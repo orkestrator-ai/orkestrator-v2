@@ -1,34 +1,66 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-const healthySettings = {
-  enabled: true,
-  running: true,
-  url: "http://127.0.0.1:34122/mcp",
-  token: "persistent-test-token-1234567890",
-  error: null,
+type Credential = {
+  id: string;
+  label: string;
+  profile: "voice" | "full" | "read-only" | "custom";
+  capabilities: string[];
+  deniedActions: string[];
+  token: string;
+  createdAt: string;
+  lastUsedAt: string | null;
 };
-let settingsResponse: {
+type Settings = {
   enabled: boolean;
   running: boolean;
   url: string;
   token: string;
   error: string | null;
-} = healthySettings;
+  credentials: Credential[];
+};
+
+const defaultCredential: Credential = {
+  id: "default",
+  label: "Default",
+  profile: "full",
+  capabilities: ["discovery", "sessions.read"],
+  deniedActions: [],
+  token: "persistent-test-token-1234567890",
+  createdAt: new Date(0).toISOString(),
+  lastUsedAt: null,
+};
+const healthySettings: Settings = {
+  enabled: true,
+  running: true,
+  url: "http://127.0.0.1:34122/mcp",
+  token: defaultCredential.token,
+  error: null,
+  credentials: [defaultCredential],
+};
+let settingsResponse: Settings = healthySettings;
 let settingsFailure: Error | null = null;
 
-const invoke = mock((command: string) => {
+const invoke = mock((command: string, args?: Record<string, unknown>) => {
   if (command === "get_control_mcp_settings") {
     return settingsFailure ? Promise.reject(settingsFailure) : Promise.resolve(settingsResponse);
   }
-  if (command === "rotate_control_mcp_token") {
-    return Promise.resolve({
-      enabled: true,
-      running: true,
-      url: "http://127.0.0.1:34122/mcp",
-      token: "rotated-test-token-123456789012",
-      error: null,
-    });
+  if (command === "rotate_control_mcp_credential") {
+    const rotated = { ...defaultCredential, token: "rotated-test-token-123456789012" };
+    return Promise.resolve({ ...healthySettings, token: rotated.token, credentials: [rotated] });
+  }
+  if (command === "create_control_mcp_credential") {
+    const created: Credential = {
+      ...defaultCredential,
+      id: "voice-assistant-1a2b3c",
+      label: String(args?.label),
+      profile: args?.profile as Credential["profile"],
+      token: "voice-test-token-12345678901234567",
+    };
+    return Promise.resolve({ ...healthySettings, credentials: [defaultCredential, created] });
+  }
+  if (command === "revoke_control_mcp_credential") {
+    return Promise.resolve({ ...healthySettings, token: "", credentials: [] });
   }
   return Promise.reject(new Error(`Unexpected command: ${command}`));
 });
@@ -40,10 +72,6 @@ mock.module("@/lib/native/clipboard", () => ({
   readText: mock(() => Promise.resolve("")),
   writeText,
 }));
-
-afterAll(() => {
-  mock.module("@/lib/native/backend", () => ({ invoke: mock(() => Promise.resolve()) }));
-});
 
 const { McpSettings } = await import("./McpSettings");
 
@@ -57,29 +85,39 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("McpSettings", () => {
-  test("shows the stable connection and copies complete client setup", async () => {
+  test("lists credentials and copies complete setup for each client", async () => {
     render(<McpSettings />);
 
     await screen.findByText("Control Orkestrator from another agent");
     expect(screen.getByDisplayValue("http://127.0.0.1:34122/mcp")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show setup for Default" })).toBeTruthy();
     const token = screen.getByDisplayValue("persistent-test-token-1234567890");
     expect(token.getAttribute("type")).toBe("password");
     expect(document.body.textContent).not.toContain("persistent-test-token-1234567890");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Copy setup" })[0]!);
+    const copies = screen.getAllByRole("button", { name: "Copy setup" });
+    expect(copies).toHaveLength(3);
+    fireEvent.click(copies[0]!);
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText.mock.calls[0]?.[0]).toContain("[mcp_servers.orkestrator]");
     expect(writeText.mock.calls[0]?.[0]).toContain(
       'Authorization = "Bearer persistent-test-token-1234567890"',
     );
+    fireEvent.click(copies[2]!);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(writeText.mock.calls[1]![0])).toEqual({
+      url: "http://127.0.0.1:34122/mcp",
+      transport: "streamable-http",
+      headers: { Authorization: "Bearer persistent-test-token-1234567890" },
+    });
   });
 
-  test("rotates only after confirmation and displays the replacement token", async () => {
+  test("rotates one credential only after confirmation and shows its new token", async () => {
     render(<McpSettings />);
     await screen.findByText("Control Orkestrator from another agent");
 
-    fireEvent.click(screen.getByRole("button", { name: "Rotate" }));
-    const dialog = screen.getByRole("alertdialog", { name: "Rotate the MCP token?" });
+    fireEvent.click(screen.getByRole("button", { name: "Rotate Default" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Rotate Default's token?" });
     const overlay = document.querySelector<HTMLElement>('[data-slot="alert-dialog-overlay"]')!;
     expect(dialog.className).toContain("z-[80]");
     expect(dialog.className).not.toContain("z-50");
@@ -90,21 +128,88 @@ describe("McpSettings", () => {
     await waitFor(() =>
       expect(screen.getByDisplayValue("rotated-test-token-123456789012")).toBeTruthy(),
     );
-    expect(invoke.mock.calls.some(([command]) => command === "rotate_control_mcp_token")).toBe(
-      true,
-    );
+    expect(invoke.mock.calls).toContainEqual([
+      "rotate_control_mcp_credential",
+      { credentialId: "default" },
+    ]);
     expect(screen.getByDisplayValue("rotated-test-token-123456789012").getAttribute("type")).toBe(
       "text",
     );
   });
 
+  test("creates a voice credential and switches the setup to it", async () => {
+    render(<McpSettings />);
+    await screen.findByText("Control Orkestrator from another agent");
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Voice assistant" } });
+    expect(document.body.textContent).toContain("spoken confirmation before risky actions");
+    fireEvent.click(screen.getByRole("button", { name: "Create credential" }));
+
+    await screen.findByText("Set up a client with Voice assistant");
+    expect(invoke.mock.calls).toContainEqual([
+      "create_control_mcp_credential",
+      { label: "Voice assistant", profile: "voice" },
+    ]);
+    const token = screen.getByDisplayValue("voice-test-token-12345678901234567");
+    expect(token.getAttribute("type")).toBe("password");
+    fireEvent.click(screen.getByRole("button", { name: "Show access token" }));
+    expect(token.getAttribute("type")).toBe("text");
+    fireEvent.click(screen.getByRole("button", { name: "Show setup for Default" }));
+    expect(screen.getByDisplayValue(defaultCredential.token).getAttribute("type")).toBe("password");
+    fireEvent.click(screen.getByRole("button", { name: "Show setup for Voice assistant" }));
+    expect(
+      screen.getByDisplayValue("voice-test-token-12345678901234567").getAttribute("type"),
+    ).toBe("password");
+  });
+
+  test("submits exactly the checked custom capabilities and refuses an empty set", async () => {
+    render(<McpSettings />);
+    await screen.findByText("Control Orkestrator from another agent");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Custom client" } });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Profile" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Custom" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Discovery: projects, environments, runs" }),
+    );
+    expect(screen.getByRole("button", { name: "Create credential" }).hasAttribute("disabled")).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Read sessions and transcripts" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Kanban tickets" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create credential" }));
+    await screen.findByText("Set up a client with Custom client");
+    expect(invoke.mock.calls).toContainEqual([
+      "create_control_mcp_credential",
+      { label: "Custom client", profile: "custom", capabilities: ["sessions.read", "tickets"] },
+    ]);
+    expect(
+      screen.getByDisplayValue("voice-test-token-12345678901234567").getAttribute("type"),
+    ).toBe("password");
+  });
+
+  test("revokes a credential after confirmation", async () => {
+    render(<McpSettings />);
+    await screen.findByText("Control Orkestrator from another agent");
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Default" }));
+    screen.getByRole("alertdialog", { name: "Revoke Default?" });
+    fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+
+    await screen.findByText("No credentials. Create one below to connect a client.");
+    expect(invoke.mock.calls).toContainEqual([
+      "revoke_control_mcp_credential",
+      { credentialId: "default" },
+    ]);
+    expect(screen.queryByRole("button", { name: "Copy setup" }) === null).toBe(true);
+  });
+
   test("hides unusable credentials and setup recipes while disabled", async () => {
     settingsResponse = {
+      ...healthySettings,
       enabled: false,
       running: false,
-      url: "http://127.0.0.1:34122/mcp",
       token: "",
-      error: null,
+      credentials: [],
     };
     render(<McpSettings />);
 
@@ -116,11 +221,11 @@ describe("McpSettings", () => {
 
   test("shows startup errors without offering setup that cannot connect", async () => {
     settingsResponse = {
-      enabled: true,
+      ...healthySettings,
       running: false,
-      url: "http://127.0.0.1:34122/mcp",
       token: "",
       error: "Address already in use",
+      credentials: [],
     };
     render(<McpSettings />);
 
@@ -138,6 +243,6 @@ describe("McpSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
     await screen.findByText("Listening locally");
-    expect(screen.getAllByRole("button", { name: "Copy setup" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Copy setup" })).toHaveLength(3);
   });
 });

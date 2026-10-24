@@ -38,7 +38,11 @@ export async function loadOperation(
       { details: { namespace: lookup.namespace } },
     );
   }
-  if (lookup.status === "missing") throw new PublicActionError("not-found", "Operation not found");
+  // Another authority's operation is answered exactly like a missing one, so
+  // a credential cannot even learn that an operation ID exists.
+  if (lookup.status === "missing" || lookup.record.authority !== context.authority) {
+    throw new PublicActionError("not-found", "Operation not found");
+  }
   return lookup.record;
 }
 
@@ -109,6 +113,7 @@ export function createRunReadHandlers(
         const found = await context.command.storage.findPublicOperationsByRequest(
           input.requestId!,
           {
+            authority: context.authority,
             ...(input.action ? { action: input.action } : {}),
             ...(input.namespace ? { namespace: input.namespace } : {}),
           },
@@ -121,9 +126,7 @@ export function createRunReadHandlers(
           );
         }
         const candidates = expected
-          ? found.records.filter(
-              (record) => record.scope === expected.scope && record.authority === context.authority,
-            )
+          ? found.records.filter((record) => record.scope === expected.scope)
           : found.records;
         if (candidates.length === 0) {
           // Not evidence that nothing ran: the request may never have reached

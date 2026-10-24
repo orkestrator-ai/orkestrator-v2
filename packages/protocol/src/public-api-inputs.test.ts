@@ -163,13 +163,19 @@ describe("public action input contract", () => {
   test("every capability with actions groups reads and mutations deliberately", () => {
     for (const capability of PUBLIC_CAPABILITIES) {
       const actions = publicActionsForCapability(capability);
-      if (capability === "tickets" || capability === "mail") expect(actions).toEqual([]);
-      else
-        expect({ capability, count: actions.length > 0 }).toEqual({
-          capability,
-          count: true,
-        });
+      expect({ capability, count: actions.length > 0 }).toEqual({
+        capability,
+        count: true,
+      });
     }
+    expect(publicActionsForCapability("tickets")).toEqual([
+      "ticket.list",
+      "ticket.get",
+      "ticket.create",
+      "ticket.update",
+      "ticket.comment",
+    ]);
+    expect(publicActionsForCapability("mail")).toEqual(["mail.mailboxes", "mail.send"]);
     // Destructive and exec capabilities grant no reads a read-only credential needs.
     for (const capability of ["environments.destructive", "exec"] as const) {
       for (const action of publicActionsForCapability(capability)) {

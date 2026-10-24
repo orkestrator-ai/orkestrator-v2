@@ -115,6 +115,9 @@ describe("DP-02 client grants at the leaf's gateway", () => {
     });
     expect(ordinary.status).toBe(200);
     for (const command of [
+      "create_control_mcp_credential",
+      "rotate_control_mcp_credential",
+      "revoke_control_mcp_credential",
       "create_client_grant",
       "attach_controller",
       "add_node",
@@ -226,6 +229,9 @@ describe("DP-03 relay through the command node", () => {
       );
       expect(refused.status).toBe(403);
       for (const command of [
+        "create_control_mcp_credential",
+        "rotate_control_mcp_credential",
+        "revoke_control_mcp_credential",
         "deliver_node_mail",
         "record_node_environment_origin",
         "read_node_file",

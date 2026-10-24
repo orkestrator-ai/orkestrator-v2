@@ -42,7 +42,8 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [transcript-artifacts-agent-guide.md](architecture/transcript-artifacts-agent-guide.md) | Agent-facing guide to the seven artifact tools, with chart and interactive examples. |
 | [rich-transcripts-user-guide.md](architecture/rich-transcripts-user-guide.md) | User guide: supported content, controls, copy/export, interactive artifacts, snapshots versus live state, platform limits. |
 | [design-canvas.md](architecture/design-canvas.md) | HTML/CSS canvas, recoverable operations, private records, history, sync, safe export, design MCP and .orkdes files. |
-| [control-mcp.md](architecture/control-mcp.md) | Control MCP operator guide. |
+| [control-mcp.md](architecture/control-mcp.md) | Control MCP operator guide: credentials and profiles, tool tiers, confirmation, authority. |
+| [control-mcp-voice.md](architecture/control-mcp-voice.md) | Control MCP for voice clients: the voice profile's tools, spoken confirmation, the attention relay, the local relay for hosted platforms, qualification. |
 | [mcp-management.md](architecture/mcp-management.md) | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
 | [version-compatibility.md](architecture/version-compatibility.md) | Mixed-version support window (published releases from the floor: the newest Stable at least 60 days old, v2.21.0 today), supported pairings, data upgrade and downgrade rules, compatibility-path usage counters, and the register of paths with owners and removal conditions. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Standalone backend, Tailscale Serve, flags, troubleshooting. |

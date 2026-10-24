@@ -239,6 +239,43 @@ directory. The branch does not touch `docker/` or the firewall test; no
 implementation, assertion, timeout or skip changed. Supports the
 host-contention hypothesis.
 
+## Coordinator read-only adapters (0026) — 2026-10-24, node mbp3
+
+`mise run test:logged -- --name full-test -- mise run test` (default
+reservations) failed four firewall cases in the root group with `exitCode`
+`null` at about 5,003 ms: `firewall uses stored domains and tolerates a
+repeated GitHub bootstrap range`, `policy 2 narrows host access to named ports
+and records what it applied`, `policy 3 allows address, protocol and port
+tuples` and `policy 3 allowlist example.org,example.com chooses blocked HTTPS
+probe example.net`. Group evidence:
+`orkestrator-test-run.B9wLO2/root-and-agent-support-tests.log.gz` under the
+host temporary directory.
+
+Three isolated reruns of the complete owner
+(`mise run test:logged -- --name firewall -- bun test ./tests/unit/firewall-policy.test.ts`)
+also failed, 12 or 13 of 24 cases, all on the same five-second deadline, with
+the host's one-minute load average between 16 and 38 (other agents were
+running). The same file at the branch's base commit (`8454d18b`, fresh
+worktree, `bun install --frozen-lockfile`) failed 13 of 24 the same way at load
+13 to 25. The branch changes nothing under `docker/` or in the firewall tests,
+so this run adds no pass-alone evidence; it does strengthen host contention as
+the cause. No firewall implementation, assertion, timeout or skip changed.
+
+After rebasing onto `a5d78cfc`, the same `mise run test` run failed only
+`GitHub ranges come from a fresh backend seed, else live, else this container's
+cache` and `policy 3 allowlist example.com,example.net:443,example.org:443/tcp
+chooses blocked HTTPS probe` (root group 3381 passed, 2 failed; every other
+group passed) at a one-minute load average of 55. Evidence:
+`orkestrator-test-run.2r3jf8/root-and-agent-support-tests.log.gz`. The owner
+rerun alone at load 31–46 still timed out (`orkestrator-test-run.yb5lB7`).
+
+## Container state observation (0020) recurrence — 2026-10-24
+
+- **Original command:** `mise run test` on `todo-0020-container-state-observation-5c2ca9cd8360` after rebasing onto `origin/main` `a5d78cfcd`, default worker plan, host load average 15–22 from other work on the node.
+- **Failure:** the root group timed out twelve firewall shell-fixture cases across `tests/unit/firewall-policy.test.ts` and `tests/unit/firewall-refresh.test.ts` at about 5003–5010 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name firewall-alone -- bun test ./tests/unit/firewall-policy.test.ts ./tests/unit/firewall-refresh.test.ts --parallel=2 --only-failures` still failed the same twelve cases under the same load (27 pass, 12 fail). The same command on a clean `origin/main` worktree failed the identical twelve cases, so the change under test does not cause them. Not rerun at lower load.
+- **Evidence:** `orkestrator-test-run.lPZA8F/firewall-alone.log.gz` under the host temporary directory. No firewall implementation, assertion, timeout or skip changed.
+
 ## Recurrence during 0016 validation (2026-10-24)
 
 - **Failure:** `GitHub ranges come from a fresh backend seed, else live, else this container's cache` and `policy 2 narrows host access to named ports and records what it applied` timed out at about 5,004 ms.
@@ -257,6 +294,20 @@ host-contention hypothesis.
   0 failed) once the one-minute load fell to 10. The branch changes no
   firewall test or `docker/` script.
 
+## Coordinator adapters main merge — 2026-10-24
+
+Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. GitHub seed/live/cache timed out at 5008.03 ms in the aggregate. `mise run test:logged -- --name merge-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` also failed (21 passed, three different five-second timeouts; 52.7 s). This run adds no independent pass-alone confirmation.
+
+Full failure names, counts, evidence paths and unresolved limitations are in [0724](../aggregate-validation-runs/0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.
+
+## Recurrence — 2026-10-24 (worktree signal review validation)
+
+- **Original command:** `mise run test:logged -- --name watcher-full-suite -- mise run test`; standard aggregate worker leases, with other checkout validation active on the host.
+- **Failures:** root bootstrap (5003.91 ms), stored domains/bootstrap ranges (5004.00 ms), policy 2 host ports (5007.96 ms), and policy 3 address/protocol/port tuples (5014.03 ms) timed out, receiving null subprocess exit codes.
+- **Follow-up:** a one-worker rerun of the complete firewall and disk-report owners failed a different firewall probe case (`policy 2 allowlist example.org,example.com chooses blocked HTTPS probe example.net`, 5010.36 ms); the four original firewall cases passed. The disk-report case also timed out again. This rerun is retained as a failed result, without attributing a cause to host load.
+- **Evidence:** `orkestrator-test-run.iTzv5K/` under the host temporary directory; the full aggregate remains failed. None of these owning files was changed.
+- **Separate complete-owner rerun:** `mise run test:logged -- --name watcher-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` failed again: policy 3 tuples (5240.73 ms), the policy 2/3 example.org/example.com probes (5002.97/5005.95 ms), and the policy 3 example.com:443/tcp probe (5004.92 ms); 20 passed, four failed in 53.46 seconds. No new complete-owner pass was established. Evidence: `orkestrator-test-run.gFLKmk/watcher-firewall-owner.log.gz`.
+
 ## Agent accounts and sign-in (0003) validation — 2026-10-24
 
 Recurred in the non-iOS aggregate on node mbp3 (thirteen `container firewall policy` cases at ~5,003 ms); the unchanged owner passed alone (24 passed). Details in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md). No implementation, assertion, timeout or skip changed.
@@ -268,3 +319,12 @@ The broad run and complete unchanged owner both retained five-second failures. T
 ## Design-agent links refresh through d6ed0717d — 2026-10-24
 
 The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 48.4 s: `mise run test:logged -- --name design-links-owner-firewall -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.
+
+## Container state observation main merge — 2026-10-24
+
+- **Parents:** feature `66a9736cc0c663bef147a65fc2d158e1951482dd` and main `d6ed0717d00a9a04ba658ba6c50e0978bc2011a6`.
+- **Original command:** `mise run test:logged -- --name merge-suite -- mise run test`; workspace/root/bridge/protocol reservations 4/1/2/1, alongside component, isolated-browser, Electron and Docker validation on the same host.
+- **Aggregate failure:** GitHub seed/live/cache fixture exceeded five seconds (5021.43 ms), receiving null process status.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` failed: 22 passed, two failed in 49.11 s. Seed/live/cache timed out at 5040.02 ms, and the policy-3 address/protocol/port probe timed out at 5024.83 ms.
+- **Evidence:** `orkestrator-test-run.bFHIz7/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.ixE6Kq/merge-firewall-owner.log.gz` below the host temporary directory.
+- **Assessment:** no new complete-owner pass or cause was established; this observation is not newly classified as flaky. No implementation, assertion, timeout or skip changed.

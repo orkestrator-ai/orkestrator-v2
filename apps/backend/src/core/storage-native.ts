@@ -100,6 +100,7 @@ import {
   NativeAgentDisplayTailStore,
   type NativeAgentDisplayTailDeletion,
 } from "./native-agent-display-tail-store.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -1618,11 +1619,11 @@ export abstract class StorageNative extends StorageReviews {
     environmentId: string,
     messages: unknown[],
     previous?: PersistedPromptQueue,
-    outstandingClaim:
-      | PersistedPromptQueue["outstandingClaim"]
-      | null = previous?.outstandingClaim ?? null,
   ): Promise<PersistedPromptQueue> {
     this.validatePromptQueueMessages(messages);
+    // Queue edits carry a claim an older backend left in place; only expiry
+    // recovery (or that backend) clears it, and nothing here creates one.
+    const outstandingClaim = previous?.outstandingClaim ?? null;
     const failedMessageStillUnchanged =
       previous?.dispatchError !== undefined &&
       messages.some(
@@ -1806,6 +1807,7 @@ export abstract class StorageNative extends StorageReviews {
       for (const queue of Object.values(queues)) {
         const claim = queue.outstandingClaim;
         if (!claim || Date.parse(claim.expiresAt) > now) continue;
+        compatibilityPathUsage.record("prompt-queue.legacy-claim-recovered");
         const messageId = isRecord(claim.message) ? claim.message.id : undefined;
         queue.messages = [
           claim.message,

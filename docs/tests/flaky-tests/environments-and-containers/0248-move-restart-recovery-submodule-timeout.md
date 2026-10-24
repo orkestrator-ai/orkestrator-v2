@@ -299,3 +299,12 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - **Complete unchanged owner:** `mise run test:logged -- --name move-recovery-recheck -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 11.1 seconds.
 - **Evidence:** `orkestrator-test-run.mrtrrc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. The aggregate's separate OpenCode version assertions expect 1.19.0 while the installed CLI reports 1.19.4; those failures are not classified as flakes.
 - **Assessment:** recurrence of the known aggregate deadline failure. No assertion, timeout, skip, or move code changed; host contention remains a hypothesis.
+
+
+## Recurrence — 2026-10-24 (worktree signal review validation)
+
+- **Original command:** `mise run test:logged -- --name watcher-full-suite -- mise run test`; standard aggregate worker leases, with other checkout validation active on the host.
+- **Failure:** restart submodule re-link exceeded the five-second deadline (5083.69 ms), followed by the interrupted Git subprocess error.
+- **Owning-file rerun:** `mise run test:logged -- --name watcher-environment-move-owner -- bun test --cwd <checkout>/apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged in 35.3 seconds.
+- **Evidence:** `orkestrator-test-run.iTzv5K/` under the host temporary directory; the full aggregate remains failed. None of these owning files was changed.
+- **Final aggregate counts:** backend 10705 passed, 116 skipped, 20 failed and five between-test errors across 10841 tests (747.20 seconds). Fourteen failures were the unchanged OpenCode conformance expectation for CLI 1.19.0 versus the installed 1.19.4; the other six were the timing cases recorded here and in companion records. The complete repository run exited 1 after 1189.0 seconds, including time queued for shared worker capacity.

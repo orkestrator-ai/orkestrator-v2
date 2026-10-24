@@ -23,6 +23,11 @@ import { startWorktreeWatcher } from "./worktree-watcher.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import {
+  ContainerWorktreeSignals,
+  type ContainerWorktreeSignalContext,
+  type ContainerWorktreeSignalInstaller,
+} from "./container-worktree-signal.js";
+import {
   buildContainerFetchScript,
   buildFileTree,
   CONTAINER_FILE_TREE_LISTER,
@@ -82,6 +87,11 @@ export type DiffStatsTrackingOptions = {
   emit: BackendEmit;
   /** Every settled scan, for the change-tracking environment projector. */
   onScanEvent?: (event: DiffScanEvent) => void;
+  /**
+   * Arms container worktree signals (`container-worktree-signal-install.ts`).
+   * Absent in tests and fixtures: every container keeps the unwatched bounds.
+   */
+  worktreeSignal?: ContainerWorktreeSignalInstaller | null;
 };
 
 /** What the baseline check needs to know about one local environment. */
@@ -117,6 +127,10 @@ export class DiffStatsTracking {
   private stopped = false;
   private syncQueue: Promise<void> = Promise.resolve();
   private readonly removeFetchPolicyDiagnostics: () => void;
+  /** Container watchers for the service; armed with the latest synced context. */
+  readonly worktreeSignals: ContainerWorktreeSignals;
+  private signalContext: ContainerWorktreeSignalContext | null = null;
+  private readonly removeSignalDiagnostics: () => void;
   /** Local environments whose baseline can move, refreshed by every sync. */
   private readonly baselineCandidates = new Map<string, BaselineCandidate>();
   /** In-flight checks, and whether another scan asked for one meanwhile. */
@@ -145,6 +159,14 @@ export class DiffStatsTracking {
       "container-git-fetch",
       this.containerGitFetchPolicy,
     );
+    this.worktreeSignals = new ContainerWorktreeSignals({
+      installer: options.worktreeSignal ?? null,
+      context: () => this.signalContext,
+    });
+    this.removeSignalDiagnostics = recurringDiagnosticsRegistry.addSignalSource(
+      "container-worktree-signal",
+      this.worktreeSignals,
+    );
     // Aliases of one physical worktree share scans and watchers; their
     // logical comparisons (environment + ref) stay separate.
     const physicalKeys = new PhysicalKeyResolver();
@@ -166,6 +188,7 @@ export class DiffStatsTracking {
           : undefined,
       onScanEvent: options.onScanEvent,
       startWatcher: this.sharedWatchers.startWatcher,
+      startContainerWatcher: (watch) => this.worktreeSignals.start(watch),
       scan: async (target, request) => {
         // A scan follows every change the watcher sees, including HEAD moving
         // when the branch takes in newer target history.
@@ -268,8 +291,12 @@ export class DiffStatsTracking {
    * lifecycle event self-corrects on the next call instead of leaving an
    * environment permanently unwatched or a deleted one permanently watched.
    */
-  async sync(context: Pick<CommandContext, "storage">): Promise<void> {
+  async sync(
+    context: Pick<CommandContext, "storage"> & Partial<Pick<CommandContext, "agentTools">>,
+  ): Promise<void> {
     if (this.stopped) return;
+    // A container watcher armed from here on uses this backend's agent tools.
+    if (context.agentTools || !this.signalContext) this.signalContext = context;
     const generation = this.syncGeneration;
     const operation = this.syncQueue
       .catch(() => undefined)
@@ -422,5 +449,6 @@ export class DiffStatsTracking {
     this.invalidatePendingSync();
     this.service.shutdown();
     this.removeFetchPolicyDiagnostics();
+    this.removeSignalDiagnostics();
   }
 }

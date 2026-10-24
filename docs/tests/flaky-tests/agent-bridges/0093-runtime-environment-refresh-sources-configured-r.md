@@ -62,6 +62,14 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - The isolated pass confirms recurrence of the registered flake. No runtime-environment implementation, deadline, assertion or skip changed. The original aggregate exit remains failed.
 
 
+## GitHub HTML renderer regression validation — 2026-10-24
+
+- **Command:** `mise run test:logged -- --name repository-tests -- mise run test`, at `d843899e5` with only renderer and regression-test changes. Workspace/root/bridges/protocol reservations were 4/1/2/1; bridge packages used one Bun worker each with two packages concurrently. Component/browser validation also ran on the host.
+- **Failure:** `runtime environment refresh > sources configured runtime helper and applies refreshed shell environment` timed out at 15000.72 ms against the unchanged 15-second deadline. The Codex package reported 2307 passed, 40 skipped and one failed across 2348 tests in 86 files (50.58 s); the bridge group failed after 186.3 s.
+- **Unchanged owning-file rerun:** `mise run test:logged -- --name codex-runtime-env-isolated -- bun --cwd=bridges/codex-bridge test ./src/runtime-env.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the complete nine-test owner, exit 0, in 0.3 s.
+- **Evidence:** `orkestrator-test-run.LK8buD/bridges.log.gz` and outer `orkestrator-test-run.UvryQg/repository-tests.log.gz` below the host temporary directory.
+- **Assessment:** recurrence of the registered flake; aggregate process-start contention remains a hypothesis. No bridge implementation, deadline, assertion or skip changed. The aggregate failure remains explicit.
+
 ## Runtime-state ownership main merge — 2026-10-24
 
 - **Original command:** `mise run test:logged -- --name merge-suite-retry -- mise run test`, default four/one/two/one workspace/root/bridge/protocol admission plan; bridge packages use one isolated Bun worker each.

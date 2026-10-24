@@ -7,6 +7,7 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { CommandContext } from "./commands-context.js";
 import * as commandFiles from "./commands-files.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
+import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
@@ -233,7 +234,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       await fs.mkdir(bridge, { recursive: true });
       await fs.writeFile(
         path.join(bridge, "index.js"),
-        `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP, oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN }));
+        `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP, oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN, commandSandbox: process.env.ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -320,6 +321,11 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         mcpUrl: "http://127.0.0.1:1234/mcp",
         mcpToken: "scoped-token",
         oauthToken: "login",
+        // The host probe the qualification table used, so the bridge requires
+        // the OS sandbox exactly where Claude was offered as enforced.
+        commandSandbox: defaultCoordinatorHostCapabilities().claudeSandbox
+          ? "required"
+          : "unavailable",
         // The research setting is process authority too; absent in the
         // stored config means the default: search plus Context7.
         research: researchMode ?? "search-and-mcp",
@@ -895,7 +901,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.mkdir(bridge, { recursive: true });
     await fs.writeFile(
       path.join(bridge, "index.js"),
-      `await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT ?? null, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH ?? null, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP ?? null }));
+      `await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT ?? null, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH ?? null, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP ?? null, commandSandbox: process.env.ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX ?? null }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -927,6 +933,8 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       ORKESTRATOR_COORDINATOR_RESEARCH_MCP: JSON.stringify([
         { name: "context7", url: "https://mcp.context7.com/mcp" },
       ]),
+      // Only a coordinator bridge may be told the sandbox is optional.
+      ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX: "unavailable",
     };
     const previous = Object.fromEntries(
       Object.keys(inherited).map((name) => [name, process.env[name]]),
@@ -938,6 +946,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         attachmentRoot: null,
         research: null,
         researchMcp: null,
+        commandSandbox: null,
       });
     } finally {
       for (const [name, value] of Object.entries(previous)) {

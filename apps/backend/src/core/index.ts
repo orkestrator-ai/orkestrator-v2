@@ -17,6 +17,11 @@ import { setManagedGitHubCli } from "./github-cli-binary.js";
 import { setGitHubCliConfigSource } from "./github-credentials.js";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
+import {
+  compatibilityPathUsage,
+  type CompatibilityPathUsageSink,
+} from "./compatibility-path-usage.js";
+import { compatibilityPathUsageDatabaseSink } from "./compatibility-path-usage-store.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
@@ -80,6 +85,7 @@ import {
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import { containerWorktreeSignalInstaller } from "./container-worktree-signal-install.js";
 import { AgentToolsServer } from "./agent-tools.js";
 import type { TranscriptArtifactService } from "./transcript-artifacts/service.js";
 import type { TranscriptArtifactRuntime } from "./transcript-artifacts/runtime.js";
@@ -188,6 +194,8 @@ export class OrkestratorBackend {
   private readonly workflowResults: WorkflowResultService;
   /** Remote-initiated updates of this host; see host-maintenance.ts. */
   readonly hostMaintenance: HostMaintenanceService;
+  /** Persists compatibility-path usage; see compatibility-path-usage.ts. */
+  private readonly compatibilityPathSink: CompatibilityPathUsageSink;
   /** Absent in `bun test` backends unless injected: probing runs real Docker commands. */
   private readonly containerHostReachability: ContainerHostReachabilityService | undefined;
   private readonly workflowResultRollout: WorkflowResultRollout;
@@ -227,7 +235,11 @@ export class OrkestratorBackend {
     Partial<
       Pick<
         AgentToolsServer,
-        "revokeTab" | "workflowResultConnection" | "servicePort" | "issueStateSignal"
+        | "revokeTab"
+        | "workflowResultConnection"
+        | "servicePort"
+        | "issueStateSignal"
+        | "issueWorktreeSignal"
       >
     >;
   private readonly controlMcp: Pick<
@@ -264,7 +276,11 @@ export class OrkestratorBackend {
       Partial<
         Pick<
           AgentToolsServer,
-          "revokeTab" | "workflowResultConnection" | "servicePort" | "issueStateSignal"
+          | "revokeTab"
+          | "workflowResultConnection"
+          | "servicePort"
+          | "issueStateSignal"
+          | "issueWorktreeSignal"
         >
       >;
     controlMcp?: Pick<
@@ -308,6 +324,8 @@ export class OrkestratorBackend {
       options.keyedActivityJobs ?? keyedSchedulingEnabled("backend-activity");
     this.activityJobClock = options.activityJobClock;
     const storage = new StorageService(options.dataDir);
+    this.compatibilityPathSink = compatibilityPathUsageDatabaseSink(options.dataDir);
+    compatibilityPathUsage.attach(this.compatibilityPathSink);
     this.workflowResults = new WorkflowResultService(options.dataDir);
     this.hostMaintenance = new HostMaintenanceService({
       dataDir: options.dataDir,
@@ -383,7 +401,12 @@ export class OrkestratorBackend {
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
     this.runtime =
       options.runtime ??
-      new BackendRuntime({ emit: (event, payload) => options.emit(event, payload) });
+      new BackendRuntime({
+        emit: (event, payload) => options.emit(event, payload),
+        // Docker-backed, so unit tests keep the unwatched bounds unless they inject one.
+        worktreeSignal:
+          process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
+      });
     this.environmentLifecycleDrainTimeoutMs =
       options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
     // Backend-owned file-change tracking (docs/architecture/change-tracking.md):
@@ -1992,6 +2015,7 @@ export class OrkestratorBackend {
           // Last: closing checkpoints the WAL into the database file.
           this.workflowResults.closeStorage();
           this.hostMaintenance.close();
+          compatibilityPathUsage.detach(this.compatibilityPathSink);
           closeEnvironmentCleanupStorage();
           this.context.storage.close();
         };

@@ -1,7 +1,7 @@
 # container status and fetch scripts against a local remote > a branch baseline follows origin/<ref> only when the policy fetches (apps/backend/src/core/container-git-fetch-git.test.ts)
 
 - **ID:** 0175
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-28
 - **Original command:** `mise run test:logged -- --name backend-workspace -- bun run --cwd apps/backend test:workspace`
 - **Worker configuration:** the backend package's own `test:workspace` script, run straight after two full `mise run test` passes on the same host.
@@ -94,3 +94,18 @@
 ## Design-agent links refresh through d6ed0717d — 2026-10-24
 
 The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 11.7 s: `mise run test:logged -- --name design-links-owner-container-fetch -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-git-fetch-git.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.
+
+## Coordinator adapter review — 2026-10-24
+
+The aggregate repeated this case during coordinator adapter validation. Exact
+commands, timing, owner rerun results and evidence are recorded in
+[0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
+The owning implementation, assertions, timeouts and skips were unchanged.
+
+## Resolution — 2026-10-24 (worktree signal review)
+
+- **Root cause:** The case runs multiple real Git status/fetch processes and a local remote push under Bun's five-second default. Recorded aggregate runs exceeded that budget; the original `Bun.spawn` helper had no per-test cancellation or child-group teardown, allowing an abandoned status process to surface as a later `script exited 143` error. The evidence does not isolate which host workload caused the slow runs.
+- **Fix:** The real-Git cases have explicit 30-second budgets. Their shell helper now uses `runCommand` with a ten-second command deadline and a test-owned abort signal; `afterEach` aborts and awaits pending shell commands, including background fetches. `runCommand` owns and terminates the whole process group.
+- **Verification:** `mise run test:logged -- --name watcher-async-regressions -- bun test --cwd <checkout>/apps/backend ./src/core/diff-stats-container-signal.test.ts ./src/core/container-worktree-signal.test.ts ./src/core/container-worktree-signal-install.test.ts ./src/core/container-git-fetch.test.ts ./src/core/container-git-fetch-git.test.ts --parallel=4` passed (78.1 seconds for the five-file group) while the repository suite and other host validation workloads were active. Earlier four-worker runs of the same real-Git owner also passed; no leftover-child error was reported.
+- **Fix reference:** Commit containing this resolution and the worktree-signal regression fixes.
+- **Aggregate verification:** the real-Git owner reported no failure in the completed repository run (backend 10705 passed, 116 skipped, 20 unrelated failures and five errors across 10841 tests). The full run remains failed because of the unchanged OpenCode version assertion and unrelated timing cases.

@@ -53,3 +53,9 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
 - **Failure:** `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull` exceeded its current 30-second deadline (30028.53 ms).
 - **Unchanged owner:** `mise run test:logged -- --name merge-owner-diagnostic-bounds -- bun test ./tests/unit/test-diagnostic-bounds.test.ts --parallel=1 --only-failures` passed (exit 0, 17.5 seconds logged).
 - **Assessment:** reopened for this confirmed intermittent scan timeout at the current deadline. Host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
+
+## Coordinator adapters main merge — 2026-10-24
+
+Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. Reopened for `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull`, which exceeded its current 30-second budget (30050.80 ms). `mise run test:logged -- --name merge-owner-diagnostics -- bun test ./tests/unit/test-diagnostic-bounds.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (28.9 s). The older Electron failures remain historical.
+
+Full failure names, counts, evidence paths and unresolved limitations are in [0724](0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.

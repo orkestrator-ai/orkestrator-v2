@@ -1,3 +1,5 @@
+import { accessSync, constants } from "node:fs";
+import { delimiter, join } from "node:path";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { NATIVE_AGENT_MAIL_CAPABILITIES } from "@orkestrator/protocol/agent-mail";
 import {
@@ -59,12 +61,41 @@ export interface CoordinatorHostCapabilities {
   claudeSandbox: boolean;
 }
 
+/** Programs the Claude CLI's Linux sandbox needs on PATH (it names both when one is missing). */
+export const CLAUDE_LINUX_SANDBOX_PROGRAMS = Object.freeze(["bwrap", "socat"]);
+
+/** Whether `name` is an executable file in one of `PATH`'s directories. */
+export function executableOnPath(
+  name: string,
+  path: string | undefined = process.env.PATH,
+): boolean {
+  for (const directory of (path ?? "").split(delimiter)) {
+    if (!directory) continue;
+    try {
+      accessSync(join(directory, name), constants.X_OK);
+      return true;
+    } catch {
+      // Not here; keep looking.
+    }
+  }
+  return false;
+}
+
 export function defaultCoordinatorHostCapabilities(
   platform: NodeJS.Platform = process.platform,
+  onPath: (name: string) => boolean = (name) => executableOnPath(name),
 ): CoordinatorHostCapabilities {
-  // Seatbelt on macOS and bubblewrap/landlock on Linux. Windows has neither,
-  // so Claude there is configuration rather than containment.
-  return { claudeSandbox: platform === "darwin" || platform === "linux" };
+  // Seatbelt on macOS, which ships with the OS. On Linux the CLI runs commands
+  // under bubblewrap with a socat network bridge, and refuses to start a
+  // required sandbox without them, so a host missing either is reported as
+  // configuration rather than containment instead of failing every turn. The
+  // pinned CLI's Windows sandbox is behind a vendor flag that is off by
+  // default, so Windows is configuration too.
+  if (platform === "darwin") return { claudeSandbox: true };
+  if (platform === "linux") {
+    return { claudeSandbox: CLAUDE_LINUX_SANDBOX_PROGRAMS.every((name) => onPath(name)) };
+  }
+  return { claudeSandbox: false };
 }
 
 interface Qualification {
@@ -113,7 +144,7 @@ function judge(platform: AgentPlatform, host: CoordinatorHostCapabilities): Tier
         : {
             tier: "provider-configured",
             reason:
-              "Claude's command sandbox is unavailable on this host. File tools are removed and commands are filtered, but nothing outside the agent enforces it.",
+              "Claude's command sandbox is unavailable on this host (it needs macOS, or Linux with bubblewrap and socat). File tools are removed and the bridge admits only reading commands, but nothing outside the agent enforces it.",
             mcpClient: true,
           };
     case "pi":
@@ -139,7 +170,7 @@ function judge(platform: AgentPlatform, host: CoordinatorHostCapabilities): Tier
       return {
         tier: "advisory",
         reason:
-          "Grok's write, edit, shell, subagent, web search and web fetch tools are removed. Remaining permission requests are denied; other tools that do not ask remain advisory.",
+          "Grok's write, edit, shell, subagent, web search and web fetch tools are removed. Remaining permission requests are denied; other tools that do not ask, including xAI's hosted X search tools, remain advisory.",
         mcpClient: true,
       };
   }

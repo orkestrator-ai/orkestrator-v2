@@ -176,3 +176,54 @@ Docker profile `design-links-merge-qa` was stopped and reset, removing two exact
 The OpenCode owner reported 56 passed and fourteen failed, reproducing the exact `1.19.0` versus `1.19.4` assertion in isolation; evidence: `orkestrator-test-run.Hh8b1H/design-links-final-opencode-conformance.log.gz`. Both Electron owners passed unchanged. The two other Electron owners and other component-browser failures remain unclassified.
 
 Final format and flake-registry checks passed. Relative local documentation links and conflict-marker checks passed. The original failed broad runs remain non-green; no second full aggregate was claimed.
+
+## Refresh through 95c9cb46a — 2026-10-24
+
+- **Parents:** `5190c5edcae76668169377709d53598cee57acb9` and `95c9cb46ae0a2b12fbc10ff73fa7c0614b254a0d`; common ancestor `d6ed0717d00a9a04ba658ba6c50e0978bc2011a6`.
+- **Scope:** the combined merge initially changed 273 paths. Fifteen original conflicts were retained, before staging, in NUL-delimited local Git metadata tied to these parents. All conflicts were in flake records/indexes and the design backlog index. Both branches' historical records were retained; the container-fetch fix remains resolved, design recovery remains finished, and the implemented design-agent links keep their updated backlog status.
+- **Static/registry checks:** `mise run format:check`, logged `mise run lint`, logged `mise run typecheck`, and the logged `tests/unit/flaky-tests-index.test.ts` owner passed. Lint retained warnings.
+- **Repository suite:** the testing guide's GNU-tool PATH with `ORKESTRATOR_TEST_AREA_BASE=d6ed0717d00a9a04ba658ba6c50e0978bc2011a6 mise run test:logged -- --name refresh-95c9-tests -- mise run test` passed all four groups in 466.7 s. It used workspace/root/bridges/protocol reservations 4/1/2/1; the area selector included transcript artifacts and tmux. Root passed in 151.6 s, bridges in 109.0 s, and the protocol lockfile in 0.4 s.
+- **Component browser:** `mise run test:logged -- --name refresh-95c9-browser -- mise run test:browser` failed with 579 passed, five failed and 102 skipped (nine workers, 254.2 s). Public-site tests chained after it did not run; public-site code is unchanged in this merge.
+
+Original conflicted paths (the authoritative list remains in local Git metadata):
+
+- `docs/tests/flaky-tests/aggregate-validation-runs/0000-index.md`
+- `docs/tests/flaky-tests/aggregate-validation-runs/0043-root-suite-5000-ms-timeout-cluster.md`
+- `docs/tests/flaky-tests/backend-services-and-tooling/0000-index.md`
+- `docs/tests/flaky-tests/backend-services-and-tooling/0213-terminal-history-aggregate-timeout.md`
+- `docs/tests/flaky-tests/backend-services-and-tooling/0239-agent-account-duplicate-directory-cleanup.md`
+- `docs/tests/flaky-tests/design-canvas-and-artifacts/0000-index.md`
+- `docs/tests/flaky-tests/electron-and-desktop/0000-index.md`
+- `docs/tests/flaky-tests/electron-and-desktop/0515-electron-nickname-reload-timeout.md`
+- `docs/tests/flaky-tests/environments-and-containers/0000-index.md`
+- `docs/tests/flaky-tests/environments-and-containers/0175-container-git-fetch-branch-baseline-timeout.md`
+- `docs/tests/flaky-tests/environments-and-containers/0192-firewall-bootstrap-shell-timeout.md`
+- `docs/tests/flaky-tests/environments-and-containers/0259-disk-report-aggregate-timeout.md`
+- `docs/tests/flaky-tests/native-agents-and-transcripts/0000-index.md`
+- `docs/tests/flaky-tests/native-agents-and-transcripts/0722-native-command-filter-projection-read.md`
+- `docs/todo/design-canvas/0000-index.md`
+
+Exact component failures:
+
+- Mobile and desktop `AgentLaunchDialog.spec.ts:7`: `selects a native branch suggestion with the keyboard and confirms`.
+- Desktop `AgentLaunchDialog.spec.ts:63`: `allows a manually entered branch and resets it on reopen`.
+- Mobile `ToolGroupFold.spec.ts:245`: `a waiting group that fits its cap follows appended calls as it starts overflowing`.
+- Desktop `ClaudeInteractions.spec.ts:100`: `a paused Claude question stays paused across a reload, then resumes and answers` (request context disposed in its route callback).
+
+Complete, unchanged one-worker owner reruns:
+
+- `ORKESTRATOR_E2E_PORT=64074 mise run test:logged -- --name refresh-95c9-owner-ToolGroupFold -- bunx playwright test --config e2e/playwright.config.ts ToolGroupFold.spec.ts --workers=1 --output output/playwright/refresh-95c9-ToolGroupFold` → exit 1, 25.6 s.
+- `ORKESTRATOR_E2E_PORT=64238 mise run test:logged -- --name refresh-95c9-owner-ClaudeInteractions -- bunx playwright test --config e2e/playwright.config.ts ClaudeInteractions.spec.ts --workers=1 --output output/playwright/refresh-95c9-ClaudeInteractions` → exit 0, 13.5 s.
+- `ORKESTRATOR_E2E_PORT=64322 mise run test:logged -- --name refresh-95c9-owner-AgentLaunchDialog -- bunx playwright test --config e2e/playwright.config.ts AgentLaunchDialog.spec.ts --workers=1 --output output/playwright/refresh-95c9-AgentLaunchDialog` → exit 1, 21.0 s.
+
+ClaudeInteractions passed (confirmed recurrence of 0252). ToolGroupFold reported fifteen passes and one different failure: desktop `focus inside a long group's viewport survives nearby inner scrolling` found zero entries instead of more than two at line 223. Its original waiting-group case passed, but the complete owner stayed non-green; this observation does not establish a new full-owner pass for 0747. AgentLaunchDialog reported two passes and two failures, both native branch suggestions; the manual-branch cases passed. Persistent branch and focus failures remain unclassified here.
+
+- **Development image:** `mise run test:logged -- --name refresh-95c9-docker-build -- mise run docker:build:dev --profile refresh-95c9-docker` passed in 31.1 s, producing this worktree's `orkestrator-v2:dev-e1f757d309b3`.
+- **Image smoke:** `mise run test:logged -- --name refresh-95c9-image-smoke -- bash docker/tests/final-image-smoke.sh orkestrator-v2:dev-e1f757d309b3` failed in 0.4 s. The script merges stderr with stdout and reads the first version line; Codex emitted `WARNING: failed to clean up stale arg0 temp dirs: Cross-device link (os error 18)` there. A separate logged invocation exited zero, and `refresh-95c9-codex-version-match` explicitly verified stdout contains the expected `0.164.0` (0.7 s). The original image smoke remains failed and did not reach its later checks.
+- **Real container watcher:** `ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE=orkestrator-v2:dev-e1f757d309b3 mise run test:logged -- --name refresh-95c9-container-watcher -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-worktree-signal-docker.test.ts --parallel=1 --only-failures` passed in 20.7 s. Its exact-owner container was cleaned by the test.
+
+- **Real-backend browser:** `mise run test:logged -- --name refresh-95c9-agent-browser -- mise run test:agent:browser:isolated` finished with 28 passed, one failed and 54 opt-in skips (one worker, 457.7 s including lifecycle). The sole failure was the narrow `host picker creates and browses folders through the authenticated gateway above fullscreen settings` case at `browser-gateway.spec.ts:150`: Repository settings did not become clickable within fifteen seconds. It was not rerun on another fresh profile, so this observation is not newly classified as flaky. Both design-canvas cases and terminal-recovery cases passed. The runner stopped and reset `qa-browser-58c8ee22-16c`.
+- **Docker fixture:** `ORKESTRATOR_AGENT_TEST_PROFILE=refresh-95c9-docker ORKESTRATOR_AGENT_TEST_RUN_ID=refresh-95c9-docker mise run test:logged -- --name refresh-95c9-docker -- mise run test:agent:docker` passed in 78.6 s: eleven passed and two live-provider skips. The profile was subsequently stopped and reset.
+- **Final checks:** formatting, flake-registry consistency, local documentation links, whitespace and conflict-marker checks passed. No test profile was retained. The original component-browser, isolated-browser and image-smoke exits remain non-green; no assertion or timeout was changed to obtain a passing result.
+
+Original evidence under the host temporary directory: `orkestrator-test-run.6yNWW5/refresh-95c9-browser.log.gz`, `orkestrator-test-run.wqj1Si/refresh-95c9-owner-AgentLaunchDialog.log.gz`, and `orkestrator-test-run.hYA3KD/refresh-95c9-image-smoke.log.gz`. Passing logged commands retain summaries and delete raw logs. No implementation, assertion, deadline or skip was changed for these results. Electron main/preload/IPC, CLI and iOS are unchanged from this merge's common ancestor, so their additional scenario suites were omitted.

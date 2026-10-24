@@ -831,7 +831,7 @@ export class DesignService {
       return {
         token: receipt.token,
         receipt,
-        matches: settledMatches(receipt, receiptDigest(record, receipt.token), descriptor),
+        matches: settledMatches(receiptDigest(record, receipt.token), descriptor),
       };
     const entry = retained.find(
       (candidate) => candidate.descriptor.correlationId === descriptor.correlationId,

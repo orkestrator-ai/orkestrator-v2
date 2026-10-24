@@ -84,7 +84,7 @@ test("Grok tool profile follows read-only create and reattach, and is removed on
   expect(first).toContain("--no-leader");
   const path = profilePath(first);
   const profile = await fs.readFile(path, "utf8");
-  for (const tool of ["write", "search_replace", "run_terminal_cmd", "Agent"]) {
+  for (const tool of ["write", "search_replace", "run_terminal_cmd", "Agent", "monitor"]) {
     expect(profile).toContain(`  - ${tool}\n`);
   }
   for (const readOnly of [false, true]) {

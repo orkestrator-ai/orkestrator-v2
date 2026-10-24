@@ -1,6 +1,7 @@
 import type { HttpBridgeAgent } from "./http-bridge-catalog.js";
 import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 import { TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER } from "@orkestrator/protocol/tab-teardown";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 /**
  * Ordinary close of a bridge session: stop owned work, release the bridge's
@@ -112,11 +113,13 @@ export async function closeBridgeSessionRetaining(
   if (response.status === 404 || response.status === 405) {
     await response.body?.cancel().catch(() => undefined);
     if (!LEGACY_DELETE_RETAINS_HISTORY[agent]) {
+      compatibilityPathUsage.record("bridge-close.upgrade-required");
       throw new BridgeCloseUnsupportedError(
         `The ${label} bridge predates non-destructive tab close. Restart the environment so ` +
           "it runs the current bridge; the conversation was not deleted and the close will be retried.",
       );
     }
+    compatibilityPathUsage.record("bridge-close.legacy-delete");
     const legacy = await request("DELETE", path);
     await legacy.body?.cancel().catch(() => undefined);
     // The legacy route has always answered 404 for an unknown session.

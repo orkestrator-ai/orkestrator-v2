@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +6,7 @@ import {
   buildContainerFetchScript,
   buildContainerGitStatusScript,
   getContainerGitStatusDetailed,
+  revertContainerFile,
   type ContainerGitStatusDeps,
 } from "./commands-files.js";
 import {
@@ -13,6 +14,7 @@ import {
   ContainerGitFetchPolicy,
   type ContainerFetchChange,
 } from "./container-git-fetch.js";
+import { runCommand } from "./shell.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { ManualTime } from "./recurring-test-support.js";
 import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
@@ -44,16 +46,28 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.toString().trim();
 }
 
-async function shell(cwd: string, script: string): Promise<string> {
-  const child = Bun.spawn(["bash", "-c", script], { cwd, env, stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  if (code !== 0) throw new Error(`script exited ${code}: ${stderr}`);
-  return stdout;
+// Each test owns its process groups, including background policy fetches.
+let testAbort = new AbortController();
+const pendingShells = new Set<Promise<string>>();
+function shell(cwd: string, script: string): Promise<string> {
+  const task = runCommand("bash", ["-c", script], {
+    cwd,
+    env,
+    signal: testAbort.signal,
+    timeoutMs: 10_000,
+  }).then(({ stdout }) => stdout);
+  pendingShells.add(task);
+  task.then(
+    () => pendingShells.delete(task),
+    () => pendingShells.delete(task),
+  );
+  return task;
 }
+
+afterEach(async () => {
+  testAbort.abort();
+  await Promise.allSettled(Array.from(pendingShells));
+});
 
 /** One "container": its clone, a fetch policy on a manual clock, the counted seams. */
 function container(id = "container-git") {
@@ -138,6 +152,7 @@ exec '${realBase64}' "$@"
 });
 
 beforeEach(async () => {
+  testAbort = new AbortController();
   await fs.rm(path.join(root, "remote-offline.git"), { recursive: true, force: true });
   await recloneWorkspace();
 });
@@ -183,7 +198,7 @@ describe("container status and fetch scripts against a local remote", () => {
     await box.read("main");
     await box.policy.idle();
     expect(box.fetchCalls).toHaveLength(3);
-  });
+  }, 30_000);
 
   test("an immutable creation commit is compared exactly and never fetched", async () => {
     const box = container();
@@ -205,7 +220,7 @@ describe("container status and fetch scripts against a local remote", () => {
     }
     await box.policy.idle();
     expect(box.fetchCalls).toEqual([]);
-  });
+  }, 30_000);
 
   test("a ref missing locally is recovered by one bounded fetch", async () => {
     const box = container();
@@ -226,7 +241,7 @@ describe("container status and fetch scripts against a local remote", () => {
     );
     await expect(box.read("nowhere")).rejects.toThrow("Target ref is not present");
     expect(box.fetchCalls).toEqual(["feature-x", "nowhere"]);
-  });
+  }, 30_000);
 
   test("an unreachable remote keeps the local diff with stale remote freshness", async () => {
     const box = container();
@@ -253,7 +268,7 @@ describe("container status and fetch scripts against a local remote", () => {
     } finally {
       await fs.rename(path.join(root, "remote-offline.git"), remote);
     }
-  });
+  }, 30_000);
 
   test("a workspace re-cloned inside the same container is a new clone identity", async () => {
     const box = container();
@@ -268,13 +283,82 @@ describe("container status and fetch scripts against a local remote", () => {
     await box.read("main");
     await box.policy.idle();
     expect(box.fetchCalls).toHaveLength(2);
-  });
+  }, 30_000);
+
+  test("a status scan never writes the index, and still reports real changes", async () => {
+    const box = container();
+    const index = path.join(workspace, ".git", "index");
+    // Stale cached stat data with unchanged contents: an ordinary status or
+    // diff would refresh and rewrite the index, which a container worktree
+    // watcher would ring for, so every scan would schedule another.
+    await fs.utimes(index, new Date("2000-01-01T00:00:00Z"), new Date("2000-01-01T00:00:00Z"));
+    await fs.utimes(
+      path.join(workspace, "base.txt"),
+      new Date("2001-01-01T00:00:00Z"),
+      new Date("2001-01-01T00:00:00Z"),
+    );
+    const before = await fs.readFile(index);
+    const mtimeBefore = (await fs.stat(index)).mtimeMs;
+    expect((await box.read("main")).rows).toEqual([{ path: "local.txt", status: "?" }]);
+    expect(await fs.readFile(index)).toEqual(before);
+    expect((await fs.stat(index)).mtimeMs).toBe(mtimeBefore);
+
+    // Positive control: this fixture does need a refresh.
+    git(workspace, "status", "--porcelain=v1");
+    expect((await fs.stat(index)).mtimeMs).not.toBe(mtimeBefore);
+
+    await fs.appendFile(path.join(workspace, "base.txt"), "edited\n");
+    expect((await box.read("main")).rows).toEqual([
+      { path: "base.txt", status: "M" },
+      { path: "local.txt", status: "?" },
+    ]);
+  }, 30_000);
+
+  test("a revert resolves the same base the old inline fetch did", async () => {
+    const box = container();
+    // The revert script's own `cd /workspace` is the container's clone.
+    const exec = (_containerId: string, script: string) =>
+      shell(workspace, script.replaceAll("cd /workspace", "cd ."));
+    await fs.writeFile(path.join(workspace, "base.txt"), "local edit\n");
+
+    // Upstream moved after the clone last fetched: like `git fetch || true`
+    // followed by `origin/main`, the revert restores the remote's newest.
+    await pushToRemote("base.txt", "upstream v2\n");
+    await revertContainerFile(box.id, "base.txt", "main", { exec, fetches: box.policy });
+    expect(await fs.readFile(path.join(workspace, "base.txt"), "utf8")).toBe("upstream v2\n");
+    expect(box.fetchCalls).toEqual(["main"]);
+
+    // An unreachable remote: the fetch fails and the local origin/main decides.
+    await fs.writeFile(path.join(workspace, "base.txt"), "local edit\n");
+    await pushToRemote("base.txt", "upstream v3\n");
+    await fs.rename(remote, path.join(root, "remote-offline.git"));
+    try {
+      box.time.jump(15_000);
+      await revertContainerFile(box.id, "base.txt", "main", { exec, fetches: box.policy });
+      expect(await fs.readFile(path.join(workspace, "base.txt"), "utf8")).toBe("upstream v2\n");
+      expect(box.fetchCalls).toHaveLength(2);
+    } finally {
+      await fs.rename(path.join(root, "remote-offline.git"), remote);
+    }
+
+    // A ref with no remote counterpart falls back to the local branch.
+    git(workspace, "branch", "-q", "local-only", "HEAD");
+    await fs.writeFile(path.join(workspace, "base.txt"), "local edit\n");
+    box.time.jump(15_000);
+    await revertContainerFile(box.id, "base.txt", "local-only", { exec, fetches: box.policy });
+    expect(await fs.readFile(path.join(workspace, "base.txt"), "utf8")).toBe(
+      git(workspace, "show", "local-only:base.txt") + "\n",
+    );
+    await expect(
+      revertContainerFile(box.id, "base.txt", "missing-ref", { exec, fetches: box.policy }),
+    ).rejects.toThrow("Target ref not found: missing-ref");
+  }, 30_000);
 
   test("the status script performs no fetch of its own", () => {
     const script = buildContainerGitStatusScript("main", true);
     expect(script).not.toContain("git fetch");
     expect(buildContainerFetchScript("main", 30_000)).toContain('git fetch origin "$ref"');
-  });
+  }, 30_000);
 });
 
 const dockerTest = process.env.ORKESTRATOR_TEST_DOCKER_IMAGE ? test : test.skip;

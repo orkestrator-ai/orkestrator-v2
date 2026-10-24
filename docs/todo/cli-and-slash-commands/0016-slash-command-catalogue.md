@@ -34,7 +34,8 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
   picker explains it (`useNativeCommandComposer.tsx`).
 - Each such 404 is counted per agent (`outdatedBridgeCatalogueReadCounts`),
   and each provider instance logs one warning with the running count and no
-  command names or session ids.
+  command names or session ids. Each read also records the persistent
+  `slash-catalogue.outdated-bridge` counter exposed by 0034.
 - Deleted: `bridges/claude-bridge/src/services/slash-commands.ts` (the
   filesystem scan and the 15-row `BUILTIN_COMMANDS` list) and its tests; the
   `GET /plugins/commands` routes on the Claude and Pi bridges; the
@@ -51,9 +52,13 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
 - **Codex cold plugin skills.** `SkillInventory`
   (`bridges/codex-bridge/src/commands/skill-inventory.ts`) reports the first
   `skills/list` answer from each app-server generation unsettled; the
-  catalogue reads `stale`, and one re-read 2 s later (`coldSettleMs`) settles
-  it and bumps `commandRevision`. A generation that dies first never marks its
-  successor settled.
+  catalogue reads `stale` for at least two re-reads, each sent 1 s after the
+  preceding answer (`coldSettleMs`). The second or later re-read must agree
+  with the answer that armed its delay (at most `maxSettleReads` rounds),
+  which settles it and bumps `commandRevision`. An explicit refresh cannot
+  replace that baseline. A read already in flight when
+  the timer fires never settles it, and a failed settling read leaves it
+  `stale`. A generation that dies first never marks its successor settled.
 - Disabled by design, listed with a reason and never executed (now decided,
   see "Assumptions and decisions"):
   - Claude, in `bridges/claude-bridge/src/services/session-manager-commands.ts`:
@@ -86,9 +91,10 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
 ### Code
 
 1. **Retire the legacy catalogue surface.** Done 2026-10-24.
-   - Support window: decided for this path alone (decision 1). The global
-     window in [0034](../cross-cutting/0034-mixed-version-compatibility.md) is
-     still open; its index row for this path was removed.
+   - Support window: the original path-specific decision (decision 1) is
+     now covered by the shared window decided in
+     [0034](../cross-cutting/0034-mixed-version-compatibility.md): published
+     releases from v2.21.0 today. Pre-#599 and pre-#827 peers are outside it.
    - The 404 fallback is gone: a 404 reads `unavailable` with
      `outdated-bridge` (`http-bridge-catalog.ts`). Tests:
      `http-bridge-commands.test.ts` ("a 404 from a bridge older than the
@@ -99,7 +105,8 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
    - `refreshProjectionCommands` skips the provider when no session is stored
      (`native-agent-service-commands.test.ts`: "a refresh before the session
      exists reads nothing and says so").
-   - Legacy-route use is counted without command names (above).
+   - Rejected outdated-bridge reads are counted without command names
+     (above), including the persistent `slash-catalogue.outdated-bridge` counter.
    - Deleted `services/slash-commands.ts`, the Claude and Pi
      `/plugins/commands` routes, the Codex and Cursor `/global/slash-commands`
      routes and the global fallback. Each bridge's route tests now assert the
@@ -290,10 +297,10 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
 
 ## Needs verification
 
-- A real pre-#827 Claude bridge (its CLI probe on the session route) against
-  this backend, and a real older renderer bundle: still open in
-  [0015](0015-slash-command-qualification.md) item 1. This file's change only
-  affects their 404 path, which the ACP and Cursor run covered.
+- Real v2.21.0 bridge, backend and renderer pairings remain open in
+  [0015](0015-slash-command-qualification.md) item 1. The shared support
+  window now excludes pre-#827 builds; the ACP and Cursor run remains
+  additional evidence for the rejected 404 path.
 - The Codex settle wait (2 s) was measured on a host worktree on Apple
   Silicon, where plugin skills arrived 200-400 ms after `initialize`. A slower
   container could take longer; the 30 s TTL read still heals it, as before.
@@ -321,8 +328,8 @@ Made on 2026-10-24 while completing this file.
      routes, two runtime methods). Cons: an old backend (2.20 or older) sharing
      the `orkestrator-v2:latest` image with a newer one loses its pre-session
      list (it errors instead); there is no production count behind the date;
-     the global 0034 window is still undecided, so other paths cannot reuse
-     this as precedent without their own decision.
+     this was originally a path-specific decision. The shared window was
+     subsequently decided in 0034, with v2.21.0 as its current floor.
 2. **How a 404 is reported.**
    - Options: keep falling back; `unsupported`; `unavailable` with
      `provider-error`; `unavailable` with a new `outdated-bridge` code.
@@ -342,8 +349,9 @@ Made on 2026-10-24 while completing this file.
    - Why: content-free, bounded, and it counts the only pairing that still
      matters (new backend, old bridge).
    - Pros: evidence in the backend log of every affected install. Cons: resets
-     on restart, is not exposed through a diagnostics command, and an old
-     backend hitting a new bridge is not counted anywhere.
+     on restart. The merged implementation also persists each rejected read
+     as `slash-catalogue.outdated-bridge` through 0034's diagnostics command
+     and metrics; an old backend hitting a new bridge is not counted here.
 4. **Refresh before a session exists.**
    - Options: keep reading the global route; answer `reread`; answer
      `unsupported`; answer `failed` with a message and read nothing.
@@ -401,13 +409,21 @@ Made on 2026-10-24 while completing this file.
    - Options: wait for a notification (none exists); force a disk rescan on
      the first read; report the first answer `stale` and re-read once after a
      delay; poll until two reads agree.
-   - Chosen: the first answer per app-server generation is unsettled
-     (`stale`), and one ordinary re-read 2 s later settles it.
+   - Chosen (revised 2026-10-24): each app-server generation's list is
+     unsettled (`stale`) for at least two ordinary re-reads, each sent 1 s
+     after the preceding answer. The second or later re-read must agree with
+     the answer that armed its delay, at most five rounds. The first version
+     re-read once after 2 s and trusted that answer; review found a read
+     already in flight when the timer fired could stand in for it and settle
+     the pre-plugin list, and a single fixed delay has no margin on a slow
+     container.
    - Why: measured, the gap is time-based (a single first read at 1 s was
-     complete), so one delayed read fixes it at the cost of one extra
-     `skills/list` per child start. 2 s is five times the slowest arrival
-     measured, and the 30 s TTL still heals anything slower.
-   - Pros: the picker never calls an incomplete list `ready`; the revision
+     complete), so in the measured case the list settles about 2 s after the
+     child starts, as before, for two extra `skills/list` calls per child
+     start. A changed list takes more rounds to confirm. Plugin loading after
+     the list has settled or the five-round limit relies on the 30 s TTL
+     (or a notification) for recovery.
+   - Pros: the picker preserves at least a two-second observation window; the revision
      bump reaches unmounted tabs. Cons: about 2 s of "may be out of date"
      after a child starts even when the first list was complete. A typed
      `$skill` is unaffected (it checks `fresh`, not `settled`).

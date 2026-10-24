@@ -8,6 +8,13 @@ import {
   type RecurringWorkMetrics,
   type RecurringWorkSpan,
 } from "./recurring-work-metrics.js";
+import {
+  emptySignalHealthStates,
+  recurringDiagnosticsRegistry,
+  type SignalDemotionReason,
+  type SignalHealthState,
+  type SignalHealthStatus,
+} from "./recurring-diagnostics.js";
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
@@ -66,6 +73,8 @@ export type ClaudeStatePoll = {
   /** The image has no signal; the container keeps the 1 s poll for its life. */
   signalUnsupported: boolean;
   signalArming?: Promise<void>;
+  /** The signal was demoted or failed to arm, and has not been confirmed since. */
+  signalDemoted: boolean;
   lastSignalAttemptAt?: number;
   /** Doorbells received, and the count when the previous read started. */
   rings: number;
@@ -139,6 +148,13 @@ export const CLAUDE_STATE_SIGNAL_MAX_RINGS_PER_MINUTE = 30;
 export const CLAUDE_STATE_RETIREMENT_CHECK_MS = 15_000;
 
 /**
+ * What the read prints when neither state file exists: terminal Claude has
+ * not run in this container (its hooks create the files). Framed with a
+ * control character so no file content can produce it.
+ */
+export const CLAUDE_STATE_ABSENT_MARKER = "\u001eabsent";
+
+/**
  * The command that reads the agent's self-reported state out of a container.
  * Extracted so the argv is assertable without a Docker daemon — a typo here
  * degrades to "always idle" rather than to a visible failure.
@@ -155,18 +171,28 @@ export function claudeStateReadCommand(containerId: string): {
       containerId,
       "sh",
       "-c",
-      "if [ -f /tmp/.claude-state-snapshot ]; then head -c 256 /tmp/.claude-state-snapshot; else head -c 256 /tmp/.claude-state; fi",
+      "if [ -f /tmp/.claude-state-snapshot ]; then head -c 256 /tmp/.claude-state-snapshot; elif [ -f /tmp/.claude-state ]; then head -c 256 /tmp/.claude-state; else printf '\\036absent'; fi",
     ],
     options: { timeoutMs: CLAUDE_STATE_READ_TIMEOUT_MS },
   };
 }
 
-/** Bounded v2 snapshots retain completion evidence even when both rings are lost. */
+/**
+ * Bounded v2 snapshots retain completion evidence even when both rings are lost.
+ *
+ * `absent` (no state file at all) is a successful read, not a failure: the
+ * counters a first hook would start from (revision 0, no completions). It is
+ * still no state to show, so it never emits or persists one.
+ */
 export function parseClaudeStateSnapshot(value: string): {
   state: string;
   revision?: number;
   completions?: number;
+  absent?: true;
 } {
+  if (value === CLAUDE_STATE_ABSENT_MARKER) {
+    return { state: "", revision: 0, completions: 0, absent: true };
+  }
   if (value === "working" || value === "waiting" || value === "idle") return { state: value };
   if (value.length > 255) return { state: "" };
   const match = /^(working|waiting|idle) ([0-9]{1,15}) ([0-9]{1,15})$/.exec(value);
@@ -188,6 +214,9 @@ export class ClaudeStatePollManager {
   private readonly nowMs: () => number;
   private readonly metrics: RecurringWorkMetrics;
   private signalInstaller: ClaudeStateSignalInstaller | null;
+  /** Lifetime counters for {@link status}. */
+  private readonly demotions: Partial<Record<SignalDemotionReason, number>> = {};
+  private acceptedRings = 0;
 
   constructor(options: ClaudeStatePollManagerOptions = {}) {
     this.metrics = options.metrics ?? recurringWorkMetrics;
@@ -233,6 +262,7 @@ export class ClaudeStatePollManager {
       context,
       signalConfirmed: false,
       signalUnsupported: false,
+      signalDemoted: false,
       rings: 0,
       ringsAtPreviousRead: 0,
       ringsInWindow: 0,
@@ -289,6 +319,8 @@ export class ClaudeStatePollManager {
         // The poll is unchanged; the next attempt waits for the retry window.
         if (this.isCurrent(containerId, poll)) {
           poll.signalConfirmed = false;
+          poll.signalDemoted = true;
+          this.countDemotion("arm-failed");
           this.reschedule(containerId, poll, CLAUDE_STATE_POLL_INTERVAL_MS);
         }
         this.revokeSignal(poll);
@@ -316,11 +348,13 @@ export class ClaudeStatePollManager {
     }
     poll.ringsInWindow += 1;
     if (poll.ringsInWindow > CLAUDE_STATE_SIGNAL_MAX_RINGS_PER_MINUTE) {
-      this.demoteSignal(containerId, poll, "rang too often");
+      this.demoteSignal(containerId, poll, "rang-too-often");
       return;
     }
     poll.rings += 1;
+    this.acceptedRings += 1;
     poll.signalConfirmed = true;
+    poll.signalDemoted = false;
     this.requestPoll(containerId, poll);
   }
 
@@ -328,13 +362,52 @@ export class ClaudeStatePollManager {
    * Stop trusting the doorbell: poll every second again. Revoking the
    * credential makes any further ring a 401 that costs no read.
    */
-  private demoteSignal(containerId: string, poll: ClaudeStatePoll, reason: string): void {
+  private demoteSignal(
+    containerId: string,
+    poll: ClaudeStatePoll,
+    reason: Extract<SignalDemotionReason, "missed-change" | "rang-too-often">,
+  ): void {
     poll.signalConfirmed = false;
+    poll.signalDemoted = true;
+    this.countDemotion(reason);
     this.revokeSignal(poll);
     this.reschedule(containerId, poll, CLAUDE_STATE_POLL_INTERVAL_MS);
     console.warn(
-      `[tmux] Claude state signal in ${containerId} ${reason}; polling every second until it is re-armed`,
+      `[tmux] Claude state signal in ${containerId} ${reason === "missed-change" ? "missed a change" : "rang too often"}; polling every second until it is re-armed`,
     );
+  }
+
+  private countDemotion(reason: SignalDemotionReason): void {
+    this.demotions[reason] = (this.demotions[reason] ?? 0) + 1;
+  }
+
+  /**
+   * Content-free signal health for recurring diagnostics: per-state counts of
+   * the polls held now, how many run the 1 s poll, and lifetime demotions.
+   */
+  status(): SignalHealthStatus {
+    const states = emptySignalHealthStates();
+    let fallback = 0;
+    for (const poll of this.polls.values()) {
+      states[this.healthOf(poll)] += 1;
+      if (poll.intervalMs !== CLAUDE_STATE_SAFETY_READ_INTERVAL_MS) fallback += 1;
+    }
+    return {
+      containers: this.polls.size,
+      states,
+      fallback,
+      demotions: { ...this.demotions },
+      rings: this.acceptedRings,
+    };
+  }
+
+  private healthOf(poll: ClaudeStatePoll): SignalHealthState {
+    if (poll.signalUnsupported) return "unsupported";
+    if (poll.signalConfirmed) return "confirmed";
+    if (poll.signal) return "armed";
+    if (poll.signalArming) return "arming";
+    if (poll.signalDemoted) return "demoted";
+    return "unarmed";
   }
 
   private revokeSignal(poll: ClaudeStatePoll): void {
@@ -453,7 +526,7 @@ export class ClaudeStatePollManager {
     // finds: that read may have run before the hook wrote the file.
     const ringsBeforePreviousRead = poll.ringsAtPreviousRead;
     const ringsAtReadStart = poll.rings;
-    const { state, revision, completions } = parseClaudeStateSnapshot(
+    const { state, revision, completions, absent } = parseClaudeStateSnapshot(
       (await this.readState(containerId).catch(() => "")).trim(),
     );
     if (!this.isCurrent(containerId, poll)) return;
@@ -470,14 +543,20 @@ export class ClaudeStatePollManager {
     const changed = known && (state !== poll.lastState || poll.stale || revisionChanged);
     if (changed) span?.changed();
     else span?.unchanged();
-    if (!known) this.retryObservation(containerId, poll);
+    // A container where terminal Claude never ran has no state file. That is
+    // an answer, not a failed read: it must not hold a confirmed doorbell on
+    // the 1 s poll (it still counts towards stale marking below, as before).
+    const observed = known || absent === true;
+    if (!observed) this.retryObservation(containerId, poll);
     // A tick that observed nothing new must cost nothing beyond the state read.
     // Loading environments here parses the whole environments file, once per
     // second per running container, to answer a question whose answer has not
     // changed. The retirement check below is what that read is *for*, and it
     // only has to be timely enough to stop polling a container that has gone.
     if (!changed && !this.isRetirementCheckDue(poll)) {
-      if (known) this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
+      if (observed) {
+        this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
+      }
       return;
     }
 
@@ -506,10 +585,14 @@ export class ClaudeStatePollManager {
       if (!this.isCurrent(containerId, poll)) return;
       poll.lastState = previous;
       poll.stale = true;
+      if (absent)
+        this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
       return;
     }
     if (!changed) {
-      if (known) this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
+      if (observed) {
+        this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
+      }
       return;
     }
     const occurredAt = this.now();
@@ -545,7 +628,7 @@ export class ClaudeStatePollManager {
       (state !== poll.lastState || revisionChanged) &&
       poll.rings === ringsBeforePreviousRead
     ) {
-      this.demoteSignal(containerId, poll, "missed a change");
+      this.demoteSignal(containerId, poll, "missed-change");
     }
     this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
     // Production hooks write `working` at UserPromptSubmit and `waiting` at
@@ -618,6 +701,7 @@ export class ClaudeStatePollManager {
 }
 
 export const defaultClaudeStatePolls = new ClaudeStatePollManager();
+recurringDiagnosticsRegistry.addSignalSource("claude-state-signal", defaultClaudeStatePolls);
 
 /**
  * Retire state polling for a container that is being stopped or deleted.

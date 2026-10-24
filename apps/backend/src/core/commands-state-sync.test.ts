@@ -3308,100 +3308,8 @@ describe("prompt queue commands", () => {
     });
   });
 
-  test("atomically claims the expected queue head", async () => {
+  test("rejects a malformed enqueue message", async () => {
     await withCommands(async (invoke) => {
-      await invoke("enqueue_prompt_queue_message", {
-        queueKey: KEY,
-        environmentId: "e1",
-        message: { id: "m1" },
-      });
-      await invoke("enqueue_prompt_queue_message", {
-        queueKey: KEY,
-        environmentId: "e1",
-        message: { id: "m2" },
-      });
-      const first = (await invoke("claim_prompt_queue_head", {
-        queueKey: KEY,
-        environmentId: "e1",
-        expectedMessageId: "m1",
-      })) as { claimToken: string };
-      expect(first).toMatchObject({
-        claimed: { id: "m1" },
-        queue: { messages: [{ id: "m2" }], revision: 3 },
-      });
-
-      await expect(
-        invoke("claim_prompt_queue_head", {
-          queueKey: KEY,
-          environmentId: "e1",
-          expectedMessageId: "m2",
-        }),
-      ).resolves.toMatchObject({
-        claimed: null,
-        claimToken: null,
-        queue: {
-          messages: [{ id: "m2" }],
-          revision: 3,
-          outstandingClaim: { message: { id: "m1" } },
-        },
-      });
-      await expect(
-        invoke("acknowledge_prompt_queue_claim", {
-          queueKey: KEY,
-          environmentId: "e1",
-          claimToken: first.claimToken,
-        }),
-      ).resolves.toMatchObject({
-        messages: [{ id: "m2" }],
-        revision: 4,
-      });
-    });
-  });
-
-  test("requeues, nacks, and acknowledges through registry commands", async () => {
-    await withCommands(async (invoke) => {
-      await invoke("requeue_prompt_queue_message", {
-        queueKey: KEY,
-        environmentId: "e1",
-        message: { id: "m1", text: "first", attachments: [] },
-      });
-      const claim = (await invoke("claim_prompt_queue_head", {
-        queueKey: KEY,
-        environmentId: "e1",
-        expectedMessageId: "m1",
-      })) as { claimToken: string };
-      await expect(
-        invoke("reject_prompt_queue_claim", {
-          queueKey: KEY,
-          environmentId: "e1",
-          claimToken: claim.claimToken,
-        }),
-      ).resolves.toMatchObject({ messages: [{ id: "m1" }] });
-
-      const retry = (await invoke("claim_prompt_queue_head", {
-        queueKey: KEY,
-        environmentId: "e1",
-        expectedMessageId: "m1",
-      })) as { claimToken: string };
-      await expect(
-        invoke("acknowledge_prompt_queue_claim", {
-          queueKey: KEY,
-          environmentId: "e1",
-          claimToken: retry.claimToken,
-        }),
-      ).resolves.toMatchObject({ messages: [] });
-    });
-  });
-
-  test("rejects malformed atomic-claim arguments", async () => {
-    await withCommands(async (invoke) => {
-      await expect(
-        invoke("claim_prompt_queue_head", {
-          queueKey: KEY,
-          environmentId: "e1",
-          expectedMessageId: "",
-        }),
-      ).rejects.toThrow();
       await expect(
         invoke("enqueue_prompt_queue_message", {
           queueKey: KEY,
@@ -3409,24 +3317,10 @@ describe("prompt queue commands", () => {
           message: "bad",
         }),
       ).rejects.toThrow("non-blank ID");
-      await expect(
-        invoke("acknowledge_prompt_queue_claim", {
-          queueKey: KEY,
-          environmentId: "e1",
-          claimToken: "",
-        }),
-      ).rejects.toThrow();
-      await expect(
-        invoke("reject_prompt_queue_claim", {
-          queueKey: KEY,
-          environmentId: "e1",
-          claimToken: "",
-        }),
-      ).rejects.toThrow();
     });
   });
 
-  test("rejects malformed reorder, removal, and requeue arguments", async () => {
+  test("rejects malformed reorder and removal arguments", async () => {
     // Each of these coerces at the registry boundary, so a bad payload must
     // fail there rather than reaching storage as a plausible-looking value.
     await withCommands(async (invoke) => {
@@ -3460,13 +3354,6 @@ describe("prompt queue commands", () => {
           messageId: 7,
         }),
       ).rejects.toThrow("messageId");
-      await expect(
-        invoke("requeue_prompt_queue_message", {
-          queueKey: KEY,
-          environmentId: "e1",
-          message: "bad",
-        }),
-      ).rejects.toThrow("non-blank ID");
     });
   });
 

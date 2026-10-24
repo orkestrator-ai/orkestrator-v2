@@ -160,6 +160,18 @@ The refreshed merge of `7e051d955` passed `mise run test:logged -- --name latest
 - **Aggregate evidence:** host temporary directories `orkestrator-test-run.jSDfl8/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.EDCav0/full-tests.log.gz`. Sidebar fixes are commit `6d6f9b83f`.
 - **Assessment:** confirmed intermittent recurrence; host process or filesystem contention remains a hypothesis. No disk-report implementation, assertion, timeout or skip changed, and the original aggregate remains failed.
 
+## Coordinator adapters main merge — 2026-10-24
+
+Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. The isolated-checkout fixture timed out at 5031.08 ms in the aggregate. `mise run test:logged -- --name merge-owner-disk -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed unchanged (6.1 s).
+
+Full failure names, counts, evidence paths and unresolved limitations are in [0724](../aggregate-validation-runs/0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.
+
+## Recurrence — 2026-10-24 (worktree signal review validation)
+
+- **Original command:** `mise run test:logged -- --name watcher-full-suite -- mise run test`; standard aggregate worker leases, with other checkout validation active on the host.
+- **Failure:** the isolated-checkout report exceeded five seconds (5108.36 ms), receiving null process status and a between-test error. Root/support reported 3378 passed, five failed and one error across 3383 tests in 565.21 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name watcher-disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` also timed out at 5033.12 ms (four passed, one failed, one error). The earlier combined one-worker firewall/disk rerun also failed this case (5034.77 ms). These results remain failed; this turn has not established a new isolated pass or root cause.
+- **Evidence:** `orkestrator-test-run.iTzv5K/` under the host temporary directory; the full aggregate remains failed. None of these owning files was changed.
 
 ## Runtime-state ownership main merge — 2026-10-24
 
@@ -172,3 +184,12 @@ Root aggregate: 3,377 passed, six failed and one error (546.21 s), including thi
 ## Design-agent links refresh through d6ed0717d — 2026-10-24
 
 The aggregate timed out at 5017.45 ms (root/support: 3381 passed, two failed). Its first unchanged one-worker rerun retained the timeout (4 passed, one failed, one error; 7.5 s). After observed host load fell from above 120 to 23.20, `mise run test:logged -- --name design-links-owner-disk-final -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed the complete unchanged owner in 2.2 s. Exact parents, original commands and artifacts are in [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md). No assertion, deadline or skip changed.
+
+## Container state observation main merge — 2026-10-24
+
+- **Parents:** feature `66a9736cc0c663bef147a65fc2d158e1951482dd` and main `d6ed0717d00a9a04ba658ba6c50e0978bc2011a6`.
+- **Original command:** `mise run test:logged -- --name merge-suite -- mise run test`; workspace/root/bridge/protocol reservations 4/1/2/1, alongside component, isolated-browser, Electron and Docker validation on the same host.
+- **Aggregate failure:** isolated-checkout report exceeded five seconds (5025.55 ms), receiving null process status and an error between tests.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` also failed: four passed, one failed and one error in 8.50 s; the report timed out at 5437.40 ms.
+- **Evidence:** `orkestrator-test-run.bFHIz7/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.iZxjhX/merge-disk-owner.log.gz` below the host temporary directory.
+- **Assessment:** no new isolated pass or cause was established; the aggregate and owner remain failed. No implementation, assertion, timeout or skip changed.

@@ -101,3 +101,11 @@ After correcting the preview tests' diagnostics assertions, `mise run test:logge
 - **Failure:** elapsed 5778 ms against `< 5000 ms` (6018.47 ms test duration).
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-mermaid-owner -- bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` passed, exit 0 (25.2 s logged).
 - **Evidence:** host temporary artifact `orkestrator-test-run.k5J28D/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after aggregate finalization. No implementation, assertion, deadline or skip changed.
+
+
+## Coordinator adapter review — 2026-10-24
+
+The aggregate repeated this case during coordinator adapter validation. Exact
+commands, timing, owner rerun results and evidence are recorded in
+[0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
+The owning implementation, assertions, timeouts and skips were unchanged.

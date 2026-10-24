@@ -2299,11 +2299,16 @@ export function parseIpTokens(output: string): string[] {
  * tools URL. Linux Engine needs a host-gateway alias, while Docker Desktop must
  * use its built-in DNS rather than an explicit Linux bridge-gateway override.
  */
-export async function ensureContainerAgentToolsHost(containerId: string): Promise<void> {
+export async function ensureContainerAgentToolsHost(
+  containerId: string,
+  signal?: AbortSignal,
+): Promise<void> {
   let existing = await dockerExec(
     containerId,
     `getent hosts ${CONTAINER_AGENT_TOOLS_HOST} 2>/dev/null || true`,
     10_000,
+    undefined,
+    signal,
   );
 
   // Docker Desktop's gateway hostname is a reliable in-container signal that
@@ -2315,12 +2320,16 @@ export async function ensureContainerAgentToolsHost(containerId: string): Promis
     containerId,
     `getent hosts ${DOCKER_DESKTOP_GATEWAY_HOST} 2>/dev/null || true`,
     10_000,
+    undefined,
+    signal,
   );
   if (parseIpTokens(desktopGateway).length > 0) {
     const explicitHostEntry = await dockerExec(
       containerId,
       `grep -E '^[^#]*[[:space:]]${CONTAINER_AGENT_TOOLS_HOST.replaceAll(".", "\\.")}([[:space:]]|$)' /etc/hosts 2>/dev/null || true`,
       10_000,
+      undefined,
+      signal,
     );
     if (explicitHostEntry.trim()) {
       const repairHosts = `
@@ -2333,12 +2342,14 @@ export async function ensureContainerAgentToolsHost(containerId: string): Promis
       await runCommand(
         "docker",
         ["exec", "--user", "root", containerId, "bash", "-lc", repairHosts],
-        { timeoutMs: 10_000 },
+        { timeoutMs: 10_000, signal },
       );
       existing = await dockerExec(
         containerId,
         `getent hosts ${CONTAINER_AGENT_TOOLS_HOST} 2>/dev/null || true`,
         10_000,
+        undefined,
+        signal,
       );
     }
     if (parseIpTokens(existing).length === 0) {
@@ -2357,7 +2368,7 @@ export async function ensureContainerAgentToolsHost(containerId: string): Promis
       "{{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}}",
       containerId,
     ],
-    { timeoutMs: 10_000 },
+    { timeoutMs: 10_000, signal },
   );
   const gateway = parseIpTokens(stdout)[0];
   if (!gateway) {
@@ -2387,7 +2398,7 @@ export async function ensureContainerAgentToolsHost(containerId: string): Promis
       "orkestrator-host-repair",
       gateway,
     ],
-    { timeoutMs: 10_000 },
+    { timeoutMs: 10_000, signal },
   );
 }
 
@@ -2424,6 +2435,7 @@ export async function resolveContainerAgentToolConnection(
 export async function ensureContainerHostServicePorts(
   containerId: string,
   servicePort: number | null,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!servicePort) return;
   const current = await runCommand(
@@ -2435,8 +2447,9 @@ export async function ensureContainerHostServicePorts(
       "-c",
       "[ -f /etc/orkestrator/network-policy ] && cat /etc/orkestrator/network-policy /etc/orkestrator/host-service-ports || true",
     ],
-    { timeoutMs: 10_000 },
+    { timeoutMs: 10_000, signal },
   ).catch(() => null);
+  signal?.throwIfAborted();
   if (!current) return;
   const [policy, ports = ""] = current.stdout.trim().split("\n");
   if (policy?.trim() !== "2" && policy?.trim() !== "3") return;
@@ -2452,6 +2465,6 @@ export async function ensureContainerHostServicePorts(
       "--host-ports",
       String(servicePort),
     ],
-    { timeoutMs: 20_000 },
+    { timeoutMs: 20_000, signal },
   );
 }

@@ -53,3 +53,10 @@ No assertion, timeout, production account behavior or skip was changed.
 ## Design-agent links refresh through d6ed0717d — 2026-10-24
 
 The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 6.4 s: `mise run test:logged -- --name design-links-owner-agent-accounts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/agent-accounts.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.
+
+## Coordinator adapter review — 2026-10-24
+
+The aggregate repeated this case during coordinator adapter validation. Exact
+commands, timing, owner rerun results and evidence are recorded in
+[0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
+The owning implementation, assertions, timeouts and skips were unchanged.

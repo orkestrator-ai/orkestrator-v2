@@ -69,6 +69,20 @@ export function flowViewportHeight(contentHeight: number): number {
   return clamp(contentHeight, FLOW_GRAPH_MIN_HEIGHT, FLOW_VIEWPORT_MAX_HEIGHT);
 }
 
+/** The shortest the divider drags the viewport to. */
+export const FLOW_VIEWPORT_RESIZE_MIN_HEIGHT = 160;
+
+/**
+ * A height dragged with the divider, kept between
+ * {@link FLOW_VIEWPORT_RESIZE_MIN_HEIGHT} and the graph's height at the
+ * largest zoom (or {@link FLOW_VIEWPORT_MAX_HEIGHT}, if that is taller):
+ * beyond it there is only empty canvas.
+ */
+export function resizedFlowViewportHeight(requested: number, contentHeight: number): number {
+  const max = Math.max(FLOW_VIEWPORT_MAX_HEIGHT, Math.ceil(contentHeight * FLOW_ZOOM_MAX));
+  return Math.round(clamp(requested, FLOW_VIEWPORT_RESIZE_MIN_HEIGHT, max));
+}
+
 /** Where the scaled canvas starts inside the viewport: centred when it is smaller. */
 export function flowContentOffset(
   zoom: number,

@@ -132,7 +132,7 @@ describe("copying a project to another machine", () => {
       "unchecked",
     );
     // Dependencies are listed behind a toggle and never ticked.
-    expect(screen.queryByRole("checkbox", { name: "node_modules/" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "node_modules/" }) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /Dependencies and build output/ }));
     expect(screen.getByRole("checkbox", { name: "node_modules/" }).getAttribute("data-state")).toBe(
       "unchecked",
@@ -226,7 +226,7 @@ describe("copying a project to another machine", () => {
         "checked",
       ),
     );
-    expect(screen.queryByTestId("node-action-request")).toBeNull();
+    expect(screen.queryByTestId("node-action-request") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Approve and copy" }));
 
     await waitFor(() => expect(resolved).toHaveLength(1));

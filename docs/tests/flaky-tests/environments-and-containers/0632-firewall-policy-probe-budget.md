@@ -25,3 +25,7 @@
   tab); nothing in `tests/unit/firewall-policy.test.ts`,
   `docker/firewall-domains.sh` or the network allowlist changed there. The
   likely fix is an explicit outer budget for these cases, as 0159 took.
+
+## Agent accounts and sign-in (0003) validation — 2026-10-24
+
+Recurred in the non-iOS aggregate on node mbp3 (thirteen `container firewall policy` cases at ~5,003 ms); the unchanged owner passed alone (24 passed). Details in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md). No implementation, assertion, timeout or skip changed.

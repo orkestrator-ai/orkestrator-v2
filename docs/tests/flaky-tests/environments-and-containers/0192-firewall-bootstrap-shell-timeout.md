@@ -222,3 +222,7 @@ cache` at 5007.56 ms. The root group had 3382 passed and one failed test.
 complete unchanged owner in 19.6 s. Original group evidence is
 `orkestrator-test-run.AW4scv/root-and-agent-support-tests.log.gz` under the host
 temporary directory. No firewall implementation, assertion, timeout or skip changed.
+
+## Agent accounts and sign-in (0003) validation — 2026-10-24
+
+Recurred in the non-iOS aggregate on node mbp3 (thirteen `container firewall policy` cases at ~5,003 ms); the unchanged owner passed alone (24 passed). Details in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md). No implementation, assertion, timeout or skip changed.

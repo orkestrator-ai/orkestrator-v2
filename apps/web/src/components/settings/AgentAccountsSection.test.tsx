@@ -185,7 +185,7 @@ describe("AgentAccountsSection", () => {
       within(added).getByText(/No longer shared with the host login: config\.toml, rules\./),
     ).toBeTruthy();
     const host = screen.getByRole("listitem", { name: "Host login" });
-    expect(within(host).queryByText(/No longer shared/)).toBeNull();
+    expect(within(host).queryByText(/No longer shared/) === null).toBe(true);
   });
 
   test("lists the active account first, then the rest alphabetically", async () => {

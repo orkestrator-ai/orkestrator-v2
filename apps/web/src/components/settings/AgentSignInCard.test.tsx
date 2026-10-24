@@ -99,8 +99,8 @@ describe("AgentSignInCard", () => {
       expect(within(card).getByText(`${platform}@example.test · pro`)).toBeTruthy();
       // Nothing to do: no hint, no sign-in action.
       if (HINTS[platform])
-        expect(within(card).queryByText(HINTS[platform], { exact: false })).toBeNull();
-      expect(within(card).queryByRole("button", { name: "Sign in to Claude" })).toBeNull();
+        expect(within(card).queryByText(HINTS[platform], { exact: false }) === null).toBe(true);
+      expect(within(card).queryByRole("button", { name: "Sign in to Claude" }) === null).toBe(true);
     } else {
       if (HINTS[platform])
         expect(within(card).getByText(HINTS[platform], { exact: false })).toBeTruthy();

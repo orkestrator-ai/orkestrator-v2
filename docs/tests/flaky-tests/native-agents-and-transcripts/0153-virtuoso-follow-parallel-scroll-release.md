@@ -45,3 +45,12 @@ That combined command reported twenty passed, four skipped and two failures
 directory. No assertion, timeout, skip or implementation changed in this owner.
 
 The desktop follow-release case failed in the aggregate.
+
+## GitHub HTML main merge — 2026-10-24
+
+- **Parents:** feature `66dd560f9b4414ed57e3450237c2a2735ca4cdc1` and main `d723429d58c52d8290c951fa113625431ad3c3fb`.
+- **Original command:** `ORKESTRATOR_E2E_PORT=55498 mise run test:logged -- --name merge-browser -- mise run test:browser`, nine component workers alongside repository, Electron and isolated-browser validation.
+- **Failure:** the desktop follow-release case at `VirtuosoFollow.spec.ts:43` retained `false` instead of `auto` after five seconds. The complete component suite reported 581 passed, 102 skipped and three failed across 686 cases (366.8 s logged); the other two failures were the recorded native branch suggestions.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=52522 mise run test:logged -- --name merge-follow-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1 --output output/playwright/merge-follow-owner` passed both desktop cases with two mobile skips (5.2 s logged).
+- **Evidence:** `orkestrator-test-run.l09gNo/merge-browser.log.gz` under the host temporary directory; passing owner summary in `orkestrator-test-run.4PLw6Z/summary.json`.
+- **Assessment:** confirms an intermittent recurrence of follow re-engagement on the merged tree. Host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.

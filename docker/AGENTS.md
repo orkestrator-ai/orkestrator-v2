@@ -17,7 +17,7 @@ These rules apply to `docker/` and to container lifecycle code such as
 
 ## Image contents
 
-The image is built from `oven/bun:1.4.3-debian`, matching the Bun version
+The image is built from `oven/bun:1.4.4-debian`, matching the Bun version
 managed in `mise.toml` for development and CI. Every agent CLI version below
 is pinned by an `ARG` in `docker/Dockerfile`, which is its container source of
 truth.

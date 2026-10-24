@@ -439,7 +439,7 @@ export async function compileElectronForDevelopment(
   const checked = (
     dependencies.typecheck ??
     (() =>
-      spawnSync("bunx", ["tsc", "--noEmit", "-p", "tsconfig.electron.json"], {
+      spawnSync("bun", ["check", "-p", "tsconfig.electron.json"], {
         cwd: packageRoot,
         encoding: "utf8",
       }))

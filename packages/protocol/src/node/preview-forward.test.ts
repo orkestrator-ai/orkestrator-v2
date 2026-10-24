@@ -570,6 +570,10 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
     Buffer.from("1"),
   ]);
 
+  // Since Bun 1.4.4 the node:http parser answers these raw targets with a bare
+  // 400 before the forwarder runs; Electron's Node still hands them to the
+  // forwarder, whose `invalid-request` refusal preview-http1.test.ts covers.
+  // Either way nothing may reach the upstream.
   test("non-ASCII request targets are refused before any upstream I/O", async () => {
     const answer = await rawExchange(
       Buffer.concat([
@@ -579,7 +583,6 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
       ]),
     );
     expect(answer).toStartWith("HTTP/1.1 400");
-    expect(answer.toLowerCase()).toContain("x-orkestrator-preview-error: invalid-request");
     expect(connects).toBe(0);
     expect(fixture.requests).toHaveLength(0);
   });
@@ -595,7 +598,6 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
       ]),
     );
     expect(answer).toStartWith("HTTP/1.1 400");
-    expect(answer).toContain("x-orkestrator-preview-error: invalid-request");
     expect(connects).toBe(0);
   });
 

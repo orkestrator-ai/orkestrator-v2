@@ -16,7 +16,7 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
 ## Current state
 
 - **CI.** `.github/workflows/ci.yml` runs on pushes to `main` and on pull
-  requests, with three jobs: "oxfmt and oxlint", "Typecheck", and "Unit and
+  requests, with three jobs: "bun fmt and oxlint", "Typecheck", and "Unit and
   integration tests". `validate-bun-runtime.yml` builds the bundled Bun per
   platform and runs the container smoke. A failing group prints its output
   tail and then Bun's report for every failing test. Since 2026-10-15 that
@@ -202,7 +202,7 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
    restart the count. The maintainer approved this ruleset on 2026-10-15; its
    inputs were rechecked on 2026-10-22 against the check runs of `c66604e2`.
 
-   - Required checks: `oxfmt and oxlint`, `Typecheck` and
+   - Required checks: `bun fmt and oxlint`, `Typecheck` and
      `Unit and integration tests` from `.github/workflows/ci.yml`, all reported
      by `github-actions` (app 15368). `tests/unit/ci-workflows.test.ts` fails if
      a context below stops matching a `ci.yml` job name.
@@ -226,7 +226,7 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
            "strict_required_status_checks_policy": false,
            "do_not_enforce_on_create": false,
            "required_status_checks": [
-             { "context": "oxfmt and oxlint", "integration_id": 15368 },
+             { "context": "bun fmt and oxlint", "integration_id": 15368 },
              { "context": "Typecheck", "integration_id": 15368 },
              { "context": "Unit and integration tests", "integration_id": 15368 }
            ]

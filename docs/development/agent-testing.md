@@ -14,7 +14,7 @@ timeouts, cache behavior, or failure artifacts.
 
 ## Prerequisites
 
-- macOS or Linux, mise with the repository-pinned Bun 1.4.3 installed, and
+- macOS or Linux, mise with the repository-pinned Bun 1.4.4 installed, and
   repository dependencies installed.
 - Docker only for container fixture environments. The default fixture and local
   smoke path do not require a Docker image.

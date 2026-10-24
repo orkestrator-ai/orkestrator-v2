@@ -12,7 +12,7 @@
 # only each bridge's runtime output. Same pinned base (and glibc) as the final
 # stage, so vendored native helpers match the runtime.
 # ---------------------------------------------------------------------------
-FROM oven/bun:1.4.3-debian@sha256:923bedb355f7746666659f71e724998159a5c8c54bd1cb1030e1975a0698415b AS bridge-build
+FROM oven/bun:1.4.4-debian@sha256:93d5032fe06d163427822dc1598f420363759bb18155c9cc90eb1be05a64a19e AS bridge-build
 WORKDIR /opt/bridge-build
 # Manifests first: a source edit reuses the install layer; a lockfile, patch or
 # manifest edit invalidates it. Every workspace manifest is present so the
@@ -60,7 +60,7 @@ RUN cd bridges/cursor-bridge && bun run build && rm -rf node_modules
 # ---------------------------------------------------------------------------
 # Development runtime image.
 # ---------------------------------------------------------------------------
-FROM oven/bun:1.4.3-debian@sha256:923bedb355f7746666659f71e724998159a5c8c54bd1cb1030e1975a0698415b
+FROM oven/bun:1.4.4-debian@sha256:93d5032fe06d163427822dc1598f420363759bb18155c9cc90eb1be05a64a19e
 
 ARG TZ
 ENV TZ="$TZ"
@@ -381,12 +381,12 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   tar -xzf "/tmp/${MISE_TARBALL}" -C /opt/mise --strip-components=1 --no-same-owner && \
   ln -s /opt/mise/bin/mise /usr/local/bin/mise && \
   chmod 755 /opt/mise/bin/mise && \
-  mise install --system bun@1.4.3 && \
-  BUN_INSTALL_DIR="$(mise where bun@1.4.3)" && \
+  mise install --system bun@1.4.4 && \
+  BUN_INSTALL_DIR="$(mise where bun@1.4.4)" && \
   test -x "$BUN_INSTALL_DIR/bin/bun" && \
   ln -sf "$BUN_INSTALL_DIR/bin/bun" /usr/local/bin/bun && \
-  test "$(/usr/local/bin/bun --version)" = "1.4.3" && \
-  mise exec bun@1.4.3 -- bun --version && \
+  test "$(/usr/local/bin/bun --version)" = "1.4.4" && \
+  mise exec bun@1.4.4 -- bun --version && \
   printf '%s\n' 'eval "$(/usr/local/bin/mise activate zsh)"' >> /home/node/.zshrc && \
   chown node:node /home/node/.zshrc && \
   rm -f "/tmp/${MISE_TARBALL}" && \
@@ -399,8 +399,8 @@ ENV MISE_TRUSTED_CONFIG_PATHS=/workspace
 ENV MISE_SELF_UPDATE_AVAILABLE=false
 USER node
 WORKDIR /workspace
-RUN test "$(/usr/local/bin/bun --version)" = "1.4.3" \
- && test "$(/usr/local/bin/bunx --version)" = "1.4.3" \
+RUN test "$(/usr/local/bin/bun --version)" = "1.4.4" \
+ && test "$(/usr/local/bin/bunx --version)" = "1.4.4" \
  && printf '%s\n' '[env]' 'ORKESTRATOR_MISE_TRUST_SMOKE = "trusted"' > mise.toml \
  && zsh -ic 'command -v mise >/dev/null && typeset -f _mise_hook >/dev/null && test "$ORKESTRATOR_MISE_TRUST_SMOKE" = trusted && mise --version' \
  && rm mise.toml

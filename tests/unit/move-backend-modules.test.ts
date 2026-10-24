@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -38,8 +38,6 @@ async function fixture(files: Record<string, string>) {
     path.join(repositoryRoot, "scripts/move-backend-modules.ts"),
     path.join(root, "scripts/move-backend-modules.ts"),
   );
-  // Exercise the installed formatter without downloading packages in fixtures.
-  await symlink(path.join(repositoryRoot, "node_modules"), path.join(root, "node_modules"), "dir");
   for (const [file, source] of Object.entries(files)) await write(root, file, source);
   run(root, ["git", "init", "--quiet"]);
   run(root, ["git", "add", "--", ...Object.keys(files)]);
@@ -144,7 +142,7 @@ describe("move-backend-modules CLI", () => {
 
     move(root);
 
-    // oxfmt normalizes single quotes, so assert the resulting parsed spellings.
+    // `bun fmt` normalizes single quotes, so assert the resulting parsed spellings.
     const moved = await read(root, `${core}/design/service.test.ts`);
     for (const target of ["./service", "../config"]) {
       expect(moved).toContain(`import "${target}.js"`);

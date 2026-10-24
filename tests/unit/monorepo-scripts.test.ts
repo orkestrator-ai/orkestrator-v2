@@ -51,7 +51,7 @@ describe("monorepo orchestration scripts", () => {
     const dev = read("apps/desktop/scripts/dev.ts");
     const lifecycle = read("apps/desktop/scripts/dev/lifecycle.ts");
     expect(build).toContain("result.status ?? 1");
-    expect(build).toContain('run("bunx", ["tsc", "--noEmit"');
+    expect(build).toContain('run("bun", ["check", "-p"');
     expect(build).toContain("dependencies.bundle ?? bundleElectron");
     expect(build).toContain("if (!result.success)");
     expect(bundle).toContain("Bun.build(");
@@ -62,7 +62,7 @@ describe("monorepo orchestration scripts", () => {
     expect(build).toContain("rmSync(output");
     // Development must bundle like production: a `tsc` emit leaves workspace
     // imports pointing at raw `.ts` sources that Electron's Node cannot run.
-    expect(lifecycle).toContain('spawnSync("bunx", ["tsc", "--noEmit"');
+    expect(lifecycle).toContain('spawnSync("bun", ["check", "-p"');
     expect(lifecycle).toContain(
       "await compileElectronForDevelopment(profile.logDir, dependencies)",
     );
@@ -360,7 +360,7 @@ describe("monorepo orchestration scripts", () => {
   test("the workspace worker count is never passed through Turbo's `--` separator", () => {
     // Turbo hashes passthrough arguments into the requested task *and its
     // dependencies*, so `-- --parallel=N` gave `bun run build` and `bun run test`
-    // different `#build` hashes and re-ran `tsc && vite build` on every
+    // different `#build` hashes and re-ran `bun check && vite build` on every
     // alternation between the two commands.
     const source = read("scripts/test-all.ts");
     expect(source).not.toContain('"--",');

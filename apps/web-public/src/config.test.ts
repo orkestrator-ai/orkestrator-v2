@@ -14,7 +14,7 @@ describe("public client deployment configuration", () => {
       scripts: Record<string, string>;
     };
     expect(manifest.name).toBe("@orkestrator/web-public");
-    expect(manifest.scripts.build).toContain("tsc");
+    expect(manifest.scripts.build).toContain("bun check");
     expect(manifest.scripts.build).toContain("vite build");
     // scripts/test-all.ts supplies the worker count through the environment so
     // every package task shares the aggregate budget. It deliberately does not

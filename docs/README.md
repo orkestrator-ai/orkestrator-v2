@@ -83,7 +83,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [credentials-and-models.md](development/credentials-and-models.md) | Credential and catalogue inventory. |
 | [test-logs.md](development/test-logs.md) | Diagnostic-bounds rationale. Operator commands stay in `testing-guide.md`. |
 | [disk-usage.md](development/disk-usage.md) | Where Orkestrator work leaves disk state, who prunes each location, `disk:report`, `dev:prune`, Docker build-cache limit. |
-| [linting.md](development/linting.md) | oxfmt/oxlint configuration, exclusions, severity policy and disable-directive rules. |
+| [linting.md](development/linting.md) | `bun fmt`/oxlint/`bun check` configuration, exclusions, severity policy and disable-directive rules. |
 | [releasing.md](development/releasing.md) | Cutting a desktop release, CI secrets, artifact names, how the in-app updater decides to run, Linux/Omarchy notes. |
 | [container-qualification.md](development/container-qualification.md) | Real-Docker qualification: C01–C30 scenario matrix, live suites and how to run them, platform dimensions, benchmark harness and regression targets. |
 | [preview-two-machine-runbook.md](development/preview-two-machine-runbook.md) | Two-machine tailnet run for service previews: `scripts/preview-latency-baseline.ts` (route baselines, client decoy, userspace throttle, diagnostics watch, slow reader), whole-link throttling, loss and reconnect, publication, cleanup, what to record. Thresholds are not set yet. Gate: [0042-service-preview-rollout.md](todo/previews-and-annotations/0042-service-preview-rollout.md). |

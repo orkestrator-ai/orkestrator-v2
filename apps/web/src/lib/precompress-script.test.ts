@@ -216,7 +216,7 @@ describe("web build asset contract", () => {
       scripts?: { build?: string };
     };
     expect(packageJson.scripts?.build).toBe(
-      "bunx tsc && bunx vite build && bun run scripts/precompress.ts",
+      "bun check && bunx vite build && bun run scripts/precompress.ts",
     );
 
     const stylesheet = await readFile(path.join(webRoot, "src/index.css"), "utf8");

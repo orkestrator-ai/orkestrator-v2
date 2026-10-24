@@ -33,6 +33,7 @@ import { HostSuspendDetector } from "./host-suspend-detector.js";
 import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { setHostClaudeLoginRefresher } from "./agent-accounts-containers.js";
+import { setLocalClaudeLoginRefresher } from "./agent-accounts-active.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 
 /** Former activity-bundle cadence, per named job. */
@@ -1228,6 +1229,7 @@ export class OrkestratorBackend {
     });
     const keeper = this.claudeLoginKeeper;
     setHostClaudeLoginRefresher(() => keeper.refreshHostIfDue());
+    setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
     keeper.start();
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
@@ -1866,6 +1868,7 @@ export class OrkestratorBackend {
     this.claudeLoginKeeper?.stop();
     this.claudeLoginKeeper = null;
     setHostClaudeLoginRefresher(undefined);
+    setLocalClaudeLoginRefresher(undefined);
     // Log followers are observers; stopping them never touches containers.
     shutdownContainerLogService();
     shutdownOomEventWatcher();

@@ -3,6 +3,7 @@ import { Check, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { writeText } from "@/lib/native/clipboard";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import { openInBrowser, submitAgentAccountLoginCode } from "@/lib/backend";
 import type { AgentAccountLoginProgress } from "@orkestrator/protocol/agent-accounts";
 
@@ -28,13 +29,14 @@ export function AgentAccountLoginPanel({
   const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
+  const { machine } = useAccountMachine();
   const url = progress.url;
   const renewing = progress.mode === "reauthenticate";
 
   const submit = async () => {
     setSubmitting(true);
     try {
-      await submitAgentAccountLoginCode(code);
+      await submitAgentAccountLoginCode(code, machine);
       setCode("");
     } catch (cause) {
       onError(messageOf(cause));

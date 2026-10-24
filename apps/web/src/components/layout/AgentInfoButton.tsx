@@ -76,6 +76,7 @@ import {
 import { agentMailCapabilities } from "@orkestrator/protocol/agent-mail";
 import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
+import { AgentInfoAccountSection } from "./AgentInfoAccountSection";
 
 interface AgentInfoButtonProps {
   activeTab: TabInfo | null;
@@ -1476,6 +1477,10 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                     ) : null}
                   </div>
                 ) : null}
+                <AgentInfoAccountSection
+                  environmentId={activeSession.environmentId}
+                  provider={activeSession.provider}
+                />
                 {accountReadFailed ? (
                   <div className="flex items-center justify-between gap-3 text-xs">
                     <span>Could not read account status.</span>

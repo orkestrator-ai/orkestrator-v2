@@ -41,6 +41,7 @@ import { machineInvoke } from "./machine-access";
 import type { MachineEntry } from "./machine-list";
 import { MachineSection, MachineStatusDot, errorText, formatMachineTime } from "./machine-ui";
 import type { ConnectionsApi } from "./useMachines";
+import { MachineAgentAccountsSection } from "./MachineAgentAccountsSection";
 
 const MODE_TEXT = { standalone: "Standalone", command: "Command node", leaf: "Leaf" } as const;
 
@@ -113,6 +114,14 @@ export function MachineSettingsDialog({
             />
           ) : api && !connection && node && origin?.kind === "https" ? (
             <SaveOnDeviceForm api={api} origin={origin.origin} name={machine.name} />
+          ) : null}
+          {machine.role === "self" ? (
+            <MachineAgentAccountsSection selfOnly onManage={() => onOpenChange(false)} />
+          ) : node ? (
+            <MachineAgentAccountsSection
+              nodeId={node.nodeId}
+              onManage={() => onOpenChange(false)}
+            />
           ) : null}
           {machine.role === "self" && status ? (
             <CommandNodeSection status={status} onChanged={onChanged} />

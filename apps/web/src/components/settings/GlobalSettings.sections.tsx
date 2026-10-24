@@ -97,6 +97,7 @@ import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { PlanUsageSection } from "./PlanUsageSection";
+import { AccountMachineScope } from "./account-machine";
 import { AgentAccountsSection } from "./AgentAccountsSection";
 import { OpenCodeProvidersSection } from "./OpenCodeProvidersSection";
 import { isAgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
@@ -602,15 +603,21 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     <div className="max-w-2xl space-y-5">
       {/* Platforms with accounts show usage on each account instead. */}
       {isAgentAccountPlatform(platform) ? (
-        <AgentAccountsSection
-          key={`accounts-${platform}`}
-          platform={platform}
-          reloadToken={planUsageRefreshToken}
-        />
+        <AccountMachineScope>
+          <AgentAccountsSection
+            key={`accounts-${platform}`}
+            platform={platform}
+            reloadToken={planUsageRefreshToken}
+          />
+        </AccountMachineScope>
       ) : (PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (
         <PlanUsageSection key={platform} platform={platform} reloadToken={planUsageRefreshToken} />
       ) : null}
-      {platform === "opencode" ? <OpenCodeProvidersSection /> : null}
+      {platform === "opencode" ? (
+        <AccountMachineScope>
+          <OpenCodeProvidersSection />
+        </AccountMachineScope>
+      ) : null}
       <AgentPlatformPane
         platform={platform}
         tier={agentSettings}
@@ -723,7 +730,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                   ? " Your stored PAT remains available if you turn this off."
                   : ""}
               </p>
-              <GitHubCliSetup />
+              <AccountMachineScope>
+                <GitHubCliSetup />
+              </AccountMachineScope>
             </div>
           ) : (
             <div className="space-y-3 border-t border-zinc-800 p-4">
@@ -1394,10 +1403,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               Cursor sessions run through Cursor&apos;s TypeScript SDK.
             </p>
           </div>
-          <CursorSdkSignIn
-            credentialRevision={`${global.cursorApiKeyConfigured === true}:${global.cursorApiKeySource ?? "none"}`}
-            onCredentialChange={() => setPlanUsageRefreshToken((token) => token + 1)}
-          />
+          <AccountMachineScope>
+            <CursorSdkSignIn
+              credentialRevision={`${global.cursorApiKeyConfigured === true}:${global.cursorApiKeySource ?? "none"}`}
+              onCredentialChange={() => setPlanUsageRefreshToken((token) => token + 1)}
+            />
+          </AccountMachineScope>
         </div>
       </>,
     );

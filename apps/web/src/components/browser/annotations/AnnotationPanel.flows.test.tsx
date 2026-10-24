@@ -262,6 +262,36 @@ describe("annotation panel flows", () => {
     expect(await screen.findByText(/too large to search in time/)).toBeTruthy();
   });
 
+  test("results resolved against the page being left are dropped on a new document", async () => {
+    backend.seed({ id: "annotation-left", title: "Left behind" });
+    capture.mocks.showPins.mockImplementation(
+      async (input: { pins: Array<{ annotationId: string }> }) =>
+        input.pins.map((pin) => ({
+          annotationId: pin.annotationId,
+          resolution: {
+            state: "too-complex" as const,
+            rule: "none" as const,
+            candidateCount: 0,
+            documentGeneration: 4,
+            rect: null,
+          },
+        })),
+    );
+    seedBrowserLayout({ open: true });
+    render(<AnnotationHarness />);
+    expect(await screen.findByText(/too large to search in time/)).toBeTruthy();
+    // A navigation: main reports document 5, and a reply still resolved
+    // against document 4 arrives afterwards. It describes the page that was
+    // left, so it is not shown.
+    bus.emit(BROWSER_PREVIEW_CAPTURE_EVENT, {
+      tabId: "browser-1",
+      captureId: null,
+      status: "pins-invalidated",
+      documentGeneration: 5,
+    });
+    await waitFor(() => expect(screen.queryByText(/too large to search in time/)).toBeNull());
+  });
+
   test("Show on page uses the desktop flow and explains each outcome", async () => {
     backend.seed({ id: "annotation-show", title: "Show me" });
     const showOnPage = mock(async () => ({

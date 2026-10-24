@@ -1,5 +1,11 @@
+import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
 import { coordinatorNodeContext } from "./nodes/node-context.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import {
+  bridgeRemoteCoordinatorEvents,
+  NodeCoordinatorRemote,
+} from "./nodes/node-coordinator-remote.js";
 import { NodePortal } from "./nodes/node-portal.js";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
@@ -33,6 +39,10 @@ import { HostSuspendDetector } from "./host-suspend-detector.js";
 import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { setHostClaudeLoginRefresher } from "./agent-accounts-containers.js";
+import {
+  setLocalClaudeLoginRefresher,
+  setLocalCodexLoginRefresher,
+} from "./agent-accounts-active.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 
 /** Former activity-bundle cadence, per named job. */
@@ -511,6 +521,22 @@ export class OrkestratorBackend {
       emit: (event, payload) => options.emit(event, payload),
     });
     context.nodeCoordination = this.nodeCoordination;
+    // Coordinator work on the nodes this one controls is read through the
+    // node link, and their relayed changes settle it promptly.
+    this.coordinators.setRemoteAccess(
+      new NodeCoordinatorRemote({
+        invokeOnNode: (input) => this.nodePortal.invokeOnNode(input),
+        summaries: (nodeIds) => this.nodePortal.summaries(nodeIds),
+        collectMail: (nodeId) => this.nodeCoordination.collector.collect(nodeId as BackendId),
+      }),
+    );
+    bridgeRemoteCoordinatorEvents({
+      onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
+      settleRemoteWorker: (nodeId, environmentId) =>
+        this.coordinators.settleRemoteWorker(nodeId, environmentId),
+      noteRemoteWorkflowChange: (nodeId, kind, id) =>
+        this.coordinators.statusWakes.noteRemoteWorkflowChange(nodeId, kind, id),
+    });
     const interactionMonitorMode =
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
         ? ("observe-only" as const)
@@ -1240,7 +1266,9 @@ export class OrkestratorBackend {
     });
     const keeper = this.claudeLoginKeeper;
     setHostClaudeLoginRefresher(() => keeper.refreshHostIfDue());
+    setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
     keeper.start();
+    setLocalCodexLoginRefresher(createCodexLoginRefresher(this.context));
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.
@@ -1878,6 +1906,8 @@ export class OrkestratorBackend {
     this.claudeLoginKeeper?.stop();
     this.claudeLoginKeeper = null;
     setHostClaudeLoginRefresher(undefined);
+    setLocalClaudeLoginRefresher(undefined);
+    setLocalCodexLoginRefresher(undefined);
     // Log followers are observers; stopping them never touches containers.
     shutdownContainerLogService();
     shutdownOomEventWatcher();

@@ -81,3 +81,12 @@
 - **Complete owning-file rerun:** `mise run test:logged -- --name container-fetch-isolated -- bun --cwd=apps/backend test ./src/core/container-git-fetch-git.test.ts --parallel=1 --only-failures` passed (13.0 seconds logged, exit 0).
 - **Evidence:** `orkestrator-test-run.tXLYBH/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence; concurrent load remains a hypothesis. No assertion, deadline or skip changed.
+
+## Transcript scroll validation — 2026-10-24
+
+- **Command:** `mise run test:logged -- --name final-repository -- mise run test`, while focused Playwright and unit runs for the transcript change ran in the same worktree.
+- **Failure:** the branch-baseline case timed out at 5204.28 ms against the 5000 ms deadline. Its owning test and Git implementation were unchanged (the branch changes only renderer transcript code).
+- **Complete owning-file rerun:** `mise run test:logged -- --name backend-git-fetch -- bun --cwd=apps/backend test src/core/container-git-fetch-git.test.ts --parallel=1 --only-failures` passed (5.0 s logged, exit 0).
+- **Suite counts:** backend 10,568 passed, 77 skipped and 16 failed across 10,661 tests in 618 files (855.84 s); the other failures were this run's watchdog recurrence (0512) and 14 OpenCode execution-policy conformance cases that also fail on the unchanged baseline (host CLI 1.19.4 against an expected 1.19.0).
+- **Evidence:** `orkestrator-test-run.4LYtCC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence; concurrent load remains a hypothesis. No assertion, deadline or skip changed.

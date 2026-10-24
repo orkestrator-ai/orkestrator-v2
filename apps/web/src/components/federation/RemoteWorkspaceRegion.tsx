@@ -15,10 +15,12 @@ import {
   parseRealmMessage,
   readFrameEnvelope,
   realmSearchParams,
+  type RealmGrouping,
   type RealmSelectRequest,
   type ShellToRealmMessage,
 } from "@/lib/federation/workspace-realm";
 import { isGlobalSettingsSection, requestGlobalSettings } from "@/lib/settings-navigation";
+import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores/uiStore";
 import {
   closeLeafWorkspace,
@@ -148,18 +150,22 @@ function selectRequest(request: RealmRequest | undefined): Omit<RealmSelectReque
  * Delivery of the window's requests to one realm: the request the realm was
  * opened with is in its URL; later ones are sent once the realm says it is
  * listening, and each at most once. The realm also follows the window's
- * sidebar, which its toolbar toggles.
+ * sidebar, which its toolbar toggles, and its grouping, which decides
+ * whether the node's coordinator opens directly.
  */
 function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) => void) | null) {
   const request = useRemoteWorkspaceStore((state) => state.requests[nodeId]);
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
+  const storedGrouping = useMachineViewStore((state) => state.grouping);
+  const sortMode = useUIStore((state) => state.environmentSortMode);
+  const grouping: RealmGrouping = sortMode === "activity" ? "activity" : storedGrouping;
   const delivered = useRef(0);
   const ready = useRef(false);
   const selection = useRef<Omit<RealmSelectRequest, "type">>({});
   // The latest values, for the callbacks below; kept current after each render.
-  const latest = useRef({ request, sidebarOpen, send });
+  const latest = useRef({ request, sidebarOpen, grouping, send });
   useLayoutEffect(() => {
-    latest.current = { request, sidebarOpen, send };
+    latest.current = { request, sidebarOpen, grouping, send };
   });
 
   const flush = useCallback(() => {
@@ -177,6 +183,10 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
   useEffect(() => {
     if (send && ready.current) send({ type: "sidebar", open: sidebarOpen });
   }, [send, sidebarOpen]);
+
+  useEffect(() => {
+    if (send && ready.current) send({ type: "grouping", grouping });
+  }, [send, grouping]);
 
   // Retain only the latest intent while a document is loading or restarting.
   const panelRequest = useRemoteWorkspaceStore((state) => state.panelRequests[nodeId]);
@@ -231,6 +241,7 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
       if (message.type === "ready") {
         ready.current = true;
         latest.current.send?.({ type: "sidebar", open: latest.current.sidebarOpen });
+        latest.current.send?.({ type: "grouping", grouping: latest.current.grouping });
         flush();
         flushPanel();
       } else if (message.type === "selection") {

@@ -23,8 +23,10 @@ export function coordinatorNodeContext(status: NodeStatus, connectedNodes: numbe
   if (status.mode === "command" && connectedNodes > 0) {
     return (
       `Nodes: this is a command node with ${connectedNodes} connected node${connectedNodes === 1 ? "" : "s"} (list_nodes). ` +
-      `Create environments on this node with launch_environment unless the user names another node (launch_node_environment). ` +
-      `Read and message environments on other nodes with read_node_environment and send_node_message; their agents report back to you by mail. ` +
+      `Every environment and workflow tool takes an optional nodeId and works on that node's copy of this project exactly as on this one: launch_environment, launch_job, send_prompt_to_tab, send_message, the tab reads, start_build_pipeline and the Multi Review tools. ` +
+      `Work on this node unless the user names another node; for another node take baseBranch and baseCommit from get_launch_options with its nodeId. ` +
+      `list_environments shows this project's environments on the other nodes too; calls you are told to make about work on another node already carry its nodeId. ` +
+      `A node without a copy of this project needs one first: ask the user with request_project_on_node. ` +
       `Never delete an environment on your own initiative: only when the user asks, through request_environment_deletion, which the user confirms.\n`
     );
   }

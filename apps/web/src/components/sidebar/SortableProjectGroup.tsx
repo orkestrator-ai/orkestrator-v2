@@ -25,6 +25,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+  Copy,
   FolderInput,
   FolderMinus,
   Trash2,
@@ -63,6 +64,8 @@ interface SortableProjectGroupProps {
   onRestartEnvironment: (environmentId: string) => void;
   onForkEnvironment?: (environmentId: string, environmentType: EnvironmentType) => void;
   onCreateEnvironment: () => void;
+  /** Copies the project to another machine; shown only when there are other machines. */
+  onCopyToMachine?: () => void;
   /** Opens the folder composer for this project. */
   onAddToFolder?: () => void;
   /** Lifts this project back out to the root level; omitted when it has no folder. */
@@ -98,6 +101,7 @@ export function SortableProjectGroup({
   onRestartEnvironment,
   onForkEnvironment,
   onCreateEnvironment,
+  onCopyToMachine,
   onAddToFolder,
   onRemoveFromFolder,
   isMultiSelectMode = false,
@@ -286,6 +290,12 @@ export function SortableProjectGroup({
                   <Plus className="h-4 w-4 mr-2" />
                   New Environment
                 </ContextMenuItem>
+                {onCopyToMachine && (
+                  <ContextMenuItem onClick={onCopyToMachine}>
+                    <Copy className="h-4 w-4 mr-2" />
+                    Copy to Machine…
+                  </ContextMenuItem>
+                )}
                 {onAddToFolder && (
                   <>
                     <ContextMenuSeparator />

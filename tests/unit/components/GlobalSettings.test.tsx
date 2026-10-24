@@ -84,6 +84,7 @@ const mockGetAgentAccountUsage = mock(
     platform: "claude" | "codex",
     _accountId: string,
     _options?: { force?: boolean },
+    _machine?: string | null,
   ): Promise<PlanUsageSnapshot> => ({
     platform,
     status: "ok",
@@ -387,7 +388,13 @@ describe("GlobalSettings", () => {
       ).toBeTruthy();
       expect(screen.queryByRole("region", { name: "Plan usage" }) === null).toBe(true);
       expect(mockGetPlanUsage).not.toHaveBeenCalled();
-      expect(mockGetAgentAccountUsage).toHaveBeenCalledWith(platform, "default", { force: false });
+      expect(mockGetAgentAccountUsage).toHaveBeenCalledWith(
+        platform,
+        "default",
+        { force: false },
+        // The command node's own accounts: no other machine was chosen.
+        null,
+      );
     },
   );
 
@@ -432,7 +439,12 @@ describe("GlobalSettings", () => {
     );
     view.rerender(<GlobalSettings activeSection="claude" />);
     await screen.findByText("Host Claude credentials are disabled.");
-    expect(mockGetAgentAccountUsage).toHaveBeenLastCalledWith("claude", "default", { force: true });
+    expect(mockGetAgentAccountUsage).toHaveBeenLastCalledWith(
+      "claude",
+      "default",
+      { force: true },
+      null,
+    );
     expect(screen.queryByText("5-hour limit") === null).toBe(true);
   });
 
@@ -444,9 +456,12 @@ describe("GlobalSettings", () => {
     fireEvent.blur(key);
     await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith("test-anthropic-key"));
     await waitFor(() =>
-      expect(mockGetAgentAccountUsage).toHaveBeenLastCalledWith("claude", "default", {
-        force: true,
-      }),
+      expect(mockGetAgentAccountUsage).toHaveBeenLastCalledWith(
+        "claude",
+        "default",
+        { force: true },
+        null,
+      ),
     );
   });
 

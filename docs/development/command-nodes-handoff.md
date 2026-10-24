@@ -87,6 +87,10 @@ matrix with evidence for every row are in
 
 ## Coordinators
 
+- **One tool family.** Every environment and workflow tool takes an
+  optional `nodeId` (see
+  [One tool family, every node](../architecture/command-nodes.md#one-tool-family-every-node));
+  the original node tools below remain and share its paths.
 - **Node tools** (`control-mcp-nodes.ts`, `control-mcp-node-files.ts`):
   - `list_nodes` and `list_node_environments`;
   - `read_node_environment`: state, tabs, transcript, diff, a file, and
@@ -97,14 +101,20 @@ matrix with evidence for every row are in
   - `request_environment_deletion`;
   - `transfer_files` and `compare_project_files`;
   - `request_project_file_update`, `request_env_value_reveal` and
-    `request_project_on_node`.
+    `request_project_on_node`, which the user reviews in the project copy
+    dialog.
+- **Copying a project between machines** (`nodes/node-project-copy.ts`,
+  `commands-registry-project-copy.ts`): clone plus the untracked and
+  ignored files the user picks, in any direction.
 
   Every one of them refuses in leaf mode. Each node's copy of the project
   is matched by repository identity.
 - **Context.** The coordinator's context names the node's role
   (`nodes/node-context.ts`).
 - **Leaf mail** (`nodes/node-mail.ts`, `nodes/node-coordination.ts`):
-  - Coordinator mail arrives on the leaf as ordinary incoming mail.
+  - Coordinator mail arrives on the leaf as trusted node mail that wakes
+    the agent; a leaf agent's report wakes the coordinator, or is held
+    while the coordinator waits on that worker.
   - An agent's mail to "coordinator", a reply on such a thread, or a
     report from a controller-launched environment goes to the originating
     command node, otherwise to the most recent one.
@@ -150,8 +160,9 @@ refinements".
    secure-delete), not the OS keychain.
 2. **Grants are workspace grants**: one leaf, one controller and one client
    session. Per-environment, per-stream grants (DP-07) are deferred.
-3. **Node tools are a separate family**, rather than a `nodeId` argument on
-   every existing tool.
+3. **Node tools were a separate family** at first. With leaf parity every
+   existing tool takes a `nodeId` instead; the separate tools remain for
+   running conversations.
 4. **"Answer" maps to prompting and messaging.** Answering a pending agent
    question on another node stays with the user in that leaf's workspace,
    as it does locally.

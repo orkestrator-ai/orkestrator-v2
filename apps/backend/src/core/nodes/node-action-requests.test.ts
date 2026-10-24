@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { NodeActionRequests, type NodeActionRequest } from "./node-action-requests.js";
+import {
+  NodeActionRequests,
+  parseNodeActionApproval,
+  type NodeActionRequest,
+} from "./node-action-requests.js";
 
 const input = {
   kind: "delete-environment" as const,
@@ -69,4 +73,23 @@ test("overlapping decisions execute once", async () => {
   ]);
   expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
   expect(executions).toBe(1);
+});
+
+test("approval parsing rejects malformed inputs and bounds paths, and trims locations", () => {
+  for (const value of [false, 1, "approval", []]) {
+    expect(() => parseNodeActionApproval(value)).toThrow("Expected approval");
+  }
+  for (const paths of ["file", [false], ["a".repeat(1025)], Array(2001).fill("file")]) {
+    expect(() => parseNodeActionApproval({ paths })).toThrow("Expected paths");
+  }
+  expect(() => parseNodeActionApproval({ location: "x".repeat(1025) })).toThrow("location");
+  expect(
+    parseNodeActionApproval({
+      location: "  /srv/site  ",
+      paths: [".env", "config/"],
+      rememberFiles: true,
+      ignored: true,
+    }),
+  ).toEqual({ location: "/srv/site", paths: [".env", "config/"], rememberFiles: true });
+  expect(parseNodeActionApproval(null)).toEqual({});
 });

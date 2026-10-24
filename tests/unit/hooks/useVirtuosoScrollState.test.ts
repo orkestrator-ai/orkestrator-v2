@@ -195,9 +195,20 @@ describe("useVirtuosoScrollState", () => {
 
         expect(result.current.scrollProps.followOutput(true)).toBe(false);
 
+        // Even at the true end, an at-bottom report (a clamp, a measurement)
+        // is not the reader's intent; only their own arrival re-arms follow.
         scroller.scrollTop = 700;
         act(() => {
           result.current.scrollProps.atBottomStateChange(true);
+        });
+        expect(result.current.isAtBottom).toBe(true);
+        expect(result.current.scrollProps.followOutput(false)).toBe(false);
+        act(() => {
+          scroller.scrollTop = 690;
+          scroller.dispatchEvent(new Event("scroll"));
+          scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: 20 }));
+          scroller.scrollTop = 700;
+          scroller.dispatchEvent(new Event("scroll"));
         });
         expect(result.current.scrollProps.followOutput(false)).toBe("auto");
       } finally {
@@ -523,54 +534,48 @@ describe("useVirtuosoScrollState", () => {
       });
     });
 
-    test("retries scrollToIndex until reaching bottom (corrects estimated heights)", async () => {
+    test("pins the journey into the footer from measured geometry, within its budget", async () => {
+      // Estimated heights can keep the end moving while rows measure. The
+      // journey corrects from the scroller's real extent each frame instead of
+      // re-issuing index jumps, and stops at its frame/time budget.
       const { result } = renderHook(() => useVirtuosoScrollState());
-
-      // Simulate the bug scenario: Virtuoso never reports isAtBottom=true
-      // because estimated heights keep the scroll short of the true bottom.
-      // The retry loop should fire scrollToIndex multiple times.
-      act(() => {
-        result.current.scrollProps.atBottomStateChange(false);
-      });
-
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      let height = 1000;
+      Object.defineProperty(el, "scrollHeight", { get: () => height, configurable: true });
       const scrollToIndexCalls: any[] = [];
       const scrollToCalls: any[] = [];
       result.current.virtuosoRef.current = {
         scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
-        scrollTo: (opts: any) => scrollToCalls.push(opts),
+        scrollTo: (opts: any) => {
+          scrollToCalls.push(opts);
+          // The end moves while the smooth scroll is still on its way.
+          if (scrollToCalls.length === 1) height = 1400;
+        },
         getState: () => {},
       } as any;
-
-      act(() => {
-        result.current.scrollToBottom();
-      });
-
-      // Each retry schedules the next one, so fixed wall-clock slack becomes
-      // flaky when the full repository suite is competing for the event loop.
-      await waitFor(
-        () => {
-          expect(scrollToIndexCalls).toHaveLength(10);
-          expect(scrollToCalls).toHaveLength(1);
-        },
-        {
-          timeout: 2_000,
-        },
-      );
-
-      // Exhaustion: exactly MAX_ATTEMPTS (10) retries when isAtBottom never flips
-      expect(scrollToIndexCalls).toHaveLength(10);
-      // Even after exhausting retries, the footer scrollTo is still issued
-      expect(scrollToCalls).toHaveLength(1);
+      try {
+        el.scrollTop = 100;
+        act(() => result.current.scrollProps.scrollerRef(el));
+        act(() => result.current.scrollToBottom());
+        await waitFor(() => expect(scrollToCalls.length).toBeGreaterThanOrEqual(2));
+        await waitFor(() =>
+          expect(result.current.getScrollDiagnostics().lastOutcome).toBe("expired"),
+        );
+        const settled = scrollToCalls.length;
+        height = 1800;
+        await act(() => new Promise((resolve) => setTimeout(resolve, 80)));
+        // The journey ended at its budget; nothing re-issues afterwards.
+        expect(scrollToCalls.length).toBe(settled);
+        expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
+        expect(scrollToCalls.every((call) => call.behavior === "smooth")).toBe(true);
+        expect(result.current.getScrollDiagnostics().lastOutcome).toBe("expired");
+      } finally {
+        document.body.removeChild(el);
+      }
     });
 
-    test("ignores overlapping scrollToBottom invocations while one is in-flight", async () => {
+    test("a repeated request supersedes the journey in flight instead of stacking", async () => {
       const { result } = renderHook(() => useVirtuosoScrollState());
-
-      // Stay at non-bottom so the retry loop runs long enough to observe
-      act(() => {
-        result.current.scrollProps.atBottomStateChange(false);
-      });
-
       const scrollToCalls: any[] = [];
       const scrollToIndexCalls: any[] = [];
       result.current.virtuosoRef.current = {
@@ -581,30 +586,15 @@ describe("useVirtuosoScrollState", () => {
 
       act(() => {
         result.current.scrollToBottom();
-        // Second call while the first is still iterating — should be ignored
         result.current.scrollToBottom();
         result.current.scrollToBottom();
       });
-
-      // Gate on the retry counter, not on the footer scroll alone. `scrollTo`
-      // fires once per chain at the very end, so waiting only for it to reach 1
-      // would resolve the instant the *first* chain finished and never observe
-      // the extra chains a broken guard would have started. Exactly MAX_ATTEMPTS
-      // retries is only reachable when a single chain ran; three chains would
-      // reach 30 and this condition would never hold.
-      //
-      // `scrollTo` is asserted inside the same wait because it lands a tick
-      // after the tenth `scrollToIndex`. Reading it immediately after the wait
-      // resolved made this test lose that race under load.
-      await waitFor(
-        () => {
-          expect(scrollToIndexCalls).toHaveLength(10);
-          expect(scrollToCalls).toHaveLength(1);
-        },
-        {
-          timeout: 2_000,
-        },
-      );
+      await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+      // Each request starts its own index jump, but only the current journey
+      // reaches its frame: one footer scroll, two superseded operations.
+      expect(scrollToIndexCalls).toHaveLength(3);
+      expect(scrollToCalls).toHaveLength(1);
+      expect(result.current.getScrollDiagnostics().superseded).toBe(2);
     });
 
     test("can be invoked again after a previous scroll completes", async () => {
@@ -740,7 +730,14 @@ describe("useVirtuosoScrollState", () => {
         expect(harness.mutationObserveCalls).toEqual([
           {
             target: scroller,
-            options: { childList: true, subtree: true },
+            // Style attributes too: Virtuoso keeps rows in place with a list
+            // margin and a deferred scroll, which resize nothing observed.
+            options: {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              attributeFilter: ["style"],
+            },
           },
         ]);
         expect(harness.mutationCallback).toBeDefined();
@@ -830,14 +827,18 @@ describe("useVirtuosoScrollState", () => {
       }
     });
 
-    test("skips re-observing direct children on deep subtree mutations", () => {
+    test("skips re-observing the observed levels on deeper subtree mutations", () => {
+      // Two levels are observed: Virtuoso's viewport child, and the list (and
+      // header, footer) inside it, which is what actually grows.
       const harness = installObservers();
       const { result, unmount } = renderHook(() => useVirtuosoScrollState());
       const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      const viewport = document.createElement("div");
       const directChild = document.createElement("div");
       const grandchild = document.createElement("span");
       directChild.appendChild(grandchild);
-      scroller.appendChild(directChild);
+      viewport.appendChild(directChild);
+      scroller.appendChild(viewport);
 
       result.current.virtuosoRef.current = {
         scrollToIndex: () => {},
@@ -848,13 +849,19 @@ describe("useVirtuosoScrollState", () => {
       try {
         act(() => result.current.scrollProps.scrollerRef(scroller));
 
-        // After mounting, the only observed element is the existing direct
-        // child. Capture that baseline before firing the deep mutation.
+        // After mounting, the viewport and the list inside it are observed,
+        // and the scroller itself (its width changes reflow the rows).
+        // Capture that baseline before firing the deep mutation.
         const observedBeforeDeepMutation = harness.resizeObserved.length;
-        expect(observedBeforeDeepMutation).toBe(1);
+        // Compared by label: a failed toEqual on DOM nodes prints the whole tree.
+        const label = (element: Element) =>
+          ({ [0]: "scroller", [1]: "viewport", [2]: "list" })[
+            [scroller, viewport, directChild].indexOf(element as HTMLDivElement)
+          ] ?? "other";
+        expect(harness.resizeObserved.map(label)).toEqual(["scroller", "viewport", "list"]);
 
-        // Add a new grandchild and dispatch a record whose target is the
-        // direct child (not the scroller) — observeChildren() should NOT run.
+        // Add a node below the observed levels and dispatch a record whose
+        // target is the list (not an observed parent) — no re-walk.
         const newGrandchild = document.createElement("em");
         directChild.appendChild(newGrandchild);
         const deepRecord = {
@@ -900,7 +907,10 @@ describe("useVirtuosoScrollState", () => {
 
       try {
         act(() => result.current.scrollProps.scrollerRef(scroller));
-        expect(harness.resizeObserved).toEqual([initialChild]);
+        // Compared by label: a failed toEqual on DOM nodes prints the whole tree.
+        const label = (element: Element) =>
+          element === scroller ? "scroller" : element === initialChild ? "initial" : "other";
+        expect(harness.resizeObserved.map(label)).toEqual(["scroller", "initial"]);
 
         const newChild = document.createElement("div");
         scroller.appendChild(newChild);
@@ -915,7 +925,9 @@ describe("useVirtuosoScrollState", () => {
           harness.mutationCallback?.([directRecord], {} as MutationObserver);
         });
 
-        expect(harness.resizeObserved).toEqual([initialChild, newChild]);
+        expect(
+          harness.resizeObserved.map((element) => (element === newChild ? "new" : label(element))),
+        ).toEqual(["scroller", "initial", "new"]);
       } finally {
         unmount();
         document.body.removeChild(scroller);
@@ -1614,6 +1626,39 @@ describe("useVirtuosoScrollState", () => {
       clearPersistedVirtuosoState("sticky-key");
     });
 
+    test("drops the pixel snapshot after a reflow, keeping the semantic place", () => {
+      // Row sizes measured at another window width or text scale are stale:
+      // restoring them would land the reader somewhere arbitrary before the
+      // anchor corrects it. Only the semantic anchor is used then.
+      const persistKey = "reflow-key";
+      const snapshotAtWidth: StateSnapshot = {
+        ranges: [{ startIndex: 0, endIndex: Number.POSITIVE_INFINITY, size: 34 }],
+        scrollTop: 300,
+      };
+      const { result, rerender } = renderHook(
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey }),
+        { initialProps: { isActive: true } },
+      );
+      result.current.virtuosoRef.current = {
+        scrollToIndex: () => {},
+        getState: (cb: (state: any) => void) => cb(snapshotAtWidth),
+      } as any;
+      rerender({ isActive: false });
+
+      const sameLayout = renderHook(() => useVirtuosoScrollState({ persistKey }));
+      expect(sameLayout.result.current.scrollProps.restoreStateFrom).toEqual(snapshotAtWidth);
+
+      const width = window.innerWidth;
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: width + 240 });
+      try {
+        const reflowed = renderHook(() => useVirtuosoScrollState({ persistKey }));
+        expect(reflowed.result.current.scrollProps.restoreStateFrom).toBeUndefined();
+      } finally {
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+        clearPersistedVirtuosoState(persistKey);
+      }
+    });
+
     test("does not persist when no persistKey is provided", () => {
       const { result, rerender } = renderHook(
         ({ isActive }) => useVirtuosoScrollState({ isActive }),
@@ -2119,7 +2164,7 @@ describe("useVirtuosoScrollState", () => {
     });
   });
 
-  describe("environment switch handling", () => {
+  describe("returning to a view", () => {
     function makeHandle(scrollToIndexCalls: any[], scrollToCalls: any[]) {
       return {
         scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
@@ -2128,51 +2173,55 @@ describe("useVirtuosoScrollState", () => {
       } as any;
     }
 
-    test("jumps to bottom on re-activation after env switch even when user had scrolled up", async () => {
+    test("a detached reader keeps their place after an environment switch", async () => {
       useUIStore.setState({ selectedEnvironmentId: "env-1" });
       const { result, rerender } = renderHook(
         ({ isActive }) => useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
         { initialProps: { isActive: true } },
       );
-
       const scrollToIndexCalls: any[] = [];
       const scrollToCalls: any[] = [];
       result.current.virtuosoRef.current = makeHandle(scrollToIndexCalls, scrollToCalls);
-
       const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       try {
-        // Release stick intent via a wheel-up: without an env switch this
-        // would suppress the re-activation jump.
         el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
-        act(() => {
-          wheelUp(el, 500);
-        });
-
-        // Switch environments away and back while the view is inactive.
-        act(() => {
-          useUIStore.setState({ selectedEnvironmentId: "env-2" });
-        });
+        act(() => wheelUp(el, 500));
+        act(() => useUIStore.setState({ selectedEnvironmentId: "env-2" }));
         rerender({ isActive: false });
-        act(() => {
-          useUIStore.setState({ selectedEnvironmentId: "env-1" });
-        });
+        act(() => useUIStore.setState({ selectedEnvironmentId: "env-1" }));
         rerender({ isActive: true });
+        await act(() => new Promise((resolve) => setTimeout(resolve, 60)));
+        expect(scrollToIndexCalls).toEqual([]);
+        expect(scrollToCalls).toEqual([]);
+        expect(el.scrollTop).toBe(500);
+        expect(result.current.scrollProps.followOutput(false)).toBe(false);
+      } finally {
+        document.body.removeChild(el);
+        useUIStore.setState({ selectedEnvironmentId: null });
+      }
+    });
 
-        act(() => {
-          el.scrollTop = 700;
-          el.dispatchEvent(new Event("scroll"));
-        });
+    test("a follower catches up on return after an environment switch", async () => {
+      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+      const { result, rerender } = renderHook(
+        ({ isActive }) => useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
+        { initialProps: { isActive: true } },
+      );
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      result.current.virtuosoRef.current = makeHandle(scrollToIndexCalls, scrollToCalls);
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      try {
+        el.scrollTop = 700;
+        act(() => result.current.scrollProps.scrollerRef(el));
+        act(() => useUIStore.setState({ selectedEnvironmentId: "env-2" }));
+        rerender({ isActive: false });
+        act(() => useUIStore.setState({ selectedEnvironmentId: "env-1" }));
+        rerender({ isActive: true });
         await waitFor(() => expect(scrollToCalls).toHaveLength(1));
-
-        // The env switch forces the jump despite wantsStick=false.
-        expect(scrollToIndexCalls.length).toBeGreaterThanOrEqual(1);
-        expect(scrollToIndexCalls[0]).toEqual({ index: "LAST", align: "end" });
-        expect(scrollToCalls[scrollToCalls.length - 1]).toEqual({
-          top: 10_000_000,
-          behavior: "auto",
-        });
-        // The forced jump also re-engages stick intent.
+        expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
+        expect(scrollToCalls).toEqual([{ top: 10_000_000, behavior: "auto" }]);
         expect(result.current.scrollProps.followOutput(false)).toBe("auto");
       } finally {
         document.body.removeChild(el);
@@ -2181,90 +2230,84 @@ describe("useVirtuosoScrollState", () => {
     });
 
     test("does not jump on within-environment tab switch when user had scrolled up", async () => {
-      useUIStore.setState({ selectedEnvironmentId: "env-1" });
       const { result, rerender } = renderHook(
         ({ isActive }) => useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
         { initialProps: { isActive: true } },
       );
-
       const scrollToIndexCalls: any[] = [];
       const scrollToCalls: any[] = [];
       result.current.virtuosoRef.current = makeHandle(scrollToIndexCalls, scrollToCalls);
-
       const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       try {
         el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
-        act(() => {
-          wheelUp(el, 500);
-        });
-
-        // Deactivate/re-activate without any environment change (simulates
-        // switching to another tab in the same environment and back).
+        act(() => wheelUp(el, 500));
         rerender({ isActive: false });
         rerender({ isActive: true });
-
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        });
-
+        await act(() => new Promise((resolve) => setTimeout(resolve, 30)));
         expect(scrollToIndexCalls.length).toBe(0);
         expect(scrollToCalls.length).toBe(0);
       } finally {
         document.body.removeChild(el);
-        useUIStore.setState({ selectedEnvironmentId: null });
       }
     });
 
-    test("retries the activation jump until Virtuoso reports at-bottom", async () => {
-      // After an environment switch, items outside the rendered window have
-      // estimated heights, so a one-shot jump can land short. The activation
-      // jump must keep retrying scrollToIndex until isAtBottom flips.
-      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+    test("an explicit target pending for the view wins over activation", async () => {
       const { result, rerender } = renderHook(
-        ({ isActive }) => useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
-        { initialProps: { isActive: true } },
+        ({ isActive, explicitTargetPending }) =>
+          useVirtuosoScrollState({ isActive, explicitTargetPending }),
+        { initialProps: { isActive: true, explicitTargetPending: false } },
       );
-
       const scrollToIndexCalls: any[] = [];
       const scrollToCalls: any[] = [];
       result.current.virtuosoRef.current = makeHandle(scrollToIndexCalls, scrollToCalls);
-
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       try {
-        // Simulate not-at-bottom (estimated heights keep landing short).
+        el.scrollTop = 700;
+        act(() => result.current.scrollProps.scrollerRef(el));
+        rerender({ isActive: false, explicitTargetPending: false });
+        // The follower would catch up, but a message link is waiting.
+        rerender({ isActive: true, explicitTargetPending: true });
+        await act(() => new Promise((resolve) => setTimeout(resolve, 40)));
+        expect(scrollToCalls).toEqual([]);
         act(() => {
-          result.current.scrollProps.atBottomStateChange(false);
+          result.current.scrollToIndex(2, undefined, "message-link");
         });
-
-        act(() => {
-          useUIStore.setState({ selectedEnvironmentId: "env-2" });
-        });
-        rerender({ isActive: false });
-        act(() => {
-          useUIStore.setState({ selectedEnvironmentId: "env-1" });
-        });
-        rerender({ isActive: true });
-
-        // Let several retry iterations elapse (16ms apart).
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        });
-        expect(scrollToIndexCalls.length).toBeGreaterThan(1);
-
-        // Once Virtuoso reports at-bottom, the loop finishes with an instant
-        // footer scroll.
-        act(() => {
-          result.current.scrollProps.atBottomStateChange(true);
-        });
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        });
-        expect(scrollToCalls[scrollToCalls.length - 1]).toEqual({
-          top: 10_000_000,
-          behavior: "auto",
-        });
+        rerender({ isActive: true, explicitTargetPending: false });
+        await act(() => new Promise((resolve) => setTimeout(resolve, 40)));
+        // The target's navigation superseded the deferred activation.
+        // (This harness renders no rows, so the target's bounded re-issues run.)
+        expect(scrollToIndexCalls.length).toBeGreaterThan(0);
+        expect(scrollToIndexCalls.every((call) => call.index === 2)).toBe(true);
+        expect(scrollToCalls).toEqual([]);
+        expect(result.current.scrollProps.followOutput(false)).toBe(false);
       } finally {
-        useUIStore.setState({ selectedEnvironmentId: null });
+        document.body.removeChild(el);
+      }
+    });
+
+    test("a dropped explicit target lets the deferred activation run", async () => {
+      const { result, rerender } = renderHook(
+        ({ isActive, explicitTargetPending }) =>
+          useVirtuosoScrollState({ isActive, explicitTargetPending }),
+        { initialProps: { isActive: true, explicitTargetPending: false } },
+      );
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      result.current.virtuosoRef.current = makeHandle(scrollToIndexCalls, scrollToCalls);
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      try {
+        el.scrollTop = 700;
+        act(() => result.current.scrollProps.scrollerRef(el));
+        rerender({ isActive: false, explicitTargetPending: false });
+        rerender({ isActive: true, explicitTargetPending: true });
+        await act(() => new Promise((resolve) => setTimeout(resolve, 40)));
+        expect(scrollToCalls).toEqual([]);
+        rerender({ isActive: true, explicitTargetPending: false });
+        await waitFor(() => expect(scrollToCalls).toHaveLength(1));
+        expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
+      } finally {
+        document.body.removeChild(el);
       }
     });
   });
@@ -2306,9 +2349,15 @@ describe("useVirtuosoScrollState", () => {
         expect(result2.current.scrollProps.followOutput(false)).toBe(false);
 
         // User scrolls to the bottom — stick should re-engage.
+        const el2 = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+        el2.scrollTop = 600;
+        act(() => result2.current.scrollProps.scrollerRef(el2));
         act(() => {
-          result2.current.scrollProps.atBottomStateChange(true);
+          el2.dispatchEvent(new WheelEvent("wheel", { deltaY: 100 }));
+          el2.scrollTop = 700;
+          el2.dispatchEvent(new Event("scroll"));
         });
+        document.body.removeChild(el2);
 
         // Rerender multiple times to catch any render-time clobber.
         act(() => {
@@ -2331,10 +2380,9 @@ describe("useVirtuosoScrollState", () => {
     });
   });
 
-  describe("scrollToBottom post-scroll watch window", () => {
-    test("re-issues scrollTo when scrollHeight grows after landing at bottom", async () => {
+  describe("scrollToBottom after the journey", () => {
+    test("following pins later growth directly instead of re-issuing smooth scrolls", async () => {
       const { result } = renderHook(() => useVirtuosoScrollState());
-
       const el = document.createElement("div");
       let mockScrollHeight = 1000;
       Object.defineProperty(el, "scrollHeight", {
@@ -2344,91 +2392,24 @@ describe("useVirtuosoScrollState", () => {
       Object.defineProperty(el, "clientHeight", { value: 300 });
       el.scrollTop = 700;
       document.body.appendChild(el);
-
       const scrollToCalls: any[] = [];
       result.current.virtuosoRef.current = {
         scrollToIndex: () => {},
         scrollTo: (opts: any) => scrollToCalls.push(opts),
         getState: () => {},
       } as any;
-
       try {
         act(() => result.current.scrollProps.scrollerRef(el));
-
-        act(() => {
-          result.current.scrollToBottom();
-        });
-
-        // Let the initial retry → finish() fire the first scrollTo.
-        act(() => {
-          result.current.scrollProps.atBottomStateChange(true);
-        });
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        });
-        expect(scrollToCalls).toHaveLength(1);
-
-        // Simulate late-rendering footer content growing the scroll height.
-        // The watch loop runs on rAF; advance by waiting a couple of frames.
+        act(() => result.current.scrollToBottom());
+        await waitFor(() =>
+          expect(result.current.getScrollDiagnostics().lastOutcome).toBe("converged"),
+        );
+        expect(scrollToCalls).toEqual([{ top: 10_000_000, behavior: "smooth" }]);
+        // Late footer content: the follower is pinned, pre-paint, in one write.
         mockScrollHeight = 1200;
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 80));
-        });
-
-        // The watch window should detect the scrollHeight change and re-issue
-        // a smooth scrollTo so the new footer content stays in view.
-        expect(scrollToCalls.length).toBeGreaterThanOrEqual(2);
-        expect(scrollToCalls[scrollToCalls.length - 1]).toEqual({
-          top: 10_000_000,
-          behavior: "smooth",
-        });
-      } finally {
-        document.body.removeChild(el);
-      }
-    });
-
-    test("stops watching scrollHeight after the watch window expires", async () => {
-      const { result } = renderHook(() => useVirtuosoScrollState());
-
-      const el = document.createElement("div");
-      let mockScrollHeight = 1000;
-      Object.defineProperty(el, "scrollHeight", {
-        get: () => mockScrollHeight,
-        configurable: true,
-      });
-      Object.defineProperty(el, "clientHeight", { value: 300 });
-      el.scrollTop = 700;
-      document.body.appendChild(el);
-
-      const scrollToCalls: any[] = [];
-      result.current.virtuosoRef.current = {
-        scrollToIndex: () => {},
-        scrollTo: (opts: any) => scrollToCalls.push(opts),
-        getState: () => {},
-      } as any;
-
-      try {
-        act(() => result.current.scrollProps.scrollerRef(el));
-
-        act(() => {
-          result.current.scrollToBottom();
-        });
-        act(() => {
-          result.current.scrollProps.atBottomStateChange(true);
-        });
-
-        // Wait well past POST_SCROLL_WATCH_MS (400ms) so the window closes.
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        });
-        const callsAfterWindow = scrollToCalls.length;
-
-        // A growth after the window should NOT trigger another scrollTo.
-        mockScrollHeight = 1500;
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 80));
-        });
-        expect(scrollToCalls.length).toBe(callsAfterWindow);
+        act(() => result.current.scrollProps.totalListHeightChanged(1200));
+        expect(el.scrollTop).toBe(900);
+        expect(scrollToCalls).toHaveLength(1);
       } finally {
         document.body.removeChild(el);
       }
@@ -2542,80 +2523,6 @@ describe("useVirtuosoScrollState", () => {
       clearPersistedVirtuosoState("evict-refreshed");
       for (let i = 0; i < 260; i += 1) {
         clearPersistedVirtuosoState(`refresh-filler-${i}`);
-      }
-    });
-  });
-
-  describe("environment subscription lifecycle", () => {
-    test("unsubscribes from the environment store when the view reactivates", () => {
-      const subscribe = useUIStore.subscribe;
-      let unsubscribeCalls = 0;
-      const wrapped = ((listener: any) => {
-        const unsubscribe = subscribe(listener);
-        return () => {
-          unsubscribeCalls += 1;
-          unsubscribe();
-        };
-      }) as typeof useUIStore.subscribe;
-      (useUIStore as any).subscribe = wrapped;
-
-      try {
-        const { rerender } = renderHook(
-          ({ isActive }) => useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
-          { initialProps: { isActive: false } },
-        );
-        expect(unsubscribeCalls).toBe(0);
-
-        rerender({ isActive: true });
-
-        // Reactivating tears down the inactive-period watcher; leaving it
-        // attached would leak a listener per activation cycle.
-        expect(unsubscribeCalls).toBe(1);
-      } finally {
-        (useUIStore as any).subscribe = subscribe;
-      }
-    });
-
-    test("unsubscribes from the environment store on unmount", () => {
-      const subscribe = useUIStore.subscribe;
-      let unsubscribeCalls = 0;
-      const wrapped = ((listener: any) => {
-        const unsubscribe = subscribe(listener);
-        return () => {
-          unsubscribeCalls += 1;
-          unsubscribe();
-        };
-      }) as typeof useUIStore.subscribe;
-      (useUIStore as any).subscribe = wrapped;
-
-      try {
-        const { unmount } = renderHook(() =>
-          useVirtuosoScrollState({ isActive: false, environmentId: "env-1" }),
-        );
-        expect(unsubscribeCalls).toBe(0);
-
-        unmount();
-
-        expect(unsubscribeCalls).toBe(1);
-      } finally {
-        (useUIStore as any).subscribe = subscribe;
-      }
-    });
-
-    test("does not subscribe when no environmentId is provided", () => {
-      const subscribe = useUIStore.subscribe;
-      let subscribeCalls = 0;
-      const wrapped = ((listener: any) => {
-        subscribeCalls += 1;
-        return subscribe(listener);
-      }) as typeof useUIStore.subscribe;
-      (useUIStore as any).subscribe = wrapped;
-
-      try {
-        renderHook(() => useVirtuosoScrollState({ isActive: false }));
-        expect(subscribeCalls).toBe(0);
-      } finally {
-        (useUIStore as any).subscribe = subscribe;
       }
     });
   });

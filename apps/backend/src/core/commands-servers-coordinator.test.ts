@@ -20,6 +20,22 @@ import {
 } from "./agent-account-bridge-state.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
+/** A Codex ChatGPT login whose access token lasts an hour. Never a real credential. */
+function codexAuth(marker: string): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const token = (claims: Record<string, unknown>) =>
+    `${encode({ alg: "none" })}.${encode({ exp: Math.floor(Date.now() / 1000) + 3600, ...claims })}.sig`;
+  return JSON.stringify({
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: token({ marker: `${marker}-id` }),
+      access_token: token({ marker }),
+      refresh_token: `refresh-${marker}`,
+      account_id: marker,
+    },
+  });
+}
+
 describe("Coordinator Codex server", () => {
   let root: string;
   let checkout: string;
@@ -30,6 +46,7 @@ describe("Coordinator Codex server", () => {
   let cleanupContext: CommandContext | null = null;
   let cleanupRuntimeId: string | null = null;
   let cleanupKind: "codex" | "claude" | "cursor" = "codex";
+  let restoreHostCredentialRead: (() => void) | undefined;
 
   beforeEach(async () => {
     commandTesting.resetLocalServerLifecycle();
@@ -65,7 +82,7 @@ describe("Coordinator Codex server", () => {
     previousCodexHome = process.env.CODEX_HOME;
     const sourceHome = path.join(root, "source-codex-home");
     await fs.mkdir(sourceHome);
-    await fs.writeFile(path.join(sourceHome, "auth.json"), '{"token":"login"}\n');
+    await fs.writeFile(path.join(sourceHome, "auth.json"), codexAuth("login"));
     await fs.writeFile(path.join(sourceHome, "config.toml"), "developer_instructions='unsafe'\n");
     process.env.CODEX_HOME = sourceHome;
     previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -91,6 +108,8 @@ describe("Coordinator Codex server", () => {
       );
     }
     commandTesting.resetLocalServerLifecycle();
+    restoreHostCredentialRead?.();
+    restoreHostCredentialRead = undefined;
     staleLoginLocalBridges.clear();
     localAgentAccountIds.clear();
     localAgentAccountTokenExpiry.clear();
@@ -190,9 +209,9 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         conversation.id,
         "claude-home",
       );
-      expect(await fs.readFile(path.join(coordinatorHome, ".credentials.json"), "utf8")).toContain(
-        "new-login",
-      );
+      // The login is handed over as an access token; no credential file is copied in.
+      await expect(fs.access(path.join(coordinatorHome, ".credentials.json"))).rejects.toThrow();
+      expect(localAgentAccountTokenExpiry.get(key)).toBeGreaterThan(Date.now());
       await stopLocalServerUnlocked(runtimeId, context, "claude");
       expect(commandTesting.getLocalServerProcess(key)).toBeUndefined();
       expect(loginlessLocalBridges.has(key)).toBe(false);
@@ -214,7 +233,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       await fs.mkdir(bridge, { recursive: true });
       await fs.writeFile(
         path.join(bridge, "index.js"),
-        `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP }));
+        `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP, oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -263,6 +282,14 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       cleanupRuntimeId = runtimeId;
       cleanupKind = "claude";
 
+      // Keep host credential discovery on the fixture, away from the real Keychain.
+      const hostCredentialRead = spyOn(
+        commandFiles,
+        "readRuntimeHostClaudeCredentials",
+      ).mockImplementation(() =>
+        fs.readFile(path.join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), "utf8"),
+      );
+      restoreHostCredentialRead = () => hostCredentialRead.mockRestore();
       const started = await startLocalServerUnlocked(runtimeId, context, "claude");
       expect(started).toMatchObject({ wasRunning: false, port: expect.any(Number) });
 
@@ -274,9 +301,8 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         conversation.id,
         "claude-home",
       );
-      expect(await fs.readFile(path.join(isolatedHome, ".credentials.json"), "utf8")).toContain(
-        "login",
-      );
+      // Only the access token reaches the coordinator; no credential file is copied in.
+      await expect(fs.access(path.join(isolatedHome, ".credentials.json"))).rejects.toThrow();
       // `settings.json` can declare hooks and `plugins/` is arbitrary code. Both
       // would run inside a session pointed at the user's real checkout.
       await expect(fs.access(path.join(isolatedHome, "settings.json"))).rejects.toThrow();
@@ -293,6 +319,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         ),
         mcpUrl: "http://127.0.0.1:1234/mcp",
         mcpToken: "scoped-token",
+        oauthToken: "login",
         // The research setting is process authority too; absent in the
         // stored config means the default: search plus Context7.
         research: researchMode ?? "search-and-mcp",
@@ -432,7 +459,8 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.mkdir(bridge, { recursive: true });
     await fs.writeFile(
       path.join(bridge, "index.js"),
-      `await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
+      `if (JSON.stringify(process.env).includes("refresh-sentinel")) throw new Error("Refresh token leaked to environment");
+await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -492,7 +520,11 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       conversation.id,
       "codex-home",
     );
-    expect(await fs.readFile(path.join(isolatedHome, "auth.json"), "utf8")).toContain("login");
+    const handedOver = JSON.parse(await fs.readFile(path.join(isolatedHome, "auth.json"), "utf8"));
+    expect(handedOver.tokens.account_id).toBe("login");
+    // Access-only: a coordinator's refresh would retire the account's own login.
+    expect(handedOver.tokens.refresh_token).toBe("");
+    expect(localAgentAccountTokenExpiry.get(`codex:${runtimeId}`)).toBeGreaterThan(Date.now());
     await expect(fs.access(path.join(isolatedHome, "config.toml"))).rejects.toThrow();
     expect(JSON.parse(await fs.readFile(path.join(isolatedHome, "captured.json"), "utf8"))).toEqual(
       {
@@ -519,7 +551,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     const addedId = "11111111-2222-4333-8444-555555555555";
     const addedHome = path.join(storage.agentAccountsDirectory(), "codex", addedId);
     await fs.mkdir(addedHome, { recursive: true });
-    await fs.writeFile(path.join(addedHome, "auth.json"), '{"token":"replacement"}');
+    await fs.writeFile(path.join(addedHome, "auth.json"), codexAuth("replacement"));
     await storage.mutateAgentAccounts((store) => ({
       store: {
         ...store,

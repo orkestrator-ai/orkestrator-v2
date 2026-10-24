@@ -235,6 +235,7 @@ export class StorageService extends StoragePublicOperations {
         if (
           duplicate.kind !== association.kind ||
           duplicate.resourceId !== association.resourceId ||
+          duplicate.nodeId !== association.nodeId ||
           duplicate.projectId !== association.projectId ||
           (duplicate.payloadHash &&
             association.payloadHash &&
@@ -268,6 +269,7 @@ export class StorageService extends StoragePublicOperations {
         if (
           existing.kind !== association.kind ||
           existing.projectId !== association.projectId ||
+          existing.nodeId !== association.nodeId ||
           existing.payloadHash !== association.payloadHash
         ) {
           throw new Error("Coordinator request id was reused with a different payload");
@@ -310,6 +312,47 @@ export class StorageService extends StoragePublicOperations {
       if (!association) throw new Error("Coordinator workflow reservation was not found");
       if (!association.pending && association.resourceId !== resourceId) {
         throw new Error("Coordinator workflow reservation is already complete");
+      }
+      // A leaf may reuse an active review after our pre-launch inventory read.
+      // Reconcile the actual workflow ID under the store mutation lock.
+      const owner =
+        association.kind === "multi-review" && association.nodeId
+          ? store.workflows.find(
+              (item) =>
+                item.id !== association.id &&
+                !item.pending &&
+                item.kind === association.kind &&
+                item.nodeId === association.nodeId &&
+                item.resourceId === resourceId,
+            )
+          : undefined;
+      if (owner) {
+        if (
+          owner.coordinatorId !== association.coordinatorId ||
+          owner.conversationId !== association.conversationId
+        ) {
+          throw new Error(
+            "This active review belongs to another conversation; adopt its workflow before opening it",
+          );
+        }
+        if (!association.payloadHash) {
+          throw new Error(
+            "Coordinator request payload hash is required to share an existing review",
+          );
+        }
+        const aliases = [
+          ...(owner.requestAliases ?? []),
+          { requestId: association.requestId, payloadHash: association.payloadHash },
+          ...(association.requestAliases ?? []),
+        ];
+        if (aliases.length > MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES) {
+          throw new Error("Coordinator workflow association has too many request aliases");
+        }
+        owner.requestAliases = aliases;
+        store.workflows = store.workflows.filter((item) => item.id !== association.id);
+        store.revision += 1;
+        await this.saveSensitiveJson(this.coordinatorsFile(), store);
+        return owner;
       }
       association.resourceId = resourceId;
       association.pending = false;
@@ -410,6 +453,7 @@ export class StorageService extends StoragePublicOperations {
           item.conversationId === association.conversationId &&
           item.kind === "environment" &&
           item.resourceId === association.resourceId &&
+          item.nodeId === association.nodeId &&
           item.delegation?.workerTabId === workerTabId &&
           item.delegation.state === "running",
       );

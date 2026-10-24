@@ -4,6 +4,7 @@ import path from "node:path";
 
 import {
   AGENT_ACCOUNT_PLATFORMS,
+  AGENT_ACCOUNTS_CHANGED_EVENT,
   DEFAULT_AGENT_ACCOUNT_ID,
   MAX_AGENT_ACCOUNT_LABEL_LENGTH,
   MAX_AGENT_ACCOUNTS_PER_PLATFORM,
@@ -79,6 +80,11 @@ async function withAccountMutation<T>(run: () => Promise<T>): Promise<T> {
   } finally {
     release();
   }
+}
+
+/** Tell every view of this machine's accounts to re-read them (`AGENT_ACCOUNTS_CHANGED_EVENT`). */
+function announceAccountsChanged(context: CommandContext, platform: AgentAccountPlatform): void {
+  context.emit(AGENT_ACCOUNTS_CHANGED_EVENT, { platform });
 }
 
 function accountsRoot(context: CommandContext): string {
@@ -185,7 +191,7 @@ export async function setActiveAgentAccount(
   accountId: string,
 ): Promise<AgentAccountsSnapshot> {
   assertKnownAccountId(accountId);
-  await withAccountMutation(async () => {
+  const changed = await withAccountMutation(async () => {
     const outgoing = sharedPlanUsageCache.lastOk(platform);
     const previous = await context.storage.mutateAgentAccounts<string | undefined>((store) => {
       const current = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
@@ -211,7 +217,9 @@ export async function setActiveAgentAccount(
     if (previous && outgoing) {
       await rememberAgentAccountUsage(accountsRoot(context), platform, previous, outgoing);
     }
+    return previous !== undefined;
   });
+  if (changed) announceAccountsChanged(context, platform);
   return listAgentAccounts(context);
 }
 
@@ -233,6 +241,7 @@ export async function renameAgentAccount(
     accounts[index] = { ...accounts[index]!, label: trimmed };
     return { store: { ...store, accounts }, result: undefined };
   });
+  announceAccountsChanged(context, platform);
   return listAgentAccounts(context);
 }
 
@@ -298,6 +307,7 @@ export async function removeAgentAccount(
     bumpUsageGeneration(context, platform);
     usageCache.delete(usageKey(context, platform, accountId));
     await forgetAgentAccountUsage(accountsRoot(context), platform, accountId);
+    announceAccountsChanged(context, platform);
     return listAgentAccounts(context);
   });
 }
@@ -475,6 +485,7 @@ async function finishLogin(context: CommandContext, entry: ActiveLogin): Promise
       await finishReauthentication(context, entry);
       entry.state = "succeeded";
       entry.completedAt = new Date().toISOString();
+      announceAccountsChanged(context, platform);
       return;
     }
     const state = await readLoginState(context, platform, homeFor(context, platform, accountId));
@@ -508,6 +519,7 @@ async function finishLogin(context: CommandContext, entry: ActiveLogin): Promise
     });
     entry.state = "succeeded";
     entry.completedAt = new Date().toISOString();
+    announceAccountsChanged(context, platform);
   } catch (error) {
     entry.state = "failed";
     entry.completedAt = new Date().toISOString();

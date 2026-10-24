@@ -3,6 +3,7 @@ import {
   isValidElement,
   memo,
   useCallback,
+  useEffect,
   useMemo,
   useState,
   type AnchorHTMLAttributes,
@@ -33,6 +34,10 @@ import {
   type RichMarkdownRenderState,
 } from "@/lib/chat/rich-markdown/render-context";
 import { copyRichText } from "@/lib/chat/rich-markdown/clipboard";
+import {
+  IncrementalMarkdownCache,
+  remarkIncrementalParse,
+} from "@/lib/chat/rich-markdown/incremental-parse";
 import { SourceViewerDialog } from "@/components/chat/rich/CodeBlockViewer";
 import { cn } from "@/lib/utils";
 
@@ -298,6 +303,18 @@ export const MessageMarkdown = memo(function MessageMarkdown({
     () => blockMarkdownPlugins({ rich, enableBreaks, clipped }),
     [rich, enableBreaks, clipped],
   );
+  // While the part streams, the completed prefix's syntax tree is parsed once
+  // and reused; only the tail is parsed per update. The final (non-live)
+  // render always parses in full. A new configuration gets a fresh cache.
+  const incremental = useMemo(() => new IncrementalMarkdownCache(plugins), [plugins]);
+  useEffect(() => {
+    if (!live) incremental.reset();
+  }, [incremental, live]);
+  const remarkPlugins = useMemo(
+    () =>
+      live ? ([[remarkIncrementalParse, incremental], ...plugins] as typeof plugins) : plugins,
+    [incremental, live, plugins],
+  );
   const mergedComponents = useMemo(
     () => (components ? { ...DEFAULT_COMPONENTS, ...components } : DEFAULT_COMPONENTS),
     [components],
@@ -320,7 +337,7 @@ export const MessageMarkdown = memo(function MessageMarkdown({
 
   const markdown = (
     <Markdown
-      remarkPlugins={plugins}
+      remarkPlugins={remarkPlugins}
       components={mergedComponents}
       urlTransform={markdownUrlTransform}
     >

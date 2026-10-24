@@ -2,8 +2,9 @@
  * The desktop window denies `window.open` and `target="_blank"` outright
  * (`apps/desktop/electron/window.ts`), so anything this pane tried to open
  * itself would silently do nothing — which is exactly how the first version of
- * it failed. These tests pin the resulting contract: the backend opens the
- * browser, and the pane's only fallback is a copyable URL.
+ * it failed. These tests pin the resulting contract: the link opens through
+ * the app's own opener (`openInBrowser`), in this client's browser even when
+ * another machine signs in, and the pane's fallback is a copyable URL.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -11,7 +12,7 @@ import type { CursorSdkLoginProgress } from "@/types";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 
-const invokeCalls: Array<{ command: string }> = [];
+const invokeCalls: Array<{ command: string; args?: Record<string, unknown> }> = [];
 let progress: CursorSdkLoginProgress = {
   state: "idle",
   auth: { authenticated: false, source: "none" },
@@ -19,8 +20,8 @@ let progress: CursorSdkLoginProgress = {
 let statusError: Error | null = null;
 
 mock.module("@/lib/native/backend", () => ({
-  invoke: mock((command: string) => {
-    invokeCalls.push({ command });
+  invoke: mock((command: string, args?: Record<string, unknown>) => {
+    invokeCalls.push({ command, args });
     if (command === "cursor_sdk_login_status") {
       return statusError ? Promise.reject(statusError) : Promise.resolve(progress);
     }
@@ -87,7 +88,7 @@ afterEach(() => {
 });
 
 describe("starting a sign-in", () => {
-  test("asks the backend to start it and never opens a window itself", async () => {
+  test("starts it on the backend and opens its link in this client, never with window.open", async () => {
     const openCalls: unknown[] = [];
     const originalOpen = window.open;
     // A pane that called this would look like it worked everywhere except the
@@ -107,8 +108,14 @@ describe("starting a sign-in", () => {
       fireEvent.click(screen.getByRole("button", { name: /Sign in with Cursor/ }));
 
       await waitFor(() =>
-        expect(invokeCalls.some((c) => c.command === "cursor_sdk_login_start")).toBe(true),
+        expect(invokeCalls.find((c) => c.command === "open_in_browser")?.args).toEqual({
+          url: LOGIN_URL,
+        }),
       );
+      // The machine signing in may be another one: its own desktop stays closed.
+      expect(invokeCalls.find((c) => c.command === "cursor_sdk_login_start")?.args).toEqual({
+        openBrowser: false,
+      });
       expect(openCalls).toHaveLength(0);
     } finally {
       window.open = originalOpen;

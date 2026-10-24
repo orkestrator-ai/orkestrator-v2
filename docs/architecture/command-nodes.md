@@ -150,8 +150,8 @@ to everything it runs, on every machine it controls.
   changes (`sync_controller_settings`, never routable through a workspace
   grant or `invoke_on_node`). The leaf lays them over its own config
   (`StorageConfig.loadConfig`), so a launch on the leaf that falls back to
-  defaults — a coordinator's `launch_node_environment` without a model, a
-  build or review step — uses the command node's.
+  defaults — a coordinator's `launch_environment` with a `nodeId` and no
+  model, a build or review step — uses the command node's.
 - **The leaf's own settings are kept underneath** (`loadOwnConfig`) and come
   back when the command node detaches. A whole-config save on the leaf that
   echoes an inherited value keeps the leaf's own; a changed value is stored
@@ -162,7 +162,8 @@ to everything it runs, on every machine it controls.
   settings changed most recently; equal timestamps prefer the later receipt.
   Each snapshot is complete: omitted inherited keys use product defaults,
   while the leaf's persisted own values remain underneath.
-- Machine-specific settings never travel: credentials and API keys, paths,
+- Machine-specific settings never travel: credentials and API keys, paths
+  (including the default projects folder a copied project is cloned into),
   installed or enabled platforms, container budgets, network policy,
   previews, MCP servers and logs.
 
@@ -314,9 +315,17 @@ A command node attached to another command node operates in leaf mode:
   information, but they are mostly hidden: the portal and the node's own UI
   do not show them by default. They can be opened behind a warning that the
   node is in leaf mode and that coordination happens on the named command
-  node. A window whose workspace is on a leaf shows the same warning in
-  place of the leaf's coordinator, with a link to the command node's
-  coordinator for the same repository.
+  node.
+- A window whose workspace is on a leaf follows its sidebar grouping.
+  Grouped by repository, the window links each repository's projects
+  across machines, so the leaf's coordinator is replaced by the same
+  warning, with a link to the command node's coordinator for that
+  repository; if the command node has no copy of it, the leaf's
+  coordinator opens directly. Grouped by machine or project, the machines
+  are not linked and the leaf's coordinator opens directly. The window
+  sends its grouping to the realm (`grouping` message,
+  `realmCoordinatorDefers`), since a realm cannot read the window's
+  storage.
 - When the node is no longer attached anywhere, it returns to being a
   command node and its coordinators regain their cross-node tools.
 
@@ -502,11 +511,63 @@ Coordinators run on the top-level command node only. A coordinator can:
 Coordinators keep their existing per-project ownership and read-only
 boundary on their own checkout.
 
+### One tool family, every node
+
+Every environment and workflow tool of the coordinator's Control MCP takes
+an optional `nodeId` and works on that node's copy of the project with the
+same contract as on the command node: `get_launch_options` (that node's
+agents, models, defaults and base branch tip), `list_environments`,
+`get_environment`, `list_tabs`, `list_agents`, `get_tab_state`,
+`get_tab_transcript`, `launch_environment`, `launch_job`,
+`send_prompt_to_tab`, `send_message`, `start_environment`,
+`stop_environment`, `get_repository_context`, the build pipeline tools and
+the Multi Review tools. Without a `nodeId`, `list_environments` also lists
+the project's environments on the other nodes. The older `*_node_*` tools
+remain and use the same paths.
+
+- **Authority stays on the command node.** Idempotency receipts, workflow
+  associations and delegations are kept there with the resource's `nodeId`
+  (`CoordinatorWorkflowAssociation.nodeId`); a reservation is written before
+  the routed side effect and completed after it
+  (`commands-registry-coordinator-nodes.ts`).
+- **The node runs the work** through its ordinary commands and a few
+  controller commands that reuse the button and local-coordinator logic
+  with the node's own defaults and model catalogue
+  (`commands-registry-controller-workflows.ts`).
+- **Delegations and wakes behave as locally.** Mail across the node link is
+  same-project coordinator mail (see
+  [agent-messaging.md](agent-messaging.md#node-mail)): it wakes the worker,
+  and the worker's report wakes the coordinator or is held while the
+  coordinator waits on that worker. A remote delegation closes when the
+  node shows the worker's turn has ended, or its environment failed,
+  stopped or disappeared; build pipelines and Multi Reviews on a node send
+  status wakes whose suggested calls carry the `nodeId`. The node's relayed
+  `resource-changed` events make this prompt; the maintenance sweep covers
+  missed events, and an unreachable node changes nothing
+  (`coordinator-remote.ts`, `nodes/node-coordinator-remote.ts`).
+
 ## Projects on leaf nodes
 
-- A coordinator never creates a project on a leaf without asking. It can do
-  so after the user approves, with the location on the leaf stated in the
-  approval.
+- **Copying a project to another machine.** Any project's menu offers
+  "Copy to Machine…" for every machine the command node controls, in either
+  direction (command node to leaf, leaf to command node, leaf to leaf). The
+  copy is a fresh clone of the project's Git remote at the target's default
+  projects folder (configurable per machine; otherwise where most of its
+  projects are, else `~/Projects`), plus the untracked and ignored files the
+  user ticks. `.env` files and the project's files to copy are ticked;
+  dependency and build output (`node_modules`, `.venv`, `target`, `dist`, …)
+  is listed but never ticked, because it is installed on each machine. The
+  safe repository settings (branches, port mappings, files to copy, agent
+  overrides) are copied too, and the ticked files can be added to the
+  copy's files to copy. The source is never changed. The command node runs
+  every copy (`nodes/node-project-copy.ts`): a background clone on the
+  target, then bounded, batched file transfer that never replaces a file the
+  target already has, so running a failed copy again finishes it.
+- A coordinator never creates a project on a leaf without asking.
+  `request_project_on_node` (with an optional location and suggested files)
+  creates a request the user reviews in the same copy dialog, where the
+  location and files are settled before approving; the outcome wakes the
+  coordinator.
 - Creating an environment on a leaf follows the same rules as creating a
   local environment today: a worktree (or container) is made from the
   project, then the project's `.env` files and other files selected in the

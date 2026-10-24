@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { scrollDiagnostics, startAnchorProbe, stopAnchorProbe } from "./transcript-anchor-probe";
 
 declare global {
   interface Window {
@@ -10,7 +11,7 @@ declare global {
   }
 }
 
-const scrollerSelector = '[data-virtuoso-scroller="true"]';
+const scrollerSelector = '[data-transcript-scroller="true"]';
 
 async function waitForFrames(page: Page, count = 4) {
   await page.evaluate(
@@ -230,4 +231,158 @@ test("a selection in the first row survives clipped overscan up to the protectio
   }
   // Past protection and the ordinary 400px viewport buffer it virtualizes away.
   await expect(row).toHaveCount(0);
+});
+
+test("a detached reader's row holds every painted frame while new rows stream", async ({
+  page,
+}) => {
+  await page.goto("/streaming-transcript?long=1");
+  await releaseStickyScroll(page);
+  await page.getByRole("button", { name: "Scroll to tool history" }).click();
+  const scroller = page.locator(scrollerSelector);
+  const historicToolRow = page.locator('[data-chat-message-index="40"]');
+  await expect(historicToolRow).toBeVisible();
+  await expect
+    .poll(async () => (await scrollDiagnostics(scroller)).lastOutcome)
+    .toMatch(/converged|clamped/);
+  await startAnchorProbe(scroller, 'css:[data-chat-message-index="40"]');
+  for (let index = 0; index < 4; index++) {
+    await page.getByRole("button", { name: "Append turn" }).click();
+    await expect(page.getByTestId("transcript-row-count")).toHaveText(String(84 + index));
+  }
+  await waitForFrames(page, 12);
+  const probe = await stopAnchorProbe(scroller);
+  expect(probe.count).toBeGreaterThan(8);
+  expect(probe.missing).toBe(0);
+  expect(probe.maxError).toBeLessThanOrEqual(2);
+  await expect.poll(() => distanceFromBottom(page)).toBeGreaterThan(100);
+});
+
+test("a downward wheel during a history jump keeps the reader in control", async ({ page }) => {
+  await page.goto("/streaming-transcript?long=1");
+  await releaseStickyScroll(page);
+  const scroller = page.locator(scrollerSelector);
+  const before = await scrollDiagnostics(scroller);
+  // Start the jump and interrupt it in the same task, before its first
+  // correction can run, in the direction a naive cancel ignores. The native
+  // movement the wheel would cause is applied directly.
+  await scroller.evaluate((element) => {
+    const jump = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Scroll to tool history",
+    )!;
+    jump.click();
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: 240, bubbles: true }));
+    element.scrollTop += 240;
+  });
+  await waitForFrames(page, 10);
+  const afterWheel = await scroller.evaluate((element) => element.scrollTop);
+  const writesAfterWheel = (await scrollDiagnostics(scroller)).writes as number;
+  // Past every guardrail the retired operation could have used.
+  await page.waitForTimeout(1_000);
+  const diagnostics = await scrollDiagnostics(scroller);
+  expect(diagnostics.operationsStarted).toBe((before.operationsStarted as number) + 1);
+  expect(diagnostics.lastOutcome).toBe("cancelled");
+  expect(diagnostics.userInterruptions).toBe((before.userInterruptions as number) + 1);
+  expect(diagnostics.writes).toBe(writesAfterWheel);
+  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(afterWheel, 0);
+  // The reader stays detached: streaming does not pull them to the tail.
+  await page.getByRole("button", { name: "Append turn" }).click();
+  await waitForFrames(page, 6);
+  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(afterWheel, 0);
+});
+
+test("a real wheel after a history jump is never pulled back", async ({ page }) => {
+  await page.goto("/streaming-transcript?long=1");
+  await releaseStickyScroll(page);
+  const scroller = page.locator(scrollerSelector);
+  await page.getByRole("button", { name: "Scroll to tool history" }).click();
+  await scroller.hover();
+  await page.mouse.wheel(0, 240);
+  await waitForFrames(page, 10);
+  const afterWheel = await scroller.evaluate((element) => element.scrollTop);
+  await page.waitForTimeout(1_000);
+  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(afterWheel, 0);
+});
+
+test("a detached reader holds their place through a reflow in either direction", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/streaming-transcript?long=1");
+  await releaseStickyScroll(page);
+  await page.getByRole("button", { name: "Scroll to tool history" }).click();
+  const scroller = page.locator(scrollerSelector);
+  await expect
+    .poll(async () => (await scrollDiagnostics(scroller)).lastOutcome)
+    .toMatch(/converged|clamped/);
+  const part = await page
+    .locator('[data-chat-message-index="40"] [data-transcript-part-id]')
+    .first()
+    .getAttribute("data-transcript-part-id");
+  // The rows above the reader, whose re-wrapping is what moves them.
+  const heightsAbove = () =>
+    scroller.evaluate((element) =>
+      Object.fromEntries(
+        Array.from(element.querySelectorAll<HTMLElement>("[data-chat-message-index]"))
+          .filter((row) => Number(row.dataset.chatMessageIndex) < 40)
+          .map((row) => [row.dataset.chatMessageIndex!, row.getBoundingClientRect().height]),
+      ),
+    );
+  await waitForFrames(page, 12);
+  for (const width of [420, 1200]) {
+    const before = await heightsAbove();
+    await startAnchorProbe(scroller, part!);
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(800);
+    const probe = await stopAnchorProbe(scroller);
+    // Not vacuous: the rows above that stayed mounted really re-wrapped.
+    const after = await heightsAbove();
+    const changed = Object.keys(before)
+      .filter((index) => index in after)
+      .reduce((total, index) => total + Math.abs(after[index]! - before[index]!), 0);
+    expect(changed).toBeGreaterThan(40);
+    expect(probe.count).toBeGreaterThan(10);
+    expect(probe.missing).toBe(0);
+    expect(probe.maxError).toBeLessThanOrEqual(3);
+  }
+  await expect.poll(() => distanceFromBottom(page)).toBeGreaterThan(100);
+});
+
+test("a follower stays at the latest row through a reflow", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/streaming-transcript?long=1");
+  await expect(page.locator(scrollerSelector)).toBeVisible();
+  await expect.poll(() => distanceFromBottom(page)).toBeLessThan(2);
+  await page.setViewportSize({ width: 420, height: 900 });
+  await waitForFrames(page, 12);
+  await expect.poll(() => distanceFromBottom(page)).toBeLessThan(2);
+});
+
+test("scrollbar departure after find stays put when streaming reapplies highlights", async ({
+  page,
+}) => {
+  await page.goto("/streaming-transcript?long=1");
+  const scroller = page.locator('[data-transcript-scroller="true"]');
+  await page.keyboard.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in chat" }).fill("History message 75:");
+  const match = page.locator('[data-chat-message-key="history-75"]');
+  await expect(match).toBeVisible();
+  // Wait for the bounded find operation to converge before dragging away.
+  await expect.poll(async () => (await scrollDiagnostics(scroller)).lastOutcome).toBe("converged");
+  await scroller.evaluate((element) => {
+    element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    element.scrollTop -= 500;
+    element.dispatchEvent(new Event("scroll"));
+    window.dispatchEvent(new PointerEvent("pointerup"));
+  });
+  await waitForFrames(page, 8);
+  const before = await scroller.evaluate((element) => element.scrollTop);
+  const writes = (await scrollDiagnostics(scroller)).writes;
+  const rowCount = Number(await page.getByTestId("transcript-row-count").textContent());
+  await page.getByRole("button", { name: "Append turn" }).click();
+  await expect(page.getByTestId("transcript-row-count")).toHaveText(String(rowCount + 1));
+  // Flush highlight application and operation reconciliation frames.
+  await waitForFrames(page, 12);
+  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(before, 0);
+  expect((await scrollDiagnostics(scroller)).writes).toBe(writes);
 });

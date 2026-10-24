@@ -162,7 +162,9 @@ export function agentMailSenderLabel(from: MailActor): string {
         ? "Orkestrator workflow"
         : from.kind === "coordinator"
           ? from.title || "Project coordinator"
-          : from.title || `${from.environmentId} / ${from.tabId}`;
+          : from.kind === "node"
+            ? `${from.title || (from.role === "coordinator" ? "Project coordinator" : from.tabId)} on ${from.nodeName}`
+            : from.title || `${from.environmentId} / ${from.tabId}`;
 }
 
 export function createPeerMailNativeMessage(message: PeerMailDisplayMessage): NativeMessage {
@@ -250,7 +252,18 @@ function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage
     from.kind !== "external" &&
     from.kind !== "tab" &&
     from.kind !== "coordinator" &&
-    from.kind !== "system"
+    from.kind !== "system" &&
+    from.kind !== "node"
+  )
+    return null;
+  if (
+    from.kind === "node" &&
+    (typeof from.nodeId !== "string" ||
+      typeof from.nodeName !== "string" ||
+      (from.role !== "coordinator" && from.role !== "agent") ||
+      typeof from.projectId !== "string" ||
+      typeof from.environmentId !== "string" ||
+      typeof from.tabId !== "string")
   )
     return null;
   if (

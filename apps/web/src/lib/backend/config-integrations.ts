@@ -39,6 +39,7 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 /** PR detection result containing URL, state, and merge conflict status */
 
 import type { PrDetectionResult } from "./projects-environments";
+import { machineInvoke, type AccountMachine } from "./agent-accounts";
 
 /** Workspace machine settings with the command node's inherited preferences. */
 export async function getConfig(): Promise<AppConfig> {
@@ -208,22 +209,29 @@ export async function setOpenCodeZenApiKey(apiKey: string | null): Promise<AppCo
  *
  * Start returns the URL to open; the flow itself runs in the backend, which
  * spawns the bridge, parses its output and stores the credential. Callers open
- * the URL and poll `cursorSdkLoginStatus` until it leaves `pending`.
+ * the URL in this client's browser (`openInBrowser`) and poll
+ * `cursorSdkLoginStatus` until it leaves `pending`; the backend's login child
+ * opens no browser of its own. `machine` names another node to sign in,
+ * through the command node.
  */
-export async function cursorSdkLoginStart(): Promise<{ loginUrl: string }> {
-  return invoke<{ loginUrl: string }>("cursor_sdk_login_start", {});
+export async function cursorSdkLoginStart(machine?: AccountMachine): Promise<{ loginUrl: string }> {
+  return machineInvoke<{ loginUrl: string }>(machine, "cursor_sdk_login_start", {
+    openBrowser: false,
+  });
 }
 
-export async function cursorSdkLoginStatus(): Promise<CursorSdkLoginProgress> {
-  return invoke<CursorSdkLoginProgress>("cursor_sdk_login_status", {});
+export async function cursorSdkLoginStatus(
+  machine?: AccountMachine,
+): Promise<CursorSdkLoginProgress> {
+  return machineInvoke<CursorSdkLoginProgress>(machine, "cursor_sdk_login_status");
 }
 
-export async function cursorSdkLoginCancel(): Promise<void> {
-  await invoke<{ cancelled: boolean }>("cursor_sdk_login_cancel", {});
+export async function cursorSdkLoginCancel(machine?: AccountMachine): Promise<void> {
+  await machineInvoke<{ cancelled: boolean }>(machine, "cursor_sdk_login_cancel");
 }
 
-export async function cursorSdkLogout(): Promise<CursorSdkAuthStatus> {
-  return invoke<CursorSdkAuthStatus>("cursor_sdk_logout", {});
+export async function cursorSdkLogout(machine?: AccountMachine): Promise<CursorSdkAuthStatus> {
+  return machineInvoke<CursorSdkAuthStatus>(machine, "cursor_sdk_logout");
 }
 
 export async function getWebClientStatus(): Promise<WebClientStatus> {

@@ -36,6 +36,20 @@ let authReadGeneration: number | undefined;
 let authRefreshPending = false;
 /** Bumped by every invalidation so an older probe cannot repopulate the cache. */
 let authGeneration = 0;
+/**
+ * A turn failed authentication recently. The probe
+ * cannot see an expired or revoked login, so while it still finds a
+ * credential the read reports `expired` rather than `signed-in` for one cache
+ * window. A later probe can observe a terminal re-login without requiring a
+ * successful turn first. That never locks the composer; only `needs-auth` does.
+ */
+let turnAuthenticationFailedUntil = 0;
+
+function withTurnFailure(value: NativeAgentAuthStatus): NativeAgentAuthStatus {
+  return Date.now() < turnAuthenticationFailedUntil && value.state === "signed-in"
+    ? { ...value, state: "expired" }
+    : value;
+}
 
 export function resetClaudeSignInForTesting(): void {
   authCache = undefined;
@@ -43,6 +57,7 @@ export function resetClaudeSignInForTesting(): void {
   authReadGeneration = undefined;
   authRefreshPending = false;
   authGeneration += 1;
+  turnAuthenticationFailedUntil = 0;
 }
 
 /** Claude reports an absent source as the literal string "none". */
@@ -90,7 +105,9 @@ async function probeAccount(): Promise<NativeAgentAuthStatus> {
 }
 
 export function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
-  if (authCache && authCache.expiresAt > Date.now()) return Promise.resolve(authCache.value);
+  if (authCache && authCache.expiresAt > Date.now()) {
+    return Promise.resolve(withTurnFailure(authCache.value));
+  }
   if (authRead) return authRead;
   const generation = authGeneration;
   const read = probeAccount()
@@ -109,7 +126,7 @@ export function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
       if (generation === authGeneration) {
         authCache = { expiresAt: Date.now() + ttl, value };
       }
-      return value;
+      return withTurnFailure(value);
     })
     .finally(() => {
       if (authRead !== read) return;
@@ -131,6 +148,7 @@ export function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
  * composer before the user sends into the same failure again.
  */
 export function noteClaudeAuthenticationFailure(): void {
+  turnAuthenticationFailedUntil = Date.now() + AUTH_CACHE_TTL_MS;
   authCache = undefined;
   // Failures share the active probe. If success already fenced it, queue one
   // replacement after its cleanup, rather than spawning concurrent CLIs.
@@ -145,6 +163,7 @@ export function noteClaudeAuthenticationWorked(): void {
   // second CLI while the obsolete probe is still running.
   authGeneration += 1;
   authRefreshPending = false;
+  turnAuthenticationFailedUntil = 0;
   if (authCache?.value.state === "needs-auth") authCache = undefined;
 }
 

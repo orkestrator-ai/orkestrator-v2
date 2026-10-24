@@ -74,6 +74,13 @@ function harness(
         return { id: args.environmentId, projectId: "p-self", name: "local-env" } as T;
       case "create_node_action_request":
         return { requestId: "req-1", state: "pending" } as T;
+      case "launch_coordinator_node_environment":
+        return {
+          environment: { id: "e-new", status: "creating" },
+          coordinatorDelegationOpened: true,
+        } as T;
+      case "send_coordinator_node_mail":
+        return { nodeId: args.nodeId, messageId: "m1", coordinatorDelegationOpened: true } as T;
       case "invoke_on_node": {
         const inner = {
           nodeId: String(args.nodeId),
@@ -160,8 +167,8 @@ describe("CO-02/CO-06 interrogating and creating on connected nodes", () => {
     ).rejects.toThrow("has no copy of this project");
   });
 
-  test("launching on a node creates in that node's project, records the origin and starts it", async () => {
-    const { call, routed } = harness();
+  test("launching on a node is the coordinator's node launch, scoped to this conversation", async () => {
+    const { call, calls } = harness();
     const result = await call("launch_node_environment", {
       requestId: "launch-1",
       nodeId: "bk_leaf",
@@ -173,18 +180,18 @@ describe("CO-02/CO-06 interrogating and creating on connected nodes", () => {
       baseCommit: "a".repeat(40),
     });
     expect(result).toMatchObject({ nodeId: "bk_leaf", environmentId: "e-new", status: "accepted" });
-    const create = routed.find((entry) => entry.command === "create_environment")!;
-    expect(create.args.projectId).toBe("p-leaf");
-    expect(String(create.args.initialPrompt)).toContain('toEnvironmentId "coordinator"');
-    expect(
-      routed.find((entry) => entry.command === "record_node_environment_origin")!.args,
-    ).toEqual({
-      environmentId: "e-new",
-      controllerId: "bk_self",
-      coordinatorEnvironmentId: "coordinator:c1:conv-1",
-      coordinatorTabId: "coord-tab",
+    const launch = calls.find((entry) => entry.command === "launch_coordinator_node_environment")!;
+    expect(launch.args).toMatchObject({
+      scope: { projectId: "p-self", coordinatorId: "c1", conversationId: "conv-1" },
+      requestId: "launch-1",
+      nodeId: "bk_leaf",
+      input: {
+        projectId: "p-self",
+        initialPrompt: "Fix the bug",
+        delegationBaseBranch: "main",
+        delegationBaseCommit: "a".repeat(40),
+      },
     });
-    expect(routed.some((entry) => entry.command === "start_environment_background")).toBe(true);
   });
 
   test("reading another node's environment never routes a write", async () => {
@@ -195,18 +202,17 @@ describe("CO-02/CO-06 interrogating and creating on connected nodes", () => {
 });
 
 describe("CO-05 messaging agents on connected nodes", () => {
-  test("a coordinator message is delivered as leaf mail with the conversation's mailbox for replies", async () => {
-    const { call, routed } = harness();
+  test("a coordinator message is the coordinator's node mail, scoped to this conversation", async () => {
+    const { call, calls } = harness();
     await call("send_node_message", {
       requestId: "mail-1",
       nodeId: "bk_leaf",
       environmentId: "e1",
       body: "Status?",
     });
-    expect(routed.find((entry) => entry.command === "deliver_node_mail")!.args).toEqual({
-      controllerId: "bk_self",
-      coordinatorEnvironmentId: "coordinator:c1:conv-1",
-      coordinatorTabId: "coord-tab",
+    expect(calls.find((entry) => entry.command === "send_coordinator_node_mail")!.args).toEqual({
+      scope: { projectId: "p-self", coordinatorId: "c1", conversationId: "conv-1" },
+      nodeId: "bk_leaf",
       requestId: "mail-1",
       toEnvironmentId: "e1",
       body: "Status?",
@@ -266,7 +272,8 @@ describe("LM-01/LM-03 the coordinator's node context", () => {
   test("a command node with nodes defaults to itself and deletes only on request", () => {
     const line = coordinatorNodeContext(commandStatus, 2)!;
     expect(line).toContain("2 connected nodes");
-    expect(line).toContain("launch_environment unless the user names another node");
+    expect(line).toContain("Work on this node unless the user names another node");
+    expect(line).toContain("takes an optional nodeId");
     expect(line).toContain("Never delete an environment on your own initiative");
     expect(coordinatorNodeContext({ ...commandStatus, mode: "standalone" }, 0)).toBeNull();
   });

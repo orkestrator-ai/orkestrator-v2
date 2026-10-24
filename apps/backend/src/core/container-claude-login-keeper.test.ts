@@ -7,6 +7,11 @@ import {
   CLAUDE_LOGIN_KEEPER_INTERVAL_MS,
   ContainerClaudeLoginKeeper,
 } from "./container-claude-login-keeper.js";
+import * as credentialFiles from "./commands-files.js";
+import {
+  localAgentAccountTokenExpiry,
+  loginlessLocalBridges,
+} from "./agent-account-bridge-state.js";
 import type { Environment } from "./models.js";
 
 const NOW = Date.parse("2026-10-21T12:00:00Z");
@@ -31,6 +36,7 @@ function harness(options: {
   useHostClaudeCredentials?: false;
   leaseHeld?: boolean;
   failRefresh?: boolean;
+  localBridges?: boolean;
   timers?: import("./container-claude-login-keeper.js").ClaudeLoginKeeperOptions["timers"];
 }) {
   let now = NOW;
@@ -56,15 +62,18 @@ function harness(options: {
       loadAgentAccounts: async () => ({ accounts: [], active: {} }),
     },
   } as unknown as CommandContext;
+  const read = async () => {
+    reads.push(now);
+    const text = options.credentials[Math.min(credentialIndex, options.credentials.length - 1)];
+    credentialIndex++;
+    return text;
+  };
   const keeper = new ContainerClaudeLoginKeeper(context, {
     now: () => now,
     timers: options.timers,
-    readCredentials: async () => {
-      reads.push(now);
-      const text = options.credentials[Math.min(credentialIndex, options.credentials.length - 1)];
-      credentialIndex++;
-      return text;
-    },
+    readCredentials: read,
+    readLocalCredentials: read,
+    hasLocalTokenBridges: () => options.localBridges === true,
     syncContainer: async (containerId) => {
       synced.push(containerId);
     },
@@ -99,6 +108,19 @@ describe("ContainerClaudeLoginKeeper", () => {
     expect(await run.keeper.tick()).toBe(CLAUDE_LOGIN_KEEPER_INTERVAL_MS);
     expect(run.synced).toEqual(["container-a", "container-b"]);
     expect(run.refreshed).toEqual([]);
+  });
+
+  test("renews the login for local coordinator bridges, even with the container opt-out", async () => {
+    const run = harness({
+      environments: [environment("a")],
+      credentials: [login(NOW + 60_000), login(NOW + 8 * 60 * 60_000)],
+      useHostClaudeCredentials: false,
+      localBridges: true,
+    });
+    await run.keeper.tick();
+    expect(run.refreshed).toEqual(["default"]);
+    // The opt-out still keeps the login out of containers.
+    expect(run.synced).toEqual([]);
   });
 
   test("does nothing without a running container, with the opt-out or without the writer lease", async () => {
@@ -261,4 +283,174 @@ describe("ContainerClaudeLoginKeeper", () => {
     keeper.stop();
     expect(cleared).toEqual([1]);
   });
+});
+
+test("default local bridge detection reads the host login and ignores other providers", async () => {
+  const read = spyOn(credentialFiles, "readRuntimeHostClaudeCredentials").mockResolvedValue(
+    login(NOW + 3600_000),
+  );
+  const context = {
+    runtimeFlavor: "production",
+    storage: {
+      loadConfig: async () => ({ global: { useHostClaudeCredentials: false } }),
+      loadAgentAccounts: async () => ({ accounts: [], active: {} }),
+    },
+  } as unknown as CommandContext;
+  const keeper = new ContainerClaudeLoginKeeper(context, { now: () => NOW });
+  try {
+    loginlessLocalBridges.add("codex:other");
+    await keeper.tick();
+    expect(read).not.toHaveBeenCalled();
+    loginlessLocalBridges.add("claude:waiting");
+    await keeper.tick();
+    expect(read).toHaveBeenCalledTimes(1);
+    loginlessLocalBridges.delete("claude:waiting");
+    localAgentAccountTokenExpiry.set("claude:running", NOW + 3600_000);
+    await keeper.tick();
+    expect(read).toHaveBeenCalledTimes(2);
+    context.runtimeFlavor = "agent-test";
+    await keeper.tick();
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally {
+    read.mockRestore();
+    loginlessLocalBridges.delete("codex:other");
+    loginlessLocalBridges.delete("claude:waiting");
+    localAgentAccountTokenExpiry.delete("claude:running");
+  }
+});
+
+test("the default local read resolves an added account's own credentials", async () => {
+  const read = spyOn(credentialFiles, "getHostClaudeCredentials").mockResolvedValue(
+    login(NOW + 3600_000),
+  );
+  const host = spyOn(credentialFiles, "readRuntimeHostClaudeCredentials").mockRejectedValue(
+    new Error("must not read host"),
+  );
+  const id = "11111111-2222-4333-8444-555555555555";
+  const context = {
+    runtimeFlavor: "production",
+    storage: {
+      loadConfig: async () => ({ global: { useHostClaudeCredentials: false } }),
+      loadAgentAccounts: async () => ({ accounts: [], active: { claude: id } }),
+      agentAccountsDirectory: () => "/isolated/accounts",
+    },
+  } as unknown as CommandContext;
+  const keeper = new ContainerClaudeLoginKeeper(context, {
+    now: () => NOW,
+    hasLocalTokenBridges: () => true,
+  });
+  try {
+    await keeper.tick();
+    expect(read).toHaveBeenCalledWith(
+      process.platform,
+      expect.any(String),
+      `/isolated/accounts/claude/${id}`,
+      expect.objectContaining({ configDirOnly: true }),
+    );
+    expect(host).not.toHaveBeenCalled();
+  } finally {
+    read.mockRestore();
+    host.mockRestore();
+  }
+});
+
+for (const first of ["local", "containers"] as const) {
+  test(`simultaneous local and container refreshes respect opt-out when ${first} reads first`, async () => {
+    let renewed = false;
+    let refreshes = 0;
+    const read = async () => login(NOW + (renewed ? 3600_000 : 60_000));
+    const keeper = new ContainerClaudeLoginKeeper(
+      {
+        runtimeFlavor: "production",
+        storage: {
+          loadConfig: async () => ({ global: { useHostClaudeCredentials: false } }),
+          loadAgentAccounts: async () => ({ accounts: [], active: {} }),
+        },
+      } as unknown as CommandContext,
+      {
+        now: () => NOW,
+        readCredentials: async () => {
+          throw new Error("container opted out");
+        },
+        readLocalCredentials: read,
+        refreshHostLogin: async () => {
+          refreshes++;
+          renewed = true;
+        },
+      },
+    );
+    const order =
+      first === "local"
+        ? [keeper.refreshLocalLoginIfDue(), keeper.refreshHostIfDue()]
+        : [keeper.refreshHostIfDue(), keeper.refreshLocalLoginIfDue()];
+    const result = await Promise.all(order);
+    expect(result[first === "local" ? 0 : 1]?.expiresAt).toBe(NOW + 3600_000);
+    expect(result[first === "local" ? 1 : 0]).toBeUndefined();
+    expect(refreshes).toBe(1);
+  });
+}
+
+test("a container opt-out read cannot suppress a concurrent local refresh", async () => {
+  const run = harness({
+    environments: [],
+    useHostClaudeCredentials: false,
+    localBridges: true,
+    credentials: [login(NOW + 60_000), login(NOW + 8 * 3600_000)],
+  });
+  const [container, local] = await Promise.all([
+    run.keeper.refreshHostIfDue(),
+    run.keeper.refreshLocalLoginIfDue(),
+  ]);
+  expect(container).toBeUndefined();
+  expect(local?.expiresAt).toBe(NOW + 8 * 3600_000);
+  expect(run.refreshed).toEqual(["default"]);
+});
+
+test("local and container consumers serialize refresh and both observe the renewal", async () => {
+  const run = harness({
+    environments: [environment("a")],
+    credentials: [login(NOW + 60_000), login(NOW + 8 * 3600_000)],
+  });
+  const [local, container] = await Promise.all([
+    run.keeper.refreshLocalLoginIfDue(),
+    run.keeper.refreshHostIfDue(),
+  ]);
+  expect(local?.expiresAt).toBe(NOW + 8 * 3600_000);
+  expect(container).toEqual(local);
+  expect(run.refreshed).toEqual(["default"]);
+});
+
+test("default local detection includes token and loginless Claude bridges only", async () => {
+  const { localAgentAccountTokenExpiry, loginlessLocalBridges } =
+    await import("./agent-account-bridge-state.js");
+  let reads = 0;
+  const context = {
+    storage: {
+      loadConfig: async () => ({ global: { useHostClaudeCredentials: false } }),
+      loadAgentAccounts: async () => ({ active: {} }),
+    },
+  } as unknown as CommandContext;
+  const keeper = new ContainerClaudeLoginKeeper(context, {
+    readLocalCredentials: async () => {
+      reads++;
+      return login(NOW + 8 * 3600_000);
+    },
+    now: () => NOW,
+  });
+  try {
+    loginlessLocalBridges.add("codex:keeper-test");
+    await keeper.tick();
+    expect(reads).toBe(0);
+    loginlessLocalBridges.add("claude:keeper-test");
+    await keeper.tick();
+    expect(reads).toBe(1);
+    loginlessLocalBridges.delete("claude:keeper-test");
+    localAgentAccountTokenExpiry.set("claude:keeper-test", NOW + 60_000);
+    await keeper.tick();
+    expect(reads).toBe(2);
+  } finally {
+    loginlessLocalBridges.delete("codex:keeper-test");
+    loginlessLocalBridges.delete("claude:keeper-test");
+    localAgentAccountTokenExpiry.delete("claude:keeper-test");
+  }
 });

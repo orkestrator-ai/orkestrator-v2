@@ -1435,8 +1435,9 @@ that a missed event can be recovered.
   supervised backend is not a Vite module.
 - Bridge changes need a rebuild first: a profile runs local bridges from
   `bridges/<name>/dist/index.js`, and `dev:test` bundles only Electron. Run
-  `bun run --cwd bridges/<name> build`, then restart the profile, or the run
-  silently exercises the old bridge.
+  that bridge's `build` script (for example
+  `bun run --cwd bridges/codex-bridge build`), then restart the profile, or
+  the run silently exercises the old bridge.
 - Use `dev:reset` only when the scenario requires pristine persisted state. A
   normal implementation loop should preserve the profile so reload and
   rehydration behavior remain testable.

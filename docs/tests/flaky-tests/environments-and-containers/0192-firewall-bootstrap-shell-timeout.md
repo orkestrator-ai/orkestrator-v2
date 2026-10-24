@@ -222,3 +222,4 @@ cache` at 5007.56 ms. The root group had 3382 passed and one failed test.
 complete unchanged owner in 19.6 s. Original group evidence is
 `orkestrator-test-run.AW4scv/root-and-agent-support-tests.log.gz` under the host
 temporary directory. No firewall implementation, assertion, timeout or skip changed.
+- **Recurrence (2026-10-24, node mbp3):** failed again in the todo-0050 aggregate (5005.02 ms) and when the owner was rerun alone under load average 16 to 35; `main` at `71227437` failed the same file the same way under the same load. See case 0632's recurrence for the comparison.

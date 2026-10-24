@@ -1,4 +1,8 @@
-import { closestCenter, type CollisionDetection } from "@dnd-kit/core";
+import {
+  closestCenter,
+  type CollisionDetection,
+  type KeyboardCoordinateGetter,
+} from "@dnd-kit/core";
 
 /**
  * Collision detection for the sidebar's nested sortable lists.
@@ -50,4 +54,47 @@ export const sidebarCollisionDetection: CollisionDetection = (args) => {
     }
   }
   return best ? [{ id: best.id }] : [];
+};
+
+/** Machines can be dropped past either end of their list, including its empty tail. */
+export const machineCollisionDetection: CollisionDetection = (args) => {
+  if (args.pointerCoordinates) {
+    const collisions = sidebarCollisionDetection(args);
+    return collisions.length > 0 ? collisions : closestCenter(args);
+  }
+
+  // Machine keyboard coordinates align section tops. Comparing centres here
+  // would move a tall source past the short section it was aligned with.
+  let best: { id: (typeof args.active)["id"]; distance: number } | undefined;
+  for (const container of args.droppableContainers) {
+    const rect = args.droppableRects.get(container.id);
+    if (!rect) continue;
+    const distance = Math.abs(rect.top - args.collisionRect.top);
+    if (!best || distance < best.distance) best = { id: container.id, distance };
+  }
+  return best ? [{ id: best.id }] : [];
+};
+
+/** Move one machine at a time regardless of the heights of the two sections. */
+export const machineKeyboardCoordinates: KeyboardCoordinateGetter = (event, { context }) => {
+  if (event.code !== "ArrowDown" && event.code !== "ArrowUp") return;
+  event.preventDefault();
+  const { active, over, droppableRects, droppableContainers } = context;
+  if (!active) return;
+  const current = droppableRects.get(over?.id ?? active.id);
+  if (!current) return;
+
+  const direction = event.code === "ArrowDown" ? 1 : -1;
+  const containerId = active.data.current?.sortable?.containerId;
+  let best: { x: number; y: number; distance: number } | undefined;
+  for (const container of droppableContainers.getEnabled()) {
+    if (container.data.current?.sortable?.containerId !== containerId) continue;
+    const rect = droppableRects.get(container.id);
+    if (!rect) continue;
+    const distance = direction * (rect.top - current.top);
+    if (distance > 0 && (!best || distance < best.distance)) {
+      best = { x: rect.left, y: rect.top, distance };
+    }
+  }
+  return best ? { x: best.x, y: best.y } : undefined;
 };

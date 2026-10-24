@@ -1,13 +1,13 @@
 import { useMemo, useState, type ReactNode } from "react";
 import {
   DndContext,
-  closestCenter,
   KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
+  type KeyboardCoordinateGetter,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -50,7 +50,11 @@ import {
 } from "@/lib/project-folders";
 import { machineTextClass } from "@/lib/federation/machine-colors";
 import { cn } from "@/lib/utils";
-import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
+import {
+  machineCollisionDetection,
+  machineKeyboardCoordinates,
+  sidebarCollisionDetection,
+} from "@/lib/sidebar-collision";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
 import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
@@ -76,11 +80,11 @@ function reportLayoutError(error: unknown): void {
   });
 }
 
-function useDragSensors() {
+function useDragSensors(coordinateGetter: KeyboardCoordinateGetter = sortableKeyboardCoordinates) {
   return useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
+      coordinateGetter,
     }),
   );
 }
@@ -285,7 +289,7 @@ export function MachineSectionList({
 }) {
   const { portalState } = useFederation();
   const layout = usePortalLayout();
-  const sensors = useDragSensors();
+  const sensors = useDragSensors(machineKeyboardCoordinates);
   const sortable = shown.length > 1;
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
@@ -302,7 +306,15 @@ export function MachineSectionList({
   };
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+    // A machine's section spans its heading and its whole tree, so comparing
+    // centres sends a drop on an expanded machine's heading to its neighbour.
+    // The section under the pointer is the target, with a nearest-section
+    // fallback outside the list. Keyboard movement aligns adjacent headings.
+    <DndContext
+      sensors={sensors}
+      collisionDetection={machineCollisionDetection}
+      onDragEnd={handleDragEnd}
+    >
       <SortableContext
         items={shown.map((machine) => `${MACHINE_DRAG_PREFIX}${machine.connectionId}`)}
         strategy={verticalListSortingStrategy}

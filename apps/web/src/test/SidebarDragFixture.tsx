@@ -16,6 +16,8 @@ function install() {
   const merged = params.has("merged") || byMachine;
   const groups = params.has("groups");
   const repository = params.has("repository");
+  // A third, empty machine, so an expanded machine has a neighbour on each side.
+  const spare = params.has("spare");
   const storageKey = `sidebar-drag-fixture:${location.search}`;
   const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? "null") as {
     projects: Project[];
@@ -69,9 +71,9 @@ function install() {
           return {
             selfId: "bk_self",
             nodes: merged
-              ? [
-                  {
-                    nodeId: "bk_remote",
+              ? [["bk_remote", "Remote"], ...(spare ? [["bk_spare", "Spare"]] : [])].map(
+                  ([nodeId, name]) => ({
+                    nodeId,
                     available: true,
                     freshness: params.has("catching-up") ? "catching-up" : "current",
                     loadedAt: 1,
@@ -80,10 +82,10 @@ function install() {
                     projects: [],
                     environments: [],
                     view: {
-                      nodeId: "bk_remote",
+                      nodeId,
                       enabled: true,
-                      displayName: "Remote",
-                      fallbackName: "Remote",
+                      displayName: name,
+                      fallbackName: name,
                       routes: [],
                       routeOrder: [],
                       hasCredential: true,
@@ -92,8 +94,8 @@ function install() {
                       addedAt: "t",
                       source: "portal",
                     },
-                  },
-                ]
+                  }),
+                )
               : [],
           } as T;
         case "get_backend_profile":

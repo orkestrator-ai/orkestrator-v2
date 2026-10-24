@@ -148,6 +148,116 @@ for (const input of ["pointer", "keyboard"] as const) {
   });
 }
 
+for (const direction of ["down", "up"] as const) {
+  test(`machine name pointer drop ${direction} targets an adjacent heading with unequal section heights`, async ({
+    page,
+  }) => {
+    await page.goto("/sidebar-drag?machines=1&spare=1");
+    await expect(page.getByText("q-env-3", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Move Spare", exact: true })).toBeVisible();
+    const source = page.getByRole("button", {
+      name: direction === "down" ? "Move Self" : "Move Remote",
+      exact: true,
+    });
+    // Self stays expanded, so its section is far taller than Remote's or Spare's.
+    await drag(
+      page,
+      source,
+      page.getByRole("button", {
+        name: direction === "down" ? "Move Remote" : "Move Self",
+        exact: true,
+      }),
+    );
+    await expect(page.getByTestId("sidebar-writes")).toContainText('"machineOrder"');
+    const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
+    expect(writes.at(-1).args.machineOrder).toEqual(["bk_remote", "bk_self", "bk_spare"]);
+    await expect(source).toBeFocused();
+    await page.reload();
+    await expect(page.getByTestId("machine-section-header").first()).toHaveAttribute(
+      "data-machine",
+      "bk_remote",
+    );
+  });
+}
+
+test("machine released in empty space below collapsed sections moves to the end", async ({
+  page,
+}) => {
+  await page.goto("/sidebar-drag?machines=1&spare=1");
+  for (const name of ["Self", "Remote", "Spare"]) {
+    await page.getByRole("button", { name: `Collapse ${name}`, exact: true }).click();
+  }
+  const source = page.getByRole("button", { name: "Move Self", exact: true });
+  const start = (await source.boundingBox())!;
+  const last = (await page.getByTestId("machine-section-header").last().boundingBox())!;
+  const x = start.x + start.width / 2;
+  const y = last.y + last.height + 80;
+  // Verify the release point really is outside every machine section.
+  for (const header of await page.getByTestId("machine-section-header").all()) {
+    const box = (await header.boundingBox())!;
+    expect(box.y + box.height).toBeLessThan(y);
+  }
+  await page.mouse.move(x, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x + 12, start.y + start.height / 2, { steps: 3 });
+  await expect(source).toHaveAttribute("aria-pressed", "true");
+  await page.mouse.move(x, y, { steps: 12 });
+  await page.mouse.up();
+  await expect(page.getByTestId("sidebar-writes")).toContainText('"machineOrder"');
+  const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
+  expect(writes.at(-1).args.machineOrder).toEqual(["bk_remote", "bk_spare", "bk_self"]);
+  await expect(source).toBeFocused();
+  await page.reload();
+  await expect(page.getByTestId("machine-section-header").last()).toHaveAttribute(
+    "data-machine",
+    "bk_self",
+  );
+});
+
+for (const sourceName of ["Self", "Remote"] as const) {
+  test(`keyboard machine reorder from ${sourceName} visits adjacent unequal-height sections`, async ({
+    page,
+  }) => {
+    await page.goto("/sidebar-drag?machines=1&spare=1");
+    await expect(page.getByText("q-env-3", { exact: true })).toBeVisible();
+    const source = page.getByRole("button", { name: `Move ${sourceName}`, exact: true });
+    await source.focus();
+    await source.press("Space");
+    await expect(source).toHaveAttribute("aria-pressed", "true");
+    // The keyboard sensor attaches its arrow listener after activation.
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    );
+    const targets =
+      sourceName === "Self"
+        ? [
+            ["ArrowDown", "bk_remote"],
+            ["ArrowDown", "bk_spare"],
+            ["ArrowUp", "bk_remote"],
+          ]
+        : [["ArrowUp", "bk_self"]];
+    for (const [key, id] of targets) {
+      await page.keyboard.press(key);
+      await expect(
+        page
+          .locator('[id^="DndLiveRegion"]')
+          .filter({ hasText: `machine:bk_${sourceName.toLowerCase()}` }),
+      ).toContainText(`over droppable area machine:${id}`);
+    }
+    await page.keyboard.press("Space");
+    await expect(page.getByTestId("sidebar-writes")).toContainText('"machineOrder"');
+    const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
+    expect(writes.at(-1).args.machineOrder).toEqual(["bk_remote", "bk_self", "bk_spare"]);
+    await expect(source).toBeFocused();
+    await expect(page.locator('[aria-pressed="true"]')).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByTestId("machine-section-header").first()).toHaveAttribute(
+      "data-machine",
+      "bk_remote",
+    );
+  });
+}
+
 test("project grouping leads bound project headings with the machine home icon", async ({
   page,
 }) => {

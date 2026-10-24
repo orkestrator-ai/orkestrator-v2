@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { ClientRect } from "@dnd-kit/core";
-import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
+import {
+  machineCollisionDetection,
+  machineKeyboardCoordinates,
+  sidebarCollisionDetection,
+} from "@/lib/sidebar-collision";
 import {
   PROJECT_ROOT_DROP_ID,
   projectFolderDragId,
@@ -129,5 +133,75 @@ describe("sidebarCollisionDetection", () => {
 
   test("keyboard drags without a pointer fall back to centres within the same list", () => {
     expect(overId(layout("project-b", PROJECTS, null))).toBe("project-a");
+  });
+});
+
+describe("machine dragging with unequal section heights", () => {
+  function machines(activeId = "self", pointer: Args["pointerCoordinates"] = null): Args {
+    const args = layout(activeId, "machines", pointer);
+    args.droppableRects = new Map([
+      ["self", rect(0, 300)],
+      ["remote", rect(300, 32)],
+      ["spare", rect(332, 32)],
+    ]);
+    args.droppableContainers = ["self", "remote", "spare"].map(
+      (id) => droppable(id, "machines") as never,
+    );
+    return args;
+  }
+
+  test("pointer drops target headings in both directions despite unequal heights", () => {
+    expect(machineCollisionDetection(machines("self", { x: 40, y: 316 }))[0]?.id).toBe("remote");
+    expect(machineCollisionDetection(machines("remote", { x: 40, y: 16 }))[0]?.id).toBe("self");
+  });
+
+  test("a pointer outside all sections retains the nearest machine target", () => {
+    const args = machines("self", { x: 40, y: 420 });
+    args.collisionRect = rect(404, 300);
+    expect(sidebarCollisionDetection(args)).toEqual([]);
+    expect(machineCollisionDetection(args)[0]?.id).toBe("spare");
+    args.pointerCoordinates = { x: 40, y: -40 };
+    args.collisionRect = rect(-56, 32);
+    expect(machineCollisionDetection(args)[0]?.id).toBe("self");
+  });
+
+  test("keyboard collisions follow aligned tops rather than a tall source's centre", () => {
+    const args = machines();
+    args.collisionRect = rect(300, 300);
+    expect(machineCollisionDetection(args)[0]?.id).toBe("remote");
+    args.collisionRect = rect(332, 300);
+    expect(machineCollisionDetection(args)[0]?.id).toBe("spare");
+    args.collisionRect = rect(0, 32);
+    expect(machineCollisionDetection(args)[0]?.id).toBe("self");
+  });
+
+  function move(code: string, over: string, activeId = "self") {
+    const args = machines(activeId);
+    const containers = args.droppableContainers;
+    // A neighbouring sortable list must not participate in machine navigation.
+    args.droppableRects.set("project", rect(310, 24));
+    containers.push(droppable("project", PROJECTS) as never);
+    const event = new KeyboardEvent("keydown", { code, cancelable: true });
+    const coordinates = machineKeyboardCoordinates(event, {
+      context: {
+        ...args,
+        over: { id: over },
+        droppableContainers: { getEnabled: () => containers },
+      },
+    } as unknown as Parameters<typeof machineKeyboardCoordinates>[1]);
+    return { coordinates, prevented: event.defaultPrevented };
+  }
+
+  test("each keyboard arrow moves exactly one heading and can reverse direction", () => {
+    expect(move("ArrowDown", "self")).toEqual({
+      coordinates: { x: 0, y: 300 },
+      prevented: true,
+    });
+    expect(move("ArrowDown", "remote").coordinates).toEqual({ x: 0, y: 332 });
+    expect(move("ArrowUp", "spare").coordinates).toEqual({ x: 0, y: 300 });
+    expect(move("ArrowUp", "remote", "remote").coordinates).toEqual({ x: 0, y: 0 });
+    expect(move("ArrowUp", "self").coordinates).toBeUndefined();
+    expect(move("ArrowDown", "spare").coordinates).toBeUndefined();
+    expect(move("ArrowLeft", "remote")).toEqual({ coordinates: undefined, prevented: false });
   });
 });

@@ -334,9 +334,9 @@ export class NativeAgentCommandCatalogueCache {
     if (outcome !== "unsupported") {
       try {
         await this.revalidate(key, environmentId, provider, sessionId, true);
-      } catch {
+      } catch (error) {
         outcome = "failed";
-        message ??= ERROR_MESSAGES[errorCode(undefined)];
+        message ??= ERROR_MESSAGES[errorCode(error)];
       }
     }
     const entry = this.entries.get(key);

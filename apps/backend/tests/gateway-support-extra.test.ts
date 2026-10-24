@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
+import { compatibilityPathUsage } from "../src/core/compatibility-path-usage.js";
 import { createCommandRegistry } from "../src/core/commands";
 import {
   AggregateByteBudget,
@@ -49,6 +50,17 @@ import {
 } from "./gateway-test-harness.js";
 
 describe("remote gateway", () => {
+  test("metrics exposes the content-free compatibility path snapshot", async () => {
+    const { info } = await startGateway();
+    compatibilityPathUsage.record("bridge-close.legacy-delete");
+    const expected = compatibilityPathUsage.snapshot().paths;
+    const response = await requestUrl(`${info.url}__orkestrator/metrics`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    expect(response.status).toBe(200);
+    expect(response.json()).toMatchObject({ compatibilityPaths: expected });
+  });
+
   test("prefers explicit compression configuration over the environment", () => {
     expect(
       resolveGatewayCompressionMode("off", {

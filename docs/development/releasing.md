@@ -86,6 +86,11 @@ desktop apps update to the same release. The step is skipped when the version
 is already on npm. Pass `mise run release:publish -- --skip-npm` to leave npm
 alone.
 
+After publishing a Stable release, check the register in
+[version-compatibility.md](../architecture/version-compatibility.md#register)
+for compatibility paths whose removal condition the moving floor has now met,
+and tell their owners.
+
 To rehearse a build without uploading or needing the tag, run
 `mise run release:desktop -- --no-publish`. Artifacts land in `release/`.
 The local signed `package:release` task also sets `--publish never`, including

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
+import remarkBreaks from "remark-breaks";
+import type { PluggableList } from "unified";
 import { TerminalProvider, useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import { invoke } from "@/lib/native/backend";
 import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
@@ -126,6 +128,69 @@ describe("InlineMessageMarkdown", () => {
 
     expect(wrapper?.className).toContain("truncate");
     expect(wrapper?.className).toContain("[&_strong]:font-semibold");
+  });
+});
+
+const OVERRIDE_PLUGINS: PluggableList = [remarkBreaks];
+const NO_PLUGINS: PluggableList = [];
+
+describe("MessageMarkdown remarkPlugins override", () => {
+  afterEach(cleanup);
+
+  test.each([
+    { live: false, richPartId: undefined },
+    { live: true, richPartId: undefined },
+    { live: false, richPartId: "rich-part" },
+    { live: true, richPartId: "rich-part" },
+  ])("replaces default plugins in mode %j, including on updates", (mode) => {
+    const content = "~~literal~~\nnext\n\n> [!NOTE]\n> body\n\n| a | b |\n| - | - |\n| c | d |";
+    const { container, rerender } = render(
+      <MessageMarkdown
+        content={content}
+        enableBreaks={false}
+        remarkPlugins={OVERRIDE_PLUGINS}
+        {...mode}
+      />,
+    );
+    const assertOverride = () => {
+      expect(container.querySelector("br")).not.toBeNull();
+      expect(container.textContent).toContain("~~literal~~");
+      expect(container.textContent).toContain("[!NOTE]");
+      expect(container.querySelector("del, table, rich-callout") === null).toBe(true);
+    };
+    assertOverride();
+    rerender(
+      <MessageMarkdown
+        content={`${content}\n\nappended\nline`}
+        enableBreaks={false}
+        remarkPlugins={OVERRIDE_PLUGINS}
+        {...mode}
+      />,
+    );
+    assertOverride();
+    expect(container.textContent).toContain("appended");
+    rerender(
+      <MessageMarkdown
+        content={`${content}\n\nfinished`}
+        remarkPlugins={OVERRIDE_PLUGINS}
+        {...mode}
+        live={false}
+      />,
+    );
+    assertOverride();
+    expect(container.textContent).toContain("finished");
+  });
+
+  test("accepts an empty override and restores defaults when it is removed", () => {
+    const content = "~~literal~~\nnext";
+    const { container, rerender } = render(
+      <MessageMarkdown content={content} remarkPlugins={NO_PLUGINS} />,
+    );
+    expect(container.querySelector("br, del") === null).toBe(true);
+    expect(container.textContent).toBe(content);
+    rerender(<MessageMarkdown content={content} />);
+    expect(container.querySelector("br")).not.toBeNull();
+    expect(container.querySelector("del")?.textContent).toBe("literal");
   });
 });
 

@@ -462,8 +462,11 @@ nested `{ path, body }` objects, and the question APIs
 to `opencode serve`; the renderer has no OpenCode client. Build-pipeline and
 Multi Review transcripts are stored raw and normalized for display on the way
 out (`apps/backend/src/core/opencode-display-transcript.ts`), so the renderer
-carries no OpenCode normalizer. It only recognizes a raw envelope from a
-backend older than 2.19.17, to show an "update the backend" notice in its place
+carries no OpenCode normalizer. It accepts entries with display-row fields
+(`role`, `content`, or a `parts` array) and groups entries with none of those
+fields into a generic unrecognized-format notice suggesting an update of the
+older peer. The named pre-2.19.17 raw-envelope guard is retired; an envelope
+with a `parts` array follows the ordinary display-row path
 ([remote-gateway.md](remote-gateway.md#version-reminders)).
 
 Because the server is the vendor's rather than ours, the SSE event vocabulary is

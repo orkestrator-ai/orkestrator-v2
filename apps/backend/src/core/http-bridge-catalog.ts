@@ -22,6 +22,7 @@ import {
   boundedJson,
   bridgeFetch,
 } from "./http-bridge-transport.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 export type HttpBridgeAgent = "claude" | "codex" | "cursor" | "grok" | "pi";
 
@@ -54,6 +55,7 @@ export class HttpBridgeCatalogAdapter {
   private noteOutdatedBridge(): void {
     const count = (outdatedBridgeCatalogueReads.get(this.agent) ?? 0) + 1;
     outdatedBridgeCatalogueReads.set(this.agent, count);
+    compatibilityPathUsage.record("slash-catalogue.outdated-bridge");
     if (this.warnedOutdatedBridge) return;
     this.warnedOutdatedBridge = true;
     console.warn(
@@ -87,6 +89,7 @@ export class HttpBridgeCatalogAdapter {
       this.fetchImpl,
     );
     if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
       this.noteOutdatedBridge();
       throw Object.assign(new Error(`${this.agent} bridge is older than the command catalogue`), {
         catalogueErrorCode: "outdated-bridge",
@@ -131,7 +134,10 @@ export class HttpBridgeCatalogAdapter {
       { method: "POST" },
       this.fetchImpl,
     );
-    if (response.status === 404) return { outcome: "reread" };
+    if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
+      return { outcome: "reread" };
+    }
     await assertOkWithErrorDetail(response, `${this.agent} command refresh`);
     const body = asRecord(
       await boundedJson(response, `${this.agent} command refresh`, { remaining: 64 * 1024 }),

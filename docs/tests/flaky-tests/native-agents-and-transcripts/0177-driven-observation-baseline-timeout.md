@@ -78,3 +78,12 @@ After the full aggregate ended, `mise run test:logged -- --name merge2-after-agg
   Existing evidence already tracks this timeout, including isolated failures.
   Concurrent host load is plausible but unproven. This preview change does
   not alter the baseline owner, its harness, assertion, timeout or skips.
+
+
+## Mixed-version compatibility main merge — 2026-10-24
+
+- **Original command:** `mise run test:logged -- --name merge-backend-complete -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src ./tests --parallel=2 --only-failures`, merged parents `74387453` / `0014505ca`, Bun 1.4.3 on the shared macOS host.
+- **Failure:** the deterministic/content-free observation-sharing baseline exceeded the unchanged five-second deadline (5001.15 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-recurring-baseline-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/recurring-baseline.test.ts --parallel=1 --only-failures` also failed at 5000.36 ms, with four passes, one failure and 66 expectations (27.0 s logged).
+- **Evidence:** `orkestrator-test-run.BDDGcj/merge-backend-complete.log.gz` after finalization and `orkestrator-test-run.GJ6mlD/merge-recurring-baseline-owner.log.gz` under the host temporary directory. Aggregate counts are in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#mixed-version-compatibility-main-merge--2026-10-24).
+- **Assessment:** remains unresolved on this host; the isolated failure does not establish a new flake. No owning implementation, assertion, timeout or skip changed.

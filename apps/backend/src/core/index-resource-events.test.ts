@@ -64,16 +64,6 @@ describe("OrkestratorBackend resource event wiring", () => {
         environmentId: "e1",
         message: { id: "m1", text: "queued", attachments: [] },
       });
-      const claim = await backend.invoke<{ claimToken: string }>("claim_prompt_queue_head", {
-        queueKey: "claude env-e1:tab-1",
-        environmentId: "e1",
-        expectedMessageId: "m1",
-      });
-      await backend.invoke("reject_prompt_queue_claim", {
-        queueKey: "claude env-e1:tab-1",
-        environmentId: "e1",
-        claimToken: claim.claimToken,
-      });
       await backend.invoke("remove_prompt_queue_message", {
         queueKey: "claude env-e1:tab-1",
         environmentId: "e1",
@@ -90,15 +80,16 @@ describe("OrkestratorBackend resource event wiring", () => {
         environmentId: "e1",
         message: { id: "m2" },
       });
-      const acknowledged = await backend.invoke<{ claimToken: string }>("claim_prompt_queue_head", {
+      await backend.invoke("enqueue_prompt_queue_message", {
         queueKey: "claude env-e1:tab-1",
         environmentId: "e1",
-        expectedMessageId: "m2",
+        message: { id: "m3" },
       });
-      await backend.invoke("acknowledge_prompt_queue_claim", {
+      await backend.invoke("move_prompt_queue_message", {
         queueKey: "claude env-e1:tab-1",
         environmentId: "e1",
-        claimToken: acknowledged.claimToken,
+        messageId: "m3",
+        direction: "up",
       });
 
       expect(events).toContainEqual({
@@ -122,7 +113,7 @@ describe("OrkestratorBackend resource event wiring", () => {
             payload !== null &&
             (payload as { resource?: string }).resource === "prompt-queue",
         ),
-      ).toHaveLength(7);
+      ).toHaveLength(5);
       expect(events).toContainEqual({
         event: RESOURCE_CHANGED_EVENT,
         payload: expect.objectContaining({

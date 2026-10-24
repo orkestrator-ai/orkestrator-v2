@@ -62,6 +62,7 @@ import type { McpApplyState, McpRuntimeApplyEntry } from "@orkestrator/protocol/
 import type { RuntimeProbe } from "./apply.js";
 import { heldRuntimes, noteOnce, retireSuperseded, sourceDrift } from "./external-edits.js";
 import type { StoredOperation } from "./operations-store.js";
+import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 
 export const EVIDENCE_WINDOW_MS = 24 * 60 * 60_000;
 export const EVIDENCE_READS_PER_TICK = 8;
@@ -249,6 +250,7 @@ export function olderBridgeOutcome(provider: AgentPlatform): {
   state: McpApplyState;
   reason: string;
 } {
+  compatibilityPathUsage.record("mcp-report.older-bridge-outcome");
   const label = BRIDGE_LABEL[provider] ?? provider;
   if (provider === "claude") {
     return {

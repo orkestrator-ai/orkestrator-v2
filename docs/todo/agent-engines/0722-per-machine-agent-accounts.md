@@ -43,11 +43,11 @@ Done on 2026-10-24, second round (every code item this file listed):
   writing a refreshed login back was not used because two refreshers of one
   rotating token can still race.
 - `agent-accounts-changed` on every account change; the overview re-reads
-  only the machine that announced it, and the panel and composer chip re-read
-  their own machine.
+  only the machine that announced it, and the panel re-reads its own machine.
 - A "By account" toggle groups the overview by email, with a switch where a
   machine has the login and a sign-in where it does not.
-- The composer chip (`SessionAccountChip`) beside the model picker.
+- The composer chip (`SessionAccountChip`) beside the model picker, since
+  removed: the account controls live in the agent information panel only.
 - Grok and Pi columns in the overview (`read_host_agent_sign_ins`) with "Sign
   in on <machine>" (`open_agent_sign_in_terminal`). This is a file and
   variable-name read on the backend, not the settings auth card of
@@ -82,7 +82,7 @@ Batched with the two-machine runs in
   empty `refresh_token`, and the account's own Codex sessions keep working
   across the coordinator's lifetime.
 - Switching an account on the leaf from its own Settings updates the command
-  node's open overview within a second, and the leaf tab's composer chip.
+  node's open overview within a second, and the leaf tab's information panel.
 - "Sign in on <leaf>" for Grok opens `grok login` in a local environment's
   terminal on the leaf, and the window shows that environment.
 - A sign-in on a leaf whose login keychain is locked names the keychain.

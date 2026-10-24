@@ -24,7 +24,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
-import { SessionAccountChip } from "./SessionAccountChip";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import {
   approvalModeIconOption,
@@ -3176,11 +3175,6 @@ export function SharedNativeAgentController({
                       : undefined
                   }
                   disabled={settingsLocked}
-                />
-                <SessionAccountChip
-                  environmentId={data.environmentId}
-                  platform={platform}
-                  refreshKey={isTurnActive}
                 />
                 {withoutSuppressedComposerControls(
                   platform,

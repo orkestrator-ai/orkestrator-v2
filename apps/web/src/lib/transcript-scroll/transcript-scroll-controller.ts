@@ -76,6 +76,14 @@ export interface SemanticAnchor {
    * inner viewport holds at its on-screen offset from the transcript's top.
    */
   inner?: InnerAnchor;
+  /** The enclosing plain group, held instead if its member rows fold away. */
+  foldedGroup?: FoldedGroupAnchor;
+}
+
+export interface FoldedGroupAnchor {
+  /** A member still represented by the folded summary (the latest call). */
+  partId: string;
+  offsetPx: number;
 }
 
 export interface InnerAnchor {
@@ -95,6 +103,7 @@ export type NavigationTarget =
       offsetPx?: number;
       align?: "start" | "center";
       inner?: InnerAnchor;
+      foldedGroup?: FoldedGroupAnchor;
     }
   | {
       /** A precise box inside a row, e.g. a find match; resolved every frame. */
@@ -561,13 +570,14 @@ export class TranscriptScrollController {
    * subtree mutation. `resize` arrives after layout and before paint, so the
    * correction it causes is never painted at the displaced position.
    */
-  notifyLayout(source: "resize" | "list-height" | "mutation"): void {
+  notifyLayout(source: "resize" | "list-height" | "mutation" | "tool-group-fold"): void {
     if (!this.state.active) return;
     if (source === "mutation") {
       this.scheduleGrowthFrame();
       return;
     }
     if (source === "resize") this.cancelGrowthFrame();
+    if (source === "tool-group-fold" && !this.op) this.holdPlaceAcrossToolGroupFold();
     const op = this.op;
     // A settled reader's place follows measurement changes that keep it (a
     // card growing below): recapture once they stop, so a later reflow
@@ -588,6 +598,37 @@ export class TranscriptScrollController {
       return;
     }
     this.followGrowth();
+  }
+
+  /** Hold a settled reader through one tool-group fold, including its exit animation. */
+  private holdPlaceAcrossToolGroupFold(): boolean {
+    const el = this.scroller;
+    const anchor = this.lastReadingAnchor;
+    if (
+      !el ||
+      !anchor ||
+      this.state.wantsFollow ||
+      Math.abs(el.clientWidth - this.lastWidth) >= 1 ||
+      this.pointerHeld ||
+      this.touchActive ||
+      now() < Math.max(this.userScrollUntil, this.lastInputAt + INPUT_ARM_MS)
+    )
+      return false;
+    const target: NavigationTarget & { kind: "row" } = {
+      kind: "row",
+      index: anchor.index ?? 0,
+      key: anchor.rowKey,
+      partId: anchor.partId,
+      offsetPx: anchor.offsetPx,
+      inner: anchor.inner,
+      foldedGroup: anchor.foldedGroup,
+    };
+    if (!this.resolve(target)) return false;
+    if (!this.navigateTo(target, "reflow")) return false;
+    // Resize delivery is before paint. Correct here as well as in subsequent
+    // frames, which run after the virtualizer applies its measurements.
+    if (this.op) this.reconcile(this.op, "layout");
+    return true;
   }
 
   /**
@@ -616,6 +657,7 @@ export class TranscriptScrollController {
         partId: anchor.partId,
         offsetPx: anchor.offsetPx,
         inner: anchor.inner,
+        foldedGroup: anchor.foldedGroup,
       },
       "reflow",
     );
@@ -685,12 +727,26 @@ export class TranscriptScrollController {
       );
     if (!row) return null;
     const index = Number(row.dataset.chatMessageIndex);
+    const plainGroup = !inner
+      ? held?.closest<HTMLElement>('[data-transcript-group-frame][data-state="open"]')
+      : null;
+    const latestMember = plainGroup
+      ? Array.from(plainGroup.querySelectorAll<HTMLElement>("[data-transcript-part-id]")).at(-1)
+      : null;
+    const foldedGroup =
+      plainGroup && latestMember?.dataset.transcriptPartId
+        ? {
+            partId: latestMember.dataset.transcriptPartId,
+            offsetPx: plainGroup.getBoundingClientRect().top - top,
+          }
+        : undefined;
     return {
       rowKey: row.dataset.chatMessageKey,
       index: Number.isSafeInteger(index) ? index : undefined,
       partId: held?.dataset.transcriptPartId,
       offsetPx: (held ?? row).getBoundingClientRect().top - top,
       ...(inner ? { inner } : {}),
+      ...(foldedGroup ? { foldedGroup } : {}),
     };
   }
 
@@ -909,6 +965,21 @@ export class TranscriptScrollController {
       ? el.querySelector<HTMLElement>(`[data-chat-message-key="${cssEscape(target.key)}"]`)
       : el.querySelector<HTMLElement>(`[data-chat-message-index="${target.index}"]`);
     if (!row) return null;
+    if (target.foldedGroup && target.offsetPx !== undefined) {
+      const summary = findPart(row, target.foldedGroup.partId);
+      const group = summary?.closest<HTMLElement>(
+        '[data-transcript-group-frame][data-state="closed"]',
+      );
+      if (group) {
+        // Project the old member's offset onto the stable group frame. This
+        // applies during the exit animation too, before Radix removes rows.
+        const delta = target.offsetPx - target.foldedGroup.offsetPx;
+        return () => {
+          const rect = group.getBoundingClientRect();
+          return new DOMRect(rect.x, rect.y + delta, rect.width, rect.height);
+        };
+      }
+    }
     const element = target.partId ? findPart(row, target.partId) : row;
     if (!element) return null;
     return () => element.getBoundingClientRect();
@@ -1114,6 +1185,11 @@ export class TranscriptScrollController {
       return;
     }
     const t = now();
+    // A scrollbar drag has no wheel/key event to arm the input window. Its
+    // released tail must also settle before layout may restore an old anchor.
+    if (this.pointerHeld && metrics.scrollTop !== previous) {
+      this.lastInputAt = t;
+    }
     const armed = t < this.userScrollUntil;
     if (!armed && !this.pointerHeld && !this.touchActive) return;
     if (armed || this.touchActive) {
@@ -1260,8 +1336,15 @@ export class TranscriptScrollController {
           // A delivery that cannot be classified is treated as structural.
           let structural = records.length === 0;
           let shifted = false;
+          let toolGroupFold = false;
           for (const record of records) {
             if (record.type === "attributes") {
+              if (
+                record.attributeName === "data-state" &&
+                (record.target as Element).matches(".tool-group-fold-content")
+              ) {
+                toolGroupFold = true;
+              }
               // Virtuoso keeps rows in place across size changes with a list
               // margin and a deferred scroll; neither resizes what is observed
               // (nor does an inner viewport's own compensation).
@@ -1284,6 +1367,7 @@ export class TranscriptScrollController {
           // During a navigation, a structural change (a header removed, rows
           // replaced) can move the target with no resize: settle it before
           // paint. Only while an operation runs, so streaming pays nothing.
+          if (toolGroupFold) this.notifyLayout("tool-group-fold");
           if ((shifted || structural) && this.op) this.reconcile(this.op, "layout");
           if (structural) this.notifyLayout("mutation");
         });
@@ -1291,7 +1375,7 @@ export class TranscriptScrollController {
           childList: true,
           subtree: true,
           attributes: true,
-          attributeFilter: ["style"],
+          attributeFilter: ["style", "data-state"],
         });
       }
     }

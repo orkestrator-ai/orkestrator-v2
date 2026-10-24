@@ -11,6 +11,7 @@ import type { NavigationOwner } from "@/lib/transcript-scroll/scroll-intent";
 import {
   TranscriptScrollController,
   type InnerAnchor,
+  type FoldedGroupAnchor,
   type SemanticAnchor,
   type ScrollDiagnostics,
 } from "@/lib/transcript-scroll/transcript-scroll-controller";
@@ -158,6 +159,7 @@ export interface TranscriptScrollAnchor {
   offset?: number;
   /** A member an inner viewport holds, inside the group frame `partId` names. */
   inner?: InnerAnchor;
+  foldedGroup?: FoldedGroupAnchor;
 }
 
 interface UseVirtuosoScrollStateReturn {
@@ -357,6 +359,7 @@ export function useVirtuosoScrollState(
                 partId: anchor.partId,
                 offsetPx: anchor.offsetPx,
                 inner: anchor.inner,
+                foldedGroup: anchor.foldedGroup,
               },
               "restore",
             );
@@ -448,6 +451,7 @@ export function useVirtuosoScrollState(
           offsetPx: anchor?.offset,
           align: anchor?.offset !== undefined ? "start" : "center",
           inner: anchor?.inner,
+          foldedGroup: anchor?.foldedGroup,
         },
         owner,
       );

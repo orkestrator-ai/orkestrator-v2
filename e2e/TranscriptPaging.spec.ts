@@ -57,6 +57,17 @@ for (const view of ["native", "reviewer"]) {
             );
           })
           .toBe(true);
+        // Newly mounted short groups have their full measured height, with no
+        // fold-open animation to move the held tool after capture.
+        if (mixed) {
+          const bodies = list.locator('.tool-group-fold-content[data-state="open"]');
+          expect(await bodies.count()).toBeGreaterThan(0);
+          expect(
+            await bodies.evaluateAll((elements) =>
+              elements.every((element) => getComputedStyle(element).animationName === "none"),
+            ),
+          ).toBe(true);
+        }
         await expect.poll(() => toolPosition(list, "call-40")).not.toBeNull();
         const before = (await toolPosition(list, "call-40"))!;
         expect(before.index).toBe(mixed ? "1" : "0");
@@ -204,3 +215,62 @@ test("reviewer: a reader who moves while a page loads is held where they moved t
   // The page really did land above the reader.
   expect(Number(after.index)).toBeGreaterThan(Number(before.index) + 40);
 });
+
+for (const view of ["native", "reviewer"] as const) {
+  for (const reducedMotion of ["no-preference", "reduce"] as const) {
+    test(`${view}: paging folds a visible short group during held-place restoration with ${reducedMotion} motion`, async ({
+      page,
+    }) => {
+      await page.emulateMedia({ reducedMotion });
+      await page.goto(`/transcript-paging?short=1${view === "reviewer" ? "&reviewer=1" : ""}`);
+      const list = page.locator("[data-transcript-scroller]");
+      await list.hover();
+      const load = page.getByRole("button", { name: "Load earlier messages", exact: true });
+      await expect
+        .poll(async () => {
+          await page.mouse.wheel(0, -4000);
+          return await list.evaluate((element) => element.scrollTop <= 1);
+        })
+        .toBe(true);
+      await expect(load).toBeVisible();
+      await page.waitForTimeout(400);
+      const group = list.locator("[data-transcript-group-frame]").first();
+      await expect(group.getByRole("button", { name: /^Read .*success$/ })).toHaveCount(2);
+      // Hold the group frame while the original member rows are replaced by
+      // the newest call's summary during restoration.
+      const anchor = "css:[data-transcript-group-frame]";
+      await startAnchorProbe(list, anchor);
+      await load.click();
+      await expect(load).toHaveCount(0);
+      const show = list.getByRole("button", { name: /^Show 60 tool calls:/ });
+      await expect(show).toHaveAttribute("aria-expanded", "false");
+      await expect(list.getByRole("button", { name: /^Read .*success$/ })).toHaveCount(0);
+      await page.evaluate(async () => {
+        await Promise.all(
+          Array.from(
+            document.querySelectorAll(".tool-group-fold-content, .tool-group-head-enter"),
+          ).flatMap((element) => element.getAnimations().map((animation) => animation.finished)),
+        );
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0))),
+        );
+      });
+      await expect(group.locator('[data-transcript-part-id="call-59"]')).toHaveCount(1);
+      await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      await expect(group.locator('[data-transcript-part-id="call-58"]')).toHaveCount(0);
+      const probe = await stopAnchorProbe(list);
+      expect(probe.count).toBeGreaterThan(0);
+      expect(probe.missing).toBe(0);
+      expect(
+        probe.maxError,
+        JSON.stringify({
+          expected: probe.expected,
+          trace: probe.trace
+            .filter((sample) => Math.abs(sample[1]! - probe.expected) > 2)
+            .slice(0, 8),
+          diagnostics: await scrollDiagnostics(list),
+        }),
+      ).toBeLessThanOrEqual(2);
+    });
+  }
+}

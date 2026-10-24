@@ -50,6 +50,9 @@ function harness() {
       top = value;
       scroller.dispatchEvent(new Event("scroll"));
     },
+    changeHeightAbove(delta: number) {
+      rowTop += delta;
+    },
     reflow() {
       width = 600;
       rowTop += 150;
@@ -114,6 +117,91 @@ describe("transcript reading ownership", () => {
     expect(view.controller.diagnostics().operationsStarted).toBe(operations + 1);
     expect(view.row.getBoundingClientRect().top).toBe(80);
     expect(view.scroller.scrollTop).toBe(2070);
+  });
+
+  test("a settled reader keeps their place throughout a tool-group fold above them", async () => {
+    const view = harness();
+    view.controller.navigateTo({ kind: "row", index: 5, key: "k5", offsetPx: 80 }, "find");
+    await frames();
+    expect(view.controller.currentOwner).toBeNull();
+    view.controller.notifyLayout("tool-group-fold");
+    for (const delta of [-8, -12, -20, -10, 10, 20]) {
+      view.changeHeightAbove(delta);
+      view.controller.notifyLayout("resize");
+      // Corrected before paint, and still correct after the virtualizer's frame.
+      expect(view.row.getBoundingClientRect().top).toBe(80);
+      await frames(1);
+      expect(view.row.getBoundingClientRect().top).toBe(80);
+    }
+    await frames();
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.controller.wantsFollow).toBe(false);
+  });
+
+  test("history restoration holds the group when folding removes the captured member", async () => {
+    const view = harness();
+    view.row.innerHTML =
+      '<div data-transcript-group-frame data-state="open"><div data-transcript-part-id="first"></div><div data-transcript-part-id="latest"></div></div>';
+    const group = view.row.firstElementChild as HTMLElement;
+    group.getBoundingClientRect = () =>
+      new DOMRect(0, view.row.getBoundingClientRect().top + 10, 300, 100);
+    const first = group.firstElementChild as HTMLElement;
+    first.getBoundingClientRect = () =>
+      new DOMRect(0, group.getBoundingClientRect().top + 3, 300, 40);
+    const latest = group.lastElementChild as HTMLElement;
+    latest.getBoundingClientRect = () =>
+      new DOMRect(0, group.getBoundingClientRect().top + 43, 300, 40);
+    view.controller.navigateTo(
+      { kind: "row", index: 5, key: "k5", partId: "first", offsetPx: 80 },
+      "find",
+    );
+    await frames();
+    const anchor = view.controller.captureAnchor()!;
+    expect(anchor.foldedGroup).toEqual({ partId: "latest", offsetPx: 77 });
+    group.dataset.state = "closed";
+    first.remove();
+    // Both the message header and the load-earlier header can change here.
+    view.changeHeightAbove(-56);
+    view.controller.navigateTo(
+      {
+        kind: "row",
+        index: 5,
+        key: "k5",
+        partId: anchor.partId,
+        offsetPx: anchor.offsetPx,
+        foldedGroup: anchor.foldedGroup,
+      },
+      "history",
+    );
+    view.controller.notifyLayout("resize");
+    expect(group.getBoundingClientRect().top).toBe(77);
+    await frames();
+    expect(group.getBoundingClientRect().top).toBe(77);
+    expect(view.controller.diagnostics().partFallbacks).toBe(0);
+    expect(view.controller.captureAnchor()?.foldedGroup).toBeUndefined();
+  });
+
+  test("height changes do not pull back a reader who has just scrolled", async () => {
+    const view = harness();
+    view.controller.navigateTo({ kind: "row", index: 5, key: "k5", offsetPx: 80 }, "find");
+    await frames();
+    view.scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: 100 }));
+    view.scrollTo(2000);
+    const writes = view.controller.diagnostics().writes;
+    view.changeHeightAbove(-40);
+    view.controller.notifyLayout("tool-group-fold");
+    view.controller.notifyLayout("resize");
+    await frames(1);
+    expect(view.scroller.scrollTop).toBe(2000);
+    expect(view.controller.diagnostics().writes).toBe(writes);
+  });
+
+  test("pointer noise at the end does not release follow", () => {
+    const view = harness();
+    view.scroller.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    view.scrollTo(4399);
+    window.dispatchEvent(new PointerEvent("pointerup"));
+    expect(view.controller.wantsFollow).toBe(true);
   });
 
   test("scrollbar movement after completed find invalidates late match refinement", async () => {

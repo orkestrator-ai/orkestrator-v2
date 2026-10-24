@@ -119,3 +119,13 @@ Aggregate result: exit 1 after 664.7 seconds logged. Codex bridge reported 2230 
 - **Unchanged owner:** `mise run test:logged -- --name codex-process-node -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed (exit 0, 0.2 s logged).
 - **Evidence:** `orkestrator-test-run.XHMi6K/bridges.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed recurrence; subprocess scheduling under shared-host load remains a hypothesis. No assertion, timeout or skip changed.
+
+
+## Multi Review divider review validation — 2026-10-24
+
+- **Original command:** `mise run test:logged -- --name resize-aggregate -- mise run test`; default workspace/root/bridges/protocol reservations 4/1/2/1, one Codex worker, alongside the component browser suite.
+- **Failure:** `fake Codex app-server process > reports its version and rejects unsupported invocations` in `bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts` timed out at 5000.00 ms. The other four bridge packages passed.
+- **Suite counts:** Codex reported 2303 passed, 40 skipped and one failed across 2344 tests in 86 files (31.19 s); the bridge group finished in 181.1 s.
+- **Unchanged owner:** `mise run test:logged -- --name codex-fake-server-node-rerun -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed (exit 0, 2 passed, 0 failed, 0.2 s logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.bqXLeN/bridges.log.gz` after aggregate completion.
+- **Assessment:** confirmed recurrence; subprocess scheduling under concurrent host load remains a hypothesis. No bridge implementation, assertion, timeout or skip changed.

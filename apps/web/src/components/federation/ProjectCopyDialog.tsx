@@ -253,10 +253,21 @@ function ProjectCopyDialogBody({
 
   /** The same copy again: it reuses whatever the failed run left on the target. */
   const retry = async () => {
-    if (!lastCopy.current) return;
+    const input =
+      lastCopy.current ??
+      (record
+        ? {
+            requestKey: record.requestKey,
+            source: { nodeId: record.source.nodeId, projectId: record.source.projectId },
+            target: { nodeId: record.target.nodeId, location: record.target.location },
+            paths: record.paths,
+            rememberFiles: record.rememberFiles,
+          }
+        : null);
+    if (!input) return;
     setBusy(true);
     try {
-      setRecord(await copyProjectToNode(lastCopy.current));
+      setRecord(await copyProjectToNode(input));
     } catch (error) {
       setRecord((current) =>
         current ? { ...current, error: { code: "failed", message: errorText(error) } } : current,
@@ -497,7 +508,7 @@ function ProjectCopyDialogBody({
                   Open on {record.target.nodeName}
                 </Button>
               ) : null}
-              {record?.stage === "failed" && !approving ? (
+              {record?.stage === "failed" ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -574,6 +585,8 @@ function CopyProgress({ record }: { record: ProjectCopyRecord | null }) {
     );
   }
   const { progress } = record;
+  const copiedFiles = progress.files - (progress.existing ?? 0);
+  const copiedBytes = progress.bytes - (progress.existingBytes ?? 0);
   const percent =
     record.stage === "completed"
       ? 100
@@ -603,7 +616,7 @@ function CopyProgress({ record }: { record: ProjectCopyRecord | null }) {
         <p className="text-sm text-muted-foreground">
           {record.reusedProject ? "Added to the existing copy" : "Cloned"}
           {progress.totalFiles > 0
-            ? `, with ${progress.files.toLocaleString()} file${progress.files === 1 ? "" : "s"} (${formatBytes(progress.bytes)})`
+            ? `, with ${copiedFiles.toLocaleString()} file${copiedFiles === 1 ? "" : "s"} (${formatBytes(copiedBytes)})`
             : ""}
           .
           {record.tooLarge.length > 0

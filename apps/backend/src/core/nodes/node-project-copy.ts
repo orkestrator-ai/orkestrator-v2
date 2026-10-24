@@ -39,8 +39,6 @@ import {
 const CLONE_POLL_MS = 1_500;
 const CLONE_TIMEOUT_MS = 60 * 60 * 1_000;
 const MAX_FAILED_CLONE_POLLS = 10;
-/** Remembered files are added to the target's files to copy only up to this many. */
-const MAX_REMEMBERED_FILES = 200;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -67,7 +65,6 @@ const COPIED_REPOSITORY_SETTINGS = [
   "defaultBranch",
   "prBaseBranch",
   "defaultPortMappings",
-  "filesToCopy",
   "entryPort",
   "agentSettings",
 ] as const;
@@ -292,6 +289,9 @@ export class NodeProjectCopies {
     if (location !== undefined && location !== "" && !location.startsWith("/")) {
       throw new Error("The location must be an absolute path on that machine.");
     }
+    if (this.running.size >= MAX_PROJECT_COPY_RECORDS) {
+      throw new Error("Too many project copies are running; retry later.");
+    }
     const record: ProjectCopyRecord = existing ?? {
       copyId: randomUUID(),
       requestKey,
@@ -322,7 +322,24 @@ export class NodeProjectCopies {
       delete record.finishedAt;
       record.stage = "queued";
     } else {
-      this.records = [...this.records, record].slice(-MAX_PROJECT_COPY_RECORDS);
+      // Active copies remain queryable even when terminal history is full.
+      const terminal = this.records.filter(
+        (entry) =>
+          entry.stage === "completed" ||
+          (entry.stage === "failed" && !this.running.has(entry.copyId)),
+      );
+      const historySlots = Math.max(
+        0,
+        MAX_PROJECT_COPY_RECORDS - (this.records.length - terminal.length) - 1,
+      );
+      const retained = new Set(historySlots ? terminal.slice(-historySlots) : []);
+      for (const entry of terminal) {
+        if (!retained.has(entry)) this.attempts.delete(entry.copyId);
+      }
+      this.records = this.records.filter(
+        (entry) => !terminal.includes(entry) || retained.has(entry),
+      );
+      this.records.push(record);
     }
     this.publish(record);
     const run = this.run(record, gitUrl)
@@ -431,7 +448,10 @@ export class NodeProjectCopies {
           onFile: (file) => {
             record.progress.files += 1;
             record.progress.bytes += file.bytes;
-            if (file.skipped) record.progress.existing = (record.progress.existing ?? 0) + 1;
+            if (file.skipped) {
+              record.progress.existing = (record.progress.existing ?? 0) + 1;
+              record.progress.existingBytes = (record.progress.existingBytes ?? 0) + file.bytes;
+            }
             this.publish(record);
           },
         });
@@ -516,11 +536,7 @@ export class NodeProjectCopies {
   ): Promise<void> {
     const source = this.deps.invokerFor(record.source.nodeId);
     const target = this.deps.invokerFor(record.target.nodeId);
-    const remembered = record.rememberFiles
-      ? list.files.length <= MAX_REMEMBERED_FILES
-        ? list.files.map((file) => file.path)
-        : record.paths.filter((entry) => !entry.endsWith("/")).slice(0, MAX_REMEMBERED_FILES)
-      : [];
+    const remembered = record.rememberFiles ? list.files.map((file) => file.path) : [];
     if (record.reusedProject) {
       if (remembered.length === 0) return;
       const current = await target<JsonRecord>("get_repository_config", {
@@ -546,9 +562,9 @@ export class NodeProjectCopies {
     for (const key of COPIED_REPOSITORY_SETTINGS) {
       if (sourceConfig[key] !== undefined) copied[key] = sourceConfig[key];
     }
-    const files = Array.isArray(copied.filesToCopy) ? (copied.filesToCopy as string[]) : [];
-    const merged = [...new Set([...files, ...remembered])];
-    if (merged.length > 0) copied.filesToCopy = merged;
+    // Source requirements may name ignored files the user did not select.
+    // Only the user's remembered selection becomes a requirement on a new copy.
+    copied.filesToCopy = remembered;
     await target("update_repository_config", {
       projectId: targetProjectId,
       repoConfig: copied,

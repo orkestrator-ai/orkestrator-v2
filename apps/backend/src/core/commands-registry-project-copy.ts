@@ -80,11 +80,11 @@ export async function defaultProjectLocation(
     : commonParent((await storage.loadProjects()).map((project) => project.localPath ?? undefined));
   const directory = configured ?? fromProjects ?? path.join(os.homedir(), "Projects");
   const source = configured ? "setting" : fromProjects ? "projects" : "home";
-  for (let attempt = 1; attempt <= 20; attempt += 1) {
+  for (let attempt = 1; attempt <= 1_000; attempt += 1) {
     const location = path.join(directory, attempt === 1 ? folder : `${folder}-${attempt}`);
     if (!(await exists(location))) return { directory, location, source };
   }
-  return { directory, location: path.join(directory, folder), source };
+  throw new Error("No free project location found; choose a location explicitly.");
 }
 
 type CloneJob = {
@@ -119,9 +119,13 @@ export function registerProjectCopyCommands(
 
   const prune = () => {
     const now = Date.now();
-    for (const [key, job] of jobs) {
+    for (const [key, job] of Array.from(jobs)) {
       if (job.finishedAtMs !== undefined && now - job.finishedAtMs > FINISHED_CLONE_TTL_MS)
         jobs.delete(key);
+    }
+    const terminal = Array.from(jobs.values()).filter((job) => job.state !== "running");
+    for (const job of terminal.slice(0, Math.max(0, terminal.length - MAX_CLONE_JOBS))) {
+      jobs.delete(job.requestKey);
     }
   };
 
@@ -176,7 +180,8 @@ export function registerProjectCopyCommands(
       }
       return view(existing);
     }
-    if (jobs.size >= MAX_CLONE_JOBS) throw new Error("Too many clones are running; retry later.");
+    if (Array.from(jobs.values()).filter((job) => job.state === "running").length >= MAX_CLONE_JOBS)
+      throw new Error("Too many clones are running; retry later.");
     const job: CloneJob = {
       requestKey,
       gitUrl,

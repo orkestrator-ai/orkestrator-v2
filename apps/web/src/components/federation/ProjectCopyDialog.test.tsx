@@ -111,7 +111,20 @@ describe("copying a project to another machine", () => {
         copies.push(args);
         return record("queued");
       }
-      if (command === "list_project_copies") return [record(stage)];
+      if (command === "list_project_copies")
+        return [
+          {
+            ...record(stage),
+            progress: {
+              files: 1,
+              totalFiles: 1,
+              bytes: 12,
+              totalBytes: 12,
+              existing: 1,
+              existingBytes: 12,
+            },
+          },
+        ];
       return undefined;
     });
     render(
@@ -165,10 +178,13 @@ describe("copying a project to another machine", () => {
       () => expect(screen.getByRole("button", { name: "Open on Build box" })).toBeTruthy(),
       { timeout: 5_000 },
     );
+    expect(dialog.textContent).toContain("with 0 files (0 B)");
   });
 
   test("a coordinator's copy request is approved from the copy dialog with the user's choices", async () => {
     const resolved: Array<Record<string, unknown>> = [];
+    const retries: Array<Record<string, unknown>> = [];
+    let stage: ProjectCopyRecord["stage"] = "copying";
     invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
       if (command === "get_node_summaries") return { selfId: "bk_self", nodes: [] };
       if (command === "get_node_status") return { nodeId: "bk_self", mode: "command" };
@@ -198,8 +214,28 @@ describe("copying a project to another machine", () => {
         resolved.push(args);
         return { requestId: "req-copy", state: "executed", result: { code: "copying" } };
       }
+      if (command === "copy_project_to_node") {
+        retries.push(args);
+        stage = "completed";
+        return {
+          ...record(stage),
+          requestKey: "node-action:req-copy:bk_leaf",
+          paths: [".env", "notes.txt"],
+          actionRequestId: "req-copy",
+        };
+      }
       if (command === "list_project_copies")
-        return [{ ...record("copying"), actionRequestId: "req-copy" }];
+        return [
+          {
+            ...record(stage),
+            requestKey: "node-action:req-copy:bk_leaf",
+            paths: [".env", "notes.txt"],
+            actionRequestId: "req-copy",
+            ...(stage === "failed"
+              ? { error: { code: "disk", message: "Disk full on Build box" } }
+              : {}),
+          },
+        ];
       return undefined;
     });
     render(
@@ -240,5 +276,22 @@ describe("copying a project to another machine", () => {
       },
     });
     await waitFor(() => expect(dialog.textContent).toContain("Copying files"));
+    stage = "failed";
+    await waitFor(() => expect(dialog.textContent).toContain("Disk full on Build box"), {
+      timeout: 5000,
+    });
+    expect(screen.getAllByRole("button", { name: "Close" }).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(retries).toHaveLength(1));
+    expect(retries[0]).toMatchObject({
+      requestKey: "node-action:req-copy:bk_leaf",
+      paths: [".env", "notes.txt"],
+      rememberFiles: true,
+      target: { nodeId: "bk_leaf" },
+    });
+    expect(resolved).toHaveLength(1);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Open on Build box" })).toBeTruthy(),
+    );
   });
 });

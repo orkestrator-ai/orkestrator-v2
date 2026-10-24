@@ -14,6 +14,7 @@ import type {
   RemoteWorkerState,
   RemoteWorkflowRecord,
 } from "./coordinator-remote.js";
+import { NodeMailCollector } from "./nodes/node-mail-collector.js";
 import { statusOnNode } from "./coordinator-status-wakes.js";
 
 class FakeRemote implements CoordinatorRemoteAccess {
@@ -35,8 +36,9 @@ class FakeRemote implements CoordinatorRemoteAccess {
     };
   }
 
-  async collectMail(nodeId: string): Promise<void> {
+  async collectMail(nodeId: string): Promise<boolean> {
     this.collected.push(nodeId);
+    return true;
   }
 
   async lastAssistantExcerpt(): Promise<string | undefined> {
@@ -222,6 +224,131 @@ describe("remote delegations", () => {
       tabId: "startup-agent",
     });
     expect((await report("r4")).placement).toBe("pending-inject");
+  });
+
+  for (const failure of ["collect", "deliver", "ack"]) {
+    test(`a failed outbox ${failure} keeps the delegation open until one report wake`, async () => {
+      const { world, remote, main, association } = await remoteWorld();
+      let failed = false;
+      let queued = true;
+      const collector = new NodeMailCollector({
+        retryDelayMs: 60_000,
+        selfId: async () => "bk_cmd" as never,
+        nodeName: async () => "Build box",
+        link: () => ({
+          connected: true,
+          invoke: async <T>(command: string) => {
+            if (
+              !failed &&
+              command ===
+                (failure === "collect"
+                  ? "collect_node_outbox"
+                  : failure === "ack"
+                    ? "ack_node_outbox"
+                    : "none")
+            ) {
+              failed = true;
+              throw new Error("temporary");
+            }
+            if (command === "collect_node_outbox")
+              return {
+                items: queued
+                  ? [
+                      {
+                        seq: 1,
+                        requestId: "report",
+                        createdAt: "",
+                        fromEnvironmentId: "leaf-env",
+                        fromTabId: "startup-agent",
+                        body: "Tests pass.",
+                        bytes: 11,
+                      },
+                    ]
+                  : [],
+                more: false,
+              } as T;
+            queued = false;
+            return {} as T;
+          },
+        }),
+        deliver: async (input) => {
+          if (!failed && failure === "deliver") {
+            failed = true;
+            throw new Error("temporary");
+          }
+          await world.storage.sendAgentMail(
+            {
+              kind: "node",
+              ...input.from,
+              role: "agent",
+              projectId: world.projectId,
+              title: "worker",
+            },
+            {
+              requestId: input.requestId,
+              toEnvironmentId: main.environmentId,
+              toTabId: main.tabId,
+              body: input.body,
+            },
+          );
+        },
+      });
+      remote.collectMail = (id) => collector.collect(id as never);
+      try {
+        await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+        remote.tab = "idle";
+        await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+        await world.deliver();
+        expect(failed).toBe(true);
+        expect((await delegationState(world, association.id))?.state).toBe("running");
+        expect(world.wakes(main)).toBe(0);
+        await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+        await world.deliver();
+        await world.coordinator.reconcileWorkerDelegations();
+        await world.deliver();
+        expect((await delegationState(world, association.id))?.wakeKind).toBe("report");
+        expect(world.wakes(main)).toBe(1);
+        expect(world.received(main).join(" ")).toContain("Tests pass.");
+      } finally {
+        collector.dispose();
+      }
+    });
+  }
+
+  test("a follow-up admitted while collecting outbox mail invalidates the idle outcome", async () => {
+    const { world, remote, main, association } = await remoteWorld();
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    remote.tab = "idle";
+    let release!: () => void;
+    let collecting!: () => void;
+    const started = new Promise<void>((resolve) => {
+      collecting = resolve;
+    });
+    remote.collectMail = async () => {
+      collecting();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return true;
+    };
+    const settling = world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    await started;
+    // Admission uses a new identity even within the same clock millisecond.
+    await world.storage.withAgentMailWorkerAdmission("node:bk_leaf:leaf-env", async () => {
+      world.coordinator.noteRemoteRequest(association.id);
+      remote.tab = "working";
+    });
+    release();
+    await settling;
+    expect((await delegationState(world, association.id))?.state).toBe("running");
+    expect(world.wakes(main)).toBe(0);
+    remote.collectMail = async () => true;
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    remote.tab = "idle";
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    await world.deliver();
+    expect((await delegationState(world, association.id))?.state).toBe("completed");
+    expect(world.wakes(main)).toBe(1);
   });
 
   test("a local turn end never settles a remote delegation with the same environment ID", async () => {

@@ -62,6 +62,19 @@ describe("defaultProjectLocation", () => {
     expect(result.location).toBe(path.join(root, "site-3"));
   });
 
+  test("continues beyond twenty occupied names", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-default-location-"));
+    roots.push(root);
+    await Promise.all(
+      Array.from({ length: 20 }, (_, i) =>
+        mkdir(path.join(root, i === 0 ? "site" : `site-${i + 1}`)),
+      ),
+    );
+    expect((await defaultProjectLocation(storage([], root), "site")).location).toBe(
+      path.join(root, "site-21"),
+    );
+  });
+
   test("refuses names that would leave the folder", async () => {
     await expect(defaultProjectLocation(storage([], "/x"), "..")).rejects.toThrow();
     expect((await defaultProjectLocation(storage([], "/x"), "a/b")).location).toBe(
@@ -121,6 +134,38 @@ describe("project clone jobs", () => {
       requestKey: "nope",
       state: "unknown",
     });
+  });
+
+  test("finished jobs within the retention TTL do not use running capacity", async () => {
+    const invoke = commands(async () => {
+      throw new Error("clone failed");
+    });
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-clone-capacity-"));
+    roots.push(root);
+    for (let i = 0; i < 50; i++) {
+      await invoke("start_project_clone", {
+        requestKey: `k${i}`,
+        gitUrl: "https://example.test/a.git",
+        localPath: path.join(root, `site-${i}`),
+      });
+    }
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const jobs = (await Promise.all(
+        Array.from({ length: 50 }, (_, i) => invoke("get_project_clone", { requestKey: `k${i}` })),
+      )) as Array<{ state: string }>;
+      if (jobs.every((job) => job.state !== "running")) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(await invoke("get_project_clone", { requestKey: "k49" })).toMatchObject({
+      state: "failed",
+    });
+    expect(
+      await invoke("start_project_clone", {
+        requestKey: "next",
+        gitUrl: "https://example.test/a.git",
+        localPath: path.join(root, "next"),
+      }),
+    ).toMatchObject({ state: "running" });
   });
 
   test("refuses a relative location", async () => {

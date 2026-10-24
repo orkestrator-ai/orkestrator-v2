@@ -127,7 +127,7 @@ export class CoordinatorService {
    * falls back to the grace period.
    */
   private readonly remoteSeenWorking = new Set<string>();
-  private readonly remoteAskedAt = new Map<string, number>();
+  private readonly remoteAskedAt = new Map<string, { at: number }>();
 
   constructor(
     private readonly storage: StorageService,
@@ -165,7 +165,7 @@ export class CoordinatorService {
    */
   noteRemoteRequest(associationId: string): void {
     this.remoteSeenWorking.delete(associationId);
-    this.remoteAskedAt.set(associationId, Date.now());
+    this.remoteAskedAt.set(associationId, { at: Date.now() });
   }
 
   /**
@@ -822,14 +822,13 @@ export class CoordinatorService {
   ): Promise<void> {
     const delegation = association.delegation;
     if (!this.remote || !association.nodeId || delegation?.state !== "running") return;
+    const requestGeneration = this.remoteAskedAt.get(association.id);
     const state = await this.remote
       .workerState(association.nodeId, association.resourceId, delegation.workerTabId)
       .catch(() => "unavailable" as const);
-    if (state === "unavailable") return;
-    const askedAt = Math.max(
-      Date.parse(delegation.requestedAt) || 0,
-      this.remoteAskedAt.get(association.id) ?? 0,
-    );
+    if (state === "unavailable" || this.remoteAskedAt.get(association.id) !== requestGeneration)
+      return;
+    const askedAt = Math.max(Date.parse(delegation.requestedAt) || 0, requestGeneration?.at ?? 0);
     const graceOver = Date.now() - askedAt >= DELEGATION_IDLE_RECONCILE_GRACE_MS;
     if (state.tab === "working" || state.tab === "waiting") {
       this.remoteSeenWorking.add(association.id);
@@ -855,10 +854,25 @@ export class CoordinatorService {
     if (!outcome) return;
     // The worker's report may still be in its node's outbox: collect it first,
     // so it is held for this delegation and released as the wake.
-    await this.remote.collectMail?.(association.nodeId).catch(() => undefined);
-    this.remoteSeenWorking.delete(association.id);
-    this.remoteAskedAt.delete(association.id);
-    await this.storage.closeCoordinatorDelegation(association.id, outcome);
+    if (
+      this.remote.collectMail &&
+      !(await this.remote.collectMail(association.nodeId).catch(() => false))
+    )
+      return;
+    await this.storage.withAgentMailWorkerAdmission(
+      `node:${association.nodeId}:${association.resourceId}`,
+      async () => {
+        // A follow-up admitted during either remote read needs its own turn.
+        if (this.remoteAskedAt.get(association.id) !== requestGeneration) return;
+        const current = (await this.storage.listOpenCoordinatorDelegations()).find(
+          (item) => item.id === association.id,
+        );
+        if (!current) return;
+        this.remoteSeenWorking.delete(association.id);
+        this.remoteAskedAt.delete(association.id);
+        await this.storage.closeCoordinatorDelegation(association.id, outcome);
+      },
+    );
   }
 
   /**

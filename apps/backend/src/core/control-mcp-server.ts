@@ -2757,10 +2757,19 @@ export class ControlMcpServer {
           if (typeof args.environmentId === "string") {
             const ownRuntime = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
             if (args.environmentId !== ownRuntime) {
-              const environment = await this.invoke<unknown>("get_environment", {
-                environmentId: args.environmentId,
-              });
-              if (!isRecord(environment) || environment.projectId !== coordinatorScope.projectId) {
+              const target =
+                typeof args.nodeId === "string"
+                  ? await createNodeTargets(this.invoke, coordinatorScope).targetOrSelf(args.nodeId)
+                  : null;
+              const environment = target
+                ? await target.environment(args.environmentId)
+                : await this.invoke<unknown>("get_environment", {
+                    environmentId: args.environmentId,
+                  });
+              if (
+                !isRecord(environment) ||
+                environment.projectId !== (target?.projectId ?? coordinatorScope.projectId)
+              ) {
                 throw new Error("Coordinator credential cannot access that environment");
               }
               // The project home runs writable sessions in the checkout the

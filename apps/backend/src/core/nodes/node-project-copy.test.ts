@@ -9,6 +9,7 @@ import { PROJECT_COPY_CHANGED_EVENT } from "@orkestrator/protocol/project-copy";
 import { BackendRuntime } from "../backend-runtime.js";
 import type { CommandContext } from "../commands-context.js";
 import { createCommandRegistry } from "../commands.js";
+import { createLocalWorktree } from "../commands-environment.js";
 import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.js";
 import { runCommand } from "../shell.js";
 import { StorageService } from "../storage.js";
@@ -222,6 +223,174 @@ describe("NodeProjectCopies", () => {
     expect(await fs.readFile(path.join(source.localPath, ".env"), "utf8")).toBe("SECRET=1\n");
   });
 
+  for (const rememberFiles of [false, true]) {
+    test(`deselected requirements do not reach target environments (remember ${rememberFiles})`, async () => {
+      const { root, a, b, source, copies } = await network();
+      await a.invoke("update_repository_config", {
+        projectId: source.id,
+        repoConfig: {
+          ...(await a.storage.getRepositoryConfig(source.id)),
+          filesToCopy: [".env", "config/local.json"],
+        },
+      });
+      const started = await copies.start({
+        requestKey: "requirements",
+        source: { nodeId: a.id, projectId: source.id },
+        target: { nodeId: b.id },
+        paths: ["config/local.json"],
+        rememberFiles,
+      });
+      await copies.settled(started.copyId);
+      const record = copies.get(started.copyId)!;
+      expect(record.stage).toBe("completed");
+      const settings = await b.storage.getRepositoryConfig(record.target.projectId!);
+      expect(settings.filesToCopy).toEqual(rememberFiles ? ["config/local.json"] : []);
+      const worker = await createLocalWorktree(
+        record.target.location,
+        "site",
+        "worker",
+        "main",
+        settings.filesToCopy,
+        path.join(root, "environments"),
+      );
+      const environment = worker.path;
+      expect(await fs.stat(path.join(environment, ".env")).catch(() => null)).toBeNull();
+      if (rememberFiles)
+        expect(await fs.readFile(path.join(environment, "config/local.json"), "utf8")).toBe("{}");
+    });
+  }
+
+  test("remembers every file in a directory with more than 200 files for future environments", async () => {
+    const { root, a, b, source, copies } = await network();
+    const paths = Array.from({ length: 201 }, (_, i) => `config/extra-${i}.txt`);
+    await Promise.all(paths.map((file) => fs.writeFile(path.join(source.localPath, file), "x")));
+    const started = await copies.start({
+      requestKey: "many-files",
+      source: { nodeId: a.id, projectId: source.id },
+      target: { nodeId: b.id },
+      paths: ["config/"],
+      rememberFiles: true,
+    });
+    await copies.settled(started.copyId);
+    const record = copies.get(started.copyId)!;
+    expect(record.stage).toBe("completed");
+    const settings = await b.storage.getRepositoryConfig(record.target.projectId!);
+    expect(settings.filesToCopy).toHaveLength(203);
+    expect(settings.filesToCopy).toEqual(expect.arrayContaining(paths));
+    const worker = await createLocalWorktree(
+      record.target.location,
+      "site",
+      "worker",
+      "main",
+      settings.filesToCopy,
+      path.join(root, "environments"),
+    );
+    const environment = worker.path;
+    expect(await fs.readFile(path.join(environment, paths[200]!), "utf8")).toBe("x");
+  });
+
+  test("a retry after cloning still copies source settings", async () => {
+    const { a, b, source } = await network();
+    const originalInvoke = b.invoke;
+    let fail = true;
+    b.invoke = async (command, args) => {
+      if (command === "update_repository_config" && fail) {
+        fail = false;
+        throw new Error("config unavailable");
+      }
+      return originalInvoke(command, args);
+    };
+    const invokerFor = (id: string) => (id === a.id ? a : b).invoke;
+    const copies = new NodeProjectCopies({
+      selfId: async () => a.id,
+      selfName: async () => a.name,
+      summaries: async () =>
+        ({
+          selfId: a.id,
+          nodes: [{ nodeId: b.id, available: true, view: { displayName: b.name } }],
+        }) as unknown as NodeSummariesResult,
+      invokerFor,
+      transfer: new NodeFileTransfer({ invokerFor }),
+      emit: () => {},
+      sleep: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      },
+    });
+    const input = {
+      requestKey: "config-retry",
+      source: { nodeId: a.id, projectId: source.id },
+      target: { nodeId: b.id },
+      paths: [".env"],
+      rememberFiles: true,
+    };
+    const first = await copies.start(input);
+    await copies.settled(first.copyId);
+    expect(copies.get(first.copyId)).toMatchObject({
+      stage: "failed",
+      reusedProject: false,
+      target: { projectId: expect.any(String) },
+    });
+    await copies.start(input);
+    await copies.settled(first.copyId);
+    const done = copies.get(first.copyId)!;
+    expect(done).toMatchObject({ stage: "completed", reusedProject: false });
+    expect((await b.storage.getRepositoryConfig(done.target.projectId!)).prBaseBranch).toBe(
+      "develop",
+    );
+    expect((await b.storage.getRepositoryConfig(done.target.projectId!)).filesToCopy).toEqual([
+      ".env",
+    ]);
+    expect(await projectsOn(b)).toHaveLength(1);
+  });
+
+  test("active copies stay queryable when history capacity is reached", async () => {
+    let release!: () => void;
+    const cloning = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const invokerFor =
+      (_id: string) =>
+      async <T>(command: string): Promise<T> => {
+        if (command === "get_project") return { id: "source", gitUrl: REMOTE } as T;
+        if (command === "get_projects") return [] as T;
+        if (command === "start_project_clone") {
+          await cloning;
+          return { state: "completed", projectId: "target" } as T;
+        }
+        if (command === "get_repository_config") return {} as T;
+        return {} as T;
+      };
+    const copies = new NodeProjectCopies({
+      selfId: async () => "a",
+      selfName: async () => "A",
+      summaries: async () =>
+        ({
+          nodes: [{ nodeId: "b", available: true, view: { displayName: "B" } }],
+        }) as unknown as NodeSummariesResult,
+      invokerFor,
+      transfer: new NodeFileTransfer({ invokerFor }),
+      emit: () => {},
+    });
+    const input = {
+      source: { nodeId: "a", projectId: "source" },
+      target: { nodeId: "b", location: "/target" },
+      paths: [],
+      rememberFiles: false,
+    };
+    const first = await copies.start({ ...input, requestKey: "first" });
+    for (let i = 1; i < 50; i++) await copies.start({ ...input, requestKey: `copy-${i}` });
+    await expect(copies.start({ ...input, requestKey: "overflow" })).rejects.toThrow(
+      "Too many project copies",
+    );
+    expect(copies.get(first.copyId)?.stage).toBe("cloning");
+    release();
+    await Promise.all(copies.list().map((record) => copies.settled(record.copyId)));
+    expect(copies.get(first.copyId)?.stage).toBe("completed");
+    const next = await copies.start({ ...input, requestKey: "next" });
+    await copies.settled(next.copyId);
+    expect(copies.list()).toHaveLength(50);
+  });
+
   test("copies into an existing copy without replacing its files", async () => {
     const { root, a, b, copies, source } = await network();
     const existing = await b.invoke<{ id: string; localPath: string }>("add_project", {
@@ -242,6 +411,9 @@ describe("NodeProjectCopies", () => {
 
     expect(record.stage).toBe("completed");
     expect(record.reusedProject).toBe(true);
+    expect(record.progress).toMatchObject({ files: 2, bytes: 11, existing: 1, existingBytes: 9 });
+    expect(record.progress.files - (record.progress.existing ?? 0)).toBe(1);
+    expect(record.progress.bytes - (record.progress.existingBytes ?? 0)).toBe(2);
     expect(record.target.projectId).toBe(existing.id);
     expect(await projectsOn(b)).toHaveLength(1);
     expect(await fs.readFile(path.join(existing.localPath, ".env"), "utf8")).toBe("MINE=1\n");

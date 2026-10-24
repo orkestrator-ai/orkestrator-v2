@@ -56,6 +56,6 @@ export interface CoordinatorRemoteAccess {
     environmentId: string,
   ): Promise<{ prUrl?: unknown; prState?: unknown }>;
   nodeName(nodeId: string): Promise<string>;
-  /** Collect what that node's agents have sent here, so a report is in before a close. */
-  collectMail?(nodeId: string): Promise<void>;
+  /** True only after a complete outbox drain, including coalesced follow-ups. */
+  collectMail?(nodeId: string): Promise<boolean>;
 }

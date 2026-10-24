@@ -437,74 +437,86 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
    */
   register("send_coordinator_node_mail", async (args, context) => {
     const caller = await identity(args.scope, context);
-    const target = await coordinatorNodeTarget(
-      context,
-      caller.projectId,
-      asNonBlankString(args.nodeId, "nodeId"),
-    );
-    const requestId = asNonBlankString(args.requestId, "requestId");
-    const toEnvironmentId = asNonBlankString(args.toEnvironmentId, "toEnvironmentId");
-    const recipient = await target.environment(toEnvironmentId);
-    const requestedTab = typeof args.toTabId === "string" ? args.toTabId.trim() : "";
-    const joining = (await context.storage.listOpenCoordinatorDelegations()).find(
-      (association) =>
-        association.coordinatorId === caller.coordinatorId &&
-        association.kind === "environment" &&
-        association.nodeId === target.nodeId &&
-        association.resourceId === toEnvironmentId &&
-        (!requestedTab || association.delegation?.workerTabId === requestedTab) &&
-        association.requestId !== `delegation:${requestId}`,
-    );
-    const delivered = await target.call<{
-      messageId?: string;
-      toTabId?: string;
-      placement?: string;
-    }>(
-      "deliver_node_mail",
-      {
-        controllerId: target.selfId,
-        ...(await mailbox(context, caller)),
-        requestId,
-        toEnvironmentId,
-        ...(requestedTab ? { toTabId: requestedTab } : {}),
-        ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
-        body: asNonBlankString(args.body, "body"),
-      },
-      `mail:${caller.coordinatorId}:${requestId}`,
-    );
-    const workerTab = requestedTab || delivered?.toTabId || joining?.delegation?.workerTabId;
-    // As here, only mail scheduled to reach the worker asks it anything: a
-    // message the node stored or bounced opens no delegation. (Older nodes do
-    // not report the placement.)
-    const scheduled = !delivered?.placement || delivered.placement === "pending-inject";
-    let coordinatorDelegationOpened = false;
-    if (joining && scheduled) {
-      context.coordinators?.noteRemoteRequest(joining.id);
-      coordinatorDelegationOpened = true;
-    } else if (workerTab && scheduled) {
-      coordinatorDelegationOpened = await openNodeDelegation(
-        context,
-        caller,
-        target.nodeId,
-        toEnvironmentId,
-        workerTab,
-        requestId,
-      );
+    const workspace = await context.storage.getCoordinatorWorkspaceById(caller.coordinatorId);
+    if (
+      workspace?.conversations.find((item) => item.id === caller.conversationId)?.role === "side"
+    ) {
+      throw new Error('A side agent can only message the main coordinator. Send to "coordinator".');
     }
-    return {
-      nodeId: target.nodeId,
-      node: target.nodeName,
-      ...(delivered?.messageId ? { messageId: delivered.messageId } : {}),
-      toEnvironmentId,
-      ...(workerTab ? { toTabId: workerTab } : {}),
-      coordinatorDelegationOpened,
-      // Said plainly, as for a worker here: "pending" alone reads as delivered.
-      ...(recipient.status === "stopped"
-        ? {
-            deliveryNote: `The recipient environment on ${target.nodeName} is stopped. Call start_environment with nodeId "${target.nodeId}" to deliver this message, or ask the user.`,
-          }
-        : {}),
-    };
+    const toEnvironmentId = asNonBlankString(args.toEnvironmentId, "toEnvironmentId");
+    return context.storage.withAgentMailWorkerAdmission(
+      `node:${args.nodeId}:${toEnvironmentId}`,
+      async () => {
+        const target = await coordinatorNodeTarget(
+          context,
+          caller.projectId,
+          asNonBlankString(args.nodeId, "nodeId"),
+        );
+        const requestId = asNonBlankString(args.requestId, "requestId");
+        const recipient = await target.environment(toEnvironmentId);
+        const requestedTab = typeof args.toTabId === "string" ? args.toTabId.trim() : "";
+        const joining = (await context.storage.listOpenCoordinatorDelegations()).find(
+          (association) =>
+            association.coordinatorId === caller.coordinatorId &&
+            association.kind === "environment" &&
+            association.nodeId === target.nodeId &&
+            association.resourceId === toEnvironmentId &&
+            (!requestedTab || association.delegation?.workerTabId === requestedTab) &&
+            association.requestId !== `delegation:${requestId}`,
+        );
+        if (joining) context.coordinators?.noteRemoteRequest(joining.id);
+        const delivered = await target.call<{
+          messageId?: string;
+          toTabId?: string;
+          placement?: string;
+        }>(
+          "deliver_node_mail",
+          {
+            controllerId: target.selfId,
+            ...(await mailbox(context, caller)),
+            requestId,
+            toEnvironmentId,
+            ...(requestedTab ? { toTabId: requestedTab } : {}),
+            ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
+            body: asNonBlankString(args.body, "body"),
+          },
+          `mail:${caller.coordinatorId}:${requestId}`,
+        );
+        const workerTab = requestedTab || delivered?.toTabId || joining?.delegation?.workerTabId;
+        // As here, only mail scheduled to reach the worker asks it anything: a
+        // message the node stored or bounced opens no delegation. (Older nodes do
+        // not report the placement.)
+        const scheduled = !delivered?.placement || delivered.placement === "pending-inject";
+        let coordinatorDelegationOpened = false;
+        if (joining && scheduled) {
+          context.coordinators?.noteRemoteRequest(joining.id);
+          coordinatorDelegationOpened = true;
+        } else if (workerTab && scheduled) {
+          coordinatorDelegationOpened = await openNodeDelegation(
+            context,
+            caller,
+            target.nodeId,
+            toEnvironmentId,
+            workerTab,
+            requestId,
+          );
+        }
+        return {
+          nodeId: target.nodeId,
+          node: target.nodeName,
+          ...(delivered?.messageId ? { messageId: delivered.messageId } : {}),
+          toEnvironmentId,
+          ...(workerTab ? { toTabId: workerTab } : {}),
+          coordinatorDelegationOpened,
+          // Said plainly, as for a worker here: "pending" alone reads as delivered.
+          ...(recipient.status === "stopped"
+            ? {
+                deliveryNote: `The recipient environment on ${target.nodeName} is stopped. Call start_environment with nodeId "${target.nodeId}" to deliver this message, or ask the user.`,
+              }
+            : {}),
+        };
+      },
+    );
   });
 
   register(
@@ -583,127 +595,132 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     await target.environment(input.environmentId);
     const reservedId = `action-${createHash("sha256").update(`${caller.coordinatorId}\0${input.requestId}`).digest("hex").slice(0, 32)}`;
     const payloadHash = actionHash({ action: "launch-multi-review", nodeId: target.nodeId, input });
-    return once(`${caller.coordinatorId}\0${input.requestId}`, async () => {
-      const associations = await context.storage.listCoordinatorWorkflowAssociations(
-        caller.projectId,
-      );
-      const existing = associations.find(
-        (item) =>
-          item.coordinatorId === caller.coordinatorId &&
-          (item.requestId === input.requestId || requestAlias(item, input.requestId)),
-      );
-      if (
-        existing &&
-        (existing.kind !== "multi-review" ||
-          existing.nodeId !== target.nodeId ||
-          (existing.requestId === input.requestId
-            ? existing.payloadHash
-            : requestAlias(existing, input.requestId)?.payloadHash) !== payloadHash)
-      ) {
-        throw new Error("Coordinator request id was reused with a different payload");
-      }
-      if (existing && existing.conversationId !== caller.conversationId) {
-        throw new Error(
-          "This request belongs to another conversation; adopt its workflow before opening it",
-        );
-      }
-      if (existing && !existing.pending) {
-        // A completed receipt names its review; a review since removed is not
-        // replaced under the same request.
-        const saved = await target.call<unknown>("get_multi_review_workflow", {
-          workflowId: existing.resourceId,
-        });
-        if (!record(saved)) {
-          throw new Error(
-            "The associated review was removed; use a new requestId only to intentionally start another review",
+    return once(`${caller.coordinatorId}\0${input.requestId}`, () =>
+      context.storage.withAgentMailWorkerAdmission(
+        `review:${target.nodeId}:${input.environmentId}`,
+        async () => {
+          const associations = await context.storage.listCoordinatorWorkflowAssociations(
+            caller.projectId,
           );
-        }
-      }
-      // The environment's active review, and who here owns it, as for a review here.
-      const listed = existing
-        ? []
-        : await target.call<unknown>("list_multi_review_workflows", {
-            environmentId: input.environmentId,
-          });
-      const active = (Array.isArray(listed) ? listed : []).find(
-        (entry): entry is JsonRecord =>
-          record(entry) &&
-          isMultiReviewWorkflow(entry.snapshot) &&
-          !isMultiReviewTerminalPhase(entry.snapshot.phase),
-      );
-      const activeId =
-        active && record(active.snapshot) && typeof active.snapshot.id === "string"
-          ? active.snapshot.id
-          : undefined;
-      const owners = activeId
-        ? associations.filter(
+          const existing = associations.find(
             (item) =>
-              item.kind === "multi-review" &&
-              item.nodeId === target.nodeId &&
-              item.resourceId === activeId,
-          )
-        : [];
-      const reusable = owners.find(
-        (item) =>
-          !item.pending &&
-          item.coordinatorId === caller.coordinatorId &&
-          item.conversationId === caller.conversationId,
-      );
-      if (!reusable && owners.some((item) => !item.pending)) {
-        throw new Error(
-          "This active review belongs to another conversation; adopt its workflow before opening it",
-        );
-      }
-      if (!reusable && owners.some((item) => item.pending)) {
-        throw new Error(
-          "This active review has a pending launch receipt; retry its original requestId before adopting it",
-        );
-      }
-      const receipt =
-        existing && !existing.pending
-          ? { association: existing, claimed: false }
-          : reusable
-            ? {
-                association: await context.storage.addCoordinatorWorkflowRequestAlias(
-                  reusable.id,
-                  caller.coordinatorId,
-                  caller.conversationId,
-                  input.requestId,
-                  payloadHash,
-                ),
-                claimed: false,
-              }
-            : await context.storage.reserveCoordinatorWorkflowAssociation({
-                id: randomUUID(),
-                ...caller,
-                kind: "multi-review",
-                resourceId: activeId ?? reservedId,
-                nodeId: target.nodeId,
-                requestId: input.requestId,
-                payloadHash,
-                createdAt: new Date().toISOString(),
+              item.coordinatorId === caller.coordinatorId &&
+              (item.requestId === input.requestId || requestAlias(item, input.requestId)),
+          );
+          if (
+            existing &&
+            (existing.kind !== "multi-review" ||
+              existing.nodeId !== target.nodeId ||
+              (existing.requestId === input.requestId
+                ? existing.payloadHash
+                : requestAlias(existing, input.requestId)?.payloadHash) !== payloadHash)
+          ) {
+            throw new Error("Coordinator request id was reused with a different payload");
+          }
+          if (existing && existing.conversationId !== caller.conversationId) {
+            throw new Error(
+              "This request belongs to another conversation; adopt its workflow before opening it",
+            );
+          }
+          if (existing && !existing.pending) {
+            // A completed receipt names its review; a review since removed is not
+            // replaced under the same request.
+            const saved = await target.call<unknown>("get_multi_review_workflow", {
+              workflowId: existing.resourceId,
+            });
+            if (!record(saved)) {
+              throw new Error(
+                "The associated review was removed; use a new requestId only to intentionally start another review",
+              );
+            }
+          }
+          // The environment's active review, and who here owns it, as for a review here.
+          const listed = existing
+            ? []
+            : await target.call<unknown>("list_multi_review_workflows", {
+                environmentId: input.environmentId,
               });
-      if (!receipt.claimed && receipt.association.pending) {
-        throw new Error(
-          "Multi Review launch is owned by another backend; retry the same requestId",
-        );
-      }
-      const result = await target.call<MultiReviewActionResult>(
-        "launch_controller_multi_review",
-        { input, reservedId: receipt.association.resourceId },
-        `review:${caller.coordinatorId}:${input.requestId}`,
-      );
-      if (!record(result) || !isMultiReviewWorkflow(result.workflow)) {
-        throw new Error("Multi Review on that node returned no workflow");
-      }
-      if (receipt.association.pending) {
-        await context.storage.completeCoordinatorWorkflowAssociation(
-          receipt.association.id,
-          result.workflow.id,
-        );
-      }
-      return result;
-    });
+          const active = (Array.isArray(listed) ? listed : []).find(
+            (entry): entry is JsonRecord =>
+              record(entry) &&
+              isMultiReviewWorkflow(entry.snapshot) &&
+              !isMultiReviewTerminalPhase(entry.snapshot.phase),
+          );
+          const activeId =
+            active && record(active.snapshot) && typeof active.snapshot.id === "string"
+              ? active.snapshot.id
+              : undefined;
+          const owners = activeId
+            ? associations.filter(
+                (item) =>
+                  item.kind === "multi-review" &&
+                  item.nodeId === target.nodeId &&
+                  item.resourceId === activeId,
+              )
+            : [];
+          const reusable = owners.find(
+            (item) =>
+              !item.pending &&
+              item.coordinatorId === caller.coordinatorId &&
+              item.conversationId === caller.conversationId,
+          );
+          if (!reusable && owners.some((item) => !item.pending)) {
+            throw new Error(
+              "This active review belongs to another conversation; adopt its workflow before opening it",
+            );
+          }
+          if (!reusable && owners.some((item) => item.pending)) {
+            throw new Error(
+              "This active review has a pending launch receipt; retry its original requestId before adopting it",
+            );
+          }
+          const receipt =
+            existing && !existing.pending
+              ? { association: existing, claimed: false }
+              : reusable
+                ? {
+                    association: await context.storage.addCoordinatorWorkflowRequestAlias(
+                      reusable.id,
+                      caller.coordinatorId,
+                      caller.conversationId,
+                      input.requestId,
+                      payloadHash,
+                    ),
+                    claimed: false,
+                  }
+                : await context.storage.reserveCoordinatorWorkflowAssociation({
+                    id: randomUUID(),
+                    ...caller,
+                    kind: "multi-review",
+                    resourceId: activeId ?? reservedId,
+                    nodeId: target.nodeId,
+                    requestId: input.requestId,
+                    payloadHash,
+                    createdAt: new Date().toISOString(),
+                  });
+          if (!receipt.claimed && receipt.association.pending) {
+            throw new Error(
+              "Multi Review launch is owned by another backend; retry the same requestId",
+            );
+          }
+          const result = await target.call<MultiReviewActionResult>(
+            "launch_controller_multi_review",
+            { input, reservedId: receipt.association.resourceId },
+            `review:${caller.coordinatorId}:${input.requestId}`,
+          );
+          if (!record(result) || !isMultiReviewWorkflow(result.workflow)) {
+            throw new Error("Multi Review on that node returned no workflow");
+          }
+          if (receipt.association.pending) {
+            await context.storage.completeCoordinatorWorkflowAssociation(
+              receipt.association.id,
+              result.workflow.id,
+            );
+          }
+          return result;
+        },
+      ),
+    );
   });
 
   register(

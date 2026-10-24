@@ -35,7 +35,7 @@ export interface NodeCoordinatorRemoteDeps {
   }): Promise<{ outcome: string; result?: unknown }>;
   summaries(nodeIds?: string[]): Promise<NodeSummariesResult>;
   /** Collect a node's outbox now (the mail collector). */
-  collectMail?(nodeId: string): Promise<void>;
+  collectMail?(nodeId: string): Promise<boolean>;
 }
 
 /** A routed read, or `"unavailable"` when the node did not answer. */
@@ -107,8 +107,8 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
     };
   }
 
-  async collectMail(nodeId: string): Promise<void> {
-    await this.deps.collectMail?.(nodeId);
+  async collectMail(nodeId: string): Promise<boolean> {
+    return this.deps.collectMail ? this.deps.collectMail(nodeId) : false;
   }
 
   async lastAssistantExcerpt(

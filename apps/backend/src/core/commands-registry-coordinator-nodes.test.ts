@@ -39,7 +39,7 @@ function review(id: string, phase: string) {
 async function setup(
   options: { available?: boolean; hasCopy?: boolean; answers?: Record<string, unknown> } = {},
 ) {
-  const world = await MailWorld.create();
+  const world = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
   worlds.push(world);
   await world.storage.updateProject(world.projectId, { gitUrl: "git@github.com:acme/site.git" });
   const main = await world.main();
@@ -84,7 +84,7 @@ async function setup(
         const answer = answers[input.command];
         return {
           outcome: "ok",
-          result: typeof answer === "function" ? answer(input.args) : answer,
+          result: typeof answer === "function" ? await answer(input.args) : answer,
         };
       },
     },
@@ -221,6 +221,43 @@ describe("launch_coordinator_node_environment", () => {
 });
 
 describe("send_coordinator_node_mail", () => {
+  test("side agents are denied before any remote mail side effect", async () => {
+    const { world, run, scope, routed, associations } = await setup();
+    const side = await world.addSide();
+    await expect(
+      run("send_coordinator_node_mail", {
+        scope: { ...scope, conversationId: side.conversationId },
+        nodeId: "bk_leaf",
+        requestId: "side",
+        toEnvironmentId: "leaf-env",
+        body: "Do work",
+      }),
+    ).rejects.toThrow("only message the main coordinator");
+    expect(routed).toEqual([]);
+    expect(await associations()).toEqual([]);
+  });
+
+  for (const placement of ["stored", "bounced"]) {
+    test(`${placement} remote mail opens no delegation and names a stopped recipient`, async () => {
+      const { run, scope, associations } = await setup({
+        answers: {
+          get_environment: { id: "leaf-env", projectId: "p-leaf", status: "stopped" },
+          deliver_node_mail: { messageId: "m1", toTabId: "startup-agent", placement },
+        },
+      });
+      const result = await run("send_coordinator_node_mail", {
+        scope,
+        nodeId: "bk_leaf",
+        requestId: placement,
+        toEnvironmentId: "leaf-env",
+        body: "hello",
+      });
+      expect(result.coordinatorDelegationOpened).toBe(false);
+      expect(result.deliveryNote).toContain('start_environment with nodeId "bk_leaf"');
+      expect(await associations()).toEqual([]);
+    });
+  }
+
   test("asking a remote worker opens a delegation; a follow-up joins it", async () => {
     const { run, scope, routed, associations } = await setup();
 
@@ -300,6 +337,51 @@ describe("workflows on a node", () => {
         pending: false,
       }),
     ]);
+  });
+
+  test("distinct concurrent launch requests share one actual review owner and status wake", async () => {
+    let active: ReturnType<typeof review> | undefined;
+    const { run, scope, associations, world, main } = await setup({
+      answers: {
+        // The leaf may reuse a workflow that was absent from an earlier inventory.
+        list_multi_review_workflows: () => [],
+        launch_controller_multi_review: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          active ??= review("one-review", "preparing");
+          return { workflow: active, outcome: "opened", reused: true, ui: { status: "opened" } };
+        },
+      },
+    });
+    await Promise.all(
+      ["one", "two"].map((requestId) =>
+        run("launch_coordinator_node_multi_review", {
+          scope,
+          nodeId: "bk_leaf",
+          input: { requestId, environmentId: "leaf-env" },
+        }),
+      ),
+    );
+    const owners = await associations();
+    expect(owners).toHaveLength(1);
+    expect(owners[0]).toMatchObject({
+      resourceId: "one-review",
+      pending: false,
+      requestId: "one",
+      requestAliases: [{ requestId: "two", payloadHash: expect.any(String) }],
+    });
+    world.coordinator.setRemoteAccess({
+      workerState: async () => "unavailable",
+      collectMail: async () => true,
+      nodeName: async () => "Build box",
+      lastAssistantExcerpt: async () => undefined,
+      workflow: async () => ({ snapshot: review("one-review", "cancelled"), revision: 2 }),
+      environmentPr: async () => ({}),
+    });
+    await world.coordinator.reconcileWorkflowNotifications();
+    await world.deliver();
+    await world.coordinator.reconcileWorkflowNotifications();
+    await world.deliver();
+    expect(world.wakes(main)).toBe(1);
   });
 
   test("addressing a review on a node adopts it unless another conversation owns it", async () => {

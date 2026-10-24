@@ -259,3 +259,12 @@ Exact original failed cases:
   failure details and evidence are recorded in
   [0224](../previews-annotations-and-gateway/0224-host-picker-narrow-tools-popover.md).
   These scenario checks remain non-green.
+
+
+## Multi Review divider validation — 2026-10-24
+
+- **Aggregate:** `mise run test:logged -- --name resize-browser -- mise run test:browser`, nine component workers alongside repository validation: 526 passed, 102 skipped, two failed in 264.0 s. Both unchanged `e2e/AgentLaunchDialog.spec.ts:7` native branch-suggestion cases retained `rel` instead of `release/2.0` after five seconds. All Multi Review browser cases passed.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=56147 mise run test:logged -- --name launch-dialog-browser-owner-isolated-port -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1` reported two passed and the same two failed in 31.6 s. This repeats the independently non-green native-dropdown behavior, not a new flake. The initial rerun on the shared default port was rejected by the checkout-ownership guard; the rerun used a discovered free port.
+- **Evidence:** host temporary artifacts `orkestrator-test-run.fYF3oO/resize-browser.log.gz` and `orkestrator-test-run.pgwMFl/launch-dialog-browser-owner-isolated-port.log.gz`; traces under `output/playwright/test-results/`.
+- **Public client:** the aggregate stopped before this suite; `mise run test:logged -- --name resize-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts --workers=1` passed separately (20.8 s).
+- No source, assertion, timeout or skip in the native branch-suggestion owner changed.

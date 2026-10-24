@@ -3,6 +3,7 @@
  * fixed live tail, and independently paged history.
  */
 import { describe, expect, mock, test } from "bun:test";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 import { applyNativeAgentProjectionDelta } from "@orkestrator/protocol/native-agent";
 
@@ -180,12 +181,17 @@ describe("native agent remote projection synchronization", () => {
           fresh.projection,
         );
 
+        const before =
+          compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0;
         const page = await service.getMessagePage({
           ...identity,
           syncVersion: 1,
           before: changed.historyCursor!,
         });
         expect(page.messages).toHaveLength(50);
+        expect(compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count).toBe(
+          before + 1,
+        );
         expect(page.nextCursor).toBeUndefined();
         expect(page.complete).toBe(true);
       },

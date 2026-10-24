@@ -100,3 +100,9 @@ preview-main-merge-runtime-owner -- bun test ./tests/unit/runtime-env-wiring.tes
 worker beside workspace and bridge groups and other host validation. No timeout
 or assertion changed. Full-run evidence and other unresolved failures are in
 [0623](../aggregate-validation-runs/0623-preview-main-merge-validation.md).
+
+## Coordinator adapters main merge — 2026-10-24
+
+Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. `Codex setup copies the complete allowlist, secures auth, and excludes plugin runtime state` timed out at 5043.80 ms. `mise run test:logged -- --name merge-owner-runtime-env -- bun test ./tests/unit/runtime-env-wiring.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (16.0 s).
+
+Full failure names, counts, evidence paths and unresolved limitations are in [0724](../aggregate-validation-runs/0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.

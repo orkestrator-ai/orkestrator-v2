@@ -45,6 +45,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [design-canvas.md](architecture/design-canvas.md) | HTML/CSS canvas, recoverable operations, private records, history, sync, safe export, design MCP and .orkdes files. |
 | [control-mcp.md](architecture/control-mcp.md) | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
+| [version-compatibility.md](architecture/version-compatibility.md) | Mixed-version support window (published releases from the floor: the newest Stable at least 60 days old, v2.21.0 today), supported pairings, data upgrade and downgrade rules, compatibility-path usage counters, and the register of paths with owners and removal conditions. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Standalone backend, Tailscale Serve, flags, troubleshooting. |
 | [command-nodes.md](architecture/command-nodes.md) | **Target multi-machine architecture:** command nodes (registry, portal, cross-node coordinators, mail, files) and leaf nodes; control plane via the command node, agent chat, terminals and previews direct from client to leaf where reachable. |
 | [federation.md](architecture/federation.md) | Transitional client-side multi-machine federation on this branch, being reworked into command nodes: identities, hello handshake, machine profile and colours, routes/fallback, realm-based panels, known limitations, acceptance-ID map. |

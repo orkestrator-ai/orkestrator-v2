@@ -290,6 +290,46 @@ export class ContainerGitFetchPolicy {
     this.remember(scope, undefined);
     const record = this.record(scope);
     this.metrics.requested("git-fetch-container");
+    return this.performInline(record);
+  }
+
+  /**
+   * An explicit action that resolves `origin/<ref>` by itself and must see
+   * the remote as it is now: reverting a file to its comparison base
+   * (`revert_container_file`), which used to run `git fetch` inline. Treated
+   * like a manual refresh: the key is invalidated unless an attempt started
+   * or finished within {@link CONTAINER_FETCH_EXPLICIT_MIN_INTERVAL_MS}, and a
+   * due fetch then runs inline, joining or taking over one already queued.
+   * As with a manual refresh, the invalidation overrides the failure
+   * cooldown, so an unreachable remote costs at most one attempt per 15 s of
+   * reverts (the old inline fetch ran on every one). Resolves `true` when a
+   * fetch ran and succeeded; never rejects.
+   *
+   * Like {@link recover}, call it inside the container's admission slot.
+   */
+  async refreshForAction(scope: ContainerFetchScope): Promise<boolean> {
+    this.remember(scope, undefined);
+    const record = this.record(scope);
+    this.metrics.requested("git-fetch-container");
+    if (!this.recentlyAttempted(record, this.now())) {
+      record.invalidations += 1;
+      record.dirty = true;
+    }
+    return this.performInline(record);
+  }
+
+  /**
+   * The clone identity the latest status scan of this container generation
+   * reported, so an action can key its fetch without probing again.
+   */
+  knownRepoId(containerId: string): string | undefined {
+    const scope = this.scopes.get(containerId);
+    if (!scope || scope.generation !== this.generations.get(containerId)) return undefined;
+    return scope.repoId;
+  }
+
+  /** One fetch for `record` in the caller's admission slot, unless none is due. */
+  private async performInline(record: FetchRecord): Promise<boolean> {
     const existing = record.inFlight;
     if (existing) {
       this.metrics.coalesced("git-fetch-container");
@@ -675,6 +715,20 @@ export const CONTAINER_REPO_IDENTITY_SNIPPET = `
       printf '\\036ORKESTRATOR_REPO\\037'
       printf '%s\\t%s\\t%s' "$repo_top" "$repo_common" "$repo_node" | base64 -w0
 `;
+
+/** Prints only the framed clone identity of `/workspace`. */
+export const CONTAINER_REPO_PROBE_SCRIPT = `
+      cd /workspace 2>/dev/null || true
+      ${CONTAINER_REPO_IDENTITY_SNIPPET}
+`;
+
+/** The clone identity digest from {@link CONTAINER_REPO_PROBE_SCRIPT}; `""` when not a repository. */
+export function parseContainerRepoProbe(output: string): string {
+  if (!output.startsWith(CONTAINER_REPO_MARKER)) return "";
+  return containerRepoId(
+    decodeFramedBase64(output.slice(CONTAINER_REPO_MARKER.length), "container repository identity"),
+  );
+}
 
 /** Content-free digest of a decoded clone identity payload. */
 export function containerRepoId(payload: string): string {

@@ -45,6 +45,7 @@ import {
   cursorMcpServers,
   cursorInlineMcpServers,
   hostOrkestratorCustomTools,
+  hostResearchCustomTools,
   mcpConnectionKey,
   retireMcpObservations,
   type AgentMcpConnection,
@@ -451,18 +452,36 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   // otherwise see tools that fail closed. Container attaches disable the
   // provider sandbox, so they may still take the vendor HTTP client.
   const allowHttpMcp = !readOnly || policy.sandbox === "container";
-  const hosted = readOnly
-    ? await hostOrkestratorCustomTools(state.agentMcp, state.health, {
-        httpFallback: policy.sandbox === "container",
-      })
-    : undefined;
+  const [hosted, research] = readOnly
+    ? await Promise.all([
+        hostOrkestratorCustomTools(state.agentMcp, state.health, {
+          httpFallback: policy.sandbox === "container",
+        }),
+        // The launcher's research servers, hosted the same way: a sandboxed
+        // read-only attach cannot call an HTTP MCP server either.
+        hostResearchCustomTools(state.health),
+      ])
+    : [undefined, undefined];
+  const closeHosted =
+    hosted || research
+      ? async () => {
+          await Promise.allSettled([hosted?.close(), research?.close()]);
+        }
+      : undefined;
   if (state.closed) {
-    await hosted?.close().catch(() => undefined);
+    await closeHosted?.();
     throw new SessionClosedError();
   }
-  state.hostedMcpClose = hosted?.close;
-  state.hostedMcpTools = hosted?.customTools;
-  state.mcpServerNames = hosted ? ["orkestrator"] : allowHttpMcp ? Object.keys(mcpServers) : [];
+  const customTools =
+    hosted || research ? { ...research?.customTools, ...hosted?.customTools } : undefined;
+  const httpMcpServerNames = hosted ? [] : allowHttpMcp ? Object.keys(mcpServers) : [];
+  state.hostedMcpClose = closeHosted;
+  state.hostedMcpTools = customTools;
+  state.researchMcpServerNames = research?.serverNames;
+  state.mcpServerNames = [
+    ...(hosted ? ["orkestrator"] : httpMcpServerNames),
+    ...(research?.serverNames ?? []),
+  ];
   state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
   const options: AgentOptions = {
     apiKey,
@@ -480,7 +499,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
           : ["user"],
       sandboxOptions: { enabled: policy.sandbox === "provider" },
       autoReview: policy.sandbox === "provider" && policy.approvals === "auto-approve",
-      ...(hosted ? { customTools: hosted.customTools } : {}),
+      ...(customTools ? { customTools } : {}),
     },
     ...(readOnly
       ? {
@@ -501,7 +520,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
           return denied.length > 0 ? { disallowedTools: denied } : {};
         })()
       : {}),
-    ...(!hosted && allowHttpMcp && state.mcpServerNames.length > 0
+    ...(httpMcpServerNames.length > 0
       ? { mcpServers: cursorInlineMcpServers(mcpServers, !readOnly && policy.projectResources) }
       : {}),
   };
@@ -571,7 +590,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     state.agentLocalOptions = undefined;
     await Promise.allSettled([
       ...(releaseWarmWorkspace ? [releaseWarmWorkspace()] : []),
-      ...(hosted ? [hosted.close()] : []),
+      ...(closeHosted ? [closeHosted()] : []),
     ]);
     throw error;
   }
@@ -616,7 +635,7 @@ export function resolveCursorExecutionPolicy(
       approvals: "deny",
       projectResources: false,
       // Follows the launcher's research setting: hosted search may be allowed,
-      // never fetch. Research MCP servers are not loaded on Cursor yet.
+      // never fetch. Research MCP servers are hosted in-process at attach.
       capabilityPolicy: coordinatorCapabilityPolicy(coordinatorWebResearchFromEnv(process.env)),
       networkAccess: "restricted",
       note: "Cursor applies these restrictions, but its SDK exposes no approval callback to verify them.",

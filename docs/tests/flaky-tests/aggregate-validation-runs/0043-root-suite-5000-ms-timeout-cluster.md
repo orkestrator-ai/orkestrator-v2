@@ -54,3 +54,9 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
 - **Isolated unchanged owner:** the same environment with `mise run test:logged -- --name merge-0050-isolate-diagnostics -- bun test ./tests/unit/test-diagnostic-bounds.test.ts --parallel=1 --only-failures` passed (exit 0, 18.2 seconds).
 - **Evidence:** `orkestrator-test-run.PmXIK0/root-and-agent-support-tests.log` under the host temporary directory (compressed after aggregate finalization); outer run `orkestrator-test-run.xSSTYy`.
 - **Assessment:** the same diagnostics case previously recorded here recurred at its newer deadline. Its unchanged owner passed separately, confirming intermittent behavior. Host contention is a possible contributor, not a proven root cause. No assertion, deadline or skip changed.
+
+## Coordinator adapters main merge — 2026-10-24
+
+Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. Reopened for `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull`, which exceeded its current 30-second budget (30050.80 ms). `mise run test:logged -- --name merge-owner-diagnostics -- bun test ./tests/unit/test-diagnostic-bounds.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (28.9 s). The older Electron failures remain historical.
+
+Full failure names, counts, evidence paths and unresolved limitations are in [0724](0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.

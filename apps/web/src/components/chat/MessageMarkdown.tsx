@@ -14,6 +14,7 @@ import {
 } from "react";
 import { CheckSquare, Square } from "lucide-react";
 import Markdown, { type Components, type ExtraProps } from "react-markdown";
+import type { PluggableList } from "unified";
 import { toast } from "sonner";
 import { useOptionalTerminalContext } from "@/contexts";
 import { openInBrowser } from "@/lib/backend";
@@ -235,6 +236,12 @@ interface MessageMarkdownProps {
   richPartId?: string;
   /** The part's text is still streaming (display hint for rich blocks). */
   live?: boolean;
+  /**
+   * Replaces the block plugin list chosen from `enableBreaks`/`richPartId`.
+   * Must be a hoisted constant, for the same memoization reason as
+   * `components`.
+   */
+  remarkPlugins?: PluggableList;
 }
 
 /** Render Markdown phrasing without introducing block or interactive nodes. */
@@ -292,6 +299,7 @@ export const MessageMarkdown = memo(function MessageMarkdown({
   enableBreaks = true,
   richPartId,
   live = false,
+  remarkPlugins: pluginOverride,
 }: MessageMarkdownProps) {
   const renderSource = useMemo(
     () => markdownRenderSource(content, MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS),
@@ -300,8 +308,8 @@ export const MessageMarkdown = memo(function MessageMarkdown({
   const rich = richPartId !== undefined;
   const clipped = renderSource.omittedCharacters > 0;
   const plugins = useMemo(
-    () => blockMarkdownPlugins({ rich, enableBreaks, clipped }),
-    [rich, enableBreaks, clipped],
+    () => pluginOverride ?? blockMarkdownPlugins({ rich, enableBreaks, clipped }),
+    [pluginOverride, rich, enableBreaks, clipped],
   );
   // While the part streams, the completed prefix's syntax tree is parsed once
   // and reused; only the tail is parsed per update. The final (non-live)

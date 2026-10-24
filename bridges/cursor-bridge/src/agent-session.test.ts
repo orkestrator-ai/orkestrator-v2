@@ -772,6 +772,59 @@ describe("ensureAgent", () => {
     expect(state.hostedMcpTools).toBeUndefined();
   });
 
+  test("a coordinator process hosts its research servers beside Orkestrator's tools", async () => {
+    setCursorMcpTransportForTests({
+      async connect(url) {
+        return {
+          tools: url.includes("context7")
+            ? [{ name: "query-docs", description: "Query docs" }]
+            : [{ name: "launch_environment", description: "Create a worker" }],
+          async call() {
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    const research = {
+      ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+      ORKESTRATOR_COORDINATOR_WEB_RESEARCH: "search-and-mcp",
+      ORKESTRATOR_COORDINATOR_RESEARCH_MCP: JSON.stringify([
+        { name: "context7", url: "https://mcp.context7.com/mcp" },
+      ]),
+    };
+    const previous = Object.fromEntries(
+      Object.keys(research).map((name) => [name, process.env[name]]),
+    );
+    Object.assign(process.env, research);
+    try {
+      const state = newSessionState();
+      state.readOnly = true;
+      state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
+
+      await ensureAgent(state);
+
+      expect(created[0]?.mcpServers).toBeUndefined();
+      expect(Object.keys(created[0]?.local?.customTools ?? {}).toSorted()).toEqual([
+        "context7__query-docs",
+        "launch_environment",
+      ]);
+      // Search follows the research setting; fetch never joins.
+      expect(created[0]?.tools).toEqual(expect.arrayContaining(["mcp", "webSearch"]));
+      expect(created[0]?.tools).not.toContain("webFetch");
+      expect(state.mcpServerNames).toEqual(["orkestrator", "context7"]);
+      expect(state.researchMcpServerNames).toEqual(["context7"]);
+      await detachAgent(state);
+      // Kept with `mcpServerNames`, so the inventory still names it correctly.
+      expect(state.researchMcpServerNames).toEqual(["context7"]);
+    } finally {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   test("a read-only attach drops repository MCP servers even when project resources are on", async () => {
     setCursorMcpTransportForTests({
       async connect() {

@@ -9,6 +9,7 @@ import {
   type NativeAgentCapability,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
+import type { CoordinatorCommandSandbox } from "@orkestrator/protocol/coordinator";
 import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
 
 /**
@@ -128,11 +129,15 @@ const READ_ONLY_COMMANDS = Object.freeze(
  * The program name alone is not the whole command: `find . -delete` removes
  * files, `sort -o` and `yq -i` write in place, and `fd -x` / `rg --pre` run a
  * program of the model's choosing. Each of those is refused by argument, so the
- * reading forms of the same tools stay available.
+ * reading forms of the same tools stay available. A one-letter flag also
+ * matches inside a cluster or with its value attached (`-ofile`, `-iP`), which
+ * is how getopt reads it.
  */
 const MUTATING_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["date", new Set(["-s", "--set"])],
   ["fd", new Set(["-x", "-X", "--exec", "--exec-batch"])],
+  // `-C` compiles a magic file into `<name>.mgc` beside it.
+  ["file", new Set(["-C", "--compile"])],
   [
     "find",
     new Set([
@@ -147,9 +152,74 @@ const MUTATING_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "-okdir",
     ]),
   ],
+  ["hostname", new Set(["-F", "--file", "-b", "--boot"])],
   ["rg", new Set(["--hostname-bin", "--pre"])],
-  ["sort", new Set(["-o", "--output"])],
-  ["yq", new Set(["-i", "--in-place", "--inplace"])],
+  // `-T` puts temporary files where the model says; `--compress-program` runs one.
+  ["sort", new Set(["-o", "--output", "-T", "--temporary-directory", "--compress-program"])],
+  ["yq", new Set(["-i", "--in-place", "--inplace", "-s", "--split-exp"])],
+]);
+
+/**
+ * Programs that write a positional argument rather than a flagged one.
+ *
+ * `uniq in out` and `xxd in out` write `out`, with no flag and no shell
+ * metacharacter to refuse. Each may take at most `max` positionals. Options
+ * that consume the next token are named, so their values are not counted; an
+ * unlisted option's value is counted, which can only refuse a reading command,
+ * never admit a writing one.
+ */
+const POSITIONAL_LIMITS: ReadonlyMap<string, { max: number; valueOptions: ReadonlySet<string> }> =
+  new Map([
+    ["hostname", { max: 0, valueOptions: new Set<string>() }],
+    ["uniq", { max: 1, valueOptions: new Set(["-f", "-s", "-w"]) }],
+    [
+      "xxd",
+      {
+        max: 1,
+        valueOptions: new Set([
+          "-c",
+          "-cols",
+          "-g",
+          "-groupsize",
+          "-l",
+          "-len",
+          "-n",
+          "-name",
+          "-o",
+          "-offset",
+          "-s",
+          "-seek",
+        ]),
+      },
+    ],
+  ]);
+
+/**
+ * Programs whose options are admitted by allowlist. Every listed option takes a
+ * value, attached (`-F,`) or as the next token; anything else is refused.
+ *
+ * gawk alone has `-i inplace`, `-o`, `-p`, `-d` and `-D` that write files and
+ * `-f`, `-E` and `-l` that load a program, and any of them can hide in a short
+ * option cluster. Field separators and variable assignments are what reading
+ * needs.
+ */
+const OPTION_ALLOWLISTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["awk", new Set(["-F", "-v", "--field-separator", "--assign"])],
+]);
+
+/** Git options that redirect output to a file or choose a program to run. */
+const GIT_MUTATING_ARGUMENTS: ReadonlySet<string> = new Set([
+  "--config-env",
+  "--exec-path",
+  "--ext-diff",
+  "--filters",
+  "--output",
+  "--textconv",
+]);
+
+/** Per-subcommand git options with the same effect. */
+const GIT_SUBCOMMAND_MUTATING_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["grep", new Set(["-O", "--open-files-in-pager"])],
 ]);
 
 /**
@@ -169,7 +239,6 @@ const READ_ONLY_GIT_SUBCOMMANDS = Object.freeze(
     "grep",
     "log",
     "ls-files",
-    "ls-remote",
     "ls-tree",
     "merge-base",
     "name-rev",
@@ -243,11 +312,26 @@ const GIT_CONFIG_WRITE_SUBCOMMANDS = Object.freeze(
 );
 
 /** `git remote` operations that only report. Everything else rewrites remotes. */
-const GIT_REMOTE_READ_SUBCOMMANDS = Object.freeze(new Set(["get-url", "show"]));
+const GIT_REMOTE_READ_SUBCOMMANDS = Object.freeze(new Set(["get-url"]));
 
 function hasFlag(args: readonly string[], flags: ReadonlySet<string>): boolean {
-  // `--output=x` is the same flag as `--output x`, so match the prefix too.
-  return args.some((arg) => flags.has(arg) || flags.has(arg.split("=", 1)[0] ?? arg));
+  // A one-letter flag can be clustered (`-no out` is `-n -o out`) or carry its
+  // value (`-oout`), so any short-option token holding the letter counts. That
+  // can refuse a reading cluster whose value happens to contain the letter;
+  // it cannot admit a writing one.
+  const letters = [...flags].flatMap((flag) => (/^-[A-Za-z0-9]$/.test(flag) ? [flag[1]!] : []));
+  return args.some(
+    (arg) =>
+      // `--output=x` is the same flag as `--output x`, so match the prefix too.
+      flags.has(arg) ||
+      flags.has(arg.split("=", 1)[0] ?? arg) ||
+      // GNU and Git parsers accept unambiguous long-option abbreviations.
+      (arg.startsWith("--") &&
+        [...flags].some(
+          (flag) => flag.startsWith("--") && flag.startsWith(arg.split("=", 1)[0]!),
+        )) ||
+      (/^-[^-]/.test(arg) && letters.some((letter) => arg.slice(1).includes(letter))),
+  );
 }
 
 /**
@@ -301,8 +385,16 @@ const CONDITIONAL_GIT_SUBCOMMANDS: ReadonlyMap<string, (args: readonly string[])
     ["tag", listsRefsOnly],
   ]);
 
-/** `gh` subcommands that only read. Anything that writes to GitHub is refused. */
-const READ_ONLY_GH_SUBCOMMANDS = Object.freeze(new Set(["api", "browse", "search", "status"]));
+/**
+ * Programs whose only purpose here is the network.
+ *
+ * Coordinator commands run with the network off, so these fail inside the
+ * sandbox anyway. Where the sandbox cannot start they are worse than useless:
+ * `gh api -f` writes to GitHub, and `git ls-remote <url>` reaches any host the
+ * model names, with `--upload-pack` choosing a program to run.
+ */
+const NETWORK_COMMANDS: ReadonlySet<string> = new Set(["curl", "gh", "wget"]);
+const NETWORK_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(["fetch", "ls-remote", "pull"]);
 
 /**
  * Shell metacharacters that let one command become several.
@@ -315,7 +407,9 @@ const READ_ONLY_GH_SUBCOMMANDS = Object.freeze(new Set(["api", "browse", "search
  * Refusing the whole command is deliberate — a coordinator does not need shell
  * composition, and partial parsing here is how a bypass gets in.
  */
-const COMPOSITION_PATTERN = /[;&|><`$(){}\n\r]|\bsudo\b|\bexec\b/;
+// Quotes, escapes and globs transform arguments before execution. This hook
+// deliberately accepts only literal words, rather than approximating a shell parser.
+const COMPOSITION_PATTERN = /[;&|><`$(){}\n\r'"\\*?[\]]|\bsudo\b|\bexec\b/;
 
 export function isCoordinatorReadOnlyPolicy(
   policy: NativeAgentExecutionPolicy | undefined,
@@ -375,12 +469,26 @@ export function claudeReadOnlyAllowedTools(options: {
   ];
 }
 
-export function claudeReadOnlySandbox(policy: NativeAgentExecutionPolicy): {
+export function claudeReadOnlySandbox(
+  policy: NativeAgentExecutionPolicy,
+  options: {
+    /**
+     * The checkout and every directory the session may read. The sandbox's
+     * default lets a command write its working directory, so without this an
+     * allowed reading command with an output argument (`uniq in out`) wrote
+     * the user's checkout.
+     */
+    workspaces?: readonly string[];
+    /** The launcher's probe result; see `COORDINATOR_COMMAND_SANDBOX_ENV`. */
+    commandSandbox?: CoordinatorCommandSandbox;
+  } = {},
+): {
   enabled: true;
   failIfUnavailable: boolean;
   autoAllowBashIfSandboxed: true;
   allowUnsandboxedCommands: false;
   excludedCommands: string[];
+  filesystem: { denyWrite: string[] };
   network: {
     allowLocalBinding: boolean;
     strictAllowlist: true;
@@ -389,10 +497,11 @@ export function claudeReadOnlySandbox(policy: NativeAgentExecutionPolicy): {
 } {
   return {
     enabled: true,
-    // Fail rather than silently running unsandboxed. A host without the
-    // sandbox is reported as a weaker tier before it gets here, so reaching
-    // this point with no sandbox means the probe was wrong.
-    failIfUnavailable: true,
+    // Fail rather than silently running unsandboxed where the platform was
+    // qualified on the sandbox. A host the launcher's probe found without one
+    // was offered at a weaker tier, with the hook as its boundary; requiring
+    // the sandbox there would fail every turn.
+    failIfUnavailable: options.commandSandbox !== "unavailable",
     // The hook has already vetted the command by the time the sandbox sees it,
     // and a `deny` policy refuses every prompt, so a prompt here would deny a
     // command the policy allows.
@@ -401,6 +510,9 @@ export function claudeReadOnlySandbox(policy: NativeAgentExecutionPolicy): {
     // `dangerouslyDisableSandbox` and fall back to the permission system.
     allowUnsandboxedCommands: false,
     excludedCommands: [],
+    // Denials win over the sandbox's own write allowance, which includes the
+    // working directory. Temporary directories stay writable for the shell.
+    filesystem: { denyWrite: [...new Set(options.workspaces ?? [])] },
     network: {
       allowLocalBinding: policy.networkAccess === "full",
       strictAllowlist: true,
@@ -418,36 +530,68 @@ interface CommandVerdict {
 export function isReadOnlyShellCommand(command: string): CommandVerdict {
   const trimmed = command.trim();
   if (!trimmed) return { allowed: true };
-  if (COMPOSITION_PATTERN.test(trimmed)) {
+  if (COMPOSITION_PATTERN.test(trimmed) || /(?:^|\s)~/.test(trimmed)) {
     return {
       allowed: false,
       reason:
-        "Coordinator shells cannot use pipes, redirection, substitution or command chaining, because the command that runs would not be the one checked.",
+        "Coordinator shells cannot use quotes, escapes, globs, pipes, redirection, substitution or command chaining, because the command that runs would not be the one checked.",
     };
   }
   const tokens = trimmed.split(/\s+/).filter(Boolean);
-  const program = tokens[0]?.split("/").at(-1) ?? "";
-  if (!program) return { allowed: true };
-  if (program === "git" || program === "gh") {
+  const first = tokens[0] ?? "";
+  if (!first) return { allowed: true };
+  // `bin/cat` is whatever the checkout put at that path, not `cat`.
+  if (first.includes("/") || first.includes("\\")) {
+    return {
+      allowed: false,
+      reason: `Coordinator shells run reading programs by name only, so \`${first}\` is not available here. Use the program name, or delegate it to a worker environment.`,
+    };
+  }
+  const program = first;
+  if (NETWORK_COMMANDS.has(program)) return networkRefusal(program);
+  if (program === "git") {
     const subcommandIndex = tokens.findIndex((token, index) => index > 0 && !token.startsWith("-"));
     const subcommand = subcommandIndex > 0 ? tokens[subcommandIndex] : undefined;
     const args = subcommandIndex > 0 ? tokens.slice(subcommandIndex + 1) : [];
+    if (
+      subcommand &&
+      (NETWORK_GIT_SUBCOMMANDS.has(subcommand) ||
+        (subcommand === "remote" && args.some((arg) => arg === "show")))
+    ) {
+      return networkRefusal(`git ${subcommand}`);
+    }
     const permitted =
-      program === "git"
-        ? subcommand !== undefined &&
-          (READ_ONLY_GIT_SUBCOMMANDS.has(subcommand) ||
-            (CONDITIONAL_GIT_SUBCOMMANDS.get(subcommand)?.(args) ?? false))
-        : subcommand !== undefined && READ_ONLY_GH_SUBCOMMANDS.has(subcommand);
-    if (permitted) return { allowed: true };
-    const described = [program, subcommand].filter(Boolean).join(" ");
-    return {
-      allowed: false,
-      reason: `Coordinator is read-only, so \`${described}\` is not available here. Delegate it to a worker environment.`,
-    };
+      subcommand !== undefined &&
+      (READ_ONLY_GIT_SUBCOMMANDS.has(subcommand) ||
+        (CONDITIONAL_GIT_SUBCOMMANDS.get(subcommand)?.(args) ?? false));
+    const described = ["git", subcommand].filter(Boolean).join(" ");
+    if (!permitted) {
+      return {
+        allowed: false,
+        reason: `Coordinator is read-only, so \`${described}\` is not available here. Delegate it to a worker environment.`,
+      };
+    }
+    if (
+      hasFlag(tokens.slice(1), GIT_MUTATING_ARGUMENTS) ||
+      hasFlag(args, GIT_SUBCOMMAND_MUTATING_ARGUMENTS.get(subcommand) ?? new Set())
+    ) {
+      return {
+        allowed: false,
+        reason: `Coordinator is read-only, so \`${described}\` cannot be used with an argument that writes a file or runs another program. Delegate it to a worker environment.`,
+      };
+    }
+    return { allowed: true };
   }
   if (READ_ONLY_COMMANDS.has(program)) {
+    const args = tokens.slice(1);
     const mutating = MUTATING_ARGUMENTS.get(program);
-    if (mutating && hasFlag(tokens.slice(1), mutating)) {
+    const options = OPTION_ALLOWLISTS.get(program);
+    const limit = POSITIONAL_LIMITS.get(program);
+    if (
+      (mutating && hasFlag(args, mutating)) ||
+      (options && !optionsAllowed(args, options)) ||
+      (limit && positionalCount(args, limit.valueOptions) > limit.max)
+    ) {
       return {
         allowed: false,
         reason: `Coordinator is read-only, so \`${program}\` cannot be used with an argument that writes or runs another program. Delegate it to a worker environment.`,
@@ -459,6 +603,49 @@ export function isReadOnlyShellCommand(command: string): CommandVerdict {
     allowed: false,
     reason: `Coordinator is read-only, so \`${program}\` is not available here. Delegate commands that change the checkout to a worker environment.`,
   };
+}
+
+function networkRefusal(described: string): CommandVerdict {
+  return {
+    allowed: false,
+    reason: `Coordinator commands have no network access, so \`${described}\` is not available here. Delegate it to a worker environment.`,
+  };
+}
+
+/** Whether every option in `args` is one of `allowed`, each taking a value. */
+function optionsAllowed(args: readonly string[], allowed: ReadonlySet<string>): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--") return true;
+    if (!arg.startsWith("-") || arg === "-") continue;
+    if (allowed.has(arg)) {
+      index += 1;
+      continue;
+    }
+    const long = arg.startsWith("--") ? arg.split("=", 1)[0]! : undefined;
+    const attached = long ?? arg.slice(0, 2);
+    if (!allowed.has(attached)) return false;
+  }
+  return true;
+}
+
+/** Positional arguments, not counting the values of `valueOptions`. */
+function positionalCount(args: readonly string[], valueOptions: ReadonlySet<string>): number {
+  let count = 0;
+  let optionsEnded = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (!optionsEnded && arg === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && arg.startsWith("-") && arg !== "-") {
+      if (valueOptions.has(arg)) index += 1;
+      continue;
+    }
+    count += 1;
+  }
+  return count;
 }
 
 function deny(reason: string): HookJSONOutput {

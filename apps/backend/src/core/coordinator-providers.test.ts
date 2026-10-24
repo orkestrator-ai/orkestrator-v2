@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import {
   coordinatorProviderAllowed,
   coordinatorProviderQualification,
   coordinatorProviderQualifications,
   coordinatorProviderTierSetting,
+  CLAUDE_LINUX_SANDBOX_PROGRAMS,
   defaultCoordinatorHostCapabilities,
+  executableOnPath,
 } from "./coordinator-providers.js";
 
 const sandboxed = { claudeSandbox: true };
@@ -136,8 +141,41 @@ describe("coordinator provider qualification", () => {
   });
 
   test("the host probe follows the OS sandboxes that actually exist", () => {
-    expect(defaultCoordinatorHostCapabilities("darwin").claudeSandbox).toBe(true);
-    expect(defaultCoordinatorHostCapabilities("linux").claudeSandbox).toBe(true);
-    expect(defaultCoordinatorHostCapabilities("win32").claudeSandbox).toBe(false);
+    const everything = () => true;
+    const nothing = () => false;
+    expect(defaultCoordinatorHostCapabilities("darwin", nothing).claudeSandbox).toBe(true);
+    expect(defaultCoordinatorHostCapabilities("linux", everything).claudeSandbox).toBe(true);
+    // The pinned CLI's Windows sandbox is behind a vendor flag that is off.
+    expect(defaultCoordinatorHostCapabilities("win32", everything).claudeSandbox).toBe(false);
+  });
+
+  test("Linux without bubblewrap or socat is not reported as enforced", () => {
+    // The CLI refuses to start a required sandbox without either, so an
+    // `enforced` Claude there would fail every coordinator turn.
+    for (const missing of CLAUDE_LINUX_SANDBOX_PROGRAMS) {
+      const host = defaultCoordinatorHostCapabilities("linux", (name) => name !== missing);
+      expect(host.claudeSandbox).toBe(false);
+      expect(
+        coordinatorProviderQualification("claude", { host, tierSetting: "provider-configured" }),
+      ).toMatchObject({ tier: "provider-configured", available: true });
+      expect(
+        coordinatorProviderQualification("claude", { host, tierSetting: "enforced" }).available,
+      ).toBe(false);
+    }
+  });
+
+  test("the PATH lookup finds an executable and ignores a plain file", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "coordinator-path-"));
+    try {
+      await writeFile(join(directory, "bwrap"), "#!/bin/sh\n");
+      await chmod(join(directory, "bwrap"), 0o755);
+      await writeFile(join(directory, "socat"), "");
+      await chmod(join(directory, "socat"), 0o644);
+      expect(executableOnPath("bwrap", directory)).toBe(true);
+      expect(executableOnPath("socat", directory)).toBe(false);
+      expect(executableOnPath("bwrap", "")).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

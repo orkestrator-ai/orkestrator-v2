@@ -140,19 +140,19 @@ bridge-only restart.
      1 ms for a 50 ms synchronous block. Like wall-clock time, these are
      machine-specific and never compared. See
      [efficiency-harness.md](../../development/efficiency-harness.md).
-3. **Decided (2026-10-24): both older-bridge fallbacks stay, uncached, until
-   [0034](../cross-cutting/0034-mixed-version-compatibility.md) agrees a
-   support window.** That covers the joined sync-v1 history path and the
-   `/messages` fallback in `readHttpBridgeTranscriptSnapshot`. Every bundled
-   bridge serves v2 pages and OpenCode pages in-process, so only an older
-   bridge behind a newer backend reaches either path. Caching joined pages
-   would add a bounded cache and invalidation rules for a path no bundled
-   bridge takes. Removing it before the window is agreed would break exactly
-   the skew 0034 exists to protect. Both rows stay in 0034's retirement index,
-   which owns the content-free use counters (its item 3). No code changed. The
-   existing tests keep both paths honest (`falls back to the legacy messages
-   route on a bridge without /transcript` in `http-bridge-provider.test.ts`,
-   and the sync-v1 cases in `native-agent-service-projection-lifecycle.test.ts`).
+3. **Window decided (2026-10-24): the older-bridge fallbacks may be
+   retired under 0034's published-release support window.** The floor is
+   v2.21.0 today ([version-compatibility.md](../../architecture/version-compatibility.md)).
+   Every bridge in that release has `/transcript` (#670) and the v2 contract
+   (#875), so the whole `/messages` fallback and joined sync-v1 bridge history
+   path serve only unpublished builds outside the window. Before removing the
+   joined path, confirm that no in-process provider still pages through it.
+
+   Both implementations remain pending that retirement work. Main now counts
+   their use through `bridge-transcript.messages-fallback` and
+   `history.joined-v1-page`. The earlier decision to retain them pending a
+   support-window agreement is superseded by 0034's decision; the existing
+   legacy-route and sync-v1 tests still cover their current behavior.
 4. **Done (2026-10-24): Codex has a per-response row boundary.** app-server
    sends `thread/tokenUsage/updated` once per Responses API completion,
    tool-only responses included. A probe of the pinned 0.164.0 showed one
@@ -759,12 +759,13 @@ considered, the choice, and why.
      not the interrupt.
 5. **Older-bridge fallbacks (item 3).**
    - Options: keep; cache joined pages; remove.
-   - Chosen: keep both, uncached, until 0034's support window.
-   - Why: only skewed installs reach them, and 0034 owns retirement and the
-     use counters.
-   - Pros: no new cache; no broken skew.
-   - Cons: two compatibility paths stay; an older bridge still pays whole
-     reads.
+   - Initial choice: keep both, uncached, pending 0034's support window.
+   - Current decision after merging 0034 (2026-10-24): the v2.21.0 floor
+     allows both older-bridge paths to be retired; no supported bridge needs
+     them. Main also supplies their content-free use counters.
+   - Remaining work: check that no in-process provider still uses joined
+     sync-v1 paging, then retire the eligible paths as described in code
+     item 3. Both implementations remain until that work is complete.
 6. **Progressive metrics (item 2).**
    - Options: one shared 256-sample ring; a ring per domain. For discovery:
      time the view read, the provider jobs, or both.

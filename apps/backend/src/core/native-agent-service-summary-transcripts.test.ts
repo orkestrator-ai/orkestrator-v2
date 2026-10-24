@@ -7,6 +7,7 @@
  * expensive paths it no longer takes: legacy full-transcript reads, joined
  * projection refreshes and interactive snapshots.
  */
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { describe, expect, mock, test } from "bun:test";
 import {
   bridgeTranscriptPage,
@@ -250,6 +251,8 @@ describe("summary transcripts", () => {
         if (update.status !== "snapshot") throw new Error("expected a snapshot");
         expect(update.value.historyPaging).toBe("direct");
         expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
+        const before =
+          compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0;
         let cursor = update.value.historyCursor;
         const seen: string[] = [];
         let pages = 0;
@@ -267,6 +270,9 @@ describe("summary transcripts", () => {
           if (!cursor) expect(page.complete).toBe(true);
         }
         expect(pages).toBe(3);
+        expect(compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0).toBe(
+          before,
+        );
         expect(seen).toEqual(history.messages.slice(0, 150).map((entry) => entry.id));
         // Give any stray background hydration a chance to have run.
         await new Promise((resolve) => setTimeout(resolve, 50));

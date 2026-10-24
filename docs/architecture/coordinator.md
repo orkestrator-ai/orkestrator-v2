@@ -195,8 +195,8 @@ it.
 
 | Tier | Meaning | Platforms |
 | --- | --- | --- |
-| `enforced` | The provider or the OS blocks the mutation whatever the agent attempts | Codex; Claude where its command sandbox is available; Pi |
-| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor; Claude when the host has no command sandbox |
+| `enforced` | The provider or the OS blocks the mutation whatever the agent attempts | Codex; Claude where its command sandbox can start (macOS; Linux with `bwrap` and `socat` on `PATH`); Pi |
+| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor; Claude where the command sandbox cannot start (Windows; Linux without `bwrap` or `socat`) |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
 **Settings → Agent platforms → Coordinator safety level** chooses the weakest
@@ -224,8 +224,22 @@ What each enforced platform actually does:
   `CLAUDE_CONFIG_DIR` holding only the credential, and a bridge-owned
   `PreToolUse` hook. The hook is the real boundary for shell: it allows a fixed
   list of reading commands and refuses pipes, redirection, substitution and
-  chaining. On Windows, where there is no command sandbox, Claude drops to
-  `provider-configured` automatically.
+  chaining, writing arguments (`uniq in out`, `sort -o`, `git diff --output`,
+  gawk's in-place and program options), path-qualified programs and the
+  network-only `gh`, `curl` and `git ls-remote`. The SDK sandbox's default lets
+  a command write its working directory, so the coordinator sandbox denies
+  writes to the checkout (`filesystem.denyWrite`); before that, `uniq in.txt
+  out.txt` wrote the checkout of an `enforced` Claude coordinator.
+  `defaultCoordinatorHostCapabilities` decides whether the sandbox can start:
+  always on macOS, on Linux only with `bwrap` and `socat` on `PATH` (the CLI
+  refuses a required sandbox without either), never on Windows, where the
+  pinned CLI's sandbox sits behind a vendor flag that is off. Elsewhere Claude
+  is `provider-configured`. The launcher passes the same answer to the bridge
+  as process authority (`ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`, `required`
+  or `unavailable`; absent reads as `required`). `required` keeps
+  `failIfUnavailable` on, so a sandbox that fails to start fails the turn.
+  `unavailable` still asks for the sandbox but runs without it, with the hook
+  as the boundary, rather than failing every turn.
 - **Pi** blocks every tool outside its read-only set in its own `tool_call`
   gate, which runs in the bridge process and cannot be switched off by the
   workspace.
@@ -236,10 +250,14 @@ declares. Cursor applies the sandbox and a tool ban but exposes no approval
 callback, and is refused outright if its sandbox cannot be enabled.
 
 Grok deny-policy children load a private agent profile that removes `write`,
-`search_replace`, `run_terminal_cmd` and built-in subagents, with `--no-leader`
+`search_replace`, `run_terminal_cmd`, built-in subagents and 1.0.67's `monitor`
+waiting tool, with `--no-leader`
 so a shared process cannot bypass it. This also covers read-only review turns.
 Remaining ACP permission requests, including MCP calls, are refused by choosing
-`reject_once`. Other tools that never ask remain advisory. Grok
+`reject_once`. Other tools that never ask remain advisory, among them xAI's
+hosted X search tools (`x_keyword_search`, `x_semantic_search`,
+`x_user_search`, `x_thread_fetch`), which neither the profile nor
+`--disallowed-tools` removes on 1.0.67. Grok
 1.0.52 ends its turn on any answer except allow, so the bridge then sends the
 same session a fixed continuation saying the call was refused and must not be
 retried (`POLICY_DENIAL_CONTINUATION`, `acp-prompt.ts`). The continuation
@@ -291,10 +309,10 @@ Orkestrator injects each one itself, never from a file the checkout can edit.
 | --- | --- | --- | --- |
 | Codex | `web_search = "cached"` when allowed, else `"disabled"`; `features.standalone_web_search = false`. The engine reads the mode back through `config/read` once per app-server generation and refuses the thread on any other value. `cached` serves pages only from OpenAI's index: a live run had it refuse a fresh URL with "Cache miss" while `live` opened it. | No separate tool; `live` mode is never used | Process `-c mcp_servers.<name>` overrides, tools approved |
 | Claude | WebSearch on the allowlist when allowed, else in `disallowedTools` and refused by the hook | WebFetch denied by name and by the hook | Added to the inline MCP set, `mcp__<name>__*` on the allowlist and the hook |
-| OpenCode | `websearch` and `codesearch` allowed by name when allowed, else denied | `webfetch` denied after every allow; `task` subagents inherit it | Not yet |
-| Cursor | `webSearch` joins the read-only allowlist when allowed | `webFetch` never on the allowlist | Not yet |
-| Grok | Off: its only verified switch, `--disable-web-search`, removes search and fetch together. Also `--no-leader`, so a shared leader that ignores the flag is never used | Off | Not yet |
-| Pi | No hosted search | None; the read-only gate is a name allowlist, so an extension's web tool is refused | Not yet |
+| OpenCode | `websearch` and `codesearch` allowed by name when allowed, else denied | `webfetch` denied after every allow; `task` subagents inherit it | Registered on the coordinator's own `opencode serve` at launch (`POST /mcp`, replacing any project entry of the same name), before the conversation is ready. OpenCode 1.19.4 lists no MCP tools over HTTP, so the backend lists each server's tools itself and allows exactly `<name>_<tool>`, leaving out an id a project server named `<name>_…` could also produce (`opencode-coordinator-research.ts`) |
+| Cursor | `webSearch` joins the read-only allowlist when allowed | `webFetch` never on the allowlist | Hosted in-process as `<name>__<tool>` custom tools beside Orkestrator's, because a sandboxed read-only attach cannot call an HTTP MCP server; published under their own server name (`hostResearchCustomTools`) |
+| Grok | Off. On 1.0.67 the hosted `web_search` carries `open_page` and `open_page_with_find`, which open any URL, and neither the agent profile nor `--disallowed-tools` removes them (`scripts/coordinator-probes/grok-web-tools-probe.mjs`), so search there is fetch. `--disable-web-search` removes all three; `GROK_WEB_FETCH=0` removes only the client `web_fetch`. Also `--no-leader`, so a shared leader that ignores the flag is never used | Off | None |
+| Pi | No hosted search | None; the read-only gate is a name allowlist, so an extension's web tool is refused | Connected by the bridge-owned MCP client in a coordinator process only (`research` scope, reserved like `orkestrator` so a `mcp.json` entry cannot stand in), and admitted by the gate by exact registered name |
 
 The coordinator context tells the agent which of these it has, that commands
 and live page fetches are off, and to report a tool as refused only after a
@@ -814,6 +832,12 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `live-network-lock.test.ts`
 - per-bridge activity and policy tests already cover whether a bridge reports
   `idle` at turn end and how it translates `capabilityPolicy`
+- the Claude coordinator sandbox against the pinned CLI with a scripted local
+  model: the default sandbox writes the working directory, the coordinator
+  sandbox refuses it and still reads, and the hook refuses `uniq in out`:
+  `conformance-coordinator-sandbox-live.test.ts` (claude-bridge)
+- research servers on the pinned OpenCode, with a real `opencode serve` and a
+  local MCP server: `opencode-coordinator-research-live.test.ts`
 
 - the same contracts against real providers: `mise run
   test:agent:coordinator` runs four scenarios per platform in a disposable

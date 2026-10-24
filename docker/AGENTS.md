@@ -55,6 +55,10 @@ Developer tooling:
   helper; root terminals have the CLI but do not load the interactive hook.
 - Playwright CLI plus its pinned Chromium build (see below).
 - ripgrep, fzf, jq, tmux, nano, vim, less, curl, wget, and `en_US.UTF-8`.
+- inotify-tools, for `orkestrator-worktree-signal`: the backend starts it per
+  tracking lineage to ring when `/workspace` changes
+  (`container-worktree-signal=1`, see
+  [container-lifecycle.md](../docs/architecture/container-lifecycle.md#container-worktree-signal-container-worktree-signal1)).
 
 Users and isolation:
 - Non-root `node` user (uid/gid 1000, matching the workspace bind mount), with

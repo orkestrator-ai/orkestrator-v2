@@ -313,6 +313,8 @@ export interface SessionState {
   recoveringRun?: Promise<void>;
   /** MCP names only. Launch configuration can contain credentials and is never persisted. */
   mcpServerNames?: string[];
+  /** The coordinator research servers hosted in-process on the current attach. */
+  researchMcpServerNames?: string[];
   /**
    * Tab-scoped Orkestrator MCP connection. Memory only — persistence must never
    * write the bearer token. Env is the fallback when this is absent.

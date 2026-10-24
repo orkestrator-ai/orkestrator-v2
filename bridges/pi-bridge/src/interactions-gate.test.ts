@@ -353,6 +353,92 @@ test("coordinator read-only allows Orkestrator MCP tools and still denies the re
   }
 });
 
+test("a coordinator may call its research servers' tools, by exact registered name only", async () => {
+  const { preparePiMcp, publicPiMcpServers, setPiMcpTransportForTests } = await import("./mcp.js");
+  const { mkdir, mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "pi-mcp-coord-research-"));
+  const agentDir = join(root, "agent");
+  await mkdir(agentDir, { recursive: true });
+  // A user server under the research name must not stand in for it: it is a
+  // local program, and the gate would otherwise admit its tools by name.
+  await writeFile(
+    join(agentDir, "mcp.json"),
+    JSON.stringify({ mcpServers: { context7: { command: "local-context7" } } }),
+  );
+  const connected: { id: string; scope: string; transport: string; url?: string }[] = [];
+  setPiMcpTransportForTests({
+    async connect(server) {
+      connected.push({
+        id: server.id,
+        scope: server.scope,
+        transport: server.transport,
+        ...(server.url ? { url: server.url } : {}),
+      });
+      return {
+        tools: server.id === "orkestrator" ? [{ name: "send_message" }] : [{ name: "query-docs" }],
+        async call() {
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+        async close() {},
+      };
+    },
+  });
+  const state = newSessionState();
+  state.readOnly = true;
+  state.policy = {
+    id: "coordinator-read-only",
+    sandbox: "provider",
+    approvals: "deny",
+    projectResources: false,
+    networkAccess: "restricted",
+  };
+  state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "coordinator-token" };
+  const env = {
+    ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+    ORKESTRATOR_COORDINATOR_WEB_RESEARCH: "search-and-mcp",
+    ORKESTRATOR_COORDINATOR_RESEARCH_MCP: JSON.stringify([
+      { name: "context7", url: "https://mcp.context7.com/mcp" },
+    ]),
+  };
+  try {
+    await preparePiMcp(state, { agentDir, cwd: root, env });
+    expect(connected).toContainEqual({
+      id: "context7",
+      scope: "research",
+      transport: "http",
+      url: "https://mcp.context7.com/mcp",
+    });
+    expect(connected.some((server) => server.transport === "stdio")).toBe(false);
+    expect(await requestToolApproval(state, "docs", "mcp_context7_query-docs", {})).toEqual({
+      block: false,
+    });
+    // Same server, a name it never registered.
+    expect(
+      await requestToolApproval(state, "other", "mcp_context7_resolve-library-id", {}),
+    ).toMatchObject({ block: true });
+    expect(await requestToolApproval(state, "bash", "bash", {})).toMatchObject({ block: true });
+    // Configured in Orkestrator's settings, so reported as Orkestrator's.
+    expect(publicPiMcpServers(state).find((server) => server.id === "context7")?.scope).toBe(
+      "orkestrator",
+    );
+
+    // Without the coordinator's process authority the research variables are
+    // ignored, so a worker's read-only review never gains a remote server.
+    connected.length = 0;
+    const { ORKESTRATOR_BRIDGE_EXECUTION_POLICY: _policy, ...workerEnv } = env;
+    await preparePiMcp(state, { agentDir, cwd: root, env: workerEnv });
+    expect(connected.some((server) => server.scope === "research")).toBe(false);
+    expect(await requestToolApproval(state, "docs", "mcp_context7_query-docs", {})).toMatchObject({
+      block: true,
+    });
+  } finally {
+    setPiMcpTransportForTests();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a read-only coordinator may call every Control MCP coordinator tool", async () => {
   const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
   const { COORDINATOR_CONTROL_TOOL_NAMES } = await import("@orkestrator/protocol/coordinator");

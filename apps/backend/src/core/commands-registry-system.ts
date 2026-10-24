@@ -7,6 +7,7 @@ import {
   type ProcessUsageEnvironment,
 } from "./environment-process-usage.js";
 import { createSystemUsageReader, type SystemUsageSnapshot } from "./system-usage.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { recurringWorkDiagnostics } from "./recurring-diagnostics.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { KeyedWorkflowOwner } from "./workflow-supervisor.js";
@@ -55,6 +56,16 @@ export function registerSystemCommands(
   register("get_recurring_work_diagnostics", (args) => {
     assertOnlyKeys(args, [], "arguments");
     return recurringWorkDiagnostics();
+  });
+  /**
+   * Content-free usage of each mixed-version compatibility path: a count and
+   * the first and last time it was taken, persisted across restarts. Retiring
+   * a path rests on this (`docs/architecture/version-compatibility.md`). Also
+   * served additively on the gateway's `/api/metrics`.
+   */
+  register("get_compatibility_path_usage", (args) => {
+    assertOnlyKeys(args, [], "arguments");
+    return compatibilityPathUsage.snapshot();
   });
   /**
    * Full diagnostic reconciliation for keyed scheduling (step 08). Every keyed

@@ -98,7 +98,7 @@ export async function prepareCreate(
         };
       }
       if (existing?.receipt) {
-        if (!settledMatches(existing.receipt, existing.digest, descriptor))
+        if (!settledMatches(existing.digest, descriptor))
           throw reusedCorrelation(existing.receipt.token);
         throw new DesignError(
           "invalid-input",

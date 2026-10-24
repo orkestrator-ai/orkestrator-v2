@@ -376,12 +376,6 @@ export class AppServerRuntime {
     return this.prompts.refreshCommandCatalogue(...args);
   }
 
-  listGlobalCommandRows(
-    ...args: Parameters<CodexRuntimePrompt["listGlobalCommandRows"]>
-  ): ReturnType<CodexRuntimePrompt["listGlobalCommandRows"]> {
-    return this.prompts.listGlobalCommandRows(...args);
-  }
-
   // -------------------------------------------------------------------------
   // Cancellation, close, models, history and health
 

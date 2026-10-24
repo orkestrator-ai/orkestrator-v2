@@ -281,6 +281,8 @@ export async function harness(
     dispatchJournalMaxRecords?: number;
     dispatchJournalMaxBytes?: number;
     skillRefreshDebounceMs?: number;
+    /** Defaults to 0: the fake app-server answers its whole skill list at once. */
+    skillColdSettleMs?: number;
     fingerprintEnvironment?: () => string;
     /** Uses the production adaptive cadence instead of deterministic immediate publishes. */
     adaptiveCoalesce?: boolean;
@@ -379,6 +381,7 @@ export async function harness(
     ...(options.skillRefreshDebounceMs !== undefined
       ? { skillRefreshDebounceMs: options.skillRefreshDebounceMs }
       : {}),
+    skillColdSettleMs: options.skillColdSettleMs ?? 0,
     ...(options.commandChangeProbe ? { commandChangeProbe: options.commandChangeProbe } : {}),
     ...(options.changeEvidence ? { changeEvidence: options.changeEvidence } : {}),
     ...(options.watchRolloutFile ? { watchRolloutFile: options.watchRolloutFile } : {}),

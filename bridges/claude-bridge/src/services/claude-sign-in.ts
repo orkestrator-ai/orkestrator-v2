@@ -21,9 +21,16 @@ import { claudeExecutableOptions } from "./session-manager-core.js";
 const AUTH_CACHE_TTL_MS = 30_000;
 const FAILED_AUTH_CACHE_TTL_MS = 5_000;
 
+/**
+ * The bridge cannot run Claude's login itself: the backend drives
+ * `claude auth login` for the active account (`ClaudeAuthRecoveryCard`, the
+ * Agent Info card and Settings → Claude). `terminal` stays the kind because
+ * the CLI's own `/login` in a terminal is still the fallback those cards offer,
+ * and no route kind names a backend-driven login.
+ */
 const CLAUDE_SIGN_IN: NativeAgentSignInRoute = {
   kind: "terminal",
-  hint: "Open a Claude terminal tab and run /login.",
+  hint: "Sign in to Claude from the sign-in card in this tab or from Settings → Claude.",
 };
 
 export const CLAUDE_SIGN_IN_REQUIRED_MESSAGE =

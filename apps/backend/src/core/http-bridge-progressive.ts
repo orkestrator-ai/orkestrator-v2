@@ -36,6 +36,7 @@ import {
   assertOk,
   boundedJson,
   bridgeFetch,
+  normalizeProviderAuthNotice,
   normalizeProviderReadiness,
 } from "./http-bridge-transport.js";
 
@@ -280,6 +281,7 @@ export async function readHttpBridgeSessionState(input: {
     ? asRecord(await boundedJson(queueResponse, "Pi queue state", { remaining: 256 * 1024 }))
     : undefined;
   const readiness = normalizeProviderReadiness(payload.readiness);
+  const authNotice = normalizeProviderAuthNotice(payload.authNotice);
   const contextUsage = contextUsageWithPlanUsage(
     input.agent,
     payload.contextUsage,
@@ -307,6 +309,7 @@ export async function readHttpBridgeSessionState(input: {
       ? { composer: composer as unknown as NativeAgentComposerState }
       : {}),
     ...(readiness ? { readiness } : {}),
+    ...(authNotice ? { notices: [authNotice] } : {}),
     ...(typeof payload.turnStartedAt === "string" &&
     Number.isFinite(Date.parse(payload.turnStartedAt))
       ? { turnStartedAt: Date.parse(payload.turnStartedAt) }
@@ -406,6 +409,7 @@ export async function readHttpBridgeAuthoritativeSessionState(input: {
     notices: snapshotNotices({
       transcriptTruncated: false,
       ...(runtime ? { runtime } : {}),
+      ...(snapshot.notices?.[0]?.kind === "auth" ? { auth: snapshot.notices[0] } : {}),
     }),
   };
 }

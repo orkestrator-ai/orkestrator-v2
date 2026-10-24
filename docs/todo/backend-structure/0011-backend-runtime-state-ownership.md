@@ -207,7 +207,7 @@ Run on node mbp3 (macOS, Apple Silicon, Docker 29.7.2) on 2026-10-24:
      Cons: two objects to pass for lifecycle work.
 5. **The delete and merge guards and merge-cleanup recovery live in
    `EnvironmentOperations`.**
-   - Options: `LocalServerRuntime` (the old names said "local server"); 
+   - Options: `LocalServerRuntime` (the old names said "local server");
      `EnvironmentOperations` (the file's table).
    - Chosen: `EnvironmentOperations`, per the table.
    - Why: they guard environment deletion and merges for every consumer

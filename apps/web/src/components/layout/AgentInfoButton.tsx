@@ -45,6 +45,7 @@ import {
   adoptNativeAgentSession,
   deleteAgentHandoff,
   beginNativeAgentSignIn,
+  cancelNativeAgentSignIn,
   forkNativeAgentSession,
   getBuildPipelineSessionProjection,
   getNativeAgentAuthStatus,
@@ -57,6 +58,7 @@ import {
   updateNativeAgentControls,
 } from "@/lib/backend";
 import { useSystemUsage } from "@/hooks/useSystemUsage";
+import { ClaudeAccountSignInAction } from "@/components/claude/ClaudeAccountSignInAction";
 import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
@@ -111,6 +113,21 @@ export const AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS = 3_000;
 /** Account auth is shared by tabs of one environment/provider, not by all accounts. */
 function deviceCodeToastId(environmentId: string, agent: string): string {
   return `agent-info-device-code:${JSON.stringify([environmentId, agent])}`;
+}
+
+/** The device-code toast's cancel: abandons the login on the provider's side too. */
+function cancelDeviceCodeSignIn(input: {
+  environmentId: string;
+  agent: AgentPlatform;
+  logicalSessionKey: string;
+}): { label: string; onClick: () => void } {
+  return {
+    label: "Cancel sign-in",
+    onClick: () => {
+      toast.dismiss(deviceCodeToastId(input.environmentId, input.agent));
+      void cancelNativeAgentSignIn(input).catch(() => toast.error("Could not cancel the sign-in"));
+    },
+  };
 }
 
 interface ActiveNativeSession {
@@ -541,6 +558,11 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                 id: deviceCodeToastId(accountEnvironmentId, accountAgent),
                 duration: pending.expiresAt - Date.now(),
                 closeButton: true,
+                cancel: cancelDeviceCodeSignIn({
+                  environmentId: accountEnvironmentId,
+                  agent: accountAgent,
+                  logicalSessionKey: accountSessionKey,
+                }),
                 action: {
                   label: "Open sign-in link",
                   onClick: () => {
@@ -1556,6 +1578,11 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                                   ),
                                   duration: NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
                                   closeButton: true,
+                                  cancel: cancelDeviceCodeSignIn({
+                                    environmentId: activeSession.environmentId,
+                                    agent: activeSession.provider,
+                                    logicalSessionKey: activeSession.sessionKey,
+                                  }),
                                   ...(result.url
                                     ? {
                                         action: {
@@ -1584,6 +1611,17 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                         </Button>
                       ) : null}
                     </div>
+                    {activeSession.provider === "claude" && auth.state !== "signed-in" ? (
+                      // Claude's route is the backend-driven account login, not
+                      // a bridge sign-in, so it has its own action.
+                      <div className="mt-2">
+                        <ClaudeAccountSignInAction
+                          containerId={
+                            activeTab ? getNativeAgentData(activeTab)?.containerId : undefined
+                          }
+                        />
+                      </div>
+                    ) : null}
                     {auth.signIn?.hint && auth.state !== "signed-in" ? (
                       <p className="mt-2 leading-relaxed text-muted-foreground">
                         {auth.signIn.hint}

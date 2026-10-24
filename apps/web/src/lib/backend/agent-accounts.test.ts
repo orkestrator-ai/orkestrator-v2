@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
-import { listAgentAccounts, setActiveAgentAccount } from "./agent-accounts";
+import { getAgentSignInStatus, listAgentAccounts, setActiveAgentAccount } from "./agent-accounts";
 import { startGitHubCliLogin } from "./docker-skills";
 import { cursorSdkLoginStart } from "./config-integrations";
 import { startOpenCodeProviderLogin } from "./opencode-provider-auth";
@@ -41,12 +41,14 @@ test("an omitted machine reads the view backend; explicit command-node reads and
 });
 
 test("all sign-in clients route the selected machine through invoke_on_node", async () => {
+  await getAgentSignInStatus("claude", "leaf");
   await startGitHubCliLogin("leaf");
   await cursorSdkLoginStart("leaf");
   await startOpenCodeProviderLogin({ providerId: "anthropic", method: 0 }, "leaf");
   expect(
     portal.mock.calls.map(([command, args]) => [command, args?.nodeId, args?.command]),
   ).toEqual([
+    ["invoke_on_node", "leaf", "get_agent_sign_in_status"],
     ["invoke_on_node", "leaf", "start_github_cli_login"],
     ["invoke_on_node", "leaf", "cursor_sdk_login_start"],
     ["invoke_on_node", "leaf", "start_opencode_provider_login"],

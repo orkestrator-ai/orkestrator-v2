@@ -7,6 +7,7 @@ import {
   type ControlledTimeout,
   installControlledTimeout,
 } from "../../../tests/helpers/controlled-timeout";
+import * as containerAccounts from "../src/core/agent-accounts-containers";
 import type { AgentAccountStore } from "../src/core/agent-accounts-store";
 import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/terminal-runtime";
 import { MAX_TEXT_FILE_BYTES } from "../src/core/path-safety";
@@ -3715,3 +3716,58 @@ test("terminal creation rechecks a move admitted during its environment read", a
     endEnvironmentMove(environment.id);
   }
 });
+
+test.each([false, true])(
+  "container terminal waits for account handoff and rechecks replacement (%s)",
+  async (replace) => {
+    const environment = createEnvironment({
+      id: "env-handoff-race",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const args = {
+      containerId: "container-1",
+      environmentId: environment.id,
+      terminalKey: "handoff",
+      user: "node",
+    };
+    const { sessionId } = terminalSessionResult(
+      await commands.get("create_terminal_session")!(args, context),
+    );
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const handoff = spyOn(
+      containerAccounts,
+      "applyActiveAgentAccountsForContainerTerminal",
+    ).mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const count = ptyProcesses.length;
+    const starting = Promise.resolve(
+      commands.get("start_terminal_session")!({ sessionId }, context),
+    );
+    void starting.catch(() => undefined);
+    try {
+      await entered.promise;
+      expect(ptyProcesses.length).toBe(count);
+      expect(handoff).toHaveBeenCalledWith(context, "container-1");
+      if (replace)
+        await commands.get("create_terminal_session")!({ ...args, user: "root" }, context);
+      release.resolve();
+      if (replace) {
+        await expect(starting).rejects.toThrow("Container terminal session is no longer available");
+        expect(ptyProcesses.length).toBe(count);
+      } else {
+        await starting;
+        expect(ptyProcesses.length).toBe(count + 1);
+      }
+    } finally {
+      release.resolve();
+      handoff.mockRestore();
+    }
+  },
+);

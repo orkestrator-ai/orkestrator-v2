@@ -64,6 +64,33 @@ describe("thread and turn lifecycle", () => {
     ]);
   });
 
+  test("modelProvider/authRecovery* become thread-scoped auth recovery events", () => {
+    const params = { threadId: "t1", turnId: "turn-1", provider: "openai", message: " Renewing " };
+    expect(reduce("modelProvider/authRecoveryStarted", params)).toEqual([
+      {
+        kind: "thread.authRecovery",
+        threadId: "t1",
+        phase: "started",
+        message: "Renewing",
+        provider: "openai",
+        engineGeneration: 1,
+        handle: "handle-1",
+      },
+    ]);
+    expect(reduce("modelProvider/authRecoveryCompleted", { threadId: "t1" })).toEqual([
+      {
+        kind: "thread.authRecovery",
+        threadId: "t1",
+        phase: "completed",
+        engineGeneration: 1,
+        handle: "handle-1",
+      },
+    ]);
+    expect(reduce("modelProvider/authRecoveryStarted", { message: "no thread" })).toEqual([]);
+    expect(isIgnoredNotification("modelProvider/authRecoveryStarted")).toBe(false);
+    expect(isIgnoredNotification("modelProvider/authRecoveryCompleted")).toBe(false);
+  });
+
   test("drops malformed model notifications", () => {
     for (const params of [
       {},

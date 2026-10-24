@@ -505,6 +505,15 @@ export function registerNativeAgentCommands(
     });
   });
 
+  register("cancel_native_agent_sign_in", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.cancelProjectionSignIn({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+    });
+  });
+
   register("sign_out_native_agent", async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     await context.nativeAgents.signOutProjectionProvider({

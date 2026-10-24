@@ -3,6 +3,7 @@ import {
   isHostSignInPlatform,
   type AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
@@ -49,6 +50,22 @@ export function registerAgentAccountCommands(
   register("list_agent_accounts", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
     return listAgentAccounts(context);
+  });
+  // Settings' per-platform sign-in card: read on the host, no session needed.
+  register("get_agent_sign_in_status", async (args, context) => {
+    assertOnlyKeys(args, ["platform"], "arguments");
+    const platform = asNonBlankString(args.platform, "platform");
+    if (!isAgentPlatform(platform)) throw new Error("Agent platform is invalid");
+    const { readAgentSignInStatus } = await import("./agent-sign-in-status.js");
+    return readAgentSignInStatus(platform, {
+      listAccounts: () => listAgentAccounts(context),
+      cursorStatus: async () => {
+        const { cursorSdkAuthStatus } = await import("./cursor-sdk-bridge.js");
+        const config = await context.storage.loadConfig();
+        // The stored key only says which credential is in play; never returned.
+        return cursorSdkAuthStatus(context, config.global.cursorApiKey);
+      },
+    });
   });
   register("list_machine_agent_accounts", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");

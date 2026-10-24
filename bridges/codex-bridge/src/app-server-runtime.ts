@@ -277,6 +277,12 @@ export class AppServerRuntime {
     return this.sessions.logoutAuth(...args);
   }
 
+  cancelAuthLogin(
+    ...args: Parameters<CodexRuntimeSessions["cancelAuthLogin"]>
+  ): ReturnType<CodexRuntimeSessions["cancelAuthLogin"]> {
+    return this.sessions.cancelAuthLogin(...args);
+  }
+
   rewindMessages(
     ...args: Parameters<CodexRuntimeSessions["rewindMessages"]>
   ): ReturnType<CodexRuntimeSessions["rewindMessages"]> {

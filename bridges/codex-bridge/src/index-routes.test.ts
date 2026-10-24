@@ -335,6 +335,27 @@ describe("sign-in routes carry no credential", () => {
     );
   });
 
+  test.each([
+    ["canceled", true],
+    ["none", false],
+  ] as const)(
+    "POST /global/auth/login/cancel answers only whether a login was open (%s)",
+    async (status, cancelled) => {
+      await withRuntimeMethod(
+        "cancelAuthLogin",
+        async () => status,
+        async () => {
+          const { result: body, output } = await captureOutput(async () =>
+            (await app.request("/global/auth/login/cancel", { method: "POST" })).json(),
+          );
+          expect(body).toEqual({ cancelled });
+          expectNoCanary(body, "Codex sign-in cancel");
+          expectNothingSecretLogged(output, "Codex sign-in cancel");
+        },
+      );
+    },
+  );
+
   test("POST /global/auth/logout answers without account detail", async () => {
     await withRuntimeMethod(
       "logoutAuth",

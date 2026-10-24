@@ -38,6 +38,7 @@ import {
   bridgeFetch,
   normalizeProviderReadiness,
 } from "./http-bridge-transport.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 export interface LegacyTranscriptSnapshot {
   messages: unknown[];
@@ -101,6 +102,7 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
   capabilities?: HttpBridgeTranscriptCapabilities;
 }): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
   const legacyFallback = async (): Promise<ProviderTranscriptSnapshot> => {
+    compatibilityPathUsage.record("bridge-transcript.messages-fallback");
     const legacy = await input.readLegacy();
     return {
       messages:

@@ -57,6 +57,7 @@ import {
   rewriteBrowserPreviewBody,
 } from "./gateway-internals.js";
 import type { StaticContentEncoding } from "./gateway-internals.js";
+import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 
 export function createSseGzipCompressor(): Gzip {
   return createGzip({
@@ -129,6 +130,7 @@ export class GatewayProxy {
     // concurrency explicitly (per port and overall) before connecting.
     let releaseLegacySlot = () => {};
     if (browserPreview) {
+      compatibilityPathUsage.record("preview.legacy-loopback-route");
       const slot = this.ctx.legacyPreviewAdmission.tryAcquire(target.port || "80");
       if (!slot) {
         jsonResponse(response, 503, { error: "Browser preview is at capacity; retry shortly" });

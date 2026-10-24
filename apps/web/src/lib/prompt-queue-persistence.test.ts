@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   applyPromptQueueSnapshot,
-  claimPromptQueueHead,
   getPromptQueueDispatchError,
   hydratePromptQueue,
   hydratePromptQueuesForEnvironment,
@@ -169,121 +168,6 @@ describe("backend-owned prompt queue projections", () => {
       throw new Error("loader must not run");
     });
     expect(source.read()).toEqual([{ id: "restored" }]);
-  });
-
-  test("does not claim an unscoped or empty projection", async () => {
-    const unscoped = createSource("claude", () => null);
-    const empty = createSource();
-    let calls = 0;
-    const claim = async () => {
-      calls += 1;
-      return { claimed: null, claimToken: null, queue: null };
-    };
-    await expect(claimPromptQueueHead(unscoped, SESSION, claim)).resolves.toBeNull();
-    await expect(claimPromptQueueHead(empty, SESSION, claim)).resolves.toBeNull();
-    expect(calls).toBe(0);
-  });
-
-  test("clears a ghost projection when a claim reports no backend queue", async () => {
-    const source = createSource();
-    source.setQueue(SESSION, [{ id: "ghost" }]);
-    await expect(
-      claimPromptQueueHead(source, SESSION, async () => ({
-        claimed: null,
-        claimToken: null,
-        queue: null,
-      })),
-    ).resolves.toBeNull();
-    expect(source.read()).toEqual([]);
-  });
-
-  test("rejects malformed or mismatched claimed messages while applying the snapshot", async () => {
-    for (const claimed of [null, "bad", { id: "different" }, { id: 7 }]) {
-      const source = createSource();
-      source.setQueue(SESSION, [{ id: "expected" }]);
-      await expect(
-        claimPromptQueueHead(source, SESSION, async (key, environmentId) => ({
-          claimed: claimed as QueuedItem | null,
-          claimToken: claimed ? "claim-token" : null,
-          queue: persisted(key, [], 2, environmentId),
-        })),
-      ).resolves.toBeNull();
-      expect(source.read()).toEqual([]);
-    }
-  });
-
-  test("refuses a claimed message that arrived without a usable claim token", async () => {
-    /**
-     * The token is the only handle on the durable claim: dispatching without
-     * one would send a prompt this client can never acknowledge or return, so
-     * it would sit in the backend until its lease expired and then be sent
-     * again.
-     */
-    for (const claimToken of [null, "", "   "]) {
-      const source = createSource();
-      source.setQueue(SESSION, [{ id: "expected" }]);
-      await expect(
-        claimPromptQueueHead(source, SESSION, async (key, environmentId) => ({
-          claimed: { id: "expected" },
-          claimToken,
-          queue: persisted(key, [], 2, environmentId),
-        })),
-      ).resolves.toBeNull();
-      expect(source.read()).toEqual([]);
-    }
-  });
-
-  test("allows only one of two clients to claim an authoritative head", async () => {
-    const first = createSource();
-    const second = createSource();
-    first.setQueue(SESSION, [{ id: "m1" }, { id: "m2" }]);
-    second.setQueue(SESSION, [{ id: "m1" }, { id: "m2" }]);
-
-    let backendQueue: QueuedItem[] = [{ id: "m1" }, { id: "m2" }];
-    let revision = 1;
-    const claim = async (key: string, environmentId: string, expectedId: string) => {
-      const head = backendQueue[0];
-      if (!head || head.id !== expectedId) {
-        return {
-          claimed: null,
-          claimToken: null,
-          queue: persisted(key, backendQueue, revision, environmentId),
-        };
-      }
-      backendQueue = backendQueue.slice(1);
-      revision += 1;
-      return {
-        claimed: head,
-        claimToken: `claim-${head.id}`,
-        queue: persisted(key, backendQueue, revision, environmentId),
-      };
-    };
-
-    const [winner, loser] = await Promise.all([
-      claimPromptQueueHead(first, SESSION, claim),
-      claimPromptQueueHead(second, SESSION, claim),
-    ]);
-    expect(winner).toEqual({
-      entry: { id: "m1" },
-      claimToken: "claim-m1",
-    });
-    expect(loser).toBeNull();
-    expect(first.read(SESSION)).toEqual([{ id: "m2" }]);
-    expect(second.read(SESSION)).toEqual([{ id: "m2" }]);
-  });
-
-  test("clears a local ghost queue when the backend refuses a missing queue", async () => {
-    const source = createSource();
-    source.push(SESSION, [{ id: "m1" }]);
-
-    const claimed = await claimPromptQueueHead(source, SESSION, async () => ({
-      claimed: null,
-      claimToken: null,
-      queue: null,
-    }));
-
-    expect(claimed).toBeNull();
-    expect(source.read(SESSION)).toEqual([]);
   });
 });
 

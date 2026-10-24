@@ -47,13 +47,6 @@ export function registerPromptCommands(
       return queue;
     },
   );
-  register("requeue_prompt_queue_message", ({ queueKey, environmentId, message }, { storage }) =>
-    storage.requeuePromptQueueMessage(
-      asString(queueKey, "queueKey"),
-      asString(environmentId, "environmentId"),
-      message,
-    ),
-  );
   register(
     "remove_prompt_queue_message",
     async ({ queueKey, environmentId, messageId }, { storage, webAnnotations }) => {
@@ -95,31 +88,6 @@ export function registerPromptCommands(
         asString(messageId, "messageId"),
         asString(direction, "direction") as "up" | "down",
       ),
-  );
-  register(
-    "claim_prompt_queue_head",
-    ({ queueKey, environmentId, expectedMessageId }, { storage }) =>
-      storage.claimPromptQueueHead(
-        asString(queueKey, "queueKey"),
-        asString(environmentId, "environmentId"),
-        asString(expectedMessageId, "expectedMessageId"),
-      ),
-  );
-  register(
-    "acknowledge_prompt_queue_claim",
-    ({ queueKey, environmentId, claimToken }, { storage }) =>
-      storage.acknowledgePromptQueueClaim(
-        asString(queueKey, "queueKey"),
-        asString(environmentId, "environmentId"),
-        asString(claimToken, "claimToken"),
-      ),
-  );
-  register("reject_prompt_queue_claim", ({ queueKey, environmentId, claimToken }, { storage }) =>
-    storage.rejectPromptQueueClaim(
-      asString(queueKey, "queueKey"),
-      asString(environmentId, "environmentId"),
-      asString(claimToken, "claimToken"),
-    ),
   );
   register("retry_prompt_queue_dispatch", ({ queueKey }, { storage }) =>
     storage.retryPromptQueueDispatch(asString(queueKey, "queueKey")),

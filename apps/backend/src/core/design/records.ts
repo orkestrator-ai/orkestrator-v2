@@ -639,22 +639,16 @@ export function receiptDigest(record: DesignPrivateRecord, token: string): strin
 
 /**
  * Whether a settled receipt answers a retry of `descriptor` (same key, same
- * input). With no kept digest (a receipt from before digests were kept) only
- * the fields the receipt carries are compared, so an identical retry still
- * replays.
+ * input). A receipt with no kept digest was settled by a backend older than
+ * 2.21.0, outside the support window (`docs/architecture/version-compatibility.md`):
+ * it never matches, so the retry is refused with `reusedCorrelation`, runs
+ * nothing, and the client reconciles through `operation_status`.
  */
 export function settledMatches(
-  receipt: DesignOperationStatus,
   stored: string | undefined,
   descriptor: DesignOperationDescriptor,
 ): boolean {
-  if (stored !== undefined) return stored === intentDigest(descriptor);
-  return (
-    receipt.kind === descriptor.input.kind &&
-    canonicalJson(receipt.base) === canonicalJson(descriptor.preconditions) &&
-    receipt.gestureId === descriptor.gestureId &&
-    receipt.clientId === descriptor.clientId
-  );
+  return stored !== undefined && stored === intentDigest(descriptor);
 }
 
 /** Keeps terminal receipts and their digests within the count and byte budget, oldest first. */

@@ -22,6 +22,7 @@ import {
   boundedJson,
   bridgeFetch,
 } from "./http-bridge-transport.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 export type HttpBridgeAgent = "claude" | "codex" | "cursor" | "grok" | "pi";
 
@@ -54,6 +55,7 @@ export class HttpBridgeCatalogAdapter {
       this.fetchImpl,
     );
     if (sessionId && response.status === 404) {
+      compatibilityPathUsage.record("slash-catalogue.legacy-route");
       response = await bridgeFetch(this.connection, globalRoute, {}, this.fetchImpl);
     }
     assertOk(response, `${this.agent} slash command list`);

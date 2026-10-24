@@ -694,16 +694,27 @@ file passed in containers at low load earlier the same day.
 ### Qualification
 
 1. **Mixed versions against real old builds.** The matrix above uses fakes.
-   Still unproven: a real pre-#827 bridge (in particular the old Claude
-   `/session/:id/commands` running a CLI probe), a real older renderer bundle
-   in a browser, and an older backend's sync-v1 polling. Build the bridges and
-   backend from `ff4026b4e^` (or the last v2.20.x release) into a disposable
-   profile, pair an old bridge with a current backend and the reverse, run the
-   scenario, and serve the v2.20.x renderer against a current backend while
-   watching for "Invalid native agent projection update response". Needs the
-   support window from
-   [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)
-   to say which old builds count.
+   Still unproven: a real old bridge, a real older renderer bundle in a
+   browser, and an older backend's sync-v1 polling.
+
+   **Which builds count (decided 2026-10-24 by
+   [0034](../cross-cutting/0034-mixed-version-compatibility.md), written in
+   [`version-compatibility.md`](../../architecture/version-compatibility.md)).**
+   The window covers published releases from the floor, which is v2.21.0
+   today and moves to the newest Stable release at least 60 days old. Pre-#827
+   builds (`ff4026b4e^`, v2.20.x) were never published and are outside it, so
+   the pre-#827 run is no longer required, and neither is the pre-#599 404
+   path. The oldest build that counts is v2.21.0, which already serves the
+   version 1 catalogue. The only change to the catalogue protocol since then
+   is #1184's `normalizeAvailability`: a v2.21.0 backend still drops an
+   availability state it does not know, which no current bridge sends.
+
+   What is left: build the bridges, backend and renderer from `v2.21.0` into
+   a disposable profile, pair a v2.21.0 bridge with a current backend and the
+   reverse, run the scenario, and serve the v2.21.0 renderer against a current
+   backend while watching for "Invalid native agent projection update
+   response". Move the target to the floor if it has moved by the time this
+   runs.
 
 ## Constraints and rationale
 
@@ -746,6 +757,9 @@ Made on 2026-10-23 while closing items 1 to 5 and both follow-ups.
      defects. Cons: if 0034 picks a longer window (before #599), the pre-#599
      bridges are covered only by the 404 path, and nothing was run against a
      real old build (outstanding item 1).
+   - Update 2026-10-24: 0034 chose a window starting at v2.21.0, newer than
+     #827, so the matrix covers more than the window needs and the con about
+     pre-#599 bridges no longer applies.
 2. **Pi credentials.** The host has an OAuth Pi login with a rotating refresh
    token.
    - Options: copy `auth.json` into the disposable agent directory; share it

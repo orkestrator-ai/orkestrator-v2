@@ -12,7 +12,6 @@ import { toMultiReviewReviewerMessages } from "@/components/review/MultiReviewRe
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import { classifyTranscriptEntry } from "@/lib/chat/transcript-skew";
 import {
-  isOpenCodeTranscriptEnvelope,
   normalizeOpenCodeDisplayEntries,
   normalizeOpenCodeDisplayEntry,
 } from "../../../apps/backend/src/core/opencode-display-transcript";
@@ -470,13 +469,6 @@ function reviewerSnapshot(messages: unknown[]): MultiReviewReviewerTranscript {
 }
 
 describe("OpenCode transcripts across the renderer–backend version boundary", () => {
-  test("flags exactly what the backend normalizer treats as an envelope", () => {
-    for (const entry of STORED) {
-      expect(isOpenCodeTranscriptEnvelope(entry)).toBe(true);
-      expect(classifyTranscriptEntry(entry)).toBe("opencode-envelope");
-    }
-  });
-
   test("flags nothing a current backend serves", () => {
     const served = normalizeOpenCodeDisplayEntries(STORED);
     for (const entry of served) {
@@ -487,24 +479,14 @@ describe("OpenCode transcripts across the renderer–backend version boundary", 
     expect(transcript.map((message) => message.content).join("\n")).toContain("Looks correct.");
   });
 
-  test("shows one notice for a build stage served by an older backend", () => {
-    expect(toPipelineTranscript(STORED, "opencode", FALLBACK)).toEqual([
-      expect.objectContaining({
-        id: "transcript-skew:opencode-envelope:user-1",
-        role: "system",
-        content: expect.stringContaining(`${STORED.length} OpenCode messages not shown.`),
-      }),
-    ]);
-  });
-
   test("keeps the notice through the Multi Review reviewer filters", () => {
-    const messages = toMultiReviewReviewerMessages(reviewerSnapshot(STORED));
-    expect(messages.map((message) => message.id)).toEqual([
-      "transcript-skew:opencode-envelope:user-1",
-    ]);
-    expect(messages[0]!.content).toContain(
-      "Update Orkestrator on the computer running the backend",
-    );
+    const unknown = [
+      { kind: "display-row-v3", row: { text: "Something newer" } },
+      { kind: "display-row-v3", row: { text: "Something newer still" } },
+    ];
+    const messages = toMultiReviewReviewerMessages(reviewerSnapshot(unknown));
+    expect(messages.map((message) => message.id)).toEqual(["transcript-skew:unrecognized:0"]);
+    expect(messages[0]!.content).toContain("update the older one");
 
     const current = toMultiReviewReviewerMessages(
       reviewerSnapshot(normalizeOpenCodeDisplayEntries(STORED)),

@@ -214,7 +214,6 @@ const steerNativeAgentQueuedPromptMock = mock(
 );
 const enqueuePromptQueueMessageMock = mock(async () => {});
 const removePromptQueueMessageMock = mock(async () => {});
-const requeuePromptQueueMessageMock = mock(async (..._args: unknown[]) => {});
 const movePromptQueueMessageMock = mock(async () => {});
 const dismissNativeAgentSuggestedPromptMock = mock(async () =>
   getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" }),
@@ -415,7 +414,6 @@ mock.module("@/lib/backend", () => ({
   steerNativeAgentQueuedPrompt: steerNativeAgentQueuedPromptMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
   removePromptQueueMessage: removePromptQueueMessageMock,
-  requeuePromptQueueMessage: requeuePromptQueueMessageMock,
   movePromptQueueMessage: movePromptQueueMessageMock,
   dismissNativeAgentSuggestedPrompt: dismissNativeAgentSuggestedPromptMock,
   updateNativeAgentControls: updateNativeAgentControlsMock,
@@ -520,7 +518,6 @@ afterEach(() => {
   steerNativeAgentQueuedPromptMock.mockResolvedValue({ outcome: "applied" });
   enqueuePromptQueueMessageMock.mockClear();
   removePromptQueueMessageMock.mockClear();
-  requeuePromptQueueMessageMock.mockClear();
   movePromptQueueMessageMock.mockClear();
   dismissNativeAgentSuggestedPromptMock.mockClear();
   updateNativeAgentControlsMock.mockClear();
@@ -9817,7 +9814,7 @@ describe("AgentNativeTab", () => {
       });
       expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
       expect(performNativeAgentSessionActionMock).not.toHaveBeenCalled();
-      expect(requeuePromptQueueMessageMock).not.toHaveBeenCalled();
+      expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
     });
 
     for (const outcome of [
@@ -9869,7 +9866,7 @@ describe("AgentNativeTab", () => {
           }
         }
         expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
-        expect(requeuePromptQueueMessageMock).not.toHaveBeenCalled();
+        expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
       });
     }
 

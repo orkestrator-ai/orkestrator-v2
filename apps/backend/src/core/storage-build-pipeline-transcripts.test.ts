@@ -670,34 +670,6 @@ describe("build pipeline control records", () => {
       const [build] = await sessionsOf(storage, "p1");
       const read = await storage.readBuildPipelineTranscript("p1", build!, { fromIndex: 16 });
       expect(read).toMatchObject({ status: "found", startIndex: 16, messageCount: 17 });
-
-      // An explicit downgrade export reports that this pipeline cannot fit
-      // the old format rather than truncating it.
-      expect(await storage.exportBuildPipelineForDowngrade("p1")).toMatchObject({
-        status: "incompatible",
-        reason: "too-large",
-      });
-    });
-  });
-
-  test("exports a pipeline that fits the old schema with its transcripts inline", async () => {
-    await withStorage(async (storage) => {
-      const bodies = await seedLegacy(storage);
-      await storage.migrateBuildPipelineTranscripts();
-      const exported = await storage.exportBuildPipelineForDowngrade("p1");
-      expect(exported.status).toBe("exported");
-      const sessions =
-        exported.status === "exported"
-          ? (exported.record.snapshot as { sessions: PipelineSession[] }).sessions
-          : [];
-      expect(sessions[0]!.messages).toEqual(bodies.build);
-      expect(sessions[0]!.transcript).toBeUndefined();
-      expect(sessions[1]!.messages).toEqual(bodies.verify);
-      // Export is read-only: the stored record keeps its references.
-      expect((await sessionsOf(storage, "p1"))[0]!.transcript).toBeDefined();
-      expect(await storage.exportBuildPipelineForDowngrade("missing")).toEqual({
-        status: "missing",
-      });
     });
   });
 

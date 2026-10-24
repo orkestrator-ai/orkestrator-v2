@@ -28,6 +28,7 @@ import {
   providerAdvisoryNotices,
   providerInventoryCount,
 } from "./agent-provider-runtime.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 /**
  * Codex reports drift as `protocol.unknownNotifications` plus the last method
@@ -266,8 +267,8 @@ export function bridgeMcpConfigEvidence(payload: unknown): ProviderMcpConfigEvid
 export function bridgeReportsMcpConfig(payload: unknown): boolean {
   const body = asRecord(payload);
   if (!body) return false;
-  return (
-    (typeof body.mcpConfigReporting === "number" && body.mcpConfigReporting >= 1) ||
-    asRecord(body.mcpConfig) !== null
-  );
+  if (typeof body.mcpConfigReporting === "number" && body.mcpConfigReporting >= 1) return true;
+  if (asRecord(body.mcpConfig) === null) return false;
+  compatibilityPathUsage.record("mcp-report.unmarked-config");
+  return true;
 }

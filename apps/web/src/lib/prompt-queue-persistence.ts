@@ -106,65 +106,6 @@ export function applyPromptQueueSnapshot<TItem extends QueuedItem>(
   source.setQueue(parsed.sessionKey, messages);
 }
 
-export type PromptQueueClaimer<TItem extends QueuedItem = QueuedItem> = (
-  queueKey: string,
-  environmentId: string,
-  expectedMessageId: string,
-  /** Renderer projection for test doubles only; the backend wrapper ignores it. */
-  projectedMessages?: TItem[],
-) => Promise<{
-  claimed: TItem | null;
-  claimToken: string | null;
-  queue: PersistedPromptQueue<TItem> | null;
-}>;
-
-export interface ClaimedPrompt<TItem extends QueuedItem> {
-  entry: TItem;
-  claimToken: string;
-}
-
-/**
- * How a send resolved, from the point of view of the durable claim.
- *
- * `unknown` is the important one: the request may already be running, so the
- * lease is retained rather than acknowledged (which could lose an unaccepted
- * prompt) or rejected (which could duplicate one the agent did accept).
- */
-export type QueueDispatchOutcome = "accepted" | "rejected" | "unknown";
-
-/** Atomically takes one queue head before its irreversible agent dispatch. */
-export async function claimPromptQueueHead<TItem extends QueuedItem>(
-  source: PromptQueueSource<TItem>,
-  sessionKey: string,
-  claim: PromptQueueClaimer<TItem> = backend.claimPromptQueueHead as PromptQueueClaimer<TItem>,
-): Promise<ClaimedPrompt<TItem> | null> {
-  const environmentId = source.environmentIdFor(sessionKey);
-  if (!environmentId) return null;
-
-  const projectedMessages = [...(source.getQueues().get(sessionKey) ?? [])];
-  const expected = projectedMessages[0];
-  if (!expected) return null;
-
-  const queueKey = promptQueueKey(source.agent, sessionKey);
-  const result = await claim(queueKey, environmentId, expected.id, projectedMessages);
-  if (result.queue) {
-    applyPromptQueueSnapshot(source, result.queue);
-  } else {
-    queueRevisions.delete(queueKey);
-    source.setQueue(sessionKey, []);
-  }
-
-  const claimed = result.claimed;
-  return typeof claimed === "object" &&
-    claimed !== null &&
-    typeof claimed.id === "string" &&
-    claimed.id === expected.id &&
-    typeof result.claimToken === "string" &&
-    result.claimToken.trim().length > 0
-    ? { entry: claimed, claimToken: result.claimToken }
-    : null;
-}
-
 /** Clears a terminal dispatch latch and lets the backend supervisor retry it. */
 export async function retryPromptQueueDispatch<TItem extends QueuedItem>(
   source: PromptQueueSource<TItem>,

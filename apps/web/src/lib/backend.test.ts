@@ -873,7 +873,6 @@ describe("backend setup wrappers", () => {
     await backendWrappers.getPromptQueue("codex\u0000env-1:tab-1");
     await backendWrappers.listPromptQueues("env-1");
     await backendWrappers.enqueuePromptQueueMessage("codex\u0000env-1:tab-1", "env-1", message);
-    await backendWrappers.requeuePromptQueueMessage("codex\u0000env-1:tab-1", "env-1", message);
     await backendWrappers.movePromptQueueMessage(
       "codex\u0000env-1:tab-1",
       "env-1",
@@ -881,9 +880,6 @@ describe("backend setup wrappers", () => {
       "up",
     );
     await backendWrappers.removePromptQueueMessage("codex\u0000env-1:tab-1", "env-1", "message-1");
-    await backendWrappers.claimPromptQueueHead("codex\u0000env-1:tab-1", "env-1", "message-1");
-    await backendWrappers.acknowledgePromptQueueClaim("codex\u0000env-1:tab-1", "env-1", "claim-1");
-    await backendWrappers.rejectPromptQueueClaim("codex\u0000env-1:tab-1", "env-1", "claim-2");
     await backendWrappers.retryPromptQueueDispatch("codex\u0000env-1:tab-1");
 
     expect(invokeMock.mock.calls).toEqual([
@@ -891,14 +887,6 @@ describe("backend setup wrappers", () => {
       ["list_prompt_queues", { environmentId: "env-1" }],
       [
         "enqueue_prompt_queue_message",
-        {
-          queueKey: "codex\u0000env-1:tab-1",
-          environmentId: "env-1",
-          message,
-        },
-      ],
-      [
-        "requeue_prompt_queue_message",
         {
           queueKey: "codex\u0000env-1:tab-1",
           environmentId: "env-1",
@@ -920,30 +908,6 @@ describe("backend setup wrappers", () => {
           queueKey: "codex\u0000env-1:tab-1",
           environmentId: "env-1",
           messageId: "message-1",
-        },
-      ],
-      [
-        "claim_prompt_queue_head",
-        {
-          queueKey: "codex\u0000env-1:tab-1",
-          environmentId: "env-1",
-          expectedMessageId: "message-1",
-        },
-      ],
-      [
-        "acknowledge_prompt_queue_claim",
-        {
-          queueKey: "codex\u0000env-1:tab-1",
-          environmentId: "env-1",
-          claimToken: "claim-1",
-        },
-      ],
-      [
-        "reject_prompt_queue_claim",
-        {
-          queueKey: "codex\u0000env-1:tab-1",
-          environmentId: "env-1",
-          claimToken: "claim-2",
         },
       ],
       [

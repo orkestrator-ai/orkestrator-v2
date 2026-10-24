@@ -1218,18 +1218,6 @@ export async function enqueuePromptQueueMessage<T>(
   });
 }
 
-export async function requeuePromptQueueMessage<T>(
-  queueKey: string,
-  environmentId: string,
-  message: T,
-): Promise<PersistedPromptQueue<T>> {
-  return invoke<PersistedPromptQueue<T>>("requeue_prompt_queue_message", {
-    queueKey,
-    environmentId,
-    message,
-  });
-}
-
 export async function removePromptQueueMessage<T>(
   queueKey: string,
   environmentId: string,
@@ -1256,46 +1244,6 @@ export async function movePromptQueueMessage<T>(
     environmentId,
     messageId,
     direction,
-  });
-}
-
-export async function claimPromptQueueHead<T>(
-  queueKey: string,
-  environmentId: string,
-  expectedMessageId: string,
-): Promise<{
-  claimed: T | null;
-  claimToken: string | null;
-  queue: PersistedPromptQueue<T> | null;
-}> {
-  return invoke("claim_prompt_queue_head", {
-    queueKey,
-    environmentId,
-    expectedMessageId,
-  });
-}
-
-export async function acknowledgePromptQueueClaim<T>(
-  queueKey: string,
-  environmentId: string,
-  claimToken: string,
-): Promise<PersistedPromptQueue<T> | null> {
-  return invoke<PersistedPromptQueue<T> | null>("acknowledge_prompt_queue_claim", {
-    queueKey,
-    environmentId,
-    claimToken,
-  });
-}
-
-export async function rejectPromptQueueClaim<T>(
-  queueKey: string,
-  environmentId: string,
-  claimToken: string,
-): Promise<PersistedPromptQueue<T> | null> {
-  return invoke<PersistedPromptQueue<T> | null>("reject_prompt_queue_claim", {
-    queueKey,
-    environmentId,
-    claimToken,
   });
 }
 

@@ -76,8 +76,12 @@ and need a decision. A new tab on a current bridge never sees those rows (see
 ### Code
 
 1. **Retire the legacy catalogue surface.**
-   - Agree the mixed-version support window (see
-     [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)).
+   - Agree the mixed-version support window. Done 2026-10-24 by
+     [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md):
+     published releases from v2.21.0 today
+     ([`version-compatibility.md`](../../architecture/version-compatibility.md)).
+     Pre-#599 and pre-#827 peers are outside it, so the 404 fallback may go;
+     `slash-catalogue.legacy-route` counts its use.
    - Stop the 404 fallback showing guessed rows: mark legacy rows
      display-only and unavailable, or drop the fallback, so the Claude picker
      never shows `BUILTIN_COMMANDS` even against an old bridge. (Pre-session

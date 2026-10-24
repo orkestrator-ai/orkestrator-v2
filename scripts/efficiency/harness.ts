@@ -1,6 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  collectGarbage,
+  startResourceSampler,
+  summarizeResources,
+  type CaseResources,
+  type ResourceWindow,
+} from "./resources.js";
 
 /**
  * Function-level efficiency harness: types, runner and comparison.
@@ -8,7 +15,8 @@ import path from "node:path";
  * Workloads import repository modules from an explicit root, so the same
  * harness measures a baseline worktree and the current tree. Deterministic
  * operation counts are the primary result and are compared exactly; the
- * wall-clock figures are secondary, machine-specific and never compared.
+ * wall-clock, heap/RSS and event-loop-lag figures are secondary,
+ * machine-specific and never compared.
  */
 
 export const EFFICIENCY_SCHEMA_VERSION = 1;
@@ -65,6 +73,12 @@ export interface CaseReport {
     warmP50Ms: number;
     warmP95Ms: number;
   };
+  /**
+   * Heap/RSS of the harness process and event-loop lag while the case ran
+   * (`resources.ts`). Secondary like `timing`: never compared, never part of
+   * `unstableCounters`.
+   */
+  resources?: CaseResources;
 }
 
 export interface WorkloadReport {
@@ -135,6 +149,7 @@ const round = (value: number) => Math.round(value * 1000) / 1000;
 export async function runCase(
   definition: CaseDefinition,
   repetitions: number,
+  options: { sampleResources?: boolean } = {},
 ): Promise<CaseReport> {
   if (!definition.run) {
     return {
@@ -148,10 +163,23 @@ export async function runCase(
   const times: number[] = [];
   let first: CaseResult | undefined;
   const unstable = new Set<string>();
+  const sampleResources = options.sampleResources ?? true;
+  const windows: ResourceWindow[] = [];
   for (let index = 0; index < count; index += 1) {
+    // Outside the timed span: the collection only cleans up earlier repetitions.
+    if (sampleResources) collectGarbage();
+    const sampler = sampleResources ? startResourceSampler() : undefined;
     const started = performance.now();
-    const result = await definition.run();
-    const elapsed = result.measuredMs ?? performance.now() - started;
+    let result: CaseResult;
+    let finished: number;
+    try {
+      result = await definition.run();
+    } finally {
+      finished = performance.now();
+      // After the timed span: stopping forces a collection.
+      if (sampler) windows.push(sampler.stop());
+    }
+    const elapsed = result.measuredMs ?? finished - started;
     times.push(elapsed);
     if (!first) first = result;
     else {
@@ -177,6 +205,7 @@ export async function runCase(
       warmP50Ms: round(percentile(warm.length > 0 ? warm : times, 0.5)),
       warmP95Ms: round(percentile(warm.length > 0 ? warm : times, 0.95)),
     },
+    ...(windows.length > 0 ? { resources: summarizeResources(windows) } : {}),
   };
 }
 
@@ -232,7 +261,7 @@ function caseMap(report: EfficiencyReport): Map<string, CaseReport> {
   return cases;
 }
 
-/** Every deterministic counter that differs; timings are never compared. */
+/** Every deterministic counter that differs; timings and resources are never compared. */
 export function compareReports(
   baseline: EfficiencyReport,
   candidate: EfficiencyReport,

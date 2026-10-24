@@ -177,6 +177,13 @@ export class TurnAccumulator {
    * at it, and recovery must still know an interruption was requested.
    */
   cancelRequested = false;
+  /**
+   * The bridge interrupted this turn because the backend that owned it died
+   * (`CodexRuntimeTail.interruptForParentExit`). Nobody asked for the stop, so
+   * it settles like a restart mid-turn, never like a cancel: a workflow must
+   * still see a turn it can continue.
+   */
+  stoppedByShutdown = false;
   error?: EngineError;
   finalDiff?: string;
   completedAt?: string;
@@ -216,10 +223,27 @@ export class TurnAccumulator {
    */
   private steerFloor = 0;
   private modelToolCalled = false;
+  /**
+   * Model responses app-server reported finished that no row boundary has
+   * consumed yet (`noteModelResponseCompleted`). A count, not a flag: a usage
+   * report can overtake the item of its own response, and a flag would then
+   * swallow the next response's boundary.
+   */
+  private pendingResponseBoundaries = 0;
 
   /** Tool calls such as write_stdin/request_user_input need no rendered item. */
   noteModelToolCall(): void {
     this.modelToolCalled = true;
+  }
+
+  /**
+   * app-server finished one model response of this turn. It reports token
+   * usage once per Responses API completion, a response that only called a
+   * tool included, and names no response on the items themselves.
+   */
+  noteModelResponseCompleted(): void {
+    if (this.isTerminal()) return;
+    this.pendingResponseBoundaries += 1;
   }
 
   /**
@@ -769,6 +793,9 @@ export class TurnAccumulator {
   ): void {
     this.assistantMessageId = assistantMessageId;
     this.modelToolCalled = false;
+    // The row just opened is the next response's; at most one finished
+    // response is behind it. A report that overtook its own item stays.
+    this.pendingResponseBoundaries = Math.max(0, this.pendingResponseBoundaries - 1);
     const segment: AssistantSegment = {
       assistantMessageId,
       startIndex: boundary,
@@ -790,17 +817,28 @@ export class TurnAccumulator {
    * the live row is therefore the next response. Parallel calls in one
    * response stay together, and a turn that never calls a tool stays one row.
    *
+   * A response that only calls a tool opens with neither, so app-server's
+   * per-response usage report (`noteModelResponseCompleted`) is the second
+   * boundary: a new tool call after a finished response, in a live row that
+   * already holds a call, is the next response. Without it, a model reading
+   * files one call at a time grew a single row for the whole run. A code-mode
+   * cell's own calls stream as items after its response finished, so a cell
+   * making several calls can split once inside itself; each report still
+   * opens at most one row, so rows stay bounded by responses.
+   *
    * Never while a steer is splitting the live row: items arriving then belong
    * to the row the steer is about to open.
    */
   opensModelStep(event: EngineEvent): boolean {
     let itemId: string;
     let type: EngineItem["type"];
+    let toolCall = false;
     switch (event.kind) {
       case "item.started":
       case "item.completed":
         itemId = event.item.id;
         type = event.item.type;
+        toolCall = isClientToolCall(event.item) && !isCodeModeCell(event.item);
         break;
       case "item.text.delta":
         itemId = event.itemId;
@@ -813,7 +851,8 @@ export class TurnAccumulator {
       default:
         return false;
     }
-    if (type !== "reasoning" && type !== "agent_message") return false;
+    const opensResponse = type === "reasoning" || type === "agent_message";
+    if (!opensResponse && !(toolCall && this.pendingResponseBoundaries > 0)) return false;
     if (this.items.has(itemId) || this.isTerminal()) return false;
     const segment = this.assistantSegment();
     if (segment.endIndex !== undefined) return false;

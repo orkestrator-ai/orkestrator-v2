@@ -160,14 +160,192 @@ export async function displayTailWorkload(context: WorkloadContext): Promise<Wor
       }),
   });
 
+  const scheduler = await context.loadOptional<{
+    NativeAgentDisplayTailScheduler: new (options: Json) => {
+      update(key: string, source: { environmentId: string; build: () => unknown }): void;
+      stats(): Record<string, number>;
+    };
+  }>("apps/backend/src/core/native-agent-display-tail-scheduler.ts");
+
+  const checkpointAgeCase = (
+    id: string,
+    description: string,
+    scenario: { sessions: number; updateEveryMs: number; streamMs: number; writeMs: number },
+  ): CaseDefinition => ({
+    id,
+    description,
+    repetitions: 3,
+    ...(!scheduler
+      ? { unsupportedReason: "the display-tail checkpoint scheduler does not exist at this root" }
+      : {
+          run: async () => {
+            const result = await checkpointAges(
+              scheduler.NativeAgentDisplayTailScheduler,
+              scenario,
+            );
+            return { counters: result.counters, measuredMs: result.measuredMs };
+          },
+        }),
+  });
+
   return {
     id: "d-display-tail-storage",
-    title: "Display-tail storage: one update and one cold read",
+    title: "Display-tail storage: one update and one cold read, and checkpoint age",
     findings: ["E04"],
     fixture: { records: "1,32,128", messagesPerTail: 20, messageBytes: 2 * 1024 },
     method:
-      "Real StorageService on a temp data dir. KiB are /proc/self/io rchar/wchar deltas around the awaited call, rounded (Linux; -1 elsewhere), and include backups and index files. HEAD payload counts come from the display-tail store's stats (database rows read/written; KeyedRecordStore.stats() on older roots); the baseline shared file is parsed whole, so its payload counts equal the record count (derived).",
-    cases: [1, 32, 128].map(caseFor),
+      "Real StorageService on a temp data dir. KiB are /proc/self/io rchar/wchar deltas around the awaited call, rounded (Linux; -1 elsewhere), and include backups and index files. HEAD payload counts come from the display-tail store's stats (database rows read/written; KeyedRecordStore.stats() on older roots); the baseline shared file is parsed whole, so its payload counts equal the record count (derived). Checkpoint-age cases drive the real NativeAgentDisplayTailScheduler with its default quiet period, maximum age and write pool on a virtual clock: sessions update on a fixed cadence, every write takes a fixed virtual time, and age is the virtual time from a key first becoming dirty to its write starting (the wait a restart preview can lag behind), plus the age of the newest unwritten update when the stream stops.",
+    cases: [
+      ...[1, 32, 128].map(caseFor),
+      checkpointAgeCase("age-stream-1", "1 session updating every 250 ms for 60 s", {
+        sessions: 1,
+        updateEveryMs: 250,
+        streamMs: 60_000,
+        writeMs: 5,
+      }),
+      checkpointAgeCase("age-stream-128", "128 sessions updating every 250 ms for 60 s", {
+        sessions: 128,
+        updateEveryMs: 250,
+        streamMs: 60_000,
+        writeMs: 5,
+      }),
+      checkpointAgeCase(
+        "age-stream-128-slow-writes",
+        "128 sessions updating every 250 ms for 60 s, 50 ms per write",
+        { sessions: 128, updateEveryMs: 250, streamMs: 60_000, writeMs: 50 },
+      ),
+      checkpointAgeCase("age-burst-then-quiet", "1 session: one burst of 10 updates, then quiet", {
+        sessions: 1,
+        updateEveryMs: 100,
+        streamMs: 1_000,
+        writeMs: 5,
+      }),
+    ],
+  };
+}
+
+/**
+ * A deterministic timer queue and clock for the scheduler: timers fire in due
+ * order (ties in arming order), and every callback's microtasks settle before
+ * the next timer runs.
+ */
+class VirtualTime {
+  now = 0;
+  private sequence = 0;
+  private readonly timers = new Map<number, { due: number; callback: () => void }>();
+
+  setTimer = (callback: () => void, delayMs: number): number => {
+    const handle = ++this.sequence;
+    this.timers.set(handle, { due: this.now + Math.max(0, delayMs), callback });
+    return handle;
+  };
+
+  clearTimer = (handle: unknown): void => {
+    this.timers.delete(handle as number);
+  };
+
+  sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => this.setTimer(resolve, ms));
+  }
+
+  async runUntilIdle(limit = 1_000_000): Promise<void> {
+    for (let step = 0; step < limit; step += 1) {
+      await settle();
+      let next: [number, { due: number; callback: () => void }] | undefined;
+      for (const entry of this.timers) {
+        if (!next || entry[1].due < next[1].due) next = entry;
+      }
+      if (!next) return;
+      this.timers.delete(next[0]);
+      this.now = Math.max(this.now, next[1].due);
+      next[1].callback();
+    }
+    throw new Error("virtual time did not settle");
+  }
+}
+
+async function settle(): Promise<void> {
+  for (let turn = 0; turn < 32; turn += 1) await Promise.resolve();
+}
+
+async function checkpointAges(
+  Scheduler: new (options: Json) => {
+    update(key: string, source: { environmentId: string; build: () => unknown }): void;
+    stats(): Record<string, number>;
+  },
+  scenario: { sessions: number; updateEveryMs: number; streamMs: number; writeMs: number },
+): Promise<{ counters: Record<string, number>; measuredMs: number }> {
+  const time = new VirtualTime();
+  const dirtySince = new Map<string, number>();
+  const lastUpdate = new Map<string, number>();
+  const lastWrittenUpdate = new Map<string, number>();
+  const ages: number[] = [];
+  let maxActive = 0;
+  let active = 0;
+  const instance = new Scheduler({
+    clock: () => time.now,
+    setTimer: time.setTimer,
+    clearTimer: time.clearTimer,
+    captureFence: () => 0,
+    write: async (key: string) => {
+      // The pending value is taken when the write starts.
+      const since = dirtySince.get(key);
+      if (since !== undefined) ages.push(time.now - since);
+      dirtySince.delete(key);
+      const written = lastUpdate.get(key) ?? 0;
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await time.sleep(scenario.writeMs);
+      active -= 1;
+      lastWrittenUpdate.set(key, written);
+      return true;
+    },
+  });
+  const keys = Array.from({ length: scenario.sessions }, (_, index) => `tail-${index}`);
+  const updates = Math.floor(scenario.streamMs / scenario.updateEveryMs);
+  for (let tick = 0; tick < updates; tick += 1) {
+    time.setTimer(() => {
+      for (const key of keys) {
+        if (!dirtySince.has(key)) dirtySince.set(key, time.now);
+        lastUpdate.set(key, time.now);
+        instance.update(key, { environmentId: "env-1", build: () => ({}) });
+      }
+    }, tick * scenario.updateEveryMs);
+  }
+  // Stop sampling the stream once the last update lands, then let it drain.
+  const streamEnd = (updates - 1) * scenario.updateEveryMs;
+  let unwrittenAtStreamEnd = 0;
+  time.setTimer(() => {
+    for (const key of keys) {
+      const written = lastWrittenUpdate.get(key);
+      const newest = lastUpdate.get(key) ?? 0;
+      if (written !== newest) {
+        const since = dirtySince.get(key) ?? newest;
+        unwrittenAtStreamEnd = Math.max(unwrittenAtStreamEnd, time.now - since);
+      }
+    }
+  }, streamEnd);
+  const started = performance.now();
+  await time.runUntilIdle();
+  const measuredMs = performance.now() - started;
+  const stats = instance.stats();
+  const sorted = [...ages].sort((a, b) => a - b);
+  const finalStale = keys.filter((key) => lastWrittenUpdate.get(key) !== lastUpdate.get(key));
+  return {
+    counters: {
+      updates: stats.updates ?? 0,
+      coalesced: stats.coalesced ?? 0,
+      writes: stats.writes ?? 0,
+      failedWrites: stats.failedWrites ?? 0,
+      droppedAdmission: stats.droppedAdmission ?? 0,
+      maxConcurrentWrites: maxActive,
+      checkpointAgeP50Ms: sorted[Math.floor((sorted.length - 1) * 0.5)] ?? 0,
+      checkpointAgeMaxMs: sorted.at(-1) ?? 0,
+      oldestUnwrittenAtStreamEndMs: unwrittenAtStreamEnd,
+      drainedAtMs: time.now,
+      keysStaleAfterDrain: finalStale.length,
+    },
+    measuredMs,
   };
 }
 

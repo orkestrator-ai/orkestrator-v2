@@ -123,6 +123,9 @@ function applyEvent(
     case "turn.started":
       turn.markRunning(turnId);
       return;
+    case "model.response.completed":
+      turn.noteModelResponseCompleted();
+      return;
     case "turn.completed":
       turn.complete(event.status, event.error);
       return;

@@ -95,6 +95,12 @@ export interface WorktreeWatcher {
    */
   readonly qualified?: boolean;
   close(): void;
+  /**
+   * The owner's safety scan found a change that no hint since its previous
+   * scan announced. Container watchers use it to stop being trusted
+   * (`container-worktree-signal.ts`); local watchers omit it.
+   */
+  unannouncedChange?(): void;
 }
 
 /**

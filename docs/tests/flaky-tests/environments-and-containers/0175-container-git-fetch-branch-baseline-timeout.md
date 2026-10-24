@@ -1,7 +1,7 @@
 # container status and fetch scripts against a local remote > a branch baseline follows origin/<ref> only when the policy fetches (apps/backend/src/core/container-git-fetch-git.test.ts)
 
 - **ID:** 0175
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-28
 - **Original command:** `mise run test:logged -- --name backend-workspace -- bun run --cwd apps/backend test:workspace`
 - **Worker configuration:** the backend package's own `test:workspace` script, run straight after two full `mise run test` passes on the same host.
@@ -90,3 +90,12 @@
 - **Suite counts:** backend 10,568 passed, 77 skipped and 16 failed across 10,661 tests in 618 files (855.84 s); the other failures were this run's watchdog recurrence (0512) and 14 OpenCode execution-policy conformance cases that also fail on the unchanged baseline (host CLI 1.19.4 against an expected 1.19.0).
 - **Evidence:** `orkestrator-test-run.4LYtCC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence; concurrent load remains a hypothesis. No assertion, deadline or skip changed.
+
+
+## Resolution — 2026-10-24 (worktree signal review)
+
+- **Root cause:** The case runs multiple real Git status/fetch processes and a local remote push under Bun's five-second default. Recorded aggregate runs exceeded that budget; the original `Bun.spawn` helper had no per-test cancellation or child-group teardown, allowing an abandoned status process to surface as a later `script exited 143` error. The evidence does not isolate which host workload caused the slow runs.
+- **Fix:** The real-Git cases have explicit 30-second budgets. Their shell helper now uses `runCommand` with a ten-second command deadline and a test-owned abort signal; `afterEach` aborts and awaits pending shell commands, including background fetches. `runCommand` owns and terminates the whole process group.
+- **Verification:** `mise run test:logged -- --name watcher-async-regressions -- bun test --cwd <checkout>/apps/backend ./src/core/diff-stats-container-signal.test.ts ./src/core/container-worktree-signal.test.ts ./src/core/container-worktree-signal-install.test.ts ./src/core/container-git-fetch.test.ts ./src/core/container-git-fetch-git.test.ts --parallel=4` passed (78.1 seconds for the five-file group) while the repository suite and other host validation workloads were active. Earlier four-worker runs of the same real-Git owner also passed; no leftover-child error was reported.
+- **Fix reference:** Commit containing this resolution and the worktree-signal regression fixes.
+- **Aggregate verification:** the real-Git owner reported no failure in the completed repository run (backend 10705 passed, 116 skipped, 20 unrelated failures and five errors across 10841 tests). The full run remains failed because of the unchanged OpenCode version assertion and unrelated timing cases.

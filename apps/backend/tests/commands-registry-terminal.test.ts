@@ -1529,8 +1529,13 @@ exit 1
         );
         expect(dockerExec).toContain('grep -qxF "$pattern" "$exclude_file"');
         expect(dockerExec).toContain("tail -c 1");
-        expect(dockerExec).toContain('git diff --name-status -z -M "$base" $end_ref');
-        expect(dockerExec).toContain('git diff --numstat -z -M "$base" $end_ref');
+        expect(dockerExec).toContain("export GIT_OPTIONAL_LOCKS=0");
+        expect(dockerExec).toContain(
+          'git -c diff.autoRefreshIndex=false diff --name-status -z -M "$base" $end_ref',
+        );
+        expect(dockerExec).toContain(
+          'git -c diff.autoRefreshIndex=false diff --numstat -z -M "$base" $end_ref',
+        );
       },
     );
   });
@@ -1665,7 +1670,9 @@ exit 1
 
         const dockerExec = await fs.readFile(logs.exec, "utf8");
         expect(dockerExec).toContain("end_ref=HEAD");
-        expect(dockerExec).toContain('git diff --name-status -z -M "$base" $end_ref');
+        expect(dockerExec).toContain(
+          'git -c diff.autoRefreshIndex=false diff --name-status -z -M "$base" $end_ref',
+        );
         expect(dockerExec).not.toContain("git status --porcelain");
         expect(dockerExec).not.toContain("node -e");
       },
@@ -1880,6 +1887,13 @@ exit 0
         const dockerExec = await fs.readFile(logs.exec, "utf8");
         expect(dockerExec).toContain("set -euo pipefail");
         expect(dockerExec).toContain("git diff --name-status -z -M");
+        // The revert's fetch goes through the container fetch policy's own
+        // bounded script; the revert script no longer fetches inline.
+        const revertAt = dockerExec.indexOf('git restore --source="$base"');
+        const policyFetchAt = dockerExec.indexOf("ORKESTRATOR_FETCH_END");
+        expect(policyFetchAt).toBeGreaterThan(-1);
+        expect(policyFetchAt).toBeLessThan(revertAt);
+        expect(dockerExec).not.toContain('git fetch origin "$branch"');
         expect(dockerExec).toContain('assert_safe_path "$source_path"');
         expect(dockerExec).toContain(
           'git restore --source="$base" --staged --worktree -- "$candidate"',

@@ -50,6 +50,10 @@ export const CONTRACT_FILES: ReadonlyArray<{ installed: string; source: string }
     installed: "/usr/local/bin/orkestrator-state-signal",
     source: "docker/orkestrator-state-signal.sh",
   },
+  {
+    installed: "/usr/local/bin/orkestrator-worktree-signal",
+    source: "docker/orkestrator-worktree-signal.sh",
+  },
 ];
 
 const MARKER = /ORKESTRATOR_CAPABILITY ([a-z-]+)=(\d+)/g;

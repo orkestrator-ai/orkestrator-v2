@@ -59,6 +59,22 @@ describe("recurring-work baseline harness", () => {
     );
   });
 
+  test("a confirmed worktree signal leaves a quiet container only its safety scan", async () => {
+    const base = DEFAULT_SCENARIOS.find((entry) => entry.id === "env1-container-c1")!;
+    const timers = await runScenario({ ...base, id: "timers", claudeStateSignal: true }, SHORT);
+    const signals = await runScenario(
+      { ...base, id: "signals", claudeStateSignal: true, worktreeSignal: true },
+      SHORT,
+    );
+    const minutes = SHORT.idleMs / 60_000;
+    // 15 s background scans plus a status exec per panel read past 3 s.
+    expect(timers.idle["diff-scan"]?.started).toBeGreaterThan(4 * minutes);
+    // One 60 s safety scan a minute, and the panel reads are all served.
+    expect(signals.idle["diff-scan"]?.started).toBe(minutes);
+    expect(signals.idle["file-tree-read"]?.started ?? 0).toBeLessThanOrEqual(minutes);
+    expect(signals.idle["tmux-poll"]?.started).toBe(timers.idle["tmux-poll"]?.started);
+  });
+
   test("comparison reports every differing counter", async () => {
     const input = DEFAULT_SCENARIOS[0]!;
     const baseline = await runBaseline({

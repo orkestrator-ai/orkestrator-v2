@@ -4,10 +4,13 @@ import { LocalServerRuntime, type LocalServerRuntimeOptions } from "./local-serv
 import { TerminalRuntime, type TerminalRuntimeOptions } from "./terminal-runtime.js";
 import type { ChangeTrackingService } from "./change-tracking/service.js";
 import type { BackendEmit } from "./commands-context.js";
+import type { ContainerWorktreeSignalInstaller } from "./container-worktree-signal.js";
 
 export type BackendRuntimeOptions = {
   /** Read at emit time, so a caller may pass a closure over a gateway that does not exist yet. */
   emit: BackendEmit;
+  /** Docker-backed container worktree signal; absent in fixtures. */
+  worktreeSignal?: ContainerWorktreeSignalInstaller | null;
   terminals?: TerminalRuntimeOptions;
   localServers?: LocalServerRuntimeOptions;
 };
@@ -40,6 +43,7 @@ export class BackendRuntime {
     this.diffStats = new DiffStatsTracking({
       emit: options.emit,
       onScanEvent: (event) => this.changeTracking?.onDiffScanEvent(event),
+      worktreeSignal: options.worktreeSignal,
     });
     this.terminals = new TerminalRuntime(options.terminals);
     this.localServers = new LocalServerRuntime(options.localServers);

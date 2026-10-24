@@ -54,3 +54,12 @@ implementation, skip or timeout was changed for these cases.
 - Backend totals: 9909 passed, 60 skipped and three failed across 9972 tests in 576 files (968.42 s). The third failure was the Mermaid watchdog tracked in 0512. The repository command exited 1 after 1022.1 s.
 - `mise run test:logged -- --name environment-create-owner -- bun test --cwd apps/backend ./tests/commands-registry-environments-create.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 13.7 s).
 - Evidence: `orkestrator-test-run.NMPAwO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.EP6EVD/repository-tests.log.gz` under the host temporary directory. The second failure may have cascaded from the first timeout's unfinished work, but this is unproven. No assertion, deadline, or skip changed.
+
+
+## Recurrence — 2026-10-24 (worktree signal review validation)
+
+- **Original command:** `mise run test:logged -- --name watcher-full-suite -- mise run test`; standard aggregate worker leases, with other checkout validation active on the host.
+- **Failures:** `does not repeat name generation when an unreachable origin is ignored` (5008.83 ms), `lets an explicit first prompt bypass rename retry backoff` (5004.82 ms), and `does not throw when rename scheduling is refused during shutdown` (5001.93 ms), with follow-on fixture errors.
+- **Owning-file rerun:** `mise run test:logged -- --name watcher-command-create-owner -- bun test --cwd <checkout>/apps/backend ./tests/commands-registry-environments-create.test.ts --parallel=1 --only-failures` passed unchanged in 25.4 seconds.
+- **Evidence:** `orkestrator-test-run.iTzv5K/` under the host temporary directory; the full aggregate remains failed. None of these owning files was changed.
+- **Final aggregate counts:** backend 10705 passed, 116 skipped, 20 failed and five between-test errors across 10841 tests (747.20 seconds). Fourteen failures were the unchanged OpenCode conformance expectation for CLI 1.19.0 versus the installed 1.19.4; the other six were the timing cases recorded here and in companion records. The complete repository run exited 1 after 1189.0 seconds, including time queued for shared worker capacity.

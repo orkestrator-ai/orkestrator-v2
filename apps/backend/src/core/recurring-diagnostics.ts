@@ -25,6 +25,58 @@ type StatusSource<T> = { status(): T };
 export type FetchPolicyName = "container-git-fetch";
 export type FetchPolicyStatus = Omit<ContainerGitFetchStatus, "generation">;
 
+/** Finite names for container change-signal diagnostics sources. */
+export type SignalSourceName = "claude-state-signal" | "container-worktree-signal";
+
+/**
+ * Where one container's change signal stands.
+ *
+ * - `unarmed`: no attempt yet (no installer, no agent tools server, or the
+ *   image could not be inspected); the container is on its fallback timers.
+ * - `arming`: the capability check or install is running.
+ * - `armed`: a credential is installed and its probe ring has not arrived.
+ * - `confirmed`: the signal works; only the slow safety read runs.
+ * - `demoted`: the signal stopped being trusted; fallback timers until the
+ *   next attempt.
+ * - `unsupported`: the image has no signal; fallback timers for its life.
+ */
+export type SignalHealthState =
+  | "unarmed"
+  | "arming"
+  | "armed"
+  | "confirmed"
+  | "demoted"
+  | "unsupported";
+
+export type SignalDemotionReason =
+  /** A safety read found a change no ring announced. */
+  | "missed-change"
+  /** More rings in a minute than the source's flood limit. */
+  | "rang-too-often"
+  /** The install exec failed. */
+  | "arm-failed"
+  /** The container's watcher reported that it stopped. */
+  | "watcher-lost";
+
+/** Content-free health of one signal source: no container ids, paths or tokens. */
+export interface SignalHealthStatus {
+  /** Containers (poll or tracking lineages) the source currently holds. */
+  containers: number;
+  /** How many of them are in each state; every state is present. */
+  states: Record<SignalHealthState, number>;
+  /** Containers held now whose fallback cadence is running (not confirmed). */
+  fallback: number;
+  /** Demotions since the source was created, by reason. */
+  demotions: Partial<Record<SignalDemotionReason, number>>;
+  /** Accepted rings since the source was created. */
+  rings: number;
+}
+
+/** An all-zero state table, so every state is reported even when empty. */
+export function emptySignalHealthStates(): Record<SignalHealthState, number> {
+  return { unarmed: 0, arming: 0, armed: 0, confirmed: 0, demoted: 0, unsupported: 0 };
+}
+
 /** A scheduler that re-times its due work after the host slept. */
 export type SuspensionListener = { compensateSuspension(suspendedMs: number): void };
 
@@ -37,6 +89,12 @@ export interface RecurringWorkDiagnostics {
    * container fetch policy). Aggregate counts only; generation ids are omitted.
    */
   fetchPolicies: { name: FetchPolicyName; status: FetchPolicyStatus }[];
+  /**
+   * Container change signals (Claude terminal state, container worktrees):
+   * how many containers are confirmed, demoted or on fallback timers, so a
+   * container stuck on the fast poll is visible without reading logs.
+   */
+  signals: { name: SignalSourceName; status: SignalHealthStatus }[];
   /** Registrations refused because the source table was full. */
   droppedSources: number;
   /** Sources whose `status()` threw; they are skipped, never propagated. */
@@ -50,6 +108,7 @@ export class RecurringDiagnosticsRegistry {
     FetchPolicyName,
     StatusSource<ContainerGitFetchStatus>
   >();
+  private readonly signals = new Map<SignalSourceName, StatusSource<SignalHealthStatus>>();
   private readonly suspensionListeners = new Set<SuspensionListener>();
   private droppedSources = 0;
 
@@ -67,6 +126,14 @@ export class RecurringDiagnosticsRegistry {
     this.fetchPolicies.set(name, source);
     return () => {
       if (this.fetchPolicies.get(name) === source) this.fetchPolicies.delete(name);
+    };
+  }
+
+  /** Registers a named signal source; a later registration replaces it. */
+  addSignalSource(name: SignalSourceName, source: StatusSource<SignalHealthStatus>): () => void {
+    this.signals.set(name, source);
+    return () => {
+      if (this.signals.get(name) === source) this.signals.delete(name);
     };
   }
 
@@ -125,11 +192,20 @@ export class RecurringDiagnosticsRegistry {
         faultedSources += 1;
       }
     }
+    const signals: RecurringWorkDiagnostics["signals"] = [];
+    for (const [name, source] of this.signals) {
+      try {
+        signals.push({ name, status: source.status() });
+      } catch {
+        faultedSources += 1;
+      }
+    }
     return {
       metrics: metrics.snapshot(),
       schedulers,
       admission,
       fetchPolicies,
+      signals,
       droppedSources: this.droppedSources,
       faultedSources,
     };

@@ -15,7 +15,6 @@ let readSession: (() => Promise<AgentSessionAccount | null>) | undefined;
 let deferredRead:
   | ((command: string, args: Record<string, unknown>) => Promise<unknown> | undefined)
   | undefined;
-let loginProgress: Record<string, unknown> = { state: "idle" };
 
 mock.module("@/lib/native/backend", () => ({
   invoke: mock((command: string, args: Record<string, unknown> = {}) => {
@@ -27,16 +26,6 @@ mock.module("@/lib/native/backend", () => ({
         return readSession ? readSession() : Promise.resolve(session);
       case "list_agent_accounts":
         return Promise.resolve(snapshot);
-      case "get_agent_account_login":
-        return Promise.resolve(loginProgress);
-      case "start_agent_account_login":
-        return Promise.resolve({
-          state: "pending",
-          platform: "claude",
-          mode: "reauthenticate",
-          operationId: "reauth",
-          url: "https://example.com/login",
-        });
       case "set_active_agent_account":
         snapshot = { ...snapshot, active: { ...snapshot.active, claude: String(args.accountId) } };
         return Promise.resolve(snapshot);
@@ -71,7 +60,6 @@ beforeEach(() => {
   calls.length = 0;
   readSession = undefined;
   deferredRead = undefined;
-  loginProgress = { state: "idle" };
   snapshot = {
     active: { claude: "default", codex: "default" },
     accounts: [
@@ -101,18 +89,18 @@ describe("AgentInfoAccountSection", () => {
     expect(calls).toEqual([]);
   });
 
-  test("names the session's account and switches every agent on the machine", async () => {
+  test("switches every agent on the machine", async () => {
     await act(async () => {
       render(<AgentInfoAccountSection environmentId="env-1" provider="claude" />);
     });
-    expect(await screen.findByText("Host login")).toBeTruthy();
-    expect(screen.getByText("me@example.com · max")).toBeTruthy();
+    const picker = await screen.findByRole("combobox", { name: "Use for every Claude Code agent" });
+    expect(picker.textContent).toContain("Host login (me@example.com)");
+    expect(screen.queryByText("me@example.com · max") === null).toBe(true);
     expect(calls).toContainEqual({
       command: "get_native_agent_session_account",
       args: { environmentId: "env-1", agent: "claude" },
     });
 
-    const picker = screen.getByRole("combobox", { name: "Use for every Claude Code agent" });
     fireEvent.keyDown(picker, { key: "Enter" });
     session = {
       platform: "claude",
@@ -131,8 +119,6 @@ describe("AgentInfoAccountSection", () => {
     await waitFor(() =>
       expect(screen.getByText("Moves to Work the next time this session is idle.")).toBeTruthy(),
     );
-    // Renewing the active login would not renew the one this session still runs on.
-    expect(screen.queryByRole("button", { name: "Sign in again" }) === null).toBe(true);
   });
 
   test("an isolated container offers no switch", async () => {
@@ -147,15 +133,13 @@ describe("AgentInfoAccountSection", () => {
 
 test("opening the persistent panel reloads account and active selection after Settings changes", async () => {
   const view = render(<AgentInfoAccountSection environmentId="env-1" provider="claude" />);
-  await screen.findByText("Host login");
+  await waitFor(() => expect(screen.getByRole("combobox").textContent).toContain("Host login"));
   view.rerender(<AgentInfoAccountSection environmentId="env-1" provider="claude" open={false} />);
   const work = snapshot.accounts[1]!;
   snapshot = { ...snapshot, active: { ...snapshot.active, claude: WORK } };
   session = { platform: "claude", source: "account", account: work, running: true };
   view.rerender(<AgentInfoAccountSection environmentId="env-1" provider="claude" open />);
-  await screen.findByText("work@example.com · team");
-  expect(screen.queryByText("me@example.com · max") === null).toBe(true);
-  expect(screen.getByRole("combobox").textContent).toContain("Work");
+  await waitFor(() => expect(screen.getByRole("combobox").textContent).toContain("Work"));
 });
 
 for (const target of [
@@ -178,15 +162,15 @@ for (const target of [
     session = {
       platform: target.provider as "claude" | "codex",
       source: "account",
-      account: account({ label: "Current account" }),
+      account: account({}),
       running: false,
+      pendingActive: account({ label: "Current account" }),
     };
     view.rerender(<AgentInfoAccountSection {...target} />);
-    await screen.findByText("Current account");
+    await screen.findByText(/Moves to Current account/);
     await act(async () => resolveOld(oldSession));
-    expect(screen.getByText("Current account")).toBeTruthy();
-    expect(screen.queryByText("Host login", { selector: "span.truncate" }) === null).toBe(true);
-    expect(screen.queryByText(/Moves to/) === null).toBe(true);
+    expect(screen.getByText(/Moves to Current account/)).toBeTruthy();
+    expect(screen.queryByText(/Moves to Work/) === null).toBe(true);
   });
 }
 
@@ -198,21 +182,12 @@ test("unknown source explains missing attribution", async () => {
   ).toBeTruthy();
 });
 
-test("Claude can reauthenticate its current account while Codex offers account management", async () => {
-  const view = render(<AgentInfoAccountSection environmentId="env-1" provider="claude" />);
-  const signIn = await screen.findByRole("button", { name: "Sign in again" });
-  await act(async () => fireEvent.click(signIn));
-  expect(calls).toContainEqual({
-    command: "start_agent_account_login",
-    args: { platform: "claude", reauthenticate: true },
-  });
+test("leaves signing in to account management", async () => {
+  render(<AgentInfoAccountSection environmentId="env-1" provider="claude" />);
+  await screen.findByRole("combobox");
+  expect(screen.getByRole("button", { name: "Manage accounts" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Sign in again" }) === null).toBe(true);
-  expect(screen.getByRole("button", { name: /Cancel/ })).toBeTruthy();
-  view.rerender(<AgentInfoAccountSection environmentId="env-1" provider="codex" />);
-  await waitFor(() =>
-    expect(screen.queryByRole("button", { name: "Sign in again" }) === null).toBe(true),
-  );
-  expect(screen.queryByRole("button", { name: /Cancel/ }) === null).toBe(true);
+  expect(screen.queryByText("Host login", { selector: "span" }) === null).toBe(true);
 });
 
 test("names the session's bound machine when multiple machines are shown", async () => {
@@ -257,7 +232,6 @@ for (const trigger of ["open", "activity"] as const) {
       />,
     );
     await screen.findByText(/Moves to Work/);
-    expect(screen.queryByRole("button", { name: "Sign in again" }) === null).toBe(true);
     session = {
       platform: "claude",
       source: "account",
@@ -272,9 +246,7 @@ for (const trigger of ["open", "activity"] as const) {
         refreshKey={trigger === "activity" ? 1 : 0}
       />,
     );
-    await screen.findByRole("button", { name: "Sign in again" });
-    expect(screen.queryByText(/Moves to Work/) === null).toBe(true);
-    expect(screen.getByText("work@example.com · team")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/Moves to Work/) === null).toBe(true));
   });
 }
 
@@ -292,8 +264,9 @@ for (const change of ["environment", "provider", "activity"] as const) {
     const current = {
       platform: change === "provider" ? ("codex" as const) : ("claude" as const),
       source: "account" as const,
-      account: account({ label: "Current" }),
+      account: account({}),
       running: true,
+      pendingActive: account({ label: "Current" }),
     };
     readSession = async () => current;
     view.rerender(
@@ -303,20 +276,17 @@ for (const change of ["environment", "provider", "activity"] as const) {
         refreshKey={1}
       />,
     );
-    await screen.findByText("Current");
+    await screen.findByText(/Moves to Current /);
     await act(async () =>
       finishOld({
         platform: "claude",
         source: "account",
-        account: account({ label: "Obsolete" }),
+        account: account({}),
         running: true,
         pendingActive: snapshot.accounts[1],
       }),
     );
-    expect(screen.getByText("Current")).toBeTruthy();
-    expect(screen.queryByText("Obsolete") === null).toBe(true);
+    expect(screen.getByText(/Moves to Current /)).toBeTruthy();
     expect(screen.queryByText(/Moves to Work/) === null).toBe(true);
-    if (change !== "provider")
-      expect(screen.getByRole("button", { name: "Sign in again" })).toBeTruthy();
   });
 }

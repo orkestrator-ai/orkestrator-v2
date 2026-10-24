@@ -26,12 +26,22 @@ export interface TransferReceipt {
   from: TransferEndpoint;
   to: TransferEndpoint;
   files: Array<{ path: string; destination: string; bytes: number; sha256: string }>;
+  /** Files left alone because the destination already had them (`skipExisting`). */
+  skipped?: string[];
   bytes: number;
   actor: string;
   startedAt: string;
   finishedAt?: string;
   status: "running" | "completed" | "failed";
   error?: { code: string; message: string };
+}
+
+/** A destination refusing to replace a file (locally the code; through a node link, the text). */
+function isExistsError(error: unknown): boolean {
+  return (
+    (error as { code?: unknown } | null)?.code === "exists" ||
+    (error instanceof Error && error.message.endsWith("already exists there."))
+  );
 }
 
 /** Runs one file command on a node (this one locally, others through the node link). */
@@ -79,7 +89,11 @@ export class NodeFileTransfer {
     files: string[];
     toDirectory?: string;
     overwrite: boolean;
+    /** With `overwrite` off: leave a file the destination already has and go on. */
+    skipExisting?: boolean;
     actor: string;
+    /** Called after each file is copied or skipped, for progress. */
+    onFile?: (file: { path: string; bytes: number; skipped: boolean }) => void;
   }): Promise<TransferReceipt> {
     await this.ensureLoaded();
     if (input.files.length === 0) throw new Error("Name at least one file to transfer.");
@@ -117,13 +131,23 @@ export class NodeFileTransfer {
         if (receipt.bytes + stat.size > MAX_TRANSFER_BYTES) {
           throw Object.assign(new Error("A transfer is at most 256 MiB."), { code: "too-large" });
         }
-        const { uploadId } = await destination<{ uploadId: string }>("begin_node_file_write", {
-          scope: input.to.scope,
-          path: target,
-          size: stat.size,
-          sha256: stat.sha256,
-          overwrite: input.overwrite,
-        });
+        let uploadId: string;
+        try {
+          ({ uploadId } = await destination<{ uploadId: string }>("begin_node_file_write", {
+            scope: input.to.scope,
+            path: target,
+            size: stat.size,
+            sha256: stat.sha256,
+            overwrite: input.overwrite,
+          }));
+        } catch (error) {
+          if (!input.overwrite && input.skipExisting && isExistsError(error)) {
+            (receipt.skipped ??= []).push(path);
+            input.onFile?.({ path, bytes: stat.size, skipped: true });
+            continue;
+          }
+          throw error;
+        }
         try {
           let offset = 0;
           while (offset < stat.size) {
@@ -154,6 +178,7 @@ export class NodeFileTransfer {
             sha256: committed.sha256,
           });
           receipt.bytes += committed.bytes;
+          input.onFile?.({ path, bytes: committed.bytes, skipped: false });
         } catch (error) {
           await destination("abort_node_file_write", { uploadId }).catch(() => undefined);
           throw error;

@@ -59,6 +59,8 @@ import { cn, createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useStore } from "zustand";
+import { portalStore } from "@/lib/portal/portal-store";
 import { useProjectStore } from "@/stores/projectStore";
 import {
   selectCoordinatorPaneLayout,
@@ -390,6 +392,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     conversations.find((item) => item.id === focusedId) ??
     conversations.find((item) => item.id === backendSelectedId);
   const environments = useEnvironmentStore((state) => state.environments);
+  // Workers on other nodes are named from the command node's summaries.
+  const nodes = useStore(portalStore.store, (state) => state.nodes);
   /*
    * Workers this coordinator is still owed an answer by.
    *
@@ -410,6 +414,19 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         association.delegation?.state !== "running"
       )
         return [];
+      if (association.nodeId) {
+        const node = nodes.find((item) => item.nodeId === association.nodeId);
+        const remote = node?.environments.find(
+          (item) => item.ref.environmentId === association.resourceId,
+        );
+        return [
+          {
+            id: association.id,
+            environmentId: association.resourceId,
+            label: `${remote?.name ?? association.resourceId} on ${node?.view.displayName ?? association.nodeId}`,
+          },
+        ];
+      }
       const environment = environments.find((item) => item.id === association.resourceId);
       return [
         {
@@ -419,7 +436,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         },
       ];
     });
-  }, [snapshot, selected, environments]);
+  }, [snapshot, selected, environments, nodes]);
   const selectedSessionKey =
     snapshot && selected
       ? createSessionKey(coordinatorRuntimeId(snapshot.workspace.id, selected.id), selected.tabId)

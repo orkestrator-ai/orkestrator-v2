@@ -56,6 +56,18 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "transfer_node_files",
   "list_node_transfers",
   "compare_project_files",
+  "get_project_copy_options",
+  "copy_project_to_node",
+  "list_project_copies",
+  // A coordinator's actions on its nodes run on its own command node.
+  "launch_coordinator_node_environment",
+  "assert_coordinator_node_delegation_available",
+  "open_coordinator_node_delegation",
+  "send_coordinator_node_mail",
+  "start_coordinator_node_build_pipeline",
+  "launch_coordinator_node_multi_review",
+  "coordinator_node_multi_review_surface",
+  "start_coordinator_node_multi_review",
   "get_node_summaries",
   "watch_node_events",
   "unwatch_node_events",
@@ -87,6 +99,14 @@ export function isWorkspaceExcludedCommand(command: string): boolean {
       "apply_env_keys",
       "fingerprint_project_files",
       "get_project_seed_files",
+      // A command node's coordinator acts through these: a delegation's
+      // framing and presentation are its to give, not a workspace client's.
+      "create_controller_environment",
+      "start_controller_build_pipeline",
+      "launch_controller_multi_review",
+      "controller_multi_review_surface",
+      "start_controller_multi_review",
+      "get_worker_request_state",
     ].includes(command)
   );
 }

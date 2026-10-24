@@ -44,7 +44,12 @@ import {
   workflowStatusWakeResult,
 } from "./control-mcp-review-actions.js";
 import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.js";
-import { NODE_TOOL_CAPABILITIES, registerNodeTools } from "./control-mcp-nodes.js";
+import {
+  createNodeTargets,
+  NODE_TOOL_CAPABILITIES,
+  registerNodeTools,
+  type NodeTarget,
+} from "./control-mcp-nodes.js";
 import { NODE_FILE_TOOL_CAPABILITIES, registerNodeFileTools } from "./control-mcp-node-files.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
@@ -53,6 +58,16 @@ const CONTROL_MCP_DESCRIPTOR = "control-mcp.json";
 export const DEFAULT_CONTROL_MCP_PORT = 34_122;
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const MAX_PROMPT_LENGTH = 100_000;
+/** The field every environment and workflow tool takes to act on another node. */
+const nodeIdField = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .optional()
+  .describe(
+    "Coordinators only: a nodeId from list_nodes, to act on that node's copy of this project. Omit for this node.",
+  );
 const MAX_TERMINAL_OUTPUT_CHARS = 256 * 1024;
 const COORDINATOR_CREDENTIAL_TTL_MS = 12 * 60 * 60 * 1_000;
 const MAX_COORDINATOR_CREDENTIALS = 512;
@@ -439,6 +454,50 @@ function asyncDelegationResult(): JsonRecord {
   };
 }
 
+/** This coordinator conversation's own mailbox address, if it still has one. */
+async function ownConversationMailbox(
+  invoke: ControlMcpInvoker,
+  scope: CoordinatorControlScope,
+): Promise<{ environmentId: string; tabId: string } | null> {
+  const snapshot = await invoke<unknown>("get_project_coordinator", { projectId: scope.projectId });
+  const conversations =
+    isRecord(snapshot) &&
+    isRecord(snapshot.workspace) &&
+    Array.isArray(snapshot.workspace.conversations)
+      ? snapshot.workspace.conversations
+      : [];
+  const own = conversations.find((item) => isRecord(item) && item.id === scope.conversationId) as
+    | JsonRecord
+    | undefined;
+  return own && typeof own.tabId === "string"
+    ? {
+        environmentId: `coordinator:${scope.coordinatorId}:${scope.conversationId}`,
+        tabId: own.tabId,
+      }
+    : null;
+}
+
+/** The same as `tryOpenCoordinatorDelegation`, for a worker on another node. */
+async function tryOpenNodeDelegation(
+  invoke: ControlMcpInvoker,
+  scope: CoordinatorControlScope,
+  worker: { nodeId: string; environmentId: string; tabId: string; requestId: string },
+): Promise<boolean> {
+  try {
+    const result = await invoke<unknown>("open_coordinator_node_delegation", {
+      scope,
+      ...worker,
+    });
+    return isRecord(result) && result.opened === true;
+  } catch (error) {
+    console.warn(
+      "[control-mcp] Could not open a delegation on another node:",
+      error instanceof Error ? error.message : error,
+    );
+    return false;
+  }
+}
+
 async function tryOpenCoordinatorDelegation(
   invoke: ControlMcpInvoker,
   scope: CoordinatorControlScope,
@@ -545,15 +604,16 @@ async function createControlMcp(
   const launchOptionsWithDefaults = async (
     projectId: string,
     environmentId?: string,
+    inv: ControlMcpInvoker = invoke,
   ): Promise<JsonRecord> => {
-    const options = await launchOptions(invoke, projectId, environmentId);
+    const options = await launchOptions(inv, projectId, environmentId);
     let defaults: JsonRecord;
     try {
       const environment = environmentId
-        ? await invoke<unknown>("get_environment", { environmentId })
+        ? await inv<unknown>("get_environment", { environmentId })
         : undefined;
       const tiers = await launchSettingsTiers(
-        invoke,
+        inv,
         projectId,
         isRecord(environment) ? environment : undefined,
       );
@@ -578,14 +638,45 @@ async function createControlMcp(
     models: readonly AgentModel[],
     input: { agent: AgentPlatform; modelId?: string; reasoningId?: string },
     filterInheritedEffort = true,
+    inv: ControlMcpInvoker = invoke,
   ): Promise<JsonRecord> => {
     try {
-      const tiers = await launchSettingsTiers(invoke, projectId, environment);
+      const tiers = await launchSettingsTiers(inv, projectId, environment);
       return { selection: launchSelectionReport(tiers, models, input, filterInheritedEffort) };
     } catch {
       return {};
     }
   };
+
+  /**
+   * The node a coordinator's call names, with a routed invoker for that
+   * node's copy of this project; `null` for this node. Only coordinators act
+   * across nodes: any other credential is refused a `nodeId`.
+   */
+  const nodes = coordinatorScope
+    ? createNodeTargets(invoke, {
+        projectId: coordinatorScope.projectId,
+        coordinatorId: coordinatorScope.coordinatorId,
+        conversationId: coordinatorScope.conversationId,
+      })
+    : null;
+  const onNode = async (nodeId: string | undefined): Promise<NodeTarget | null> => {
+    if (!nodeId) return null;
+    if (!nodes) throw new Error("nodeId is available to coordinators only.");
+    return nodes.targetOrSelf(nodeId);
+  };
+  /** The invoker for one environment's node, after checking it is this project's worker there. */
+  const environmentInvoker = async (
+    nodeId: string | undefined,
+    environmentId: string,
+  ): Promise<{ inv: ControlMcpInvoker; target: NodeTarget | null }> => {
+    const target = await onNode(nodeId);
+    if (!target) return { inv: invoke, target: null };
+    await target.environment(environmentId);
+    return { inv: target.invoke, target };
+  };
+  const onNodeResult = (target: NodeTarget | null): JsonRecord =>
+    target ? { nodeId: target.nodeId, node: target.nodeName } : {};
 
   server.registerTool(
     "list_projects",
@@ -612,12 +703,48 @@ async function createControlMcp(
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200),
         environmentId: z.string().trim().min(1).max(200).optional(),
+        nodeId: nodeIdField,
       }),
       annotations: coordinatorScope
         ? { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true }
         : readAnnotations(),
     },
-    async ({ projectId, environmentId }) => {
+    async ({ projectId, environmentId, nodeId }) => {
+      const target = await onNode(nodeId);
+      if (target) {
+        // That node's agents and models, its defaults, and its copy's base branch.
+        if (environmentId) await target.environment(environmentId);
+        const options = await launchOptionsWithDefaults(
+          target.projectId,
+          environmentId,
+          target.invoke,
+        );
+        const [coordinatorBase, checkoutBase] = await Promise.all([
+          target
+            .call<unknown>("get_project_base_branch_tip", { projectId: target.projectId })
+            .then((tip) => coordinatorLaunchBaseFromTip(isRecord(tip) ? tip : null))
+            .catch((error: unknown) =>
+              coordinatorLaunchBaseFromTip(
+                null,
+                `Base branch is unavailable on ${target.nodeName}: ${
+                  error instanceof Error ? error.message : "base branch read failed"
+                }`,
+              ),
+            ),
+          target
+            .call<unknown>("get_project_git_status", { projectId: target.projectId })
+            .then((status) => checkoutLaunchBaseFromStatus(isRecord(status) ? status : null))
+            .catch((error: unknown) =>
+              checkoutLaunchBaseFromStatus(
+                null,
+                `Repository status is unavailable on ${target.nodeName}: ${
+                  error instanceof Error ? error.message : "status read failed"
+                }`,
+              ),
+            ),
+        ]);
+        return toolResult({ ...options, coordinatorBase, checkoutBase, ...onNodeResult(target) });
+      }
       const options = await launchOptionsWithDefaults(projectId, environmentId);
       if (!coordinatorScope) return toolResult(options);
       // Fetching the base branch moves remote-tracking refs only. The checkout
@@ -663,15 +790,67 @@ async function createControlMcp(
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200).optional(),
         status: z.enum(["running", "stopped", "error", "creating", "stopping"]).optional(),
+        nodeId: nodeIdField,
       }),
       annotations: readAnnotations(),
     },
-    async ({ projectId, status }) => {
-      const all = await allEnvironments(invoke, projectId ?? coordinatorScope?.projectId);
+    async ({ projectId, status, nodeId }) => {
+      const target = await onNode(nodeId);
+      const all = target
+        ? await allEnvironments(target.invoke, target.projectId)
+        : await allEnvironments(invoke, projectId ?? coordinatorScope?.projectId);
       const environments = all
         .filter((environment) => !status || environment.status === status)
-        .map(environmentSummary);
-      return toolResult({ environments, total: environments.length });
+        .filter((environment) => !target || environment.projectHome !== true)
+        .map((environment) => ({ ...environmentSummary(environment), ...onNodeResult(target) }));
+      // A coordinator also sees where else this project runs (names and state
+      // only); nodeId on any environment tool acts there.
+      const otherNodes =
+        nodes && !nodeId
+          ? await invoke<unknown>("get_node_summaries")
+              .then(async (summaries) => {
+                const hint = await nodes.ownRepository();
+                const list =
+                  isRecord(summaries) && Array.isArray(summaries.nodes) ? summaries.nodes : [];
+                return list.flatMap((node: JsonRecord) => {
+                  const project = (Array.isArray(node.projects) ? node.projects : []).find(
+                    (entry: JsonRecord) => hint && entry.repositoryHint === hint,
+                  ) as JsonRecord | undefined;
+                  const ref = project && isRecord(project.ref) ? project.ref : null;
+                  if (!ref) return [];
+                  const rows = (Array.isArray(node.environments) ? node.environments : [])
+                    .filter(
+                      (environment: JsonRecord) =>
+                        environment.projectId === ref.projectId &&
+                        !environment.isProjectHome &&
+                        (!status || environment.status === status),
+                    )
+                    .map((environment: JsonRecord) => ({
+                      environmentId: isRecord(environment.ref)
+                        ? environment.ref.environmentId
+                        : undefined,
+                      name: environment.name,
+                      status: environment.status,
+                      activity: environment.activity,
+                      ...(environment.branch ? { branch: environment.branch } : {}),
+                    }));
+                  return [
+                    {
+                      nodeId: node.nodeId,
+                      node: isRecord(node.view) ? node.view.displayName : node.nodeId,
+                      available: node.available === true,
+                      environments: rows,
+                    },
+                  ];
+                });
+              })
+              .catch(() => [])
+          : [];
+      return toolResult({
+        environments,
+        total: environments.length,
+        ...(otherNodes.length > 0 ? { otherNodes } : {}),
+      });
     },
   );
 
@@ -680,13 +859,21 @@ async function createControlMcp(
     {
       title: "Get an Orkestrator environment",
       description: "Read the authoritative lifecycle and activity state of one environment.",
-      inputSchema: z.object({ environmentId: z.string().trim().min(1).max(200) }),
+      inputSchema: z.object({
+        environmentId: z.string().trim().min(1).max(200),
+        nodeId: nodeIdField,
+      }),
       annotations: readAnnotations(),
     },
-    async ({ environmentId }) => {
-      const environment = await invoke<unknown>("get_environment", { environmentId });
+    async ({ environmentId, nodeId }) => {
+      const target = await onNode(nodeId);
+      const environment = target
+        ? await target.environment(environmentId)
+        : await invoke<unknown>("get_environment", { environmentId });
       if (!isRecord(environment)) throw new Error(`Environment not found: ${environmentId}`);
-      return toolResult({ environment: environmentSummary(environment) });
+      return toolResult({
+        environment: { ...environmentSummary(environment), ...onNodeResult(target) },
+      });
     },
   );
 
@@ -695,13 +882,17 @@ async function createControlMcp(
     {
       title: "List environment tabs",
       description: "List tabs from the backend-owned pane layout of an environment.",
-      inputSchema: z.object({ environmentId: z.string().trim().min(1).max(200) }),
+      inputSchema: z.object({
+        environmentId: z.string().trim().min(1).max(200),
+        nodeId: nodeIdField,
+      }),
       annotations: readAnnotations(),
     },
-    async ({ environmentId }) => {
-      const layout = await invoke<unknown>("get_pane_layout", { environmentId });
+    async ({ environmentId, nodeId }) => {
+      const { inv, target } = await environmentInvoker(nodeId, environmentId);
+      const layout = await inv<unknown>("get_pane_layout", { environmentId });
       const tabs = paneTabs(layout);
-      return toolResult({ environmentId, tabs, total: tabs.length });
+      return toolResult({ environmentId, ...onNodeResult(target), tabs, total: tabs.length });
     },
   );
 
@@ -714,10 +905,25 @@ async function createControlMcp(
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200).optional(),
         environmentId: z.string().trim().min(1).max(200).optional(),
+        nodeId: nodeIdField,
       }),
       annotations: readAnnotations(),
     },
-    async ({ projectId, environmentId }) => {
+    async ({ projectId, environmentId, nodeId }) => {
+      const target = await onNode(nodeId);
+      if (target) {
+        if (environmentId) await target.environment(environmentId);
+        const remote = await target.call<unknown>("get_agent_registry", {
+          projectId: target.projectId,
+          ...(environmentId ? { environmentId } : {}),
+        });
+        if (!isRecord(remote)) throw new Error("Agent registry returned no result");
+        // That node's own coordinator conversations are not this coordinator's agents.
+        const entries = asArray(remote.entries).filter(
+          (entry) => entry.ownerKind !== "coordinator",
+        );
+        return toolResult({ ...remote, entries, ...onNodeResult(target) });
+      }
       const snapshot = await invoke<unknown>("get_agent_registry", {
         ...(coordinatorScope
           ? { projectId: coordinatorScope.projectId }
@@ -739,13 +945,16 @@ async function createControlMcp(
       inputSchema: z.object({
         environmentId: z.string().trim().min(1).max(200),
         tabId: z.string().trim().min(1).max(200),
+        nodeId: nodeIdField,
       }),
       annotations: readAnnotations(),
     },
-    async ({ environmentId, tabId }) => {
+    async ({ environmentId, tabId, nodeId }) => {
+      const { inv, target } = await environmentInvoker(nodeId, environmentId);
+      const where = { environmentId, tabId, ...onNodeResult(target) };
       const [layout, environment] = await Promise.all([
-        invoke<unknown>("get_pane_layout", { environmentId }),
-        invoke<unknown>("get_environment", { environmentId }),
+        inv<unknown>("get_pane_layout", { environmentId }),
+        inv<unknown>("get_environment", { environmentId }),
       ]);
       const tab = paneTabs(layout).find((candidate) => candidate.id === tabId);
       if (!tab) throw new Error(`Tab not found: ${tabId}`);
@@ -753,24 +962,24 @@ async function createControlMcp(
       if (!native) {
         if (!isRecord(environment)) throw new Error(`Environment not found: ${environmentId}`);
         if (typeof tab.type !== "string" || !TERMINAL_TAB_TYPES.has(tab.type)) {
-          return toolResult({ environmentId, tabId, tab, state: { kind: "persisted" } });
+          return toolResult({ ...where, tab, state: { kind: "persisted" } });
         }
-        const state = await invoke<unknown>("get_terminal_session", {
+        const state = await inv<unknown>("get_terminal_session", {
           sessionId: terminalSessionId(environment, environmentId, tabId),
         });
-        return toolResult({ environmentId, tabId, tab, state });
+        return toolResult({ ...where, tab, state });
       }
-      const projection = await invoke<unknown>("get_native_agent_projection", {
+      const projection = await inv<unknown>("get_native_agent_projection", {
         environmentId,
         agent: native.agent,
         logicalSessionKey: `env-${environmentId}:${tabId}`,
         messageLimit: 1,
       });
       if (!isRecord(projection)) {
-        return toolResult({ environmentId, tabId, agent: native.agent, connection: "connecting" });
+        return toolResult({ ...where, agent: native.agent, connection: "connecting" });
       }
       const { messages: _messages, ...state } = projection;
-      return toolResult({ environmentId, tabId, agent: native.agent, state });
+      return toolResult({ ...where, agent: native.agent, state });
     },
   );
 
@@ -784,24 +993,32 @@ async function createControlMcp(
         environmentId: z.string().trim().min(1).max(200),
         tabId: z.string().trim().min(1).max(200),
         limit: z.number().int().min(1).max(MAX_TRANSCRIPT_MESSAGES).default(50),
+        nodeId: nodeIdField,
       }),
       annotations: readAnnotations(),
     },
-    async ({ environmentId, tabId, limit }) => {
+    async ({ environmentId, tabId, limit, nodeId }) => {
+      const { inv, target } = await environmentInvoker(nodeId, environmentId);
       const [layout, environment] = await Promise.all([
-        invoke<unknown>("get_pane_layout", { environmentId }),
-        invoke<unknown>("get_environment", { environmentId }),
+        inv<unknown>("get_pane_layout", { environmentId }),
+        inv<unknown>("get_environment", { environmentId }),
       ]);
       const native = nativeTab(layout, tabId);
       if (native) {
-        const projection = await invoke<unknown>("get_native_agent_projection", {
+        const projection = await inv<unknown>("get_native_agent_projection", {
           environmentId,
           agent: native.agent,
           logicalSessionKey: `env-${environmentId}:${tabId}`,
           messageLimit: limit,
         });
         if (!isRecord(projection)) {
-          return toolResult({ environmentId, tabId, agent: native.agent, messages: [] });
+          return toolResult({
+            environmentId,
+            tabId,
+            ...onNodeResult(target),
+            agent: native.agent,
+            messages: [],
+          });
         }
         const compact = compactMessages(
           Array.isArray(projection.messages) ? projection.messages : [],
@@ -809,6 +1026,7 @@ async function createControlMcp(
         return toolResult({
           environmentId,
           tabId,
+          ...onNodeResult(target),
           agent: native.agent,
           ...compact,
           messageWindow: projection.messageWindow,
@@ -823,13 +1041,14 @@ async function createControlMcp(
         throw new Error(`Transcript is unavailable for tab type: ${String(tab.type)}`);
       }
       const sessionId = terminalSessionId(environment, environmentId, tabId);
-      const snapshot = await invoke<unknown>("get_terminal_output_snapshot", { sessionId });
+      const snapshot = await inv<unknown>("get_terminal_output_snapshot", { sessionId });
       const output =
         isRecord(snapshot) && typeof snapshot.output === "string" ? snapshot.output : "";
       const stripped = output.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
       return toolResult({
         environmentId,
         tabId,
+        ...onNodeResult(target),
         kind: "terminal-output",
         output: stripped.slice(-MAX_TERMINAL_OUTPUT_CHARS),
         truncated:
@@ -1038,6 +1257,9 @@ async function createControlMcp(
             ? "Required coordinator base commit; copy coordinatorBase.baseCommit from get_launch_options (checkoutBase.baseCommit only when the user asks to build on the current checkout)."
             : "Optional 40-character commit to use as the environment base.",
         ),
+        nodeId: nodeIdField.describe(
+          "Coordinators only: launch on that node's copy of this project (a nodeId from list_nodes); take baseBranch and baseCommit from get_launch_options with the same nodeId. Omit for this node.",
+        ),
       }),
       annotations: {
         readOnlyHint: false,
@@ -1049,6 +1271,50 @@ async function createControlMcp(
     async (input) => {
       if (coordinatorScope && (!input.baseBranch || !input.baseCommit)) {
         throw new Error("Coordinator launches require an explicit baseBranch and baseCommit");
+      }
+      const target = await onNode(input.nodeId);
+      if (target && coordinatorScope) {
+        // The base, the agent and the model are checked against that node's copy.
+        await assertCoordinatorLaunchBaseOnBranch(target.invoke, target.projectId, input);
+        const options = await validateSelection(target.invoke, {
+          ...input,
+          projectId: target.projectId,
+        });
+        const { nodeId: _nodeId, ...launchInput } = input;
+        const launch = await invoke<unknown>("launch_coordinator_node_environment", {
+          scope: coordinatorScope,
+          requestId: input.requestId,
+          nodeId: target.nodeId,
+          input: launchEnvironmentCreateInput(launchInput),
+        });
+        const environment = isRecord(launch) ? launch.environment : null;
+        if (!isRecord(environment) || typeof environment.id !== "string") {
+          throw new Error("Environment creation returned no environment");
+        }
+        const selection = await selectionReport(
+          target.projectId,
+          environment,
+          options.models,
+          input,
+          false,
+          target.invoke,
+        );
+        if (isRecord(selection.selection)) selection.selection.advisory = true;
+        const startError =
+          isRecord(launch) && typeof launch.startError === "string" ? launch.startError : undefined;
+        const delegationOpened =
+          !startError && isRecord(launch) && launch.coordinatorDelegationOpened === true;
+        return toolResult({
+          environmentId: environment.id,
+          ...onNodeResult(target),
+          tabId: "startup-agent",
+          status: startError ? "created" : "accepted",
+          ...selection,
+          ...(delegationOpened ? asyncDelegationResult() : {}),
+          delegationBaseBranch: input.baseBranch,
+          delegationBaseCommit: input.baseCommit,
+          ...(startError ? { error: startError } : {}),
+        });
       }
       // Only a launch from the checkout's own HEAD can miss its uncommitted
       // changes; for that case the result says whether there are any.
@@ -1204,6 +1470,7 @@ async function createControlMcp(
         conversationMode: z.enum(["plan", "build"]).default("build"),
         title: z.string().trim().min(1).max(200).optional(),
         prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
+        nodeId: nodeIdField,
       }),
       annotations: {
         readOnlyHint: false,
@@ -1212,14 +1479,15 @@ async function createControlMcp(
         openWorldHint: true,
       },
     },
-    async (input) => {
-      const environment = await invoke<unknown>("get_environment", {
+    async ({ nodeId, ...input }) => {
+      const { inv, target } = await environmentInvoker(nodeId, input.environmentId);
+      const environment = await inv<unknown>("get_environment", {
         environmentId: input.environmentId,
       });
       if (!isRecord(environment) || typeof environment.projectId !== "string") {
         throw new Error(`Environment not found: ${input.environmentId}`);
       }
-      const options = await validateSelection(invoke, {
+      const options = await validateSelection(inv, {
         projectId: environment.projectId,
         environmentId: input.environmentId,
         agent: input.agent,
@@ -1232,6 +1500,8 @@ async function createControlMcp(
         environment,
         options.models,
         input,
+        true,
+        inv,
       );
       const delegation = coordinatorScope
         ? createCoordinatorDelegatedPrompt(
@@ -1253,21 +1523,31 @@ async function createControlMcp(
             },
           )
         : { ...input, activateTab: true };
-      const job = await invoke<unknown>("launch_control_job", launchArgs);
+      const job = target
+        ? await target.call<unknown>("launch_control_job", launchArgs, `job:${input.requestId}`)
+        : await invoke<unknown>("launch_control_job", launchArgs);
       if (!isRecord(job)) throw new Error("Job launch returned no result");
       // Only against the tab the job actually landed in. A guessed tab id would
       // open a delegation nothing can ever close, leaving the conversation
       // shown as waiting on a worker that does not exist.
       const delegationOpened =
         coordinatorScope && typeof job.tabId === "string"
-          ? await tryOpenCoordinatorDelegation(invoke, coordinatorScope, {
-              environmentId: input.environmentId,
-              tabId: job.tabId,
-              requestId: input.requestId,
-            })
+          ? target
+            ? await tryOpenNodeDelegation(invoke, coordinatorScope, {
+                nodeId: target.nodeId,
+                environmentId: input.environmentId,
+                tabId: job.tabId,
+                requestId: input.requestId,
+              })
+            : await tryOpenCoordinatorDelegation(invoke, coordinatorScope, {
+                environmentId: input.environmentId,
+                tabId: job.tabId,
+                requestId: input.requestId,
+              })
           : false;
       return toolResult({
         ...job,
+        ...onNodeResult(target),
         ...selection,
         ...(delegationOpened ? asyncDelegationResult() : {}),
       });
@@ -1286,6 +1566,7 @@ async function createControlMcp(
         tabId: z.string().trim().min(1).max(200),
         prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
         conversationMode: z.enum(["plan", "build"]).optional(),
+        nodeId: nodeIdField,
       }),
       annotations: {
         readOnlyHint: false,
@@ -1294,37 +1575,55 @@ async function createControlMcp(
         openWorldHint: true,
       },
     },
-    async ({ requestId, environmentId, tabId, prompt, conversationMode }) => {
+    async ({ requestId, environmentId, tabId, prompt, conversationMode, nodeId }) => {
+      const { inv, target } = await environmentInvoker(nodeId, environmentId);
       if (coordinatorScope) {
-        await invoke("assert_coordinator_delegation_available", {
-          scope: coordinatorScope,
-          environmentId,
-          tabId,
-          requestId,
-        });
+        await invoke(
+          target
+            ? "assert_coordinator_node_delegation_available"
+            : "assert_coordinator_delegation_available",
+          {
+            scope: coordinatorScope,
+            ...(target ? { nodeId: target.nodeId } : {}),
+            environmentId,
+            tabId,
+            requestId,
+          },
+        );
       }
-      const layout = await invoke<unknown>("get_pane_layout", { environmentId });
+      const layout = await inv<unknown>("get_pane_layout", { environmentId });
       const native = nativeTab(layout, tabId);
       if (!native) throw new Error(`Native agent tab not found: ${tabId}`);
-      const outcome = await invoke<unknown>("dispatch_native_agent_intent", {
+      const intent = {
         environmentId,
         agent: native.agent,
         logicalSessionKey: `env-${environmentId}:${tabId}`,
         requestId,
         prompt,
         ...(conversationMode ? { mode: conversationMode } : {}),
-      });
+      };
+      const outcome = target
+        ? await target.call<unknown>("dispatch_native_agent_intent", intent, `prompt:${requestId}`)
+        : await invoke<unknown>("dispatch_native_agent_intent", intent);
       if (!isRecord(outcome)) throw new Error("Prompt dispatch returned no result");
-      const delegationOpened = coordinatorScope
-        ? await tryOpenCoordinatorDelegation(invoke, coordinatorScope, {
-            environmentId,
-            tabId,
-            requestId,
-          })
-        : false;
+      const delegationOpened = !coordinatorScope
+        ? false
+        : target
+          ? await tryOpenNodeDelegation(invoke, coordinatorScope, {
+              nodeId: target.nodeId,
+              environmentId,
+              tabId,
+              requestId,
+            })
+          : await tryOpenCoordinatorDelegation(invoke, coordinatorScope, {
+              environmentId,
+              tabId,
+              requestId,
+            });
       return toolResult({
         environmentId,
         tabId,
+        ...onNodeResult(target),
         ...outcome,
         ...(delegationOpened ? asyncDelegationResult() : {}),
       });
@@ -1345,16 +1644,19 @@ async function createControlMcp(
       {
         title: "Get project repository context",
         description:
-          "Read current branch, immutable HEAD commit, dirty state, and upstream freshness. This tool cannot mutate Git.",
-        inputSchema: z.object({}),
+          "Read current branch, immutable HEAD commit, dirty state, and upstream freshness. This tool cannot mutate Git. With nodeId, of that node's copy of the project.",
+        inputSchema: z.object({ nodeId: nodeIdField }),
         annotations: readAnnotations(),
       },
-      async () => {
-        const status = await invoke<unknown>("get_project_git_status", {
-          projectId: coordinatorScope.projectId,
-        });
+      async ({ nodeId }) => {
+        const target = await onNode(nodeId);
+        const status = target
+          ? await target.call<unknown>("get_project_git_status", { projectId: target.projectId })
+          : await invoke<unknown>("get_project_git_status", {
+              projectId: coordinatorScope.projectId,
+            });
         if (!isRecord(status)) throw new Error("Repository status returned no result");
-        return toolResult({ repository: status });
+        return toolResult({ repository: status, ...onNodeResult(target) });
       },
     );
     server.registerTool(
@@ -1371,28 +1673,45 @@ async function createControlMcp(
           projectId: coordinatorScope.projectId,
         });
         const associations = isRecord(snapshot) ? asArray(snapshot.workflows).slice(-200) : [];
+        // One resolution per node, shared by that node's workflows.
+        const invokers = new Map<string, Promise<ControlMcpInvoker | null>>();
+        const invokerOn = (nodeId: string | undefined): Promise<ControlMcpInvoker | null> => {
+          if (!nodeId) return Promise.resolve(invoke);
+          let resolved = invokers.get(nodeId);
+          if (!resolved) {
+            resolved = onNode(nodeId)
+              .then((target) => (target ? target.invoke : invoke))
+              .catch(() => null);
+            invokers.set(nodeId, resolved);
+          }
+          return resolved;
+        };
         const workflows = await Promise.all(
           associations.map(async (association) => {
             const kind = association.kind;
             const resourceId =
               typeof association.resourceId === "string" ? association.resourceId : "";
+            const nodeId = typeof association.nodeId === "string" ? association.nodeId : undefined;
             let resource: JsonRecord | null = null;
             try {
+              const inv = await invokerOn(nodeId);
               if (association.pending === true || resourceId.startsWith("pending:")) {
                 resource = { id: resourceId, status: "pending" };
+              } else if (!inv) {
+                resource = { id: resourceId, status: "unavailable" };
               } else if (kind === "environment") {
-                const environment = await invoke<unknown>("get_environment", {
+                const environment = await inv<unknown>("get_environment", {
                   environmentId: resourceId,
                 });
                 resource = isRecord(environment) ? environmentSummary(environment) : null;
               } else if (kind === "build-pipeline") {
-                const workflow = await invoke<unknown>("get_build_pipeline", {
+                const workflow = await inv<unknown>("get_build_pipeline", {
                   pipelineId: resourceId,
                 });
                 const record = normalizedWorkflow(workflow);
                 resource = record ? workflowSummary(record) : null;
               } else if (kind === "multi-review") {
-                const workflow = await invoke<unknown>("get_multi_review_workflow", {
+                const workflow = await inv<unknown>("get_multi_review_workflow", {
                   workflowId: resourceId,
                 });
                 const record = normalizedWorkflow(workflow);
@@ -1405,6 +1724,7 @@ async function createControlMcp(
               id: association.id,
               kind,
               resourceId,
+              ...(nodeId ? { nodeId } : {}),
               requestId: association.requestId,
               baseBranch: association.baseBranch,
               baseCommit: association.baseCommit,
@@ -1439,13 +1759,21 @@ async function createControlMcp(
         return toolResult({ association });
       },
     );
-    const scopedWorkflow = async (kind: "build" | "review", workflowId: string) => {
-      const raw = await invoke<unknown>(
+    const scopedWorkflow = async (
+      kind: "build" | "review",
+      workflowId: string,
+      target: NodeTarget | null = null,
+    ) => {
+      const inv = target ? target.invoke : invoke;
+      const raw = await inv<unknown>(
         kind === "build" ? "get_build_pipeline" : "get_multi_review_workflow",
         kind === "build" ? { pipelineId: workflowId } : { workflowId },
       );
       const record = normalizedWorkflow(raw);
-      if (!record || record.projectId !== coordinatorScope.projectId) {
+      if (
+        !record ||
+        record.projectId !== (target ? target.projectId : coordinatorScope.projectId)
+      ) {
         throw new Error(
           `${kind === "build" ? "Build pipeline" : "Multi-review"} not found in this project`,
         );
@@ -1462,7 +1790,10 @@ async function createControlMcp(
         {
           title,
           description: `${title} that belongs to this coordinator's project.`,
-          inputSchema: z.object({ environmentId: z.string().trim().min(1).max(200) }),
+          inputSchema: z.object({
+            environmentId: z.string().trim().min(1).max(200),
+            nodeId: nodeIdField,
+          }),
           annotations: {
             readOnlyHint: false,
             destructiveHint: tool === "stop_environment",
@@ -1470,10 +1801,11 @@ async function createControlMcp(
             openWorldHint: false,
           },
         },
-        async ({ environmentId }) => {
-          await invoke("get_environment", { environmentId });
-          await invoke(command, { environmentId });
-          return toolResult({ environmentId, accepted: true });
+        async ({ environmentId, nodeId }) => {
+          const { inv, target } = await environmentInvoker(nodeId, environmentId);
+          await inv("get_environment", { environmentId });
+          await inv(command, { environmentId });
+          return toolResult({ environmentId, ...onNodeResult(target), accepted: true });
         },
       );
     }
@@ -1539,6 +1871,9 @@ async function createControlMcp(
           }),
           existingEnvironmentId: z.string().trim().min(1).max(200).optional(),
           maxIterations: z.number().int().min(1).max(20).optional(),
+          nodeId: nodeIdField.describe(
+            "Optional: run the build on that node's copy of this project (a nodeId from list_nodes); take baseBranch and baseCommit from get_launch_options with the same nodeId. Omit for this node.",
+          ),
         }),
         annotations: {
           readOnlyHint: false,
@@ -1547,28 +1882,39 @@ async function createControlMcp(
           openWorldHint: true,
         },
       },
-      async ({ requestId, baseBranch, baseCommit, ...input }) => {
-        await assertCoordinatorLaunchBaseOnBranch(invoke, coordinatorScope.projectId, {
-          baseBranch,
-          baseCommit,
-        });
-        if (input.existingEnvironmentId) {
+      async ({ requestId, baseBranch, baseCommit, nodeId, ...input }) => {
+        const target = await onNode(nodeId);
+        await assertCoordinatorLaunchBaseOnBranch(
+          target ? target.invoke : invoke,
+          target ? target.projectId : coordinatorScope.projectId,
+          { baseBranch, baseCommit },
+        );
+        if (input.existingEnvironmentId && !target) {
           await invoke("get_environment", { environmentId: input.existingEnvironmentId });
         }
-        const workflow = await invoke<unknown>("start_coordinator_build_pipeline", {
-          scope: coordinatorScope,
-          requestId,
-          input: {
-            ...input,
-            projectId: coordinatorScope.projectId,
-            delegationBaseBranch: baseBranch,
-            delegationBaseCommit: baseCommit,
-          },
-        });
+        const scoped = {
+          ...input,
+          projectId: coordinatorScope.projectId,
+          delegationBaseBranch: baseBranch,
+          delegationBaseCommit: baseCommit,
+        };
+        const workflow = target
+          ? await invoke<unknown>("start_coordinator_node_build_pipeline", {
+              scope: coordinatorScope,
+              requestId,
+              nodeId: target.nodeId,
+              input: scoped,
+            })
+          : await invoke<unknown>("start_coordinator_build_pipeline", {
+              scope: coordinatorScope,
+              requestId,
+              input: scoped,
+            });
         const record = normalizedWorkflow(workflow);
         if (!record) throw new Error("Build pipeline returned no result");
         return toolResult({
           workflow: workflowSummary(record),
+          ...onNodeResult(target),
           ...(await workflowStatusWakeResult(invoke)),
 
           selection: buildPipelineSelection(record, input),
@@ -1581,11 +1927,19 @@ async function createControlMcp(
       {
         title: "Get a build pipeline",
         description: "Read authoritative state for a coordinator-associated build pipeline.",
-        inputSchema: z.object({ pipelineId: z.string().trim().min(1).max(200) }),
+        inputSchema: z.object({
+          pipelineId: z.string().trim().min(1).max(200),
+          nodeId: nodeIdField,
+        }),
         annotations: readAnnotations(),
       },
-      async ({ pipelineId }) =>
-        toolResult({ workflow: workflowSummary(await scopedWorkflow("build", pipelineId)) }),
+      async ({ pipelineId, nodeId }) => {
+        const target = await onNode(nodeId);
+        return toolResult({
+          workflow: workflowSummary(await scopedWorkflow("build", pipelineId, target)),
+          ...onNodeResult(target),
+        });
+      },
     );
 
     for (const [tool, command, title] of [
@@ -1598,7 +1952,10 @@ async function createControlMcp(
         {
           title,
           description: `${title} in this coordinator's project.`,
-          inputSchema: z.object({ pipelineId: z.string().trim().min(1).max(200) }),
+          inputSchema: z.object({
+            pipelineId: z.string().trim().min(1).max(200),
+            nodeId: nodeIdField,
+          }),
           annotations: {
             readOnlyHint: false,
             destructiveHint: tool === "cancel_build_pipeline",
@@ -1606,11 +1963,17 @@ async function createControlMcp(
             openWorldHint: false,
           },
         },
-        async ({ pipelineId }) => {
-          await scopedWorkflow("build", pipelineId);
-          const workflow = await invoke<unknown>(command, { pipelineId });
+        async ({ pipelineId, nodeId }) => {
+          const target = await onNode(nodeId);
+          await scopedWorkflow("build", pipelineId, target);
+          const workflow = target
+            ? await target.call<unknown>(command, { pipelineId }, `${command}:${pipelineId}`)
+            : await invoke<unknown>(command, { pipelineId });
           const record = normalizedWorkflow(workflow);
-          return toolResult({ workflow: record ? workflowSummary(record) : { id: pipelineId } });
+          return toolResult({
+            workflow: record ? workflowSummary(record) : { id: pipelineId },
+            ...onNodeResult(target),
+          });
         },
       );
     }
@@ -1649,6 +2012,7 @@ async function createControlMcp(
             ),
           autoFix: z.boolean().optional().describe(AUTO_FIX_FIELD_DESCRIPTION),
           autoPr: z.boolean().optional().describe(AUTO_PR_FIELD_DESCRIPTION),
+          nodeId: nodeIdField,
         }),
         annotations: {
           readOnlyHint: false,
@@ -1657,18 +2021,28 @@ async function createControlMcp(
           openWorldHint: true,
         },
       },
-      async ({ requestId, buildPipelineId, ...input }) => {
-        await invoke("get_environment", { environmentId: input.environmentId });
-        const workflow = await invoke<unknown>("start_coordinator_multi_review", {
-          scope: coordinatorScope,
-          requestId,
-          buildPipelineId,
-          input: { ...input, projectId: coordinatorScope.projectId },
-        });
+      async ({ requestId, buildPipelineId, nodeId, ...input }) => {
+        const target = await onNode(nodeId);
+        if (!target) await invoke("get_environment", { environmentId: input.environmentId });
+        const workflow = target
+          ? await invoke<unknown>("start_coordinator_node_multi_review", {
+              scope: coordinatorScope,
+              requestId,
+              nodeId: target.nodeId,
+              buildPipelineId,
+              input: { ...input, projectId: coordinatorScope.projectId },
+            })
+          : await invoke<unknown>("start_coordinator_multi_review", {
+              scope: coordinatorScope,
+              requestId,
+              buildPipelineId,
+              input: { ...input, projectId: coordinatorScope.projectId },
+            });
         const record = normalizedWorkflow(workflow);
         if (!record) throw new Error("Multi-review returned no result");
         return toolResult({
           workflow: workflowSummary(record),
+          ...onNodeResult(target),
           selection: reviewSelection(record, input),
           ...(await workflowStatusWakeResult(invoke)),
         });
@@ -1680,11 +2054,19 @@ async function createControlMcp(
       {
         title: "Get a multi-review",
         description: "Read authoritative state for a multi-review in this project.",
-        inputSchema: z.object({ workflowId: z.string().trim().min(1).max(200) }),
+        inputSchema: z.object({
+          workflowId: z.string().trim().min(1).max(200),
+          nodeId: nodeIdField,
+        }),
         annotations: readAnnotations(),
       },
-      async ({ workflowId }) =>
-        toolResult({ workflow: workflowSummary(await scopedWorkflow("review", workflowId)) }),
+      async ({ workflowId, nodeId }) => {
+        const target = await onNode(nodeId);
+        return toolResult({
+          workflow: workflowSummary(await scopedWorkflow("review", workflowId, target)),
+          ...onNodeResult(target),
+        });
+      },
     );
 
     for (const [tool, command, title] of [
@@ -1695,7 +2077,10 @@ async function createControlMcp(
         {
           title,
           description: `${title} in the associated worker environment.`,
-          inputSchema: z.object({ workflowId: z.string().trim().min(1).max(200) }),
+          inputSchema: z.object({
+            workflowId: z.string().trim().min(1).max(200),
+            nodeId: nodeIdField,
+          }),
           annotations: {
             readOnlyHint: false,
             destructiveHint: true,
@@ -1703,11 +2088,17 @@ async function createControlMcp(
             openWorldHint: false,
           },
         },
-        async ({ workflowId }) => {
-          await scopedWorkflow("review", workflowId);
-          const workflow = await invoke<unknown>(command, { workflowId });
+        async ({ workflowId, nodeId }) => {
+          const target = await onNode(nodeId);
+          await scopedWorkflow("review", workflowId, target);
+          const workflow = target
+            ? await target.call<unknown>(command, { workflowId }, `${command}:${workflowId}`)
+            : await invoke<unknown>(command, { workflowId });
           const record = normalizedWorkflow(workflow);
-          return toolResult({ workflow: record ? workflowSummary(record) : { id: workflowId } });
+          return toolResult({
+            workflow: record ? workflowSummary(record) : { id: workflowId },
+            ...onNodeResult(target),
+          });
         },
       );
     }
@@ -1763,6 +2154,9 @@ async function createControlMcp(
               "body must be at most 32 KiB UTF-8",
             ),
           replyToMessageId: z.string().trim().min(1).max(300).optional(),
+          nodeId: nodeIdField.describe(
+            "Coordinators only: message an agent on that node (a nodeId from list_nodes); toEnvironmentId is that node's environment. A reply to mail from another node goes back to it without nodeId.",
+          ),
         }),
         annotations: {
           readOnlyHint: false,
@@ -1771,7 +2165,55 @@ async function createControlMcp(
           openWorldHint: false,
         },
       },
-      async (input) => {
+      async ({ nodeId, ...input }) => {
+        const target = await onNode(nodeId);
+        if (coordinatorScope) {
+          let remote: { nodeId: string; toEnvironmentId: string; toTabId?: string } | null = target
+            ? {
+                nodeId: target.nodeId,
+                toEnvironmentId: input.toEnvironmentId,
+                ...(input.toTabId ? { toTabId: input.toTabId } : {}),
+              }
+            : null;
+          if (!remote && input.replyToMessageId) {
+            // A reply to an agent on another node goes back across the node link.
+            const own = await ownConversationMailbox(invoke, coordinatorScope);
+            const parent = own
+              ? await invoke<unknown>("get_agent_mail_message", {
+                  ...own,
+                  messageId: input.replyToMessageId,
+                }).catch(() => null)
+              : null;
+            const from = isRecord(parent) && isRecord(parent.from) ? parent.from : null;
+            if (
+              from?.kind === "node" &&
+              typeof from.nodeId === "string" &&
+              typeof from.environmentId === "string" &&
+              typeof from.tabId === "string"
+            ) {
+              remote = {
+                nodeId: from.nodeId,
+                toEnvironmentId: from.environmentId,
+                toTabId: from.tabId,
+              };
+            }
+          }
+          if (remote) {
+            const sent = await invoke<unknown>("send_coordinator_node_mail", {
+              scope: coordinatorScope,
+              ...remote,
+              requestId: input.requestId,
+              ...(input.subject ? { subject: input.subject } : {}),
+              body: input.body,
+            });
+            if (!isRecord(sent)) throw new Error("Message send returned no result");
+            const { coordinatorDelegationOpened, ...summary } = sent;
+            return toolResult({
+              message: summary,
+              ...(coordinatorDelegationOpened === true ? asyncDelegationResult() : {}),
+            });
+          }
+        }
         const message = await invoke<unknown>(
           coordinatorScope ? "send_coordinator_agent_mail" : "send_external_agent_mail",
           coordinatorScope ? { ...input, ...coordinatorScope } : input,
@@ -2315,10 +2757,19 @@ export class ControlMcpServer {
           if (typeof args.environmentId === "string") {
             const ownRuntime = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
             if (args.environmentId !== ownRuntime) {
-              const environment = await this.invoke<unknown>("get_environment", {
-                environmentId: args.environmentId,
-              });
-              if (!isRecord(environment) || environment.projectId !== coordinatorScope.projectId) {
+              const target =
+                typeof args.nodeId === "string"
+                  ? await createNodeTargets(this.invoke, coordinatorScope).targetOrSelf(args.nodeId)
+                  : null;
+              const environment = target
+                ? await target.environment(args.environmentId)
+                : await this.invoke<unknown>("get_environment", {
+                    environmentId: args.environmentId,
+                  });
+              if (
+                !isRecord(environment) ||
+                environment.projectId !== (target?.projectId ?? coordinatorScope.projectId)
+              ) {
                 throw new Error("Coordinator credential cannot access that environment");
               }
               // The project home runs writable sessions in the checkout the

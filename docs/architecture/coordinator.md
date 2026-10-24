@@ -56,20 +56,18 @@ Coordinator and deletes the isolated runtime, never the user's local repository.
 ## Multiple machines
 
 On a command node ([command-nodes.md](command-nodes.md)) a coordinator also
-works across the nodes that node controls, through node-qualified tools:
+works across the nodes that node controls:
 
-- `list_nodes` and `list_node_environments` show the connected nodes and
-  this project's environments on them (each node's copy of the project is
-  matched by repository identity).
-- `launch_node_environment` creates an environment on a named node; plain
-  `launch_environment` (this node) stays the default. The leaf records which
-  command node and conversation launched it, so the worker's report comes
-  back to this coordinator.
-- `read_node_environment` reads another node's environment directly
-  (state, tabs, transcript); `start_node_environment`,
-  `stop_node_environment`, `send_prompt_to_node_tab` and `send_node_message`
-  act on it. Mail from a leaf agent arrives as ordinary mail naming the
-  node and environment.
+- `list_nodes` shows the connected nodes and whether each has a copy of this
+  project (matched by repository identity); `list_environments` lists the
+  project's environments on them as well.
+- Every environment and workflow tool takes an optional `nodeId` and works
+  on that node's copy with the same contract as here: launches, jobs,
+  prompts and messages open delegations that wake this conversation once,
+  and build pipelines and Multi Reviews there send status wakes. See
+  [command-nodes.md](command-nodes.md#one-tool-family-every-node).
+- A node without a copy needs one first: `request_project_on_node` asks the
+  user, who settles the location and files in the copy dialog.
 - `request_environment_deletion` only asks: the user confirms in a dialog
   that names the node and the environment. A coordinator never deletes on
   its own initiative, here or on its own node.

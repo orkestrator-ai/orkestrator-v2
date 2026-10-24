@@ -126,3 +126,62 @@ test("legacy leaves still acknowledge a fully delivered batch", async () => {
   expect(pending).toEqual([]);
   collector.dispose();
 });
+
+test("coalesced collectors await the follow-up drain and report partial delivery", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let reads = 0;
+  const collector = new NodeMailCollector({
+    selfId: async () => "bk_cmd" as never,
+    nodeName: async () => "Leaf",
+    link: () => ({
+      connected: true,
+      invoke: async <T>() => {
+        reads++;
+        if (reads === 1) {
+          started();
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          return { items: [], more: false } as T;
+        }
+        return { items: [item(2)], more: false } as T;
+      },
+    }),
+    deliver: async () => {
+      throw new Error("unavailable mailbox");
+    },
+  });
+  try {
+    const first = collector.collect("bk_leaf" as never);
+    await entered;
+    const joined = collector.collect("bk_leaf" as never);
+    release();
+    expect(await first).toBe(false);
+    expect(await joined).toBe(false);
+    expect(reads).toBe(2);
+  } finally {
+    collector.dispose();
+  }
+});
+
+test("a bounded partial drain is not reported as complete", async () => {
+  const collector = new NodeMailCollector({
+    selfId: async () => "bk_cmd" as never,
+    nodeName: async () => "Leaf",
+    link: () => ({
+      connected: true,
+      invoke: async <T>(command: string) =>
+        (command === "collect_node_outbox" ? { items: [item(1)], more: true } : {}) as T,
+    }),
+    deliver: async () => {},
+  });
+  try {
+    expect(await collector.collect("bk_leaf" as never)).toBe(false);
+  } finally {
+    collector.dispose();
+  }
+});

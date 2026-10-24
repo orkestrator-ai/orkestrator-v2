@@ -48,7 +48,7 @@ describe("OpenCode coordinator research servers", () => {
         const research = fixtureMcpServer(["query-docs"]);
         const project = fixtureMcpServer(["query-docs"]);
         // The checkout declares a server whose name extends the research
-        // server's, and a command-backed entry under the research name itself.
+        // server's, and a different endpoint under the research name itself.
         await writeFile(
           `${fixture.cwd}/opencode.json`,
           JSON.stringify({
@@ -106,7 +106,7 @@ describe("OpenCode coordinator research servers", () => {
               { headers },
             )
           ).json()) as Record<string, { status?: string }>;
-          // The registration took the project's command-backed entry's name,
+          // The registration replaced the project's same-named endpoint,
           // and the project server beside it is still there with its own tools.
           expect(status.context7?.status).toBe("connected");
           expect(status.context7_x?.status).toBe("connected");

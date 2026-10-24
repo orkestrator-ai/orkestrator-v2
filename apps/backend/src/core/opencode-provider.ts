@@ -1,3 +1,4 @@
+import { OpenCodeSessionPolicy } from "./opencode-session-policy.js";
 import { createOpenCodeSdkClient, type OpencodeClient } from "./opencode-sdk-client.js";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
@@ -116,7 +117,6 @@ import {
   openCodeFileParts,
   openCodeMessageIdScope,
   openCodeModelSelection,
-  openCodePermissionRules,
   preflightOpenCodeModel,
   openCodePromptToolOptions,
   openCodePromptParts,
@@ -184,7 +184,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly commandReload: OpenCodeInstanceReload;
   private readonly blockedSessions = new Set<string>();
   private readonly failedQuestionSessions = new Set<string>();
-  private readonly sessionResearchTools = new Map<string, string>();
+  private readonly sessionPolicy: OpenCodeSessionPolicy;
   private readonly sessionPolicies = new Map<string, NativeAgentExecutionPolicy>();
   /** A coordinator's research tool ids; empty everywhere else. */
   private readonly researchTools: () => readonly string[];
@@ -246,11 +246,18 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       });
     this.messageIds = dependencies.openCodeMessageIdCoordinator ?? defaultOpenCodeMessageIds;
     this.researchTools = dependencies.coordinatorResearchToolIds ?? (() => []);
+    this.sessionPolicy = new OpenCodeSessionPolicy(
+      this.client,
+      this.sessionPolicies,
+      () => this.requestOptions(),
+      this.researchTools,
+      dependencies.ensureCoordinatorResearch,
+    );
     this.reviewPermissions = new OpenCodeReviewSessionPermissions(
       this.client,
       connection.directory,
       () => this.requestOptions(),
-      (sessionId, policy) => this.sessionPolicies.set(sessionId, policy),
+      (sessionId, policy) => this.sessionPolicy.remember(sessionId, policy),
       this.researchTools,
     );
     this.workflowResults = new OpenCodeWorkflowResultBroker(
@@ -717,8 +724,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         this.lifecycle.rememberExistingSession(created.sessionId);
         this.registerSession(created.sessionId, options.interaction);
         if (created.policy) {
-          this.sessionPolicies.set(created.sessionId, created.policy);
-          this.sessionResearchTools.set(created.sessionId, JSON.stringify(this.researchTools()));
+          this.sessionPolicy.remember(created.sessionId, created.policy);
         }
         return created.sessionId;
       } catch (error) {
@@ -747,7 +753,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   ) {
     await this.dependencies.ensureCoordinatorResearch?.();
     const policy = this.sessionPolicies.get(sessionId);
-    if (policy) await this.synchronizeSessionPolicyGated(sessionId, policy);
+    if (policy) await this.sessionPolicy.synchronize(sessionId, policy);
     await this.workflowResults.prepare(sessionId, {
       agentMcp: options.agentMcp,
       workflowResultTool: options.workflowResultTool,
@@ -1333,7 +1339,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return this.commandReload.withinDispatch(async () => {
       const status = await this.status(sessionId);
       if (status === "missing") throw new PromptRejectedError("OpenCode session was not found");
-      if (policy) await this.applySessionPolicy(sessionId, effectiveOpenCodePolicy(policy));
+      if (policy) await this.sessionPolicy.apply(sessionId, effectiveOpenCodePolicy(policy));
       this.lifecycle.rememberExistingSession(sessionId);
       return sessionId;
     });
@@ -1344,49 +1350,13 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     policy: NativeAgentExecutionPolicy,
   ): Promise<void> {
     return this.commandReload.withinDispatch(() =>
-      this.synchronizeSessionPolicyGated(sessionId, policy),
+      this.sessionPolicy.synchronize(sessionId, policy),
     );
-  }
-
-  private async synchronizeSessionPolicyGated(
-    sessionId: string,
-    policy: NativeAgentExecutionPolicy,
-  ): Promise<void> {
-    await this.dependencies.ensureCoordinatorResearch?.();
-    const effectivePolicy = effectiveOpenCodePolicy(policy);
-    // OpenCode appends permission rules on update. Readiness checks must not
-    // append the same rules on every turn; a new provider rehydrates once.
-    if (
-      JSON.stringify(this.sessionPolicies.get(sessionId)) === JSON.stringify(effectivePolicy) &&
-      this.sessionResearchTools.get(sessionId) === JSON.stringify(this.researchTools())
-    )
-      return;
-    await this.applySessionPolicy(sessionId, effectivePolicy);
-  }
-
-  private async applySessionPolicy(
-    sessionId: string,
-    effectivePolicy: NativeAgentExecutionPolicy,
-  ): Promise<void> {
-    await this.dependencies.ensureCoordinatorResearch?.();
-    const researchTools = this.researchTools();
-    const response = await this.client.session.update(
-      {
-        sessionID: sessionId,
-        permission: openCodePermissionRules(effectivePolicy, {
-          researchTools,
-        }),
-      },
-      this.requestOptions(),
-    );
-    assertSdkResponse(response, "OpenCode resumed session policy update");
-    this.sessionPolicies.set(sessionId, effectivePolicy);
-    this.sessionResearchTools.set(sessionId, JSON.stringify(researchTools));
   }
 
   private invalidateResearch(): void {
     this.dependencies.invalidateCoordinatorResearch?.();
-    this.sessionResearchTools.clear();
+    this.sessionPolicy.invalidateResearch();
   }
 
   async forkSession(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome> {
@@ -1491,7 +1461,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.changeEvidence.forget(sessionId);
     this.interactiveMetadata.delete(sessionId);
     this.sessionPolicies.delete(sessionId);
-    this.sessionResearchTools.delete(sessionId);
+    this.sessionPolicy.forget(sessionId);
     this.blockedSessions.delete(sessionId);
     this.failedQuestionSessions.delete(sessionId);
     this.actionRetry.forget(sessionId);

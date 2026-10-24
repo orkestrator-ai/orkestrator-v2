@@ -83,6 +83,72 @@ test("real gateway saves a design and rehydrates another client's edits", async 
 
     const embedded = page.frameLocator('iframe[title="Screen"]');
     await expect(embedded.getByRole("heading")).toHaveText("Shared design");
+    // Links rehydrate through the real gateway. An unsent conversation must
+    // never offer an endpoint action that requires a saved resume identity.
+    const linkConversation = async (tabId: string, label: string, sessionId?: string) => {
+      const result = await invoke<{ ok: true; value: { id: string } }>("design_session_link", {
+        environmentId: env.id,
+        canvasId: canvas.id,
+        link: { tabId, label, sessionId, platform: "codex", role: "design" },
+      });
+      expect(result.ok).toBe(true);
+      return result.value;
+    };
+    const unsent = await linkConversation("unsent-design-tab", "Unsent design chat");
+    const savedLink = await linkConversation(
+      "closed-design-tab",
+      "Saved design chat",
+      "saved-thread",
+    );
+    expect(
+      await invoke("design_session_resume", {
+        environmentId: env.id,
+        canvasId: canvas.id,
+        linkId: unsent.id,
+        expectedTabId: "unsent-design-tab",
+        tabId: "must-not-open",
+      }),
+    ).toMatchObject({ ok: false, failure: { code: "invalid-input" } });
+    await page.reload();
+    await ensureProjectExpanded(page, project.name);
+    await page.getByText(env.name, { exact: true }).first().click();
+    await expect(embedded.getByRole("heading")).toHaveText("Shared design");
+    await page.getByRole("button", { name: "Ask agent about the selection" }).click();
+    const agentDialog = page.getByRole("dialog", { name: "Ask agent about this design" });
+    await expect(agentDialog.getByTestId(`design-link-${unsent.id}`)).toContainText(
+      "Closed — no conversation to resume",
+    );
+    await expect(
+      agentDialog.getByRole("button", { name: "Resume Unsent design chat" }),
+    ).toHaveCount(0);
+    await expect(
+      agentDialog.getByRole("button", { name: "Resume Saved design chat" }),
+    ).toBeVisible();
+    await agentDialog.getByRole("button", { name: "Close", exact: true }).click();
+    const unsupportedCheck = async (route: import("@playwright/test").Route) => {
+      if (route.request().postDataJSON()?.command === "design_session_link_states")
+        await route.fulfill({
+          status: 500,
+          json: { error: "Unknown backend command: design_session_link_states" },
+        });
+      else await route.fallback();
+    };
+    await page.route("**/__orkestrator/invoke", unsupportedCheck);
+    await page.getByRole("button", { name: "Ask agent about the selection" }).click();
+    await expect(agentDialog.getByTestId(`design-link-${savedLink.id}`)).toContainText(
+      "Closed — conversation ended",
+    );
+    await expect(agentDialog.getByRole("button", { name: "Resume Saved design chat" })).toHaveCount(
+      0,
+    );
+    await agentDialog.getByRole("button", { name: "Close", exact: true }).click();
+    await page.unroute("**/__orkestrator/invoke", unsupportedCheck);
+    for (const link of [unsent, savedLink])
+      await invoke("design_session_unlink", {
+        environmentId: env.id,
+        canvasId: canvas.id,
+        linkId: link.id,
+      });
     // Save As remembers the file the design was opened from.
     await page.getByRole("button", { name: "Export design to repository" }).click();
     const exportDialog = page.getByRole("dialog", { name: "Export design to repository" });

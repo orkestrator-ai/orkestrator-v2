@@ -106,3 +106,7 @@ ACP filesystem/terminal generalization hit its 60-second hook deadline (60,013.0
 - **Unchanged owner:** `mise run test:logged -- --name merge-acp-owner -- bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts ./src/acp-generalization.test.ts --parallel=1 --only-failures` passed (3 tests; 1.0 s logged).
 - **Evidence:** `orkestrator-test-run.jFRynx/bridges.log.gz` under the host temporary directory after aggregate completion.
 - **Assessment:** confirmed recurrence of the existing intermittent lifecycle timeout. No ACP source, assertion, timeout or skip changed.
+
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 2.5 s: `mise run test:logged -- --name design-links-owner-acp-generalization -- bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts ./src/acp-generalization.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.

@@ -31,6 +31,8 @@ import {
   type DesignPrepareResult,
   type DesignReadiness,
   type DesignSessionLink,
+  type DesignSessionLinkStates,
+  type DesignSessionResumeResult,
   type DesignSnapshotResult,
   type DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
@@ -52,6 +54,12 @@ import {
   writeCheckpoint,
 } from "./history.js";
 import { DesignLibraryIndex, summarizeRecord, type DesignSummary } from "./library.js";
+import * as sessionLinks from "./session-links.js";
+import type {
+  DesignNativeSessionLookup,
+  DesignSessionLinkInput,
+  DesignSessionResumer,
+} from "./session-links.js";
 import {
   addReceipt,
   cloneRecord,
@@ -1802,58 +1810,43 @@ export class DesignService {
   // Sessions (workspace metadata only; never transcripts or credentials)
   // -------------------------------------------------------------------------
 
-  async linkSession(
+  linkSession(
     environmentId: string,
     canvasId: string,
-    link: Omit<DesignSessionLink, "id" | "createdAt">,
+    link: DesignSessionLinkInput,
     replaceId?: string,
   ): Promise<DesignSessionLink> {
-    await this.initialize();
-    return this.lane(canvasId, async () => {
-      const { record, legacy } = await this.loadFor(canvasId, environmentId);
-      const next = cloneRecord(record);
-      const existing = next.sessions.find((candidate) => candidate.tabId === link.tabId);
-      if (existing) {
-        Object.assign(existing, link);
-      } else {
-        if (replaceId)
-          next.sessions = next.sessions.filter((candidate) => candidate.id !== replaceId);
-        if (next.sessions.length >= DESIGN_LIMITS.sessionLinksPerCanvas)
-          throw new DesignError(
-            "capacity",
-            "This design already links eight conversations; replace one",
-            {
-              retry: "review",
-            },
-          );
-        next.sessions.push({ ...link, id: randomUUID().slice(0, 12), createdAt: this.iso() });
-      }
-      next.statusVersion++;
-      await this.commit(next, legacy, {
-        revision: next.document.revision,
-        kind: "status",
-        statusVersion: next.statusVersion,
-      });
-      return next.sessions.find((candidate) => candidate.tabId === link.tabId)!;
-    });
+    return sessionLinks.linkSession(this, environmentId, canvasId, link, replaceId);
   }
 
-  async unlinkSession(environmentId: string, canvasId: string, linkId: string): Promise<void> {
-    await this.initialize();
-    await this.lane(canvasId, async () => {
-      const { record, legacy } = await this.loadFor(canvasId, environmentId, {
-        allowDeleted: true,
-      });
-      if (!record.sessions.some((candidate) => candidate.id === linkId)) return;
-      const next = cloneRecord(record);
-      next.sessions = next.sessions.filter((candidate) => candidate.id !== linkId);
-      next.statusVersion++;
-      await this.commit(next, legacy, {
-        revision: next.document.revision,
-        kind: "status",
-        statusVersion: next.statusVersion,
-      });
-    });
+  unlinkSession(environmentId: string, canvasId: string, linkId: string): Promise<void> {
+    return sessionLinks.unlinkSession(this, environmentId, canvasId, linkId);
+  }
+
+  sessionLinkStates(
+    environmentId: string,
+    canvasId: string,
+    lookup: DesignNativeSessionLookup,
+  ): Promise<DesignSessionLinkStates> {
+    return sessionLinks.sessionLinkStates(this, environmentId, canvasId, lookup);
+  }
+
+  recordTabSession(input: {
+    environmentId: string;
+    tabId: string;
+    platform: string;
+    providerSessionId: string;
+  }): Promise<number> {
+    return sessionLinks.recordTabSession(this, input);
+  }
+
+  resumeSessionLink(
+    environmentId: string,
+    canvasId: string,
+    input: { linkId: string; expectedTabId: string; tabId: string },
+    resumer: DesignSessionResumer,
+  ): Promise<DesignSessionResumeResult> {
+    return sessionLinks.resumeSessionLink(this, environmentId, canvasId, input, resumer);
   }
 
   // -------------------------------------------------------------------------

@@ -2643,6 +2643,51 @@ describe("pane layout intent persistence", () => {
 });
 
 describe("durable tab teardown intents", () => {
+  test("captures a resume identity durably without replacing a newer intent or captured identity", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-resume-capture";
+      await storage.addEnvironment(environment);
+      const intent = {
+        tabId: "tab-capture",
+        kind: "codex-native" as const,
+        createdAt: "2026-10-24T00:00:00Z",
+      };
+      await storage.setTabTeardownIntent(environment.id, intent);
+      await storage.recordTabTeardownSessionId(
+        environment.id,
+        intent.tabId,
+        intent.createdAt,
+        "thread-verified",
+      );
+      await storage.recordTabTeardownSessionId(
+        environment.id,
+        intent.tabId,
+        intent.createdAt,
+        "bridge-unverified",
+      );
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect(
+        (await restarted.getEnvironment(environment.id))?.tabTeardownIntents?.[intent.tabId]
+          ?.resumableSessionId,
+      ).toBe("thread-verified");
+      const newer = { ...intent, createdAt: "2026-10-24T00:00:01Z" };
+      await restarted.setTabTeardownIntent(environment.id, newer);
+      await expect(
+        storage.recordTabTeardownSessionId(
+          environment.id,
+          intent.tabId,
+          intent.createdAt,
+          "stale-thread",
+        ),
+      ).rejects.toThrow("changed");
+      expect(
+        (await restarted.getEnvironment(environment.id))?.tabTeardownIntents?.[intent.tabId],
+      ).toEqual(newer);
+    });
+  });
+
   test("atomically preserves concurrent intents and clears only the completed generation", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = createEnvironment("project-1");

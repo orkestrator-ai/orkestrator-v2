@@ -212,3 +212,7 @@ That combined command reported twenty passed, four skipped and two failures
 directory. No assertion, timeout, skip or implementation changed in this owner.
 
 The mobile canvas reached 30 seconds while clicking Switch tab.
+
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The nine-worker `mise run test:browser` run repeated failures in this owner; the complete unchanged owner passed across both viewports with one worker in 23.0 s. Command: `ORKESTRATOR_E2E_PORT=52890 mise run test:logged -- --name design-links-browser-owner-design -- bunx playwright test --config e2e/playwright.config.ts DesignCanvas.spec.ts --workers=1 --output output/playwright/design-links-owner-design`. The aggregate had 496 passes, 89 failures and 101 skips. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the parents and original evidence. No assertion, deadline or skip changed.

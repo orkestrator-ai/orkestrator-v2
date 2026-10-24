@@ -181,6 +181,10 @@ Full failure names, counts, evidence paths and unresolved limitations are in [07
 
 Root aggregate: 3,377 passed, six failed and one error (546.21 s), including this five-second deadline and error between tests. The complete unchanged owner also failed: four passed, one failed and one error (6.0 s), command `mise run test:logged -- --name merge-disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`. Evidence: `orkestrator-test-run.kKsk4G/merge-disk-report-owner.log.gz` below the host temporary directory. This observation is not newly classified as a flake. See [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md).
 
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The aggregate timed out at 5017.45 ms (root/support: 3381 passed, two failed). Its first unchanged one-worker rerun retained the timeout (4 passed, one failed, one error; 7.5 s). After observed host load fell from above 120 to 23.20, `mise run test:logged -- --name design-links-owner-disk-final -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed the complete unchanged owner in 2.2 s. Exact parents, original commands and artifacts are in [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md). No assertion, deadline or skip changed.
+
 ## Container state observation main merge — 2026-10-24
 
 - **Parents:** feature `66a9736cc0c663bef147a65fc2d158e1951482dd` and main `d6ed0717d00a9a04ba658ba6c50e0978bc2011a6`.

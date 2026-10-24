@@ -457,6 +457,38 @@ offset is the same across two providers, and tool-run folding (#1108) landed
 after the 2026-10-18 fixes, so it points at the shared renderer or the spec.
 It is tracked as new work in 0090, not here.
 
+### Validation (2026-10-24)
+
+`mise run format:check`, `mise run lint` and `mise run typecheck` passed.
+
+The focused suites passed:
+- the Codex bridge `history/`, `turn-accumulator`, `event-reducer`,
+  `notification-replay`, `app-server-runtime-rows` and lifecycle tests;
+- the backend progressive-metrics and progressive service tests;
+- the Cursor and Pi lifecycle tests;
+- `tests/unit/efficiency` and `tests/unit/mise-tasks.test.ts`.
+
+`env -u PORT mise run test` (926 s, host load average 17 to 38) failed only
+on causes outside this change:
+- Known load timeouts:
+  [0244](../../tests/flaky-tests/environments-and-containers/0244-container-replacement-reconciliation-timeout.md),
+  [0672](../../tests/flaky-tests/environments-and-containers/0672-container-storage-marker-aggregate-timeout.md),
+  [0192](../../tests/flaky-tests/environments-and-containers/0192-firewall-bootstrap-shell-timeout.md),
+  [0632](../../tests/flaky-tests/environments-and-containers/0632-firewall-policy-probe-budget.md)
+  and [0198](../../tests/flaky-tests/environments-and-containers/0198-git-ssh-fetch-aggregate-timeouts.md).
+  Under this load the firewall and container-replacement owners failed alone
+  on `main` too.
+- One new aggregate timeout,
+  [0785](../../tests/flaky-tests/agent-bridges/0785-local-bridge-reuse-busy-replace-timeout.md),
+  whose owner passed alone.
+- `conformance-execution-policy.test.ts`'s OpenCode cases, which expect CLI
+  "1.19.0" while the toolchain manifest pins 1.19.4. They fail identically on
+  `main`.
+
+The run also exposed this change's own failures, now fixed: the Cursor and Pi
+lifecycle tests still expected the 5 s watch, and AGENTS.md's bridge-rebuild
+note named a placeholder path that `mise-tasks.test.ts` resolves literally.
+
 ## Qualification results (2026-10-21): cold restart
 
 Real cold restarts of the whole profile (backend, bridges and Electron), idle,

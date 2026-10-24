@@ -40,6 +40,7 @@ import {
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { StorageService } from "./storage.js";
+import type { CoordinatorRemoteAccess } from "./coordinator-remote.js";
 
 /** How long a notice waits for others before waking the coordinator. */
 export const COORDINATOR_STATUS_COALESCE_MS = 10_000;
@@ -699,6 +700,22 @@ export interface CoordinatorStatusWakeOptions {
   waitingDebounceMs?: number;
 }
 
+/**
+ * The same status for a resource on another node: every suggested call names
+ * that node, and the first detail says where the work runs.
+ */
+export function statusOnNode(
+  status: CoordinatorStatus,
+  nodeId: string,
+  nodeName: string,
+): CoordinatorStatus {
+  return {
+    ...status,
+    details: [`Runs on ${nodeName} (nodeId ${nodeId}).`, ...status.details],
+    tools: status.tools.map((tool) => tool.replace(/^(\w+) \{ /, `$1 { "nodeId": "${nodeId}", `)),
+  };
+}
+
 /** Sends status wakes for coordinator-owned resources; see the module comment. */
 export class CoordinatorStatusWakes {
   private readonly timers: CoordinatorStatusWakeTimers;
@@ -709,6 +726,8 @@ export class CoordinatorStatusWakes {
   private unsubscribe: (() => void) | null = null;
   /** One pass at a time, so two observers of one state cannot both send it. */
   private queue: Promise<unknown> = Promise.resolve();
+  /** Reads of workflows and workers on other nodes, once the node services exist. */
+  private remote: CoordinatorRemoteAccess | null = null;
 
   constructor(
     private readonly storage: StorageService,
@@ -717,6 +736,35 @@ export class CoordinatorStatusWakes {
     this.timers = options.timers ?? SYSTEM_TIMERS;
     this.coalesceMs = options.coalesceMs ?? COORDINATOR_STATUS_COALESCE_MS;
     this.waitingDebounceMs = options.waitingDebounceMs ?? COORDINATOR_WAITING_DEBOUNCE_MS;
+  }
+
+  setRemoteAccess(remote: CoordinatorRemoteAccess): void {
+    this.remote = remote;
+  }
+
+  /**
+   * A workflow on another node was saved (its node's relayed event). Debounced
+   * like a local save; cheap when no coordinator here owns it.
+   */
+  noteRemoteWorkflowChange(
+    nodeId: string,
+    kind: "multi-review" | "build-pipeline",
+    id: string,
+  ): void {
+    const key = `${nodeId}\0${kind}\0${id}`;
+    if (this.changeTimers.has(key)) return;
+    this.changeTimers.set(
+      key,
+      this.timers.setTimeout(() => {
+        this.changeTimers.delete(key);
+        void this.observeWorkflow(kind, id, nodeId).catch((error: unknown) => {
+          console.warn(
+            "[coordinator] Could not observe a remote workflow for status wakes:",
+            error instanceof Error ? error.message : error,
+          );
+        });
+      }, RESOURCE_CHANGE_DEBOUNCE_MS),
+    );
   }
 
   /** Observe workflow saves so a settled state is reported within seconds, not on the sweep. */
@@ -773,14 +821,19 @@ export class CoordinatorStatusWakes {
     return settings.coordinatorStatusWakes;
   }
 
-  /** Observe one workflow now. Cheap when no coordinator owns it. */
-  observeWorkflow(kind: "multi-review" | "build-pipeline", resourceId: string): Promise<void> {
+  /** Observe one workflow now (on `nodeId`, or this node). Cheap when no coordinator owns it. */
+  observeWorkflow(
+    kind: "multi-review" | "build-pipeline",
+    resourceId: string,
+    nodeId?: string,
+  ): Promise<void> {
     return this.serialize(async () => {
       const state = await this.storage.getCoordinatorReconciliationState();
       const owned = state.workflows.filter(
         (association) =>
           association.kind === kind &&
           association.resourceId === resourceId &&
+          association.nodeId === nodeId &&
           !association.pending &&
           !association.terminalNotifiedAt,
       );
@@ -838,6 +891,7 @@ export class CoordinatorStatusWakes {
    */
   private async launchedPrEnvironment(
     snapshot: unknown,
+    nodeId?: string,
   ): Promise<{ prUrl?: unknown; prState?: unknown }> {
     if (
       !record(snapshot) ||
@@ -847,6 +901,13 @@ export class CoordinatorStatusWakes {
       !text(snapshot.environmentId)
     )
       return {};
+    if (nodeId) {
+      return (
+        (await this.remote
+          ?.environmentPr(nodeId, snapshot.environmentId as string)
+          .catch(() => ({}))) ?? {}
+      );
+    }
     return (await this.storage.getEnvironment(snapshot.environmentId as string)) ?? {};
   }
 
@@ -855,19 +916,38 @@ export class CoordinatorStatusWakes {
     association: CoordinatorWorkflowAssociation,
     mode: CoordinatorStatusWakeMode,
   ): Promise<void> {
-    const persisted =
-      association.kind === "build-pipeline"
+    const kind = association.kind === "build-pipeline" ? "build-pipeline" : "multi-review";
+    const remote = association.nodeId ? this.remote : null;
+    if (association.nodeId && !remote) return;
+    const read = remote
+      ? await remote
+          .workflow(association.nodeId!, kind, association.resourceId)
+          .catch(() => "unavailable" as const)
+      : kind === "build-pipeline"
         ? await this.storage.getBuildPipeline(association.resourceId)
         : await this.storage.getMultiReviewWorkflow(association.resourceId);
-    if (!persisted) return;
-    const status =
-      association.kind === "build-pipeline"
+    // An unreachable node is no news; the sweep asks again.
+    if (!read || read === "unavailable") return;
+    const persisted = read as {
+      snapshot: unknown;
+      revision?: number;
+      updatedAt?: string;
+      environmentId?: string;
+    };
+    const reduced =
+      kind === "build-pipeline"
         ? buildPipelineStatus(persisted.snapshot, association.resourceId)
         : multiReviewStatus(
             persisted.snapshot,
             association.resourceId,
-            await this.launchedPrEnvironment(persisted.snapshot),
+            await this.launchedPrEnvironment(persisted.snapshot, association.nodeId),
           );
+    const nodeName =
+      remote && association.nodeId
+        ? await remote.nodeName(association.nodeId).catch(() => association.nodeId!)
+        : null;
+    const status =
+      reduced && nodeName ? statusOnNode(reduced, association.nodeId!, nodeName) : reduced;
     if (!status || MODE_ORDER[mode] < MODE_ORDER[status.mode]) return;
     const revision = typeof persisted.revision === "number" ? persisted.revision : 0;
     if (association.statusNotice?.key === status.key) {
@@ -888,15 +968,25 @@ export class CoordinatorStatusWakes {
     }
     const snapshot = record(persisted.snapshot) ? persisted.snapshot : {};
     const environmentId = text(snapshot.environmentId) ?? text(persisted.environmentId);
-    const environment = environmentId ? await this.storage.getEnvironment(environmentId) : null;
+    const label =
+      remote && association.nodeId && environmentId
+        ? await remote
+            .workerState(association.nodeId, environmentId, "")
+            .then((state) => (state === "unavailable" ? undefined : state.name))
+            .catch(() => undefined)
+        : environmentId
+          ? (await this.storage.getEnvironment(environmentId))?.name
+          : undefined;
     const delivered = await this.deliver(
       workspaces,
       association,
       {
-        kind: association.kind === "build-pipeline" ? "build-pipeline" : "multi-review",
+        kind,
         id: association.resourceId,
         ...(environmentId ? { environmentId } : {}),
-        ...(environment?.name ? { label: environment.name } : {}),
+        ...(label || nodeName
+          ? { label: `${label ?? association.resourceId}${nodeName ? ` on ${nodeName}` : ""}` }
+          : {}),
       },
       status,
     );
@@ -922,6 +1012,7 @@ export class CoordinatorStatusWakes {
     return this.serialize(async () => {
       const open = (await this.storage.listOpenCoordinatorDelegations()).filter(
         (association) =>
+          !association.nodeId &&
           association.resourceId === event.environmentId &&
           association.delegation?.workerTabId === event.tabId,
       );
@@ -987,11 +1078,20 @@ export class CoordinatorStatusWakes {
     association: CoordinatorWorkflowAssociation,
   ): Promise<void> {
     const delegation = association.delegation;
-    if (!delegation || delegation.state !== "running" || !this.options.workerActivity) return;
-    const activity = await this.options.workerActivity(
-      association.resourceId,
-      delegation.workerTabId,
-    );
+    if (!delegation || delegation.state !== "running") return;
+    const remote = association.nodeId ? this.remote : null;
+    if (association.nodeId ? !remote : !this.options.workerActivity) return;
+    const activity: AgentActivityState | "unknown" = remote
+      ? await remote
+          .workerState(association.nodeId!, association.resourceId, delegation.workerTabId)
+          .then((state) =>
+            state !== "unavailable" &&
+            (state.tab === "working" || state.tab === "waiting" || state.tab === "idle")
+              ? state.tab
+              : ("unknown" as const),
+          )
+          .catch(() => "unknown" as const)
+      : await this.options.workerActivity!(association.resourceId, delegation.workerTabId);
     if (activity !== "waiting") {
       if (delegation.waiting && activity === "working") {
         this.clearWaitingTimer(association.id);
@@ -1020,16 +1120,30 @@ export class CoordinatorStatusWakes {
       if (!this.waitingTimers.has(association.id)) this.scheduleWaitingCheck(association.id);
       return;
     }
-    const environment = await this.storage.getEnvironment(association.resourceId);
-    const excerpt = await this.options
-      .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
-      .catch(() => undefined);
-    const status = waitingStatus(
+    const environmentName = remote
+      ? await remote
+          .workerState(association.nodeId!, association.resourceId, delegation.workerTabId)
+          .then((state) => (state === "unavailable" ? undefined : state.name))
+          .catch(() => undefined)
+      : (await this.storage.getEnvironment(association.resourceId))?.name;
+    const excerpt = remote
+      ? await remote
+          .lastAssistantExcerpt(association.nodeId!, association.resourceId, delegation.workerTabId)
+          .catch(() => undefined)
+      : await this.options
+          .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
+          .catch(() => undefined);
+    const nodeName = remote
+      ? await remote.nodeName(association.nodeId!).catch(() => association.nodeId!)
+      : null;
+    const waiting = waitingStatus(
       delegation,
       association.resourceId,
       delegation.workerTabId,
       excerpt,
     );
+    const status =
+      waiting && nodeName ? statusOnNode(waiting, association.nodeId!, nodeName) : waiting;
     if (!status) return;
     const delivered = await this.deliver(
       workspaces,
@@ -1039,7 +1153,11 @@ export class CoordinatorStatusWakes {
         id: delegation.workerTabId,
         environmentId: association.resourceId,
         tabId: delegation.workerTabId,
-        ...(environment?.name ? { label: environment.name } : {}),
+        ...(environmentName || nodeName
+          ? {
+              label: `${environmentName ?? association.resourceId}${nodeName ? ` on ${nodeName}` : ""}`,
+            }
+          : {}),
       },
       status,
     );

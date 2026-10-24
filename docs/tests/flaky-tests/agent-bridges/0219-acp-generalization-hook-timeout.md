@@ -96,3 +96,13 @@ ACP filesystem/terminal generalization hit its 60-second hook deadline (60,013.0
 - **Unchanged owner:** `mise run test:logged -- --name acp-generalization-node -- bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts ./src/acp-generalization.test.ts --parallel=1 --only-failures` passed (exit 0, 1.9 s logged).
 - **Evidence:** `orkestrator-test-run.XHMi6K/bridges.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent fixture lifecycle timeout; shared-host contention remains a hypothesis. No assertion, timeout or skip changed.
+
+
+## Per-machine agent accounts main merge — 2026-10-24
+
+- **Parents:** feature `9f67a5963` and main `5282e441a`.
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`; workspace/root/bridge/protocol reservations 4/1/2/1, one ACP worker, alongside component and isolated-browser validation and other worktrees.
+- **Failure:** the filesystem/terminal fixture hook timed out after 60004 ms. ACP reported 668 passed, three skipped and one failed across 672 tests in 45 files (266.36 s); the other four bridge packages passed.
+- **Unchanged owner:** `mise run test:logged -- --name merge-acp-owner -- bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts ./src/acp-generalization.test.ts --parallel=1 --only-failures` passed (3 tests; 1.0 s logged).
+- **Evidence:** `orkestrator-test-run.jFRynx/bridges.log.gz` under the host temporary directory after aggregate completion.
+- **Assessment:** confirmed recurrence of the existing intermittent lifecycle timeout. No ACP source, assertion, timeout or skip changed.

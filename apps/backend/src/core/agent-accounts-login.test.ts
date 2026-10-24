@@ -6,6 +6,8 @@ import type { ChildProcess } from "node:child_process";
 import {
   agentAccountLoginCommand,
   beginAgentAccountLogin,
+  loginFailureMessage,
+  loginFailureReason,
   parseClaudeLoginOutput,
   parseCodexDeviceLoginOutput,
   type SpawnLike,
@@ -24,6 +26,43 @@ const CODEX_OUTPUT = [
   "2. Enter this one-time code \u001b[90m(expires in 15 minutes)\u001b[0m",
   "   \u001b[94mABCD-EFGH1\u001b[0m",
 ].join("\n");
+
+describe("login failure reasons", () => {
+  test("names the CLI's own reason without the URL, code or anything token-shaped", () => {
+    const output = [
+      CLAUDE_OUTPUT,
+      "Login failed: token exchange refused for state Zx9aQ2wErTy7uIoP3aSdFgHjKl0",
+    ].join("\n");
+    const message = loginFailureMessage(1, output);
+    expect(message).toBe(
+      "The sign-in did not complete: Login failed: token exchange refused for state …",
+    );
+    expect(message).not.toContain("https://");
+    expect(message).not.toContain("Zx9aQ2wErTy7uIoP3aSdFgHjKl0");
+  });
+
+  test("skips lines that carry a device code", () => {
+    expect(loginFailureReason(`${CODEX_OUTPUT}\nError: ABCD-EFGH1 expired`)).toBeUndefined();
+  });
+
+  test("adds what to do for a locked keychain and a mismatched code", () => {
+    expect(
+      loginFailureMessage(
+        1,
+        "Couldn't save your login. If your Mac's keychain is locked, unlock it and log in again.",
+      ),
+    ).toContain("Unlock this machine's login keychain");
+    expect(loginFailureMessage(1, "Login failed: Invalid code")).toContain(
+      "paste the code from the newest browser page",
+    );
+  });
+
+  test("falls back to the exit code", () => {
+    expect(loginFailureMessage(1, CLAUDE_OUTPUT)).toBe(
+      "The sign-in did not complete (exit code 1)",
+    );
+  });
+});
 
 describe("login output parsing", () => {
   test("finds Claude's authorize URL", () => {

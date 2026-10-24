@@ -7,14 +7,21 @@ import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,
   applyCoordinatorClaudeAccount,
+  coordinatorCodexLogin,
   localBridgeIsOnActiveAccount,
   markLocalBridgesForLoginRefresh,
+  setLocalClaudeLoginRefresher,
+  setLocalCodexLoginRefresher,
+  readCoordinatorCodexLogin,
 } from "./agent-accounts-active.js";
 import type { CommandContext } from "./commands-context.js";
 import * as commandFiles from "./commands-files.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { LocalServerLaunch } from "./local-server-runtime.js";
-import { prepareCoordinatorClaudeHome } from "./commands-servers.js";
+
+import { prepareCoordinatorClaudeHome, prepareCoordinatorCodexHome } from "./commands-servers.js";
+import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
+import { claudeKeychainService } from "./agent-accounts-homes.js";
 import { StorageService } from "./storage.js";
 
 const ACCOUNT_IDS = {
@@ -31,6 +38,27 @@ let storage: StorageService;
 let liveWork = false;
 let context: CommandContext;
 let restoreHostCredentialRead: (() => void) | undefined;
+const noKeychain = async (): Promise<void> => undefined;
+
+/** A JWT-shaped token whose `exp` claim is `expiresAt`. Never a real credential. */
+function fakeJwt(expiresAt: number, marker: string): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${encode({ alg: "none" })}.${encode({ exp: Math.floor(expiresAt / 1000), marker })}.sig`;
+}
+
+/** A Codex ChatGPT login whose access token expires at `expiresAt`. */
+function codexAuth(expiresAt: number, marker = "login"): string {
+  return JSON.stringify({
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: fakeJwt(expiresAt, `${marker}-id`),
+      access_token: fakeJwt(expiresAt, marker),
+      refresh_token: `refresh-${marker}`,
+      account_id: `account-${marker}`,
+    },
+    last_refresh: "2026-10-01T00:00:00.000Z",
+  });
+}
 
 /**
  * Records `key` as an owned bridge launched with `launch`. Each call replaces
@@ -91,6 +119,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  setLocalCodexLoginRefresher(undefined);
   restoreHostCredentialRead?.();
   restoreHostCredentialRead = undefined;
   for (const [key, value] of Object.entries(savedEnv)) {
@@ -156,6 +185,7 @@ describe("applyCoordinatorClaudeAccount", () => {
       env,
       prepareCoordinatorClaudeHome,
       async () => credentials,
+      noKeychain,
     );
     expect(account).toEqual({ accountId: ACCOUNT_IDS.claude, tokenExpiresAt: expiresAt });
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("access-only");
@@ -174,18 +204,27 @@ describe("applyCoordinatorClaudeAccount", () => {
             expiresAt: Date.now() + 2 * 60_000,
           },
         }),
+      noKeychain,
     );
     expect(soon).toEqual({ accountId: ACCOUNT_IDS.claude, loginless: true });
   });
-  test("copies the active account's credential file and replaces an earlier one", async () => {
+  test("hands over a file login's access token and never copies the file", async () => {
     await activate("claude");
     await fs.mkdir(accountHome("claude"), { recursive: true });
+    const expiresAt = Date.now() + 60 * 60_000;
     await fs.writeFile(
       path.join(accountHome("claude"), ".credentials.json"),
-      '{"claudeAiOauth":{"accessToken":"second"}}',
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "second", refreshToken: "account-refresh", expiresAt },
+      }),
     );
     const coordinatorHome = path.join(root, "coordinator", "claude-home");
     await fs.mkdir(coordinatorHome, { recursive: true });
+    // Earlier builds copied a login in; it must not survive the launch.
+    await fs.writeFile(
+      path.join(coordinatorHome, ".credentials.json"),
+      '{"claudeAiOauth":{"accessToken":"stale","refreshToken":"stale-refresh"}}',
+    );
     await fs.writeFile(path.join(coordinatorHome, "credentials.json"), '{"stale":true}');
     const env: NodeJS.ProcessEnv = { ANTHROPIC_AUTH_TOKEN: "host-token" };
 
@@ -194,17 +233,86 @@ describe("applyCoordinatorClaudeAccount", () => {
       coordinatorHome,
       env,
       prepareCoordinatorClaudeHome,
+      (home) => fs.readFile(path.join(home, ".credentials.json"), "utf8"),
+      noKeychain,
     );
 
-    expect(account).toEqual({ accountId: ACCOUNT_IDS.claude });
+    expect(account).toEqual({ accountId: ACCOUNT_IDS.claude, tokenExpiresAt: expiresAt });
     expect(env.CLAUDE_CONFIG_DIR).toBe(coordinatorHome);
     // The host token an agent-test profile injected would outrank the account.
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
-    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
-    expect(await fs.readFile(path.join(coordinatorHome, ".credentials.json"), "utf8")).toContain(
-      "second",
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("second");
+    expect(JSON.stringify(env)).not.toContain("account-refresh");
+    expect(await fs.readdir(coordinatorHome)).toEqual([]);
+  });
+
+  test("refreshes a lapsed login before handing over its token", async () => {
+    await activate("claude");
+    const expiresAt = Date.now() + 60 * 60_000;
+    let credentials = JSON.stringify({
+      claudeAiOauth: { accessToken: "old", refreshToken: "r", expiresAt: Date.now() - 60_000 },
+    });
+    let refreshes = 0;
+    setLocalClaudeLoginRefresher(async () => {
+      refreshes += 1;
+      credentials = JSON.stringify({
+        claudeAiOauth: { accessToken: "renewed", refreshToken: "r2", expiresAt },
+      });
+    });
+    context.runtimeFlavor = "production";
+    try {
+      const env: NodeJS.ProcessEnv = {};
+      const account = await applyCoordinatorClaudeAccount(
+        context,
+        path.join(root, "coordinator", "lapsed"),
+        env,
+        prepareCoordinatorClaudeHome,
+        async () => credentials,
+        noKeychain,
+      );
+      expect(refreshes).toBe(1);
+      expect(account).toEqual({ accountId: ACCOUNT_IDS.claude, tokenExpiresAt: expiresAt });
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("renewed");
+
+      // A login with no refresh token is not worth asking about.
+      credentials = JSON.stringify({
+        claudeAiOauth: { accessToken: "old", expiresAt: Date.now() - 60_000 },
+      });
+      expect(
+        await applyCoordinatorClaudeAccount(
+          context,
+          path.join(root, "coordinator", "lapsed"),
+          {},
+          prepareCoordinatorClaudeHome,
+          async () => credentials,
+          noKeychain,
+        ),
+      ).toEqual({ accountId: ACCOUNT_IDS.claude, loginless: true });
+      expect(refreshes).toBe(1);
+    } finally {
+      setLocalClaudeLoginRefresher(undefined);
+    }
+  });
+
+  test("uses an agent-test profile's own file login, never the Keychain", async () => {
+    const profileDir = path.join(root, "profile-claude");
+    await fs.mkdir(profileDir, { recursive: true });
+    await fs.writeFile(
+      path.join(profileDir, ".credentials.json"),
+      JSON.stringify({ claudeAiOauth: { accessToken: "profile", refreshToken: "profile-r" } }),
     );
-    await expect(fs.stat(path.join(coordinatorHome, "credentials.json"))).rejects.toThrow();
+    const env: NodeJS.ProcessEnv = { CLAUDE_CONFIG_DIR: profileDir };
+    const account = await applyCoordinatorClaudeAccount(
+      context,
+      path.join(root, "coordinator", "profile"),
+      env,
+      prepareCoordinatorClaudeHome,
+      undefined,
+      noKeychain,
+    );
+    expect(account).toEqual({ accountId: "default" });
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("profile");
+    expect(JSON.stringify(env)).not.toContain("profile-r");
   });
 
   test("an agent-test profile without a grant never reads the host login", async () => {
@@ -215,6 +323,8 @@ describe("applyCoordinatorClaudeAccount", () => {
       coordinatorHome,
       env,
       prepareCoordinatorClaudeHome,
+      undefined,
+      noKeychain,
     );
     expect(account).toEqual({ accountId: "default", loginless: true });
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
@@ -270,6 +380,8 @@ describe("localBridgeIsOnActiveAccount", () => {
         path.join(root, "host-coordinator"),
         env,
         prepareCoordinatorClaudeHome,
+        undefined,
+        noKeychain,
       ),
     ).toEqual({
       accountId: "default",
@@ -358,4 +470,305 @@ describe("localBridgeIsOnActiveAccount", () => {
     liveWork = false;
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(false);
   });
+
+  test("replaces an idle Codex coordinator once its token nears expiry and a fresher one exists", async () => {
+    await activate("codex");
+    const key = "codex:coordinator-1";
+    const handedOver = Date.now() + 60_000;
+    launchBridge(key, { accountId: ACCOUNT_IDS.codex, tokenExpiresAt: handedOver });
+    await fs.mkdir(accountHome("codex"), { recursive: true });
+    // The account's own login has not been refreshed: nothing better to hand over.
+    await fs.writeFile(path.join(accountHome("codex"), "auth.json"), codexAuth(handedOver));
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(true);
+
+    await fs.writeFile(
+      path.join(accountHome("codex"), "auth.json"),
+      codexAuth(Date.now() + 10 * 24 * 60 * 60_000, "fresh"),
+    );
+    liveWork = true;
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(true);
+    liveWork = false;
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(false);
+  });
+
+  test("replaces an idle Codex coordinator launched without a login once one appears", async () => {
+    await activate("codex");
+    const key = "codex:coordinator-1";
+    launchBridge(key, { accountId: ACCOUNT_IDS.codex, loginless: true });
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(true);
+
+    await fs.mkdir(accountHome("codex"), { recursive: true });
+    await fs.writeFile(
+      path.join(accountHome("codex"), "auth.json"),
+      codexAuth(Date.now() + 60 * 60_000),
+    );
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(false);
+  });
+});
+
+describe("prepareCoordinatorCodexHome", () => {
+  test("hands over the access token without the refresh token and records its expiry", async () => {
+    const expiresAt = Date.now() + 60 * 60_000;
+    const source = path.join(root, "codex-source");
+    const destination = path.join(root, "codex-coordinator");
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(path.join(source, "auth.json"), codexAuth(expiresAt));
+
+    const login = await prepareCoordinatorCodexHome(destination, source);
+    expect(login).toEqual({ tokenExpiresAt: Math.floor(expiresAt / 1000) * 1000 });
+    const copied = JSON.parse(await fs.readFile(path.join(destination, "auth.json"), "utf8"));
+    expect(copied.tokens.access_token).toBe(JSON.parse(codexAuth(expiresAt)).tokens.access_token);
+    expect(copied.tokens.refresh_token).toBe("");
+    expect(JSON.stringify(copied)).not.toContain("refresh-login");
+    expect((await fs.stat(path.join(destination, "auth.json"))).mode & 0o777).toBe(0o600);
+    // The account's own login is untouched.
+    expect(await fs.readFile(path.join(source, "auth.json"), "utf8")).toBe(codexAuth(expiresAt));
+  });
+
+  test("starts signed out rather than hand over a token about to lapse", async () => {
+    const source = path.join(root, "codex-source");
+    const destination = path.join(root, "codex-coordinator");
+    await fs.mkdir(destination, { recursive: true });
+    await fs.writeFile(path.join(destination, "auth.json"), "earlier login");
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(path.join(source, "auth.json"), codexAuth(Date.now() + 60_000));
+
+    expect(await prepareCoordinatorCodexHome(destination, source)).toEqual({ loginless: true });
+    await expect(fs.access(path.join(destination, "auth.json"))).rejects.toThrow();
+    expect(await prepareCoordinatorCodexHome(destination, path.join(root, "absent"))).toEqual({
+      loginless: true,
+    });
+  });
+
+  test("keeps an API key login, which never expires", () => {
+    const raw = JSON.stringify({ OPENAI_API_KEY: "sk-test-key" });
+    expect(coordinatorCodexLogin(raw)).toEqual({ text: raw });
+  });
+});
+
+test("renews an expired owner login without ordinary sessions before the coordinator handoff", async () => {
+  await activate("codex");
+  const home = accountHome("codex");
+  await fs.mkdir(home, { recursive: true });
+  await fs.writeFile(path.join(home, "auth.json"), codexAuth(Date.now() - 60_000));
+  let calls = 0;
+  const production = { ...context, runtimeFlavor: "production" } as CommandContext;
+  setLocalCodexLoginRefresher(
+    createCodexLoginRefresher(production, async (owner) => {
+      calls++;
+      expect(owner).toBe(home);
+      await fs.writeFile(
+        path.join(owner, "auth.json"),
+        codexAuth(Date.now() + 3600_000, "renewed"),
+      );
+    }),
+  );
+  const destination = path.join(root, "coordinator-codex");
+  const [login] = await Promise.all([
+    prepareCoordinatorCodexHome(destination, home),
+    readCoordinatorCodexLogin({ accountId: ACCOUNT_IDS.codex, home }),
+  ]);
+  expect(login.loginless).toBeUndefined();
+  expect(calls).toBe(1);
+  const owner = JSON.parse(await fs.readFile(path.join(home, "auth.json"), "utf8"));
+  const copy = JSON.parse(await fs.readFile(path.join(destination, "auth.json"), "utf8"));
+  expect(owner.tokens.refresh_token).toBe("refresh-renewed");
+  expect(copy.tokens.access_token).toBe(owner.tokens.access_token);
+  expect(copy.tokens.refresh_token).toBe("");
+  // The following turn can use the renewed token and does not spend it again.
+  expect(
+    (await readCoordinatorCodexLogin({ accountId: ACCOUNT_IDS.codex, home })).text,
+  ).toBeTruthy();
+  expect(calls).toBe(1);
+});
+
+test("macOS removes only each coordinator home's Keychain login, once per home", async () => {
+  const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+  const removed: string[] = [];
+  try {
+    for (const name of ["one", "one", "two"]) {
+      await applyCoordinatorClaudeAccount(
+        context,
+        path.join(root, name),
+        {},
+        prepareCoordinatorClaudeHome,
+        async () => undefined,
+        async (service) => {
+          removed.push(service);
+        },
+      );
+    }
+    expect(removed).toEqual([
+      claudeKeychainService(path.join(root, "one")),
+      claudeKeychainService(path.join(root, "two")),
+    ]);
+    expect(removed).not.toContain(claudeKeychainService(accountHome("claude")));
+    expect(removed).not.toContain("Claude Code-credentials");
+  } finally {
+    Object.defineProperty(process, "platform", original);
+  }
+});
+
+test("a due Codex coordinator renews its owning login on reuse and moves only while idle", async () => {
+  await activate("codex");
+  const home = accountHome("codex");
+  const key = "codex:renew-on-use";
+  await fs.mkdir(home, { recursive: true });
+  await fs.writeFile(path.join(home, "auth.json"), codexAuth(Date.now() + 60_000));
+  launchBridge(key, { accountId: ACCOUNT_IDS.codex, tokenExpiresAt: Date.now() + 60_000 });
+  let refreshes = 0;
+  setLocalCodexLoginRefresher(
+    createCodexLoginRefresher({ ...context, runtimeFlavor: "production" }, async (owner) => {
+      refreshes++;
+      await fs.writeFile(path.join(owner, "auth.json"), codexAuth(Date.now() + 3600_000));
+    }),
+  );
+  liveWork = true;
+  expect(await localBridgeIsOnActiveAccount(key, "codex", "renew-on-use", context)).toBe(true);
+  liveWork = false;
+  expect(await localBridgeIsOnActiveAccount(key, "codex", "renew-on-use", context)).toBe(false);
+  expect(refreshes).toBe(1);
+});
+
+test("real keeper refreshes the 4m30s handoff gap before a coordinator starts", async () => {
+  const { ContainerClaudeLoginKeeper } = await import("./container-claude-login-keeper.js");
+  const now = Date.now();
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  await activate("claude");
+  context.runtimeFlavor = undefined;
+  let credentials = JSON.stringify({
+    claudeAiOauth: { accessToken: "old", refreshToken: "owner-refresh", expiresAt: now + 270_000 },
+  });
+  let refreshes = 0;
+  const keeper = new ContainerClaudeLoginKeeper(context, {
+    now: () => now,
+    readLocalCredentials: async () => credentials,
+    refreshHostLogin: async () => {
+      refreshes++;
+      credentials = JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "renewed",
+          refreshToken: "new-owner-refresh",
+          expiresAt: now + 8 * 3600_000,
+        },
+      });
+    },
+  });
+  setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
+  try {
+    const env: NodeJS.ProcessEnv = {};
+    const result = await applyCoordinatorClaudeAccount(
+      context,
+      path.join(root, "coordinator"),
+      env,
+      prepareCoordinatorClaudeHome,
+      async () => credentials,
+      noKeychain,
+    );
+    expect(refreshes).toBe(1);
+    expect(result.loginless).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("renewed");
+    expect(JSON.stringify(env)).not.toContain("owner-refresh");
+  } finally {
+    clock.mockRestore();
+    setLocalClaudeLoginRefresher(undefined);
+  }
+});
+
+test.skipIf(process.platform !== "darwin")(
+  "cleans an actual isolated coordinator Keychain entry before launch",
+  async () => {
+    const { runCommand } = await import("./shell.js");
+    const { claudeKeychainService } = await import("./agent-accounts-homes.js");
+    const home = path.join(root, "keychain-coordinator");
+    const service = claudeKeychainService(home);
+    // This uniquely named disposable entry belongs only to this test.
+    await runCommand("security", [
+      "add-generic-password",
+      "-a",
+      "ork-account-test",
+      "-s",
+      service,
+      "-w",
+      "test-only",
+    ]);
+    try {
+      await applyCoordinatorClaudeAccount(
+        context,
+        home,
+        {},
+        prepareCoordinatorClaudeHome,
+        async () => undefined,
+      );
+      await expect(
+        runCommand("security", ["find-generic-password", "-s", service]),
+      ).rejects.toThrow();
+    } finally {
+      await runCommand("security", ["delete-generic-password", "-s", service]).catch(
+        () => undefined,
+      );
+    }
+  },
+);
+
+test("keeper reads the real active added-account path to renew a loginless local bridge", async () => {
+  const { ContainerClaudeLoginKeeper } = await import("./container-claude-login-keeper.js");
+  await activate("claude");
+  context.runtimeFlavor = undefined;
+  const home = accountHome("claude");
+  await fs.mkdir(home, { recursive: true });
+  const credentialsPath = path.join(home, ".credentials.json");
+  await fs.writeFile(
+    credentialsPath,
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "old",
+        refreshToken: "account-refresh",
+        expiresAt: Date.now() + 270_000,
+      },
+    }),
+  );
+  const key = "claude:env-loginless";
+  launchBridge(key, { accountId: ACCOUNT_IDS.claude, loginless: true });
+  const refreshed: string[] = [];
+  const keeper = new ContainerClaudeLoginKeeper(context, {
+    refreshHostLogin: async (account) => {
+      refreshed.push(account.home!);
+      await fs.writeFile(
+        credentialsPath,
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "fresh",
+            refreshToken: "renewed-private",
+            expiresAt: Date.now() + 8 * 3600_000,
+          },
+        }),
+      );
+    },
+  });
+  setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
+  expect(await localBridgeIsOnActiveAccount(key, "claude", "env-loginless", context)).toBe(false);
+  expect(refreshed).toEqual([home]);
+  liveWork = true;
+  expect(await localBridgeIsOnActiveAccount(key, "claude", "env-loginless", context)).toBe(true);
+});
+
+test("keeper's local default path reads host credentials only outside agent-test profiles", async () => {
+  const { ContainerClaudeLoginKeeper } = await import("./container-claude-login-keeper.js");
+  const host = spyOn(commandFiles, "readRuntimeHostClaudeCredentials").mockResolvedValue(
+    JSON.stringify({
+      claudeAiOauth: { accessToken: "host", expiresAt: Date.now() + 8 * 3600_000 },
+    }),
+  );
+  try {
+    const keeper = new ContainerClaudeLoginKeeper(context);
+    expect(await keeper.refreshLocalLoginIfDue()).toBeUndefined();
+    expect(host).not.toHaveBeenCalled();
+    context.runtimeFlavor = undefined;
+    expect((await keeper.refreshLocalLoginIfDue())?.expiresAt).toBeGreaterThan(Date.now());
+    expect(host).toHaveBeenCalledTimes(1);
+  } finally {
+    host.mockRestore();
+  }
 });

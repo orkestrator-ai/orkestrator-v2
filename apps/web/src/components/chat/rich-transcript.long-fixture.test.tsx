@@ -33,9 +33,11 @@ const realVirtuosoSnapshot = { ...realVirtuoso };
 function WindowedVirtuoso({
   data,
   itemContent,
+  firstItemIndex = 0,
   computeItemKey,
 }: {
   data: unknown[];
+  firstItemIndex?: number;
   itemContent: (index: number, item: unknown) => ReactNode;
   computeItemKey: (index: number, item: unknown) => string;
 }) {
@@ -44,7 +46,9 @@ function WindowedVirtuoso({
   const rows: ReactNode[] = [];
   for (let index = start; index < Math.min(data.length, start + WINDOW); index++) {
     rows.push(
-      <div key={computeItemKey(index, data[index])}>{itemContent(index, data[index])}</div>,
+      <div key={computeItemKey(firstItemIndex + index, data[index])}>
+        {itemContent(firstItemIndex + index, data[index])}
+      </div>,
     );
   }
   return <div data-virtuoso-scroller="true">{rows}</div>;

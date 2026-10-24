@@ -343,17 +343,6 @@ async function routeGlobal(
     json(response, 200, { ok: true });
     return true;
   }
-  // Pi's slash commands are prompt templates, skills and extension commands,
-  // all discovered per session because a workspace can contribute its own.
-  // There is no global list, so this answers empty rather than 404 — the
-  // backend reads a 404 as a bridge that predates the route. `/compact` used
-  // to be advertised here, but `session.prompt` does not implement Pi's
-  // interactive builtins; compaction is the backend's session action over
-  // `/session/:id/compact`.
-  if (url.pathname === "/plugins/commands" && request.method === "GET") {
-    json(response, 200, { commands: [] });
-    return true;
-  }
   if (url.pathname === "/global/auth" && request.method === "GET") {
     json(response, 200, await authStatus());
     return true;

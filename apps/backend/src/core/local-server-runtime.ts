@@ -58,10 +58,10 @@ export type LocalServerLaunch = {
   workingDirectory: string;
   /** Account bound to a Claude or Codex bridge. */
   accountId?: string;
-  /** Expiry of a short-lived token handed to a coordinator Claude bridge. */
+  /** Expiry of a short-lived token handed to a coordinator Claude or Codex bridge. */
   tokenExpiresAt?: number;
   /**
-   * A coordinator Claude bridge launched with no login to hand over. A sign-in
+   * A coordinator Claude or Codex bridge launched with no login to hand over. A sign-in
    * outside Orkestrator's own flow is never announced, so each use checks for one.
    */
   loginless?: boolean;

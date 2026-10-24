@@ -155,6 +155,12 @@ export async function beginCursorSdkLogin(
     spawnImpl?: typeof spawn;
     /** Lets the backend cancel a login before the child has emitted its URL. */
     signal?: AbortSignal;
+    /**
+     * False when the client opens the link itself: the child then never opens
+     * a browser on this machine (`NO_OPEN_BROWSER`, honoured by the Cursor SDK).
+     * Cursor's sign-in polls for approval, so it completes from any browser.
+     */
+    openBrowser?: boolean;
     /** Bounds how long to wait for the child's login URL; tests lower this. */
     startupTimeoutMs?: number;
   },
@@ -178,6 +184,7 @@ export async function beginCursorSdkLogin(
         // on an ambient one: a user who asks to sign in is asking for a key
         // this app owns and can revoke.
         CURSOR_API_KEY: "",
+        ...(options.openBrowser === false ? { NO_OPEN_BROWSER: "1" } : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -305,7 +312,12 @@ let activeLoginStartup: CursorSdkLoginStartup | undefined;
 
 export async function startCursorSdkLogin(
   context: CommandContext,
-  options: { bridgeEntrypoint: string; runtime: string; spawnImpl?: typeof spawn },
+  options: {
+    bridgeEntrypoint: string;
+    runtime: string;
+    spawnImpl?: typeof spawn;
+    openBrowser?: boolean;
+  },
 ): Promise<{ loginUrl: string }> {
   if (activeLogin?.state === "pending") return { loginUrl: activeLogin.handle.loginUrl };
   if (activeLoginStartup) {

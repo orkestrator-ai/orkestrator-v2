@@ -93,6 +93,8 @@ export interface AppServerRuntimeOptions {
   skillInventoryTtlMs?: number;
   /** Test/embedding override for the coalesced `skills/changed` re-read delay. */
   skillRefreshDebounceMs?: number;
+  /** Skill inventory settle wait after a child's first answer; 0 trusts it. */
+  skillColdSettleMs?: number;
   /**
    * Measures what each shell command changed in its worktree, for the +N −M
    * badge on its row. One per process, supplied by the composition root;

@@ -1,12 +1,4 @@
-import {
-  Fragment,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { Fragment, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Check,
@@ -41,24 +33,17 @@ import {
   type NativeBackgroundTaskStatus,
   type NativeMessagePart,
   type NativeTaskGroupPart,
-  type NativeToolGroupPart,
 } from "@/lib/chat/native-message-types";
-import { shouldFoldToolGroup, summarizeToolGroup } from "@/lib/chat/tool-group-summary";
-import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import {
-  AgentExpansionScopeContext,
   AgentPlatformContext,
   BackgroundTaskChildrenContext,
   BackgroundTaskStopContext,
-  MessageExpansionScopeContext,
   ModelLabelResolverContext,
   NativeMessagePartRenderer,
-  getToolExpansionKey,
   markdownComponents,
   useAgentExpansion,
   useDeferredToolResult,
 } from "./NativeMessage.shared";
-import { toolRowPreview } from "./NativeMessage.basic-parts";
 
 function getSubagentStatusLabel(status: NativeAgentStatus): string {
   switch (status) {
@@ -1380,187 +1365,6 @@ export function AgentGroupPart({
         ))}
       </div>
     </section>
-  );
-}
-
-export function ToolGroupPart({
-  part,
-  containerId,
-  partKey,
-}: {
-  part: NativeToolGroupPart;
-  containerId?: string;
-  partKey: string;
-}) {
-  const folds = shouldFoldToolGroup(part.parts);
-  // A group that was on screen unfolded animates into its folded line; one that
-  // arrives already long (history, paging) just renders folded.
-  const [shownUnfolded, setShownUnfolded] = useState(!folds);
-  if (!folds && !shownUnfolded) setShownUnfolded(true);
-
-  // An empty group would still paint its border and padding.
-  if (part.parts.length === 0) {
-    return null;
-  }
-
-  const rows = part.parts.map((child, index) => (
-    <div key={`tool-group-part-${index}-${child.type}`} className="px-2 py-0.5">
-      <NativeMessagePartRenderer
-        part={child}
-        containerId={containerId}
-        partKey={`${partKey}/tool-${index}`}
-      />
-    </div>
-  ));
-
-  if (folds) {
-    return (
-      <FoldedToolGroup part={part} partKey={partKey} rows={rows} animateFold={shownUnfolded} />
-    );
-  }
-
-  return (
-    /*
-      Padding lives on the rows, not the card, so the separators run the full
-      width of the block rather than stopping short of its outline.
-
-      Only the horizontal padding is the wrapper's to give: each row's own
-      trigger already carries `py-1.5`, so anything more than a hairline here
-      is added to that rather than replacing it.
-    */
-    <div className="my-0 divide-y divide-divider overflow-hidden rounded-lg border border-divider bg-sidebar">
-      {rows}
-    </div>
-  );
-}
-
-/**
- * A long run of tool calls, folded to one line until the reader opens it.
- *
- * The folded line previews the newest call, so a running turn still shows what
- * the agent is doing now, and carries the group's size and how long it took
- * from the first call's start to the last call's end. Opened, the same line
- * heads the full list and folds it again.
- *
- * With `animateFold`, the group mounts open and folds on the next frame, so a
- * live group crossing the fold threshold visibly collapses its rows instead of
- * snapping to one line.
- */
-function FoldedToolGroup({
-  part,
-  partKey,
-  rows,
-  animateFold = false,
-}: {
-  part: NativeToolGroupPart;
-  partKey: string;
-  rows: ReactNode[];
-  animateFold?: boolean;
-}) {
-  const messageScope = useContext(MessageExpansionScopeContext);
-  const transcriptScope = useContext(AgentExpansionScopeContext);
-  const toolKeys = part.parts.flatMap((child, index) =>
-    child.type === "tool-invocation"
-      ? [getToolExpansionKey(child, `${partKey}/tool-${index}`)]
-      : [],
-  );
-  // A provider call id is unique within its conversation, so it is scoped to
-  // the transcript rather than to the row: coalescing renames the row that
-  // holds a group whenever earlier rows merge in front of it.
-  const groupKey = (toolKey = `part:${partKey}`) =>
-    `native-tool-group:${toolKey.startsWith("id:") ? JSON.stringify([transcriptScope]) : messageScope}:${toolKey}`;
-  /*
-   * Remember every member: paging and streaming can change both ends in one
-   * update. The message-local fallback also bridges calls acquiring provider
-   * ids. All aliases are cleared together when the reader folds the group.
-   */
-  const [isOpen, setIsOpen] = useMessagePartExpansion([groupKey(), ...toolKeys.map(groupKey)]);
-  const [holdingOpenToFold, setHoldingOpenToFold] = useState(animateFold);
-  useEffect(() => {
-    if (!holdingOpenToFold) return;
-    const frame = requestAnimationFrame(() => setHoldingOpenToFold(false));
-    return () => cancelAnimationFrame(frame);
-  }, [holdingOpenToFold]);
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      setHoldingOpenToFold(false);
-      setIsOpen(open);
-    },
-    [setIsOpen],
-  );
-  const summary = summarizeToolGroup(part.parts);
-  if (!summary) return null;
-
-  const { latestTool, toolCount, pendingCount, failureCount, spanMs } = summary;
-  const latestPartId = latestTool.toolUseId ?? latestTool.sourcePartId;
-  const latestName = getToolDisplayName(latestTool.toolName);
-  const latestPreview = toolRowPreview(latestTool);
-  const latestDetail =
-    latestPreview?.text ??
-    latestTool.toolDiff?.filePath?.split("/").pop() ??
-    getToolTitleDisplayName(latestTool.toolTitle, latestTool.toolName);
-  const latestDetailMonospace = latestPreview ? latestPreview.monospace : true;
-  const countLabel = `${toolCount} tool calls`;
-  const spanLabel = spanMs === undefined ? undefined : formatAgentDurationMs(spanMs);
-
-  return (
-    <Collapsible
-      open={isOpen || holdingOpenToFold}
-      onOpenChange={handleOpenChange}
-      className="my-0 divide-y divide-divider overflow-hidden rounded-lg border border-divider bg-sidebar"
-    >
-      {/*
-        Folded, the line stands in for its newest call, so it carries that
-        call's transcript id: a held scroll position still finds its tool.
-        Open, the call's own row carries it instead.
-      */}
-      <div className="px-2 py-0.5" data-transcript-part-id={isOpen ? undefined : latestPartId}>
-        <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
-          <span className="sr-only">
-            {isOpen ? "Fold" : "Show"} {countLabel}:{" "}
-          </span>
-          <ChevronRight
-            className={cn("h-3 w-3 shrink-0 transition-transform", isOpen && "rotate-90")}
-          />
-          <Layers className="h-3.5 w-3.5 shrink-0" />
-          {isOpen ? (
-            <span className="flex-1 truncate text-left font-medium">Tool calls</span>
-          ) : (
-            <>
-              <span className="shrink-0 font-medium">{latestName}</span>
-              <span
-                className={cn(
-                  "flex-1 truncate text-left text-muted-foreground/80",
-                  latestDetailMonospace && "font-mono",
-                )}
-              >
-                {latestDetail}
-              </span>
-            </>
-          )}
-          {pendingCount > 0 ? (
-            <span className="shrink-0 animate-pulse text-yellow-600">running...</span>
-          ) : null}
-          {failureCount > 0 ? (
-            <span className="shrink-0 text-failure">{failureCount} failed</span>
-          ) : null}
-          <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground/70">
-            {countLabel}
-          </span>
-          {spanLabel ? (
-            <span
-              className="shrink-0 tabular-nums text-[10px] text-muted-foreground/60"
-              title={`First call started to last call finished: ${spanLabel}`}
-            >
-              {spanLabel}
-            </span>
-          ) : null}
-        </CollapsibleTrigger>
-      </div>
-      <CollapsibleContent className="tool-group-fold-content divide-y divide-divider">
-        {rows}
-      </CollapsibleContent>
-    </Collapsible>
   );
 }
 

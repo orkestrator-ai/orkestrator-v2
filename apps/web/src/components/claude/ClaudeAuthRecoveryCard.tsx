@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginPanel";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { useAgentAccountReauth } from "@/hooks/useAgentAccountReauth";
+import { useSessionMachineName } from "@/components/layout/AgentInfoAccountSection";
 import { useConfigStore } from "@/stores/configStore";
 import { CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND, CLAUDE_AUTH_LOGIN_COMMAND } from "@/lib/claude-auth";
 
@@ -41,6 +42,8 @@ export function ClaudeAuthRecoveryCard({
   const canOpenTerminal = Boolean(createTab) && (isolatedContainer || !containerId);
   const signedIn = reauth.progress.state === "succeeded";
   const signingIn = reauth.progress.state === "pending";
+  // The login being renewed is this machine's; with several machines, say which.
+  const machineName = useSessionMachineName();
 
   const openSignInTerminal = () => {
     createTab?.("plain", {
@@ -63,11 +66,13 @@ export function ClaudeAuthRecoveryCard({
         </div>
         <div className="min-w-0 flex-1">
           <p id={headingId} className="text-sm font-medium text-foreground">
-            Sign in to Claude
+            {machineName ? `Sign in to Claude on ${machineName}` : "Sign in to Claude"}
           </p>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            Claude needs you to sign in again. After signing in, return here and resend your
-            message.
+            {machineName
+              ? `Each machine keeps its own Claude login, and ${machineName}'s needs signing in again.`
+              : "Claude needs you to sign in again."}{" "}
+            After signing in, return here and resend your message.
           </p>
 
           {signedIn ? (
@@ -141,7 +146,7 @@ export function ClaudeAuthRecoveryCard({
 
           <details className="mt-3 text-[11px] text-muted-foreground/70">
             <summary className="w-fit cursor-pointer select-none hover:text-muted-foreground">
-              Error details
+              Claude&apos;s error
             </summary>
             <p className="mt-1.5 whitespace-pre-wrap break-words">{error}</p>
           </details>

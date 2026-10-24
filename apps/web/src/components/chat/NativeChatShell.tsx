@@ -6,7 +6,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import type { StateSnapshot, VirtuosoHandle } from "react-virtuoso";
+import type { VirtuosoHandle } from "react-virtuoso";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { AlertCircle, ArrowDown, History, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,10 +15,14 @@ import { SessionRefreshShimmer } from "@/components/chat/SessionRefreshShimmer";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
-import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
+import {
+  VirtualizedMessageList,
+  type TranscriptListScrollProps,
+} from "@/components/chat/VirtualizedMessageList";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { LiveElapsed } from "@/components/chat/LiveElapsed";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
 import type {
   NativeAgentAsyncQuestionResponse,
@@ -98,7 +102,13 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
    * (Codex's "Stopping…" / "Reconnecting…").
    */
   statusLabel?: ReactNode;
+  /** A fixed elapsed figure; prefer `elapsedStartedAt`, which ticks on its own. */
   elapsedSeconds: number | null;
+  /**
+   * The running turn's backend clock. The footer's clock then updates itself
+   * each second instead of the shell's owner re-rendering the whole transcript.
+   */
+  elapsedStartedAt?: number;
   finalElapsedSeconds: number | null;
 
   /**
@@ -160,14 +170,7 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
 
   isAtBottom: boolean;
   scrollToBottom: () => void;
-  scrollProps: {
-    followOutput: (isAtBottom: boolean) => "auto" | false;
-    atBottomStateChange: (atBottom: boolean) => void;
-    atBottomThreshold: number;
-    totalListHeightChanged?: (height: number) => void;
-    restoreStateFrom: StateSnapshot | undefined;
-    scrollerRef?: (el: HTMLElement | Window | null) => void;
-  };
+  scrollProps: TranscriptListScrollProps;
   virtuosoRef: RefObject<VirtuosoHandle | null>;
   /** Message id to highlight briefly after a jump to it. */
   highlightedMessageId?: string | null;
@@ -203,6 +206,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   agentActivityAnnouncement,
   statusLabel,
   elapsedSeconds,
+  elapsedStartedAt,
   finalElapsedSeconds,
   blockingCards,
   transcriptCards,
@@ -485,11 +489,13 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                   <div className="chat-status-row mx-auto max-w-3xl min-w-0">
                     <div className="flex items-center gap-2 text-muted-foreground">
                       {statusLabel ?? <AgentThinkingIndicator agentName={agentLabel} />}
-                      {elapsedSeconds !== null && elapsedSeconds > 0 && (
+                      {elapsedStartedAt !== undefined ? (
+                        <LiveElapsed startedAt={elapsedStartedAt} />
+                      ) : elapsedSeconds !== null && elapsedSeconds > 0 ? (
                         <span className="text-xs text-muted-foreground/50">
                           {formatElapsed(elapsedSeconds)}
                         </span>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 </div>

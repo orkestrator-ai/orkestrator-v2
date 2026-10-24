@@ -25,7 +25,7 @@ const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 interface ScrollStateOptions {
   isActive?: boolean;
   persistKey?: string;
-  stickToBottomOnActivation?: boolean;
+  activation?: "respect-intent" | "latest";
 }
 
 const scrollStateOptions: ScrollStateOptions[] = [];
@@ -294,7 +294,7 @@ describe("BuildChatTab on a phone", () => {
     // does. Leaving it active would keep it following a stream nobody can see
     // and skip the re-lock that brings the user back to the live bottom.
     expect(lastScrollState().isActive).toBe(false);
-    expect(lastScrollState().stickToBottomOnActivation).toBe(true);
+    expect(lastScrollState().activation).toBe("latest");
 
     fireEvent.click(viewTabs().getByRole("tab", { name: "Verification Session" }));
 

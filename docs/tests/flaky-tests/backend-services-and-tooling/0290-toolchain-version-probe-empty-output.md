@@ -36,3 +36,10 @@ other workspace package passed; aggregate exit 1 after 852.0 seconds.
 The GNU-tool PATH prefix followed by `mise run test:logged -- --name merge-tests -- mise run test` repeated the empty Codex version output at 223.50 ms. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; toolchain used two isolated workers alongside browser validation and other worktrees. `mise run test:logged -- --name merge-toolchain-owner -- bun test --cwd packages/toolchain --preload ../../tests/setup-node.ts ./src/manager.test.ts --parallel=1 --only-failures` passed the unchanged owner, exit 0, in 5.6 s. Evidence: `orkestrator-test-run.Yk2l1H/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. No source, assertion, timeout or skip changed.
 
 Final aggregate counts: toolchain 90 passed and one failed across 91 tests in two files (6.48 s). The aggregate exited 1 after 1473.5 s including queue time; root also reported 0178/0482 and backend reported 0165/0211. All other workspace packages, bridges and protocol passed.
+
+
+## Leaf grouping main merge — 2026-10-24
+
+- `ORKESTRATOR_TEST_AREA_BASE=8454d18b8648d7482897c2544b538f0d915bc18c mise run test:logged -- --name merge-repository -- mise run test` repeated `codex reported an unexpected version: no output` after 163.04 ms. The toolchain package reported 90 passed and one failed across 91 tests (5.26 s), using two isolated workers alongside the other repository groups and nine component-browser workers on the shared macOS host, Bun 1.4.3.
+- `mise run test:logged -- --name merge-toolchain-owner -- bun test --cwd packages/toolchain --preload ../../tests/setup-node.ts ./src/manager.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 5.2 s.
+- Evidence: host temporary artifact `orkestrator-test-run.GCa83B/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. No implementation, assertion, timeout or skip changed; the original aggregate remains failed.

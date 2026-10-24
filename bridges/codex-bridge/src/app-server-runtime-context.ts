@@ -233,6 +233,9 @@ export class CodexRuntimeContext {
       ...(options.skillRefreshDebounceMs !== undefined
         ? { skillRefreshDebounceMs: options.skillRefreshDebounceMs }
         : {}),
+      ...(options.skillColdSettleMs !== undefined
+        ? { skillColdSettleMs: options.skillColdSettleMs }
+        : {}),
     });
   }
 

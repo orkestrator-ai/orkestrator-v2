@@ -5,6 +5,7 @@ import type { ConnectionList } from "@orkestrator/protocol/connections";
 import type { HostMaintenanceSnapshot } from "@orkestrator/protocol/host-maintenance";
 import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
 import { BACKEND_PROFILE_CONFLICT_CODE } from "@orkestrator/protocol/backend-profile";
+import { listen } from "@/lib/native/events";
 import { invoke } from "@/lib/native/backend";
 import { expectDomAbsent } from "../../../../../../tests/bounded-test-diagnostics";
 import {
@@ -123,7 +124,7 @@ function install(
     if (["get_node_status", "list_nodes"].includes(command) && options.discoveryFails?.())
       throw new Error("discovery failed");
     if (command === "get_node_status") return status;
-    if (command === "list_nodes") return list;
+    if (command === "list_nodes") return { ...list };
     if (command === "get_backend_profile") {
       return { revision: 1, displayName: "Desk", colorToken: "violet", updatedAt: "t" };
     }
@@ -156,6 +157,7 @@ function install(
     return undefined;
   });
   return {
+    list,
     routed,
     commands,
     called: (command: string) => commands.filter(([name]) => name === command),
@@ -858,4 +860,48 @@ test("failed connection mutations report errors and leave retry controls usable"
     (confirm.getByRole("button", { name: "Forget on this device" }) as HTMLButtonElement).disabled,
   ).toBe(false);
   expect(reload).not.toHaveBeenCalled();
+});
+
+test("the account overview follows machine additions and removals while Settings stays open", async () => {
+  const callbacks = new Map<string, (event: { payload: unknown }) => void>();
+  const listener = listen as ReturnType<typeof mock>;
+  listener.mockImplementation(async (event, callback) => {
+    callbacks.set(event, callback);
+    return () => {};
+  });
+  const installed = install({ nodes: [BUILD] });
+  const originalInvoke = invokeMock.getMockImplementation()!;
+  let fleet = [
+    {
+      nodeId: "self",
+      name: "Desk",
+      self: true,
+      state: "ok",
+      snapshot: { accounts: [], active: { claude: "default", codex: "default" } },
+    },
+  ];
+  invokeMock.mockImplementation((command, args) =>
+    command === "list_machine_agent_accounts"
+      ? Promise.resolve({ machines: fleet })
+      : originalInvoke(command, args),
+  );
+  try {
+    render(<MachinesSettings />);
+    await screen.findByTestId("machine-agent-accounts-row");
+    fleet = [...fleet, { ...fleet[0]!, nodeId: "bk_zed", name: "Zed", self: false }];
+    installed.list.nodes = [BUILD, ZED];
+    await act(async () => callbacks.get("nodes-changed")!({ payload: undefined }));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("machine-agent-accounts-row")).toHaveLength(2),
+    );
+    fleet = [fleet[0]!];
+    installed.list.nodes = [BUILD];
+    await act(async () => callbacks.get("nodes-changed")!({ payload: undefined }));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("machine-agent-accounts-row")).toHaveLength(1),
+    );
+  } finally {
+    listener.mockReset();
+    listener.mockImplementation(() => Promise.resolve(() => {}));
+  }
 });

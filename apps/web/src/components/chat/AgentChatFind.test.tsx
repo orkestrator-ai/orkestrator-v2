@@ -92,30 +92,39 @@ describe("agent chat find controls", () => {
 
     fireEvent.change(input, { target: { value: "needle" } });
     expect(screen.getByText("1 of 3")).toBeTruthy();
-    expect(onNavigate).toHaveBeenLastCalledWith({
-      itemIndex: 0,
-      characterIndex: 6,
-      occurrenceIndex: 0,
-    });
+    expect(onNavigate).toHaveBeenLastCalledWith(
+      {
+        itemIndex: 0,
+        characterIndex: 6,
+        occurrenceIndex: 0,
+      },
+      "needle",
+    );
 
     fireEvent.keyDown(input, { key: "Enter" });
     expect(screen.getByText("2 of 3")).toBeTruthy();
-    expect(onNavigate).toHaveBeenLastCalledWith({
-      itemIndex: 0,
-      characterIndex: 21,
-      occurrenceIndex: 1,
-    });
+    expect(onNavigate).toHaveBeenLastCalledWith(
+      {
+        itemIndex: 0,
+        characterIndex: 21,
+        occurrenceIndex: 1,
+      },
+      "needle",
+    );
 
     fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
     expect(screen.getByText("1 of 3")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
     expect(screen.getByText("3 of 3")).toBeTruthy();
-    expect(onNavigate).toHaveBeenLastCalledWith({
-      itemIndex: 2,
-      characterIndex: 10,
-      occurrenceIndex: 0,
-    });
+    expect(onNavigate).toHaveBeenLastCalledWith(
+      {
+        itemIndex: 2,
+        characterIndex: 10,
+        occurrenceIndex: 0,
+      },
+      "needle",
+    );
   });
 
   test("reports no results and closes with Escape", () => {

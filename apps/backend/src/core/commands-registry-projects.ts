@@ -938,10 +938,14 @@ export function registerProjectCommands(
    * storing the credential, cancelling — stays here; the settings pane only
    * opens the returned URL and polls.
    */
-  register("cursor_sdk_login_start", async (_payload, context) => {
+  register("cursor_sdk_login_start", async (payload, context) => {
     return startCursorSdkLogin(context, {
       bridgeEntrypoint: nodePath.join(getBridgePath(context, "cursor-bridge"), "dist", "index.js"),
       runtime: resolveBunBinary(context),
+      // A client opens the link in its own browser, which may be on another
+      // machine. Without the flag (an older client) this machine's desktop
+      // opens it, as before.
+      openBrowser: payload.openBrowser !== false,
     });
   });
   register("cursor_sdk_login_status", async (_payload, context) => {

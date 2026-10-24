@@ -1598,7 +1598,7 @@ describe("NativeStyleChatPanel", () => {
     expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({
       isActive: true,
       persistKey: "panel-key",
-      stickToBottomOnActivation: true,
+      activation: "latest",
     });
   });
 

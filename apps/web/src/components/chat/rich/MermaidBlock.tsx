@@ -445,7 +445,13 @@ export const MermaidBlock = memo(function MermaidBlock({
   const pin = useRichViewPin(blockKey, expanded && preview !== null, () => setExpanded(false));
   const stale = state.status === "pending" || state.status === "error" ? state.stale : null;
   const shown = preview ?? stale;
-  const showSource = !closed || view === "source" || revealed || !shown;
+  // A closed fence whose first preview is still rendering keeps the preview's
+  // own frame, so the diagram replaces it without changing the row's height.
+  // The source is the explicit alternative: a fence still streaming, the
+  // reader's choice, a find reveal, or a failure.
+  const awaitingPreview =
+    closed && !shown && state.status === "pending" && view !== "source" && !revealed;
+  const showSource = !closed || view === "source" || revealed || (!shown && !awaitingPreview);
 
   const toggleSource = () => {
     setView(showSource ? "preview" : "source");
@@ -590,6 +596,11 @@ export const MermaidBlock = memo(function MermaidBlock({
       ) : null}
       {showSource ? (
         sourceView
+      ) : awaitingPreview ? (
+        <>
+          <div aria-hidden="true" data-rich-preview-placeholder="true" className="h-80" />
+          <RichSearchMirror text={displayText} revealKey={blockKey} />
+        </>
       ) : (
         <>
           {stale && !preview ? (

@@ -281,23 +281,6 @@ export class NodeProjectFiles {
     });
     return { code: "revealed", message: "The values were sent to the requesting conversation." };
   }
-
-  /** Approved: clone the project on the node at the approved location. */
-  async executeCreateProject(request: NodeActionRequest) {
-    const created: string[] = [];
-    for (const target of request.targets) {
-      if (!target.gitRemote || !target.location)
-        throw new Error("A project request names a remote and a location.");
-      const project = await this.invokerFor(target.nodeId)<{ name?: string }>("add_project", {
-        gitUrl: target.gitRemote,
-        localPath: target.location,
-      });
-      created.push(
-        `${project?.name ?? target.gitRemote} on ${target.nodeName} at ${target.location}`,
-      );
-    }
-    return { code: "created", message: `Created ${created.join(", ")}.` };
-  }
 }
 
 function compareOne(file: string, mine: Fingerprint[], theirs: Fingerprint[]) {

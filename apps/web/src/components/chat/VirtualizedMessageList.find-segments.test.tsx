@@ -19,15 +19,19 @@ mock.module("react-virtuoso", () => ({
   Virtuoso: ({
     data,
     itemContent,
+    firstItemIndex = 0,
     computeItemKey,
   }: {
     data: unknown[];
+    firstItemIndex?: number;
     itemContent: (index: number, item: unknown) => ReactNode;
     computeItemKey: (index: number, item: unknown) => string;
   }) => (
     <div data-virtuoso-scroller="true">
       {data.map((item, index) => (
-        <div key={computeItemKey(index, item)}>{itemContent(index, item)}</div>
+        <div key={computeItemKey(firstItemIndex + index, item)}>
+          {itemContent(firstItemIndex + index, item)}
+        </div>
       ))}
     </div>
   ),

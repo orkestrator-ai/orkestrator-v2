@@ -293,7 +293,9 @@ export function ClaudeTmuxChatTab({
     isActive: isActive && !interactiveMode,
     persistKey: `claude-tmux-${stateKey}`,
     environmentId,
-    stickToBottomOnActivation: true,
+    // Leaving for the interactive terminal and coming back keeps a detached
+    // reader's place; a follower catches up.
+    activation: "respect-intent",
   });
   const queueLength = useClaudeTmuxStore(
     useCallback((state) => state.messageQueue.get(storeKey)?.length ?? 0, [storeKey]),

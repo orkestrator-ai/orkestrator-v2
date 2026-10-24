@@ -1,4 +1,5 @@
-import { useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { RichMessageContext, useRichMessageIdentity } from "@/lib/chat/rich-identity";
 import { imageReadFromToolPart, type ImageRead } from "@/lib/chat/image-read";
 import { isPlanTool } from "@/lib/plan-tool";
 import { isTodoTool } from "@/lib/todo-tool";
@@ -30,14 +31,10 @@ import {
   canLoadImagePreview,
 } from "./NativeMessage.file-parts";
 import { CompactionPart, ImagePart, RetryPart, StatusPart } from "./NativeMessage.notice-parts";
-import {
-  AgentGroupPart,
-  SubagentPart,
-  TaskGroupPart,
-  ToolGroupPart,
-} from "./NativeMessage.agent-parts";
+import { AgentGroupPart, SubagentPart, TaskGroupPart } from "./NativeMessage.agent-parts";
 import { NativeAsyncQuestionCard } from "./NativeAsyncQuestionCard";
 import { ArtifactPart } from "./rich/ArtifactPart";
+import { ToolGroupPart } from "./NativeMessage.tool-group";
 
 export function DeferredToolMessagePart({
   part,
@@ -182,8 +179,33 @@ function ImageReadPreview({
 /** Render a single message part based on its type */
 export function MessagePart(props: Parameters<typeof MessagePartContent>[0]) {
   const part = props.part;
-  const id = part.type === "tool-invocation" ? (part.toolUseId ?? part.sourcePartId) : undefined;
-  const content = <MessagePartContent {...props} />;
+  // Rich block view state belongs to the part's source message, not to the
+  // display row: coalescing renames the row that holds a part, which must not
+  // reset a diagram's source view or a table's sort.
+  const displayMessage = useRichMessageIdentity();
+  const sourceMessageId = part.sourceMessageId;
+  const richIdentity = useMemo(
+    () =>
+      sourceMessageId && displayMessage
+        ? { messageId: sourceMessageId, role: displayMessage.role }
+        : null,
+    [displayMessage, sourceMessageId],
+  );
+  // Source parts are the transcript's scroll anchors: a held or restored
+  // place finds its part again by this id, whatever row now contains it.
+  // Prose anchors at block level; file chips flow inline and stay unwrapped.
+  const id =
+    part.type === "tool-invocation"
+      ? (part.toolUseId ?? part.sourcePartId)
+      : part.type === "text"
+        ? part.sourcePartId
+        : undefined;
+  const inner = <MessagePartContent {...props} />;
+  const content = richIdentity ? (
+    <RichMessageContext.Provider value={richIdentity}>{inner}</RichMessageContext.Provider>
+  ) : (
+    inner
+  );
   return id ? <div data-transcript-part-id={id}>{content}</div> : content;
 }
 

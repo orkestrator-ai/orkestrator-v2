@@ -82,6 +82,25 @@ function routed(command: string): unknown {
   return { ok: true };
 }
 
+function hostAccounts() {
+  return {
+    accounts: ["claude", "codex"].map((platform) => ({
+      id: "default",
+      platform,
+      label: "Host login",
+      isDefault: true,
+      isActive: true,
+      signedIn: true,
+      identity: {},
+    })),
+    active: { claude: "default", codex: "default" },
+  };
+}
+
+function hostSignIns() {
+  return { grok: { state: "signed-out" }, pi: { state: "signed-in", source: "anthropic" } };
+}
+
 // What reached the backend and the desktop API is kept in localStorage so the
 // browser assertion proves the exact input crossed each boundary.
 function installMachinesFixture() {
@@ -112,6 +131,25 @@ function installMachinesFixture() {
             return { revision: 1, displayName: "Studio", colorToken: "violet", updatedAt: "t" };
           case "get_host_maintenance":
             return snapshot("2.26.0", "2.26.0");
+          case "list_machine_agent_accounts":
+            return {
+              machines: [
+                {
+                  nodeId: "bk_self",
+                  name: "Studio",
+                  colorToken: "violet",
+                  self: true,
+                  state: "ok",
+                  snapshot: hostAccounts(),
+                  signIns: hostSignIns(),
+                },
+              ],
+            };
+          // The overview re-reads a machine once its event subscription is in place.
+          case "list_agent_accounts":
+            return hostAccounts();
+          case "read_host_agent_sign_ins":
+            return hostSignIns();
           case "invoke_on_node":
             return { outcome: "ok", result: routed(String(args?.command)) };
           case "add_node":

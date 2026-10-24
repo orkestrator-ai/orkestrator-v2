@@ -420,40 +420,23 @@ body[data-orkestrator-dev-profile]::before {
  * measures the content into --radix-collapsible-content-height), so the
  * bottom-anchored transcript follows the fold rather than jumping.
  */
+/*
+ * Tool groups open and fold without animating their height: a height
+ * animation is a stream of layout changes the transcript would have to chase.
+ * Opening fades its already-settled rows in; folding is immediate.
+ */
 @keyframes tool-group-fold-open {
   from {
-    height: 0;
     opacity: 0;
   }
 
   to {
-    height: var(--radix-collapsible-content-height);
     opacity: 1;
   }
-}
-
-@keyframes tool-group-fold-close {
-  from {
-    height: var(--radix-collapsible-content-height);
-    opacity: 1;
-  }
-
-  to {
-    height: 0;
-    opacity: 0;
-  }
-}
-
-.tool-group-fold-content {
-  overflow: hidden;
 }
 
 .tool-group-fold-content[data-state="open"] {
-  animation: tool-group-fold-open 200ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.tool-group-fold-content[data-state="closed"] {
-  animation: tool-group-fold-close 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: tool-group-fold-open 120ms ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {

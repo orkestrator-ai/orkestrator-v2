@@ -241,3 +241,11 @@ temporary directory. No firewall implementation, assertion, timeout or skip chan
   to 98 (3 and more cases at about 5,008 ms), then passed alone (24 passed,
   0 failed) once the one-minute load fell to 10. The branch changes no
   firewall test or `docker/` script.
+
+## Agent accounts and sign-in (0003) validation — 2026-10-24
+
+Recurred in the non-iOS aggregate on node mbp3 (thirteen `container firewall policy` cases at ~5,003 ms); the unchanged owner passed alone (24 passed). Details in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Agent accounts main merge — 2026-10-24
+
+The broad run and complete unchanged owner both retained five-second failures. This is not newly classified as a flake. Exact commands, counts and artifacts are in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md#merge-through-main-8290f2ca9--2026-10-24). No assertion, deadline or skip changed.

@@ -2,20 +2,19 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { terminalProcesses } from "./commands-runtime-state.js";
-import {
-  setupTerminalSessionId,
-  terminateTerminalSessionsForEnvironment,
-} from "./commands-terminal.js";
+import { setupTerminalSessionId } from "./commands-terminal.js";
 import { spawnPty } from "./pty.js";
+import { TerminalRuntime } from "./terminal-runtime.js";
 
 const tempDirectories: string[] = [];
+let terminals = new TerminalRuntime();
 
 afterEach(async () => {
-  for (const id of Array.from(terminalProcesses.keys())) {
-    terminalProcesses.get(id)?.kill();
-    terminalProcesses.delete(id);
+  for (const id of terminals.processIds()) {
+    terminals.explicitlyCloseSession(id);
   }
+  terminals.shutdown();
+  terminals = new TerminalRuntime();
   await Promise.all(
     tempDirectories
       .splice(0)
@@ -47,14 +46,14 @@ describe("terminal termination before worktree removal", () => {
         "wait",
       ].join("\n");
       const pty = spawnPty("/bin/sh", ["-c", script], { cwd: worktree, cols: 80, rows: 24 });
-      terminalProcesses.set(setupTerminalSessionId("e1"), pty);
+      terminals.registerProcess(setupTerminalSessionId("e1"), pty);
       const deadline = Date.now() + 5_000;
       while (!(await exists(started)) && Date.now() < deadline) await Bun.sleep(25);
       expect(await exists(started)).toBe(true);
 
-      const survivors = await terminateTerminalSessionsForEnvironment("e1");
+      const survivors = await terminals.terminateSessionsForEnvironment("e1");
       expect(survivors).toEqual([]);
-      expect(terminalProcesses.has(setupTerminalSessionId("e1"))).toBe(false);
+      expect(terminals.hasProcess(setupTerminalSessionId("e1"))).toBe(false);
 
       await Bun.sleep(3_500);
       expect(await exists(late)).toBe(false);

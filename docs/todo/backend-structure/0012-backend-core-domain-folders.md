@@ -31,7 +31,7 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   | plan-usage | `plan-usage*` | 2 | 2 |
   | features | `feature-*` | 3 | 3 |
   | coordinator | `coordinator-*` | 7 | 5 |
-  | agent-accounts | `agent-accounts*`, `agent-account-bridge-state.ts` | 8 | 7 |
+  | agent-accounts | `agent-accounts*` | 7 | 7 |
   | worktrees | `worktree-*` | 6 | 4 |
   | previews | `preview-*` | 7 | 5 |
   | git | `git-*`, `github*`, `pr-*` | 11 | 8 |
@@ -86,10 +86,12 @@ before the busy ones move.
    `environments`, `storage`. Many files import these, and `containers` and
    `previews` are also imported from outside `core/`, so these slices touch the
    most files.
-4. **Last: `commands`.** It depends on most other domains and owns
-   `commands-runtime-state.ts`. Move it only after
-   [0011-backend-runtime-state-ownership.md](0011-backend-runtime-state-ownership.md) has
-   deleted that module.
+4. **Last: `commands`.** It depends on most other domains. Its former
+   `commands-runtime-state.ts` was deleted by
+   [0011-backend-runtime-state-ownership.md](0011-backend-runtime-state-ownership.md);
+   the state now lives in `BackendRuntime` (`backend-runtime.ts`,
+   `terminal-runtime.ts`, `local-server-runtime.ts`,
+   `environment-operations.ts`).
 5. **Record the type-level import cycle.** Re-measure the type-level cycle
    across `core/` (112 files on 2026-10-14) and record it here. It is not
    expected to reach zero, but cross-domain type cycles should run through

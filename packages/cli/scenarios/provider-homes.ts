@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { restrictGrokAuthSnapshot } from "@orkestrator/protocol/login-snapshots";
 import {
+  claudeLoginLookupOptions,
   getClaudeOAuthAccessToken,
   getHostClaudeCredentials,
 } from "../../../apps/backend/src/core/claude-host-credentials.js";
@@ -12,6 +13,27 @@ export const INHERITED_AGENT_TOOL_ENV = {
   ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:9/mcp",
   ORKESTRATOR_AGENT_MCP_TOKEN: "scenario-inherited-decoy",
 } as const;
+
+/**
+ * The login a `claude` in the harness's own shell would use: the Keychain entry
+ * named after an explicit `CLAUDE_CONFIG_DIR`, else the plain host entry.
+ */
+function readScenarioHostClaudeCredentials(
+  hostEnv: NodeJS.ProcessEnv,
+  hostHome: string,
+): Promise<string | undefined> {
+  const recorded = hostEnv.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR?.trim();
+  const configDir = recorded || hostEnv.CLAUDE_CONFIG_DIR?.trim() || undefined;
+  const explicit = recorded
+    ? hostEnv.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT === "1"
+    : Boolean(configDir);
+  return getHostClaudeCredentials(
+    process.platform,
+    hostHome,
+    configDir,
+    claudeLoginLookupOptions(configDir, explicit),
+  );
+}
 
 interface ProviderHomeOptions {
   root: string;
@@ -127,15 +149,7 @@ export async function isolateProviderHomes(
       const token =
         hostEnv.CLAUDE_CODE_OAUTH_TOKEN?.trim() ||
         hostEnv.ANTHROPIC_AUTH_TOKEN?.trim() ||
-        getClaudeOAuthAccessToken(
-          await getHostClaudeCredentials(
-            process.platform,
-            hostHome,
-            hostEnv.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR?.trim() ||
-              hostEnv.CLAUDE_CONFIG_DIR?.trim() ||
-              undefined,
-          ),
-        );
+        getClaudeOAuthAccessToken(await readScenarioHostClaudeCredentials(hostEnv, hostHome));
       if (token) {
         env.ANTHROPIC_AUTH_TOKEN = token;
         // Containers stage this file too. Never give either runtime a refresh token.
@@ -150,6 +164,8 @@ export async function isolateProviderHomes(
     // and container input staging. The original host was read only above.
     env.ORKESTRATOR_AGENT_TEST_HOST_HOME = base;
     env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = env.CLAUDE_CONFIG_DIR!;
+    // The disposable copy is a file, not a Keychain entry: never inherit the flag.
+    env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT = "";
   }
   if (options.credentialSource === "pi") {
     const source = path.join(

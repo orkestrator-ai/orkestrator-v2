@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { registerAgentAccountCommands } from "./commands-registry-accounts.js";
 import type { CommandHandler } from "./commands-context.js";
 import type { RegistryDependencies } from "./commands-registry-types.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { agentAccountLoginProgress, resetAgentAccountLoginForTests } from "./agent-accounts.js";
+
+import * as cursorBridge from "./cursor-sdk-bridge.js";
 
 const command = createCommandRegistry().get("start_agent_account_login")!;
 afterEach(resetAgentAccountLoginForTests);
@@ -80,6 +82,50 @@ describe("OpenCode provider login argument validation", () => {
       state: "idle",
     });
   });
+});
+
+describe("get_agent_sign_in_status", () => {
+  const status = createCommandRegistry().get("get_agent_sign_in_status")!;
+  test.each([
+    {},
+    { platform: "invalid" },
+    { platform: 1 },
+    { platform: " " },
+    { platform: "cursor", extra: true },
+  ])("rejects invalid arguments before accessing dependencies %j", async (args) => {
+    const loadConfig = mock(async () => {
+      throw new Error("unexpected storage access");
+    });
+    await expect(
+      status(args, { storage: { loadConfig } } as unknown as CommandContext),
+    ).rejects.toThrow();
+    expect(loadConfig).not.toHaveBeenCalled();
+  });
+  test.each([undefined, "stored-test-key"])(
+    "composes Cursor status with the optional configured key %s",
+    async (key) => {
+      const read = spyOn(cursorBridge, "cursorSdkAuthStatus").mockResolvedValue(
+        key
+          ? { authenticated: true, source: "api-key-config" }
+          : { authenticated: false, source: "none" },
+      );
+      const context = {
+        storage: { loadConfig: mock(async () => ({ global: { cursorApiKey: key } })) },
+      } as unknown as CommandContext;
+      try {
+        const result = await status({ platform: "cursor" }, context);
+        expect(read).toHaveBeenCalledWith(context, key);
+        expect(result).toMatchObject({
+          state: key ? "signed-in" : "signed-out",
+          signIn: { kind: "browser-url" },
+          signOut: false,
+        });
+        expect(JSON.stringify(result)).not.toContain("stored-test-key");
+      } finally {
+        read.mockRestore();
+      }
+    },
+  );
 });
 
 function harness() {

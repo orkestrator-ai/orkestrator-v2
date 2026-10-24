@@ -805,6 +805,15 @@ export async function beginNativeAgentSignIn(input: {
   return invoke("begin_native_agent_sign_in", input);
 }
 
+/** Abandon an in-tab sign-in so the provider stops waiting for it. */
+export async function cancelNativeAgentSignIn(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+}): Promise<{ cancelled: boolean }> {
+  return invoke("cancel_native_agent_sign_in", input);
+}
+
 export async function signOutNativeAgent(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;

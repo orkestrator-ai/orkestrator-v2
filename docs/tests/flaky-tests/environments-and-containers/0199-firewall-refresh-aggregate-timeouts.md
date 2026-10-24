@@ -36,3 +36,8 @@ aggregate-load timeouts.
 - **Failure:** `firewall allowlist refresh and edits > policy 3 refreshes the stored tuples and add/remove edit them` hit the five-second timeout (5003.39 ms). It was the only failure in the root group.
 - **Owning-file rerun:** `mise run test:logged -- --name firewall-owner -- bun test ./tests/unit/firewall-refresh.test.ts --parallel=1 --only-failures` passed the complete unchanged file, exit 0 in 5.0 seconds.
 - **Evidence:** `orkestrator-test-run.IoyN8C/full-test.log.gz` under the host temporary directory. No assertion, timeout or skip changed.
+
+
+## Runtime-state ownership main merge — 2026-10-24
+
+`mise run test:logged -- --name merge-suite -- mise run test` used the default 4/1/2/1 workspace/root/bridge/protocol plan alongside browser suites and other validating worktrees. Root/support ran with one worker after waiting 953.5 s: 3,369 passed, twelve failed and one error across 3,381 tests in 161 files (609.28 s execution). Evidence: host temporary artifact `orkestrator-test-run.BJKk4l/root-and-agent-support-tests.log` (compressed at aggregate completion). `policy 3 refreshes the stored tuples and add/remove edit them` timed out at 5032.87 ms. `mise run test:logged -- --name merge-firewall-refresh-owner -- bun test ./tests/unit/firewall-refresh.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (28.9 s logged). This confirms a recurrence; no assertion, deadline or skip changed.

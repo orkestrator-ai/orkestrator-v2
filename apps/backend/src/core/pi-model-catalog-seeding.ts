@@ -5,12 +5,6 @@ import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { CommandContext } from "./commands-context.js";
 import { resolveBunBinary } from "./commands-agent-support.js";
 import { applyPiHostCredentialEnvironment } from "./host-agent-credentials.js";
-import { terminateLocalServerChild } from "./commands-local-server-lifecycle.js";
-import {
-  isLocalServerShutdownRequested,
-  localServerProcesses,
-  spawnLocalServerCommandImpl,
-} from "./commands-runtime-state.js";
 import { bearerBridgeHeaders } from "./commands-server-health.js";
 import {
   allocateLocalPort,
@@ -123,7 +117,8 @@ async function runDiscovery(context: CommandContext): Promise<AgentModel[]> {
   // Shutdown closes admission before it snapshots the children it owns, so a
   // probe admitted after that point would spawn a bridge the drain has already
   // walked past.
-  if (isLocalServerShutdownRequested()) return [];
+  const localServers = context.runtime.localServers;
+  if (localServers.isShuttingDown()) return [];
 
   const cwd = getBridgePath(context, "pi-bridge");
   const entrypoint = path.join(cwd, "dist", "index.js");
@@ -155,7 +150,7 @@ async function runDiscovery(context: CommandContext): Promise<AgentModel[]> {
   // `peekLocalAgentBridge`, and a generation counter keeps a probe that is
   // still terminating from releasing its successor's entry.
   const key = `pi:catalog-seed:${piCatalogProbeSequence}`;
-  const child = spawnLocalServerCommandImpl(resolveBunBinary(context), [entrypoint], {
+  const child = localServers.spawn(resolveBunBinary(context), [entrypoint], {
     cwd,
     env,
     // Matches every other bridge launch: a dedicated group lets shutdown reach
@@ -163,9 +158,9 @@ async function runDiscovery(context: CommandContext): Promise<AgentModel[]> {
     // covers children that create new groups.
     detached: process.platform !== "win32",
   });
-  // Registered before the first await so `shutdownLocalServers` can terminate
-  // it. `terminateLocalServerChild` releases the entry on the way out.
-  localServerProcesses.set(key, child);
+  // Registered before the first await so `localServers.shutdown()` can
+  // terminate it. `localServers.terminate()` releases the entry on the way out.
+  localServers.adoptProcess(key, child);
   // The bridge normally has no output. Drain defensively rather than allowing a
   // child pipe to back-pressure startup, and never log provider diagnostics —
   // an SDK error can contain account-specific data.
@@ -175,14 +170,14 @@ async function runDiscovery(context: CommandContext): Promise<AgentModel[]> {
   try {
     // Closes the window between the gate above and the registration: shutdown
     // may have snapshotted its children in between, leaving this one unowned.
-    if (isLocalServerShutdownRequested()) return [];
+    if (localServers.isShuttingDown()) return [];
     await waitForLocalServerStartup(child, port, "pi", bearerBridgeHeaders(authToken));
     return await fetchAcpNormalizedModelsAt(port, authToken, "pi");
   } finally {
     // A teardown failure must not replace the outcome. Discarding a catalogue
     // this probe successfully read — or masking the error that ended it — would
     // report a provider problem for what is only a stubborn child process.
-    await terminateLocalServerChild(key, child).catch((error: unknown) => {
+    await localServers.terminate(key, child).catch((error: unknown) => {
       console.warn(
         "[ElectronBackend] The Pi catalogue probe did not exit cleanly:",
         error instanceof Error ? error.message : "unknown error",

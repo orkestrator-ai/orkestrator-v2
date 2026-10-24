@@ -155,10 +155,6 @@ const IGNORED_METHODS = new Set([
   // message-level rewind; until then adopting it would drop transcript the
   // bridge is still serving, with nothing able to put it back.
   "thread/reverted",
-  // Codex re-authenticating a model provider mid-session. Surfaced as
-  // sign-in state by plan 08 rather than as a transcript event.
-  "modelProvider/authRecoveryStarted",
-  "modelProvider/authRecoveryCompleted",
   // Bookkeeping the bridge tracks itself.
   "thread/status/changed",
   "thread/archived",
@@ -247,6 +243,28 @@ export function reduceNotification(
             threadId,
             turnId,
             model,
+            ...base,
+          },
+        ],
+      };
+    }
+
+    // Codex re-authenticating a model provider mid-session. Surfaced as the
+    // tab's `auth` notice rather than as a transcript row.
+    case "modelProvider/authRecoveryStarted":
+    case "modelProvider/authRecoveryCompleted": {
+      if (!threadId || !isRecord(params)) return { events: [] };
+      const message = str(params.message)?.trim().slice(0, 300);
+      const provider = str(params.provider)?.trim().slice(0, 64);
+      return {
+        events: [
+          {
+            kind: "thread.authRecovery",
+            threadId,
+            phase:
+              notification.method === "modelProvider/authRecoveryStarted" ? "started" : "completed",
+            ...(message ? { message } : {}),
+            ...(provider ? { provider } : {}),
             ...base,
           },
         ],

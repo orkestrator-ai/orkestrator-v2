@@ -1,0 +1,15 @@
+# Efficiency checkpoint workload exceeds its aggregate deadline
+
+- **ID:** 0788
+- **Status:** open
+- **Date observed:** 2026-10-24
+- **Test:** `supervision workloads > an unchanged pipeline session is read whole and saved once`
+- **File:** `tests/unit/efficiency/harness.test.ts`
+- **Merge parents:** `109a3a90509f3b5f258881f9004c4fde4747f0a9` and `d6ed0717d00a9a04ba658ba6c50e0978bc2011a6`.
+- **Original command:** `env -u PORT mise run test:logged -- --name merge-complete-suite -- mise run test`, with the testing guide's GNU-tool PATH and `ORKESTRATOR_TEST_AREA_BASE=0014505caeed69395b3cc996dd541fcc6df12c23`.
+- **Worker configuration:** workspace/root/bridge/protocol reservations 4/1/2/1; root ran with one worker. Other worktrees were validating concurrently; the host load average reached 147.
+- **Failure:** five-second timeout (5012.23 ms). Root/support reported 3,397 passed, three failed and one between-test error across 3,400 tests in 162 files (970.54 seconds).
+- **First isolated rerun:** `env -u PORT mise run test:logged -- --name merge-efficiency-owner -- bun test ./tests/unit/efficiency/harness.test.ts --parallel=1 --only-failures`, same GNU-tool PATH, retained the timeout (5001.79 ms): 32 passed, one failed, 14.8 seconds logged. Artifact: `orkestrator-test-run.UI9utn/merge-efficiency-owner.log.gz` under the host temporary directory.
+- **Complete unchanged owner after root completion:** `env -u PORT mise run test:logged -- --name merge-efficiency-owner-after-root -- bun test ./tests/unit/efficiency/harness.test.ts --parallel=1 --only-failures`, same GNU-tool PATH, passed (exit 0, 7.2 seconds logged). The host load had fallen to approximately 76 before this rerun.
+- **Aggregate evidence:** `orkestrator-test-run.YFMbrr/root-and-agent-support-tests.log.gz` after aggregate finalization; outer run `orkestrator-test-run.I7HssJ`.
+- **Hypothesis:** contention during real temporary-store initialization and checkpoint commits exceeded the generic deadline. The workload uses real `StorageService` and performs both unchanged and moving session cases; no test, assertion, timeout, skip or implementation changed during this merge resolution. The final whole-owner pass establishes intermittence; the earlier failed rerun remains part of the evidence.

@@ -231,12 +231,8 @@
     {
       "files": [
         "apps/backend/src/core/bridge-session-close.ts",
-        "apps/backend/src/core/commands-agent-support.ts",
         "apps/backend/src/core/commands-container-exec.ts",
-        "apps/backend/src/core/commands-files.ts",
         "apps/backend/src/core/commands-pr-monitor.ts",
-        "apps/backend/src/core/commands-runtime-state.ts",
-        "apps/backend/src/core/commands-servers.ts",
         "apps/backend/src/core/control-mcp-server.ts",
         "apps/backend/src/core/coordinator-service.ts",
         "apps/backend/src/core/extension-discovery.ts",

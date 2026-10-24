@@ -79,6 +79,7 @@ import {
   boundedJson,
   promptDispatchUnavailableError,
   bridgeFetch,
+  normalizeProviderAuthNotice,
   normalizeProviderReadiness,
   fetchSessionSnapshot,
   readProviderActivityObservation,
@@ -843,9 +844,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       }
       const codexContextUsage = this.contextUsage(payload.contextUsage);
       const codexReadiness = normalizeProviderReadiness(payload.readiness);
+      const codexAuthNotice = normalizeProviderAuthNotice(payload.authNotice);
       const codexNotices = snapshotNotices({
         transcriptTruncated: transcript.truncated,
         ...(runtime ? { runtime } : {}),
+        ...(codexAuthNotice ? { auth: codexAuthNotice } : {}),
       });
       const phase: NativeAgentTurnPhase | undefined =
         rawPhase === "cancelling"
@@ -962,9 +965,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const claudeContextUsage = this.contextUsage(payload.contextUsage);
     const claudeTurnActivity = claudeTurnActivityFromPayload(payload);
     const claudeReadiness = normalizeProviderReadiness(payload.readiness);
+    const claudeAuthNotice = normalizeProviderAuthNotice(payload.authNotice);
     const claudeNotices = snapshotNotices({
       transcriptTruncated: transcript.truncated,
       ...(runtime ? { runtime } : {}),
+      ...(claudeAuthNotice ? { auth: claudeAuthNotice } : {}),
     });
     return {
       status,
@@ -1145,6 +1150,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   beginSignIn(options?: { deviceCode?: boolean }) {
     return this.catalogAdapter.beginSignIn(options);
+  }
+
+  cancelSignIn() {
+    return this.catalogAdapter.cancelSignIn();
   }
 
   signOut() {

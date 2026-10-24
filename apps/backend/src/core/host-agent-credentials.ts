@@ -2,11 +2,17 @@ import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
-import { getClaudeOAuthAccessToken, getHostClaudeCredentials } from "./commands-files.js";
+import { claudeLoginLookupOptions } from "./claude-host-credentials.js";
+import {
+  getClaudeOAuthAccessToken,
+  getHostClaudeCredentials,
+  runtimeHostClaudeConfigDir,
+} from "./commands-files.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
+  AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV,
   AGENT_TEST_HOST_PI_AGENT_DIR_ENV,
-} from "./commands-runtime-state.js";
+} from "./agent-credential-files.js";
 import { cursorApiKeyFingerprint, resolveCursorApiKey } from "./commands-validation.js";
 
 export type CursorHostCredentialMaterial = {
@@ -45,11 +51,23 @@ export async function applyClaudeHostCredentialEnvironment(
 ): Promise<void> {
   if (context.runtimeFlavor !== "agent-test" || !context.credentialSources?.has("claude")) return;
 
-  const hostConfigDir = process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim();
   const hostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
   if (env.ANTHROPIC_API_KEY || !hostHome) return;
 
-  const credentials = await getHostClaudeCredentials(process.platform, hostHome, hostConfigDir);
+  // The login the shell `dev:test` started in uses: an added account's own
+  // Keychain entry when that shell named its directory, else the default one.
+  // Never the profile's own `CLAUDE_CONFIG_DIR`, which is not the host's.
+  const { configDir, explicit } = runtimeHostClaudeConfigDir({
+    [AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]: process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV],
+    [AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV]:
+      process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV],
+  });
+  const credentials = await getHostClaudeCredentials(
+    process.platform,
+    hostHome,
+    configDir,
+    claudeLoginLookupOptions(configDir, explicit),
+  );
   const accessToken = getClaudeOAuthAccessToken(credentials);
   if (accessToken) env.ANTHROPIC_AUTH_TOKEN = accessToken;
 }

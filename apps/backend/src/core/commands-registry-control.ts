@@ -265,6 +265,30 @@ export function registerControlCommands(
     return context.controlMcp.rotateToken();
   });
 
+  // Named operator credentials (Settings → MCP). Tokens are returned to the
+  // renderer so Copy setup works, exactly as the single token always was.
+  register("create_control_mcp_credential", async (args, context) => {
+    if (!context.controlMcp) throw new Error("Orkestrator control MCP is unavailable");
+    return context.controlMcp.createCredential({
+      label: args.label,
+      profile: args.profile,
+      ...(args.capabilities !== undefined ? { capabilities: args.capabilities } : {}),
+      ...(args.deniedActions !== undefined ? { deniedActions: args.deniedActions } : {}),
+    });
+  });
+
+  register("rotate_control_mcp_credential", async (args, context) => {
+    if (!context.controlMcp) throw new Error("Orkestrator control MCP is unavailable");
+    if (typeof args.credentialId !== "string") throw new Error("credentialId is required");
+    return context.controlMcp.rotateCredential(args.credentialId);
+  });
+
+  register("revoke_control_mcp_credential", async (args, context) => {
+    if (!context.controlMcp) throw new Error("Orkestrator control MCP is unavailable");
+    if (typeof args.credentialId !== "string") throw new Error("credentialId is required");
+    return context.controlMcp.revokeCredential(args.credentialId);
+  });
+
   register("launch_control_job", (args, context) =>
     launchNativeAgentJob(args, context, dependencies, {
       validateModelCatalog: true,

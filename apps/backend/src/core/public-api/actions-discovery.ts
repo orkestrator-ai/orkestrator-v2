@@ -51,7 +51,7 @@ function collectionFingerprint(ids: string[]): string {
   return createHash("sha256").update(ids.join("\n")).digest("hex").slice(0, 16);
 }
 
-function paginate<T extends { id: string }>(
+export function paginate<T extends { id: string }>(
   items: T[],
   input: { limit?: number; cursor?: string },
 ): PublicPage<T> {

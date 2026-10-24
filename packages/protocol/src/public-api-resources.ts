@@ -9,7 +9,13 @@
  */
 import type { AgentPlatform } from "./agent-platforms.js";
 import type { ChangeFileRow, ChangeHistoryEntry, ChangeProjection } from "./change-resources.js";
-import type { PublicCompletionSupport, PublicInteractionRef } from "./public-api.js";
+import type {
+  PublicActionName,
+  PublicCompletionSupport,
+  PublicErrorCode,
+  PublicInteractionRef,
+  PublicOperationState,
+} from "./public-api.js";
 
 // ---------------------------------------------------------------------------
 // Session handles
@@ -575,4 +581,74 @@ export interface PublicExecOutputWindow {
   totalBytes: number;
   truncatedHead: boolean;
   complete: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Attention
+
+/** One thing that needs a person: a pending interaction, a settled run, a finished setup. */
+export type PublicAttentionItem =
+  | {
+      kind: "interaction";
+      at: string;
+      sessionId: string;
+      environmentId: string;
+      environmentName: string;
+      agent: string;
+      interactionId: string;
+      interactionKind: string;
+      revision: number;
+      blocking: boolean;
+      /** Bounded; the body is read with `session.interactions`. */
+      title: string;
+    }
+  | {
+      kind: "run";
+      at: string;
+      operationId: string;
+      action: PublicActionName;
+      state: PublicOperationState;
+      sessionId: string | null;
+      environmentId: string | null;
+      errorCode: PublicErrorCode | null;
+    }
+  | {
+      kind: "setup";
+      at: string;
+      environmentId: string;
+      environmentName: string;
+      phase: "ready" | "failed";
+    };
+
+export interface PublicAttentionPage {
+  /** Blocking interactions first, then newest first. */
+  items: PublicAttentionItem[];
+  /** Items left out by `limit`. */
+  more: number;
+  counts: { interactions: number; runs: number; setups: number };
+  /** Pass back to see only what changed since this read. */
+  cursor: string;
+}
+
+// ---------------------------------------------------------------------------
+// Tickets
+
+export interface PublicTicketSummary {
+  id: string;
+  projectId: string;
+  title: string;
+  status: string;
+  order: number;
+  createdAt: string;
+  commentCount: number;
+  imageCount: number;
+  environmentId: string | null;
+  pr: { url: string | null; state: string | null };
+}
+
+export interface PublicTicketDetail extends PublicTicketSummary {
+  description: string;
+  acceptanceCriteria: string;
+  /** The latest 50. */
+  comments: Array<{ id: string; text: string; createdAt: string }>;
 }

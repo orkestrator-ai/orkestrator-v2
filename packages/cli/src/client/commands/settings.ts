@@ -51,6 +51,7 @@ export function settingsCommands(scope: "project" | "environment"): CommandSpec[
   return [
     {
       path: [scope, "config", "get"],
+      action: `${scope}.config.get`,
       summary: `Show ${scope} settings with effective values, sources and application timing.`,
       positionals: [{ name: idName, required: true }],
       options: [],
@@ -69,6 +70,7 @@ export function settingsCommands(scope: "project" | "environment"): CommandSpec[
     },
     {
       path: [scope, "config", "set"],
+      action: `${scope}.config.set`,
       summary: `Set and/or unset ${scope} settings atomically.`,
       description: `Settable keys:\n${keysHelp}\n${applies}`,
       positionals: [{ name: idName, required: true }],
@@ -182,6 +184,8 @@ export function settingsCommands(scope: "project" | "environment"): CommandSpec[
     },
     {
       path: [scope, "config", "unset"],
+      action: `${scope}.config.set`,
+      inputFields: { key: "unset" },
       summary: `Unset ${scope} settings, restoring inheritance.`,
       positionals: [
         { name: idName, required: true },

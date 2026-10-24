@@ -1,4 +1,8 @@
-import type { PublicConnectionIdentity, PublicReceipt } from "@orkestrator/protocol/public-api";
+import type {
+  PublicActionName,
+  PublicConnectionIdentity,
+  PublicReceipt,
+} from "@orkestrator/protocol/public-api";
 import type { CliConfigStore } from "./config.js";
 import type { ClientIo } from "./io.js";
 import type { ClientSession } from "./session.js";
@@ -75,6 +79,18 @@ export interface GlobalOptions {
 
 export interface CommandSpec {
   path: string[];
+  /**
+   * The public action this command runs. Declarative only: `run()` still
+   * builds the request. `command-actions.test.ts` checks every action has a
+   * command, and Control MCP's `describe_action` names the first one.
+   */
+  action?: PublicActionName;
+  /**
+   * Options and positionals whose names are not the camelCase of the action
+   * input property they fill, mapped to that property; `null` marks one that
+   * never reaches the input (an observer or output switch).
+   */
+  inputFields?: Readonly<Record<string, string | null>>;
   summary: string;
   description?: string;
   positionals: PositionalSpec[];
@@ -90,3 +106,24 @@ export interface CommandSpec {
   examples?: string[];
   run(context: CommandContext, parsed: ParsedCommand): Promise<CommandOutcome>;
 }
+
+/**
+ * Flag and positional names every command uses for the same input property.
+ * A command's own `inputFields` take precedence.
+ */
+export const SHARED_INPUT_FIELDS: Readonly<Record<string, string>> = Object.freeze({
+  project: "projectId",
+  environment: "environmentId",
+  session: "sessionId",
+  operation: "operationId",
+  interaction: "interactionId",
+  "prompt-file": "prompt",
+  "prompt-stdin": "prompt",
+  "text-file": "text",
+  "text-stdin": "text",
+  "patch-file": "set",
+  "patch-stdin": "set",
+  fast: "fastMode",
+  network: "networkAccessMode",
+  "expect-run": "expectedOperationId",
+});

@@ -944,3 +944,9 @@ no Pi code, deadline or assertion changed.
 ## Agent-interactions main merge, 2026-10-22
 
 `mise run test:logged -- --name merge-tests -- mise run test` repeated `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` at 112073.68 ms in the one-worker root group; the group later hit its no-output watchdog without final counts. `mise run test:logged -- --name merge-unit-pi-bridge-vendor.test -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the entire unchanged owner (19.1 s logged). Host load reached 156.45 during the original aggregate; see [0691](../aggregate-validation-runs/0691-main-merge-validation-timeout-cluster.md) for group evidence.
+
+## Control MCP voice main merge — 2026-10-24
+
+- The testing guide's GNU-tool PATH with `mise run test:logged -- --name merge-full-tests -- mise run test`, one root worker, repeated the staged-runtime load timeout (30000.96 ms). Root results were 3,368 passed and 15 failed across 162 files; the other failures were firewall fixtures.
+- The same PATH with `mise run test:logged -- --name merge-0041-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (28.4 s, exit 0).
+- Evidence: host temporary-directory `orkestrator-test-run.LK1I3Y/root-and-agent-support-tests.log`, retained from the interrupted aggregate. Host contention remains an unconfirmed hypothesis. No runtime-vendoring implementation, assertion, deadline or skip changed.

@@ -1,4 +1,9 @@
 import { invoke } from "@/lib/native/backend";
+import type {
+  ControlMcpCredentialSummary,
+  ControlMcpProfile,
+} from "@orkestrator/protocol/control-mcp";
+import type { PublicCapability } from "@orkestrator/protocol/public-api-inputs";
 import {
   invokeGlobalConfigCommand,
   invokeRepositoryConfigCommand,
@@ -281,8 +286,17 @@ export interface ControlMcpSettings {
   enabled: boolean;
   running: boolean;
   url: string;
+  /** The `default` credential's token. */
   token: string;
   error: string | null;
+  credentials: ControlMcpCredentialSummary[];
+}
+
+export interface CreateControlMcpCredentialInput {
+  label: string;
+  profile: ControlMcpProfile;
+  /** Omitted: the profile's preset. Required for `custom`. */
+  capabilities?: PublicCapability[];
 }
 
 export async function getControlMcpSettings(): Promise<ControlMcpSettings> {
@@ -291,6 +305,24 @@ export async function getControlMcpSettings(): Promise<ControlMcpSettings> {
 
 export async function rotateControlMcpToken(): Promise<ControlMcpSettings> {
   return invoke<ControlMcpSettings>("rotate_control_mcp_token");
+}
+
+export async function createControlMcpCredential(
+  input: CreateControlMcpCredentialInput,
+): Promise<ControlMcpSettings> {
+  return invoke<ControlMcpSettings>("create_control_mcp_credential", { ...input });
+}
+
+export async function rotateControlMcpCredential(
+  credentialId: string,
+): Promise<ControlMcpSettings> {
+  return invoke<ControlMcpSettings>("rotate_control_mcp_credential", { credentialId });
+}
+
+export async function revokeControlMcpCredential(
+  credentialId: string,
+): Promise<ControlMcpSettings> {
+  return invoke<ControlMcpSettings>("revoke_control_mcp_credential", { credentialId });
 }
 
 export async function getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {

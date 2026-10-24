@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,7 @@ import { CodexCommandCatalogue } from "./codex-command-catalogue.js";
 import {
   normalizeSkillsList,
   SKILL_INVENTORY_LIMITS,
+  SkillInventory,
   skillCommandId,
 } from "./skill-inventory.js";
 import { clearTemplateMetadataCacheForTesting } from "../prompts/template-discovery.js";
@@ -259,6 +260,93 @@ describe("a cold app-server child", () => {
     commands.dispose();
   });
 
+  test("two pre-plugin answers stay stale until late plugins are observed and confirmed", async () => {
+    const { state, engine } = fakeEngine();
+    const commands = coldCatalogue(engine);
+    try {
+      expect((await commands.list()).status).toBe("stale");
+      await waitFor(() => state.calls.length === 2);
+      expect((await commands.list()).status).toBe("stale");
+      state.response = { data: [{ cwd: "/w", skills: [skill(), pluginSkill], errors: [] }] };
+      await waitFor(() => state.calls.length === 3);
+      const grown = await commands.list();
+      expect(grown.status).toBe("stale");
+      expect(grown.commands.map((row) => row.name)).toContain("$plugin-review");
+      await waitFor(() => state.calls.length === 4);
+      const settled = await commands.list();
+      expect(settled.status).toBe("ready");
+      expect(settled.commands.map((row) => row.name)).toContain("$plugin-review");
+    } finally {
+      commands.dispose();
+    }
+  });
+
+  test("an explicit refresh cannot replace the baseline for an already armed delay", async () => {
+    const { state, engine } = fakeEngine();
+    const commands = coldCatalogue(engine);
+    try {
+      await commands.list();
+      await waitFor(() => state.calls.length === 2);
+      expect((await commands.list()).status).toBe("stale");
+      state.response = { data: [{ cwd: "/w", skills: [skill(), pluginSkill], errors: [] }] };
+      await commands.refresh();
+      expect((await commands.list()).status).toBe("stale");
+      await waitFor(() => state.calls.length === 4);
+      // The second delayed read compares against the pre-plugin first round,
+      // even though the explicit refresh already returned the plugin list.
+      expect((await commands.list()).status).toBe("stale");
+      await waitFor(() => state.calls.length === 5);
+      expect((await commands.list()).status).toBe("ready");
+    } finally {
+      commands.dispose();
+    }
+  });
+
+  for (const outcome of ["resolve", "reject"] as const) {
+    for (const lifecycle of ["dispose", "restart"] as const) {
+      test(`${lifecycle} cancels a queued settling continuation when the pending read ${outcome}s`, async () => {
+        let generation = 1;
+        let complete!: () => void;
+        const onRefreshed = mock(() => {});
+        const list = mock(async () => ({
+          result: { data: [{ cwd, skills: [skill()], errors: [] }] },
+          generation,
+        }));
+        const inventory = new SkillInventory({
+          cwd,
+          generation: () => generation,
+          now: Date.now,
+          coldSettleMs: 20,
+          list,
+          onRefreshed,
+        });
+        try {
+          await inventory.read();
+          list.mockImplementationOnce(
+            () =>
+              new Promise((resolve, reject) => {
+                complete = () =>
+                  outcome === "resolve"
+                    ? resolve({ result: { data: [] }, generation: 1 })
+                    : reject(new Error("read failed"));
+              }),
+          );
+          const pending = inventory.read({ forceReload: true });
+          await waitFor(() => inventory.stats.settlingReads === 1);
+          if (lifecycle === "dispose") inventory.dispose();
+          else generation = 2;
+          complete();
+          await pending;
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          expect(list).toHaveBeenCalledTimes(2);
+          if (lifecycle === "dispose") expect(onRefreshed).toHaveBeenCalledTimes(1);
+        } finally {
+          inventory.dispose();
+        }
+      });
+    }
+  }
+
   test("a failed settling read leaves the list stale until a read succeeds", async () => {
     const { state, engine } = fakeEngine();
     const commands = coldCatalogue(engine);
@@ -267,6 +355,8 @@ describe("a cold app-server child", () => {
     await waitFor(() => state.calls.length === 2);
     expect((await commands.list()).status).toBe("stale");
     state.fail = false;
+    expect((await commands.list()).status).toBe("stale");
+    await waitFor(() => state.calls.length === 5);
     expect((await commands.list()).status).toBe("ready");
     commands.dispose();
   });
@@ -299,13 +389,13 @@ describe("a cold app-server child", () => {
     const { state, engine } = fakeEngine();
     const commands = coldCatalogue(engine);
     expect((await commands.list()).status).toBe("stale");
-    await waitFor(() => state.calls.length === 2);
+    await waitFor(() => state.calls.length === 3);
     expect((await commands.list()).status).toBe("ready");
 
     state.generation = 2;
     commands.withdrawGeneration(2);
     expect((await commands.list()).status).toBe("stale");
-    await waitFor(() => state.calls.length === 4);
+    await waitFor(() => state.calls.length === 6);
     expect((await commands.list()).status).toBe("ready");
     commands.dispose();
   });
@@ -322,7 +412,7 @@ describe("a cold app-server child", () => {
     expect(commands.skills.stats.settlingReads).toBe(0);
     // The second child's first answer is cold in its own right.
     expect((await commands.list()).status).toBe("stale");
-    await waitFor(() => state.calls.length === 3);
+    await waitFor(() => state.calls.length === 4);
     expect((await commands.list()).status).toBe("ready");
     commands.dispose();
   });

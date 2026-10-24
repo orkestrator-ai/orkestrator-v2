@@ -68,6 +68,41 @@ function harness(
 const KEY = commandCatalogueKey("env-1", "claude", "session-1");
 
 describe("NativeAgentCommandCatalogueCache", () => {
+  test("a successful stale answer stays stale until a higher provider revision becomes ready", async () => {
+    const h = harness();
+    let response: ProviderCommandCatalogue = {
+      ...catalogue([row("/early")]),
+      status: "stale",
+      revision: 1,
+      generation: "g-1",
+    };
+    const source = provider(async () => response);
+    const first = await h.cache.read(KEY, "env-1", source, "session-1");
+    expect(first.state).toMatchObject({ status: "stale", revision: 1 });
+    expect(first.state.error).toBeUndefined();
+    expect(h.cache.peek(KEY)).toEqual(first);
+    expect(h.cache.expiresAt(KEY)).toBeGreaterThan(h.now);
+
+    // The same revision causes no read. A later push must bypass the TTL,
+    // including while this session has no mounted client.
+    h.cache.observeProviderRevision(KEY, "env-1", source, "session-1", 1);
+    expect(source.commandCatalogue).toHaveBeenCalledTimes(1);
+    response = {
+      ...catalogue([row("/early"), row("/plugin")]),
+      revision: 2,
+      generation: "g-1",
+    };
+    h.cache.observeProviderRevision(KEY, "env-1", source, "session-1", 2);
+    await h.cache.settle();
+    const ready = h.cache.peek(KEY)!;
+    expect(source.commandCatalogue).toHaveBeenCalledTimes(2);
+    expect(ready.commands.map((command) => command.name)).toEqual(["/early", "/plugin"]);
+    expect(ready.state).toMatchObject({ status: "ready", revision: 2 });
+    expect(ready.state.error).toBeUndefined();
+    expect(h.announce).toHaveBeenCalledTimes(2);
+    expect(h.announce).toHaveBeenLastCalledWith("env-1");
+  });
+
   test("a successful empty list is ready and distinct from a failed first read", async () => {
     const { cache } = harness();
     const empty = await cache.read(

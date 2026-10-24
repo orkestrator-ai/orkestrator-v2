@@ -137,6 +137,9 @@ export function StreamingTranscriptFixture() {
               createdAt: "2026-09-21T11:00:00Z",
               parts: [command(3_000), command(3_001)],
             },
+            ...(query.has("foldAbove")
+              ? Array.from({ length: 20 }, (_, index) => textMessage(100 + index))
+              : []),
           ]
         : initialMessages(longTranscript),
   );
@@ -210,20 +213,30 @@ export function StreamingTranscriptFixture() {
         type="button"
         onClick={() =>
           setMessages((current) => {
+            const index = current.findIndex((message) => message.id === "live-fold");
             return [
-              ...current,
+              ...current.slice(0, index + 1),
               {
-                id: `live-fold-update-${current.length}`,
+                id: "live-fold-update",
                 role: "assistant",
                 content: "",
                 createdAt: "2026-09-21T11:02:00Z",
                 parts: [command(3_002)],
               },
+              ...current.slice(index + 1).filter((message) => message.id !== "live-fold-update"),
             ];
           })
         }
       >
         Grow tool group
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          setMessages((current) => current.filter((message) => message.id !== "live-fold-update"))
+        }
+      >
+        Shrink tool group
       </button>
       {bigGroup > 0 ? (
         <>

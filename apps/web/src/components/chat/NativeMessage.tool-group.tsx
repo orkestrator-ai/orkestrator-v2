@@ -369,7 +369,7 @@ function ToolGroupBody(props: BodyProps) {
  * Short runs show every call. From `TOOL_GROUP_FOLD_MIN_CALLS` calls the head
  * line appears, summarising the newest call, the count and the span, and the
  * body folds under it. The same host and body element serve every state, so
- * crossing the threshold never remounts the rows.
+ * crossing the threshold retains the rows until the closing animation ends.
  *
  * A group the reader saw unfolded folds when it crosses the threshold, its
  * body animating down into the head line; a group that arrives already long —
@@ -386,9 +386,45 @@ export function ToolGroupPart({
   partKey: string;
 }) {
   const folds = shouldFoldToolGroup(part.parts);
+  const empty = part.parts.length === 0;
   // Only a group that was short on screen animates its head line in when it
   // folds; one that mounts already long draws the line at once.
-  const [mountedFolded] = useState(folds);
+  const [headEntry, setHeadEntry] = useState({ folds, seen: folds, animate: false });
+  // Only reader-driven opening animates. Short groups and restored expanded
+  // groups mount at their measured height immediately.
+  const [animateOpen, setAnimateOpen] = useState(false);
+  const [readerClosed, setReaderClosed] = useState(false);
+  if (headEntry.folds !== folds) {
+    setHeadEntry({ folds, seen: headEntry.seen || folds, animate: folds && !headEntry.seen });
+    if (!folds) setReaderClosed(false);
+  }
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [interacting, setInteracting] = useState(false);
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    const document = content.ownerDocument;
+    const update = () => {
+      const selection = document.getSelection();
+      const selected =
+        content.hasChildNodes() &&
+        !content.hidden &&
+        selection &&
+        !selection.isCollapsed &&
+        Array.from({ length: selection.rangeCount }, (_, index) =>
+          selection.getRangeAt(index),
+        ).some((range) => range.intersectsNode(content));
+      setInteracting(content.contains(document.activeElement) || Boolean(selected));
+    };
+    document.addEventListener("selectionchange", update);
+    document.addEventListener("focusin", update);
+    document.addEventListener("focusout", update);
+    return () => {
+      document.removeEventListener("selectionchange", update);
+      document.removeEventListener("focusin", update);
+      document.removeEventListener("focusout", update);
+    };
+  }, [empty]);
 
   const messageScope = useContext(MessageExpansionScopeContext);
   const transcriptScope = useContext(AgentExpansionScopeContext);
@@ -409,26 +445,33 @@ export function ToolGroupPart({
    */
   const [isOpen, setIsOpen] = useMessagePartExpansion([groupKey(), ...toolKeys.map(groupKey)]);
 
-  if (part.parts.length === 0) return null;
-  // Short, the body is open; crossing the threshold closes it in the same
-  // host, so Radix measures the rows and plays the fold from their height.
-  const open = !folds || isOpen;
+  if (empty) return null;
+  // Defer automatic folding until focus and selection leave the rows. An
+  // explicit fold still honors the reader’s choice.
+  const open = !folds || isOpen || (interacting && !readerClosed);
 
   return (
     <Collapsible
       open={open}
-      onOpenChange={setIsOpen}
+      onOpenChange={(next) => {
+        setAnimateOpen(next);
+        setReaderClosed(!next);
+        setIsOpen(next);
+      }}
       // The transcript's anchor for members whose scrolling an inner
       // viewport owns: hold this frame, then the member within it.
       data-transcript-group-frame="true"
       className="my-0 divide-y divide-divider overflow-hidden rounded-lg border border-divider bg-sidebar"
     >
-      {folds ? <ToolGroupHeadLine part={part} isOpen={open} entering={!mountedFolded} /> : null}
+      {folds ? <ToolGroupHeadLine part={part} isOpen={open} entering={headEntry.animate} /> : null}
       {/*
         Padding lives on the rows, not the card, so the separators run the
         full width of the block rather than stopping short of its outline.
       */}
-      <CollapsibleContent className="tool-group-fold-content">
+      <CollapsibleContent
+        ref={contentRef}
+        className={cn("tool-group-fold-content", animateOpen && "tool-group-reader-open")}
+      >
         <ToolGroupBody entries={part.parts} containerId={containerId} partKey={partKey} />
       </CollapsibleContent>
     </Collapsible>

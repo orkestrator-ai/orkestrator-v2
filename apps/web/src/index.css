@@ -468,7 +468,7 @@ body[data-orkestrator-dev-profile]::before {
   overflow: hidden;
 }
 
-.tool-group-fold-content[data-state="open"] {
+.tool-group-fold-content:where(.tool-group-reader-open)[data-state="open"] {
   animation: tool-group-fold-open var(--tool-group-fold-duration) var(--tool-group-fold-easing);
 }
 

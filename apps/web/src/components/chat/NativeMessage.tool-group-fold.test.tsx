@@ -4,13 +4,16 @@
  * list and, from its place at the top of that list, folds it again.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { VirtuosoMockContext } from "react-virtuoso";
 import { NativeMessage } from "./NativeMessage";
 
-afterEach(cleanup);
+afterEach(() => {
+  document.getSelection()?.removeAllRanges();
+  cleanup();
+});
 
 let messageCounter = 0;
 // Call ids are unique within a conversation, and an opened group is
@@ -225,6 +228,95 @@ describe("folded tool group", () => {
       screen.getByRole("button", { name: /^Fold 4 tool calls:/ }).getAttribute("aria-expanded"),
     ).toBe("true");
     expect(screen.getByText("git status")).toBeTruthy();
+  });
+
+  test("short and restored open groups mount without the reader opening animation", () => {
+    const id = `mount-animation-${++messageCounter}`;
+    const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
+    const first = render(messageView(id, calls.slice(0, 2)));
+    expect(first.container.querySelector(".tool-group-reader-open") === null).toBe(true);
+    first.rerender(messageView(id, calls));
+    fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
+    expect(first.container.querySelector(".tool-group-reader-open")).toBeTruthy();
+    first.unmount();
+    const restored = render(messageView(id, calls));
+    expect(screen.getByRole("button", { name: /^Fold 3 tool calls:/ })).toBeTruthy();
+    expect(restored.container.querySelector(".tool-group-reader-open") === null).toBe(true);
+  });
+
+  test("a summary enters only on its first short-to-long crossing", () => {
+    const id = `recross-${++messageCounter}`;
+    const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
+    const { container, rerender } = render(messageView(id, calls.slice(0, 2)));
+    rerender(messageView(id, calls));
+    expect(container.querySelector(".tool-group-head-enter")).toBeTruthy();
+    rerender(messageView(id, calls.slice(0, 2)));
+    rerender(messageView(id, calls));
+    expect(container.querySelector(".tool-group-head-enter") === null).toBe(true);
+  });
+
+  test("an initially long summary never animates on a later re-crossing", () => {
+    const id = `long-recross-${++messageCounter}`;
+    const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
+    const { container, rerender } = render(messageView(id, calls));
+    rerender(messageView(id, calls.slice(0, 2)));
+    rerender(messageView(id, calls));
+    expect(container.querySelector(".tool-group-head-enter") === null).toBe(true);
+  });
+
+  for (const interaction of ["focus", "selection"] as const) {
+    test(`defers threshold folding while row ${interaction} is held`, () => {
+      const id = `interaction-${++messageCounter}`;
+      const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
+      const { container, rerender } = render(messageView(id, calls.slice(0, 2)));
+      const row = screen.getByText("git status");
+      const control = row.closest("button")!;
+      if (interaction === "focus") {
+        act(() => control.focus());
+      } else {
+        const range = document.createRange();
+        range.selectNodeContents(row);
+        document.getSelection()!.addRange(range);
+        fireEvent(document, new Event("selectionchange"));
+      }
+      rerender(messageView(id, calls));
+      expect(container.querySelector(".tool-group-fold-content")?.getAttribute("data-state")).toBe(
+        "open",
+      );
+      expect(screen.getByText("git status")).toBe(row);
+      if (interaction === "focus") {
+        act(() => control.blur());
+      } else {
+        document.getSelection()!.removeAllRanges();
+        fireEvent(document, new Event("selectionchange"));
+      }
+      expect(container.querySelector(".tool-group-fold-content")?.getAttribute("data-state")).toBe(
+        "closed",
+      );
+    });
+  }
+
+  test("an explicit fold overrides a held selection and a later short run protects focus again", () => {
+    const id = `explicit-fold-${++messageCounter}`;
+    const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
+    const { container, rerender } = render(messageView(id, calls.slice(0, 2)));
+    const range = document.createRange();
+    range.selectNodeContents(screen.getByText("git status"));
+    document.getSelection()!.addRange(range);
+    fireEvent(document, new Event("selectionchange"));
+    rerender(messageView(id, calls));
+    fireEvent.click(screen.getByRole("button", { name: /^Fold 3 tool calls:/ }));
+    expect(container.querySelector(".tool-group-fold-content")?.getAttribute("data-state")).toBe(
+      "closed",
+    );
+    document.getSelection()!.removeAllRanges();
+    fireEvent(document, new Event("selectionchange"));
+    rerender(messageView(id, calls.slice(0, 2)));
+    act(() => screen.getByText("git status").closest("button")!.focus());
+    rerender(messageView(id, calls));
+    expect(container.querySelector(".tool-group-fold-content")?.getAttribute("data-state")).toBe(
+      "open",
+    );
   });
 
   test("renders a group that arrives already long folded without animating", () => {

@@ -1,6 +1,6 @@
 # Container state observation
 
-Checked against `main` at `712274379` (2026-10-24).
+Checked against `main` at `a5d78cfcd` (2026-10-24).
 
 The backend observes state inside containers by running `docker exec`. Both
 of the largest idle costs now have a container-side change signal with a
@@ -62,7 +62,7 @@ Image `orkestrator-v2:dev-8540c28917b1`, built from this branch, declares
 | --- | --- | --- |
 | One B18 state read, Docker Desktop VM side | dockerd 9.5–10.8 ms, containerd 5.2–5.7 ms, shim with `runc` and the command 24.7–29.1 ms; whole VM 54–61 ms busy CPU per exec | `container-exec-cost.ts`, 2 runs × 200 execs |
 | Same read, host side | `docker` CLI 18.7–19.0 ms CPU p50, 30 MB peak RSS; `com.docker.backend` about 20 ms; wall 46–54 ms p50, 64–83 ms p95 | same |
-| So the 1 s poll per container | about 11 % of one core in total (CLI, Desktop backend, VM), now paid only by images without the signal | derived |
+| So the 1 s poll per container | about 9–10 % of one core (CLI 19 ms + `com.docker.backend` 20 ms + VM guest 54–61 ms per read; hypervisor overhead not separated), now paid only by images without the signal | derived |
 | Status scan / tree walk (this repo's HEAD) | 151 / 130 ms VM CPU, 93 / 102 ms wall p50 | same, 50 execs each |
 | Watcher on the same workspace | 513 watches, set up in 254 ms, 7 MB RSS for its three processes, 0 s CPU over 30 s idle, about 0.5 MB kernel memory | same, `--watcher` |
 | Live watcher, real image | arm to confirmed 0.5–0.85 s; file change to completed scan 0.45–0.47 s; `node_modules` writes ring nothing; a pause and resume leaves one watcher; a killed `inotifywait` demotes (`watcher-lost`) | `container-worktree-signal-docker.test.ts`, 4 runs |

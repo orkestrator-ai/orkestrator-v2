@@ -2,16 +2,17 @@
 
 Checked against `main` at `2459b05c` (2026-10-15); the correlation-id item
 was re-checked and closed against `9906db30` (2026-10-16). Items 1–3 were
-fixed and re-checked against `06297124` (2026-10-23). Only item 4, a
-compatibility path waiting for a support window, is left.
+fixed and re-checked against `06297124` (2026-10-23). Item 4, the pre-digest
+receipt fallback, was retired on 2026-10-24 once
+[0034](../cross-cutting/0034-mixed-version-compatibility.md) set the support
+window. Nothing is left.
 
 Design edits are recoverable operations: every submitted edit should end in a
 truthful terminal outcome and never run twice
 ([`design-canvas.md`](../../architecture/design-canvas.md), "Operations"). A
 client that loses a response reconciles by reading status, so the status it
 reads must be exact. The three restart and renderer edges this file tracked
-are fixed (see "Done"). What remains is retiring the pre-digest receipt
-fallback once older receipts and backends are out of the support window.
+are fixed, and the pre-digest receipt fallback is retired (see "Done").
 
 ## Current state
 
@@ -25,14 +26,15 @@ fallback once older receipts and backends are out of the support window.
   `core/design/service-lifecycle.ts` all apply `settledMatches`; a mismatch
   throws `reusedCorrelation` (`core/design/errors.ts`). Tests:
   `mcp.test.ts` ("submit_operation is idempotent by correlationId…", "a
-  receipt settled before digests were kept…"), `operations.test.ts` ("a
+  receipt settled before digests were kept refuses every retry"), `operations.test.ts` ("a
   settled correlation id refuses different input at preparation", "a create
   prepared twice…", "a correlation id binds style order but not other key
   order") and `records.test.ts` (digest pruning, key and style order).
-- Receipts with no kept digest (settled before `receiptDigests` existed, or
-  written by a backend older than 2.21.0 sharing the data directory) still use
-  the fallback in `settledMatches`: kind, preconditions, gesture and client
-  ids. Digests first shipped in v2.21.0 (2026-10-16).
+- A receipt with no kept digest (settled before `receiptDigests` existed, in
+  a build older than v2.21.0) never matches: `settledMatches` takes only the
+  stored digest, so the retry is refused with `reusedCorrelation`, runs
+  nothing, and `operation_status` still answers from the receipt. Digests
+  first shipped in v2.21.0 (2026-10-16), the floor of the support window.
 - A dead owner's unsettled entry resolves through `deadOutcome`
   (`core/design/service.ts`): `interrupted`, or `committed` for a duplicate
   whose copy exists (`committedDuplicate` in `service-lifecycle.ts`).
@@ -47,32 +49,24 @@ fallback once older receipts and backends are out of the support window.
 
 ## Outstanding work
 
-### Code
-
-4. **Retire the pre-digest receipt fallback** (low; deferred until the
-   support window allows). Receipts settled before `receiptDigests` existed
-   are compared on kind, preconditions, gesture and client ids only, so a
-   reused id that changes only the input body still replays them. When it is
-   retired, drop the fallback in `settledMatches` and treat a missing digest
-   as a mismatch: the call is refused with `reusedCorrelation`, which runs
-   nothing, and the client reconciles through `details.token` and
-   `operation_status`.
-
-   Not done on 2026-10-23, deliberately. The item's own condition ("once a
-   release has shipped long enough") is not met: digests shipped seven days
-   earlier in v2.21.0, a canvas that is not edited keeps its receipts
-   indefinitely (they only leave the 128-receipt window when newer ones push
-   them out), and a backend older than 2.21.0 sharing the data directory
-   still writes receipts with no digest. There is no agreed support window to
-   measure "long enough" against; that decision is owned by
-   [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md),
-   whose compatibility-path index now lists this fallback. Done when the
-   window no longer covers backends older than 2.21.0 and the fallback is
-   removed with its `mcp.test.ts` case ("a receipt settled before digests
-   were kept…") rewritten to expect the refusal.
+None.
 
 ## Done
 
+4. **Pre-digest receipt fallback retired** (2026-10-24). 0034 set the support
+   window: published releases from the floor, v2.21.0 today
+   ([`version-compatibility.md`](../../architecture/version-compatibility.md)).
+   Every backend in it keeps digests (`receiptDigests` is in v2.21.0, #1021),
+   so this item's condition is met. `settledMatches`
+   (`core/design/records.ts`) now takes only the stored digest and the
+   descriptor, and a missing digest is a mismatch, as recorded below. The
+   three callers (`service.ts`, `service-lifecycle.ts`, `tools.ts`) pass the
+   digest only. Evidence: `mcp.test.ts` ("a receipt settled before digests
+   were kept refuses every retry") strips the digest index from a settled
+   record, then shows that an identical retry and a changed one are both
+   refused as a different edit, the canvas revision does not move, and
+   `operation_status` still returns the original receipt. The design suite
+   (`apps/backend/src/core/design`) passes.
 1. **Restart interruptions on legacy canvases** (2026-10-23). Recovery no
    longer drops a dead owner's entries on a never-migrated canvas; they stay
    in the pending file as the canvas's outcomes. `status` answers
@@ -211,6 +205,12 @@ fallback once older receipts and backends are out of the support window.
     "different edit".
   - *Cons:* until then, a reused id that changes only the input body still
     replays a pre-digest receipt.
+  - *Superseded 2026-10-24:* 0034 decided the window (floor v2.21.0), which
+    met the condition, so the fallback was retired with the recorded
+    semantics. Pro: a reused id can no longer replay a receipt for a
+    different body. Con: an identical retry of a receipt settled by a pre-2.21
+    source build is now refused; the client reconciles through
+    `operation_status`, and no published release wrote such receipts.
 
 ## Constraints and rationale
 
@@ -257,10 +257,9 @@ fallback once older receipts and backends are out of the support window.
     token, not a field on the receipt, so `DesignOperationStatus` and every
     response stay byte-identical. It is counted inside the 128 KiB receipt
     budget and pruned with its receipts. Records are parsed with
-    `passthrough`, so an older backend sharing the directory keeps the map;
-    receipts it writes simply have no digest and use the fallback below.
-  - *Older receipts:* with no digest, kind, preconditions, gesture and client
-    ids are compared; an identical retry still replays (item 4).
+    `passthrough`, so an older backend sharing the directory keeps the map.
+  - *Older receipts:* a receipt with no digest never matches, so even an
+    identical retry is refused (item 4, retired 2026-10-24).
   - *Clients:* the renderer never reuses an id for new input (a new intent,
     `resume` and `runDesignLifecycle` mint fresh ids) and uses
     prepare/execute, not `submit_operation`, so its retry paths are
@@ -271,10 +270,11 @@ fallback once older receipts and backends are out of the support window.
 
 - [0036-design-canvas-qualification.md](0036-design-canvas-qualification.md), whose
   real-container export run exercises the same reconciliation rules.
-- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md):
-  owns the support window that gates item 4, and lists the pre-digest
-  fallback in its compatibility-path index. The never-migrated legacy canvas
-  path is also a compatibility path.
+- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)
+  decided the support window that retired item 4;
+  [`version-compatibility.md`](../../architecture/version-compatibility.md)
+  lists it as retired. The never-migrated legacy canvas path reads user data
+  and is not governed by the window.
 - Flake [0215](../../tests/flaky-tests/design-canvas-and-artifacts/0215-design-operation-replay-event-count.md)
   (resolved): the lost-execute and duplicate-execute case now holds the
   background validation before it counts hints.

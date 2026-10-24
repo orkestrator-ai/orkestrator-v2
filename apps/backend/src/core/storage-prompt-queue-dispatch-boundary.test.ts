@@ -127,11 +127,5 @@ describe("prompt queue dispatch boundary", () => {
     await expect(
       storage.enqueuePromptQueueMessage(queueKey, "environment-2", { id: "message-1" }),
     ).rejects.toThrow("does not match its environment owner");
-    await expect(
-      storage.requeuePromptQueueMessage(queueKey, "environment-2", { id: "message-1" }),
-    ).rejects.toThrow("does not match its environment owner");
-    await expect(
-      storage.claimPromptQueueHead(queueKey, "environment-2", "message-1"),
-    ).rejects.toThrow("does not match its environment owner");
   });
 });

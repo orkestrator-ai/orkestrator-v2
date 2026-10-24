@@ -15,6 +15,7 @@ import {
   reviewerHistoryDigest,
   reviewerHistoryKey,
 } from "./multi-review-reviewer-transcript.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { OpenCodeStreamState } from "./opencode-stream-state.js";
 import { openCodeHistoryServer, openCodeMessageId } from "./opencode-history-test-support.js";
 import {
@@ -118,10 +119,17 @@ describe("conditional reviewer transcript reads", () => {
   }
 
   test("sends bounded arguments and answers unchanged without messages", async () => {
+    const before =
+      compatibilityPathUsage.snapshot().paths["multi-review.reviewer-transcript-fallback"]?.count ??
+      0;
     const fake = snapshotProvider();
     const first = await readReviewerTranscript(fake.provider, "session-a", undefined);
     expect(first).toMatchObject({ kind: "snapshot", messages: [{ revision: 1 }], fallback: false });
     expect(fake.calls[0]).toEqual({ limit: 500, targetBytes: 2 * 1024 * 1024 });
+    expect(
+      compatibilityPathUsage.snapshot().paths["multi-review.reviewer-transcript-fallback"]?.count ??
+        0,
+    ).toBe(before);
 
     const second = await readReviewerTranscript(
       fake.provider,
@@ -160,6 +168,9 @@ describe("conditional reviewer transcript reads", () => {
   });
 
   test("providers without a snapshot surface use the bounded compatibility path", async () => {
+    const before =
+      compatibilityPathUsage.snapshot().paths["multi-review.reviewer-transcript-fallback"]?.count ??
+      0;
     const calls: Array<{ limit?: number } | undefined> = [];
     const provider = {
       agent: "claude",
@@ -170,6 +181,9 @@ describe("conditional reviewer transcript reads", () => {
     } as unknown as BuildPipelineProvider;
     const read = await readReviewerTranscript(provider, "session", undefined);
     expect(read).toMatchObject({ kind: "snapshot", fallback: true, truncated: true });
+    expect(
+      compatibilityPathUsage.snapshot().paths["multi-review.reviewer-transcript-fallback"]?.count,
+    ).toBe(before + 1);
     expect(read.kind === "snapshot" ? read.messages : []).toHaveLength(500);
     expect(read.kind === "snapshot" ? read.sourceToken : "token").toBeUndefined();
     // The provider itself is asked for no more than the tab can show.

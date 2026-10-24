@@ -11,6 +11,7 @@ import type { StorageService } from "../storage.js";
 import {
   describeNodeAction,
   NodeActionRequests,
+  type NodeActionApproval,
   type NodeActionKind,
   type NodeActionRequest,
   type NodeActionTarget,
@@ -28,6 +29,8 @@ import {
 import { NodeFiles } from "./node-files.js";
 import type { NodePortal } from "./node-portal.js";
 import { NodeProjectFiles } from "./node-project-files.js";
+import { NodeProjectCopies } from "./node-project-copy.js";
+import type { ProjectCopyRecord } from "@orkestrator/protocol/project-copy";
 import type { NodeService } from "./node-service.js";
 
 /**
@@ -56,6 +59,7 @@ export class NodeCoordination {
   readonly actions: NodeActionRequests;
   readonly files: NodeFiles;
   readonly projectFiles: NodeProjectFiles;
+  readonly copies: NodeProjectCopies;
 
   constructor(
     private readonly options: {
@@ -153,11 +157,29 @@ export class NodeCoordination {
           requestId: input.requestId,
         }),
     });
+    this.copies = new NodeProjectCopies({
+      selfId: () => nodes.selfIdentity(),
+      selfName: async () => (await nodes.selfProfile()).displayName,
+      summaries: (nodeIds) => portal.summaries(nodeIds),
+      invokerFor: this.projectFiles.invokerFor,
+      transfer: this.projectFiles.transfer,
+      emit: options.emit,
+      onFinished: (record) => {
+        if (record.actionRequestId) void this.notifyCopyFinished(record);
+      },
+    });
     portal.afterRouted = async (nodeId, command, args, result) => {
-      if (command !== "create_environment" || typeof args.projectId !== "string") return;
+      // A coordinator's launch creates through `create_controller_environment`.
+      const input =
+        command === "create_controller_environment" && args.input && typeof args.input === "object"
+          ? (args.input as Record<string, unknown>)
+          : command === "create_environment"
+            ? args
+            : null;
+      if (!input || typeof input.projectId !== "string") return;
       const environmentId = (result as { id?: unknown } | null)?.id;
       if (typeof environmentId !== "string") return;
-      await this.projectFiles.seedEnvironment(nodeId, args.projectId, environmentId);
+      await this.projectFiles.seedEnvironment(nodeId, input.projectId, environmentId);
     };
     this.actions = new NodeActionRequests({
       load: () => storage.loadNodeActionRequests(),
@@ -167,7 +189,7 @@ export class NodeCoordination {
         "delete-environment": (request) => this.executeDeletion(request),
         "update-project-files": (request) => this.projectFiles.executeUpdate(request),
         "reveal-env-value": (request) => this.projectFiles.executeReveal(request),
-        "create-project": (request) => this.projectFiles.executeCreateProject(request),
+        "create-project": (request, approval) => this.executeCreateProject(request, approval),
       },
       notify: (request) => this.notifyRequester(request),
     });
@@ -178,7 +200,9 @@ export class NodeCoordination {
    */
 
   /** Mail from a command node's coordinator to an agent on this node. */
-  async deliverIncoming(args: Record<string, unknown>): Promise<{ messageId: string }> {
+  async deliverIncoming(
+    args: Record<string, unknown>,
+  ): Promise<{ messageId: string; toTabId: string; placement: string }> {
     const controllerId = args.controllerId;
     if (!isBackendId(controllerId)) throw new Error("Expected controllerId.");
     const controller = this.options.nodes
@@ -194,8 +218,22 @@ export class NodeCoordination {
       throw new Error("Expected a body of at most 32 KiB.");
     const requestId =
       typeof args.requestId === "string" ? args.requestId.slice(0, 200) : randomUUID();
+    const environment = await this.options.storage.getEnvironment(toEnvironmentId);
+    if (!environment) throw new Error("That environment does not exist on this node.");
+    // The attached command node's coordinator, authenticated by the node link:
+    // its mail is a delegation in this environment's project and wakes the
+    // agent, as a coordinator's on this node would.
     const message = await this.options.storage.sendAgentMail(
-      { kind: "external" },
+      {
+        kind: "node",
+        nodeId: controllerId,
+        nodeName: controller.displayName,
+        role: "coordinator",
+        projectId: environment.projectId,
+        environmentId: mailbox.coordinatorEnvironmentId,
+        tabId: mailbox.coordinatorTabId,
+        title: "Project coordinator",
+      },
       {
         requestId: `node:${controllerId}:${requestId}`.slice(0, 256),
         toEnvironmentId,
@@ -203,6 +241,7 @@ export class NodeCoordination {
         ...(typeof args.subject === "string" ? { subject: args.subject.slice(0, 200) } : {}),
         body: describeCoordinatorMail(body, controller.displayName),
       },
+      { newDelegation: true },
     );
     await this.leafMail.recordThread(message.id, mailbox);
     // An environment the coordinator talks to reports back to it.
@@ -210,7 +249,7 @@ export class NodeCoordination {
     if (!parseMailState(state).origins[toEnvironmentId]) {
       await this.leafMail.recordOrigin(toEnvironmentId, mailbox);
     }
-    return { messageId: message.id };
+    return { messageId: message.id, toTabId: message.toTabId, placement: message.placement };
   }
 
   async recordOrigin(args: Record<string, unknown>): Promise<{ recorded: true }> {
@@ -258,22 +297,32 @@ export class NodeCoordination {
     subject?: string;
     body: string;
     requestId: string;
+    /** A leaf agent; absent for this node's own notices. */
+    from?: {
+      nodeId: string;
+      nodeName: string;
+      environmentId: string;
+      tabId: string;
+      environmentName?: string;
+    };
   }): Promise<void> {
     const storage = this.options.storage;
     let address = input.toCoordinator;
+    let projectId: string | undefined;
     if (address) {
       const workspaces = await storage.listCoordinatorWorkspaces();
-      const valid = workspaces.some((workspace) =>
+      const owner = workspaces.find((workspace) =>
         workspace.conversations.some(
           (conversation) =>
             coordinatorRuntimeId(workspace.id, conversation.id) === address!.environmentId &&
             conversation.tabId === address!.tabId,
         ),
       );
-      if (!valid)
+      if (!owner)
         throw Object.assign(new Error("That destination is not a coordinator conversation."), {
           code: "no-coordinator",
         });
+      projectId = owner.projectId;
     }
     if (!address) {
       const projects = await storage.loadProjects();
@@ -293,9 +342,24 @@ export class NodeCoordination {
         });
       }
       address = { environmentId: coordinatorRuntimeId(workspace.id, main.id), tabId: main.tabId };
+      projectId = workspace.projectId;
     }
+    // A worker on a node this one controls reports like a worker here: the
+    // node link authenticates it, it wakes the coordinator, and while the
+    // coordinator waits on that worker its report is held for the turn's end.
     await storage.sendAgentMail(
-      { kind: "external" },
+      input.from && projectId
+        ? {
+            kind: "node",
+            nodeId: input.from.nodeId,
+            nodeName: input.from.nodeName,
+            role: "agent",
+            projectId,
+            environmentId: input.from.environmentId,
+            tabId: input.from.tabId,
+            title: input.from.environmentName ?? null,
+          }
+        : { kind: "external" },
       {
         requestId: input.requestId,
         toEnvironmentId: address.environmentId,
@@ -406,9 +470,87 @@ export class NodeCoordination {
     return { code: "deleted", message: `Deleted ${done.join(", ")}.` };
   }
 
+  /**
+   * Approved: copy the coordinator's project (this node's copy) to each
+   * target, with the location and files the user settled on while approving.
+   * The copy runs in the background; its outcome is mailed when it ends.
+   */
+  private async executeCreateProject(
+    request: NodeActionRequest,
+    approval: NodeActionApproval,
+  ): Promise<{ code: string; message: string }> {
+    const self = await this.options.nodes.selfIdentity();
+    const started: string[] = [];
+    for (const target of request.targets) {
+      const record = await this.copies.start({
+        requestKey: `node-action:${request.requestId}:${target.nodeId}`,
+        source: { nodeId: self, projectId: request.requestedBy.projectId },
+        target: {
+          nodeId: target.nodeId,
+          ...((approval.location ?? target.location)
+            ? { location: approval.location ?? target.location }
+            : {}),
+        },
+        paths: approval.paths ?? target.files ?? [],
+        rememberFiles: approval.rememberFiles ?? false,
+        actionRequestId: request.requestId,
+      });
+      started.push(
+        `${record.source.projectName} to ${record.target.nodeName}${record.target.location ? ` at ${record.target.location}` : ""}`,
+      );
+    }
+    return {
+      code: "copying",
+      message: `Started copying ${started.join(", ")}. You will get a message when it finishes.`,
+    };
+  }
+
+  private async notifyCopyFinished(record: ProjectCopyRecord): Promise<void> {
+    const request = await this.actions.get(record.actionRequestId!).catch(() => null);
+    if (!request) return;
+    const done = record.stage === "completed";
+    const what = `${record.source.projectName} to ${record.target.nodeName}${record.target.location ? ` at ${record.target.location}` : ""}`;
+    await this.options.storage
+      .sendAgentMail(
+        // A system notice in the coordinator's own project, so it wakes the
+        // conversation that asked rather than waiting unread.
+        {
+          kind: "system",
+          projectId: request.requestedBy.projectId,
+          source: "workflow",
+          resourceId: `node-copy:${record.copyId}`,
+        },
+        {
+          requestId: `node-copy:${record.copyId}:${record.stage}:${record.finishedAt ?? ""}`.slice(
+            0,
+            256,
+          ),
+          toEnvironmentId: request.requestedBy.coordinatorEnvironmentId,
+          toTabId: request.requestedBy.coordinatorTabId,
+          subject: `Project copy ${done ? "finished" : "failed"}: ${what}`.slice(0, 200),
+          body: done
+            ? `Copied ${what}: ${record.progress.files - (record.progress.existing ?? 0)} file(s) besides the clone${record.tooLarge.length ? `; ${record.tooLarge.length} file(s) over 64 MiB were not copied` : ""}. Its environments can now be launched there with nodeId ${record.target.nodeId}.`
+            : `Copying ${what} failed: ${record.error?.message ?? "unknown error"}`,
+        },
+      )
+      .catch((error: unknown) => {
+        console.warn(
+          "[nodes] Could not tell the coordinator a project copy finished:",
+          error instanceof Error ? error.name : "unknown",
+        );
+      });
+  }
+
   private async notifyRequester(request: NodeActionRequest): Promise<void> {
     await this.options.storage.sendAgentMail(
-      { kind: "external" },
+      // The coordinator asked and was told it would hear back: a system notice
+      // in its project wakes it, where external mail would wait unread.
+      {
+        kind: "system",
+        projectId: request.requestedBy.projectId,
+        source: "workflow",
+        resourceId: `node-action:${request.requestId}`,
+      },
       {
         requestId: `node-action:${request.requestId}:${request.state}`,
         toEnvironmentId: request.requestedBy.coordinatorEnvironmentId,

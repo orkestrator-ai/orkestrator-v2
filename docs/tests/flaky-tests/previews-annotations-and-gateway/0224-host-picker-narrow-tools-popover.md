@@ -566,3 +566,14 @@ Evidence: host temporary artifacts `orkestrator-test-run.QHhbhR/merge-isolated-b
 and `orkestrator-test-run.AMX0fi/merge-gateway-owner.log.gz`; rerun artifacts
 under `output/agent-testing/merge-gateway-0331564a/browser/`. No implementation,
 assertion, timeout or skip changed.
+
+
+## Per-machine agent accounts main merge — 2026-10-24
+
+- **Parents:** feature `9f67a5963` and main `5282e441a`.
+- **Original command:** `mise run test:logged -- --name merge-agent-browser -- mise run test:agent:browser:isolated`, credential-free Codex fixture `qa-browser-8e82b8e7-4e8`, one Playwright worker alongside repository/component validation and other worktrees.
+- **Full-suite result:** 28 passed, 53 opt-in skips and one failed (641.3 s logged including lifecycle). The runner stopped and reset its profile.
+- **Failure:** the unchanged narrow host-picker case repeated the 15000 ms hidden/unstable Repository settings click timeout at `browser-gateway.spec.ts:241`.
+- **Complete unchanged owner:** fresh credential-free Codex fixture `merge-gateway-cb5bcc4a`; `ORKESTRATOR_AGENT_TEST_PROFILE=merge-gateway-cb5bcc4a ORKESTRATOR_AGENT_TEST_RUN_ID=merge-gateway-cb5bcc4a mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` reported 13 passed, ten skipped and only the same failure (218.8 s logged). Both maintenance viewports, account recovery, local-environment smoke and persisted-diff cases passed.
+- **Evidence:** host temporary artifact `orkestrator-test-run.Xcu2PF/merge-gateway-owner.log.gz`; browser artifacts under `output/agent-testing/merge-gateway-cb5bcc4a/browser/`. The owner profile was stopped and reset with `dev:stop` and `dev:reset`.
+- **Assessment:** this known failure persists in the complete unchanged owner; it remains unresolved. No gateway implementation, assertion, timeout or skip changed.

@@ -1,4 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { FederationProvider } from "@/components/federation/FederationProvider";
+import { portalStore } from "@/lib/portal/portal-store";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   AgentAccountsSnapshot,
@@ -10,17 +12,31 @@ const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 let snapshot: AgentAccountsSnapshot;
 let session: AgentSessionAccount | null;
 let readSession: (() => Promise<AgentSessionAccount | null>) | undefined;
+let deferredRead:
+  | ((command: string, args: Record<string, unknown>) => Promise<unknown> | undefined)
+  | undefined;
+let loginProgress: Record<string, unknown> = { state: "idle" };
 
 mock.module("@/lib/native/backend", () => ({
   invoke: mock((command: string, args: Record<string, unknown> = {}) => {
     calls.push({ command, args });
+    const deferred = deferredRead?.(command, args);
+    if (deferred) return deferred;
     switch (command) {
       case "get_native_agent_session_account":
         return readSession ? readSession() : Promise.resolve(session);
       case "list_agent_accounts":
         return Promise.resolve(snapshot);
       case "get_agent_account_login":
-        return Promise.resolve({ state: "idle" });
+        return Promise.resolve(loginProgress);
+      case "start_agent_account_login":
+        return Promise.resolve({
+          state: "pending",
+          platform: "claude",
+          mode: "reauthenticate",
+          operationId: "reauth",
+          url: "https://example.com/login",
+        });
       case "set_active_agent_account":
         snapshot = { ...snapshot, active: { ...snapshot.active, claude: String(args.accountId) } };
         return Promise.resolve(snapshot);
@@ -54,6 +70,8 @@ function account(overrides: Partial<AgentAccountSummary>): AgentAccountSummary {
 beforeEach(() => {
   calls.length = 0;
   readSession = undefined;
+  deferredRead = undefined;
+  loginProgress = { state: "idle" };
   snapshot = {
     active: { claude: "default", codex: "default" },
     accounts: [
@@ -125,6 +143,100 @@ describe("AgentInfoAccountSection", () => {
     expect(await screen.findByText(/keeps its own Claude Code login/)).toBeTruthy();
     expect(screen.queryByRole("combobox") === null).toBe(true);
   });
+});
+
+test("opening the persistent panel reloads account and active selection after Settings changes", async () => {
+  const view = render(<AgentInfoAccountSection environmentId="env-1" provider="claude" />);
+  await screen.findByText("Host login");
+  view.rerender(<AgentInfoAccountSection environmentId="env-1" provider="claude" open={false} />);
+  const work = snapshot.accounts[1]!;
+  snapshot = { ...snapshot, active: { ...snapshot.active, claude: WORK } };
+  session = { platform: "claude", source: "account", account: work, running: true };
+  view.rerender(<AgentInfoAccountSection environmentId="env-1" provider="claude" open />);
+  await screen.findByText("work@example.com · team");
+  expect(screen.queryByText("me@example.com · max") === null).toBe(true);
+  expect(screen.getByRole("combobox").textContent).toContain("Work");
+});
+
+for (const target of [
+  { environmentId: "env-2", provider: "claude" },
+  { environmentId: "env-1", provider: "codex" },
+]) {
+  test(`late reads cannot overwrite ${target.environmentId}/${target.provider}`, async () => {
+    let resolveOld!: (value: AgentSessionAccount) => void;
+    deferredRead = (command, args) =>
+      command === "get_native_agent_session_account" &&
+      args.environmentId === "env-1" &&
+      args.agent === "claude"
+        ? new Promise((resolve) => {
+            resolveOld = resolve;
+          })
+        : undefined;
+    const oldSession = { ...session!, pendingActive: snapshot.accounts[1] };
+    const view = render(<AgentInfoAccountSection environmentId="env-1" provider="claude" />);
+    await waitFor(() => expect(resolveOld).toBeDefined());
+    session = {
+      platform: target.provider as "claude" | "codex",
+      source: "account",
+      account: account({ label: "Current account" }),
+      running: false,
+    };
+    view.rerender(<AgentInfoAccountSection {...target} />);
+    await screen.findByText("Current account");
+    await act(async () => resolveOld(oldSession));
+    expect(screen.getByText("Current account")).toBeTruthy();
+    expect(screen.queryByText("Host login", { selector: "span.truncate" }) === null).toBe(true);
+    expect(screen.queryByText(/Moves to/) === null).toBe(true);
+  });
+}
+
+test("unknown source explains missing attribution", async () => {
+  session = { platform: "claude", source: "unknown", running: true };
+  render(<AgentInfoAccountSection environmentId="env-1" provider="claude" />);
+  expect(
+    await screen.findByText("Could not tell which account this session runs on."),
+  ).toBeTruthy();
+});
+
+test("Claude can reauthenticate its current account while Codex offers account management", async () => {
+  const view = render(<AgentInfoAccountSection environmentId="env-1" provider="claude" />);
+  const signIn = await screen.findByRole("button", { name: "Sign in again" });
+  await act(async () => fireEvent.click(signIn));
+  expect(calls).toContainEqual({
+    command: "start_agent_account_login",
+    args: { platform: "claude", reauthenticate: true },
+  });
+  expect(screen.queryByRole("button", { name: "Sign in again" }) === null).toBe(true);
+  expect(screen.getByRole("button", { name: /Cancel/ })).toBeTruthy();
+  view.rerender(<AgentInfoAccountSection environmentId="env-1" provider="codex" />);
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "Sign in again" }) === null).toBe(true),
+  );
+  expect(screen.queryByRole("button", { name: /Cancel/ }) === null).toBe(true);
+});
+
+test("names the session's bound machine when multiple machines are shown", async () => {
+  const previous = portalStore.getState();
+  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+  deferredRead = (command) =>
+    command === "get_backend_profile"
+      ? Promise.resolve({ revision: 1, displayName: "Leaf", colorToken: "blue", updatedAt: "" })
+      : undefined;
+  try {
+    render(
+      <FederationProvider>
+        <AgentInfoAccountSection environmentId="env-1" provider="claude" />
+      </FederationProvider>,
+    );
+    expect(await screen.findByText("Claude Code account on Leaf")).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", { name: "Use for every Claude Code agent on Leaf" }),
+    ).toBeTruthy();
+  } finally {
+    cleanup();
+    delete window.orkestratorWorkspaceTarget;
+    portalStore.store.setState(previous);
+  }
 });
 
 for (const trigger of ["open", "activity"] as const) {

@@ -275,21 +275,38 @@ export function registerNodeFileTools(
   server.registerTool(
     "request_project_on_node",
     {
-      title: "Ask the user to create this project on a node",
+      title: "Ask the user to copy this project to a node",
       description:
-        "Ask the user to clone this project on a connected node at a stated absolute location. Never create a project on a node without this approval.",
+        "Ask the user to copy this project to a connected node: a clone of its Git remote, plus the untracked or ignored files the user picks there (the files you suggest are pre-selected; dependency folders such as node_modules are meant to be installed on that node, not copied). Omit location to use that node's default projects folder. The user approves the location and files in Orkestrator; you are told the outcome by mail. Never create a project on a node without this approval.",
       inputSchema: z.object({
         nodeId: nodeIdSchema,
-        location: z.string().trim().min(1).max(1024).describe("Absolute directory on that node."),
+        location: z
+          .string()
+          .trim()
+          .min(1)
+          .max(1024)
+          .optional()
+          .describe("Absolute directory on that node; omit for its default projects folder."),
+        files: z
+          .array(pathSchema)
+          .max(200)
+          .optional()
+          .describe(
+            "Untracked or ignored paths of this project to suggest copying (a directory ends with /), such as .env files.",
+          ),
         reason: z.string().trim().min(1).max(500),
       }),
       annotations: { ...WRITE, destructiveHint: false },
     },
-    async ({ nodeId, location, reason }) => {
+    async ({ nodeId, location, files, reason }) => {
       const self = await status();
       if (nodeId === self.nodeId) throw new Error("This project already exists on this node.");
-      if (!location.startsWith("/"))
+      if (location !== undefined && !location.startsWith("/"))
         throw new Error("The location must be an absolute path on that node.");
+      for (const file of files ?? []) {
+        if (file.startsWith("/") || file.split("/").includes(".."))
+          throw new Error("Files are paths inside this project.");
+      }
       const projects = await invoke<unknown>("get_projects");
       const project = (Array.isArray(projects) ? projects : []).find(
         (entry) => isRecord(entry) && entry.id === scope.projectId,
@@ -307,7 +324,8 @@ export function registerNodeFileTools(
             nodeName: existing.nodeName,
             gitRemote: project.gitUrl,
             projectName: typeof project.name === "string" ? project.name : undefined,
-            location,
+            ...(location ? { location } : {}),
+            ...(files?.length ? { files } : {}),
           },
         ],
         requestedBy: await mailbox(),

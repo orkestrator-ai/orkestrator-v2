@@ -13,6 +13,7 @@ import type { NodeService } from "./nodes/node-service.js";
 import type { NodePortal } from "./nodes/node-portal.js";
 import type { NodeCoordination } from "./nodes/node-coordination.js";
 import { parseNodeFileScope } from "./nodes/node-files.js";
+import { parseNodeActionApproval } from "./nodes/node-action-requests.js";
 
 function safeInteger(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
@@ -245,6 +246,21 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     return coordination(context).deliverIncoming(args);
   });
 
+  // Whether coordinator mail to a worker tab has reached a turn yet; a
+  // command node asks before treating that tab's turn end as its answer.
+  register("get_worker_request_state", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "tabId"], "arguments");
+    if (typeof args.environmentId !== "string" || typeof args.tabId !== "string") {
+      throw new Error("Expected environmentId and tabId.");
+    }
+    return {
+      requestPending: await context.storage.hasUndeliveredCoordinatorRequest(
+        args.environmentId,
+        args.tabId,
+      ),
+    };
+  });
+
   register("record_node_environment_origin", async (args, context) => {
     assertOnlyKeys(
       args,
@@ -295,12 +311,16 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   });
 
   register("resolve_node_action_request", async (args, context) => {
-    assertOnlyKeys(args, ["requestId", "decision"], "arguments");
+    assertOnlyKeys(args, ["requestId", "decision", "approval"], "arguments");
     if (typeof args.requestId !== "string") throw new Error("Expected requestId.");
     if (args.decision !== "approve" && args.decision !== "reject") {
       throw new Error("Expected decision approve or reject.");
     }
-    return coordination(context).actions.resolve(args.requestId, args.decision);
+    return coordination(context).actions.resolve(
+      args.requestId,
+      args.decision,
+      parseNodeActionApproval(args.approval),
+    );
   });
 
   // Node files (any node; a command node calls them on itself and its nodes).
@@ -435,6 +455,56 @@ export function registerNodeCommands(register: CommandRegistrar): void {
       String(args.projectId),
       Array.isArray(args.nodeIds) ? args.nodeIds.map(String) : undefined,
     );
+  });
+
+  // Command node: copying a project between any two machines it controls.
+  register("get_project_copy_options", async (args, context) => {
+    assertOnlyKeys(args, ["nodeId", "projectId"], "arguments");
+    if (typeof args.nodeId !== "string" || typeof args.projectId !== "string") {
+      throw new Error("Expected nodeId and projectId.");
+    }
+    return coordination(context).copies.copyOptions({
+      nodeId: args.nodeId,
+      projectId: args.projectId,
+    });
+  });
+
+  register("copy_project_to_node", async (args, context) => {
+    assertOnlyKeys(args, ["requestKey", "source", "target", "paths", "rememberFiles"], "arguments");
+    const source = args.source as Record<string, unknown> | null;
+    const target = args.target as Record<string, unknown> | null;
+    if (
+      typeof args.requestKey !== "string" ||
+      !source ||
+      typeof source.nodeId !== "string" ||
+      typeof source.projectId !== "string" ||
+      !target ||
+      typeof target.nodeId !== "string" ||
+      (target.location !== undefined && typeof target.location !== "string")
+    ) {
+      throw new Error("Expected requestKey, source { nodeId, projectId } and target { nodeId }.");
+    }
+    if (
+      !Array.isArray(args.paths) ||
+      !args.paths.every((entry) => typeof entry === "string" && entry.length <= 1_024)
+    ) {
+      throw new Error("Expected paths.");
+    }
+    return coordination(context).copies.start({
+      requestKey: args.requestKey,
+      source: { nodeId: source.nodeId, projectId: source.projectId },
+      target: {
+        nodeId: target.nodeId,
+        ...(typeof target.location === "string" ? { location: target.location } : {}),
+      },
+      paths: args.paths as string[],
+      rememberFiles: args.rememberFiles === true,
+    });
+  });
+
+  register("list_project_copies", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    return coordination(context).copies.list();
   });
 
   register("import_desktop_connections", async (args, context) => {

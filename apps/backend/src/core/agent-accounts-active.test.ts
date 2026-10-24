@@ -637,3 +637,146 @@ test("a due Codex coordinator renews its owning login on reuse and moves only wh
   expect(await localBridgeIsOnActiveAccount(key, "codex", "renew-on-use", context)).toBe(false);
   expect(refreshes).toBe(1);
 });
+
+test("real keeper refreshes the 4m30s handoff gap before a coordinator starts", async () => {
+  const { ContainerClaudeLoginKeeper } = await import("./container-claude-login-keeper.js");
+  const now = Date.now();
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  await activate("claude");
+  context.runtimeFlavor = undefined;
+  let credentials = JSON.stringify({
+    claudeAiOauth: { accessToken: "old", refreshToken: "owner-refresh", expiresAt: now + 270_000 },
+  });
+  let refreshes = 0;
+  const keeper = new ContainerClaudeLoginKeeper(context, {
+    now: () => now,
+    readLocalCredentials: async () => credentials,
+    refreshHostLogin: async () => {
+      refreshes++;
+      credentials = JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "renewed",
+          refreshToken: "new-owner-refresh",
+          expiresAt: now + 8 * 3600_000,
+        },
+      });
+    },
+  });
+  setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
+  try {
+    const env: NodeJS.ProcessEnv = {};
+    const result = await applyCoordinatorClaudeAccount(
+      context,
+      path.join(root, "coordinator"),
+      env,
+      prepareCoordinatorClaudeHome,
+      async () => credentials,
+      noKeychain,
+    );
+    expect(refreshes).toBe(1);
+    expect(result.loginless).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("renewed");
+    expect(JSON.stringify(env)).not.toContain("owner-refresh");
+  } finally {
+    clock.mockRestore();
+    setLocalClaudeLoginRefresher(undefined);
+  }
+});
+
+test.skipIf(process.platform !== "darwin")(
+  "cleans an actual isolated coordinator Keychain entry before launch",
+  async () => {
+    const { runCommand } = await import("./shell.js");
+    const { claudeKeychainService } = await import("./agent-accounts-homes.js");
+    const home = path.join(root, "keychain-coordinator");
+    const service = claudeKeychainService(home);
+    // This uniquely named disposable entry belongs only to this test.
+    await runCommand("security", [
+      "add-generic-password",
+      "-a",
+      "ork-account-test",
+      "-s",
+      service,
+      "-w",
+      "test-only",
+    ]);
+    try {
+      await applyCoordinatorClaudeAccount(
+        context,
+        home,
+        {},
+        prepareCoordinatorClaudeHome,
+        async () => undefined,
+      );
+      await expect(
+        runCommand("security", ["find-generic-password", "-s", service]),
+      ).rejects.toThrow();
+    } finally {
+      await runCommand("security", ["delete-generic-password", "-s", service]).catch(
+        () => undefined,
+      );
+    }
+  },
+);
+
+test("keeper reads the real active added-account path to renew a loginless local bridge", async () => {
+  const { ContainerClaudeLoginKeeper } = await import("./container-claude-login-keeper.js");
+  await activate("claude");
+  context.runtimeFlavor = undefined;
+  const home = accountHome("claude");
+  await fs.mkdir(home, { recursive: true });
+  const credentialsPath = path.join(home, ".credentials.json");
+  await fs.writeFile(
+    credentialsPath,
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "old",
+        refreshToken: "account-refresh",
+        expiresAt: Date.now() + 270_000,
+      },
+    }),
+  );
+  const key = "claude:env-loginless";
+  localAgentAccountIds.set(key, ACCOUNT_IDS.claude);
+  loginlessLocalBridges.add(key);
+  const refreshed: string[] = [];
+  const keeper = new ContainerClaudeLoginKeeper(context, {
+    refreshHostLogin: async (account) => {
+      refreshed.push(account.home!);
+      await fs.writeFile(
+        credentialsPath,
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "fresh",
+            refreshToken: "renewed-private",
+            expiresAt: Date.now() + 8 * 3600_000,
+          },
+        }),
+      );
+    },
+  });
+  setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
+  expect(await localBridgeIsOnActiveAccount(key, "claude", "env-loginless", context)).toBe(false);
+  expect(refreshed).toEqual([home]);
+  liveWork = true;
+  expect(await localBridgeIsOnActiveAccount(key, "claude", "env-loginless", context)).toBe(true);
+});
+
+test("keeper's local default path reads host credentials only outside agent-test profiles", async () => {
+  const { ContainerClaudeLoginKeeper } = await import("./container-claude-login-keeper.js");
+  const host = spyOn(commandFiles, "readRuntimeHostClaudeCredentials").mockResolvedValue(
+    JSON.stringify({
+      claudeAiOauth: { accessToken: "host", expiresAt: Date.now() + 8 * 3600_000 },
+    }),
+  );
+  try {
+    const keeper = new ContainerClaudeLoginKeeper(context);
+    expect(await keeper.refreshLocalLoginIfDue()).toBeUndefined();
+    expect(host).not.toHaveBeenCalled();
+    context.runtimeFlavor = undefined;
+    expect((await keeper.refreshLocalLoginIfDue())?.expiresAt).toBeGreaterThan(Date.now());
+    expect(host).toHaveBeenCalledTimes(1);
+  } finally {
+    host.mockRestore();
+  }
+});

@@ -84,6 +84,7 @@ const mockGetAgentAccountUsage = mock(
     platform: "claude" | "codex",
     _accountId: string,
     _options?: { force?: boolean },
+    _machine?: string | null,
   ): Promise<PlanUsageSnapshot> => ({
     platform,
     status: "ok",

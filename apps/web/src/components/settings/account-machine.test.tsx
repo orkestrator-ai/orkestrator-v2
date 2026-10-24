@@ -1,108 +1,133 @@
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { useState } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { invoke } from "@/lib/native/backend";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { AccountMachineScope, useAccountMachine, useAccountMachineStore } from "./account-machine";
-import type { NodeSummary } from "@orkestrator/protocol/node-summaries";
+import { TerminalProvider } from "@/contexts/TerminalContext";
+import { useActionBarController } from "@/components/layout/useActionBarController";
 
-const originalPortal = portalStore.getState();
-const originalRemote = useRemoteWorkspaceStore.getState();
-let start: ReturnType<typeof spyOn>;
-function node(id: string, name: string, state = "connected"): NodeSummary {
-  return {
-    nodeId: id,
-    view: { displayName: name, colorToken: "teal", connection: { state } },
+const invokeMock = invoke as unknown as ReturnType<typeof mock>;
+const initialPortal = portalStore.getState();
+const initialRemote = useRemoteWorkspaceStore.getState();
+let nodes: typeof initialPortal.nodes;
+function Child() {
+  const target = useAccountMachine();
+  const [pending, setPending] = useState(false);
+  return (
+    <div>
+      <output data-testid="target">{JSON.stringify(target)}</output>
+      <button onClick={() => setPending(true)}>
+        {pending ? "Pending sign-in" : "Start fixture sign-in"}
+      </button>
+    </div>
+  );
+}
+function mount() {
+  return render(
+    <FederationProvider>
+      <AccountMachineScope>
+        <Child />
+      </AccountMachineScope>
+    </FederationProvider>,
+  );
+}
+function target() {
+  return JSON.parse(screen.getByTestId("target").textContent!) as {
+    machine: string | null;
+    name: string | null;
+  };
+}
+beforeEach(() => {
+  nodes = ["leaf", "offline"].map((nodeId) => ({
+    nodeId,
+    view: {
+      displayName: nodeId === "leaf" ? "Leaf" : "Offline",
+      connection: { state: nodeId === "offline" ? "unavailable" : "connected" },
+    },
     projects: [],
     environments: [],
     freshness: "current",
-    loadedAt: 1,
-    truncated: false,
-  } as unknown as NodeSummary;
-}
-beforeEach(() => {
-  start = spyOn(portalStore, "start").mockImplementation(() => () => {});
-  portalStore.store.setState({
-    selfId: "self" as never,
-    self: null,
-    nodes: [node("leaf", "Leaf"), node("off", "Offline", "unavailable")],
-  });
-  useAccountMachineStore.getState().choose(undefined);
+  })) as never;
+  portalStore.store.setState({ ...initialPortal, selfId: "command" as never, nodes });
   useRemoteWorkspaceStore.setState({
     active: { nodeId: "leaf", projectId: null, environmentId: null },
+  });
+  useAccountMachineStore.getState().choose(undefined);
+  invokeMock.mockImplementation(async (command: string) => {
+    if (command === "get_backend_profile")
+      return { revision: 1, displayName: "Command", colorToken: "blue", updatedAt: "" };
+    if (command === "get_node_summaries") return { selfId: "command", nodes };
+    if (command === "get_node_status") return { nodeId: "command" };
+    return undefined;
   });
 });
 afterEach(() => {
   cleanup();
-  start.mockRestore();
-  portalStore.store.setState(originalPortal, true);
-  useRemoteWorkspaceStore.setState(originalRemote, true);
+  portalStore.store.setState(initialPortal);
+  useRemoteWorkspaceStore.setState(initialRemote);
   useAccountMachineStore.getState().choose(undefined);
+  invokeMock.mockReset();
 });
 
-function LoginProbe() {
-  const { machine } = useAccountMachine();
-  const [pending, setPending] = useState(false);
-  return (
-    <>
-      <p>Target: {machine ?? "command"}</p>
-      <button onClick={() => setPending(true)}>
-        {pending ? "Pending sign-in" : "Start sign-in"}
-      </button>
-    </>
-  );
-}
-function Scope() {
-  return (
-    <FederationProvider>
-      <AccountMachineScope>
-        <LoginProbe />
-      </AccountMachineScope>
-    </FederationProvider>
-  );
-}
+test("defaults to the machine on screen and preserves an explicit command-node selection", async () => {
+  mount();
+  await waitFor(() => expect(target()).toEqual({ machine: "leaf", name: "Leaf" }));
+  act(() => useAccountMachineStore.getState().choose(null));
+  expect(target()).toEqual({ machine: null, name: "Command" });
+});
 
-test("defaults to the current leaf and allows explicit command-node selection", async () => {
-  render(<Scope />);
-  expect(screen.getByText("Target: leaf")).toBeTruthy();
+test("unknown choices fall back to command; offline choices stay scoped and cannot be newly selected", async () => {
+  mount();
+  await screen.findByRole("combobox", { name: "Machine" });
+  act(() => useAccountMachineStore.getState().choose("missing"));
+  await waitFor(() => expect(target().machine).toBeNull());
+  act(() => useAccountMachineStore.getState().choose("offline"));
+  expect(target()).toEqual({ machine: "offline", name: "Offline" });
   fireEvent.keyDown(screen.getByRole("combobox", { name: "Machine" }), { key: "Enter" });
-  const options = screen.getAllByRole("option");
-  const command = options.find(
-    (option) => !option.textContent?.includes("Leaf") && !option.textContent?.includes("Offline"),
-  )!;
-  await act(async () => {
-    fireEvent.click(command);
+  expect(screen.getByRole("option", { name: /Offline/ }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
+});
+
+test("changing machines discards pending local sign-in UI and restores no stale child state", async () => {
+  mount();
+  await waitFor(() => expect(target().machine).toBe("leaf"));
+  fireEvent.click(screen.getByRole("button", { name: "Start fixture sign-in" }));
+  expect(screen.getByRole("button", { name: "Pending sign-in" })).toBeTruthy();
+  act(() => useAccountMachineStore.getState().choose(null));
+  expect(screen.getByRole("button", { name: "Start fixture sign-in" })).toBeTruthy();
+  act(() => useAccountMachineStore.getState().choose("leaf"));
+  expect(screen.getByRole("button", { name: "Start fixture sign-in" })).toBeTruthy();
+});
+
+test("single-machine settings hide the picker", async () => {
+  nodes = [];
+  portalStore.store.setState({ nodes });
+  mount();
+  await waitFor(() => expect(target()).toEqual({ machine: null, name: null }));
+  expect(screen.queryByRole("combobox", { name: "Machine" }) === null).toBe(true);
+});
+
+test("closing Settings resets its selection so the next visit follows the on-screen machine", async () => {
+  const { result } = renderHook(() => useActionBarController({ presentation: "bar" }), {
+    wrapper: TerminalProvider,
+  });
+  act(() => {
+    result.current.setGlobalSettingsOpen(true);
+    useAccountMachineStore.getState().choose(null);
   });
   expect(useAccountMachineStore.getState().chosen).toBeNull();
-  expect(screen.getByText("Target: command")).toBeTruthy();
-});
-
-test("switching machines remounts pending sign-in state and disables offline choices", async () => {
-  render(<Scope />);
-  fireEvent.click(screen.getByRole("button", { name: "Start sign-in" }));
-  expect(screen.getByRole("button", { name: "Pending sign-in" })).toBeTruthy();
-  fireEvent.keyDown(screen.getByRole("combobox", { name: "Machine" }), { key: "Enter" });
-  expect(
-    screen.getByRole("option", { name: /Offline/ }).getAttribute("data-disabled"),
-  ).not.toBeNull();
-  await act(async () => fireEvent.click(screen.getByRole("option", { name: "This machine" })));
-  expect(screen.getByText("Target: command")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Start sign-in" })).toBeTruthy();
-});
-
-test("unknown selections and a single-machine federation fall back to the command node", async () => {
-  useAccountMachineStore.getState().choose("missing");
-  const view = render(<Scope />);
-  expect(screen.getByText("Target: command")).toBeTruthy();
-  await act(async () => portalStore.store.setState({ nodes: [] }));
-  expect(screen.queryByRole("combobox") === null).toBe(true);
-  expect(screen.getByText("Target: command")).toBeTruthy();
-  view.unmount();
-  render(
-    <AccountMachineScope>
-      <LoginProbe />
-    </AccountMachineScope>,
-  );
-  expect(screen.getByText("Target: command")).toBeTruthy();
+  act(() => result.current.setGlobalSettingsOpen(false));
+  expect(useAccountMachineStore.getState().chosen).toBeUndefined();
 });

@@ -5,7 +5,7 @@
  * command node. Without a choice the sections would always show the command
  * node's logins, even while the window shows another machine's environment.
  * The picker defaults to the machine on screen; `null` is the command node
- * itself, reached with the window's own transport.
+ * itself, reached through the portal transport.
  */
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { create } from "zustand";
@@ -33,13 +33,16 @@ export const useAccountMachineStore = create<AccountMachineState>()((set) => ({
 }));
 
 export interface AccountMachineValue {
-  /** The node to ask through the command node, or `null` for the command node itself. */
-  machine: string | null;
+  /** `null` is the command node; `undefined` follows the current view outside Settings. */
+  machine: string | null | undefined;
   /** The machine's name, when this client can show more than one machine. */
   name: string | null;
 }
 
-const AccountMachineContext = createContext<AccountMachineValue>({ machine: null, name: null });
+const AccountMachineContext = createContext<AccountMachineValue>({
+  machine: undefined,
+  name: null,
+});
 
 /** Point the sign-in sections inside at one machine without the picker. */
 export const AccountMachineProvider = AccountMachineContext.Provider;

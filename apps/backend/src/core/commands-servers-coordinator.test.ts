@@ -459,7 +459,8 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.mkdir(bridge, { recursive: true });
     await fs.writeFile(
       path.join(bridge, "index.js"),
-      `await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
+      `if (JSON.stringify(process.env).includes("refresh-sentinel")) throw new Error("Refresh token leaked to environment");
+await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);

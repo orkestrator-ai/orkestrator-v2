@@ -5,11 +5,26 @@ import {
   type AgentSessionAccount,
 } from "@orkestrator/protocol/agent-accounts";
 
+import { CLAUDE_BRIDGE_PORT, CODEX_BRIDGE_PORT } from "./constants.js";
+import { getHostPort } from "./commands-container-exec.js";
+import { checkHttpHealth } from "./commands-server-health.js";
+
 import type { CommandContext } from "./commands-context.js";
 import { localServerProcesses } from "./commands-runtime-state.js";
 import { localAgentAccountIds } from "./agent-account-bridge-state.js";
 import { listAgentAccounts } from "./agent-accounts.js";
 import { readContainerAgentAccountId } from "./agent-accounts-containers.js";
+
+async function containerBridgeRunning(
+  containerId: string,
+  platform: AgentAccountPlatform,
+): Promise<boolean> {
+  const port = await getHostPort(
+    containerId,
+    platform === "claude" ? CLAUDE_BRIDGE_PORT : CODEX_BRIDGE_PORT,
+  );
+  return port ? checkHttpHealth(port) : false;
+}
 
 /**
  * Which of this machine's logins a session's bridge uses.
@@ -24,6 +39,7 @@ export async function readSessionAgentAccount(
   environmentId: string,
   agent: string,
   readContainerAccount: typeof readContainerAgentAccountId = readContainerAgentAccountId,
+  readContainerRunning: typeof containerBridgeRunning = containerBridgeRunning,
 ): Promise<AgentSessionAccount | null> {
   if (!isAgentAccountPlatform(agent)) return null;
   const platform: AgentAccountPlatform = agent;
@@ -38,14 +54,16 @@ export async function readSessionAgentAccount(
   let launchedId: string | undefined;
   let running: boolean;
   if (environment?.containerId && environment.environmentType !== "local") {
+    running =
+      environment.status === "running" &&
+      (await readContainerRunning(environment.containerId, platform));
     if (platform === "claude") {
       const { global } = await context.storage.loadConfig();
       // An isolated container is signed in from a terminal inside it.
       if (global.useHostClaudeCredentials === false) {
-        return { platform, source: "container", running: environment.status === "running" };
+        return { platform, source: "container", running };
       }
     }
-    running = environment.status === "running";
     if (running) {
       launchedId = await readContainerAccount(environment.containerId, platform).catch(
         () => undefined,

@@ -49,6 +49,7 @@
     "./command-nodes": "./src/command-nodes.ts",
     "./node-events": "./src/node-events.ts",
     "./node-summaries": "./src/node-summaries.ts",
+    "./project-copy": "./src/project-copy.ts",
     "./portal-layout": "./src/portal-layout.ts",
     "./coordinator-web-research": "./src/coordinator-web-research.ts",
     "./codex-background-task": "./src/codex-background-task.ts",

@@ -146,3 +146,66 @@ test("a malformed peer row becomes an error cell instead of reaching Settings", 
   expect(result.machines[1]).toMatchObject({ state: "error", error: "Invalid account snapshot" });
   expect(result.machines[1]?.snapshot).toBeUndefined();
 });
+
+test("omits detaching nodes and distinguishes invalid responses from errors", async () => {
+  const asked: string[] = [];
+  const result = await listMachineAgentAccounts(
+    context({
+      nodes: {
+        selfIdentity: async () => "self",
+        isLeaf: () => false,
+        listNodes: async () => ({
+          nodes: ["detaching", "error", "invalid", "unknown"].map((nodeId) => ({
+            nodeId,
+            displayName: nodeId,
+            enabled: true,
+            detachPending: nodeId === "detaching",
+          })),
+        }),
+      } as never,
+      nodePortal: {
+        invokeOnNode: async ({ nodeId, command }: { nodeId: string; command: string }) => {
+          if (command === "read_host_agent_sign_ins") return { outcome: "ok", result: {} };
+          asked.push(nodeId);
+          if (nodeId === "error") throw new Error("failed".repeat(60));
+          if (nodeId === "unknown") return { outcome: "unknown" };
+          return { outcome: "ok", result: { accounts: [], active: null } };
+        },
+      } as never,
+    }),
+    { readSignIns },
+  );
+  expect(asked.sort()).toEqual(["error", "invalid", "unknown"]);
+  expect(result.machines.slice(1).map((row) => row.state)).toEqual([
+    "error",
+    "error",
+    "unavailable",
+  ]);
+  expect(result.machines[1]?.error).toHaveLength(200);
+});
+
+for (const invalid of [
+  null,
+  {},
+  { accounts: [] },
+  { accounts: [], active: [] },
+  { accounts: [], active: { claude: "default" } },
+]) {
+  test(`a connected node's malformed snapshot is an error: ${JSON.stringify(invalid)}`, async () => {
+    const result = await listMachineAgentAccounts(
+      context({
+        nodes: {
+          selfIdentity: async () => "self",
+          isLeaf: () => false,
+          listNodes: async () => ({
+            nodes: [{ nodeId: "leaf", enabled: true, displayName: "Leaf" }],
+          }),
+        } as never,
+        nodePortal: { invokeOnNode: async () => ({ outcome: "ok", result: invalid }) } as never,
+      }),
+      { readSignIns },
+    );
+    expect(result.machines[1]).toMatchObject({ nodeId: "leaf", state: "error" });
+    expect(result.machines[1]?.snapshot).toBeUndefined();
+  });
+}

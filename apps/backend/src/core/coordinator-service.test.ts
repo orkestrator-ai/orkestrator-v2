@@ -1709,6 +1709,9 @@ describe("project coordinator", () => {
     await fs.writeFile(path.join(source, "config.toml"), "developer_instructions='unsafe'\n");
     await prepareCoordinatorCodexHome(destination, source);
     expect(await fs.readFile(path.join(destination, "auth.json"), "utf8")).toContain("secret");
+    expect(await fs.readFile(path.join(destination, "auth.json"), "utf8")).not.toContain(
+      "private-refresh",
+    );
     expect((await fs.stat(destination)).mode & 0o777).toBe(0o700);
     expect((await fs.stat(path.join(destination, "auth.json"))).mode & 0o777).toBe(0o600);
     await expect(fs.access(path.join(destination, "config.toml"))).rejects.toThrow();

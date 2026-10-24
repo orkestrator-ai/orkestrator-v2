@@ -17,7 +17,7 @@ interface ProjectLoad {
 
 let latestProjectLoad: ProjectLoad | null = null;
 
-const loadProjectsFromBackend = (): Promise<void> => {
+export const loadProjectsFromBackend = (): Promise<void> => {
   const mutationVersion = getProjectMutationVersion();
 
   // All hook instances share the same request for the same data generation.
@@ -68,7 +68,7 @@ export function useProjects() {
   const setError = useProjectStore((state) => state.setError);
   const getProjectById = useProjectStore((state) => state.getProjectById);
 
-  const loadProjects = useCallback(loadProjectsFromBackend, []);
+  const loadProjects = loadProjectsFromBackend;
 
   // Load projects from backend on mount. Concurrent hook mounts share this read.
   useEffect(() => {

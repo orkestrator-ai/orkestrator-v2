@@ -300,3 +300,28 @@ describe("Claude auth status carries no credential", () => {
     }
   });
 });
+
+test("a fresh probe after terminal reauthentication can clear expired without a model turn", async () => {
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    queryControlOverrides.accountInfo = mock(async () => ({
+      tokenSource: "claude.ai",
+      subscriptionType: "max",
+    }));
+    noteClaudeAuthenticationFailure();
+    const failedProbe = await nextQueryCall();
+    await waitFor(() => failedProbe.isClosed());
+    expect((await readClaudeAuthStatus()).state).toBe("expired");
+    now += 30_001;
+    queryControlOverrides.accountInfo = mock(async () => ({
+      tokenSource: "claude.ai",
+      subscriptionType: "team",
+    }));
+    const status = await readClaudeAuthStatus();
+    expect(status).toMatchObject({ state: "signed-in", account: { plan: "team" } });
+    expect(claudeReadiness()).toBeUndefined();
+  } finally {
+    clock.mockRestore();
+  }
+});

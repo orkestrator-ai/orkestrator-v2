@@ -442,7 +442,8 @@ itself. Where each surface acts:
   machine on screen; closing Settings forgets a choice. Another machine is
   asked through the command node (`portalStore.invokeOnNode`, so an
   ambiguous write reports an unknown outcome rather than retrying); the
-  command node itself through the window's own transport. A sign-in runs on
+  command node itself through the portal transport (`machine: null`); an omitted
+  target follows the current workspace's backend. A sign-in runs on
   the chosen machine, and its link opens in this client's browser. That
   includes Cursor: `cursor_sdk_login_start { openBrowser: false }` starts its
   login child with `NO_OPEN_BROWSER`, and the settings pane opens the link
@@ -493,7 +494,7 @@ itself. Where each surface acts:
     environment.
 - **The agent information panel** shows which account the session's bridge
   runs on (`get_native_agent_session_account`): a local or coordinator bridge
-  from `localAgentAccountIds`, a container from its account marker, and a
+  from `localAgentAccountIds`, a container from its account marker after checking that provider’s bridge health, and a
   bridge that is not running from the active account. It names a pending move
   to a newly active account, switches the machine's active account, and for
   Claude signs the active account in again. It re-reads on its own machine's

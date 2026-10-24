@@ -4,13 +4,9 @@ import { registerTmuxBackendCommands } from "./tmux.js";
 import { claudeStateSignalInstaller } from "./claude-state-signal.js";
 import type { Environment } from "./models.js";
 import {
-  terminalSessionIdsByStableKey,
-  terminalStableKeysBySessionId,
-  orphanedTerminalMissingSince,
   assertOnlyKeys,
   asNonBlankString,
   stableTerminalKey,
-  explicitlyCloseTerminalSession,
   peekLocalAgentBridge,
   peekContainerAgentBridge,
   conciseError,
@@ -189,7 +185,7 @@ export function registerTeardownCommands(
             stableTerminalKey(kind as "container" | "local", environment.id, intent.tabId),
           ),
         );
-        const actualStableKey = terminalStableKeysBySessionId.get(intent.sessionId);
+        const actualStableKey = context.runtime.terminals.stableKeyForSession(intent.sessionId);
         if (actualStableKey && !expectedStableKeys.has(actualStableKey)) {
           throw new Error("Terminal session is not owned by the requested environment and tab");
         }
@@ -198,7 +194,7 @@ export function registerTeardownCommands(
         if (actualStableKey) sessionIds.add(intent.sessionId);
       }
       for (const kind of ["container", "local"] as const) {
-        const stableId = terminalSessionIdsByStableKey.get(
+        const stableId = context.runtime.terminals.sessionIdForStableKey(
           stableTerminalKey(kind, environment.id, intent.tabId) ?? "",
         );
         if (stableId) sessionIds.add(stableId);
@@ -213,7 +209,8 @@ export function registerTeardownCommands(
           }
         }
       }
-      for (const sessionId of sessionIds) explicitlyCloseTerminalSession(sessionId);
+      for (const sessionId of sessionIds)
+        context.runtime.terminals.explicitlyCloseSession(sessionId);
       await deleteTerminalHistories({
         dataDir: context.storage.getDataDir(),
         environmentId: environment.id,
@@ -509,25 +506,11 @@ export function registerTeardownCommands(
       referencedNativeTabs.set(environment.id, native);
     }
 
-    let terminals = 0;
-    for (const [sessionId, stableKey] of terminalStableKeysBySessionId) {
-      const [, environmentId, tabId] = stableKey.split("\0");
-      if (!environmentId || !tabId) continue;
-      if (referencedTerminalTabs.get(environmentId)?.has(tabId)) {
-        orphanedTerminalMissingSince.delete(sessionId);
-        continue;
-      }
-      const missingSince = orphanedTerminalMissingSince.get(sessionId);
-      if (missingSince === undefined) {
-        orphanedTerminalMissingSince.set(sessionId, now);
-        continue;
-      }
-      if (now - missingSince < graceMs) continue;
-      console.warn(`[backend] Reaping orphaned terminal ${environmentId}/${tabId}`);
-      explicitlyCloseTerminalSession(sessionId);
-      orphanedTerminalMissingSince.delete(sessionId);
-      terminals += 1;
-    }
+    const terminals = context.runtime.terminals.reapOrphanedSessions(
+      (environmentId, tabId) => referencedTerminalTabs.get(environmentId)?.has(tabId) === true,
+      now,
+      graceMs,
+    );
 
     const teardownTab = commands.get("teardown_tab");
     let nativeSessions = 0;

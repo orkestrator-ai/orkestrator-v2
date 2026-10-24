@@ -40,10 +40,6 @@ import type {
 import type { AgentToolConnection } from "./agent-tools.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
-  BRIDGE_TOKEN_PATTERN,
-  retryableBridgeStartupError,
-  CLAUDE_MODEL_CATALOG_TTL_MS,
-  CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS,
   CONTAINER_GITHUB_CREDENTIAL_FILE,
   CLAUDE_GITHUB_CREDENTIAL_FILE_ENV,
   CLAUDE_GITHUB_ENV_FINGERPRINT_FILE,
@@ -52,7 +48,8 @@ import {
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE,
   OPENCODE_GITHUB_ENV_PLUGIN_SOURCE,
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
-} from "./commands-runtime-state.js";
+} from "./agent-credential-files.js";
+import { BRIDGE_TOKEN_PATTERN, retryableBridgeStartupError } from "./local-server-runtime.js";
 import { resolveAnthropicApiKey, resolveCursorApiKey } from "./commands-validation.js";
 import { quoteShell } from "./commands-agent-support.js";
 import {
@@ -83,7 +80,7 @@ import {
   agentToolConnectionFingerprint,
   warmOpenCodeInstance,
 } from "./commands-server-health.js";
-import type { LocalServerKind } from "./commands-runtime-state.js";
+import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { ContainerLifecycleError, findOperationContainers } from "./container-lifecycle-service.js";
 import {
@@ -121,6 +118,9 @@ import type { ContainerStorageIdentity } from "@orkestrator/protocol/container-l
 import { imageCopiesCursorMcpConfig } from "@orkestrator/protocol/image-manifest";
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
+
+export const CLAUDE_MODEL_CATALOG_TTL_MS = 5 * 60_000;
+export const CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS = 30_000;
 
 const AGENT_TEST_LOCAL_GIT_REMOTE_PATH = "/orkestrator-agent-test-origin.git";
 

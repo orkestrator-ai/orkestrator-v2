@@ -7,7 +7,6 @@ import {
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
 import { environmentCleanupLedger } from "./environment-cleanup-ledger.js";
-import { environmentLifecycleOperations, environmentStartTasks } from "./commands-runtime-state.js";
 import { containerIdMatches } from "./commands-review.js";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
@@ -60,7 +59,7 @@ export interface CleanupRunResult {
   reclaimedBytes: number;
 }
 
-type CleanupContext = Pick<CommandContext, "storage" | "strictDockerOwner">;
+type CleanupContext = Pick<CommandContext, "storage" | "strictDockerOwner" | "runtime">;
 
 /** Upper bound on containers examined in one cleanup; the rest wait for the next. */
 export const MAX_CLEANUP_CANDIDATES = 500;
@@ -149,6 +148,8 @@ export interface ProtectionSnapshot {
   operationVolumes: Set<string>;
   /** Volumes a pending deletion still owes. */
   deletionVolumes: Set<string>;
+  /** A start or lifecycle operation is queued or running; read live at classification. */
+  operationInFlight: (environmentId: string) => boolean;
 }
 
 export async function loadProtection(context: CleanupContext): Promise<ProtectionSnapshot> {
@@ -204,14 +205,9 @@ export async function loadProtection(context: CleanupContext): Promise<Protectio
     deletionVolumes: new Set(
       ledger.filter((entry) => entry.pending.includes("volumes")).flatMap((entry) => entry.volumes),
     ),
+    operationInFlight: (environmentId) =>
+      context.runtime.environments.hasLifecycleWork(environmentId),
   };
-}
-
-function operationInFlight(environmentId: string | null): boolean {
-  if (!environmentId) return false;
-  return (
-    environmentLifecycleOperations.has(environmentId) || environmentStartTasks.has(environmentId)
-  );
 }
 
 export function classify(
@@ -253,7 +249,9 @@ export function classify(
     // may hold that environment's work, so it is never garbage by default.
     return "live-environment-label";
   }
-  if (operationInFlight(labelledEnvironmentId)) return "operation-in-flight";
+  if (labelledEnvironmentId && protection.operationInFlight(labelledEnvironmentId)) {
+    return "operation-in-flight";
+  }
   if (!container.state) return "identity-uncertain";
   if (!options.includeRunning && !STOPPED_STATES.has(container.state)) return "running";
   return null;

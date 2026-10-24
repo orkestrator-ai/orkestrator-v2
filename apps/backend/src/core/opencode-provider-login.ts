@@ -58,14 +58,14 @@ export interface OpenCodeProviderLoginDependencies {
   withServer: ServerRunner;
   createClient: typeof createOpencodeClient;
   /** Flags every live local OpenCode server so it reloads credentials once idle. */
-  onLoginChanged: () => void;
+  onLoginChanged: (context: CommandContext) => void;
   loginTimeoutMs: number;
 }
 
 const defaultDependencies: OpenCodeProviderLoginDependencies = {
   withServer: (context, use) => withHostOpenCodeServer(context, use, "provider-sign-in"),
   createClient: createOpencodeClient,
-  onLoginChanged: () => markLocalBridgesForLoginRefresh("opencode"),
+  onLoginChanged: (context) => markLocalBridgesForLoginRefresh(context, "opencode"),
   loginTimeoutMs: LOGIN_TOTAL_TIMEOUT_MS,
 };
 
@@ -337,7 +337,7 @@ export function createOpenCodeProviderLogin(
         );
         assertResponse(response, "Saving the API key");
       });
-      dependencies.onLoginChanged();
+      dependencies.onLoginChanged(context);
     } finally {
       release();
     }
@@ -354,7 +354,7 @@ export function createOpenCodeProviderLogin(
         );
         assertResponse(response, "Signing out");
       });
-      dependencies.onLoginChanged();
+      dependencies.onLoginChanged(context);
     } finally {
       release();
     }
@@ -468,7 +468,7 @@ export function createOpenCodeProviderLogin(
       .then(
         () => {
           finish({ state: "succeeded" });
-          dependencies.onLoginChanged();
+          dependencies.onLoginChanged(context);
         },
         (error: unknown) => {
           const reason = controller.signal.aborted ? controller.signal.reason : error;

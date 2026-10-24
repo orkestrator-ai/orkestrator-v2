@@ -19,3 +19,34 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name update-follow-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1` passed both desktop cases with two mobile skips (3.7 s logged), run sequentially after the branch owner.
 - **Evidence:** `orkestrator-test-run.NzXlM1/update-main-browser.log.gz` under the host temporary directory; original browser artifacts under `output/playwright/test-results/`.
 - **Assessment:** confirms an intermittent recurrence in follow re-engagement, rather than the original scroll-release symptom. The cause is not established. No owning implementation, assertion, timeout or skip changed during resolution.
+
+
+## Runtime-state ownership main merge — 2026-10-24
+
+`ORKESTRATOR_E2E_PORT=61933 mise run test:logged -- --name merge-components-bounded -- bunx playwright test --config e2e/playwright.config.ts --workers=2` reported 575 passed, 102 skipped and five failed across 682 cases (1188.3 s logged). The desktop small-wheel case retained `false` rather than `auto` after returning to bottom and appending (`:86`, five seconds). Evidence: host temporary artifact `orkestrator-test-run.Qvr7ev/merge-components-bounded.log.gz`.
+
+The complete unchanged owner, on its own newly allocated fixture port, also failed: `ORKESTRATOR_E2E_PORT=56474 mise run test:logged -- --name merge-follow-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1 --output output/playwright/merge-follow-owner` reported two failed desktop cases and two mobile skips (23.2 s logged). Both `:43` and `:86` retained `false` at five seconds. Evidence: host temporary artifact `orkestrator-test-run.pqBwTh/merge-follow-owner.log.gz` and `output/playwright/merge-follow-owner/`. The renderer and spec match main `0014505ca`; no assertion, timeout or skip changed. This recurrence remains non-green in isolation and is not newly classified as intermittent.
+
+
+## Agent accounts main merge — 2026-10-24
+
+`mise run test:logged -- --name merge-browser-fixed -- mise run test:browser`
+(nine workers) reported 577 passed, 102 skipped and seven failed in 694.4 s.
+The complete unchanged owner passed in the sequential one-worker command
+`mise run test:logged -- --name merge-browser-owners -- bunx playwright test --config e2e/playwright.config.ts AgentUsage.spec.ts DesignCanvas.spec.ts PaneBreakpoint.spec.ts AgentLaunchDialog.spec.ts MonacoRuntime.spec.ts VirtuosoFollow.spec.ts --workers=1`.
+That combined command reported twenty passed, four skipped and two failures
+(127.0 s), both in AgentLaunchDialog; this owner had no failures. Evidence:
+`orkestrator-test-run.BIyzun/merge-browser-fixed.log.gz` and
+`orkestrator-test-run.ngoXeT/merge-browser-owners.log.gz` below the host temporary
+directory. No assertion, timeout, skip or implementation changed in this owner.
+
+The desktop follow-release case failed in the aggregate.
+
+## GitHub HTML main merge — 2026-10-24
+
+- **Parents:** feature `66dd560f9b4414ed57e3450237c2a2735ca4cdc1` and main `d723429d58c52d8290c951fa113625431ad3c3fb`.
+- **Original command:** `ORKESTRATOR_E2E_PORT=55498 mise run test:logged -- --name merge-browser -- mise run test:browser`, nine component workers alongside repository, Electron and isolated-browser validation.
+- **Failure:** the desktop follow-release case at `VirtuosoFollow.spec.ts:43` retained `false` instead of `auto` after five seconds. The complete component suite reported 581 passed, 102 skipped and three failed across 686 cases (366.8 s logged); the other two failures were the recorded native branch suggestions.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=52522 mise run test:logged -- --name merge-follow-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1 --output output/playwright/merge-follow-owner` passed both desktop cases with two mobile skips (5.2 s logged).
+- **Evidence:** `orkestrator-test-run.l09gNo/merge-browser.log.gz` under the host temporary directory; passing owner summary in `orkestrator-test-run.4PLw6Z/summary.json`.
+- **Assessment:** confirms an intermittent recurrence of follow re-engagement on the merged tree. Host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.

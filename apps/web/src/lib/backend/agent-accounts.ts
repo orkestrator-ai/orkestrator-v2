@@ -13,6 +13,8 @@ import type {
   HostSignInPlatform,
   MachineAgentAccountsResult,
 } from "@orkestrator/protocol/agent-accounts";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { NativeAgentAuthStatus } from "@orkestrator/protocol/native-agent";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 /**
@@ -40,6 +42,18 @@ export function machineInvoke<T>(
 
 export async function listAgentAccounts(machine?: AccountMachine): Promise<AgentAccountsSnapshot> {
   return machineInvoke<AgentAccountsSnapshot>(machine, "list_agent_accounts");
+}
+
+/**
+ * A platform's sign-in state for the settings pane, read on the host without a
+ * session: the active account for Claude and Codex, the stored credential or
+ * provider logins for the rest.
+ */
+export async function getAgentSignInStatus(
+  platform: AgentPlatform,
+  machine?: AccountMachine,
+): Promise<NativeAgentAuthStatus> {
+  return machineInvoke<NativeAgentAuthStatus>(machine, "get_agent_sign_in_status", { platform });
 }
 
 export async function setActiveAgentAccount(

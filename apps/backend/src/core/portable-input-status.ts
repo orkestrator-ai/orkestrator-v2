@@ -14,7 +14,7 @@ import { runCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentInputStatus } from "@orkestrator/protocol/container-recovery";
 import { pruneInputRevisions, readInputsManifest, scrubStagedProvider } from "./portable-inputs.js";
-import { CONTAINER_CURSOR_API_KEY_FILE } from "./commands-runtime-state.js";
+import { CONTAINER_CURSOR_API_KEY_FILE } from "./agent-credential-files.js";
 import { CONTAINER_CURSOR_SDK_AUTH_FILE } from "./cursor-sdk-bridge.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
@@ -223,7 +223,7 @@ const PROVIDER_PROCESS_PATTERNS: Record<AgentPlatform, string> = {
 export async function revokeProviderCredentials(
   environmentId: string,
   provider: AgentPlatform,
-  context: Pick<CommandContext, "storage" | "runtimeFlavor" | "credentialSources">,
+  context: Pick<CommandContext, "storage" | "runtimeFlavor" | "credentialSources" | "runtime">,
 ): Promise<RevocationResult> {
   if (!AGENT_PLATFORMS.includes(provider)) throw new Error("Unknown provider");
   const environment = await context.storage.getEnvironment(environmentId);
@@ -233,7 +233,7 @@ export async function revokeProviderCredentials(
   await context.storage.updateEnvironment(environmentId, {
     revokedInputProviders: [...new Set([...(environment.revokedInputProviders ?? []), provider])],
   });
-  return enqueueContainerBridgeOperation(provider, containerId, async () => {
+  return enqueueContainerBridgeOperation(context, provider, containerId, async () => {
     const revision = await containerLabel(containerId, DOCKER_LABEL_INPUTS_REVISION);
     const scrubbed = revision
       ? await scrubStagedProvider(context.storage.getDataDir(), environmentId, revision, provider)

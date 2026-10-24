@@ -16,6 +16,7 @@ import {
   reclaimReleasedTurnForAssistant,
 } from "../session-manager-prompt-turn-lifecycle.js";
 import { appendTranscriptNotice } from "./transcript-notice.js";
+import { setSessionAuthNotice } from "../session-auth-notice.js";
 
 /** Notice wording per `conversation_reset.trigger`; an open set upstream. */
 const CONVERSATION_RESET_CAUSES: Record<string, string> = {
@@ -113,6 +114,26 @@ function handleAuthStatus(turn: TurnState, message: SDKMessage): void {
     severity: auth.error ? "error" : "info",
     createdAt: new Date().toISOString(),
   });
+  // The row records what happened; the notice says what to do about it, and
+  // goes away once Claude reports the authentication finished.
+  const occurrenceId = typeof auth.uuid === "string" && auth.uuid ? auth.uuid : crypto.randomUUID();
+  setSessionAuthNotice(
+    session,
+    sessionId,
+    auth.error
+      ? {
+          state: "expired",
+          message: `${content.slice(0, 300)}. Sign in to Claude again to keep working.`,
+          occurrenceId,
+        }
+      : auth.isAuthenticating
+        ? {
+            state: "needs-auth",
+            message: "Claude is signing in again. Finish any sign-in it opened to continue.",
+            occurrenceId,
+          }
+        : undefined,
+  );
 }
 
 /** `stream_event`: one streamed delta. Runs once per token, so it stays cheap. */

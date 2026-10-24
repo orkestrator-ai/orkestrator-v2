@@ -17,9 +17,12 @@
  * A child's first answer is not settled. app-server answers `skills/list`
  * before its plugin skills have loaded and sends no `skills/changed` when they
  * arrive (0.164.0, measured on 2026-10-24: 26 skills for the first 100-300 ms
- * after `initialize`, then 114, with no notification). So the first answer
- * from each generation is reported unsettled and re-read once after
- * `coldSettleMs`; that re-read is the authoritative one.
+ * after `initialize`, then 114, with no notification). So each generation's
+ * list is reported unsettled for at least two settling re-reads, each sent
+ * `coldSettleMs` after the preceding answer. The second or later re-read must
+ * agree with that preceding answer. Each mismatch re-arms one more re-read,
+ * up to `maxSettleReads`; after that the newest answer is trusted. Loads beyond
+ * that bounded observation window are recovered by notifications or the TTL.
  */
 import { isAbsolute } from "node:path";
 import type { SkillScope } from "../app-server/generated/typescript/v2/index.js";
@@ -41,8 +44,10 @@ export const SKILL_INVENTORY_LIMITS = Object.freeze({
   ttlMs: 30_000,
   /** Quiet period after `skills/changed` before the one coalesced re-read. */
   refreshDebounceMs: 250,
-  /** Wait after a child's first answer before the one re-read that settles it. */
-  coldSettleMs: 2_000,
+  /** Wait after an unsettled answer before each of at least two re-reads. */
+  coldSettleMs: 1_000,
+  /** Settling re-reads per generation before its newest answer is trusted. */
+  maxSettleReads: 5,
 });
 
 export const SKILL_ID_PREFIX = "codex-skill:";
@@ -188,6 +193,13 @@ export function normalizeSkillsList(
   };
 }
 
+/** What a settling re-read compares: the skills and whether each can run. */
+function snapshotSignature(snapshot: SkillSnapshot): string {
+  return snapshot.bindings
+    .map((binding) => `${binding.bindingRevision}:${binding.enabled}:${binding.ambiguous}`)
+    .join("\n");
+}
+
 /** Why a listed skill cannot run, or undefined when it can. */
 export function skillUnavailability(
   binding: SkillBinding,
@@ -260,7 +272,7 @@ export interface SkillInventoryRead {
   fresh: boolean;
   /**
    * False while the live child's list may still be missing plugin skills: from
-   * its first answer until the one settling re-read.
+   * its first answer until the second or later settling re-read agrees.
    */
   settled: boolean;
   /** Bounded, content-free reason the inventory could not be refreshed. */
@@ -274,8 +286,19 @@ export class SkillInventory {
   private invalidationSerial = 0;
   private inflight: { forced: boolean; promise: Promise<SkillInventoryRead> } | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
-  /** The generation whose first answer has been re-read after `coldSettleMs`. */
+  /** The generation whose list a settling re-read has confirmed. */
   private settledGeneration: EngineGeneration | null = null;
+  /**
+   * The settling re-read the live generation is owed. Only a read sent at or
+   * after `serial` counts: one already in flight when the timer fired may
+   * predate the plugin skills.
+   */
+  private settling: {
+    generation: EngineGeneration;
+    serial: number;
+    round: number;
+    baseline: string;
+  } | null = null;
   /** The generation that has answered at least once. */
   private answeredGeneration: EngineGeneration | null = null;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -339,7 +362,7 @@ export class SkillInventory {
 
   private async refresh(forceReload: boolean): Promise<SkillInventoryRead> {
     const read = await this.fetch(forceReload);
-    this.deps.onRefreshed?.(read);
+    if (!this.disposed) this.deps.onRefreshed?.(read);
     return read;
   }
 
@@ -368,7 +391,8 @@ export class SkillInventory {
           settled: false,
           error: "Codex restarted while listing skills",
         };
-      this.noteAnswer(live.generation);
+      this.noteSettlingAnswer(live, serial);
+      this.noteAnswer(live);
       return { snapshot: live, fresh: !live.partial, settled: this.isSettled(live.generation) };
     } catch {
       this.dirty = true;
@@ -391,22 +415,67 @@ export class SkillInventory {
   }
 
   /**
-   * The first answer from a generation arms one settling re-read. Later
+   * The first answer from a generation arms its first settling re-read. Later
    * answers from the same child change nothing here.
    */
-  private noteAnswer(generation: EngineGeneration): void {
+  private noteAnswer(snapshot: SkillSnapshot): void {
+    const { generation } = snapshot;
     if (this.isSettled(generation) || this.answeredGeneration === generation || this.disposed) {
       return;
     }
     this.answeredGeneration = generation;
+    this.armSettle(snapshot, 1);
+  }
+
+  /**
+   * A settling re-read answered: the generation is settled when it matches the
+   * answer before it after at least two rounds (or the rounds are spent),
+   * otherwise one more is armed.
+   * A failed settling read leaves `settling` owed, so the next read retries it.
+   */
+  private noteSettlingAnswer(live: SkillSnapshot, serial: number): void {
+    const settling = this.settling;
+    if (!settling || settling.generation !== live.generation || serial < settling.serial) return;
+    this.settling = null;
+    if (
+      (settling.round >= 2 && snapshotSignature(live) === settling.baseline) ||
+      settling.round >= SKILL_INVENTORY_LIMITS.maxSettleReads
+    ) {
+      this.settledGeneration = live.generation;
+      return;
+    }
+    this.armSettle(live, settling.round + 1);
+  }
+
+  private armSettle(snapshot: SkillSnapshot, round: number): void {
+    const { generation } = snapshot;
+    // Keep the answer that starts this delay: a refresh just before timer fire
+    // must not replace the baseline and shorten the observation interval.
+    const baseline = snapshotSignature(snapshot);
     if (this.settleTimer) clearTimeout(this.settleTimer);
     this.settleTimer = setTimeout(() => {
       this.settleTimer = null;
       if (this.disposed || this.deps.generation() !== generation) return;
-      this.settledGeneration = generation;
+      // Like an invalidation: a read already in flight stays dirty, so the
+      // settling answer always comes from a request sent after this point.
+      this.invalidationSerial += 1;
       this.dirty = true;
+      const settling = {
+        generation,
+        serial: this.invalidationSerial,
+        round,
+        baseline,
+      };
+      this.settling = settling;
       this.stats.settlingReads += 1;
-      void this.read().catch(() => undefined);
+      // `read()` would join a request already in flight; wait it out instead.
+      const pending = this.inflight?.promise.catch(() => undefined);
+      const read = () => {
+        if (this.disposed || this.deps.generation() !== generation || this.settling !== settling)
+          return;
+        return this.read();
+      };
+      void (pending ? pending.then(read) : read())?.catch(() => undefined);
     }, this.coldSettleMs());
     this.settleTimer.unref?.();
   }
@@ -417,5 +486,6 @@ export class SkillInventory {
     this.refreshTimer = null;
     if (this.settleTimer) clearTimeout(this.settleTimer);
     this.settleTimer = null;
+    this.settling = null;
   }
 }

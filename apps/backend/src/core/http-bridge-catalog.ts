@@ -87,6 +87,7 @@ export class HttpBridgeCatalogAdapter {
       this.fetchImpl,
     );
     if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
       this.noteOutdatedBridge();
       throw Object.assign(new Error(`${this.agent} bridge is older than the command catalogue`), {
         catalogueErrorCode: "outdated-bridge",
@@ -131,7 +132,10 @@ export class HttpBridgeCatalogAdapter {
       { method: "POST" },
       this.fetchImpl,
     );
-    if (response.status === 404) return { outcome: "reread" };
+    if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
+      return { outcome: "reread" };
+    }
     await assertOkWithErrorDetail(response, `${this.agent} command refresh`);
     const body = asRecord(
       await boundedJson(response, `${this.agent} command refresh`, { remaining: 64 * 1024 }),
@@ -346,6 +350,27 @@ export class HttpBridgeCatalogAdapter {
       ...(nonEmptyString(body?.url) ? { url: nonEmptyString(body?.url)!.slice(0, 4096) } : {}),
       ...(nonEmptyString(body?.code) ? { code: nonEmptyString(body?.code)!.slice(0, 512) } : {}),
     };
+  }
+
+  /**
+   * Abandon the in-tab sign-in the bridge started. Only Codex can cancel one
+   * (`account/login/cancel`); a bridge without the route answers 404, which
+   * is a no-op here because there is nothing on its side to release.
+   */
+  async cancelSignIn(): Promise<{ cancelled: boolean }> {
+    const response = await bridgeFetch(
+      this.connection,
+      "/global/auth/login/cancel",
+      { method: "POST" },
+      this.fetchImpl,
+    );
+    if (response.status === 404 || response.status === 405) {
+      await response.body?.cancel().catch(() => undefined);
+      return { cancelled: false };
+    }
+    await assertOkWithErrorDetail(response, `${this.agent} sign-in cancel`);
+    const body = asRecord(await boundedJson(response, `${this.agent} sign-in cancel`));
+    return { cancelled: body?.cancelled === true };
   }
 
   async signOut(): Promise<void> {

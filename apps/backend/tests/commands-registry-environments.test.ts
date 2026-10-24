@@ -10,8 +10,6 @@ const {
   RUNNING_CONTAINER_DOCKER_SCRIPT,
   SETUP_DONE_OSC,
   SETUP_FAILED_OSC,
-  closeLocalServerAdmission,
-  commandTesting,
   configuredGitPushBehaviour,
   configuredGitUpstream,
   createCommandRegistry,
@@ -30,6 +28,7 @@ const {
   expectedManagedWorktreePath,
   fs,
   gitOutput,
+  localServerHooks,
   path,
   ptyProcesses,
   ptySpawn,
@@ -1720,14 +1719,14 @@ esac
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    commandTesting.markEnvironmentMerging(environment.id);
+    context.runtime.environments.beginMerge(environment.id);
 
     await expect(
       commands.get("delete_environment")?.({ environmentId: environment.id }, context),
     ).rejects.toThrow("Environment is currently being merged");
     // Reserving before the refusal would block local-server starts and further
     // merges for an environment that is not being deleted at all.
-    expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(false);
+    expect(context.runtime.environments.isDeleting(environment.id)).toBe(false);
   });
 
   test("rejects starts while deletion is reserved before cleanup settles", async () => {
@@ -1750,18 +1749,18 @@ esac
     const terminationResult = new Promise<boolean>((resolve) => {
       releaseTermination = resolve;
     });
-    commandTesting.setLocalServerProcess(`codex:${environment.id}`, createFakeChild(95050));
-    commandTesting.setTerminateProcessTree(async () => {
+    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, createFakeChild(95050));
+    localServerHooks.terminateProcessTree = async () => {
       announceTermination();
       return terminationResult;
-    });
+    };
 
     const deletion = commands.get("delete_environment")?.(
       { environmentId: environment.id },
       context,
     );
     await terminationStarted;
-    expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(true);
+    expect(context.runtime.environments.isDeleting(environment.id)).toBe(true);
 
     await expect(
       commands.get("start_environment")?.({ environmentId: environment.id }, context),
@@ -1772,7 +1771,7 @@ esac
 
     releaseTermination(false);
     await expect(deletion).rejects.toThrow("Failed to stop all local servers");
-    commandTesting.setTerminateProcessTree(async () => true);
+    localServerHooks.terminateProcessTree = async () => true;
   });
 
   test("rejects starts carrying a durable deletion tombstone", async () => {
@@ -1871,12 +1870,12 @@ exit 0
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    closeLocalServerAdmission();
+    context.runtime.localServers.closeAdmission();
 
     await expect(
       commands.get("delete_environment")?.({ environmentId: environment.id }, context),
     ).rejects.toThrow("Backend is shutting down");
-    expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(false);
+    expect(context.runtime.environments.isDeleting(environment.id)).toBe(false);
   });
 
   test(
@@ -1987,8 +1986,8 @@ exit 0
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    commandTesting.setLocalServerProcess(`codex:${environment.id}`, createFakeChild(95010));
-    commandTesting.setTerminateProcessTree(async () => false);
+    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, createFakeChild(95010));
+    localServerHooks.terminateProcessTree = async () => false;
 
     await expect(
       commands.get("stop_environment")?.({ environmentId: environment.id }, context),
@@ -2002,7 +2001,7 @@ exit 0
       "Environment start failed. Check the backend logs and retry.",
     );
 
-    commandTesting.setTerminateProcessTree(async () => true);
+    localServerHooks.terminateProcessTree = async () => true;
   });
 
   test(
@@ -3622,17 +3621,17 @@ exit 0
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
     const child = createFakeChild(92001);
-    commandTesting.setLocalServerProcess(`codex:${environment.id}`, child);
-    commandTesting.setTerminateProcessTree(async () => false);
+    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, child);
+    localServerHooks.terminateProcessTree = async () => false;
 
     await expect(
       commands.get("delete_environment")?.({ environmentId: environment.id }, context),
     ).rejects.toThrow("Failed to stop all local servers");
     expect(await context.storage.getEnvironment(environment.id)).toBe(environment);
     expect(existsSync(worktreePath)).toBe(true);
-    expect(commandTesting.getLocalServerProcess(`codex:${environment.id}`)).toBe(child);
+    expect(context.runtime.localServers.process(`codex:${environment.id}`)).toBe(child);
 
-    commandTesting.setTerminateProcessTree(async () => true);
+    localServerHooks.terminateProcessTree = async () => true;
     await expect(
       commands.get("delete_environment")?.({ environmentId: environment.id }, context),
     ).resolves.toBeUndefined();

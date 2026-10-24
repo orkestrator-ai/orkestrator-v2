@@ -9,7 +9,6 @@ import type {
 } from "@orkestrator/protocol/host-maintenance";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
-import { localServerProcesses, terminalProcesses } from "./commands-runtime-state.js";
 import { APP_VERSION } from "./constants.js";
 import { configuredImageRef, getImageStatus, resolveDockerImage } from "./docker-image.js";
 import { gitHubCli } from "./github-cli-binary.js";
@@ -44,8 +43,8 @@ export async function readRestartImpact(context: CommandContext): Promise<HostRe
     waitingAgents,
     unknownAgents,
     activePipelines,
-    terminals: terminalProcesses.size,
-    hostServers: localServerProcesses.size,
+    terminals: context.runtime.terminals.processCount(),
+    hostServers: context.runtime.localServers.processCount(),
     measuredAt: new Date().toISOString(),
   };
 }

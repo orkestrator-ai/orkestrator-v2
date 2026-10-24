@@ -159,3 +159,8 @@ The refreshed merge of `7e051d955` passed `mise run test:logged -- --name latest
 - **Final complete unchanged owner:** after the component browser aggregate ended, `mise run test:logged -- --name disk-report-final-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed all five tests, exit 0 in 5.0 seconds logged.
 - **Aggregate evidence:** host temporary directories `orkestrator-test-run.jSDfl8/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.EDCav0/full-tests.log.gz`. Sidebar fixes are commit `6d6f9b83f`.
 - **Assessment:** confirmed intermittent recurrence; host process or filesystem contention remains a hypothesis. No disk-report implementation, assertion, timeout or skip changed, and the original aggregate remains failed.
+
+
+## Runtime-state ownership main merge — 2026-10-24
+
+`mise run test:logged -- --name merge-suite -- mise run test` used the default 4/1/2/1 workspace/root/bridge/protocol plan alongside browser suites and other validating worktrees. Root/support ran with one worker after waiting 953.5 s: 3,369 passed, twelve failed and one error across 3,381 tests in 161 files (609.28 s execution). Evidence: host temporary artifact `orkestrator-test-run.BJKk4l/root-and-agent-support-tests.log` (compressed at aggregate completion). `reports an isolated checkout and only fixes named legacy Turbo artifacts` timed out at 5044.08 ms and produced the error between tests (`report.status` null). `mise run test:logged -- --name merge-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (5.4 s logged). This confirms a recurrence; no assertion, deadline or skip changed.

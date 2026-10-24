@@ -1,8 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
 
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
-import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/commands-runtime-state";
-import { TERMINAL_ACTIVITY_PERSIST_RETRY_DELAYS_MS } from "../src/core/commands-terminal";
+import {
+  TERMINAL_ACTIVITY_PERSIST_RETRY_DELAYS_MS,
+  TERMINAL_ACTIVITY_SETTLE_MS,
+} from "../src/core/terminal-runtime";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {

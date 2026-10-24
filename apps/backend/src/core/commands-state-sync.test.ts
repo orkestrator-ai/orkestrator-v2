@@ -27,7 +27,6 @@ import {
   firstUseCatalogFetchTimeoutMs,
 } from "./commands-registry-projects.js";
 import { cachedLaunchModels } from "./control-shared-actions.js";
-import { appendTerminalOutputBuffer } from "./commands-terminal.js";
 import { StorageService } from "./storage.js";
 import { seedUnreadableStore } from "./storage-test-support.js";
 import type { ClaudeModelCatalogEntry } from "./models.js";
@@ -50,6 +49,7 @@ async function withCommands<T>(
     storage: StorageService,
     dataDir: string,
     commands: ReturnType<typeof createCommandRegistry>,
+    context: CommandContext,
   ) => Promise<T>,
   options: {
     claudeStatePolls?: ClaudeStatePollManager;
@@ -109,7 +109,7 @@ async function withCommands<T>(
   };
 
   try {
-    return await run(invoke, storage, dataDir, commands);
+    return await run(invoke, storage, dataDir, commands, context);
   } finally {
     context.runtime.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });
@@ -2478,7 +2478,8 @@ describe("setup session wait command", () => {
     // The renderer retires a completed setup tab only when the backend proves
     // its transcript is gone, so the durable-rehydration branch has to answer
     // `hasOutput` from the retained buffer rather than always reporting false.
-    await withCommands(async (invoke, storage) => {
+    await withCommands(async (invoke, storage, _dataDir, _commands, context) => {
+      const { terminals } = context.runtime;
       try {
         await storage.updateEnvironment("e1", {
           setupPhase: "ready",
@@ -2498,7 +2499,7 @@ describe("setup session wait command", () => {
           }),
         );
 
-        appendTerminalOutputBuffer("e1:setup", "cloning repository...\r\n");
+        terminals.appendOutput("e1:setup", "cloning repository...\r\n");
         await expect(
           invoke("await_environment_setup_session", { environmentId: "e1", timeoutMs: 0 }),
         ).resolves.toEqual(
@@ -2512,12 +2513,12 @@ describe("setup session wait command", () => {
 
         // Freeing the retained buffer is what flips the answer back, which is
         // the transition that makes the tab retirable minutes after setup ends.
-        commandTesting.deleteRetainedTerminalOutputBuffer("e1:setup");
+        terminals.deleteRetainedOutput("e1:setup");
         await expect(
           invoke("await_environment_setup_session", { environmentId: "e1", timeoutMs: 0 }),
         ).resolves.toEqual(expect.objectContaining({ hasOutput: false }));
       } finally {
-        commandTesting.deleteRetainedTerminalOutputBuffer("e1:setup");
+        terminals.deleteRetainedOutput("e1:setup");
       }
     });
   });

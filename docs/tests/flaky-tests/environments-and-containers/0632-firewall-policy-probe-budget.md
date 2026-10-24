@@ -25,6 +25,15 @@
   tab); nothing in `tests/unit/firewall-policy.test.ts`,
   `docker/firewall-domains.sh` or the network allowlist changed there. The
   likely fix is an explicit outer budget for these cases, as 0159 took.
+- **2026-10-24 (node mbp3, macOS, Apple Silicon):** `mise run test` on the
+  0011 runtime-state branch failed five of these cases at 5.0 s. Unlike the
+  original observation, the owner also failed alone here:
+  `mise run test:logged -- --name firewall -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1`
+  → 12 pass, 12 fail (67.4 s), and the same command in a clean `origin/main`
+  (`8454d18b`) worktree → 11 pass, 13 fail (70.1 s). On this host it is a
+  host condition (slow DNS in the shell harness), not a branch regression and
+  not a flake by the register's definition; the branch touches neither the
+  test nor `docker/`.
 
 ## Recurrence during 0016 validation (2026-10-24)
 
@@ -43,3 +52,8 @@
   to 98 (3 and more cases at about 5,008 ms), then passed alone (24 passed,
   0 failed) once the one-minute load fell to 10. The branch changes no
   firewall test or `docker/` script.
+
+
+## Runtime-state ownership main merge — 2026-10-24
+
+`mise run test:logged -- --name merge-suite -- mise run test` used the default 4/1/2/1 workspace/root/bridge/protocol plan alongside browser suites and other validating worktrees. Root/support ran with one worker after waiting 953.5 s: 3,369 passed, twelve failed and one error across 3,381 tests in 161 files (609.28 s execution). Evidence: host temporary artifact `orkestrator-test-run.BJKk4l/root-and-agent-support-tests.log` (compressed at aggregate completion). Nine firewall-policy cases exceeded five seconds (5004–5221 ms), including tuple application, seven parametrized probe cases and GitHub range fallback. The complete unchanged owner also failed: `mise run test:logged -- --name merge-firewall-policy-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` reported twenty passes and four failures in 51.1 s logged (stored-domain bootstrap, policy 2 host ports, and two example.org/example.com probe cases). Evidence: host temporary artifact `orkestrator-test-run.gK2ocG/merge-firewall-policy-owner.log.gz`. This host-condition recurrence does not establish a flake; the branch changes neither this owner nor its Docker scripts. No assertion, deadline or skip changed.

@@ -16,13 +16,9 @@ import {
 } from "./agent-accounts-active.js";
 import type { CommandContext } from "./commands-context.js";
 import * as commandFiles from "./commands-files.js";
-import {
-  localAgentAccountIds,
-  localAgentAccountTokenExpiry,
-  loginlessLocalBridges,
-  staleLoginLocalBridges,
-} from "./agent-account-bridge-state.js";
-import { localServerProcesses } from "./commands-runtime-state.js";
+import { BackendRuntime } from "./backend-runtime.js";
+import type { LocalServerLaunch } from "./local-server-runtime.js";
+
 import { prepareCoordinatorClaudeHome, prepareCoordinatorCodexHome } from "./commands-servers.js";
 import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
 import { claudeKeychainService } from "./agent-accounts-homes.js";
@@ -61,6 +57,17 @@ function codexAuth(expiresAt: number, marker = "login"): string {
       account_id: `account-${marker}`,
     },
     last_refresh: "2026-10-01T00:00:00.000Z",
+  });
+}
+
+/**
+ * Records `key` as an owned bridge launched with `launch`. Each call replaces
+ * every launch fact, as a relaunch does.
+ */
+function launchBridge(key: string, launch: Omit<LocalServerLaunch, "workingDirectory"> = {}): void {
+  context.runtime.localServers.adoptProcess(key, {} as never, {
+    workingDirectory: root,
+    ...launch,
   });
 }
 
@@ -107,10 +114,8 @@ beforeEach(async () => {
     runtimeFlavor: "agent-test",
     credentialSources: new Set(),
     nativeAgents: { hasObservedLiveWork: async () => liveWork },
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as unknown as CommandContext;
-  localAgentAccountIds.clear();
-  localAgentAccountTokenExpiry.clear();
-  loginlessLocalBridges.clear();
 });
 
 afterEach(async () => {
@@ -121,9 +126,7 @@ afterEach(async () => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  localAgentAccountIds.clear();
-  localAgentAccountTokenExpiry.clear();
-  loginlessLocalBridges.clear();
+  context.runtime.shutdown();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -337,8 +340,7 @@ describe("localBridgeIsOnActiveAccount", () => {
     hostCredentialRead.mockResolvedValue(undefined);
     context.runtimeFlavor = "production";
     const key = "claude:host-coordinator";
-    localAgentAccountIds.set(key, "default");
-    loginlessLocalBridges.add(key);
+    launchBridge(key, { accountId: "default", loginless: true });
 
     expect(await localBridgeIsOnActiveAccount(key, "claude", "host-coordinator", context)).toBe(
       true,
@@ -399,7 +401,7 @@ describe("localBridgeIsOnActiveAccount", () => {
     liveWork = true;
     expect(await localBridgeIsOnActiveAccount(key, "codex", "env-1", context)).toBe(true);
 
-    localAgentAccountIds.set(key, ACCOUNT_IDS.codex);
+    launchBridge(key, { accountId: ACCOUNT_IDS.codex });
     liveWork = false;
     expect(await localBridgeIsOnActiveAccount(key, "codex", "env-1", context)).toBe(true);
     // Other platforms have no accounts.
@@ -408,31 +410,27 @@ describe("localBridgeIsOnActiveAccount", () => {
 
   test("replaces an idle OpenCode server once a provider login changed", async () => {
     const key = "opencode:env-1";
-    localServerProcesses.set(key, {} as never);
-    localServerProcesses.set("codex:env-1", {} as never);
-    try {
-      expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(true);
-      markLocalBridgesForLoginRefresh("opencode");
-      expect(staleLoginLocalBridges.has("codex:env-1")).toBe(false);
-      liveWork = true;
-      expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(true);
-      liveWork = false;
-      expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(false);
-    } finally {
-      localServerProcesses.delete(key);
-      localServerProcesses.delete("codex:env-1");
-      staleLoginLocalBridges.clear();
-    }
+    const { localServers } = context.runtime;
+    localServers.adoptProcess(key, {} as never);
+    localServers.adoptProcess("codex:env-1", {} as never);
+    expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(true);
+    markLocalBridgesForLoginRefresh(context, "opencode");
+    expect(localServers.hasStaleLogin(key)).toBe(true);
+    expect(localServers.hasStaleLogin("codex:env-1")).toBe(false);
+    liveWork = true;
+    expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(true);
+    liveWork = false;
+    expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(false);
   });
 
   test("keeps a near-expiry token until a fresher one is available or it expires", async () => {
     const key = "claude:coordinator-1";
-    localAgentAccountTokenExpiry.set(key, Date.now() + 60 * 60_000);
+    launchBridge(key, { tokenExpiresAt: Date.now() + 60 * 60_000 });
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(true);
 
-    localAgentAccountTokenExpiry.set(key, Date.now() + 60_000);
+    launchBridge(key, { tokenExpiresAt: Date.now() + 60_000 });
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(true);
-    localAgentAccountTokenExpiry.set(key, Date.now() - 1);
+    launchBridge(key, { tokenExpiresAt: Date.now() - 1 });
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(false);
     liveWork = true;
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(true);
@@ -441,8 +439,7 @@ describe("localBridgeIsOnActiveAccount", () => {
   test("replaces an idle coordinator once its account has a fresher token", async () => {
     await activate("claude");
     const key = "claude:coordinator-1";
-    localAgentAccountIds.set(key, ACCOUNT_IDS.claude);
-    localAgentAccountTokenExpiry.set(key, Date.now() + 60_000);
+    launchBridge(key, { accountId: ACCOUNT_IDS.claude, tokenExpiresAt: Date.now() + 60_000 });
     await fs.mkdir(accountHome("claude"), { recursive: true });
     await fs.writeFile(
       path.join(accountHome("claude"), ".credentials.json"),
@@ -456,8 +453,7 @@ describe("localBridgeIsOnActiveAccount", () => {
   test("replaces an idle coordinator launched without a login once one appears", async () => {
     await activate("claude");
     const key = "claude:coordinator-1";
-    localAgentAccountIds.set(key, ACCOUNT_IDS.claude);
-    loginlessLocalBridges.add(key);
+    launchBridge(key, { accountId: ACCOUNT_IDS.claude, loginless: true });
     // Still signed out: a relaunch would not help.
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(true);
 
@@ -478,9 +474,8 @@ describe("localBridgeIsOnActiveAccount", () => {
   test("replaces an idle Codex coordinator once its token nears expiry and a fresher one exists", async () => {
     await activate("codex");
     const key = "codex:coordinator-1";
-    localAgentAccountIds.set(key, ACCOUNT_IDS.codex);
     const handedOver = Date.now() + 60_000;
-    localAgentAccountTokenExpiry.set(key, handedOver);
+    launchBridge(key, { accountId: ACCOUNT_IDS.codex, tokenExpiresAt: handedOver });
     await fs.mkdir(accountHome("codex"), { recursive: true });
     // The account's own login has not been refreshed: nothing better to hand over.
     await fs.writeFile(path.join(accountHome("codex"), "auth.json"), codexAuth(handedOver));
@@ -499,8 +494,7 @@ describe("localBridgeIsOnActiveAccount", () => {
   test("replaces an idle Codex coordinator launched without a login once one appears", async () => {
     await activate("codex");
     const key = "codex:coordinator-1";
-    localAgentAccountIds.set(key, ACCOUNT_IDS.codex);
-    loginlessLocalBridges.add(key);
+    launchBridge(key, { accountId: ACCOUNT_IDS.codex, loginless: true });
     expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(true);
 
     await fs.mkdir(accountHome("codex"), { recursive: true });
@@ -622,8 +616,7 @@ test("a due Codex coordinator renews its owning login on reuse and moves only wh
   const key = "codex:renew-on-use";
   await fs.mkdir(home, { recursive: true });
   await fs.writeFile(path.join(home, "auth.json"), codexAuth(Date.now() + 60_000));
-  localAgentAccountIds.set(key, ACCOUNT_IDS.codex);
-  localAgentAccountTokenExpiry.set(key, Date.now() + 60_000);
+  launchBridge(key, { accountId: ACCOUNT_IDS.codex, tokenExpiresAt: Date.now() + 60_000 });
   let refreshes = 0;
   setLocalCodexLoginRefresher(
     createCodexLoginRefresher({ ...context, runtimeFlavor: "production" }, async (owner) => {
@@ -737,8 +730,7 @@ test("keeper reads the real active added-account path to renew a loginless local
     }),
   );
   const key = "claude:env-loginless";
-  localAgentAccountIds.set(key, ACCOUNT_IDS.claude);
-  loginlessLocalBridges.add(key);
+  launchBridge(key, { accountId: ACCOUNT_IDS.claude, loginless: true });
   const refreshed: string[] = [];
   const keeper = new ContainerClaudeLoginKeeper(context, {
     refreshHostLogin: async (account) => {

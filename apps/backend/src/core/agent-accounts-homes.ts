@@ -8,7 +8,7 @@ import type {
   AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
 
-import { HOST_CLAUDE_KEYCHAIN_SERVICE } from "./commands-runtime-state.js";
+import { HOST_CLAUDE_KEYCHAIN_SERVICE } from "./agent-credential-files.js";
 
 /**
  * Filesystem side of an added account: its configuration directory, the links

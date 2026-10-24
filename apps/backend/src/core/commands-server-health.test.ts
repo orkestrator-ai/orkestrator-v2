@@ -9,7 +9,7 @@ import {
   LOCAL_SERVER_REUSE_FIRST_PROBE_TIMEOUT_MS,
   LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS,
   LOCAL_SERVER_REUSE_RETRY_PROBE_TIMEOUT_MS,
-} from "./commands-runtime-state.js";
+} from "./commands-server-health.js";
 
 describe("confirmRunningServerHealth", () => {
   test("exits when the child dies after the first failed probe", async () => {

@@ -36,7 +36,7 @@ import { openCodeFake } from "./agent-provider-test-support.js";
 import { OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE } from "./opencode-provider-list-test-fixtures.js";
 import { OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
 import { seedUnreadableStore } from "./storage-test-support.js";
-import { localAgentAccountIds } from "./agent-account-bridge-state.js";
+import { LocalServerRuntime } from "./local-server-runtime.js";
 
 import type { Environment } from "./models.js";
 
@@ -199,6 +199,7 @@ async function withService(
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
     resolveAgentToolConnection?: NativeAgentServiceOptions["resolveAgentToolConnection"];
+    localBridgeAccountId?: NativeAgentServiceOptions["localBridgeAccountId"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -246,6 +247,7 @@ async function withService(
     ...(setup.resolveAgentToolConnection
       ? { resolveAgentToolConnection: setup.resolveAgentToolConnection }
       : {}),
+    ...(setup.localBridgeAccountId ? { localBridgeAccountId: setup.localBridgeAccountId } : {}),
   });
   try {
     await run({ storage, service });
@@ -1144,24 +1146,24 @@ describe("NativeAgentService", () => {
 
   describe("bridge connections", () => {
     test("binds local usage to the account recorded at bridge launch", async () => {
-      const key = "codex:env-1";
-      localAgentAccountIds.set(key, "account-a");
-      try {
-        await withService(
-          {
-            prefix: "orkestrator-native-bridge-account-",
-            invoke: (async () => ({ port: 4123, authToken: "token" })) as Invoke,
-          },
-          async ({ storage, service }) => {
-            const environment = (await storage.getEnvironment("env-1"))!;
-            expect(
-              (await internals(service).bridgeConnection("codex", environment)).accountId,
-            ).toBe("account-a");
-          },
-        );
-      } finally {
-        localAgentAccountIds.delete(key);
-      }
+      const localServers = new LocalServerRuntime();
+      localServers.adoptProcess("codex:env-1", {} as never, {
+        workingDirectory: "/workspace",
+        accountId: "account-a",
+      });
+      await withService(
+        {
+          prefix: "orkestrator-native-bridge-account-",
+          invoke: (async () => ({ port: 4123, authToken: "token" })) as Invoke,
+          localBridgeAccountId: (key) => localServers.launchedAccountId(key),
+        },
+        async ({ storage, service }) => {
+          const environment = (await storage.getEnvironment("env-1"))!;
+          expect((await internals(service).bridgeConnection("codex", environment)).accountId).toBe(
+            "account-a",
+          );
+        },
+      );
     });
     test.each([
       ["claude", "start_local_claude_server_cmd"],

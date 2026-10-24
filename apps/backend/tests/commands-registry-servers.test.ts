@@ -1286,10 +1286,15 @@ exit 0
     const commands = createCommandRegistry();
     const released = Promise.withResolvers<void>();
     const locked = Promise.withResolvers<void>();
-    const held = enqueueContainerBridgeOperation("claude", environment.containerId!, async () => {
-      locked.resolve();
-      await released.promise;
-    });
+    const held = enqueueContainerBridgeOperation(
+      context,
+      "claude",
+      environment.containerId!,
+      async () => {
+        locked.resolve();
+        await released.promise;
+      },
+    );
     // Paths are private generated fixture paths; no credentials are in argv/logs.
     const dockerScript = `#!/bin/sh
 case "$1" in

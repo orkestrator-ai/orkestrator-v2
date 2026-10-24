@@ -1528,7 +1528,7 @@ describe("AgentNativeTab", () => {
       await waitFor(() => expect(cancelNativeAgentSignInMock).toHaveBeenCalledTimes(1));
       expect(await screen.findByText("SAFE-CODE")).toBeTruthy();
       expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeTruthy();
-      expect(screen.queryByRole("link", { name: "Open sign-in link" })).toBeNull();
+      expect(screen.queryByRole("link", { name: "Open sign-in link" }) === null).toBe(true);
       expect(openInBrowserMock).not.toHaveBeenCalled();
       fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
       await waitFor(() => expect(cancelNativeAgentSignInMock).toHaveBeenCalledTimes(2));

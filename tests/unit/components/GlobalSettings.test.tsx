@@ -389,7 +389,7 @@ describe("GlobalSettings", () => {
     }));
     render(<GlobalSettings activeSection="cursor" />);
     expect(await screen.findByRole("button", { name: "Sign in with Cursor" })).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Cursor Agent sign-in" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Cursor Agent sign-in" }) === null).toBe(true);
   });
 
   test("switching to a signed-out Claude account refreshes the adjacent sign-in card", async () => {

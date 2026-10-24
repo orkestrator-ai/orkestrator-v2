@@ -3,10 +3,11 @@
  * how many calls there were and how long they took. The line opens the full
  * list and, from its place at the top of that list, folds it again.
  */
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, test } from "bun:test";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
+import { VirtuosoMockContext } from "react-virtuoso";
 import { NativeMessage } from "./NativeMessage";
 
 afterEach(cleanup);
@@ -185,7 +186,7 @@ describe("folded tool group", () => {
     ).toBe("true");
   });
 
-  test("keeps a pending question visible and folds it only after completion", async () => {
+  test("keeps a pending question visible, then offers the fold without collapsing it", () => {
     const id = `question-${++messageCounter}`;
     const question = shell(2, "", {
       toolName: "AskUserQuestion",
@@ -197,63 +198,30 @@ describe("folded tool group", () => {
     expect(screen.queryByRole("button", { name: /^Show .*tool calls:/ }) === null).toBe(true);
     expect(screen.getByText("Which approach?")).toBeTruthy();
     rerender(messageView(id, [...calls.slice(0, 2), { ...question, toolState: "success" }]));
-    // A group that was on screen unfolded mounts open and folds a frame later,
-    // so the collapse animates rather than snapping shut.
-    const trigger = () => screen.getByRole("button", { name: /^Show 3 tool calls:/ });
-    expect(trigger().getAttribute("aria-expanded")).toBe("true");
-    await waitFor(() => expect(trigger().getAttribute("aria-expanded")).toBe("false"));
+    // The group the reader was looking at stays open; folding is theirs.
+    const fold = screen.getByRole("button", { name: /^Fold 3 tool calls:/ });
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("git status")).toBeTruthy();
   });
 
-  for (const toggleDuringHold of [false, true]) {
-    test(`folds a visible two-call group on the next frame (user toggle: ${toggleDuringHold})`, () => {
-      const frames = new Map<number, FrameRequestCallback>();
-      let nextFrame = 0;
-      const request = spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
-        frames.set(++nextFrame, callback);
-        return nextFrame;
-      });
-      const cancel = spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => {
-        frames.delete(id);
-      });
-      try {
-        const id = `threshold-${++messageCounter}`;
-        const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
-        const { rerender } = render(messageView(id, calls.slice(0, 2)));
-        expect(screen.getByText("git status")).toBeTruthy();
-        rerender(messageView(id, calls));
-        const trigger = screen.getByRole("button", { name: /^Show 3 tool calls:/ });
-        expect(trigger.getAttribute("aria-expanded")).toBe("true");
-        expect(screen.getByText("git status")).toBeTruthy();
-        if (toggleDuringHold) {
-          fireEvent.click(trigger);
-          expect(trigger.getAttribute("aria-expanded")).toBe("false");
-          fireEvent.click(trigger);
-          expect(trigger.getAttribute("aria-expanded")).toBe("true");
-        }
-        act(() => {
-          const pending = Array.from(frames.values());
-          frames.clear();
-          pending.forEach((callback) => callback(16));
-        });
-        expect(trigger.getAttribute("aria-expanded")).toBe(String(toggleDuringHold));
-        if (toggleDuringHold) {
-          expect(screen.getByText("git status")).toBeTruthy();
-          rerender(messageView(id, [...calls, shell(3, "git branch")]));
-          expect(
-            screen
-              .getByRole("button", { name: /^Fold 4 tool calls:/ })
-              .getAttribute("aria-expanded"),
-          ).toBe("true");
-        } else {
-          expect(screen.queryByText("git status") === null).toBe(true);
-        }
-      } finally {
-        cleanup();
-        request.mockRestore();
-        cancel.mockRestore();
-      }
-    });
-  }
+  test("a visible group crossing the threshold keeps its rows and gains the fold control", () => {
+    const id = `threshold-${++messageCounter}`;
+    const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
+    const { rerender } = render(messageView(id, calls.slice(0, 2)));
+    const firstRow = screen.getByText("git status").closest(".px-2");
+    rerender(messageView(id, calls));
+    const fold = screen.getByRole("button", { name: /^Fold 3 tool calls:/ });
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    // Same host and rows: crossing the threshold remounted nothing.
+    expect(screen.getByText("git status").closest(".px-2")).toBe(firstRow);
+    fireEvent.click(fold);
+    expect(screen.queryByText("git status") === null).toBe(true);
+    // Folded by the reader, it stays folded as calls keep arriving.
+    rerender(messageView(id, [...calls, shell(3, "git branch")]));
+    expect(
+      screen.getByRole("button", { name: /^Show 4 tool calls:/ }).getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
 
   test("renders a group that arrives already long folded without animating", () => {
     const calls = [shell(0, "git status"), shell(1, "git diff --stat"), shell(2, "git log -5")];
@@ -295,5 +263,48 @@ describe("folded tool group", () => {
     expect(screen.queryByRole("button", { name: /tool calls/ }) === null).toBe(true);
     expect(screen.getByText("git status")).toBeTruthy();
     expect(screen.getByText("git diff --stat")).toBeTruthy();
+  });
+
+  test("an open long group renders a bounded window of entries inside its own viewport", () => {
+    const calls = Array.from({ length: 300 }, (_, index) => shell(index % 10, `step ${index}`));
+    messageCounter += 1;
+    // happy-dom lays nothing out; give the inner virtualizer fixed geometry.
+    const { container } = render(
+      <VirtuosoMockContext.Provider value={{ viewportHeight: 400, itemHeight: 40 }}>
+        {messageView(`tool-group-fold-${messageCounter}`, calls)}
+      </VirtuosoMockContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Show 300 tool calls:/ }));
+    const viewport = container.querySelector("[data-transcript-inner-viewport]");
+    expect(viewport).toBeTruthy();
+    // At most a window of entries is mounted; the rest is virtual space.
+    const mounted = viewport!.querySelectorAll("[data-transcript-part-id]").length;
+    expect(mounted).toBeLessThan(60);
+    const list = viewport!.querySelector<HTMLElement>("[data-testid=virtuoso-item-list]")!;
+    expect(
+      Number.parseFloat(list.style.paddingBottom) + Number.parseFloat(list.style.paddingTop),
+    ).toBeGreaterThan((300 - 60) * 40);
+    // The inner scroller has a hard height, below the body ceiling.
+    const scroller = viewport!.querySelector<HTMLElement>("[data-virtuoso-scroller]")!;
+    expect(Number.parseFloat(scroller.style.height)).toBeLessThanOrEqual(28 * 16);
+    // The frame keeps standing in for the calls the inner viewport scrolls.
+    const head = container.querySelector(":scope [data-transcript-part-id]");
+    expect(head?.closest("[data-transcript-inner-viewport]") === null).toBe(true);
+  });
+
+  test("a short group's body has a hard height ceiling", () => {
+    const { container } = renderParts([shell(0, "git status"), shell(1, "git diff --stat")]);
+    const body = container.querySelector(".tool-group-fold-content > div") as HTMLElement;
+    expect(body.style.maxHeight).toBe("min(28rem, 55dvh)");
+    expect(body.className).toContain("overflow-y-auto");
+  });
+
+  test("members prepended by history keep the existing rows mounted", () => {
+    const id = `prepend-${++messageCounter}`;
+    const later = [shell(4, "git log"), shell(5, "git show")];
+    const { rerender } = render(messageView(id, later));
+    const row = screen.getByText("git log").closest(".px-2");
+    rerender(messageView(id, [shell(2, "git fetch"), ...later]));
+    expect(screen.getByText("git log").closest(".px-2")).toBe(row);
   });
 });

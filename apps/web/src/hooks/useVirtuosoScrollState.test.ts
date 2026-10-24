@@ -130,6 +130,7 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
       scrollToIndex: mock((_location: unknown) => {}),
       scrollTo: mock((_location: unknown) => {}),
       getState: mock(() => {}),
+      cancelPendingNavigation: mock(() => {}),
     };
   }
 
@@ -143,14 +144,16 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
     expect(handle.scrollToIndex).not.toHaveBeenCalled();
   });
 
-  test("centres the row, releases stick intent, and corrects once rows measure", async () => {
+  test("centres an unrendered row through one index navigation and releases follow", () => {
     const { result } = renderHook(() => useVirtuosoScrollState({ isActive: true }));
     const handle = fakeHandle();
     result.current.virtuosoRef.current = handle as never;
+    mountScroller(result);
 
     expect(result.current.scrollProps.followOutput(true)).toBe("auto");
     expect(result.current.scrollToIndex(3)).toBe(true);
 
+    expect(handle.scrollToIndex).toHaveBeenCalledTimes(1);
     expect(handle.scrollToIndex).toHaveBeenCalledWith({
       index: 3,
       align: "center",
@@ -158,7 +161,6 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
     });
     // New output no longer drags the reader back to the tail.
     expect(result.current.scrollProps.followOutput(true)).toBe(false);
-    await waitFor(() => expect(handle.scrollToIndex.mock.calls.length).toBeGreaterThan(1));
     expect(handle.scrollTo).not.toHaveBeenCalled();
   });
 
@@ -171,25 +173,23 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
     return el;
   }
 
-  test("a jump ending at the tail resumes following without another bottom callback", async () => {
+  test("an unresolved target re-issues index navigation a bounded number of times, then stops", async () => {
     const { result } = renderHook(() => useVirtuosoScrollState({ isActive: true }));
-    const el = mountScroller(result);
     const handle = fakeHandle();
     result.current.virtuosoRef.current = handle as never;
-    act(() => result.current.scrollProps.atBottomStateChange(false));
-    expect(result.current.scrollToIndex(3)).toBe(true);
-    el.scrollTop = 1500;
-    // The sole false-to-true transition arrives while corrections are guarded.
-    act(() => result.current.scrollProps.atBottomStateChange(true));
-    expect(result.current.scrollProps.followOutput(true)).toBe(false);
-    await waitFor(() => expect(result.current.scrollProps.followOutput(true)).toBe("auto"));
-    expect(handle.scrollToIndex).toHaveBeenCalledTimes(4);
-    Object.defineProperty(el, "scrollHeight", { value: 2200 });
-    act(() => result.current.scrollProps.totalListHeightChanged(2200));
-    expect(el.scrollTop).toBe(1700);
+    mountScroller(result);
+    result.current.scrollToIndex(3);
+    // 30 frames or 750 ms, whichever first; let both pass.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 900)));
+    const calls = handle.scrollToIndex.mock.calls.length;
+    expect(calls).toBeGreaterThanOrEqual(1);
+    expect(calls).toBeLessThanOrEqual(3);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 200)));
+    expect(handle.scrollToIndex.mock.calls.length).toBe(calls);
+    expect(result.current.getScrollDiagnostics().lastOutcome).toBe("unresolved");
   });
 
-  test("a transient bottom landing followed by correction away stays released", async () => {
+  test("a jump that lands at the tail leaves the reader detached until they arrive themselves", async () => {
     const { result } = renderHook(() => useVirtuosoScrollState({ isActive: true }));
     const el = mountScroller(result);
     const handle = fakeHandle();
@@ -197,37 +197,44 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
     expect(result.current.scrollToIndex(3)).toBe(true);
     el.scrollTop = 1500;
     act(() => {
-      // A cached-height correction can arrive at the bottom through a native
-      // scroll event before Virtuoso reports its at-bottom transition.
+      el.dispatchEvent(new Event("scroll"));
+      result.current.scrollProps.atBottomStateChange(true);
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 900)));
+    // Neither a measurement landing at the end nor an at-bottom report is intent.
+    expect(result.current.scrollProps.followOutput(true)).toBe(false);
+    expect(result.current.scrollProps.followEnabled).toBe(false);
+    // The reader's own arrival is.
+    el.scrollTop = 1400;
+    act(() => el.dispatchEvent(new Event("scroll")));
+    act(() => {
+      el.dispatchEvent(new WheelEvent("wheel", { deltaY: 100 }));
+      el.scrollTop = 1500;
       el.dispatchEvent(new Event("scroll"));
     });
-    expect(result.current.scrollProps.followOutput(false)).toBe(false);
-    act(() => result.current.scrollProps.totalListHeightChanged(2000));
-    expect(result.current.scrollProps.followOutput(false)).toBe(false);
-    act(() => result.current.scrollProps.atBottomStateChange(true));
-    expect(result.current.scrollProps.followOutput(true)).toBe(false);
-    el.scrollTop = 500;
-    // Even a stale at-bottom boolean cannot override the final geometry.
-    await waitFor(() => expect(handle.scrollToIndex).toHaveBeenCalledTimes(4));
-    await new Promise((resolve) => setTimeout(resolve, 240));
-    expect(result.current.scrollProps.followOutput(true)).toBe(false);
+    expect(result.current.scrollProps.followOutput(true)).toBe("auto");
+    Object.defineProperty(el, "scrollHeight", { value: 2200 });
+    act(() => result.current.scrollProps.totalListHeightChanged(2200));
+    expect(el.scrollTop).toBe(1700);
   });
 
-  test("a user scroll cancels corrections and their final stick reconciliation", async () => {
+  test("a user scroll retires the navigation: no later index writes, follow stays released", async () => {
     const { result } = renderHook(() => useVirtuosoScrollState({ isActive: true }));
     const el = mountScroller(result);
     const handle = fakeHandle();
     result.current.virtuosoRef.current = handle as never;
     result.current.scrollToIndex(3);
-    await waitFor(() => expect(handle.scrollToIndex).toHaveBeenCalledTimes(2));
+    expect(handle.scrollToIndex).toHaveBeenCalledTimes(1);
     el.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
     el.scrollTop = 300;
     el.dispatchEvent(new Event("scroll"));
+    expect(handle.cancelPendingNavigation).toHaveBeenCalled();
     // Bottom geometry later changes without a new arrival transition.
     el.scrollTop = 1500;
-    await new Promise((resolve) => setTimeout(resolve, 550));
-    expect(handle.scrollToIndex).toHaveBeenCalledTimes(2);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 900)));
+    expect(handle.scrollToIndex).toHaveBeenCalledTimes(1);
     expect(result.current.scrollProps.followOutput(true)).toBe(false);
+    expect(result.current.getScrollDiagnostics().lastOutcome).toBe("cancelled");
   });
 
   test("settles a held tool from actual geometry after cached header estimates change", async () => {
@@ -248,33 +255,30 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
     expect(result.current.scrollProps.followOutput(true)).toBe(false);
   });
 
-  test("recalculates the source tool offset after row measurement", async () => {
+  test("converges a mounted source tool on measured geometry as its row re-measures", async () => {
     const { result } = renderHook(() => useVirtuosoScrollState({ isActive: true }));
     const el = mountScroller(result);
     el.innerHTML =
       '<div data-chat-message-index="0"><div data-transcript-part-id="call52"></div></div>';
+    el.getBoundingClientRect = () => ({ top: 100 }) as DOMRect;
     const row = el.firstElementChild as HTMLElement;
     const tool = row.firstElementChild as HTMLElement;
-    row.getBoundingClientRect = () => ({ top: -500 }) as DOMRect;
-    let toolTop = 120;
-    tool.getBoundingClientRect = () => ({ top: toolTop }) as DOMRect;
+    // Once the first correction lands, content above the tool measures 100px
+    // taller (rows rendering in around it), before the operation converges.
+    const toolDocumentTop = () => (el.scrollTop >= 556 ? 776 : 676);
+    row.getBoundingClientRect = () => ({ top: 600 - el.scrollTop }) as DOMRect;
+    tool.getBoundingClientRect = () =>
+      ({ top: toolDocumentTop() - el.scrollTop, height: 40 }) as DOMRect;
     const handle = fakeHandle();
     result.current.virtuosoRef.current = handle as never;
     result.current.scrollToIndex(0, { partId: "call52", offset: 20 });
-    expect(handle.scrollToIndex).toHaveBeenLastCalledWith({
-      index: 0,
-      align: "start",
-      behavior: "auto",
-      offset: 600,
-    });
-    toolTop = 220;
+    // Mounted: no index navigation, only measured writes.
+    expect(handle.scrollToIndex).not.toHaveBeenCalled();
+    // The same bounded operation follows the re-measure to the held offset.
+    await waitFor(() => expect(el.scrollTop).toBe(656));
     await waitFor(() =>
-      expect(handle.scrollToIndex).toHaveBeenLastCalledWith({
-        index: 0,
-        align: "start",
-        behavior: "auto",
-        offset: 700,
-      }),
+      expect(result.current.getScrollDiagnostics().lastOutcome).toBe("converged"),
     );
+    expect(tool.getBoundingClientRect().top - el.getBoundingClientRect().top).toBe(20);
   });
 });

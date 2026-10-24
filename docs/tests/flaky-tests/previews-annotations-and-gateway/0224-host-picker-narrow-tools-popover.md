@@ -577,3 +577,14 @@ assertion, timeout or skip changed.
 - **Complete unchanged owner:** fresh credential-free Codex fixture `merge-gateway-cb5bcc4a`; `ORKESTRATOR_AGENT_TEST_PROFILE=merge-gateway-cb5bcc4a ORKESTRATOR_AGENT_TEST_RUN_ID=merge-gateway-cb5bcc4a mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` reported 13 passed, ten skipped and only the same failure (218.8 s logged). Both maintenance viewports, account recovery, local-environment smoke and persisted-diff cases passed.
 - **Evidence:** host temporary artifact `orkestrator-test-run.Xcu2PF/merge-gateway-owner.log.gz`; browser artifacts under `output/agent-testing/merge-gateway-cb5bcc4a/browser/`. The owner profile was stopped and reset with `dev:stop` and `dev:reset`.
 - **Assessment:** this known failure persists in the complete unchanged owner; it remains unresolved. No gateway implementation, assertion, timeout or skip changed.
+
+## Transcript scroll smoothness validation — 2026-10-24
+
+- `mise run test:agent:browser:isolated` (profile `qa-browser-ca22b087-f8c`,
+  removed afterwards): 28 passed, 53 skipped, 1 failed — this case, again a
+  `locator.click` timeout (15000 ms) in the narrow fullscreen-settings host
+  picker. Screenshot:
+  `output/agent-testing/qa-browser-ca22b087-f8c/browser/artifacts/browser-gateway-host-path--e1bef-fullscreen-settings-narrow-/test-failed-1.png`.
+- The change under validation does not touch settings, the gateway or the
+  host picker (web transcript scrolling, tool groups, Markdown streaming,
+  the Virtuoso patch). No assertion, timeout or skip changed.

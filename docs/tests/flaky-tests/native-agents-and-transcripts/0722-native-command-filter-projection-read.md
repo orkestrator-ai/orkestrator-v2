@@ -19,3 +19,13 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-native-command-owner -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit 0 in 5.2 s logged.
 - **Evidence:** `orkestrator-test-run.jFRynx/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate completion.
 - **Assessment:** confirmed recurrence of the existing extra projection read. No implementation, assertion, timeout or skip changed for this test.
+
+
+## Latest-main refresh of per-machine accounts — 2026-10-24
+
+- **Parents:** merge `e25b6123` and main `553da7f54`.
+- **Original command:** `mise run test:logged -- --name update-main-tests -- mise run test`; workspace/root/bridge/protocol reservations 4/1/2/1 alongside component/isolated-browser validation, with two web workers.
+- **Failure:** Native-command filtering again observed an extra projection read (1977.52 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name update-native-command-owner -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit 0 in 4.3 s logged.
+- **Evidence:** `orkestrator-test-run.fA9A1i/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate completion.
+- **Assessment:** confirmed recurrence of the existing intermittent failure. No implementation, assertion, timeout or skip changed.

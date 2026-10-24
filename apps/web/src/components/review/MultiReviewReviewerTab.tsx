@@ -1,4 +1,7 @@
-import { coalesceAdjacentToolMessages } from "@/lib/chat/native-message-adapters";
+import {
+  coalesceAdjacentToolMessages,
+  type CoalescedRowAliases,
+} from "@/lib/chat/native-message-adapters";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTranscriptPlace";
@@ -34,9 +37,9 @@ import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useElapsedTimer, useVirtuosoScrollState } from "@/hooks";
+import { useVirtuosoScrollState } from "@/hooks";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
-import { formatElapsed } from "@/lib/format-elapsed";
+import { LiveElapsed } from "@/components/chat/LiveElapsed";
 import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
@@ -320,11 +323,15 @@ export function prependReviewerHistoryPage(
   };
 }
 
-export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTranscript) {
+export function toMultiReviewReviewerMessages(
+  snapshot: MultiReviewReviewerTranscript,
+  aliases?: CoalescedRowAliases,
+) {
   return toMultiReviewSessionMessages(
     snapshot.messages,
     snapshot.agent,
     snapshot.startedAt ?? "1970-01-01T00:00:00.000Z",
+    aliases,
   );
 }
 
@@ -337,6 +344,7 @@ export function toMultiReviewSessionMessages(
   messages: unknown[],
   agent: MultiReviewReviewerTranscript["agent"],
   startedAt: string,
+  aliases?: CoalescedRowAliases,
 ) {
   const transcript = toPipelineTranscript(messages, agent, startedAt);
   // This backend-owned session has no interactive composer. Initial and schema-
@@ -344,6 +352,7 @@ export function toMultiReviewSessionMessages(
   // reviewer outputs/tool calls instead of rendering pages of prompt or schema.
   const output = coalesceAdjacentToolMessages(
     transcript.filter((message) => message.role !== "user"),
+    aliases,
   );
   // The workflow's validated report is authoritative. Schema-shaped text in
   // the provider transcript is progress data and must never be shown as raw
@@ -726,19 +735,26 @@ export function MultiReviewReviewerTab({
   }, [workflowRevision]);
   /* oxlint-enable react-hooks/exhaustive-deps */
 
+  // Records are parsed afresh on every read, so a coalesced run's surviving
+  // id (kept across a page merging into it) is remembered by member id here.
+  const [coalescedAliases] = useState<CoalescedRowAliases>(() => new Map());
   const messages = useMemo(() => {
     if (!snapshot) return [];
-    if (history.earlier.length === 0) return toMultiReviewReviewerMessages(snapshot);
+    if (history.earlier.length === 0)
+      return toMultiReviewReviewerMessages(snapshot, coalescedAliases);
     const tailIds = new Set(snapshot.messages.map(messageId).filter(Boolean));
     const earlier = history.earlier.filter((message) => {
       const id = messageId(message);
       return id === undefined || !tailIds.has(id);
     });
-    return toMultiReviewReviewerMessages({
-      ...snapshot,
-      messages: [...earlier, ...snapshot.messages],
-    });
-  }, [history.earlier, snapshot]);
+    return toMultiReviewReviewerMessages(
+      {
+        ...snapshot,
+        messages: [...earlier, ...snapshot.messages],
+      },
+      coalescedAliases,
+    );
+  }, [coalescedAliases, history.earlier, snapshot]);
 
   /*
    * The reviewer session's own key owns what it publishes; a restart rotates
@@ -774,23 +790,20 @@ export function MultiReviewReviewerTab({
     isActive,
     persistKey: scrollKey,
     environmentId: data.environmentId,
-    stickToBottomOnActivation: true,
+    // A reviewer transcript is read, not watched: returning keeps a detached
+    // reader's place and catches a follower up.
+    activation: "respect-intent",
   });
 
   // Hold the reader on the message they were reading when a page lands above
   // it; the list otherwise keeps its offset and the new rows push it away.
-  useRestoreHeldPlace(heldPlace, displayedMessages, scrollToIndex);
+  useRestoreHeldPlace(heldPlace, displayedMessages, scrollToIndex, loadingEarlier);
 
   const running = snapshot?.status === "running";
   const stalled = Boolean(snapshot?.stalledSince && running);
   const turnStartedAtMs = snapshot?.startedAt ? Date.parse(snapshot.startedAt) : Number.NaN;
-  // Hidden tabs stay mounted. Tick only while visible so a stale running
-  // snapshot cannot keep the virtualized transcript rerendering every second.
-  const { elapsedSeconds } = useElapsedTimer(
-    running && isActive,
-    data.reviewerId,
-    Number.isFinite(turnStartedAtMs) ? turnStartedAtMs : undefined,
-  );
+  // The clock ticks in its own small component, and only while visible: a
+  // stale running snapshot cannot keep the transcript re-rendering.
   // A refused action stays visible until the user acts again, so an ordinary
   // transcript failure must not displace it. A gone workflow or reviewer is the
   // exception: it makes the action failure moot and is terminal for this view,
@@ -833,11 +846,9 @@ export function MultiReviewReviewerTab({
           ) : (
             <AgentThinkingIndicator agentName={label} />
           )}
-          {elapsedSeconds !== null && elapsedSeconds > 0 && (
-            <span className="text-xs text-muted-foreground/50">
-              {formatElapsed(elapsedSeconds)}
-            </span>
-          )}
+          {Number.isFinite(turnStartedAtMs) ? (
+            <LiveElapsed startedAt={turnStartedAtMs} running={running && isActive} />
+          ) : null}
         </div>
       </div>
     </div>
@@ -882,7 +893,10 @@ export function MultiReviewReviewerTab({
             variant="outline"
             disabled={loadingEarlier}
             onClick={(event) => {
-              heldPlace.hold(event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"));
+              heldPlace.hold(
+                event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"),
+                scrollProps.controller,
+              );
               void loadEarlier();
             }}
           >

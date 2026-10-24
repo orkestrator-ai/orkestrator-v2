@@ -133,6 +133,10 @@ import {
   retainSupportedAttachments,
 } from "@/lib/chat/workspace-attachments";
 import { createSessionKey } from "@/lib/utils";
+import {
+  conversationScrollTargetKey,
+  useConversationScrollTargetStore,
+} from "@/stores/conversationScrollTargetStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import {
@@ -179,7 +183,6 @@ import { useConversationScrollTarget } from "./useConversationScrollTarget";
 import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { nativeMessageHasPlanTool } from "@/lib/plan-tool";
-import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import {
   findLatestBackendTurnElapsedSeconds,
   findLatestBackendUserTurnStartedAt,
@@ -605,14 +608,21 @@ export function SharedNativeAgentController({
     tabId === "startup-agent" &&
     (environment?.pendingAgentLaunch === true || environment?.startupAgentSession !== undefined);
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
+  // An "open full conversation" request parked for this tab outranks the
+  // activation policy, whichever effect happens to run first.
+  const explicitScrollTargetPending = useConversationScrollTargetStore((state) =>
+    state.targets.has(conversationScrollTargetKey(data.environmentId, tabId)),
+  );
   const { isAtBottom, scrollToBottom, scrollToIndex, virtuosoRef, scrollProps } =
     useVirtuosoScrollState({
-      // Every activation re-locks to the end, but a pane the mobile switcher
-      // hid is still laid out where the user left it.
+      // A pane the mobile switcher hid is still laid out where the user left it.
       isActive: isActive || hiddenByLayout,
       persistKey: sessionKey,
       environmentId: data.environmentId,
-      stickToBottomOnActivation: true,
+      // Returning respects intent: a follower catches up to the latest
+      // message, a reader who scrolled away comes back to their place.
+      activation: "respect-intent",
+      explicitTargetPending: explicitScrollTargetPending,
     });
 
   /*
@@ -896,7 +906,7 @@ export function SharedNativeAgentController({
   });
   // Load earlier messages keeps the reader on the row they were reading.
   const loadEarlierPlace = useHeldTranscriptPlace();
-  useRestoreHeldPlace(loadEarlierPlace, messages, scrollToIndex);
+  useRestoreHeldPlace(loadEarlierPlace, messages, scrollToIndex, loadingEarlier);
   const latestAssistantMessage = [...normalizedMessages]
     .reverse()
     .find((message) => message.role === "assistant");
@@ -1174,12 +1184,10 @@ export function SharedNativeAgentController({
           ) ?? null),
     [isTurnActive, normalizedMessages],
   );
-  const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
-    isTurnActive,
-    projection?.sessionId,
-    turnStartedAt,
-    completedElapsedSeconds,
-  );
+  // The running clock ticks inside the footer (`elapsedStartedAt`): holding
+  // the tick here would re-render this whole tab every second of a turn.
+  const elapsedStartedAt = isTurnActive ? turnStartedAt : undefined;
+  const finalElapsedSeconds = isTurnActive ? null : (completedElapsedSeconds ?? null);
   const canQueue = isRunning && (projection?.capabilities.queue ?? adapter.capabilities.queue);
   // Older mocked/legacy hook surfaces have no domain availability field; a
   // complete projection remains authoritative on that compatibility path.
@@ -2850,7 +2858,8 @@ export function SharedNativeAgentController({
       respondToAsyncQuestion={platform === "codex" ? respondToAsyncQuestion : undefined}
       isLoading={isTurnActive}
       statusLabel={phaseStatusLabel}
-      elapsedSeconds={elapsedSeconds}
+      elapsedSeconds={null}
+      elapsedStartedAt={elapsedStartedAt}
       finalElapsedSeconds={finalElapsedSeconds}
       centerCompose={composerCentered}
       emptyStateMessage={`Ask ${label} to work on this repository.`}
@@ -2878,6 +2887,7 @@ export function SharedNativeAgentController({
                 onClick={(event) => {
                   loadEarlierPlace.hold(
                     event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"),
+                    scrollProps.controller,
                   );
                   setLoadingEarlier(true);
                   void loadEarlierMessages()

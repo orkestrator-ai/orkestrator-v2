@@ -1630,7 +1630,14 @@ function VirtuosoFollowFixture() {
         <output data-testid="virtuoso-follow-decision">{lastFollowDecision}</output>
       </div>
       <Virtuoso
-        {...scrollProps}
+        // Only Virtuoso's own props; following may run only while allowed
+        // (literal false otherwise), as the shared transcript list wires it.
+        followOutput={scrollProps.followEnabled ? scrollProps.followOutput : false}
+        atBottomStateChange={scrollProps.atBottomStateChange}
+        atBottomThreshold={scrollProps.atBottomThreshold}
+        totalListHeightChanged={scrollProps.totalListHeightChanged}
+        restoreStateFrom={scrollProps.restoreStateFrom}
+        scrollerRef={scrollProps.scrollerRef}
         ref={virtuosoRef}
         data={messages}
         fixedItemHeight={40}

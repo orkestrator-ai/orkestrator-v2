@@ -312,6 +312,7 @@ export const NativeMessage = memo(function NativeMessage({
                             showTextCopy: false,
                             containerId,
                             toolIdsWithFirstClassImages,
+                            identityScope: stableAgentExpansionScope,
                           })}
 
                           {!hasTextParts && message.content && (
@@ -356,14 +357,17 @@ function renderMessageParts(
     showTextCopy?: boolean;
     containerId?: string;
     toolIdsWithFirstClassImages?: ReadonlySet<string>;
+    /** The transcript scope source identities are unique within. */
+    identityScope?: string;
   } = {},
 ) {
   const promptPresentationPartIndex = message.promptPresentation
     ? message.parts.findIndex((part) => part.type === "text")
     : -1;
+  const identities = partIdentities(message, options.identityScope);
   const renderPart = (part: NativeMessagePart, index: number) => (
     <MessagePart
-      key={`${message.id}-part-${index}-${part.type}`}
+      key={identities[index]!.key}
       part={part}
       showTextCopy={options.showTextCopy ?? true}
       truncateUserPrompt={message.role === "user"}
@@ -377,7 +381,7 @@ function renderMessageParts(
         part.type === "tool-invocation" &&
         Boolean(part.toolUseId && options.toolIdsWithFirstClassImages?.has(part.toolUseId))
       }
-      partKey={`${message.id}-part-${index}`}
+      partKey={identities[index]!.partKey}
     />
   );
 
@@ -412,6 +416,44 @@ function renderMessageParts(
   }
 
   return renderedParts;
+}
+
+/**
+ * A part's identity within its conversation: its source occurrence (source
+ * message plus the provider's part or call id) when it has one. Never a
+ * content hash — a streaming token must not change it — and never its
+ * position, which history paging and coalescing shift.
+ */
+export function sourcePartIdentity(part: NativeMessagePart): string | undefined {
+  const id =
+    part.type === "tool-invocation" ? (part.toolUseId ?? part.sourcePartId) : part.sourcePartId;
+  if (!id) return undefined;
+  return part.sourceMessageId ? `${part.sourceMessageId}:${id}` : id;
+}
+
+/**
+ * React keys and `partKey`s for a message's parts. A part with a source
+ * identity keeps both across appends, merges into a coalesced row and renames
+ * of that row; a legacy part without one falls back to its position. Two
+ * parts claiming one identity (a provider reusing an id) are told apart by
+ * position rather than colliding.
+ */
+function partIdentities(
+  message: NativeMessageType,
+  scope: string | undefined,
+): Array<{ key: string; partKey: string }> {
+  const used = new Set<string>();
+  return message.parts.map((part, index) => {
+    const identity = sourcePartIdentity(part);
+    let key = identity ? `src:${identity}` : `${message.id}-part-${index}-${part.type}`;
+    if (used.has(key)) key = `${key}#${index}`;
+    used.add(key);
+    const partKey =
+      identity && !key.includes("#")
+        ? `src:${JSON.stringify([scope ?? message.id, identity])}`
+        : `${message.id}-part-${index}`;
+    return { key, partKey };
+  });
 }
 
 function firstClassImageToolUseIds(parts: readonly NativeMessagePart[]): ReadonlySet<string> {

@@ -31,6 +31,7 @@ function harness(options: {
   useHostClaudeCredentials?: false;
   leaseHeld?: boolean;
   failRefresh?: boolean;
+  localBridges?: boolean;
   timers?: import("./container-claude-login-keeper.js").ClaudeLoginKeeperOptions["timers"];
 }) {
   let now = NOW;
@@ -56,15 +57,18 @@ function harness(options: {
       loadAgentAccounts: async () => ({ accounts: [], active: {} }),
     },
   } as unknown as CommandContext;
+  const read = async () => {
+    reads.push(now);
+    const text = options.credentials[Math.min(credentialIndex, options.credentials.length - 1)];
+    credentialIndex++;
+    return text;
+  };
   const keeper = new ContainerClaudeLoginKeeper(context, {
     now: () => now,
     timers: options.timers,
-    readCredentials: async () => {
-      reads.push(now);
-      const text = options.credentials[Math.min(credentialIndex, options.credentials.length - 1)];
-      credentialIndex++;
-      return text;
-    },
+    readCredentials: read,
+    readLocalCredentials: read,
+    hasLocalTokenBridges: () => options.localBridges === true,
     syncContainer: async (containerId) => {
       synced.push(containerId);
     },
@@ -99,6 +103,19 @@ describe("ContainerClaudeLoginKeeper", () => {
     expect(await run.keeper.tick()).toBe(CLAUDE_LOGIN_KEEPER_INTERVAL_MS);
     expect(run.synced).toEqual(["container-a", "container-b"]);
     expect(run.refreshed).toEqual([]);
+  });
+
+  test("renews the login for local coordinator bridges, even with the container opt-out", async () => {
+    const run = harness({
+      environments: [environment("a")],
+      credentials: [login(NOW + 60_000), login(NOW + 8 * 60 * 60_000)],
+      useHostClaudeCredentials: false,
+      localBridges: true,
+    });
+    await run.keeper.tick();
+    expect(run.refreshed).toEqual(["default"]);
+    // The opt-out still keeps the login out of containers.
+    expect(run.synced).toEqual([]);
   });
 
   test("does nothing without a running container, with the opt-out or without the writer lease", async () => {

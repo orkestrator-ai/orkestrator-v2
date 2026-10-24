@@ -112,6 +112,30 @@ function installMachinesFixture() {
             return { revision: 1, displayName: "Studio", colorToken: "violet", updatedAt: "t" };
           case "get_host_maintenance":
             return snapshot("2.26.0", "2.26.0");
+          case "list_machine_agent_accounts":
+            return {
+              machines: [
+                {
+                  nodeId: "bk_self",
+                  name: "Studio",
+                  colorToken: "violet",
+                  self: true,
+                  state: "ok",
+                  snapshot: {
+                    accounts: ["claude", "codex"].map((platform) => ({
+                      id: "default",
+                      platform,
+                      label: "Host login",
+                      isDefault: true,
+                      isActive: true,
+                      signedIn: true,
+                      identity: {},
+                    })),
+                    active: { claude: "default", codex: "default" },
+                  },
+                },
+              ],
+            };
           case "invoke_on_node":
             return { outcome: "ok", result: routed(String(args?.command)) };
           case "add_node":

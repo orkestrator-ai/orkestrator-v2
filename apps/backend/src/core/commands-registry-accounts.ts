@@ -23,6 +23,8 @@ import {
   startAgentAccountLogin,
   submitAgentAccountLoginCode,
 } from "./agent-accounts.js";
+import { listMachineAgentAccounts } from "./agent-accounts-machines.js";
+import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { openCodeProviderLogin, openCodeProviderLoginProgress } from "./opencode-provider-login.js";
 
 function asAccountPlatform(value: unknown): AgentAccountPlatform {
@@ -45,6 +47,18 @@ export function registerAgentAccountCommands(
   register("list_agent_accounts", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
     return listAgentAccounts(context);
+  });
+  register("list_machine_agent_accounts", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    return listMachineAgentAccounts(context);
+  });
+  register("get_native_agent_session_account", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "agent"], "arguments");
+    return readSessionAgentAccount(
+      context,
+      asNonBlankString(args.environmentId, "environmentId"),
+      asNonBlankString(args.agent, "agent"),
+    );
   });
   register("set_active_agent_account", async (args, context) => {
     assertOnlyKeys(args, ["platform", "accountId"], "arguments");

@@ -189,36 +189,18 @@ import {
 const DELETION_DRAIN_GRACE_SECONDS = 5;
 
 /**
- * A private Claude configuration directory holding only the credential.
+ * A coordinator's private Claude configuration directory, empty of anything
+ * the user authored.
  *
- * Mirrors `prepareCoordinatorCodexHome`. Claude's own config directory holds
- * `settings.json` (which can declare hooks), `plugins/` and MCP server
- * definitions; copying any of them would let a user's own configuration run
- * code inside a session whose whole purpose is not to change the checkout.
+ * Claude's own config directory holds `settings.json` (which can declare
+ * hooks), `plugins/` and MCP server definitions; copying any of them would let
+ * a user's own configuration run code inside a session whose whole purpose is
+ * not to change the checkout. No login is copied either: the active account's
+ * access token is handed over instead (`applyCoordinatorClaudeAccount`).
  */
-export async function prepareCoordinatorClaudeHome(
-  destination: string,
-  source = process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(homedir(), ".claude"),
-): Promise<void> {
+export async function prepareCoordinatorClaudeHome(destination: string): Promise<void> {
   await mkdir(destination, { recursive: true, mode: 0o700 });
   await chmod(destination, 0o700);
-  for (const filename of [".credentials.json", "credentials.json"]) {
-    const sourceFile = path.join(source, filename);
-    const sourceStat = await lstat(sourceFile).catch(() => null);
-    if (!sourceStat) continue;
-    if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
-      throw new Error("Claude credential file must be a regular file, not a symbolic link");
-    }
-    const destinationFile = path.join(destination, filename);
-    const temporary = `${destinationFile}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-    try {
-      await copyFile(sourceFile, temporary);
-      await chmod(temporary, 0o600);
-      await rename(temporary, destinationFile);
-    } finally {
-      await rm(temporary, { force: true }).catch(() => undefined);
-    }
-  }
 }
 
 export async function prepareCoordinatorCodexHome(

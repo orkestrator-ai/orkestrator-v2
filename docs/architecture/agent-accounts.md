@@ -3,7 +3,10 @@
 Status: Living — `apps/backend/src/core/agent-accounts*.ts`,
 `apps/backend/src/core/agent-account-bridge-state.ts`,
 `packages/protocol/src/agent-accounts.ts`,
-`apps/web/src/components/settings/AgentAccountsSection.tsx`;
+`apps/web/src/components/settings/AgentAccountsSection.tsx`,
+`apps/web/src/components/settings/account-machine.tsx`,
+`apps/web/src/components/settings/machines/MachineAgentAccountsSection.tsx`,
+`apps/web/src/components/layout/AgentInfoAccountSection.tsx`;
 `apps/backend/src/core/opencode-provider-login.ts`,
 `packages/protocol/src/opencode-provider-auth.ts`,
 `apps/web/src/components/settings/OpenCodeProvidersSection.tsx`.
@@ -15,8 +18,10 @@ and no tab, environment or settings tier records an account. Accounts never
 run side by side in one platform, so bridge keys, tab records and the agent
 settings tiers are unchanged by accounts.
 
-Outstanding work and known gaps are in
-[0003-agent-accounts-and-sign-in.md](../todo/agent-engines/0003-agent-accounts-and-sign-in.md).
+Every machine (node) keeps its own accounts and its own active account per
+platform; see [Machines](#machines). Outstanding work and known gaps are in
+[0003-agent-accounts-and-sign-in.md](../todo/agent-engines/0003-agent-accounts-and-sign-in.md)
+and [0722-per-machine-agent-accounts.md](../todo/agent-engines/0722-per-machine-agent-accounts.md).
 
 ## Account directories
 
@@ -112,6 +117,13 @@ for that directory. The backend never sees the token, and CLI output is
 bounded and never logged. A login is given 16 minutes; Codex's device code
 lasts 15.
 
+When the CLI exits unsuccessfully, the failure names the CLI's own reason
+(`loginFailureMessage`): the last output line that reads as a failure, with
+any line holding a URL or a device code skipped and anything token-shaped cut
+out. It goes only to the client that asked, in `AgentAccountLoginProgress.error`,
+and adds what to do for a locked macOS keychain or a code from another
+attempt. Without a recognisable line it stays `exit code <n>`.
+
 A login that resolves to an identity already listed, including the host
 login, is refused and its directory removed. So is any failed or cancelled
 add.
@@ -192,7 +204,10 @@ the tab without a send.
   answers a turn with `error: "authentication_failed"`. `accountInfo()`
   reports a signed-out directory as `tokenSource: "none"` with
   `apiProvider: "firstParty"`, and it cannot see an expired token, so an
-  expired login stays a turn error with the transcript card.
+  expired login stays a turn error with the transcript card. After such a
+  turn, an auth read that still finds a credential reports `expired` instead
+  of `signed-in` until a model answers again (`claude-sign-in.ts`). That
+  never locks the composer.
 - Grok's ACP `authenticate` does not fail without a login: it waits on an
   interactive sign-in. The bridge refuses before asking, and a session created
   without a login is deferred (no agent, empty `acpSessionId`) until the first
@@ -362,12 +377,25 @@ out of containers, whichever account it belongs to.
 
 ## Coordinator conversations
 
-`applyCoordinatorClaudeAccount` seeds a coordinator's private Claude directory
-from the active account's directory instead of the host's, after removing any
-login an earlier launch copied. A Claude login kept only in the macOS Keychain
-cannot be copied, because the entry is named after its directory. The
-account's current access token is passed as `CLAUDE_CODE_OAUTH_TOKEN` instead,
-never the refresh token, which would rotate away from the account's own login.
+A coordinator's private Claude directory (`prepareCoordinatorClaudeHome`)
+never holds a login. `applyCoordinatorClaudeAccount` removes any login an
+earlier build copied in, and on macOS removes once per process any Keychain
+entry Claude saved under that directory. It then reads the active account's
+login (Keychain first, then file; for the host login exactly as Claude does)
+and passes only the access token, as `CLAUDE_CODE_OAUTH_TOKEN`. A refresh token
+is never handed over: a copy rotates away from the account's own login, and on
+macOS `~/.claude/.credentials.json` is often stale beside the Keychain login,
+so a copy of it fails with "OAuth session expired and could not be refreshed".
+
+A login whose access token has lapsed is refreshed first, through the
+keeper's `refreshLocalLoginIfDue` (the same `claude -p` refresh containers
+use). While any coordinator runs on a handed-over token or waits for one,
+`ContainerClaudeLoginKeeper` keeps the active login refreshed even with no
+container running and with the container opt-out on.
+
+The Codex coordinator still copies the account's `auth.json`, refresh token
+included; see
+[0722-per-machine-agent-accounts.md](../todo/agent-engines/0722-per-machine-agent-accounts.md).
 
 That token cannot be renewed, so its expiry is recorded
 (`localAgentAccountTokenExpiry`). Within five minutes of expiry an idle
@@ -381,6 +409,37 @@ answers "Not logged in". It is recorded in `loginlessLocalBridges`, and every
 later use checks the account again, so an idle bridge is replaced as soon as a
 token exists. This covers sign-ins Orkestrator is never told about, such as
 `claude auth login` in a terminal.
+
+## Machines
+
+Every machine (node) has its own registry, host logins, account directories
+and active account per platform. Nothing moves a credential between machines
+(see [command-nodes.md](command-nodes.md#settings)); each machine signs in for
+itself. Where each surface acts:
+
+- **A leaf's workspace** talks to the leaf, so the transcript sign-in card,
+  in-tab sign-in and the agent information panel act on the machine the
+  session runs on. With more than one machine, the card and panel name it.
+- **Settings** belongs to the command node. Each sign-in section (Claude and
+  Codex accounts, OpenCode providers, Cursor sign-in, GitHub CLI) sits under a
+  "Sign-ins on" machine picker (`AccountMachineScope`). It defaults to the
+  machine on screen; closing Settings forgets a choice. Another machine is
+  asked through the command node (`portalStore.invokeOnNode`, so an
+  ambiguous write reports an unknown outcome rather than retrying); the
+  command node itself through the window's own transport. A sign-in runs on
+  the chosen machine, and its link opens in this client's browser.
+- **Settings → Machines → Agent accounts** shows every machine against Claude
+  and Codex, with each machine's active account and a switch
+  (`list_machine_agent_accounts`). The command node asks each enabled machine
+  for `list_agent_accounts` in parallel, eight seconds each; one that cannot
+  answer shows as not connected. A node in leaf mode lists only itself. Each
+  machine's own settings dialog shows its row.
+- **The agent information panel** shows which account the session's bridge
+  runs on (`get_native_agent_session_account`): a local or coordinator bridge
+  from `localAgentAccountIds`, a container from its account marker, and a
+  bridge that is not running from the active account. It names a pending move
+  to a newly active account, switches the machine's active account, and for
+  Claude signs the active account in again.
 
 ## Terminal tabs
 

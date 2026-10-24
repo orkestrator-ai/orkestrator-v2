@@ -6,6 +6,7 @@ import {
   submitOpenCodeProviderLoginCode,
 } from "@/lib/backend";
 import type { OpenCodeProviderLoginProgress } from "@orkestrator/protocol/opencode-provider-auth";
+import { useAccountMachine } from "@/components/settings/account-machine";
 
 const POLL_INTERVAL_MS = 1_500;
 const IDLE: OpenCodeProviderLoginProgress = { state: "idle" };
@@ -24,6 +25,8 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
   const epoch = useRef(0);
   const onSucceededRef = useRef(onSucceeded);
   const pending = observed.state === "pending";
+  // Settings may be pointed at another machine; a tab never is.
+  const { machine } = useAccountMachine();
 
   useEffect(() => {
     onSucceededRef.current = onSucceeded;
@@ -59,7 +62,7 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
 
   useEffect(() => {
     const version = ++epoch.current;
-    void getOpenCodeProviderLogin()
+    void getOpenCodeProviderLogin(machine)
       .then((existing) => {
         if (epoch.current === version && existing.state === "pending") adopt(existing);
       })
@@ -67,7 +70,7 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
     return () => {
       epoch.current += 1;
     };
-  }, [adopt]);
+  }, [adopt, machine]);
 
   useEffect(() => {
     if (!pending && providerId) return;
@@ -76,7 +79,7 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
     const poll = async () => {
       const version = epoch.current;
       try {
-        const next = await getOpenCodeProviderLogin();
+        const next = await getOpenCodeProviderLogin(machine);
         if (active && epoch.current === version) adopt(next);
       } catch {
         /* Retry transient read failures while observing backend state. */
@@ -88,7 +91,7 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
       active = false;
       clearTimeout(timer);
     };
-  }, [pending, providerId, adopt]);
+  }, [pending, providerId, adopt, machine]);
 
   const start = useCallback(
     async (input: { providerLabel?: string; method: number; inputs?: Record<string, string> }) => {
@@ -97,7 +100,7 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
       setError(null);
       setStarting(true);
       try {
-        const next = await startOpenCodeProviderLogin({ providerId, ...input });
+        const next = await startOpenCodeProviderLogin({ providerId, ...input }, machine);
         if (epoch.current === version) adopt(next);
       } catch (cause) {
         if (epoch.current === version) setError(messageOf(cause));
@@ -105,7 +108,7 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
         if (epoch.current === version) setStarting(false);
       }
     },
-    [adopt, providerId, starting],
+    [adopt, providerId, starting, machine],
   );
 
   const cancel = useCallback(async () => {
@@ -114,20 +117,20 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
     const version = ++epoch.current;
     setError(null);
     try {
-      const next = await cancelOpenCodeProviderLogin(operationId);
+      const next = await cancelOpenCodeProviderLogin(operationId, machine);
       if (epoch.current === version) adopt(next);
     } catch (cause) {
       if (epoch.current === version) setError(messageOf(cause));
     }
-  }, [adopt]);
+  }, [adopt, machine]);
 
   const submitCode = useCallback(
     async (code: string) => {
       const version = ++epoch.current;
-      const next = await submitOpenCodeProviderLoginCode(code);
+      const next = await submitOpenCodeProviderLoginCode(code, machine);
       if (epoch.current === version) adopt(next);
     },
-    [adopt],
+    [adopt, machine],
   );
 
   const matches = !providerId || observed.providerId === providerId;

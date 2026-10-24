@@ -30,6 +30,7 @@ describe("Coordinator Codex server", () => {
   let cleanupContext: CommandContext | null = null;
   let cleanupRuntimeId: string | null = null;
   let cleanupKind: "codex" | "claude" | "cursor" = "codex";
+  let restoreHostCredentialRead: (() => void) | undefined;
 
   beforeEach(async () => {
     commandTesting.resetLocalServerLifecycle();
@@ -91,6 +92,8 @@ describe("Coordinator Codex server", () => {
       );
     }
     commandTesting.resetLocalServerLifecycle();
+    restoreHostCredentialRead?.();
+    restoreHostCredentialRead = undefined;
     staleLoginLocalBridges.clear();
     localAgentAccountIds.clear();
     localAgentAccountTokenExpiry.clear();
@@ -190,9 +193,9 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         conversation.id,
         "claude-home",
       );
-      expect(await fs.readFile(path.join(coordinatorHome, ".credentials.json"), "utf8")).toContain(
-        "new-login",
-      );
+      // The login is handed over as an access token; no credential file is copied in.
+      await expect(fs.access(path.join(coordinatorHome, ".credentials.json"))).rejects.toThrow();
+      expect(localAgentAccountTokenExpiry.get(key)).toBeGreaterThan(Date.now());
       await stopLocalServerUnlocked(runtimeId, context, "claude");
       expect(commandTesting.getLocalServerProcess(key)).toBeUndefined();
       expect(loginlessLocalBridges.has(key)).toBe(false);
@@ -214,7 +217,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       await fs.mkdir(bridge, { recursive: true });
       await fs.writeFile(
         path.join(bridge, "index.js"),
-        `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP }));
+        `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP, oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -263,6 +266,14 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       cleanupRuntimeId = runtimeId;
       cleanupKind = "claude";
 
+      // Keep host credential discovery on the fixture, away from the real Keychain.
+      const hostCredentialRead = spyOn(
+        commandFiles,
+        "readRuntimeHostClaudeCredentials",
+      ).mockImplementation(() =>
+        fs.readFile(path.join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), "utf8"),
+      );
+      restoreHostCredentialRead = () => hostCredentialRead.mockRestore();
       const started = await startLocalServerUnlocked(runtimeId, context, "claude");
       expect(started).toMatchObject({ wasRunning: false, port: expect.any(Number) });
 
@@ -274,9 +285,8 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         conversation.id,
         "claude-home",
       );
-      expect(await fs.readFile(path.join(isolatedHome, ".credentials.json"), "utf8")).toContain(
-        "login",
-      );
+      // Only the access token reaches the coordinator; no credential file is copied in.
+      await expect(fs.access(path.join(isolatedHome, ".credentials.json"))).rejects.toThrow();
       // `settings.json` can declare hooks and `plugins/` is arbitrary code. Both
       // would run inside a session pointed at the user's real checkout.
       await expect(fs.access(path.join(isolatedHome, "settings.json"))).rejects.toThrow();
@@ -293,6 +303,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         ),
         mcpUrl: "http://127.0.0.1:1234/mcp",
         mcpToken: "scoped-token",
+        oauthToken: "login",
         // The research setting is process authority too; absent in the
         // stored config means the default: search plus Context7.
         research: researchMode ?? "search-and-mcp",

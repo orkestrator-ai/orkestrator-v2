@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   MultiReviewPhase,
   MultiReviewReviewerTranscript,
@@ -360,6 +360,7 @@ const TRANSCRIPT_LINES: Array<[string, Record<string, string>] | string> = [
 async function fixtureTranscript(
   workflowId: string,
   reviewerId: string,
+  messageCount = 40,
 ): Promise<MultiReviewReviewerTranscript> {
   const createdAt = new Date().toISOString();
   const longTranscript = new URLSearchParams(window.location.search).has("longTranscript");
@@ -371,9 +372,9 @@ async function fixtureTranscript(
     model: "gpt-6.1-sol",
     status: longTranscript ? "completed" : "running",
     transcript: "snapshot",
-    sourceToken: "fixture",
+    sourceToken: `fixture-${messageCount}`,
     messages: longTranscript
-      ? Array.from({ length: 40 }, (_, index) => ({
+      ? Array.from({ length: messageCount }, (_, index) => ({
           id: `long-line-${index}`,
           role: "assistant",
           content: `Transcript entry ${index + 1}. ${"Checked the review implementation and recorded the validation result. ".repeat(8)}`,
@@ -466,6 +467,13 @@ export function MultiReviewFlowFixture() {
   });
   const [isActive, setIsActive] = useState(true);
   const paneControls = params.has("paneControls");
+  const transcriptControls = params.has("transcriptControls");
+  const transcriptEntries = useRef(transcriptControls ? 32 : 40);
+  const loadReviewerTranscript = useCallback(
+    (workflowId: string, reviewerId: string) =>
+      fixtureTranscript(workflowId, reviewerId, transcriptEntries.current),
+    [],
+  );
 
   useEffect(() => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
@@ -474,6 +482,20 @@ export function MultiReviewFlowFixture() {
 
   return (
     <main className="flex h-screen flex-col bg-background text-foreground">
+      {transcriptControls && (
+        <button
+          onClick={() => {
+            transcriptEntries.current += 1;
+            const current = useMultiReviewStore.getState().workflows.get(workflow.id)!;
+            useMultiReviewStore.getState().replaceWorkflow({
+              ...current,
+              backendRevision: (current.backendRevision ?? 0) + 1,
+            });
+          }}
+        >
+          Append transcript entry
+        </button>
+      )}
       {paneControls && (
         <div>
           <button onClick={() => setIsActive(!isActive)}>
@@ -487,7 +509,7 @@ export function MultiReviewFlowFixture() {
           data={{ environmentId: workflow.environmentId, workflowId: workflow.id, isLocal: true }}
           isActive={isActive}
           hydrateWorkflow={async () => workflow}
-          loadReviewerTranscript={fixtureTranscript}
+          loadReviewerTranscript={loadReviewerTranscript}
           loadStepTranscript={fixtureStepTranscript}
         />
       </div>

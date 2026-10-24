@@ -699,7 +699,9 @@ describe("flow graph nodes", () => {
       </TerminalProvider>,
     );
 
-    const tabs = () => screen.getAllByRole("tab");
+    // The pipeline's nodes, not the inspector's own Transcript/Report tabs.
+    const tabs = () =>
+      within(screen.getByRole("tablist", { name: "Multi Review pipeline" })).getAllByRole("tab");
     // One tab stop: the selected node.
     expect(tabs().map((node) => node.tabIndex)).toEqual([0, -1, -1, -1, -1, -1]);
     const packageNode = tabs()[0]!;

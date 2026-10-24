@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
+import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   AgentAccountsSnapshot,
@@ -81,6 +82,33 @@ afterEach(() => {
 });
 
 describe("AgentInfoAccountSection", () => {
+  for (const platform of ["claude", "codex"] as const) {
+    test(`a single signed-out ${platform} account recovers through Settings`, async () => {
+      const signedOut = account({ platform, signedIn: false, identity: {} });
+      snapshot = { ...snapshot, accounts: [signedOut] };
+      session = { platform, source: "account", account: signedOut, running: false };
+      const openSettings = mock(() => undefined);
+      const unsubscribe = onGlobalSettingsRequest(openSettings);
+      try {
+        await act(async () => {
+          render(<AgentInfoAccountSection environmentId="env-1" provider={platform} />);
+        });
+        const addAccount = await screen.findByRole("button", { name: "Add an account" });
+        expect(screen.queryByText("Reading account…") === null).toBe(true);
+        expect(screen.queryByRole("combobox") === null).toBe(true);
+        expect(screen.queryByText("Host login") === null).toBe(true);
+        expect(screen.queryByRole("button", { name: "Manage accounts" }) === null).toBe(true);
+        expect(screen.queryByRole("button", { name: /sign in/i }) === null).toBe(true);
+
+        fireEvent.click(addAccount);
+        expect(openSettings).toHaveBeenCalledTimes(1);
+        expect(openSettings).toHaveBeenCalledWith(platform);
+      } finally {
+        unsubscribe();
+      }
+    });
+  }
+
   test("shows nothing for a platform without accounts", async () => {
     await act(async () => {
       render(<AgentInfoAccountSection environmentId="env-1" provider="pi" />);

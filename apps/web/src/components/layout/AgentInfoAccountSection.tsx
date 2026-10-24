@@ -1,5 +1,5 @@
 /**
- * Which account this session's agent runs on, and a switch to another.
+ * Account source messages, pending moves, machine-wide switching, and Settings access.
  *
  * Accounts belong to the machine the session runs on, and this view's
  * transport already reaches it (a leaf's workspace talks to the leaf), so

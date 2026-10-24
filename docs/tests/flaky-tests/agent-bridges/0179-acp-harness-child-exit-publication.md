@@ -20,3 +20,18 @@ machine environments ran suites concurrently. The owning file passed alone with
 `/tmp/orkestrator-test-run.J2NQoU/bridges.log.gz`.
 
 - **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3, `mise run test` via `test:logged`): failed in the bridges group; `bun test --cwd bridges/acp-bridge ./src/acp-test-harness.test.ts --parallel=1` then passed.
+
+## Account-panel review recurrence on 2026-10-24
+
+- **Original command:** `mise run test:logged -- --name account-review-suite -- mise run test`.
+- **Worker configuration:** workspace four slots, root one slot, bridges two slots
+  (one isolated worker per bridge package), protocol one slot.
+- **Failure:** the same test expected `live.exitCode` to be 0 but received null
+  at line 56 (13.40 ms). ACP reported 668 passed, 3 skipped, and 1 failed;
+  the bridges group finished in 85.4 seconds.
+- **Isolated rerun:** `mise run test:logged -- --name acp-harness-rerun -- bun test --cwd bridges/acp-bridge ./src/acp-test-harness.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed unchanged (one test, under 0.1 seconds).
+- **Evidence:** `orkestrator-test-run.3LkBxP/bridges.log.gz`.
+- **Scope:** this change updates account-panel documentation, comments, and
+  renderer tests; it does not change the ACP harness. The existing exit-code
+  publication race hypothesis remains unconfirmed.

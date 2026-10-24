@@ -573,12 +573,15 @@ itself. Where each surface acts:
     most recently active one. A container's terminal would sign the container
     in, so only local environments qualify. The window then shows that
     environment.
-- **The agent information panel** shows which account the session's bridge
-  runs on (`get_native_agent_session_account`): a local or coordinator bridge
-  from `LocalServerRuntime.launchedAccountId`, a container from its account marker after checking that provider’s bridge health, and a
-  bridge that is not running from the active account. It names a pending move
-  to a newly active account, switches the machine's active account, and for
-  Claude signs the active account in again. It re-reads on its own machine's
+- **The agent information panel** places account controls below usage. It reads
+  `get_native_agent_session_account` for container or unknown-source messages
+  and pending moves to a newly active account. When the machine holds multiple
+  logins, it offers a machine-wide active-account switcher, except for isolated
+  containers. It shows read or switch errors. Outside isolated containers, it
+  offers **Manage accounts** or, with at most one login, **Add an account**,
+  opening the platform's Settings section. Claude reauthentication lives in
+  Settings. With multiple logins, session identity is shown by the composer
+  chip. The panel re-reads on its own machine's
   `agent-accounts-changed` (`useAgentAccountsChanged`), on event-stream reconnect,
   when opened, and when the turn or bridge changes. Reads are fenced against
   newer requests, and a different environment or provider starts with fresh state.

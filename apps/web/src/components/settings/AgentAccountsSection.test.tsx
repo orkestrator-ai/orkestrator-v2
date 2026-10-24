@@ -177,6 +177,17 @@ describe("AgentAccountsSection", () => {
     expect(screen.queryAllByRole("listitem")).toHaveLength(2);
   });
 
+  test("names the shared entries an account now keeps as its own copy", async () => {
+    snapshot.accounts[2] = { ...snapshot.accounts[2]!, privateEntries: ["config.toml", "rules"] };
+    await mount();
+    const added = await screen.findByRole("listitem", { name: "second@example.com" });
+    expect(
+      within(added).getByText(/No longer shared with the host login: config\.toml, rules\./),
+    ).toBeTruthy();
+    const host = screen.getByRole("listitem", { name: "Host login" });
+    expect(within(host).queryByText(/No longer shared/)).toBeNull();
+  });
+
   test("lists the active account first, then the rest alphabetically", async () => {
     snapshot.accounts.push(
       account({ id: "b", label: "bravo", isDefault: false, isActive: false }),

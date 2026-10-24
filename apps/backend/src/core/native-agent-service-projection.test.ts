@@ -813,6 +813,28 @@ describe("NativeAgentService", () => {
     },
   );
 
+  test.each([true, false])(
+    "cancelling a sign-in forwards to the provider when it can cancel (%s)",
+    async (canCancel) => {
+      const stub = createProviderStub("codex");
+      const cancelSignIn = mock(async () => ({ cancelled: true }));
+      if (canCancel) Object.assign(stub.provider, { cancelSignIn });
+      await withService(
+        { prefix: "orkestrator-sign-in-cancel-", provider: async () => stub.provider },
+        async ({ service }) => {
+          await expect(
+            service.cancelProjectionSignIn({
+              environmentId: "env-1",
+              agent: "codex",
+              logicalSessionKey: "env-env-1:tab-sign-in",
+            }),
+          ).resolves.toEqual({ cancelled: canCancel });
+          expect(cancelSignIn).toHaveBeenCalledTimes(canCancel ? 1 : 0);
+        },
+      );
+    },
+  );
+
   test("account reads preserve auth failures rather than reporting unsupported", async () => {
     const stub = createProviderStub("cursor", {
       authStatus: async () => {

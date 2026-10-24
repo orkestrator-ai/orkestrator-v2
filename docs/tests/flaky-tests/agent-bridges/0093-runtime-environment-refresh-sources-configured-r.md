@@ -60,3 +60,11 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - Complete unchanged owner: `mise run test:logged -- --name merge2-codex-runtime-env-owner -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed (exit 0, 0.1 s).
 - Evidence: `orkestrator-test-run.Dm83Kv/bridges.log.gz`; wrapper: `orkestrator-test-run.jIdcYh/merge2-tests.log.gz`, below the host temporary directory.
 - The isolated pass confirms recurrence of the registered flake. No runtime-environment implementation, deadline, assertion or skip changed. The original aggregate exit remains failed.
+
+## Agent accounts and sign-in (todo 0003) — 2026-10-24, node mbp3
+
+- Command: `mise run test:logged -- --name codex-bridge -- bun run --cwd bridges/codex-bridge test:bridge` (one Bun worker), on the todo-0003 branch before its main merge.
+- Exact failure: `runtime environment refresh > sources configured runtime helper and applies refreshed shell environment` timed out at 15000.90 ms; the Codex package reported 2360 passed and one failed across 87 files.
+- The branch does not touch `runtime-env.ts` or its test. The unchanged owning file passed alone: `bun test src/runtime-env.test.ts --preload ../../tests/setup-node.ts` from `bridges/codex-bridge` (9 passed, 0 failed).
+- Evidence: `orkestrator-test-run.tfXbQS/codex-bridge.log.gz` below the host temporary directory.
+- Assessment: confirmed recurrence. No implementation, deadline, assertion or skip changed.

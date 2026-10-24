@@ -312,6 +312,27 @@ export class HttpBridgeCatalogAdapter {
     };
   }
 
+  /**
+   * Abandon the in-tab sign-in the bridge started. Only Codex can cancel one
+   * (`account/login/cancel`); a bridge without the route answers 404, which
+   * is a no-op here because there is nothing on its side to release.
+   */
+  async cancelSignIn(): Promise<{ cancelled: boolean }> {
+    const response = await bridgeFetch(
+      this.connection,
+      "/global/auth/login/cancel",
+      { method: "POST" },
+      this.fetchImpl,
+    );
+    if (response.status === 404 || response.status === 405) {
+      await response.body?.cancel().catch(() => undefined);
+      return { cancelled: false };
+    }
+    await assertOkWithErrorDetail(response, `${this.agent} sign-in cancel`);
+    const body = asRecord(await boundedJson(response, `${this.agent} sign-in cancel`));
+    return { cancelled: body?.cancelled === true };
+  }
+
   async signOut(): Promise<void> {
     const response = await bridgeFetch(
       this.connection,

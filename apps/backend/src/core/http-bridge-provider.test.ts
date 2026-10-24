@@ -15,7 +15,10 @@ import {
   httpProvider,
   piConnection,
 } from "./agent-provider-test-support.js";
-import { normalizeProviderReadiness } from "./http-bridge-transport.js";
+import {
+  normalizeProviderAuthNotice,
+  normalizeProviderReadiness,
+} from "./http-bridge-transport.js";
 import { readHttpBridgeSessionState } from "./http-bridge-progressive.js";
 import { setActivePlanUsageAccount, sharedPlanUsageCache } from "./plan-usage-cache.js";
 
@@ -1022,7 +1025,10 @@ describe("HTTP bridge provider", () => {
     const readiness = {
       state: "authentication-required",
       message: "Claude isn't signed in. Sign in to Claude to keep working.",
-      signIn: { kind: "terminal", hint: "Open a Claude terminal tab and run /login." },
+      signIn: {
+        kind: "terminal",
+        hint: "Sign in to Claude from the sign-in card in this tab or from Settings → Claude.",
+      },
     } as const;
     const read = async (body: Record<string, unknown>) => {
       const { provider } = httpProvider((url) => {
@@ -2779,6 +2785,69 @@ describe("HTTP bridge progressive transcript", () => {
       state: "authentication-required",
       message: "You've been signed out of Codex. Sign in again to keep working.",
     });
+  });
+
+  test.each([
+    [undefined],
+    [{ state: "signed-out", message: "Sign in" }],
+    [{ state: "expired" }],
+    [{ state: "needs-auth", message: "  " }],
+  ])("rejects a malformed turn-time auth notice %#", (value) => {
+    expect(normalizeProviderAuthNotice(value)).toBeUndefined();
+  });
+
+  test("reads a turn-time auth notice field by field and bounds it", () => {
+    expect(
+      normalizeProviderAuthNotice({
+        state: "expired",
+        message: ` ${"m".repeat(600)} `,
+        occurrenceId: "o".repeat(200),
+        accessToken: "never copied",
+      }),
+    ).toEqual({
+      kind: "auth",
+      state: "expired",
+      message: "m".repeat(500),
+      occurrenceId: "o".repeat(128),
+    });
+  });
+
+  test("shows a Codex login renewal as the first auth notice on both snapshot reads", async () => {
+    const authNotice = {
+      state: "expired" as const,
+      message: "Refreshing the OpenAI login",
+      occurrenceId: "renewal-1",
+    };
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/config")) return Response.json({ model: "gpt-5.5" });
+      return Response.json({ status: "running", messageRevision: 0, authNotice });
+    }, codexConnection);
+    const expected = { kind: "auth" as const, ...authNotice };
+    expect((await provider.interactiveSnapshot!("session-1")).notices).toEqual([expected]);
+    expect((await provider.sessionStateSnapshot!("session-1")).notices).toEqual([expected]);
+  });
+
+  test("shows a Claude login refused mid-turn as an auth notice", async () => {
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      return Response.json({
+        status: "error",
+        authNotice: {
+          state: "expired",
+          message: "Claude's login was refused. Sign in to Claude again to keep working.",
+          occurrenceId: "assistant-1",
+        },
+      });
+    }, claudeConnection);
+    const expected = {
+      kind: "auth" as const,
+      state: "expired" as const,
+      message: "Claude's login was refused. Sign in to Claude again to keep working.",
+      occurrenceId: "assistant-1",
+    };
+    expect((await provider.interactiveSnapshot!("session-1")).notices).toContainEqual(expected);
+    expect((await provider.sessionStateSnapshot!("session-1")).notices).toEqual([expected]);
   });
 
   test("carries Codex readiness through the interactive snapshot only when reported", async () => {

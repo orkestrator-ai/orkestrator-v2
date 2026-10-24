@@ -784,6 +784,16 @@ describe("agent accounts", () => {
     expect(await fs.readlink(path.join(home, "sessions"))).toBe(
       path.join(process.env.CODEX_HOME!, "sessions"),
     );
+    expect(added.privateEntries).toBeUndefined();
+
+    // The CLI replaced the shared link while saving: the account says so.
+    await fs.rm(path.join(home, "sessions"));
+    await fs.mkdir(path.join(home, "sessions"));
+    const replaced = (await listAgentAccounts(context)).accounts.find((a) => a.id === added.id);
+    expect(replaced?.privateEntries).toEqual(["sessions"]);
+    expect(
+      (await listAgentAccounts(context)).accounts.find((a) => a.isDefault)?.privateEntries,
+    ).toBeUndefined();
   });
 
   test("the same login cannot be added twice", async () => {

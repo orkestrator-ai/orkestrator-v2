@@ -98,6 +98,7 @@ import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { PlanUsageSection } from "./PlanUsageSection";
 import { AgentAccountsSection } from "./AgentAccountsSection";
+import { AgentSignInCard } from "./AgentSignInCard";
 import { OpenCodeProvidersSection } from "./OpenCodeProvidersSection";
 import { isAgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
@@ -598,8 +599,22 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     />
   );
 
-  const renderPlatform = (platform: AgentPlatform, extras?: React.ReactNode) => (
+  const renderPlatform = (
+    platform: AgentPlatform,
+    extras?: React.ReactNode,
+    signInControls?: React.ReactNode,
+  ) => (
     <div className="max-w-2xl space-y-5">
+      {/* Read without a session, so it is there before any environment runs it. */}
+      {enabledAgentPlatforms.includes(platform) ? (
+        <AgentSignInCard
+          key={`sign-in-${platform}`}
+          platform={platform}
+          reloadToken={planUsageRefreshToken}
+        >
+          {signInControls}
+        </AgentSignInCard>
+      ) : null}
       {/* Platforms with accounts show usage on each account instead. */}
       {isAgentAccountPlatform(platform) ? (
         <AgentAccountsSection
@@ -1386,20 +1401,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             name, and its value is redacted from creation errors.
           </p>
         </div>
-
-        <div className="space-y-3 border-t border-border/60 pt-5">
-          <div>
-            <h3 className="text-sm font-medium text-foreground">Cursor sign-in</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Cursor sessions run through Cursor&apos;s TypeScript SDK.
-            </p>
-          </div>
-          <CursorSdkSignIn
-            credentialRevision={`${global.cursorApiKeyConfigured === true}:${global.cursorApiKeySource ?? "none"}`}
-            onCredentialChange={() => setPlanUsageRefreshToken((token) => token + 1)}
-          />
-        </div>
       </>,
+      // Cursor's own sign-in is that platform's card body.
+      <CursorSdkSignIn
+        credentialRevision={`${global.cursorApiKeyConfigured === true}:${global.cursorApiKeySource ?? "none"}`}
+        onCredentialChange={() => setPlanUsageRefreshToken((token) => token + 1)}
+      />,
     );
 
   const renderCodex = () =>

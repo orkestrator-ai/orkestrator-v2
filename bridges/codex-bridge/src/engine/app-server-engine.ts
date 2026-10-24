@@ -816,6 +816,11 @@ export class AppServerEngine implements CodexEngine {
   private pendingSignIn: { loginId: string; display: NativeAgentPendingSignIn } | null = null;
   private pendingSignInTimer: ReturnType<typeof setTimeout> | undefined;
   private completedLoginId: string | null = null;
+  /**
+   * The login this bridge started and app-server has not finished, browser or
+   * device code, so an abandoned sign-in can be cancelled. Never logged.
+   */
+  private activeLoginId: string | null = null;
   private loginSequence = 0;
   /**
    * The generation whose model has answered since its last refused turn or
@@ -896,7 +901,7 @@ export class AppServerEngine implements CodexEngine {
       onGenerationReady: (generation, previous) =>
         this.handleGenerationChange(generation, previous),
       onGenerationExit: (generation) => {
-        this.clearPendingSignIn();
+        this.forgetSignIn();
         this.loginSequence++;
         this.hostedNetworkLockVerifiedGeneration = null;
         this.toolHistoryLockVerifiedGeneration = null;
@@ -1027,7 +1032,7 @@ export class AppServerEngine implements CodexEngine {
   }
 
   async stop(): Promise<void> {
-    this.clearPendingSignIn();
+    this.forgetSignIn();
     await this.supervisor.stop();
     this.bindings.clear();
     this.rejectAllWaiters();
@@ -1162,6 +1167,7 @@ export class AppServerEngine implements CodexEngine {
       if (typeof loginId === "string" && loginId.length <= 512) {
         this.completedLoginId = loginId;
         if (this.pendingSignIn?.loginId === loginId) this.clearPendingSignIn();
+        if (this.activeLoginId === loginId) this.activeLoginId = null;
       }
     }
 
@@ -2144,6 +2150,12 @@ export class AppServerEngine implements CodexEngine {
     this.pendingSignIn = null;
   }
 
+  /** Forget both the display and the cancellable login. */
+  private forgetSignIn(): void {
+    this.clearPendingSignIn();
+    this.activeLoginId = null;
+  }
+
   async readAccount(): Promise<unknown> {
     // Order by request, but only a successful response supersedes an older
     // one. A failed routine read leaves a pending failure check free to land.
@@ -2163,8 +2175,7 @@ export class AppServerEngine implements CodexEngine {
         redactSecrets(error instanceof Error ? error.message : String(error)),
       );
     });
-    if (loginSequence === this.loginSequence && objectRecord(response).account)
-      this.clearPendingSignIn();
+    if (loginSequence === this.loginSequence && objectRecord(response).account) this.forgetSignIn();
     const pendingSignIn = normalizePendingSignIn(this.pendingSignIn?.display);
     if (!pendingSignIn) this.clearPendingSignIn();
     return { ...objectRecord(response), ...(pendingSignIn ? { pendingSignIn } : {}) };
@@ -2193,7 +2204,7 @@ export class AppServerEngine implements CodexEngine {
    */
   async beginAccountLogin(method: "browser" | "device-code" = "browser"): Promise<unknown> {
     const sequence = ++this.loginSequence;
-    this.clearPendingSignIn();
+    this.forgetSignIn();
     const response = await this.supervisor.request(
       "account/login/start",
       method === "device-code"
@@ -2207,6 +2218,15 @@ export class AppServerEngine implements CodexEngine {
           },
     );
     const raw = objectRecord(response);
+    if (
+      sequence === this.loginSequence &&
+      typeof raw.loginId === "string" &&
+      raw.loginId.length > 0 &&
+      raw.loginId.length <= 512 &&
+      raw.loginId !== this.completedLoginId
+    ) {
+      this.activeLoginId = raw.loginId;
+    }
     const display = normalizePendingSignIn({
       url: raw.verificationUrl,
       code: raw.userCode,
@@ -2222,7 +2242,9 @@ export class AppServerEngine implements CodexEngine {
     ) {
       this.pendingSignIn = { loginId: raw.loginId, display };
       this.pendingSignInTimer = setTimeout(
-        () => this.clearPendingSignIn(),
+        // The device code has lapsed, so nobody can finish this login: release
+        // app-server's side of it too rather than leaving it to time out there.
+        () => void this.cancelAccountLogin().catch(() => undefined),
         Math.max(0, display.expiresAt - Date.now()),
       );
       this.pendingSignInTimer.unref?.();
@@ -2230,8 +2252,23 @@ export class AppServerEngine implements CodexEngine {
     return response;
   }
 
+  /**
+   * Abandon the sign-in this bridge started, if one is still open. App-server
+   * stops waiting on its loopback callback or device code (`account/login/cancel`).
+   * `none` when nothing was open or app-server had already finished it.
+   */
+  async cancelAccountLogin(): Promise<"canceled" | "none"> {
+    const loginId = this.activeLoginId;
+    this.forgetSignIn();
+    // A start still in flight must not re-arm the login being abandoned.
+    this.loginSequence++;
+    if (!loginId) return "none";
+    const response = await this.supervisor.request("account/login/cancel", { loginId });
+    return objectRecord(response).status === "canceled" ? "canceled" : "none";
+  }
+
   async logoutAccount(): Promise<void> {
-    this.clearPendingSignIn();
+    this.forgetSignIn();
     this.loginSequence++;
     await this.supervisor.request("account/logout", undefined);
   }

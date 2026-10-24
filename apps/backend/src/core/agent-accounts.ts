@@ -28,6 +28,7 @@ import {
   hostClaudeJsonPath,
   hostClaudeConfigDir,
   prepareAgentAccountHome,
+  privateSharedEntries,
   readClaudeAccountJson,
   readCodexAuthFile,
   type AgentAccountLoginState,
@@ -141,11 +142,11 @@ export async function listAgentAccounts(context: CommandContext): Promise<AgentA
   ]);
   const accounts = await Promise.all(
     rows.map(async ({ platform, stored }): Promise<AgentAccountSummary> => {
-      const state = await readLoginState(
-        context,
-        platform,
-        stored ? homeFor(context, platform, stored.id) : undefined,
-      );
+      const home = stored ? homeFor(context, platform, stored.id) : undefined;
+      const [state, privateEntries] = await Promise.all([
+        readLoginState(context, platform, home),
+        home ? privateSharedEntries(platform, home) : Promise.resolve([]),
+      ]);
       const id = stored?.id ?? DEFAULT_AGENT_ACCOUNT_ID;
       return {
         id,
@@ -157,6 +158,7 @@ export async function listAgentAccounts(context: CommandContext): Promise<AgentA
         // What the login says now wins over what was recorded when it was added.
         identity: { ...stored?.identity, ...state.identity },
         ...(stored ? { createdAt: stored.createdAt } : {}),
+        ...(privateEntries.length > 0 ? { privateEntries } : {}),
       };
     }),
   );

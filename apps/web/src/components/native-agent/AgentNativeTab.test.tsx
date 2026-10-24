@@ -170,6 +170,11 @@ const beginNativeAgentSignInMock = mock(
     url: "https://auth.example.test/login" as string | undefined,
   }),
 );
+const cancelNativeAgentSignInMock = mock(
+  async (_input: { environmentId: string; agent: string; logicalSessionKey: string }) => ({
+    cancelled: true,
+  }),
+);
 const openInBrowserMock = mock(async (_url: string) => undefined);
 const getNativeAgentAuthStatusMock = mock(
   async (_input: {
@@ -386,6 +391,7 @@ mock.module("@/lib/backend", () => ({
   adoptNativeAgentSession: adoptNativeAgentSessionMock,
   forkNativeAgentSession: forkNativeAgentSessionMock,
   beginNativeAgentSignIn: beginNativeAgentSignInMock,
+  cancelNativeAgentSignIn: cancelNativeAgentSignInMock,
   getNativeAgentAuthStatus: getNativeAgentAuthStatusMock,
   startAgentAccountLogin: startAgentAccountLoginMock,
   getAgentAccountLogin: getAgentAccountLoginMock,
@@ -482,6 +488,7 @@ afterEach(() => {
   forkNativeAgentSessionMock.mockReset();
   forkNativeAgentSessionMock.mockImplementation(async () => ({ sessionId: "fork-session" }));
   beginNativeAgentSignInMock.mockClear();
+  cancelNativeAgentSignInMock.mockClear();
   getNativeAgentAuthStatusMock.mockClear();
   getNativeAgentAuthStatusMock.mockImplementation(async () => null);
   openInBrowserMock.mockClear();
@@ -1477,6 +1484,33 @@ describe("AgentNativeTab", () => {
     expect(openInBrowserMock).toHaveBeenCalledWith("https://auth.example.test/login");
   });
 
+  test("an abandoned Codex sign-in is cancelled on the provider's side", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
+    }));
+    getNativeAgentAuthStatusMock.mockImplementation(async () => ({
+      state: "needs-auth" as const,
+      signIn: { kind: "browser-url" as const },
+    }));
+    render(<AgentNativeTab tabId="tab-codex-cancel" data={identity("codex")} isActive />);
+
+    expect(screen.queryByRole("button", { name: "Cancel sign-in" }) === null).toBe(true);
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel sign-in" }));
+
+    await waitFor(() => expect(cancelNativeAgentSignInMock).toHaveBeenCalledTimes(1));
+    expect(cancelNativeAgentSignInMock.mock.calls[0]?.[0]).toEqual({
+      environmentId: "env-1",
+      agent: "codex",
+      logicalSessionKey: createSessionKey("env-1", "tab-codex-cancel"),
+    });
+    expect(screen.queryByRole("link", { name: "Open sign-in link" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Cancel sign-in" }) === null).toBe(true);
+    // The sign-in can be started again.
+    expect(screen.getByRole("button", { name: "Sign in to Codex" })).toBeTruthy();
+  });
+
   test("reports when the Codex sign-in link cannot be opened", async () => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
@@ -1930,7 +1964,10 @@ describe("AgentNativeTab", () => {
     const readiness = {
       state: "authentication-required" as const,
       message: "Claude isn't signed in. Sign in to Claude to keep working.",
-      signIn: { kind: "terminal" as const, hint: "Open a Claude terminal tab and run /login." },
+      signIn: {
+        kind: "terminal" as const,
+        hint: "Sign in to Claude from the sign-in card in this tab or from Settings → Claude.",
+      },
     };
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
@@ -1945,7 +1982,11 @@ describe("AgentNativeTab", () => {
       (screen.getByTitle("Sign in to Claude before sending") as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(screen.queryByRole("button", { name: "Open Claude settings" }) === null).toBe(true);
-    expect(screen.queryByText("Open a Claude terminal tab and run /login.") === null).toBe(true);
+    expect(
+      screen.queryByText(
+        "Sign in to Claude from the sign-in card in this tab or from Settings → Claude.",
+      ) === null,
+    ).toBe(true);
     unmount();
 
     // Claude's own reply and the readiness ask for the same card.
@@ -9636,6 +9677,36 @@ describe("AgentNativeTab", () => {
       expect(useNativeNoticeDismissalStore.getState().sessions[0]?.occurrenceIds).toContain(
         "warning\u0000warning\u0000First provider notice",
       );
+    });
+
+    test("shows a turn-time sign-in notice as a warning the user can act on", async () => {
+      seedProjection({
+        notices: [
+          {
+            kind: "auth",
+            state: "expired",
+            message: "Claude's login was refused. Sign in to Claude again to keep working.",
+            occurrenceId: "assistant-1",
+          },
+        ],
+      });
+
+      render(
+        <AgentNativeTab
+          tabId="tab-auth-notice"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(mockToastWarning).toHaveBeenCalledWith(
+          "Claude's login was refused. Sign in to Claude again to keep working.",
+          expect.objectContaining({ duration: Infinity }),
+        ),
+      );
+      expect(mockToastError).not.toHaveBeenCalled();
     });
 
     test("persists a dismissed occurrence but shows a newer occurrence and another session", async () => {

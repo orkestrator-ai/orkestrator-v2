@@ -32,9 +32,11 @@ import {
   phaseToExternalStatus,
   type BridgeSession,
   CODEX_RESTARTED_MID_TURN_MESSAGE,
+  type ThreadAuthNotice,
   type ThreadContext,
 } from "./sessions/thread-registry.js";
 import { TurnAccumulator } from "./sessions/turn-accumulator.js";
+import { nextThreadAuthNotice } from "./sessions/auth-recovery-notice.js";
 import { RefusedCellTail, reportsRefusal, type RefusedCell } from "./sessions/refused-cell-tail.js";
 import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
 
@@ -931,6 +933,12 @@ export class CodexRuntimeLifecycle {
       case "turn.model.updated":
         this.applyConfirmedModel(context, event.model, event.turnId);
         return;
+      case "thread.authRecovery":
+        this.setThreadAuthNotice(
+          context,
+          nextThreadAuthNotice(context.authNotice, event, () => crypto.randomUUID()),
+        );
+        return;
       case "turn.configuration.updated": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
@@ -1122,6 +1130,8 @@ export class CodexRuntimeLifecycle {
       case "turn.completed": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
+        // A turn that finished proves the login works again.
+        if (event.status === "completed") this.setThreadAuthNotice(context, undefined);
         this.discardOutlivingCommandWindows(turn);
         turn.complete(event.status, event.error);
         this.ctx.options.changeEvidence?.turn(this.evidenceSource(context, turn), event.status);
@@ -1559,6 +1569,19 @@ export class CodexRuntimeLifecycle {
    * Publish only app-server-observed model values. Thread settings confirm the
    * effective model for an accepted turn; a turn-scoped reroute wins over it.
    */
+  /** Replace the thread's `auth` notice and tell every session bound to it. */
+  setThreadAuthNotice(context: ThreadContext, notice: ThreadAuthNotice | undefined): void {
+    if (context.authNotice === notice) return;
+    context.authNotice = notice;
+    for (const session of this.ctx.registry.boundSessionsForThread(context.threadId)) {
+      this.ctx.options.emit({
+        type: "session.updated",
+        sessionId: session.id,
+        data: { authNotice: notice ?? null },
+      });
+    }
+  }
+
   applyConfirmedModel(context: ThreadContext, model: string, turnId?: string): void {
     if (!turnId) context.modelId = model;
     if (turnId) {

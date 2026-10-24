@@ -1210,6 +1210,15 @@ app.post("/global/auth/login", async (c) => {
   });
 });
 
+/**
+ * Abandon the in-tab sign-in this bridge started (`account/login/cancel`).
+ * Answers only whether one was open; the login id never leaves the bridge.
+ */
+app.post("/global/auth/login/cancel", async (c) => {
+  const status = await appServerRuntime.cancelAuthLogin();
+  return c.json({ cancelled: status === "canceled" });
+});
+
 app.post("/global/auth/logout", async (c) => {
   await appServerRuntime.logoutAuth();
   return c.json({ ok: true });

@@ -2221,6 +2221,16 @@ export class NativeAgentService {
     return outcome;
   }
 
+  /** Abandon an in-tab sign-in; a platform without cancel has nothing to release. */
+  async cancelProjectionSignIn(input: NativeAgentProjectionInput): Promise<{ cancelled: boolean }> {
+    const provider = await this.provider(input);
+    const outcome = provider.cancelSignIn ? await provider.cancelSignIn() : { cancelled: false };
+    this.projections.invalidateProjection(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+    );
+    return outcome;
+  }
+
   async signOutProjectionProvider(input: NativeAgentProjectionInput): Promise<void> {
     const provider = await this.provider(input);
     if (!provider.signOut) throw new Error(`${input.agent} does not support sign-out here`);

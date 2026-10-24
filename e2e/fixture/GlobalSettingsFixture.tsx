@@ -29,6 +29,17 @@ function installGlobalSettingsFixture() {
           return { accounts: [], active: { claude: "host", codex: "host" } } as T;
         case "get_agent_account_login":
           return { state: "idle" } as T;
+        case "get_agent_sign_in_status":
+          // An expired active Claude login, read without a session.
+          return {
+            state: "expired",
+            account: { label: "Host login", plan: "max" },
+            signIn: {
+              kind: "terminal",
+              hint: "Sign the active Claude account in again from this card.",
+            },
+            signOut: false,
+          } as T;
         default:
           throw new Error(`Unexpected global settings fixture command: ${command}`);
       }

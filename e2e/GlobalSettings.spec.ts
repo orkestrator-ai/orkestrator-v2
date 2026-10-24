@@ -38,3 +38,11 @@ test("Claude background limit persists across reload and clears when reset to de
   await page.reload();
   await expect(limit).toHaveText("2 hours (default)");
 });
+
+test("the Claude page shows its sign-in card without a session", async ({ page }) => {
+  await page.goto("/global-settings");
+  const card = page.getByRole("region", { name: "Claude Code sign-in" });
+  await expect(card.getByText("Login expired")).toBeVisible();
+  await expect(card.getByText("Host login · max")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Sign in to Claude" })).toBeVisible();
+});

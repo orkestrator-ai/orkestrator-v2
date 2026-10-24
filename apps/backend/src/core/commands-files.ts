@@ -1,4 +1,7 @@
-import { getHostClaudeCredentials as readHostClaudeCredentials } from "./claude-host-credentials.js";
+import {
+  claudeLoginLookupOptions,
+  getHostClaudeCredentials as readHostClaudeCredentials,
+} from "./claude-host-credentials.js";
 export { getClaudeOAuthAccessToken } from "./claude-host-credentials.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
@@ -28,6 +31,7 @@ import type { Environment, AppConfig } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
+  AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV,
   CONTAINER_GITHUB_CREDENTIAL_FILE,
   CONTAINER_CLAUDE_CREDENTIAL_FILE,
   CONTAINER_CURSOR_API_KEY_FILE,
@@ -2288,20 +2292,40 @@ export async function resolveContainerClaudeCredentials(
   return readRuntimeHostClaudeCredentials();
 }
 
+/**
+ * The configuration directory holding this runtime's host Claude login, and
+ * whether `CLAUDE_CONFIG_DIR` named it explicitly. An agent-test profile reads
+ * the directory the desktop recorded from the shell `dev:test` started in; any
+ * other runtime its own inherited `CLAUDE_CONFIG_DIR`, which its launches pass on.
+ */
+export function runtimeHostClaudeConfigDir(env: NodeJS.ProcessEnv = process.env): {
+  configDir: string | undefined;
+  explicit: boolean;
+} {
+  const agentTestDir = env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim();
+  if (agentTestDir) {
+    return {
+      configDir: agentTestDir,
+      explicit: env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV] === "1",
+    };
+  }
+  const configDir = env.CLAUDE_CONFIG_DIR?.trim() || undefined;
+  return { configDir, explicit: Boolean(configDir) };
+}
+
 /** The host login this runtime's Claude launches use, without the container opt-out. */
 export async function readRuntimeHostClaudeCredentials(): Promise<string | undefined> {
   const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
-  return getHostClaudeCredentials(
-    process.platform,
-    agentTestHostHome || os.homedir(),
-    process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim() ||
-      process.env.CLAUDE_CONFIG_DIR?.trim() ||
-      undefined,
+  const { configDir, explicit } = runtimeHostClaudeConfigDir();
+  return getHostClaudeCredentials(process.platform, agentTestHostHome || os.homedir(), configDir, {
     // Only an agent-test profile needs the lookup pinned to one keychain file.
     // An ordinary install runs as the logged-in user and may keep the record
     // outside `login.keychain-db`, so it keeps the default search list.
-    { allowDefaultKeychainSearchList: !agentTestHostHome },
-  );
+    allowDefaultKeychainSearchList: !agentTestHostHome,
+    // The entry Claude itself reads for that directory, so a profile started
+    // from an added account's shell spends that account, not the default one.
+    ...claudeLoginLookupOptions(configDir, explicit),
+  });
 }
 
 // `docker cp` behaves like `cp -a`: it preserves the staging tree's modes and

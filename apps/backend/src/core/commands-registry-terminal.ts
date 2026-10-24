@@ -144,6 +144,7 @@ import {
   stripInheritedAgentCredentials,
 } from "./agent-accounts-active.js";
 import { terminalAccountHomes } from "./terminal-account-usage.js";
+import { applyActiveAgentAccountsForContainerTerminal } from "./agent-accounts-containers.js";
 
 /** Hold shared-checkout admission across a home file mutation. */
 async function withLocalFileMutation<T>(
@@ -482,6 +483,12 @@ export function registerTerminalCommands(
       assertEnvironmentNotDeleting(environmentId);
       assertEnvironmentDeletionNotRequested(environment, environmentId);
     }
+    if (storedConfig && terminalSessionConfigs.get(id) !== storedConfig) {
+      throw new Error("Container terminal session is no longer available");
+    }
+    // A `claude` or `codex` run in this shell should use the active account,
+    // not whichever login the container was last handed. Best effort.
+    await applyActiveAgentAccountsForContainerTerminal(context, config.containerId);
     if (storedConfig && terminalSessionConfigs.get(id) !== storedConfig) {
       throw new Error("Container terminal session is no longer available");
     }

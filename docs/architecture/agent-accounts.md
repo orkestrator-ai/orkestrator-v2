@@ -2,6 +2,8 @@
 
 Status: Living — `apps/backend/src/core/agent-accounts*.ts`,
 `apps/backend/src/core/agent-account-bridge-state.ts`,
+`apps/backend/src/core/agent-sign-in-status.ts`,
+`apps/web/src/components/settings/AgentSignInCard.tsx`,
 `packages/protocol/src/agent-accounts.ts`,
 `apps/web/src/components/settings/AgentAccountsSection.tsx`;
 `apps/backend/src/core/opencode-provider-login.ts`,
@@ -60,7 +62,10 @@ missing, so an account's first session does not grow a private copy.
 `linkSharedEntries` is conservative: a regular file already in the account
 directory is left alone, because a CLI that saves by atomic rename replaces
 the link with one, and that content is the account's now. A link whose host
-target has gone is removed.
+target has gone is removed. Such an entry is reported rather than re-linked:
+`privateSharedEntries` lists it, `listAgentAccounts` returns the names as the
+account's `privateEntries`, and its row in Settings says the entry is no longer
+shared with the host login. Re-linking would race a CLI still writing it.
 
 Claude's `.claude.json` is per account, because it holds `oauthAccount`. Once
 `CLAUDE_CONFIG_DIR` is set it is also the only place Claude reads user- and
@@ -160,7 +165,11 @@ The UI is `ClaudeAuthRecoveryCard`. It shows under a Claude authentication
 error in the transcript, and pinned above the composer while Claude's `Not
 logged in · Please run /login` reply is the latest exchange or Claude reports
 `authentication-required` readiness (below). It reuses the settings pane's
-link-and-code panel and resumes a sign-in already running.
+link-and-code panel and resumes a sign-in already running. Its compact form,
+`ClaudeAccountSignInAction`, is the **Sign in to Claude** action on the Agent
+Info account card and on the Claude settings sign-in card. Claude's bridge
+hint names those cards rather than a terminal; its route kind stays
+`terminal`, because the CLI's own `/login` is still the fallback they offer.
 
 ## Sign-in readiness
 
@@ -206,6 +215,25 @@ the tab without a send.
   missing login answers 401 with `kind: "authentication-required"`, and the
   backend passes that message through unwrapped on every platform.
 
+### Turn-time auth notice
+
+A login that stops working during a turn is shown as the tab's `auth` notice
+(`NativeAgentNotice { kind: "auth", state, message, occurrenceId }`), a warning
+beside the transcript's sign-in card, rather than as a failed spawn. Claude and
+Codex put an `authNotice` on their session read (`GET /session/:id`,
+`/session/:id/status`), and the backend reads it field by field
+(`normalizeProviderAuthNotice`) into the first snapshot notice.
+
+| Platform | Raised by | Cleared by |
+| --- | --- | --- |
+| Claude | `auth_status` with an `error` (`expired`) or `isAuthenticating` (`needs-auth`); a turn refused with `authentication_failed` (`expired`) | `auth_status` reporting the authentication finished; any real model answer |
+| Codex | `modelProvider/authRecoveryStarted` (`expired`) | `authRecoveryCompleted`, unless its text says the renewal failed, which keeps a `needs-auth` notice; a completed turn |
+
+Codex's completion carries no outcome field (codex 0.162 says succeeded,
+failed-permanent or failed-transient only in its message), so the failure check
+reads its text; a real sign-out still locks the composer through readiness. The
+notice is in memory on the bridge: a restarted bridge starts without one.
+
 ### Codex in-tab sign-in: browser or device code
 
 Codex's browser sign-in finishes on a callback app-server serves on its own
@@ -222,6 +250,36 @@ device code (`deviceCode: true`, sent to the bridge as
 Otherwise it keeps the browser flow. The tab banner keeps the code visible
 beside the sign-in link, and the panel's code toast stays until a read finds
 the account signed in. Bridges without a device flow ignore the body.
+
+An abandoned sign-in is cancelled on Codex's side too. The bridge keeps the
+`loginId` of the browser or device-code login it started (never logged or
+returned), and `POST /global/auth/login/cancel` sends
+`account/login/cancel` and answers only `{ cancelled }`. The backend command
+is `cancel_native_agent_sign_in`; on a bridge without the route it is a no-op.
+The tab banner's **Cancel sign-in** and the panel's device-code toast call it,
+and a device code that lapses cancels its login on the bridge by itself.
+
+## Settings sign-in card
+
+Each enabled platform's settings page opens with a sign-in card
+(`AgentSignInCard`) read without a session or a bridge
+(`get_agent_sign_in_status`, `agent-sign-in-status.ts`), so it is there before
+any environment runs the platform. It reads the same evidence the launchers
+hand to bridges:
+
+- Claude and Codex: the active account's login, as `listAgentAccounts` reports
+  it. The card sits above the accounts list. Claude is signed in again from it
+  (`ClaudeAccountSignInAction`); Codex points to the tab's in-app sign-in and
+  to adding an account.
+- Cursor: the credential `cursorSdkAuthStatus` resolves. The card wraps
+  `CursorSdkSignIn`, which keeps its own sign-in and sign-out.
+- Grok: the bridge's checks before `authenticate` (a stored login,
+  `XAI_API_KEY`, an auth-provider command).
+- Pi and OpenCode: the provider entries in `~/.pi/agent/auth.json` and
+  OpenCode's `auth.json` (ids and credential kinds only; a key-shaped id is
+  dropped). An empty store reads `unknown`, never `signed-out`, because an
+  environment variable or configuration may still hold a key. OpenCode's
+  logins are managed under Provider Sign-in below the card.
 
 ## OpenCode provider sign-in
 
@@ -294,7 +352,12 @@ device login.
   warnings with `redactSecrets`. Hono's default handler would otherwise print
   the whole `AppServerRpcError`, including app-server's `data`.
   `open_in_browser` redacts the URL from a failed launch. Nothing logs command
-  arguments or results.
+  arguments or results. Every local bridge's stdout and stderr, which Debug
+  logging writes to `<dataDir>/logs`, is reassembled into whole lines and
+  scrubbed of credential shapes before it reaches the console
+  (`forwardBridgeOutput`, `redactBridgeOutput`). A bare OAuth or device code
+  has no recognisable shape, so the rule that bridges never print one stays
+  the guard for those.
 - **Recordings.** `scripts/scrub-codex-recording.ts` removes `authUrl`,
   `authorizationUrl`, `verificationUrl`, `userCode` and `loginId`. The opt-in
   notification recorder writes those verbatim.
@@ -335,7 +398,7 @@ the reporting bridge was launched on the active account
 ## Containers
 
 A container receives the active account's login instead of the host's at
-three points (`agent-accounts-containers.ts`). Nothing is rewritten for a
+these points (`agent-accounts-containers.ts`). Nothing is rewritten for a
 platform that never had an account added, renewed or made active, and a
 provider the environment has revoked is never handed a login.
 
@@ -356,9 +419,25 @@ provider the environment has revoked is never handed a login.
   `reconcileContainerAgentAccount` writes the new login into the container,
   updates the staged revision, stops the bridge and only then writes the
   marker. A busy bridge keeps its account until idle.
+- **Older images.** A container created before staged inputs mounts the host
+  homes read-only and its entrypoint copies them into `/home/node`, so a
+  restart would bring the host login back. On every start of such a container
+  (no inputs-revision label) the active Claude identity is pushed in, and the
+  active Codex login too while its marker proves an unreconciled boot and
+  Codex has no live work (`applyActiveCodexLoginAfterLegacyBoot`). Only the
+  container's own copy is written; the marker is left for the next bridge
+  start. Retiring the legacy mount removes this step.
+- **Terminal open.** `start_terminal_session` first runs
+  `applyActiveAgentAccountsForContainerTerminal`, so `claude` and `codex` in a
+  new container terminal use the active account. It writes the login and the
+  staged copy but neither stops the bridge nor writes the marker, waits behind
+  the platform's bridge operations, is skipped while that platform has live
+  work and gives up after 10 s.
 
 `useHostClaudeCredentials: false` keeps every Orkestrator-held Claude token
-out of containers, whichever account it belongs to.
+out of containers, whichever account it belongs to, and the terminal hand-off
+then leaves Claude alone, because the container's own login was signed in
+from a terminal inside it.
 
 ## Coordinator conversations
 
@@ -388,8 +467,10 @@ Local terminal tabs start with `CLAUDE_CONFIG_DIR`/`CODEX_HOME` pointing at
 the active accounts (`activeAgentAccountShellEnvironment`); nothing is set for
 host logins. A terminal keeps the account that was active when it opened.
 Claude tmux mode exports the active Claude account per session, because a
-local tmux server keeps the environment it was first started with. Container
-terminals use whatever login the container holds.
+local tmux server keeps the environment it was first started with. A container
+terminal is handed the active login when it opens (see
+[Containers](#containers)); one opened while that platform has live work, or
+one already open, keeps the login the container held.
 
 ## Provider behaviour relied on
 

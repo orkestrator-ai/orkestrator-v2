@@ -11,6 +11,7 @@ import {
   hostClaudeJsonPath,
   linkSharedEntries,
   prepareAgentAccountHome,
+  privateSharedEntries,
   syncClaudeAccountSettings,
 } from "./agent-accounts-homes.js";
 
@@ -94,6 +95,30 @@ describe("linkSharedEntries", () => {
     await linkSharedEntries(account, host, ["rules"]);
 
     await expect(fs.lstat(path.join(account, "rules"))).rejects.toThrow();
+  });
+});
+
+describe("privateSharedEntries", () => {
+  test("names shared entries the account now holds as its own file or directory", async () => {
+    const host = path.join(root, "host");
+    const account = path.join(root, "account");
+    await fs.mkdir(path.join(host, "rules"), { recursive: true });
+    await fs.writeFile(path.join(host, "config.toml"), "host");
+    await fs.writeFile(path.join(host, "AGENTS.md"), "host");
+    await fs.mkdir(account, { recursive: true });
+    await linkSharedEntries(account, host, ["config.toml", "AGENTS.md", "rules"]);
+    expect(await privateSharedEntries("codex", account)).toEqual([]);
+
+    // A save by atomic rename replaces the link with the account's own file.
+    await fs.rm(path.join(account, "config.toml"));
+    await fs.writeFile(path.join(account, "config.toml"), "account");
+    await fs.rm(path.join(account, "rules"));
+    await fs.mkdir(path.join(account, "rules"));
+    // Not a shared entry: the login itself is always the account's own.
+    await fs.writeFile(path.join(account, "auth.json"), "{}");
+
+    expect(await privateSharedEntries("codex", account)).toEqual(["config.toml", "rules"]);
+    expect(await privateSharedEntries("claude", account)).toEqual(["rules"]);
   });
 });
 

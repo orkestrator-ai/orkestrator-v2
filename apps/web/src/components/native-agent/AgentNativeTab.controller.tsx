@@ -80,6 +80,7 @@ import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTran
 import {
   adoptNativeAgentSession,
   beginNativeAgentSignIn,
+  cancelNativeAgentSignIn,
   getNativeAgentAuthStatus,
   openInBrowser,
   recoverMultiReviewFixSession,
@@ -1076,6 +1077,23 @@ export function SharedNativeAgentController({
       })
       .finally(() => setSignInPending(false));
   }, [data.environmentId, label, openSignInUrl, platform, sessionKey, setAuthReadAttempt]);
+  // Abandoning the sign-in releases the provider's side of it too (Codex stops
+  // waiting on its loopback callback or device code). A device code lapses on
+  // the bridge by itself, so only an explicit abandon needs this.
+  const cancelSignIn = useCallback(() => {
+    setSignInDetails(null);
+    void cancelNativeAgentSignIn({
+      environmentId: data.environmentId,
+      agent: platform,
+      logicalSessionKey: sessionKey,
+    })
+      .catch((error: unknown) => {
+        toast.error(
+          `Could not cancel ${label} sign-in: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      })
+      .finally(() => setAuthReadAttempt((attempt) => attempt + 1));
+  }, [data.environmentId, label, platform, sessionKey, setAuthReadAttempt]);
   const resolvedComposer = useMemo(
     () =>
       withResolvedNativeComposerModel(composer?.models ?? [], composer?.selectedModelId, platform),
@@ -2618,6 +2636,11 @@ export function SharedNativeAgentController({
               <span>
                 Code <span className="select-all font-mono font-semibold">{signInCode}</span>
               </span>
+            ) : null}
+            {signInUrl || signInCode ? (
+              <Button type="button" size="sm" variant="ghost" onClick={cancelSignIn}>
+                Cancel sign-in
+              </Button>
             ) : null}
           </div>
         ) : terminalSignInCommand && createTerminalTab ? (

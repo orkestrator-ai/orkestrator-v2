@@ -76,6 +76,11 @@ its desired offset and writes at most one correction per phase per frame.
   so it runs after the frame Virtuoso requests for its own measurements.
 - A row target stays mounted while it converges, within the keep-mounted
   bound; beyond it the protection is released.
+- Protection overscan only grows for one protected row
+  (`useRatchetedOverscan`). A larger overscan re-renders the list, and the
+  range measured during that re-render can need less, which would shrink it
+  and re-render again: without the ratchet that cycled until React's update
+  depth limit (a reader moving while a history page loads).
 
 ## Semantic anchors and history
 
@@ -177,6 +182,11 @@ runner read them; nothing else does.
   not searched, so inner virtualization cannot shift find's pairing.
 - Exact reading-line preservation inside a reflowed paragraph is block-level:
   a prose part keeps its top, not a specific word.
+- The native tab's background poll (every 500–1500 ms) retires a history page
+  still in flight (`useNativeAgentSession`'s refresh sequence), so a page
+  slower than the poll never lands and the reader has to ask again. That is the
+  session hook's paging policy, predating this design; the "reader moves while
+  a page loads" browser test therefore runs against the reviewer view.
 
 ## Maintaining the Virtuoso patch
 

@@ -25,7 +25,7 @@ import {
 } from "./NativeMessage.shared";
 import { toolRowPreview } from "./NativeMessage.basic-parts";
 import { pureprependCount } from "@/lib/transcript-scroll/prepend";
-import { keepMountedOverscan } from "@/lib/transcript-scroll/keep-mounted";
+import { keepMountedOverscan, useRatchetedOverscan } from "@/lib/transcript-scroll/keep-mounted";
 
 /** Inner `firstItemIndex` start; lowered by members a history page prepends. */
 const INNER_FIRST_ITEM_INDEX_BASE = 1_000_000;
@@ -255,8 +255,10 @@ function VirtualizedToolGroupBody({
   }, []);
   // A selection outranks focus, as in the transcript.
   const protectedIndex = selectedIndex ?? focusedIndex;
-  const keepMounted =
-    protectedIndex === null ? null : keepMountedOverscan(protectedIndex, visibleRange);
+  const keepMounted = useRatchetedOverscan(
+    protectedIndex === null ? null : String(protectedIndex),
+    protectedIndex === null ? null : keepMountedOverscan(protectedIndex, visibleRange),
+  );
   const onRange = useCallback(
     (range: ListRange) => {
       const local = {

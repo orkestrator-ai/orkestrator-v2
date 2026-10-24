@@ -248,7 +248,8 @@ describe("firstItemIndex with the real virtualizer", () => {
                 atBottomThreshold: 50,
                 restoreStateFrom: undefined,
                 scrollerRef: (element) => {
-                  if (element instanceof HTMLElement) instrument(element, () => count.current, writes);
+                  if (element instanceof HTMLElement)
+                    instrument(element, () => count.current, writes);
                 },
               }}
               virtuosoRef={handle}

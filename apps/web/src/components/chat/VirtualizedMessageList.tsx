@@ -46,7 +46,7 @@ import { useRichViewPinned } from "@/stores/richContentViewStore";
 import { useArtifactLiveHostStore } from "@/stores/artifactLiveHostStore";
 import type { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import { pureprependCount } from "@/lib/transcript-scroll/prepend";
-import { keepMountedOverscan } from "@/lib/transcript-scroll/keep-mounted";
+import { keepMountedOverscan, useRatchetedOverscan } from "@/lib/transcript-scroll/keep-mounted";
 
 interface VirtuosoListContext {
   footer?: ReactNode;
@@ -591,10 +591,12 @@ export function VirtualizedMessageList<TMessage>({
   }, [protectedIndex]);
   // A navigation target is only protected against a known range: with none
   // there is nothing to measure the bound from.
-  const keepMounted =
+  const keepMounted = useRatchetedOverscan(
+    protectedIndex === null ? null : protectedRowKey,
     selectionRowKey === null && focusRowKey === null && visibleRange === null
       ? null
-      : keepMountedOverscan(protectedIndex, visibleRange);
+      : keepMountedOverscan(protectedIndex, visibleRange),
+  );
   useLayoutEffect(() => {
     appliedOverscan.current.top = keepMounted?.top ?? 0;
     appliedOverscan.current.bottom = keepMounted?.bottom ?? 0;

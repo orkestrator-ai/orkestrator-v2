@@ -84,8 +84,10 @@ export interface BriefDestinationCapabilities {
   images: boolean;
   /** `model` when the selected model's image support was known; else `agent`. */
   imageSupport?: "model" | "agent";
-  /** Per-turn plan mode that does not change the session's own mode. */
+  /** Discuss can run in plan mode without changing the session's own mode. */
   planMode: boolean;
+  /** `turn`: per-turn plan mode; `session`: the session is already in Plan. */
+  planModeScope?: "turn" | "session";
   resultTools: boolean;
 }
 

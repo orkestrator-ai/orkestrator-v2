@@ -221,6 +221,7 @@ export function RequestComposer({
         }}
         fallback={reference?.retargetOf ? null : (single?.defaultDestination ?? null)}
         excludeTabId={reference?.previousTabId ?? null}
+        operation={operation}
         defaultFor={
           single ? { annotationId: single.id, metadataRevision: single.metadataRevision } : null
         }
@@ -345,7 +346,9 @@ export function RequestComposer({
           {preparation.operation === "discuss" && (
             <p className="text-muted-foreground">
               {preparation.readOnly === "plan-mode"
-                ? "Discussion uses the agent's read-only plan mode for this turn."
+                ? destination?.planModeScope === "session"
+                  ? "Discussion runs in the session's current Plan mode (read-only). If the session leaves Plan before it is sent, it is held instead of sent."
+                  : "Discussion uses the agent's read-only plan mode for this turn."
                 : "Discussion asks the agent not to change files; it keeps its existing permissions."}
             </p>
           )}

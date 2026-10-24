@@ -639,6 +639,18 @@ export class OrkestratorBackend {
             if (event.owner !== "coordinator") {
               this.probeForAgentCreatedPullRequest(event.environmentId, context);
             }
+            // Web annotation requests sent to this session read their turn
+            // outcome now, while the bridge that ran the turn is still up,
+            // rather than on a later reconcile pass that may find it gone.
+            if (event.owner !== "coordinator" && event.agent && event.logicalSessionKey) {
+              void context.webAnnotations
+                ?.noteTurnEnded({
+                  environmentId: event.environmentId,
+                  agent: event.agent,
+                  logicalSessionKey: event.logicalSessionKey,
+                })
+                .catch(() => undefined);
+            }
             /*
              * The turn that was holding this session's work just ended, so the
              * things that were waiting for it can run now rather than on the

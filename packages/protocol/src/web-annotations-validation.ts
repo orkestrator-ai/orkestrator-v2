@@ -191,8 +191,7 @@ export function isWebAnnotationTarget(
         isWebAnnotationRect(value.rect) &&
         value.rect.width >= 1 &&
         value.rect.height >= 1 &&
-        (value.imageRect === null || isWebAnnotationRect(value.imageRect)) &&
-        (value.parentCaptureId === undefined || isWebAnnotationId(value.parentCaptureId))
+        (value.imageRect === null || isWebAnnotationRect(value.imageRect))
       );
     case "page":
       return true;
@@ -322,6 +321,16 @@ export function validateWebAnnotationCaptureInput(
     return fail("Document generation is invalid");
   }
   if (!isWebAnnotationPageIdentity(value.page)) return fail("Page identity is invalid");
+  // Relations between a capture's images, and the basis of its producer, are
+  // assigned by the backend that stores it. A payload naming them is refused
+  // rather than trusted (`parentCaptureId` was an earlier, never-set field).
+  if (
+    Object.hasOwn(value, "regionCrop") ||
+    Object.hasOwn(value, "producerSource") ||
+    (isRecord(value.target) && Object.hasOwn(value.target, "parentCaptureId"))
+  ) {
+    return fail("Image relations and producer basis are assigned by the receiver");
+  }
   if (!isWebAnnotationTarget(value.target)) return fail("Capture target is invalid or unsupported");
   if (value.geometry !== null && !isWebAnnotationGeometry(value.geometry)) {
     return fail("Capture geometry is invalid");

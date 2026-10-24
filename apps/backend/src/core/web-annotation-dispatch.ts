@@ -245,8 +245,11 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
    * - Images: the platform must accept images, and a model that explicitly
    *   rejects them wins; without model information the platform answer is
    *   used and labelled `imageSupport: "agent"`.
-   * - Plan mode: only a per-turn mode (`composer.modeScope === "turn"`) can
-   *   make one discussion read-only without changing the session's own mode.
+   * - Plan mode: a per-turn mode (`composer.modeScope === "turn"`) makes one
+   *   discussion read-only without changing the session's own mode. A
+   *   session-scoped mode can only be used as it already is: a session whose
+   *   recorded mode is Plan runs the discussion in Plan without a change, and
+   *   any other session is advisory. The session's mode is never switched.
    * - Result tools: the platform must receive the agent tools credential, the
    *   session must be environment-owned, and a tool host must be installed.
    */
@@ -263,10 +266,19 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
       !context.session ||
       context.session.owner === undefined ||
       context.session.owner.kind === "environment";
+    const planModeScope: BriefDestinationCapabilities["planModeScope"] = !capabilities.composer.mode
+      ? undefined
+      : capabilities.composer.modeScope === "turn"
+        ? "turn"
+        : capabilities.composer.modeScope === "session" &&
+            context.session?.controls?.mode === "plan"
+          ? "session"
+          : undefined;
     return {
       images: capabilities.attachments.images && modelImages !== false,
       imageSupport: modelImages === null ? "agent" : "model",
-      planMode: capabilities.composer.mode && capabilities.composer.modeScope === "turn",
+      planMode: planModeScope !== undefined,
+      ...(planModeScope ? { planModeScope } : {}),
       resultTools:
         capabilities.agentTools === true && environmentOwned && this.resultToolsAvailable(),
     };
@@ -440,6 +452,7 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
         images: capabilities.images,
         imageSupport: capabilities.imageSupport ?? "agent",
         planMode: capabilities.planMode,
+        ...(capabilities.planModeScope ? { planModeScope: capabilities.planModeScope } : {}),
         resultTools: capabilities.resultTools,
         holds,
         isDefault: defaultTabId !== null && candidate.tabId === defaultTabId,
@@ -609,7 +622,21 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
     } catch (error) {
       return { status: "rejected", reason: bounded(errorMessage(error)) };
     }
-    const { fields: modeFields, dispatchMode } = await this.dispatchModeFields(request);
+    const {
+      fields: modeFields,
+      dispatchMode,
+      sessionModeLeft,
+    } = await this.dispatchModeFields(request);
+    if (sessionModeLeft && !(await this.queuedWithSameBody(queueKey, request, text))) {
+      // Read-only discussion relied on the session's own Plan mode, and the
+      // session left it after preparation. Sending would either switch the
+      // mode back or run the discussion with write access; neither happens.
+      return {
+        status: "rejected",
+        reason:
+          "The session is no longer in Plan mode, so this read-only discussion was not sent. Switch the session to Plan in its chat, or discuss again to send it as advisory.",
+      };
+    }
     const message = {
       id: request.id,
       requestId: request.id,
@@ -683,8 +710,13 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
   /**
    * Mode fields for the queued message. Never changes a session's own mode:
    *
-   * - Discuss in `plan-mode` (only offered for per-turn modes): ask for plan
-   *   mode on this one prompt.
+   * - Discuss in `plan-mode` with a per-turn mode: ask for plan mode on this
+   *   one prompt.
+   * - Discuss in `plan-mode` with a session-scoped mode: only while the
+   *   session's recorded mode is still Plan, send Plan (equal to the current
+   *   mode, so nothing changes) and mark the message `requireSessionMode` so
+   *   the drain refuses it if the session leaves Plan while it waits. When the
+   *   session already left Plan, `sessionModeLeft` tells `publish` to refuse.
    * - Otherwise send the session's current mode when it is known, and when it
    *   is not, mark the message `preserveSessionMode` so the drain sends no
    *   mode at all (a `build` default would switch a session-scoped provider
@@ -693,6 +725,7 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
   private async dispatchModeFields(request: WebAnnotationRequest): Promise<{
     fields: Record<string, unknown>;
     dispatchMode: WebAnnotationDispatchMode;
+    sessionModeLeft?: boolean;
   }> {
     const destination = request.destination;
     const claude = destination.agent === "claude";
@@ -700,14 +733,23 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
       mode,
       ...(claude ? { planModeEnabled: mode === "plan" } : {}),
     });
-    if (request.operation === "discuss" && request.readOnly === "plan-mode") {
+    const capabilities = nativeAgentCapabilities(destination.agent);
+    const sessionScoped = capabilities.composer.mode && capabilities.composer.modeScope !== "turn";
+    if (request.operation === "discuss" && request.readOnly === "plan-mode" && !sessionScoped) {
       return { fields: withMode("plan"), dispatchMode: "plan" };
     }
-    const capabilities = nativeAgentCapabilities(destination.agent);
     if (capabilities.composer.mode) {
       const session = await this.storage
         .getNativeAgentSession(this.sessionKey(request.environmentId, destination))
         .catch(() => null);
+      if (request.operation === "discuss" && request.readOnly === "plan-mode") {
+        return session?.controls?.mode === "plan"
+          ? {
+              fields: { ...withMode("plan"), requireSessionMode: "plan" },
+              dispatchMode: "plan",
+            }
+          : { fields: {}, dispatchMode: "plan", sessionModeLeft: true };
+      }
       const current =
         session?.controls?.mode ??
         this.cachedProjection(request.environmentId, destination)?.composer?.selectedModeId;
@@ -1287,6 +1329,9 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
     environment: DispatchEnvironment,
     paths: readonly string[],
   ): Promise<WebAnnotationFileCheck[]> {
-    return checkWebAnnotationWorkspacePaths(environment, paths);
+    return checkWebAnnotationWorkspacePaths(environment, paths, {
+      checkContainer: (containerId, safe) =>
+        this.invoke("check_container_workspace_paths", { containerId, paths: [...safe] }),
+    });
   }
 }

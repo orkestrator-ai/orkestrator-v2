@@ -409,6 +409,9 @@ export class WebAnnotationResults {
       });
       return { resultId, captureId: record.id };
     });
+    if (committed.committed && metadata.targetResolution) {
+      this.ctx.metrics.recordTargetResolution(metadata.targetResolution);
+    }
     const result = await this.threads.readResult(store, committed.value.resultId);
     if (!result)
       throw new WebAnnotationServiceError(

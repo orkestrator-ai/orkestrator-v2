@@ -30,6 +30,7 @@ import {
   WEB_ANNOTATION_EVIDENCE_OPEN,
   WEB_ANNOTATION_LIMITS,
   WEB_ANNOTATION_WORKSPACE_DIRECTORY,
+  webAnnotationProducerSource,
   webAnnotationRequestMarker,
   webAnnotationUtf8Bytes,
   type WebAnnotationAnchor,
@@ -271,6 +272,8 @@ function sectionValues(
       capturedAt: capture.capturedAt,
       documentGeneration: capture.documentGeneration,
       producer: capture.producer,
+      // A client-declared producer is a label, not an attestation.
+      producerSource: webAnnotationProducerSource(capture),
       redaction: capture.redaction,
       ...(capture.stateReason ? { stateReason: capture.stateReason } : {}),
     });
@@ -322,12 +325,23 @@ function sectionValues(
   }
 
   if (plan.images.length > 0) {
+    // A region keeps its full-viewport screenshot next to the crop; the
+    // backend-recorded relation says which is which.
+    const crop = capture?.regionCrop;
+    const digestOf = (assetId: string) =>
+      plan.images.find((image) => image.assetId === assetId)?.digest;
+    const cropSource = crop ? digestOf(crop.sourceAssetId) : undefined;
     values.set("image", {
       images: plan.images.map((image) => ({
         digest: image.digest,
         width: image.width,
         height: image.height,
         bytes: image.bytes,
+        ...(crop && cropSource && image.assetId === crop.assetId
+          ? { role: "region-crop", cropOf: cropSource, sourceRect: crop.sourceRect }
+          : crop && cropSource && image.assetId === crop.sourceAssetId
+            ? { role: "viewport" }
+            : {}),
       })),
     });
   }

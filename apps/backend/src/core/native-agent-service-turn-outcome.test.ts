@@ -141,6 +141,37 @@ describe("native queue mode preservation", () => {
   });
 });
 
+describe("native queue required session mode", () => {
+  test("a prompt that needs the session's Plan mode is parked, not sent, once the session left it", async () => {
+    const stub = providerStub("codex");
+    await withService(stub.provider, async ({ service, storage }) => {
+      const queueKey = `codex\0${logicalSessionKey}`;
+      const key = nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey);
+      await storage.savePromptQueue(queueKey, "env-1", [
+        { id: "d-1", text: "read-only discussion", mode: "plan", requireSessionMode: "plan" },
+      ]);
+      service.notifyPromptQueueChanged(queueKey);
+      // The session has no recorded Plan mode: nothing is sent, and the queue
+      // parks on the prompt with the reason.
+      await waitForCondition(
+        async () => (await storage.getPromptQueue(queueKey))?.dispatchError !== undefined,
+      );
+      expect(stub.send).not.toHaveBeenCalled();
+      expect((await storage.getPromptQueue(queueKey))?.dispatchError?.message).toContain(
+        "no longer in Plan mode",
+      );
+
+      // Back in Plan, an explicit retry sends it in Plan (the session's mode).
+      await storage.updateNativeAgentSessionControls(key, "provider-session", { mode: "plan" });
+      await storage.retryPromptQueueDispatch(queueKey);
+      markIdle(service, "codex", "provider-session");
+      service.notifyPromptQueueChanged(queueKey);
+      await waitForCondition(() => stub.send.mock.calls.length === 1);
+      expect(stub.send.mock.calls[0]![2].mode).toBe("plan");
+    });
+  });
+});
+
 describe("native turn outcomes", () => {
   test("the drain records the previous turn's provider error before parking", async () => {
     const stub = providerStub("claude");

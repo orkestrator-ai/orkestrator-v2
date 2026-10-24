@@ -191,6 +191,8 @@ function targetLabel(query: BrowserPreviewAnchorQuery): string {
 
 export class BrowserPreviewPinSessions {
   private readonly tabs = new Map<string, PinnedTab>();
+  /** Resolutions returned to the renderer, by `state|rule` (closed vocabularies). */
+  private readonly resolutionCounts = new Map<string, number>();
   /** Tabs whose pins were cleared by a document change and not yet re-requested. */
   private readonly invalidated = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -348,7 +350,19 @@ export class BrowserPreviewPinSessions {
         this.ensureTimer();
       }
     }
-    return this.results(tab);
+    const results = this.results(tab);
+    for (const result of results) this.countResolution(result.resolution);
+    return results;
+  }
+
+  private countResolution(resolution: WebAnnotationAnchorResolution): void {
+    const key = `${resolution.state}|${resolution.rule}`;
+    this.resolutionCounts.set(key, (this.resolutionCounts.get(key) ?? 0) + 1);
+  }
+
+  /** Content-free counters for diagnostics: resolutions by state and rule. */
+  anchorResolutionCounts(): Record<string, number> {
+    return Object.fromEntries(this.resolutionCounts);
   }
 
   private results(tab: PinnedTab): BrowserPreviewAnchorResult[] {
@@ -538,10 +552,12 @@ export class BrowserPreviewPinSessions {
       resolution?: WebAnnotationAnchorResolution,
     ): BrowserPreviewShowOnPageResult => {
       const generation = this.options.preview(input.tabId)?.generation ?? handle.generation;
+      const resolved = resolution ?? this.resolution(generation, "missing", "none");
+      this.countResolution(resolved);
       return {
         outcome: result,
         navigated,
-        resolution: resolution ?? this.resolution(generation, "missing", "none"),
+        resolution: resolved,
         documentGeneration: generation,
       };
     };

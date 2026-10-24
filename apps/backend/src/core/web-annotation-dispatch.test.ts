@@ -294,11 +294,82 @@ describe("WebAnnotationDispatchAdapter.publish", () => {
   });
 
   test("a session-scoped mode provider never gets per-turn plan mode for discussion", () => {
-    expect(adapter.capabilitiesFor("claude").planMode).toBe(true);
+    expect(adapter.capabilitiesFor("claude")).toMatchObject({
+      planMode: true,
+      planModeScope: "turn",
+    });
     // Codex, Cursor and Grok persist a prompt's mode on the session.
     expect(adapter.capabilitiesFor("codex").planMode).toBe(false);
     expect(adapter.capabilitiesFor("cursor").planMode).toBe(false);
     expect(adapter.capabilitiesFor("opencode").planMode).toBe(false);
+    expect(adapter.capabilitiesFor("pi").planMode).toBe(false);
+  });
+
+  test("a session-scoped session already in Plan can discuss read-only without a mode change", async () => {
+    const codex: WebAnnotationDestination = {
+      agent: "codex",
+      tabId: "tab-2",
+      logicalSessionKey: `env-${ENV}:tab-2`,
+    };
+    const codexKey = nativeAgentSessionStorageKey(ENV, "codex", codex.logicalSessionKey);
+    const codexQueue = webAnnotationQueueKey(codex);
+    const session = (mode: "plan" | "build") => ({ controls: { mode }, owner: undefined }) as never;
+    expect(adapter.capabilitiesFor("codex", { session: session("plan") })).toMatchObject({
+      planMode: true,
+      planModeScope: "session",
+    });
+    expect(adapter.capabilitiesFor("cursor", { session: session("build") }).planMode).toBe(false);
+    // OpenCode and Pi have no mode at all.
+    expect(adapter.capabilitiesFor("opencode", { session: session("plan") }).planMode).toBe(false);
+
+    const discuss = (id: string) =>
+      request(
+        {
+          operation: "discuss",
+          readOnly: "plan-mode",
+          destination: codex,
+          queueKey: codexQueue,
+        },
+        id,
+      );
+    await storage.getOrCreateNativeAgentSession(
+      {
+        key: codexKey,
+        environmentId: ENV,
+        agent: "codex",
+        logicalSessionKey: codex.logicalSessionKey,
+        controls: { mode: "plan" },
+      },
+      async () => "provider-codex",
+    );
+    expect(
+      await adapter.publish({ request: discuss("req-d1"), text: text("req-d1", "b", "discuss") }),
+    ).toEqual({ status: "queued", dispatchMode: "plan" });
+    const [queued] = (await storage.getPromptQueue(codexQueue))!.messages as Array<
+      Record<string, unknown>
+    >;
+    // Plan equals the session's own mode, and the drain re-checks it.
+    expect(queued).toMatchObject({ mode: "plan", requireSessionMode: "plan" });
+    expect(queued?.planModeEnabled).toBeUndefined();
+
+    // The user switched the session to Build before a second discussion was
+    // queued: it is refused rather than switching the mode back or running
+    // with write access.
+    const current = await storage.getNativeAgentSession(codexKey);
+    await storage.updateNativeAgentSessionControls(codexKey, current!.providerSessionId, {
+      mode: "build",
+    });
+    const refused = await adapter.publish({
+      request: discuss("req-d2"),
+      text: text("req-d2", "b", "discuss"),
+    });
+    expect(refused).toMatchObject({ status: "rejected" });
+    expect(refused.status === "rejected" && refused.reason).toContain("no longer in Plan mode");
+    expect((await storage.getPromptQueue(codexQueue))!.messages).toHaveLength(1);
+    // The already queued one is still recognised as published (same body).
+    expect(
+      await adapter.publish({ request: discuss("req-d1"), text: text("req-d1", "b", "discuss") }),
+    ).toEqual({ status: "queued", dispatchMode: "plan" });
   });
 
   test("an id removed from the chat queue is consumed and never republished", async () => {

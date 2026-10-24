@@ -1416,6 +1416,45 @@ export class WebAnnotationRequests {
     if (this.reconcileTicks % GC_EVERY_TICKS === 1) await this.collectAllGarbage();
   }
 
+  /**
+   * A native turn just ended in one session (the activity observer's
+   * turn-end edge). Observe that session's active requests now instead of on
+   * a later pass: the outcome is read once either way, but reading it while
+   * the bridge that ran the turn is still up, and before a later prompt
+   * supersedes it, is what keeps it from settling as `unknown`. Only already
+   * loaded environments are looked at; nothing is hydrated or started.
+   */
+  async noteTurnEnded(input: {
+    environmentId: string;
+    agent: string;
+    logicalSessionKey: string;
+  }): Promise<void> {
+    if (this.stopped || !this.ctx.options.dispatch) return;
+    if (!this.ctx.storage.loadedEnvironmentIds().includes(input.environmentId)) return;
+    const store = await this.ctx.storage.environment(input.environmentId).catch(() => null);
+    if (!store || store.status !== "ready" || store.isClosed) return;
+    const matching = store
+      .activeRequestIds()
+      .filter((requestId) => {
+        const request = store.manifest.requests[requestId];
+        return (
+          request !== undefined &&
+          request.state !== "prepared" &&
+          request.destination.agent === input.agent &&
+          request.destination.logicalSessionKey === input.logicalSessionKey
+        );
+      })
+      .slice(0, WEB_ANNOTATION_LIMITS.requestRecoveryBatch);
+    for (const requestId of matching) {
+      if (this.stopped) return;
+      await this.reconcileRequest(input.environmentId, requestId).catch((error: unknown) => {
+        console.warn(
+          `[web-annotations] Turn-end reconcile failed: ${error instanceof Error ? error.name : "unknown"}`,
+        );
+      });
+    }
+  }
+
   private async collectAllGarbage(): Promise<void> {
     const deadline = Date.now() + GC_DEADLINE_MS;
     for (const environmentId of this.ctx.storage.loadedEnvironmentIds()) {

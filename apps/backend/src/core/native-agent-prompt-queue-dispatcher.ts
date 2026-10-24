@@ -710,6 +710,24 @@ export class NativeAgentPromptQueueDispatcher {
       this.clearQueueBackoff(queueKey);
       return;
     }
+    // A backend-authored prompt that relies on the session's own mode (a
+    // read-only web annotation discussion in a session-scoped Plan mode) is
+    // sent only while the session is still in that mode. Sending it anyway
+    // would switch the mode back, or run it with write access; park it with
+    // the reason instead, and the owner retries or cancels.
+    const requiredMode = message.requireSessionMode;
+    if (requiredMode !== undefined) {
+      const current = (await this.storage.getNativeAgentSession(session.key))?.controls?.mode;
+      if (requiredMode !== "plan" || current !== "plan") {
+        await this.storage.failPromptQueueDispatch(
+          queueKey,
+          reservation.requestId,
+          `The session is no longer in Plan mode, so this read-only prompt was not sent. Switch the session back to Plan and retry, or cancel it.`,
+        );
+        this.clearQueueBackoff(queueKey);
+        return;
+      }
+    }
     try {
       await this.host.dispatchPrompt({
         environmentId: queue.environmentId,

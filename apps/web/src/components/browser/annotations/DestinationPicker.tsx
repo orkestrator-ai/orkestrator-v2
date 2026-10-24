@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Plus, RefreshCw } from "lucide-react";
+import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import {
   WEB_ANNOTATION_COMMANDS,
   type WebAnnotationDestination,
   type WebAnnotationDestinationOption,
+  type WebAnnotationRequestOperation,
 } from "@orkestrator/protocol/web-annotations";
 import { Button } from "@/components/ui/button";
 import {
@@ -43,6 +45,19 @@ export function imageSupportLabel(option: WebAnnotationDestinationOption): strin
     : "Images supported";
 }
 
+/** How Discuss runs in this session: read-only, or advisory and why. */
+export function discussModeLabel(option: WebAnnotationDestinationOption): string {
+  if (option.planMode) {
+    return option.planModeScope === "session"
+      ? "Discuss runs in this session's Plan mode (read-only)"
+      : "Discuss uses read-only plan mode";
+  }
+  const composer = nativeAgentCapabilities(option.destination.agent).composer;
+  return composer.mode && composer.modeScope === "session"
+    ? "Discuss is advisory: switch this session to Plan in its chat for read-only"
+    : "Discuss is advisory (no read-only mode)";
+}
+
 export function destinationName(destination: WebAnnotationDestination | null | undefined) {
   if (!destination) return "an agent";
   return destination.label ?? destination.agent;
@@ -59,6 +74,7 @@ export function DestinationPicker({
   fallback,
   defaultFor,
   excludeTabId,
+  operation,
 }: {
   environmentId: string;
   value: WebAnnotationDestinationOption | null;
@@ -69,6 +85,12 @@ export function DestinationPicker({
   defaultFor?: { annotationId: string; metadataRevision: number } | null;
   /** A session this choice must not return to (the one being retargeted away from). */
   excludeTabId?: string | null;
+  /**
+   * The operation being prepared. For Discuss in a session that cannot run it
+   * read-only, the sessions that can are offered instead; nothing changes the
+   * chosen session's own mode.
+   */
+  operation?: WebAnnotationRequestOperation | null;
 }) {
   const [options, setOptions] = useState<WebAnnotationDestinationOption[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -222,9 +244,7 @@ export function DestinationPicker({
                   {imageSupportLabel(option)}
                 </span>
                 <span className="block text-muted-foreground">
-                  {option.planMode
-                    ? "Discuss uses read-only plan mode"
-                    : "Discuss is advisory (no read-only mode)"}
+                  {discussModeLabel(option)}
                   {option.resultTools ? " · reports structured results" : ""}
                 </span>
                 {option.holds.map((hold) => (
@@ -237,6 +257,58 @@ export function DestinationPicker({
           })}
         </div>
       )}
+      {operation === "discuss" && value && !value.planMode && options && (
+        <ReadOnlyAlternatives
+          options={options.filter(
+            (option) => option.planMode && option.destination.tabId !== value.destination.tabId,
+          )}
+          onChoose={choose}
+        />
+      )}
     </fieldset>
+  );
+}
+
+/**
+ * Discuss in a session without a read-only mode runs under that session's
+ * own permissions. Offer the sessions in this environment that can discuss
+ * read-only instead (a per-turn plan mode, or a session already in Plan);
+ * when there are none the advisory label stands. No session's mode is
+ * changed to make this work.
+ */
+function ReadOnlyAlternatives({
+  options,
+  onChoose,
+}: {
+  options: WebAnnotationDestinationOption[];
+  onChoose: (option: WebAnnotationDestinationOption) => void;
+}) {
+  if (options.length === 0) {
+    return (
+      <p className="text-[11px] text-muted-foreground" data-read-only-alternatives="none">
+        No session in this environment can discuss read-only. Use a Claude session, or switch a
+        Codex, Cursor or Grok session to Plan in its chat, then refresh.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-1 text-[11px]" data-read-only-alternatives>
+      <p className="text-muted-foreground">Discuss read-only in another session instead:</p>
+      <div className="flex flex-wrap gap-1">
+        {options.map((option) => (
+          <Button
+            key={option.destination.tabId}
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-auto min-h-6 max-w-full whitespace-normal break-words px-2 py-0.5 text-left text-[11px]"
+            data-read-only-alternative={option.destination.tabId}
+            onClick={() => onChoose(option)}
+          >
+            {option.title} ({option.destination.agent})
+          </Button>
+        ))}
+      </div>
+    </div>
   );
 }

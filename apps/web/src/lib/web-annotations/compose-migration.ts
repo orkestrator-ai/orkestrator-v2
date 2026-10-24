@@ -1,5 +1,6 @@
 /**
- * Legacy browser notes in native compose drafts (plan step 09).
+ * Legacy browser notes in native compose drafts ("Legacy migration" in
+ * docs/architecture/web-page-annotations.md).
  *
  * The backend migrates persisted drafts itself. A dirty in-memory draft that
  * still holds an unmigrated browser note is reconciled through the same

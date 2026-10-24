@@ -15,6 +15,7 @@ import type {
   BrowserPreviewBounds,
   BrowserPreviewCaptureAck,
   BrowserPreviewCaptureCapabilities,
+  BrowserPreviewCaptureDiagnostics,
   BrowserPreviewCaptureEvent,
   BrowserPreviewExpiredCaptureNotice,
   BrowserPreviewOpenLinkEvent,
@@ -664,6 +665,13 @@ export class BrowserPreviewManager {
 
   getPinResults(tabId: string): Promise<BrowserPreviewPinSnapshot | null> {
     return this.pins.getPinResults(tabId);
+  }
+
+  async getCaptureDiagnostics(): Promise<BrowserPreviewCaptureDiagnostics> {
+    return {
+      spool: (await this.options.captureStore?.stats?.()) ?? null,
+      anchorResolutions: this.pins.anchorResolutionCounts(),
+    };
   }
 
   showOnPage(input: BrowserPreviewShowOnPageInput): Promise<BrowserPreviewShowOnPageResult> {

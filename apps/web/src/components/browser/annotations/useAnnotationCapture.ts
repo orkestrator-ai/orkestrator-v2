@@ -1,5 +1,6 @@
 /**
- * Capture transfer coordinator (plan step 04, renderer side).
+ * Capture transfer coordinator, renderer side ("Pending spool and
+ * acknowledged transfer" in docs/architecture/web-page-annotations.md).
  *
  * The desktop main process owns selection and a bounded pending spool that
  * survives renderer unmounts. This hook starts/cancels selection, follows the

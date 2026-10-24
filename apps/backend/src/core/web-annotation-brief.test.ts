@@ -313,6 +313,55 @@ describe("compileWebAnnotationBrief", () => {
     expect(delivered.evidence).toMatchObject({ imageCount: 1, imageBytes: 1024 });
   });
 
+  test("a region's crop and viewport images are labelled from the recorded relation", () => {
+    const full = asset("asset-full", "full");
+    const crop = asset("asset-crop", "crop");
+    const capture = fixtureCapture("region", {
+      id: "capture-annotation-1",
+      assetIds: ["asset-full", "asset-crop"],
+      regionCrop: {
+        assetId: "asset-crop",
+        sourceAssetId: "asset-full",
+        sourceRect: { x: 20, y: 40, width: 320, height: 120 },
+      },
+      producerSource: "client-declared",
+    });
+    const brief = compileWebAnnotationBrief(
+      input({ annotations: [item("annotation-1", { capture, assets: [full, crop] })] }),
+    );
+    const annotation = envelope(brief.body).annotations[0]!;
+    const images = (annotation.image as { images: Array<Record<string, unknown>> }).images;
+    expect(images).toEqual([
+      expect.objectContaining({ digest: full.digest, role: "viewport" }),
+      expect.objectContaining({
+        digest: crop.digest,
+        role: "region-crop",
+        cropOf: full.digest,
+        sourceRect: { x: 20, y: 40, width: 320, height: 120 },
+      }),
+    ]);
+    expect(annotation.page).toMatchObject({
+      producer: "desktop-native",
+      producerSource: "client-declared",
+    });
+
+    // Without a recorded relation the images are listed without roles.
+    const plain = compileWebAnnotationBrief(
+      input({
+        annotations: [
+          item("annotation-1", {
+            capture: { ...capture, regionCrop: undefined },
+            assets: [full, crop],
+          }),
+        ],
+      }),
+    );
+    const plainImages = (
+      envelope(plain.body).annotations[0]!.image as { images: Array<Record<string, unknown>> }
+    ).images;
+    expect(plainImages.every((image) => image.role === undefined)).toBe(true);
+  });
+
   test("images are deduplicated by digest and capped by count and bytes", () => {
     const shared = asset("asset-a", "same");
     const twin = { ...asset("asset-b", "same"), id: "asset-b" };

@@ -28,6 +28,11 @@ import {
   isAnnotationEvidencePath,
   runContainerEvidenceScript,
 } from "./web-annotation-evidence-files.js";
+import {
+  MAX_WORKSPACE_PATH_CHECKS,
+  runContainerPathCheck,
+} from "./web-annotation-source-checks.js";
+import { isSafeRelativePath } from "@orkestrator/protocol/web-annotations-validation";
 import path from "node:path";
 import {
   pathExists,
@@ -1193,6 +1198,21 @@ export function registerTerminalCommands(
       child.once("error", reject);
     });
     return fullPath;
+  });
+  // Containment and existence of agent-reported paths in a container
+  // workspace (web annotation file checks). Runs `stat` only, inside the
+  // container, with the same bounds as the local check; never reads contents.
+  register("check_container_workspace_paths", async ({ containerId, paths }) => {
+    const id = asString(containerId, "containerId");
+    if (
+      !Array.isArray(paths) ||
+      paths.length > MAX_WORKSPACE_PATH_CHECKS ||
+      !paths.every((entry) => typeof entry === "string" && isSafeRelativePath(entry))
+    ) {
+      throw new Error("paths must be at most 200 workspace-relative paths");
+    }
+    // Paths travel as JSON on stdin, never on the exec command line.
+    return runContainerPathCheck(spawnCommand, id, paths as string[]);
   });
   register("delete_container_annotation_evidence", async ({ containerId, filePath, digest }) => {
     const id = asString(containerId, "containerId");

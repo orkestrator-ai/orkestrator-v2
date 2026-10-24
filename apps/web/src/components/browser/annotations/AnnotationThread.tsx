@@ -23,6 +23,7 @@ import {
   anchorStateLabel,
   annotationStateLabel,
   annotationTitle,
+  captureProducerLabel,
   pageLabel,
   sameService,
   targetPrecision,
@@ -33,6 +34,15 @@ import { RequestCard } from "./RequestCard";
 import { RequestComposer, type ComposerItem } from "./RequestComposer";
 import { SavedImageControls } from "./SavedImageControls";
 import { useThreadHistory } from "./useThreadHistory";
+
+/**
+ * The region crop among a capture's images: the backend-recorded relation,
+ * or, for captures stored before it existed, the second image of a region.
+ */
+function regionCropAssetId(capture: WebAnnotationCapture): string | null {
+  if (capture.regionCrop) return capture.regionCrop.assetId;
+  return capture.target.kind === "region" ? (capture.assetIds[1] ?? null) : null;
+}
 
 function CaptureEvidence({ capture }: { capture: WebAnnotationCapture }) {
   const [open, setOpen] = useState(false);
@@ -425,17 +435,29 @@ export function AnnotationThread({
             )}
             <AnnotationImage
               environmentId={environmentId}
-              assetId={captureRecord.assetIds[0] ?? annotation.thumbnailAssetId}
+              assetId={
+                captureRecord.regionCrop?.sourceAssetId ??
+                captureRecord.assetIds[0] ??
+                annotation.thumbnailAssetId
+              }
               alt={`Capture of ${annotation.targetLabel}`}
             />
-            {captureRecord.assetIds[1] && captureRecord.target.kind === "region" && (
+            {regionCropAssetId(captureRecord) && (
               <AnnotationImage
                 environmentId={environmentId}
-                assetId={captureRecord.assetIds[1]}
+                assetId={regionCropAssetId(captureRecord)!}
                 alt={`Selected region of ${annotation.targetLabel}`}
                 className="max-h-32"
               />
             )}
+            {captureRecord.regionCrop && (
+              <p className="text-[11px] text-muted-foreground" data-region-crop>
+                The region is cut from the full screenshot above.
+              </p>
+            )}
+            <p className="text-[11px] text-muted-foreground" data-capture-producer>
+              {captureProducerLabel(captureRecord)}
+            </p>
             <SavedImageControls annotation={annotation} capture={captureRecord} />
             <CaptureEvidence capture={captureRecord} />
           </>

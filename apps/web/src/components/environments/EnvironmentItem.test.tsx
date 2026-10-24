@@ -74,23 +74,25 @@ function renderItem(environment: Environment = environmentFixture()) {
   return render(<EnvironmentItem environment={environment} isSelected={false} {...callbacks} />);
 }
 
-function expectWorking(ring: HTMLElement) {
-  expect(ring.classList).toContain("border-blue-500");
-  expect(ring.classList).toContain("animate-pulse");
-  expect(ring.classList).not.toContain("border-success");
-  expect(ring.classList).not.toContain("border-amber-500");
+function expectWorking(halo: HTMLElement) {
+  expect(halo.parentElement?.getAttribute("data-state")).toBe("working");
+  expect(halo.classList).toContain("bg-red-500/50");
+  expect(halo.classList).toContain("animate-pulse");
+  expect(halo.classList).not.toContain("bg-yellow-400/50");
 }
 
-function expectIdle(ring: HTMLElement) {
-  expect(ring.classList).toContain("border-success");
-  expect(ring.classList).not.toContain("border-blue-500");
-  expect(ring.classList).not.toContain("animate-pulse");
+function expectIdle(halo: HTMLElement) {
+  expect(halo.parentElement?.getAttribute("data-state")).toBe("idle");
+  expect(halo.classList).toContain("opacity-0");
+  expect(halo.classList).not.toContain("bg-red-500/50");
+  expect(halo.classList).not.toContain("animate-pulse");
 }
 
-function expectWaiting(ring: HTMLElement) {
-  expect(ring.classList).toContain("border-amber-500");
-  expect(ring.classList).toContain("animate-pulse");
-  expect(ring.classList).not.toContain("border-blue-500");
+function expectWaiting(halo: HTMLElement) {
+  expect(halo.parentElement?.getAttribute("data-state")).toBe("waiting");
+  expect(halo.classList).toContain("bg-yellow-400/50");
+  expect(halo.classList).toContain("animate-pulse");
+  expect(halo.classList).not.toContain("bg-red-500/50");
 }
 
 beforeEach(() => {

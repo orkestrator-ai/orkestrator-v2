@@ -5,19 +5,25 @@ export function EnvironmentStatusMarkerFixture() {
   return (
     <main className="flex flex-col gap-8 p-12">
       {[true, false].map((local) => (
-        <div key={String(local)} className="flex gap-8">
-          {(["inactive", "idle", "working", "waiting"] as const).map((state) => (
-            <div key={state} data-testid={`${local ? "circle" : "square"}-${state}`}>
-              <EnvironmentStatusMarker
-                local={local}
-                state={state}
-                machine={{ name: "Build machine", colorToken: "teal", status: "Connected" }}
-              />
-            </div>
-          ))}
-          <div data-testid={`${local ? "circle" : "square"}-neutral`}>
-            <EnvironmentStatusMarker local={local} state="inactive" machine={null} />
-          </div>
+        <div key={String(local)} className="flex flex-wrap gap-8">
+          {[true, false].map((withMachine) =>
+            (["inactive", "idle", "working", "waiting"] as const).map((state) => (
+              <div
+                key={`${withMachine}-${state}`}
+                data-testid={`${local ? "circle" : "square"}-${withMachine ? "" : "neutral-"}${state}`}
+              >
+                <EnvironmentStatusMarker
+                  local={local}
+                  state={state}
+                  machine={
+                    withMachine
+                      ? { name: "Build machine", colorToken: "teal", status: "Connected" }
+                      : null
+                  }
+                />
+              </div>
+            )),
+          )}
         </div>
       ))}
     </main>

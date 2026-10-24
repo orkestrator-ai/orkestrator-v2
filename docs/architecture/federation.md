@@ -463,15 +463,20 @@ with `MachinesFilter`:
   environment ID. Timestamps come from different clocks, so this is a
   presentation sort only.
 - `EnvironmentStatusMarker` sits immediately before every environment name:
-  federated rows and the bound machine's `EnvironmentItem`. Its 12 px
-  `MachineDot` center has no separate outline and fills the interior of a 2 px
-  state ring (16 px overall). Only the ring shows activity or health; the
-  machine colour stays steady. Local environments use a circle and containers
-  a square. An unavailable machine's rows are dimmed
-  and read "Connection lost; last observed …", never "stopped". The dot is
-  decorative when the label names the machine, and an image otherwise. In
-  forced-colours mode it keeps an outline and compact badges show the name.
-  "Compact machine labels" reduces labels to the dot plus a tooltip.
+  federated rows and the bound machine's `EnvironmentItem`. Its 8 px
+  `MachineDot` center sits above a 16 px background halo, without a separate
+  outline. Only the halo pulses: red while working and yellow while waiting
+  for input. The machine colour stays steady throughout the animation; clients
+  without a machine identity use a neutral center. Stopped environments have
+  a faint outline, while running idle environments have no halo. Local
+  environments use a circle and containers a square. An unavailable machine's
+  rows are dimmed and read "Connection lost; last observed …", never "stopped".
+  The dot is decorative when the label names the machine, and an image otherwise. In
+  forced-colours mode the center uses `CanvasText`; working and waiting keep
+  static 2 px `CanvasText` outlines (solid and dashed respectively), while
+  inactive and idle halos are hidden. Machine dots keep an outline and compact
+  badges show the name. "Compact machine labels" reduces labels to the dot plus
+  a tooltip.
 - A row of the bound machine selects in place. A row of another machine opens
   its panel. Its actions menu offers Open in panel, Copy link, Start, Stop and
   Delete…, all disabled while the machine is not writable.

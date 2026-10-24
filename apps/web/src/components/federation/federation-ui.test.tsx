@@ -334,7 +334,7 @@ test("merged lists draw this window's own projects and rows with its full contro
   }
 });
 
-test("a repository group names each member by its machine and shows a machine dot, not a count", async () => {
+test("a repository group names each member by its machine in its colour and summarizes machines and environments", async () => {
   const hint = "github.com/acme/app";
   const first = machineView();
   first.projects[0]!.repositoryHint = hint;
@@ -373,19 +373,25 @@ test("a repository group names each member by its machine and shows a machine do
     "teal",
   );
   expect(within(heading).queryByText("2") === null).toBe(true);
-  const members = screen.getAllByTestId("federated-project");
-  expect(members.map((member) => member.querySelector(".truncate")?.textContent)).toEqual([
-    "Machine A",
-    "Machine B",
-  ]);
-  // Members lead with a home in their machine's colour instead of a trailing
-  // dot, and put the chevron last.
+  // The heading leads with the command node's home (no command node is known
+  // here) over "owner/repo" and a machine and environment count.
   expect(
-    members.map((member) =>
-      within(member).getByTestId("machine-home-icon").getAttribute("data-machine-color"),
-    ),
-  ).toEqual(["teal", "rose"]);
+    within(heading).getByTestId("command-node-home-icon").getAttribute("data-machine-color"),
+  ).toBe("neutral");
+  expect(within(heading).getByText("acme/").classList).toContain("text-muted-foreground");
+  expect(within(heading).getByText("app").classList).toContain("text-foreground");
+  expect(within(heading).getByText("2 machines · 2 environments")).toBeTruthy();
+  const content = document.querySelector("[data-project-folder-content]")!;
+  expect(content.className).not.toContain("ml-3");
+  const members = screen.getAllByTestId("federated-project");
+  const labels = members.map((member) => member.querySelector(".truncate")!);
+  expect(labels.map((label) => label.textContent)).toEqual(["Machine A", "Machine B"]);
+  // Members are named in their machine's colour, with no leading home and no
+  // trailing dot, and put the chevron last.
+  expect(labels[0]!.classList).toContain("text-teal-500");
+  expect(labels[1]!.classList).toContain("text-rose-500");
   for (const member of members) {
+    expect(within(member).queryByTestId("machine-home-icon") === null).toBe(true);
     const header = member.firstElementChild!.firstElementChild as HTMLElement;
     expect(within(header).queryByTestId("machine-dot") === null).toBe(true);
     expect(header.lastElementChild!.getAttribute("aria-label")).toMatch(/^Collapse project /);
@@ -393,6 +399,69 @@ test("a repository group names each member by its machine and shows a machine do
   // The heading itself is the drag handle; there is no separate grip.
   expect(heading.getAttribute("aria-roledescription")).toBe("sortable");
   expect(screen.queryByRole("button", { name: /^Move repository/ }) === null).toBe(true);
+});
+
+test("a repository heading uses the command node's colour even when that machine is filtered out", async () => {
+  installTwoMachines();
+  // The workspace is on a different machine from the command node.
+  const remote = machineView({ bound: true });
+  remote.projects[0]!.repositoryHint = "github.com/acme/app";
+  const commandNode = machineView({
+    connectionId: "bk_self",
+    backendId: "bk_self" as BackendId,
+    name: "Command node",
+    colorToken: "violet",
+    projects: [],
+    environmentsByProject: new Map(),
+  });
+  renderWithFederation(
+    <MergedProjectList
+      machines={[remote, commandNode]}
+      shownIds={new Set([remote.connectionId])}
+      mode="repository"
+      renderBoundProject={() => null}
+      onBoundEnvironmentDragEnd={() => undefined}
+    />,
+  );
+  const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
+  const home = within(heading).getByTestId("command-node-home-icon");
+  await waitFor(() => expect(home.getAttribute("data-machine-color")).toBe("violet"));
+  expect(home.querySelector("svg")!.classList).toContain("text-violet-500");
+  expect(within(heading).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
+    "teal",
+  );
+});
+
+test("a repository with one visible environment uses singular summary labels and excludes project homes", async () => {
+  const machine = machineView();
+  machine.projects[0]!.repositoryHint = "github.com/acme/app";
+  machine.environmentsByProject = new Map([
+    [
+      "project-1",
+      [
+        firstEnvironment(machine),
+        {
+          ...firstEnvironment(machine),
+          ref: environmentRef(machine.backendId!, "home"),
+          key: environmentKey(environmentRef(machine.backendId!, "home")),
+          isProjectHome: true,
+        },
+      ],
+    ],
+  ]);
+  await act(async () => {
+    render(
+      <MergedProjectList
+        machines={[machine]}
+        shownIds={new Set([machine.connectionId])}
+        mode="repository"
+        renderBoundProject={() => null}
+        onBoundEnvironmentDragEnd={() => undefined}
+      />,
+    );
+  });
+  const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
+  expect(within(heading).getByText("1 machine · 1 environment")).toBeTruthy();
 });
 
 describe("CL-05: machine identity visual rules", () => {
@@ -457,12 +526,12 @@ describe("CL-05: machine identity visual rules", () => {
             );
             const ring = within(marker).getByTestId("environment-status-ring");
             const color = !active
-              ? "border-muted-foreground/60"
+              ? "border-muted-foreground/40"
               : activity === "idle"
-                ? "border-success"
+                ? "opacity-0"
                 : activity === "working"
-                  ? "border-blue-500"
-                  : "border-amber-500";
+                  ? "bg-red-500/50"
+                  : "bg-yellow-400/50";
             expect(ring.classList).toContain(color);
             expect(ring.classList.contains("animate-pulse")).toBe(active && activity !== "idle");
             expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);

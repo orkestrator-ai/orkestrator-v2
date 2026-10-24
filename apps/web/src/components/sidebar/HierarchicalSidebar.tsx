@@ -76,6 +76,7 @@ import { useFederation } from "@/components/federation/FederationProvider";
 import { useProjectCopyStore } from "@/stores/projectCopyStore";
 import { MachinesFilter } from "@/components/federation/MachinesFilter";
 import { MachineDot, MachineHomeIcon } from "@/components/federation/MachineDot";
+import { machineTextClass } from "@/lib/federation/machine-colors";
 import {
   FederatedActivityList,
   MachineSectionList,
@@ -1021,6 +1022,7 @@ export function HierarchicalSidebar() {
       sortableId: string;
       machineIcon?: ReactNode;
       label?: string;
+      labelClassName?: string;
     },
   ) => (
     <SortableProjectGroup
@@ -1028,6 +1030,7 @@ export function HierarchicalSidebar() {
       sortableId={mixed?.sortableId}
       machineIcon={mixed?.machineIcon}
       label={mixed?.label}
+      labelClassName={mixed?.labelClassName}
       project={project}
       environments={getProjectEnvironments(project.id)}
       home={allEnvironments.find(
@@ -1297,6 +1300,14 @@ export function HierarchicalSidebar() {
   ) => {
     const project = projectsById.get(projectId);
     if (!project) return null;
+    // A repository member is named by its machine, in the machine's colour.
+    if (federatedMode === "repository") {
+      return renderProjectGroup(project, {
+        sortableId,
+        label,
+        labelClassName: machineTextClass(boundMachineView?.colorToken),
+      });
+    }
     // Show that this is the bound project even before this window's machine
     // is identified; its colour and name become available once identified.
     return renderProjectGroup(project, {

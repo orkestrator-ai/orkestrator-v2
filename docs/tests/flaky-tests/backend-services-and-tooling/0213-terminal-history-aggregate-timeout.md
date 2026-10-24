@@ -84,3 +84,7 @@ The aggregate repeated this case during coordinator adapter validation. Exact
 commands, timing, owner rerun results and evidence are recorded in
 [0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
 The owning implementation, assertions, timeouts and skips were unchanged.
+
+## Environment-list UI main merge — 2026-10-24
+
+The normalization case exceeded 5000 ms in the combined workspace run (5000.99 ms), with a subsequent null-cursor error from the timed-out work. The complete unchanged owner passed alone (7.2 s). See [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md) for commands, parents and retained evidence. No implementation, assertion, timeout or skip changed.

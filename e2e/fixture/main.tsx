@@ -1,3 +1,4 @@
+import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
 import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
 import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
@@ -1753,6 +1754,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/environment-status-marker")
     return <EnvironmentStatusMarkerFixture />;
   if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
+  if (window.location.pathname === "/agent-account-status") return <AgentAccountStatusFixture />;
   if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;

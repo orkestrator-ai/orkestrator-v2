@@ -31,14 +31,18 @@ function context(overrides: Partial<CommandContext>): CommandContext {
   } as unknown as CommandContext;
 }
 
+/** Never the real machine's: a test must not read the host's Grok or Pi login. */
+const readSignIns = async () => ({ grok: { state: "signed-out" as const } });
+
 const LEAF_SNAPSHOT = {
   accounts: [],
   active: { claude: "default", codex: "default" },
 };
 
 test("lists only this machine without command nodes", async () => {
-  const result = await listMachineAgentAccounts(context({}));
+  const result = await listMachineAgentAccounts(context({}), { readSignIns });
   expect(result.machines).toHaveLength(1);
+  expect(result.machines[0]?.signIns).toEqual({ grok: { state: "signed-out" } });
   expect(result.machines[0]).toMatchObject({ self: true, state: "ok", nodeId: "self" });
 });
 
@@ -68,17 +72,33 @@ test("asks each enabled machine and keeps going when one cannot answer", async (
           asked.push(`${args.nodeId}:${args.command}`);
           if (args.nodeId === "node-b") throw new NodeUnavailableError("offline");
           if (args.nodeId === "node-slow") return new Promise(() => undefined);
+          if (args.command === "read_host_agent_sign_ins") {
+            return {
+              outcome: "ok",
+              result: {
+                grok: { state: "signed-in", source: "x".repeat(300), token: "leaked" },
+                pi: { state: "bogus" },
+              },
+            };
+          }
           return { outcome: "ok", result: LEAF_SNAPSHOT };
         },
       } as never,
     }),
-    { timeoutMs: 20 },
+    { timeoutMs: 20, readSignIns },
   );
   expect(asked.sort()).toEqual([
     "node-a:list_agent_accounts",
+    "node-a:read_host_agent_sign_ins",
     "node-b:list_agent_accounts",
+    "node-b:read_host_agent_sign_ins",
     "node-slow:list_agent_accounts",
+    "node-slow:read_host_agent_sign_ins",
   ]);
+  // Rebuilt field by field: nothing else another machine sends passes through.
+  expect(result.machines[1]?.signIns).toEqual({
+    grok: { state: "signed-in", source: "x".repeat(120) },
+  });
   expect(result.machines.map((machine) => [machine.name, machine.state])).toEqual([
     [(await storage.getBackendProfile()).displayName, "ok"],
     ["MBP3", "ok"],
@@ -87,6 +107,44 @@ test("asks each enabled machine and keeps going when one cannot answer", async (
   ]);
   expect(result.machines[0]?.nodeId).toBe("node-self");
   expect(result.machines[1]?.snapshot).toEqual(LEAF_SNAPSHOT);
+});
+
+test("a malformed peer row becomes an error cell instead of reaching Settings", async () => {
+  const result = await listMachineAgentAccounts(
+    context({
+      nodes: {
+        selfIdentity: async () => "self",
+        isLeaf: () => false,
+        listNodes: async () => ({
+          nodes: [{ nodeId: "bad", displayName: "Bad peer", enabled: true }],
+        }),
+      } as never,
+      nodePortal: {
+        invokeOnNode: async ({ command }: { command: string }) => ({
+          outcome: "ok",
+          result:
+            command === "list_agent_accounts"
+              ? {
+                  ...LEAF_SNAPSHOT,
+                  accounts: [
+                    {
+                      id: "default",
+                      platform: "claude",
+                      label: "Bad",
+                      signedIn: true,
+                      isDefault: true,
+                      isActive: true,
+                    },
+                  ],
+                }
+              : { grok: { state: "signed-in", token: "secret", source: "s".repeat(500) } },
+        }),
+      } as never,
+    }),
+    { readSignIns },
+  );
+  expect(result.machines[1]).toMatchObject({ state: "error", error: "Invalid account snapshot" });
+  expect(result.machines[1]?.snapshot).toBeUndefined();
 });
 
 test("omits detaching nodes and distinguishes invalid responses from errors", async () => {
@@ -106,7 +164,8 @@ test("omits detaching nodes and distinguishes invalid responses from errors", as
         }),
       } as never,
       nodePortal: {
-        invokeOnNode: async ({ nodeId }: { nodeId: string }) => {
+        invokeOnNode: async ({ nodeId, command }: { nodeId: string; command: string }) => {
+          if (command === "read_host_agent_sign_ins") return { outcome: "ok", result: {} };
           asked.push(nodeId);
           if (nodeId === "error") throw new Error("failed".repeat(60));
           if (nodeId === "unknown") return { outcome: "unknown" };
@@ -114,11 +173,12 @@ test("omits detaching nodes and distinguishes invalid responses from errors", as
         },
       } as never,
     }),
+    { readSignIns },
   );
   expect(asked.sort()).toEqual(["error", "invalid", "unknown"]);
   expect(result.machines.slice(1).map((row) => row.state)).toEqual([
     "error",
-    "unavailable",
+    "error",
     "unavailable",
   ]);
   expect(result.machines[1]?.error).toHaveLength(200);
@@ -131,7 +191,7 @@ for (const invalid of [
   { accounts: [], active: [] },
   { accounts: [], active: { claude: "default" } },
 ]) {
-  test(`a connected node's malformed snapshot is unavailable: ${JSON.stringify(invalid)}`, async () => {
+  test(`a connected node's malformed snapshot is an error: ${JSON.stringify(invalid)}`, async () => {
     const result = await listMachineAgentAccounts(
       context({
         nodes: {
@@ -143,8 +203,9 @@ for (const invalid of [
         } as never,
         nodePortal: { invokeOnNode: async () => ({ outcome: "ok", result: invalid }) } as never,
       }),
+      { readSignIns },
     );
-    expect(result.machines[1]).toMatchObject({ nodeId: "leaf", state: "unavailable" });
+    expect(result.machines[1]).toMatchObject({ nodeId: "leaf", state: "error" });
     expect(result.machines[1]?.snapshot).toBeUndefined();
   });
 }

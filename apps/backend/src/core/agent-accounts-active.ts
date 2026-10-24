@@ -6,6 +6,7 @@ import {
   DEFAULT_AGENT_ACCOUNT_ID,
   type AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
+import { jwtExpiryMs, restrictCodexAuthSnapshot } from "@orkestrator/protocol/login-snapshots";
 
 import type { CommandContext } from "./commands-context.js";
 import {
@@ -114,33 +115,48 @@ export async function localBridgeIsOnActiveAccount(
   if (kind !== "claude" && kind !== "codex") return true;
   const launchedWith = localAgentAccountIds.get(key) ?? DEFAULT_AGENT_ACCOUNT_ID;
   const active = await resolveActiveAgentAccount(context, kind);
-  const tokenExpiresAt = kind === "claude" ? localAgentAccountTokenExpiry.get(key) : undefined;
+  const tokenExpiresAt = localAgentAccountTokenExpiry.get(key);
   const tokenLapsed =
     tokenExpiresAt !== undefined && Date.now() >= tokenExpiresAt - TOKEN_REPLACEMENT_LEAD_MS;
   // Signed in again since launch: the bridge's login is out of date even
   // though it is on the right account.
   if (launchedWith === active.accountId && !staleLoginLocalBridges.has(key)) {
-    if (kind === "claude" && loginlessLocalBridges.has(key)) {
+    if (loginlessLocalBridges.has(key)) {
       // It answers "Not logged in" to everything; relaunching only helps once
       // the account has a token to hand over.
-      const { token } = await readUsableClaudeLogin(context, active, readAddedClaudeCredentials);
-      if (!token) return true;
+      const usable =
+        kind === "claude"
+          ? Boolean(
+              (await readUsableClaudeLogin(context, active, readAddedClaudeCredentials)).token,
+            )
+          : (await readCoordinatorCodexLogin(active)).text !== undefined;
+      if (!usable) return true;
       return (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
     }
     if (tokenExpiresAt === undefined || !tokenLapsed) return true;
-    const credentials = await readActiveClaudeCredentials(context, active);
-    const freshExpiry = claudeCredentialExpiry(credentials);
+    const fresh =
+      kind === "claude"
+        ? await readFreshClaudeTokenExpiry(context, active)
+        : (await readCoordinatorCodexLogin(active)).tokenExpiresAt;
     // A lapsed lead window is only a reason to relaunch when there is a
     // better token to hand over. Keep the existing bridge until actual expiry.
-    if (
-      !freshExpiry ||
-      freshExpiry <= tokenExpiresAt ||
-      !getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS)
-    ) {
+    if (!fresh || fresh <= tokenExpiresAt) {
       if (Date.now() < tokenExpiresAt) return true;
     }
   }
   return (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
+}
+
+/** The active Claude login's expiry, when it holds a token that outlives the replacement lead. */
+async function readFreshClaudeTokenExpiry(
+  context: CommandContext,
+  active: ResolvedAgentAccount,
+): Promise<number | undefined> {
+  const credentials = await readActiveClaudeCredentials(context, active);
+  if (!getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS)) {
+    return undefined;
+  }
+  return claudeCredentialExpiry(credentials);
 }
 
 /** How long before a handed-over token expires its idle bridge is replaced. */
@@ -378,4 +394,84 @@ export async function applyCoordinatorClaudeAccount(
   env.CLAUDE_CODE_OAUTH_TOKEN = token;
   const tokenExpiresAt = claudeCredentialExpiry(credentials);
   return { accountId: active.accountId, ...(tokenExpiresAt ? { tokenExpiresAt } : {}) };
+}
+
+/** Where a coordinator finds the host's Codex login: `CODEX_HOME`, else `~/.codex`. */
+export function coordinatorHostCodexHome(): string {
+  return process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
+}
+
+/** A Codex login reduced to what a coordinator may hold. */
+export interface CoordinatorCodexLogin {
+  /** The access-only `auth.json`, absent when there is nothing usable to hand over. */
+  text?: string;
+  /** When its ChatGPT access token expires; absent for an API key, which does not. */
+  tokenExpiresAt?: number;
+}
+
+function codexAccessTokenExpiry(text: string): number | undefined {
+  try {
+    const accessToken = (JSON.parse(text) as { tokens?: { access_token?: unknown } }).tokens
+      ?.access_token;
+    return typeof accessToken === "string" ? jwtExpiryMs(accessToken) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The access-only form of a Codex `auth.json` for a coordinator.
+ *
+ * The refresh token is blanked (`restrictCodexAuthSnapshot`, the same form
+ * containers receive): Codex rotates it on every refresh, so a coordinator
+ * that refreshed a copy would retire the account's own login. An access
+ * token that will not outlive the replacement lead is not handed over at all;
+ * the bridge then starts signed out and moves over once a fresher one exists.
+ */
+export function coordinatorCodexLogin(
+  raw: string | undefined,
+  nowMs = Date.now(),
+): CoordinatorCodexLogin {
+  if (raw === undefined) return {};
+  const restricted = restrictCodexAuthSnapshot(raw, nowMs);
+  if (!("text" in restricted)) return {};
+  const tokenExpiresAt = codexAccessTokenExpiry(restricted.text);
+  if (tokenExpiresAt !== undefined && tokenExpiresAt - nowMs < TOKEN_REPLACEMENT_LEAD_MS) {
+    return {};
+  }
+  return { text: restricted.text, ...(tokenExpiresAt ? { tokenExpiresAt } : {}) };
+}
+
+/**
+ * The active Codex login as a coordinator would receive it. Codex keeps its
+ * login in a file only. Renew it in the owning home before handing out an
+ * access-only copy; the coordinator never receives the renewable login.
+ */
+export async function readCoordinatorCodexLogin(
+  active: ResolvedAgentAccount,
+): Promise<CoordinatorCodexLogin> {
+  const home = active.home ?? coordinatorHostCodexHome();
+  let raw = await readCodexAuthFile(home);
+  let login = coordinatorCodexLogin(raw);
+  if (!login.text && localCodexLoginRefresher && codexHasRefreshToken(raw)) {
+    await localCodexLoginRefresher(home).catch(() => undefined);
+    raw = await readCodexAuthFile(home);
+    login = coordinatorCodexLogin(raw);
+  }
+  return login;
+}
+
+let localCodexLoginRefresher: ((home: string) => Promise<void>) | undefined;
+
+export function setLocalCodexLoginRefresher(refresher: typeof localCodexLoginRefresher): void {
+  localCodexLoginRefresher = refresher;
+}
+
+function codexHasRefreshToken(raw: string | undefined): boolean {
+  try {
+    const token = JSON.parse(raw ?? "").tokens?.refresh_token;
+    return typeof token === "string" && token.trim() !== "";
+  } catch {
+    return false;
+  }
 }

@@ -49,8 +49,8 @@ beforeEach(() => {
   window.orkestratorPortal = { invoke: portal } as never;
   window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
 });
-afterEach(() => {
-  cleanup();
+afterEach(async () => {
+  await act(async () => cleanup());
   resetReadCoordinatorForTests();
   delete window.orkestratorPortal;
   delete window.orkestratorWorkspaceTarget;
@@ -97,7 +97,19 @@ for (const machine of ["leaf", null]) {
           ),
         ).toBe(true);
     }
-    expect(workspace).not.toHaveBeenCalled();
+    // Cursor opens the returned link on the client; all login commands still
+    // run on the selected machine rather than this workspace's backend.
+    expect(workspace.mock.calls).toEqual([
+      ["open_in_browser", { url: "https://example.com/login" }],
+    ]);
+    const cursorStart = portal.mock.calls.find(([called, args]) =>
+      machine === null
+        ? called === "cursor_sdk_login_start"
+        : called === "invoke_on_node" && args?.command === "cursor_sdk_login_start",
+    )!;
+    expect(machine === null ? cursorStart[1] : cursorStart[1]?.args).toEqual({
+      openBrowser: false,
+    });
   });
 }
 
@@ -106,5 +118,11 @@ test("an unscoped workspace sign-in follows the leaf instead of the portal", asy
   const github = await screen.findByRole("button", { name: "Sign in to GitHub" });
   await act(async () => fireEvent.click(github));
   expect(workspace).toHaveBeenCalledWith("start_github_cli_login", {});
-  expect(portal).not.toHaveBeenCalled();
+  // Federation discovery may read the portal in the background. An unscoped
+  // sign-in must still send every login operation to the workspace backend.
+  expect(
+    portal.mock.calls.filter(
+      ([command]) => command !== "get_node_status" && command !== "get_node_summaries",
+    ),
+  ).toEqual([]);
 });

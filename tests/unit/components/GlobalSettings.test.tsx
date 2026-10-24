@@ -392,6 +392,7 @@ describe("GlobalSettings", () => {
         platform,
         "default",
         { force: false },
+        // The command node's own accounts: no other machine was chosen.
         null,
       );
     },
@@ -458,9 +459,7 @@ describe("GlobalSettings", () => {
       expect(mockGetAgentAccountUsage).toHaveBeenLastCalledWith(
         "claude",
         "default",
-        {
-          force: true,
-        },
+        { force: true },
         null,
       ),
     );

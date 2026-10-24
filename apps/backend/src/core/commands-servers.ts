@@ -1,4 +1,3 @@
-import { restrictCodexAuthSnapshot } from "@orkestrator/protocol/login-snapshots";
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
   COORDINATOR_WEB_RESEARCH_ENV,
@@ -168,8 +167,7 @@ export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECU
  */
 export const ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV = "ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT";
 import { realpath } from "node:fs/promises";
-import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { sanitizeCoordinatorError } from "./coordinator-service.js";
 import {
   coordinatorRuntimeUnavailableMessage,
@@ -181,9 +179,12 @@ import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,
   applyCoordinatorClaudeAccount,
+  readCoordinatorCodexLogin,
+  coordinatorHostCodexHome,
   localBridgeIsOnActiveAccount,
   resolveActiveAgentAccount,
   stripInheritedAgentCredentials,
+  type CoordinatorAgentAccount,
 } from "./agent-accounts-active.js";
 
 /** Deletion drains briefly: the container is removed right after. */
@@ -204,32 +205,40 @@ export async function prepareCoordinatorClaudeHome(destination: string): Promise
   await chmod(destination, 0o700);
 }
 
+/**
+ * A coordinator's private Codex home, holding only an access-only copy of the
+ * active login (`coordinatorCodexLogin`): never the refresh token, which Codex
+ * rotates and would retire from the account's own login on a coordinator's
+ * refresh. Returns the handed-over token's expiry, or `loginless` when there
+ * was no usable login to hand over.
+ */
 export async function prepareCoordinatorCodexHome(
   destination: string,
-  source = process.env.CODEX_HOME?.trim() || path.join(homedir(), ".codex"),
-): Promise<void> {
+  source = coordinatorHostCodexHome(),
+): Promise<Omit<CoordinatorAgentAccount, "accountId">> {
   await mkdir(destination, { recursive: true, mode: 0o700 });
   await chmod(destination, 0o700);
+  const destinationAuth = path.join(destination, "auth.json");
+  // The directory outlives a launch: drop an earlier login before anything
+  // below can fail, so no stale or earlier account's login stays behind.
+  await rm(destinationAuth, { force: true });
   const sourceAuth = path.join(source, "auth.json");
   const sourceStat = await lstat(sourceAuth).catch(() => null);
-  if (!sourceStat) return;
+  if (!sourceStat) return { loginless: true };
   if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
     throw new Error("Codex authentication file must be a regular file, not a symbolic link");
   }
-  const destinationAuth = path.join(destination, "auth.json");
+  const login = await readCoordinatorCodexLogin({ accountId: "default", home: source });
+  if (!login.text) return { loginless: true };
   const temporary = `${destinationAuth}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   try {
-    const login = restrictCodexAuthSnapshot(await readFile(sourceAuth, "utf8"));
-    if (!("text" in login)) {
-      await rm(destinationAuth, { force: true });
-      return;
-    }
-    await writeFile(temporary, login.text, { mode: 0o600 });
+    await writeFile(temporary, login.text, { mode: 0o600, flag: "wx" });
     await chmod(temporary, 0o600);
     await rename(temporary, destinationAuth);
   } finally {
     await rm(temporary, { force: true }).catch(() => undefined);
   }
+  return login.tokenExpiresAt ? { tokenExpiresAt: login.tokenExpiresAt } : {};
 }
 
 async function coordinatorCodexRuntime(executable: string): Promise<{
@@ -1273,15 +1282,17 @@ async function startLocalServerAttempt(
         coordinatorConversationId!,
         "codex-home",
       );
-      // Hand over access-only credentials from the active account or host.
-      // The private home must never rotate the account's refresh token.
+      // Only the login is copied, access-only: from the active account's
+      // directory, or the host's when no account was added.
       const account = await resolveActiveAgentAccount(context, "codex");
       if (account.home) stripInheritedAgentCredentials(env);
-      // The directory outlives a launch: drop an earlier account's login.
-      await rm(path.join(coordinatorCodexHome, "auth.json"), { force: true });
-      await prepareCoordinatorCodexHome(coordinatorCodexHome, account.home);
+      const login = await prepareCoordinatorCodexHome(coordinatorCodexHome, account.home);
       env.CODEX_HOME = coordinatorCodexHome;
       launchedAccountId = account.accountId;
+      launchedTokenExpiresAt = login.tokenExpiresAt;
+      // An inherited API key still serves turns without a login file.
+      launchedLoginless =
+        login.loginless === true && !env.CODEX_API_KEY?.trim() && !env.OPENAI_API_KEY?.trim();
     } else {
       launchedAccountId = await applyActiveAgentAccountEnvironment(context, "codex", env);
     }

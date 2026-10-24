@@ -2268,7 +2268,10 @@ describe("backend command wrapper coverage", () => {
     for (const [name, wrapper] of commandWrappers) {
       invokeMock.mockClear();
       const args = Array.from({ length: wrapper.length }, () => "value");
-      await wrapper(...args);
+      // Only reaching invoke is asserted. A wrapper that takes a machine routes
+      // a "value" machine through the command node and then rejects the mock's
+      // empty answer, after the call.
+      await wrapper(...args).catch(() => undefined);
       expect(invokeMock.mock.calls.length, `${name} must call invoke`).toBeGreaterThan(0);
     }
   });

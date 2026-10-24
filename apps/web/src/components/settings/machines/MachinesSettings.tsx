@@ -204,7 +204,15 @@ export function MachinesSettings() {
         </div>
       )}
 
-      {!leaf ? <MachineAgentAccountsSection /> : null}
+      {!leaf ? (
+        <MachineAgentAccountsSection
+          key={(nodes?.nodes ?? [])
+            .filter((node) => node.enabled && !node.detachPending)
+            .map((node) => node.nodeId)
+            .sort()
+            .join(",")}
+        />
+      ) : null}
 
       {nodes && nodes.pendingDetaches.length > 0 ? (
         <PendingDetaches entries={nodes.pendingDetaches} onChanged={changed} />

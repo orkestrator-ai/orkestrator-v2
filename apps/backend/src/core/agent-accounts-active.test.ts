@@ -7,9 +7,12 @@ import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,
   applyCoordinatorClaudeAccount,
+  coordinatorCodexLogin,
   localBridgeIsOnActiveAccount,
   markLocalBridgesForLoginRefresh,
   setLocalClaudeLoginRefresher,
+  setLocalCodexLoginRefresher,
+  readCoordinatorCodexLogin,
 } from "./agent-accounts-active.js";
 import type { CommandContext } from "./commands-context.js";
 import * as commandFiles from "./commands-files.js";
@@ -20,7 +23,9 @@ import {
   staleLoginLocalBridges,
 } from "./agent-account-bridge-state.js";
 import { localServerProcesses } from "./commands-runtime-state.js";
-import { prepareCoordinatorClaudeHome } from "./commands-servers.js";
+import { prepareCoordinatorClaudeHome, prepareCoordinatorCodexHome } from "./commands-servers.js";
+import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
+import { claudeKeychainService } from "./agent-accounts-homes.js";
 import { StorageService } from "./storage.js";
 
 const ACCOUNT_IDS = {
@@ -38,6 +43,26 @@ let liveWork = false;
 let context: CommandContext;
 let restoreHostCredentialRead: (() => void) | undefined;
 const noKeychain = async (): Promise<void> => undefined;
+
+/** A JWT-shaped token whose `exp` claim is `expiresAt`. Never a real credential. */
+function fakeJwt(expiresAt: number, marker: string): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${encode({ alg: "none" })}.${encode({ exp: Math.floor(expiresAt / 1000), marker })}.sig`;
+}
+
+/** A Codex ChatGPT login whose access token expires at `expiresAt`. */
+function codexAuth(expiresAt: number, marker = "login"): string {
+  return JSON.stringify({
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: fakeJwt(expiresAt, `${marker}-id`),
+      access_token: fakeJwt(expiresAt, marker),
+      refresh_token: `refresh-${marker}`,
+      account_id: `account-${marker}`,
+    },
+    last_refresh: "2026-10-01T00:00:00.000Z",
+  });
+}
 
 function accountHome(platform: "claude" | "codex"): string {
   return path.join(root, "data", "agent-accounts", platform, ACCOUNT_IDS[platform]);
@@ -89,6 +114,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  setLocalCodexLoginRefresher(undefined);
   restoreHostCredentialRead?.();
   restoreHostCredentialRead = undefined;
   for (const [key, value] of Object.entries(savedEnv)) {
@@ -448,6 +474,168 @@ describe("localBridgeIsOnActiveAccount", () => {
     liveWork = false;
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(false);
   });
+
+  test("replaces an idle Codex coordinator once its token nears expiry and a fresher one exists", async () => {
+    await activate("codex");
+    const key = "codex:coordinator-1";
+    localAgentAccountIds.set(key, ACCOUNT_IDS.codex);
+    const handedOver = Date.now() + 60_000;
+    localAgentAccountTokenExpiry.set(key, handedOver);
+    await fs.mkdir(accountHome("codex"), { recursive: true });
+    // The account's own login has not been refreshed: nothing better to hand over.
+    await fs.writeFile(path.join(accountHome("codex"), "auth.json"), codexAuth(handedOver));
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(true);
+
+    await fs.writeFile(
+      path.join(accountHome("codex"), "auth.json"),
+      codexAuth(Date.now() + 10 * 24 * 60 * 60_000, "fresh"),
+    );
+    liveWork = true;
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(true);
+    liveWork = false;
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(false);
+  });
+
+  test("replaces an idle Codex coordinator launched without a login once one appears", async () => {
+    await activate("codex");
+    const key = "codex:coordinator-1";
+    localAgentAccountIds.set(key, ACCOUNT_IDS.codex);
+    loginlessLocalBridges.add(key);
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(true);
+
+    await fs.mkdir(accountHome("codex"), { recursive: true });
+    await fs.writeFile(
+      path.join(accountHome("codex"), "auth.json"),
+      codexAuth(Date.now() + 60 * 60_000),
+    );
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(false);
+  });
+});
+
+describe("prepareCoordinatorCodexHome", () => {
+  test("hands over the access token without the refresh token and records its expiry", async () => {
+    const expiresAt = Date.now() + 60 * 60_000;
+    const source = path.join(root, "codex-source");
+    const destination = path.join(root, "codex-coordinator");
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(path.join(source, "auth.json"), codexAuth(expiresAt));
+
+    const login = await prepareCoordinatorCodexHome(destination, source);
+    expect(login).toEqual({ tokenExpiresAt: Math.floor(expiresAt / 1000) * 1000 });
+    const copied = JSON.parse(await fs.readFile(path.join(destination, "auth.json"), "utf8"));
+    expect(copied.tokens.access_token).toBe(JSON.parse(codexAuth(expiresAt)).tokens.access_token);
+    expect(copied.tokens.refresh_token).toBe("");
+    expect(JSON.stringify(copied)).not.toContain("refresh-login");
+    expect((await fs.stat(path.join(destination, "auth.json"))).mode & 0o777).toBe(0o600);
+    // The account's own login is untouched.
+    expect(await fs.readFile(path.join(source, "auth.json"), "utf8")).toBe(codexAuth(expiresAt));
+  });
+
+  test("starts signed out rather than hand over a token about to lapse", async () => {
+    const source = path.join(root, "codex-source");
+    const destination = path.join(root, "codex-coordinator");
+    await fs.mkdir(destination, { recursive: true });
+    await fs.writeFile(path.join(destination, "auth.json"), "earlier login");
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(path.join(source, "auth.json"), codexAuth(Date.now() + 60_000));
+
+    expect(await prepareCoordinatorCodexHome(destination, source)).toEqual({ loginless: true });
+    await expect(fs.access(path.join(destination, "auth.json"))).rejects.toThrow();
+    expect(await prepareCoordinatorCodexHome(destination, path.join(root, "absent"))).toEqual({
+      loginless: true,
+    });
+  });
+
+  test("keeps an API key login, which never expires", () => {
+    const raw = JSON.stringify({ OPENAI_API_KEY: "sk-test-key" });
+    expect(coordinatorCodexLogin(raw)).toEqual({ text: raw });
+  });
+});
+
+test("renews an expired owner login without ordinary sessions before the coordinator handoff", async () => {
+  await activate("codex");
+  const home = accountHome("codex");
+  await fs.mkdir(home, { recursive: true });
+  await fs.writeFile(path.join(home, "auth.json"), codexAuth(Date.now() - 60_000));
+  let calls = 0;
+  const production = { ...context, runtimeFlavor: "production" } as CommandContext;
+  setLocalCodexLoginRefresher(
+    createCodexLoginRefresher(production, async (owner) => {
+      calls++;
+      expect(owner).toBe(home);
+      await fs.writeFile(
+        path.join(owner, "auth.json"),
+        codexAuth(Date.now() + 3600_000, "renewed"),
+      );
+    }),
+  );
+  const destination = path.join(root, "coordinator-codex");
+  const [login] = await Promise.all([
+    prepareCoordinatorCodexHome(destination, home),
+    readCoordinatorCodexLogin({ accountId: ACCOUNT_IDS.codex, home }),
+  ]);
+  expect(login.loginless).toBeUndefined();
+  expect(calls).toBe(1);
+  const owner = JSON.parse(await fs.readFile(path.join(home, "auth.json"), "utf8"));
+  const copy = JSON.parse(await fs.readFile(path.join(destination, "auth.json"), "utf8"));
+  expect(owner.tokens.refresh_token).toBe("refresh-renewed");
+  expect(copy.tokens.access_token).toBe(owner.tokens.access_token);
+  expect(copy.tokens.refresh_token).toBe("");
+  // The following turn can use the renewed token and does not spend it again.
+  expect(
+    (await readCoordinatorCodexLogin({ accountId: ACCOUNT_IDS.codex, home })).text,
+  ).toBeTruthy();
+  expect(calls).toBe(1);
+});
+
+test("macOS removes only each coordinator home's Keychain login, once per home", async () => {
+  const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+  const removed: string[] = [];
+  try {
+    for (const name of ["one", "one", "two"]) {
+      await applyCoordinatorClaudeAccount(
+        context,
+        path.join(root, name),
+        {},
+        prepareCoordinatorClaudeHome,
+        async () => undefined,
+        async (service) => {
+          removed.push(service);
+        },
+      );
+    }
+    expect(removed).toEqual([
+      claudeKeychainService(path.join(root, "one")),
+      claudeKeychainService(path.join(root, "two")),
+    ]);
+    expect(removed).not.toContain(claudeKeychainService(accountHome("claude")));
+    expect(removed).not.toContain("Claude Code-credentials");
+  } finally {
+    Object.defineProperty(process, "platform", original);
+  }
+});
+
+test("a due Codex coordinator renews its owning login on reuse and moves only while idle", async () => {
+  await activate("codex");
+  const home = accountHome("codex");
+  const key = "codex:renew-on-use";
+  await fs.mkdir(home, { recursive: true });
+  await fs.writeFile(path.join(home, "auth.json"), codexAuth(Date.now() + 60_000));
+  localAgentAccountIds.set(key, ACCOUNT_IDS.codex);
+  localAgentAccountTokenExpiry.set(key, Date.now() + 60_000);
+  let refreshes = 0;
+  setLocalCodexLoginRefresher(
+    createCodexLoginRefresher({ ...context, runtimeFlavor: "production" }, async (owner) => {
+      refreshes++;
+      await fs.writeFile(path.join(owner, "auth.json"), codexAuth(Date.now() + 3600_000));
+    }),
+  );
+  liveWork = true;
+  expect(await localBridgeIsOnActiveAccount(key, "codex", "renew-on-use", context)).toBe(true);
+  liveWork = false;
+  expect(await localBridgeIsOnActiveAccount(key, "codex", "renew-on-use", context)).toBe(false);
+  expect(refreshes).toBe(1);
 });
 
 test("real keeper refreshes the 4m30s handoff gap before a coordinator starts", async () => {

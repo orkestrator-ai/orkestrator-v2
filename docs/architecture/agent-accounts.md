@@ -6,7 +6,9 @@ Status: Living — `apps/backend/src/core/agent-accounts*.ts`,
 `apps/web/src/components/settings/AgentAccountsSection.tsx`,
 `apps/web/src/components/settings/account-machine.tsx`,
 `apps/web/src/components/settings/machines/MachineAgentAccountsSection.tsx`,
-`apps/web/src/components/layout/AgentInfoAccountSection.tsx`;
+`apps/web/src/components/layout/AgentInfoAccountSection.tsx`,
+`apps/web/src/components/native-agent/SessionAccountChip.tsx`,
+`apps/backend/src/core/agent-sign-ins.ts`;
 `apps/backend/src/core/opencode-provider-login.ts`,
 `packages/protocol/src/opencode-provider-auth.ts`,
 `apps/web/src/components/settings/OpenCodeProvidersSection.tsx`.
@@ -393,11 +395,24 @@ use). While any coordinator runs on a handed-over token or waits for one,
 `ContainerClaudeLoginKeeper` keeps the active login refreshed even with no
 container running and with the container opt-out on.
 
-The Codex coordinator still copies the account's `auth.json`, refresh token
-included; see
-[0722-per-machine-agent-accounts.md](../todo/agent-engines/0722-per-machine-agent-accounts.md).
+A Codex coordinator gets the same treatment through a file, because Codex
+has no access-token variable: `prepareCoordinatorCodexHome` writes the active
+login's `auth.json` into the coordinator's private `CODEX_HOME` access-only
+(`coordinatorCodexLogin`, the `restrictCodexAuthSnapshot` form containers
+receive). The refresh token is blanked and `last_refresh` set to now, so Codex
+uses its access token until it actually expires instead of refreshing early.
+Codex rotates the refresh token on every refresh, so a coordinator refreshing
+a whole copy would retire the account's own login. An API-key login is copied
+as is. Before startup, or reuse of a bridge whose token is near expiry, the
+backend renews a due login in its owning home with Codex app-server's
+`account/read { refreshToken: true }`. Requests are serialized per owning home,
+re-read the saved login before refreshing, and back off after failed renewal.
+The owner retains the rotated refresh token; only the renewed access token is
+handed over. Agent-test profiles never renew a borrowed host login.
+App-server's `chatgptAuthTokens` login would avoid the file but needs the
+`experimentalApi` capability, which the bridge leaves off.
 
-That token cannot be renewed, so its expiry is recorded
+Either token cannot be renewed by the coordinator, so its expiry is recorded
 (`localAgentAccountTokenExpiry`). Within five minutes of expiry an idle
 coordinator bridge is replaced if a fresher login is available, and otherwise
 once the token has expired. Coordinator bridges also move to a newly active
@@ -408,7 +423,8 @@ lapsed while nothing used the account), the bridge launches without one and
 answers "Not logged in". It is recorded in `loginlessLocalBridges`, and every
 later use checks the account again, so an idle bridge is replaced as soon as a
 token exists. This covers sign-ins Orkestrator is never told about, such as
-`claude auth login` in a terminal.
+`claude auth login` in a terminal. A Codex coordinator with an inherited
+`CODEX_API_KEY` or `OPENAI_API_KEY` is not recorded as loginless.
 
 ## Machines
 
@@ -426,20 +442,72 @@ itself. Where each surface acts:
   machine on screen; closing Settings forgets a choice. Another machine is
   asked through the command node (`portalStore.invokeOnNode`, so an
   ambiguous write reports an unknown outcome rather than retrying); the
-  command node itself through the window's own transport. A sign-in runs on
-  the chosen machine, and its link opens in this client's browser.
+  command node itself through the portal transport (`machine: null`); an omitted
+  target follows the current workspace's backend. A sign-in runs on
+  the chosen machine, and its link opens in this client's browser. That
+  includes Cursor: `cursor_sdk_login_start { openBrowser: false }` starts its
+  login child with `NO_OPEN_BROWSER`, and the settings pane opens the link
+  with `openInBrowser`. Cursor's sign-in polls for approval, so it completes
+  from a browser on any machine. An older client omits the flag and the
+  machine's own desktop opens the link, as before.
 - **Settings → Machines → Agent accounts** shows every machine against Claude
   and Codex, with each machine's active account and a switch
   (`list_machine_agent_accounts`). The command node asks each enabled machine
-  for `list_agent_accounts` in parallel, eight seconds each; one that cannot
-  answer shows as not connected. A node in leaf mode lists only itself. Each
-  machine's own settings dialog shows its row.
+  for `list_agent_accounts` and `read_host_agent_sign_ins` in parallel, eight
+  seconds each; one that cannot answer shows as not connected. A node in leaf mode lists only itself. Each
+  machine's own settings dialog shows its row. Registry changes reload the
+  overview so attached and removed machines are reflected immediately. Peer
+  account summaries and live sign-in rereads are rebuilt from validated fields;
+  a malformed account row shows an error for that machine.
+  - **Live.** Every machine announces a change to its accounts as
+    `agent-accounts-changed` `{ platform }` (`AGENT_ACCOUNTS_CHANGED_EVENT`):
+    a switch, an added, renamed or removed account, a renewed login. The
+    event never carries the state. The overview watches each listed machine
+    through the command node's relay (`subscribeNodeEvents`, so the command
+    node's own events arrive directly) and re-reads only that machine, with
+    `list_agent_accounts` and `read_host_agent_sign_ins`, on an event or a
+    resync. Each machine is re-read once its subscription is in place, which
+    covers a change between the overview read and the subscription. A
+    sign-in made outside Orkestrator is never announced; the refresh button
+    and reopening still re-read everything.
+  - **By account.** A toggle groups the overview by email instead of by
+    machine: each login, the machines it is on, which of them use it, a
+    switch to it on a machine that has it, and a sign-in (that platform's
+    settings, on that machine) on each connected machine that lacks it. A
+    login without an email cannot be matched across machines and is listed
+    alone.
+  - **Grok and Pi** have no accounts. Each machine reports whether it has a
+    login a local bridge would use (`read_host_agent_sign_ins`,
+    `agent-sign-ins.ts`), from files and variable names only, never a value:
+    for Grok the bridge's own rule (`XAI_API_KEY`, an auth-provider command or
+    `$GROK_HOME/auth.json`), for Pi the provider ids in `~/.pi/agent/auth.json`
+    and then a common provider key in the backend's environment. Nothing is
+    checked against the provider, so an expired login still reads as signed
+    in. The command node rebuilds another machine's answer field by field,
+    and a machine that predates the read shows no Grok or Pi column.
+    "Sign in on <machine>" calls `open_agent_sign_in_terminal`: the machine
+    opens a plain terminal tab running its fixed login command (`grok login`,
+    or `pi` for Pi's own `/login`) through `launch_terminal_job`, in the
+    environment on screen when it is a running local one there, otherwise its
+    most recently active one. A container's terminal would sign the container
+    in, so only local environments qualify. The window then shows that
+    environment.
 - **The agent information panel** shows which account the session's bridge
   runs on (`get_native_agent_session_account`): a local or coordinator bridge
-  from `localAgentAccountIds`, a container from its account marker, and a
+  from `localAgentAccountIds`, a container from its account marker after checking that provider’s bridge health, and a
   bridge that is not running from the active account. It names a pending move
   to a newly active account, switches the machine's active account, and for
-  Claude signs the active account in again.
+  Claude signs the active account in again. It re-reads on its own machine's
+  `agent-accounts-changed` (`useAgentAccountsChanged`), on event-stream reconnect,
+  when opened, and when the turn or bridge changes. Reads are fenced against
+  newer requests, and a different environment or provider starts with fresh state.
+- **The composer chip** (`SessionAccountChip`) sits beside the model picker
+  of a Claude or Codex tab whose machine holds more than one login for the
+  platform, naming the session's account (`work@…`). It is amber while the
+  session is on an account other than the machine's active one, and opens the
+  agent information panel (`requestAgentInformation`). With only the host
+  login it reads `list_agent_accounts` and nothing else. It re-reads when a
+  turn starts or ends and on `agent-accounts-changed`.
 
 ## Terminal tabs
 

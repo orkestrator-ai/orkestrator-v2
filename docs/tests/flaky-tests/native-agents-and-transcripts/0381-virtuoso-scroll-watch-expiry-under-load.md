@@ -45,4 +45,3 @@
 - **Verification:** `bun test ./tests/unit/hooks/useVirtuosoScrollState.test.ts
   --parallel=1` passes (88 tests), and the suite runs inside the aggregate
   `mise run test` recorded with this change.
-

@@ -33,6 +33,7 @@ import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import type { KanbanTask } from "@/lib/backend";
+import { useAccountMachineStore } from "@/components/settings/account-machine";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import {
   CLICK_SUPPRESSION_MS,
@@ -8609,4 +8610,16 @@ describe("ActionBar error dialogs", () => {
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
   });
+});
+
+test("closing Settings resets an explicit account machine choice for the next visit", async () => {
+  render(<ActionBar />);
+  fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
+  await screen.findByText("Global settings dialog");
+  act(() => useAccountMachineStore.getState().choose(null));
+  fireEvent.click(screen.getByRole("button", { name: "Close global settings" }));
+  expect(useAccountMachineStore.getState().chosen).toBeUndefined();
+  fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
+  await screen.findByText("Global settings dialog");
+  expect(useAccountMachineStore.getState().chosen).toBeUndefined();
 });

@@ -20,6 +20,22 @@ import {
 } from "./agent-account-bridge-state.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
+/** A Codex ChatGPT login whose access token lasts an hour. Never a real credential. */
+function codexAuth(marker: string): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const token = (claims: Record<string, unknown>) =>
+    `${encode({ alg: "none" })}.${encode({ exp: Math.floor(Date.now() / 1000) + 3600, ...claims })}.sig`;
+  return JSON.stringify({
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: token({ marker: `${marker}-id` }),
+      access_token: token({ marker }),
+      refresh_token: `refresh-${marker}`,
+      account_id: marker,
+    },
+  });
+}
+
 describe("Coordinator Codex server", () => {
   let root: string;
   let checkout: string;
@@ -66,10 +82,7 @@ describe("Coordinator Codex server", () => {
     previousCodexHome = process.env.CODEX_HOME;
     const sourceHome = path.join(root, "source-codex-home");
     await fs.mkdir(sourceHome);
-    await fs.writeFile(
-      path.join(sourceHome, "auth.json"),
-      '{"tokens":{"access_token":"login","refresh_token":"refresh-sentinel"}}\n',
-    );
+    await fs.writeFile(path.join(sourceHome, "auth.json"), codexAuth("login"));
     await fs.writeFile(path.join(sourceHome, "config.toml"), "developer_instructions='unsafe'\n");
     process.env.CODEX_HOME = sourceHome;
     previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -507,10 +520,11 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       conversation.id,
       "codex-home",
     );
-    expect(await fs.readFile(path.join(isolatedHome, "auth.json"), "utf8")).toContain("login");
-    expect(await fs.readFile(path.join(isolatedHome, "auth.json"), "utf8")).not.toContain(
-      "refresh-sentinel",
-    );
+    const handedOver = JSON.parse(await fs.readFile(path.join(isolatedHome, "auth.json"), "utf8"));
+    expect(handedOver.tokens.account_id).toBe("login");
+    // Access-only: a coordinator's refresh would retire the account's own login.
+    expect(handedOver.tokens.refresh_token).toBe("");
+    expect(localAgentAccountTokenExpiry.get(`codex:${runtimeId}`)).toBeGreaterThan(Date.now());
     await expect(fs.access(path.join(isolatedHome, "config.toml"))).rejects.toThrow();
     expect(JSON.parse(await fs.readFile(path.join(isolatedHome, "captured.json"), "utf8"))).toEqual(
       {
@@ -537,10 +551,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     const addedId = "11111111-2222-4333-8444-555555555555";
     const addedHome = path.join(storage.agentAccountsDirectory(), "codex", addedId);
     await fs.mkdir(addedHome, { recursive: true });
-    await fs.writeFile(
-      path.join(addedHome, "auth.json"),
-      '{"tokens":{"access_token":"replacement","refresh_token":"refresh-sentinel"}}',
-    );
+    await fs.writeFile(path.join(addedHome, "auth.json"), codexAuth("replacement"));
     await storage.mutateAgentAccounts((store) => ({
       store: {
         ...store,

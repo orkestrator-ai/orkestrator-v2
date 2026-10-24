@@ -66,6 +66,7 @@ import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
 import {
+  onGlobalSettingsCloseRequest,
   onGlobalSettingsRequest,
   requestGlobalSettings,
   type GlobalSettingsSection,
@@ -223,6 +224,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       useAccountMachineStore.getState().choose(undefined);
     }
   }, []);
+
+  useEffect(
+    () => onGlobalSettingsCloseRequest(() => updateGlobalSettingsOpen(false)),
+    [updateGlobalSettingsOpen],
+  );
   const resolveLaunchEnvironmentIdRef = useRef<string | null>(null);
   const selectedEnvironmentIdRef = useRef(selectedEnvironmentId);
   selectedEnvironmentIdRef.current = selectedEnvironmentId;

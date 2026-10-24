@@ -1,6 +1,6 @@
 import { invoke } from "@/lib/native/backend";
-import type { BackendId } from "@orkestrator/protocol/federation";
 import { portalInvoke } from "@/lib/portal/portal-transport";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { portalStore } from "@/lib/portal/portal-store";
 import { invokeCommandNodeSetting } from "@/lib/portal/command-node-config";
 import type {
@@ -8,6 +8,9 @@ import type {
   AgentAccountPlatform,
   AgentAccountsSnapshot,
   AgentSessionAccount,
+  AgentSignInTerminal,
+  HostAgentSignIns,
+  HostSignInPlatform,
   MachineAgentAccountsResult,
 } from "@orkestrator/protocol/agent-accounts";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
@@ -23,7 +26,7 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
  */
 export type AccountMachine = string | null | undefined;
 
-/** `null` selects the command node; an omitted target selects this view's backend. */
+/** Ask `machine` through the command node, or this view's own backend without one. */
 export function machineInvoke<T>(
   machine: AccountMachine,
   command: string,
@@ -143,4 +146,24 @@ export async function getNativeAgentSessionAccount(
 /** Every machine's accounts, collected by the command node. */
 export async function listMachineAgentAccounts(): Promise<MachineAgentAccountsResult> {
   return invokeCommandNodeSetting<MachineAgentAccountsResult>("list_machine_agent_accounts");
+}
+
+/** Grok's and Pi's login on `machine`, read without a session. Older machines reject it. */
+export async function readHostAgentSignIns(machine?: AccountMachine): Promise<HostAgentSignIns> {
+  return machineInvoke<HostAgentSignIns>(machine, "read_host_agent_sign_ins");
+}
+
+/**
+ * Open a terminal tab on `machine` running the platform's fixed login command,
+ * in one of its running local environments (`environmentId` when it is one).
+ */
+export async function openAgentSignInTerminal(
+  platform: HostSignInPlatform,
+  machine?: AccountMachine,
+  environmentId?: string,
+): Promise<AgentSignInTerminal> {
+  return machineInvoke<AgentSignInTerminal>(machine, "open_agent_sign_in_terminal", {
+    platform,
+    ...(environmentId ? { environmentId } : {}),
+  });
 }

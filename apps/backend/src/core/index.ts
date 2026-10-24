@@ -1,3 +1,4 @@
+import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
 import { coordinatorNodeContext } from "./nodes/node-context.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -38,7 +39,10 @@ import { HostSuspendDetector } from "./host-suspend-detector.js";
 import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { setHostClaudeLoginRefresher } from "./agent-accounts-containers.js";
-import { setLocalClaudeLoginRefresher } from "./agent-accounts-active.js";
+import {
+  setLocalClaudeLoginRefresher,
+  setLocalCodexLoginRefresher,
+} from "./agent-accounts-active.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 
 /** Former activity-bundle cadence, per named job. */
@@ -1252,6 +1256,7 @@ export class OrkestratorBackend {
     setHostClaudeLoginRefresher(() => keeper.refreshHostIfDue());
     setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
     keeper.start();
+    setLocalCodexLoginRefresher(createCodexLoginRefresher(this.context));
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.
@@ -1890,6 +1895,7 @@ export class OrkestratorBackend {
     this.claudeLoginKeeper = null;
     setHostClaudeLoginRefresher(undefined);
     setLocalClaudeLoginRefresher(undefined);
+    setLocalCodexLoginRefresher(undefined);
     // Log followers are observers; stopping them never touches containers.
     shutdownContainerLogService();
     shutdownOomEventWatcher();

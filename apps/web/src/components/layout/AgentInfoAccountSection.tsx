@@ -21,6 +21,7 @@ import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginP
 import { accountOptionLabel } from "@/components/settings/machines/MachineAgentAccountsSection";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useAgentAccountReauth } from "@/hooks/useAgentAccountReauth";
+import { useAgentAccountsChanged } from "@/hooks/useAgentAccountsChanged";
 import {
   getNativeAgentSessionAccount,
   listAgentAccounts,
@@ -57,17 +58,21 @@ export function AgentInfoAccountSection({
   environmentId,
   provider,
   open = true,
+  refreshKey,
 }: {
   environmentId: string;
   provider: string;
   open?: boolean;
+  refreshKey?: unknown;
 }) {
-  if (!open || !isAgentAccountPlatform(provider)) return null;
+  if (!isAgentAccountPlatform(provider)) return null;
   return (
     <AccountSection
       key={`${environmentId}:${provider}`}
       environmentId={environmentId}
       platform={provider}
+      open={open}
+      refreshKey={refreshKey}
     />
   );
 }
@@ -75,16 +80,20 @@ export function AgentInfoAccountSection({
 function AccountSection({
   environmentId,
   platform,
+  open,
+  refreshKey,
 }: {
   environmentId: string;
   platform: AgentAccountPlatform;
+  open: boolean;
+  refreshKey?: unknown;
 }) {
   const [session, setSession] = useState<AgentSessionAccount | null>(null);
   const [snapshot, setSnapshot] = useState<AgentAccountsSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
-  const readGeneration = useRef(0);
+  const latest = useRef(0);
   const machineName = useSessionMachineName();
   const platformLabel = AGENT_PLATFORM_LABELS[platform];
   const reauth = useAgentAccountReauth(platform, platform === "claude");
@@ -93,36 +102,36 @@ function AccountSection({
     mounted.current = true;
     return () => {
       mounted.current = false;
-      readGeneration.current += 1;
+      latest.current += 1;
     };
   }, []);
 
-  const load = useCallback(() => {
-    const generation = ++readGeneration.current;
-    return Promise.all([
-      getNativeAgentSessionAccount(environmentId, platform),
-      listAgentAccounts(),
-    ]).then(
-      ([nextSession, nextSnapshot]) => {
-        if (!mounted.current || generation !== readGeneration.current) return;
-        setSession(nextSession);
-        setSnapshot(nextSnapshot);
-        setError(null);
-      },
-      (cause: unknown) => {
-        if (mounted.current && generation === readGeneration.current) setError(messageOf(cause));
-      },
-    );
+  const load = useCallback(async () => {
+    const read = ++latest.current;
+    try {
+      const [nextSession, nextSnapshot] = await Promise.all([
+        getNativeAgentSessionAccount(environmentId, platform),
+        listAgentAccounts(),
+      ]);
+      if (!mounted.current || latest.current !== read) return;
+      setSession(nextSession);
+      setSnapshot(nextSnapshot);
+      setError(null);
+    } catch (cause) {
+      if (mounted.current && latest.current === read) setError(messageOf(cause));
+    }
   }, [environmentId, platform]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void Promise.resolve().then(load);
+  }, [load, open, refreshKey]);
+  // A switch or sign-in elsewhere (Settings, another window) moves this too.
+  useAgentAccountsChanged(platform, () => void load());
 
   // A finished sign-in changes what the account reports.
   const reauthState = reauth.progress.state;
   useEffect(() => {
-    if (reauthState === "succeeded") void load();
+    if (reauthState === "succeeded") void Promise.resolve().then(load);
   }, [load, reauthState]);
 
   const choose = async (accountId: string) => {

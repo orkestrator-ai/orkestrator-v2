@@ -1,18 +1,21 @@
 /**
  * Sign-in for the Cursor SDK bridge.
  *
- * Deliberately thin. The backend spawns the bridge's login mode, which opens
- * the browser, parses its output, stores the credential and owns the
- * one-at-a-time rule; this view starts that flow and reflects the status it is
- * told. It makes no decision of its own about credentials, and it cannot open
- * the browser itself — the desktop window denies `window.open` and
- * `target="_blank"`, so its only fallback is to hand the user the URL.
+ * Deliberately thin. The backend spawns the bridge's login mode, which parses
+ * its output, stores the credential and owns the one-at-a-time rule; this view
+ * starts that flow, opens its link in this client's browser and reflects the
+ * status it is told. The machine signing in may be another one (the "Sign-ins
+ * on" picker) whose desktop nobody is looking at, so its login child opens no
+ * browser; Cursor's sign-in polls for approval and completes from any browser.
+ * The link goes through `openInBrowser` because the desktop window denies
+ * `window.open` and `target="_blank"`; the copy button stays as a fallback.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { Check, Copy, Loader2, LogIn, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { writeText } from "@/lib/native/clipboard";
+import { openInBrowser } from "@/lib/backend";
 import { useAccountMachine } from "@/components/settings/account-machine";
 import {
   cursorSdkLoginCancel,
@@ -114,12 +117,16 @@ export function CursorSdkSignIn({ credentialRevision, onCredentialChange }: Curs
     setError(null);
     setCopied(false);
     try {
-      // The backend's login child opens the browser on the user's machine.
-      // This view deliberately does not: the desktop window denies both
-      // `window.open` and `target="_blank"`, so anything it tried would
-      // silently do nothing.
-      await cursorSdkLoginStart(machine);
+      // Opened here rather than by the backend's login child, which may run on
+      // another machine. `openInBrowser` uses the desktop shell or this
+      // browser, never `window.open` from the desktop window.
+      const { loginUrl } = await cursorSdkLoginStart(machine);
       await refresh();
+      if (loginUrl) {
+        await openInBrowser(loginUrl).catch((cause: unknown) => {
+          if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause));
+        });
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -217,7 +224,8 @@ export function CursorSdkSignIn({ credentialRevision, onCredentialChange }: Curs
           {progress?.loginUrl ? (
             <>
               <p className="text-xs text-muted-foreground">
-                Waiting for you to finish signing in. If the browser did not open, copy this link:
+                Waiting for you to finish signing in. If the browser did not open, open or copy this
+                link:
               </p>
               {/*
                 Selectable text plus a copy button rather than a link. The desktop

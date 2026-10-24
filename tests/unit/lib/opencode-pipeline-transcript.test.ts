@@ -407,11 +407,10 @@ describe("normalizeOpenCodeDisplayEntry", () => {
 });
 
 /*
- * The renderer's skew guard against the backend's own normalizer. A backend
- * older than 2.19.17 serves these transcripts as stored, in OpenCode's raw
- * `{ info, parts }` envelope; a current one normalizes each entry on the way
- * out. The renderer must flag every entry of the first kind and none of the
- * second, or a current backend would show "update the backend" notices.
+ * Current backends normalize stored OpenCode envelopes before serving them.
+ * The renderer accepts display-row fields and retains a permanent generic
+ * notice for entries with no recognized display fields. The named legacy
+ * raw-envelope guard has been retired.
  */
 
 /** Stored OpenCode entries, including the awkward ones the normalizer must survive. */
@@ -469,6 +468,15 @@ function reviewerSnapshot(messages: unknown[]): MultiReviewReviewerTranscript {
 }
 
 describe("OpenCode transcripts across the renderer–backend version boundary", () => {
+  test("raw OpenCode envelopes use the ordinary parts-array display path", () => {
+    const raw = STORED[0]!;
+    expect(classifyTranscriptEntry(raw)).toBe("display");
+    const transcript = toPipelineTranscript([raw], "opencode", FALLBACK);
+    // Raw `text` parts are not normalized display content. The empty display
+    // row is filtered without reviving the retired legacy-envelope notice.
+    expect(transcript).toEqual([]);
+  });
+
   test("flags nothing a current backend serves", () => {
     const served = normalizeOpenCodeDisplayEntries(STORED);
     for (const entry of served) {

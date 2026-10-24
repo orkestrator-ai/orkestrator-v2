@@ -8,6 +8,7 @@ import {
   CompatibilityPathUsage,
   compatibilityPathUsage,
   normalizeCompatibilityPathUsage,
+  mergeCompatibilityPathUsage,
   type CompatibilityPathUsageSink,
 } from "./compatibility-path-usage.js";
 import { compatibilityPathUsageDatabaseSink } from "./compatibility-path-usage-store.js";
@@ -121,6 +122,123 @@ describe("CompatibilityPathUsage", () => {
     }
     expect(merged).toEqual([2]);
     usage.detach(sink);
+  });
+
+  test("preserves newer backend counters through a database merge", async () => {
+    const dir = await dataDir();
+    const database = openBackendDatabase(dir);
+    const future = {
+      count: 9,
+      firstSeenAt: clock().now().toISOString(),
+      lastSeenAt: clock().now().toISOString(),
+    };
+    const sink = compatibilityPathUsageDatabaseSink(dir);
+    const usage = new CompatibilityPathUsage(clock().now);
+    try {
+      database.transaction(() =>
+        database.writeStoreInTransaction(COMPATIBILITY_PATH_USAGE_STORE, {
+          version: 1,
+          paths: { "future.path": future, broken: { count: -1 } },
+        }),
+      );
+      usage.attach(sink);
+      usage.record("history.joined-v1-page");
+      expect(usage.snapshot().paths).not.toHaveProperty("future.path");
+      usage.detach(sink);
+      expect(database.readStore(COMPATIBILITY_PATH_USAGE_STORE)?.value).toEqual({
+        version: 1,
+        paths: {
+          "future.path": future,
+          "history.joined-v1-page": { ...future, count: 1 },
+        },
+      });
+    } finally {
+      usage.detach(sink);
+      database.close();
+    }
+  });
+
+  test("retries a failed timed flush without further traffic", async () => {
+    let attempts = 0;
+    let stored = { version: 1 as const, paths: {} };
+    const sink: CompatibilityPathUsageSink = {
+      merge(pending) {
+        attempts++;
+        if (attempts === 1) throw new Error("busy");
+        stored = mergeCompatibilityPathUsage(stored, pending);
+        return stored;
+      },
+    };
+    const usage = new CompatibilityPathUsage(clock().now, 5);
+    usage.attach(sink);
+    try {
+      usage.record("history.joined-v1-page");
+      const deadline = Date.now() + 1_000;
+      while (attempts < 2 && Date.now() < deadline) await Bun.sleep(5);
+      expect(attempts).toBe(2);
+      expect(normalizeCompatibilityPathUsage(stored).paths["history.joined-v1-page"]?.count).toBe(
+        1,
+      );
+    } finally {
+      usage.detach(sink);
+    }
+  });
+
+  test("detach cancels a pending retry and preserves counts for a replacement sink", async () => {
+    let attempts = 0;
+    const sink: CompatibilityPathUsageSink = {
+      merge() {
+        attempts++;
+        throw new Error("busy");
+      },
+    };
+    const usage = new CompatibilityPathUsage(clock().now, 5);
+    usage.attach(sink);
+    usage.record("history.joined-v1-page");
+    usage.snapshot();
+    usage.detach(sink);
+    const detachedAttempts = attempts;
+    await Bun.sleep(25);
+    expect(attempts).toBe(detachedAttempts);
+    expect(usage.snapshot().paths["history.joined-v1-page"]?.count).toBe(1);
+  });
+
+  test("failed snapshots include historical totals plus pending counts without double counting", () => {
+    let fail = false;
+    const stored = { version: 1 as const, paths: {} };
+    const sink: CompatibilityPathUsageSink = {
+      merge(pending) {
+        if (fail) throw new Error("busy");
+        return mergeCompatibilityPathUsage(stored, pending);
+      },
+    };
+    const time = clock();
+    const usage = new CompatibilityPathUsage(time.now);
+    usage.attach(sink);
+    try {
+      usage.record("history.joined-v1-page");
+      usage.record("bridge-close.legacy-delete");
+      const original = usage.snapshot();
+      time.advance(1_000);
+      usage.record("history.joined-v1-page");
+      fail = true;
+      for (let i = 0; i < 2; i++) {
+        expect(usage.snapshot().paths).toEqual({
+          "bridge-close.legacy-delete": original.paths["bridge-close.legacy-delete"],
+          "history.joined-v1-page": {
+            count: 2,
+            firstSeenAt: "2026-10-24T10:00:00.000Z",
+            lastSeenAt: "2026-10-24T10:00:01.000Z",
+          },
+        });
+      }
+      fail = false;
+      expect(usage.snapshot().paths["history.joined-v1-page"]?.count).toBe(2);
+      fail = true;
+      expect(usage.snapshot().paths["history.joined-v1-page"]?.count).toBe(2);
+    } finally {
+      usage.detach(sink);
+    }
   });
 
   test("keeps pending counts when the sink fails", () => {

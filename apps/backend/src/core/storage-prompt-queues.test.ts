@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { StorageService } from "./storage.js";
 import type { StorageDatabase } from "./storage-database.js";
 import {
@@ -50,9 +51,14 @@ const QUEUES = "prompt-queues.json";
 describe("StorageService prompt queues", () => {
   test("stores and reads a queue", async () => {
     await withStorage(async (storage) => {
+      const before =
+        compatibilityPathUsage.snapshot().paths["prompt-queue.legacy-claim-recovered"]?.count ?? 0;
       const saved = await storage.savePromptQueue(KEY, "e1", [{ id: "m1" }]);
       expect(saved).toMatchObject({ queueKey: KEY, environmentId: "e1", revision: 1 });
       expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [{ id: "m1" }] });
+      expect(
+        compatibilityPathUsage.snapshot().paths["prompt-queue.legacy-claim-recovered"]?.count ?? 0,
+      ).toBe(before);
     });
   });
 
@@ -684,6 +690,8 @@ describe("StorageService prompt queues", () => {
 describe("StorageService legacy prompt queue claims", () => {
   test("recovers every expired claim and announces each owning environment", async () => {
     await withStorage(async (storage) => {
+      const before =
+        compatibilityPathUsage.snapshot().paths["prompt-queue.legacy-claim-recovered"]?.count ?? 0;
       const otherKey = "claude env-e2:tab-1";
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
       await storage.enqueuePromptQueueMessage(otherKey, "e2", { id: "m2" });
@@ -705,6 +713,14 @@ describe("StorageService legacy prompt queue claims", () => {
         .filter((event) => event.resource === "prompt-queue")
         .map((event) => event.id);
       expect(new Set(announced)).toEqual(new Set(["e1", "e2"]));
+      expect(
+        compatibilityPathUsage.snapshot().paths["prompt-queue.legacy-claim-recovered"]?.count,
+      ).toBe(before + 2);
+      await restarted.getPromptQueue(KEY);
+      expect(
+        compatibilityPathUsage.snapshot().paths["prompt-queue.legacy-claim-recovered"]?.count,
+      ).toBe(before + 2);
+      restarted.close();
     });
   });
 

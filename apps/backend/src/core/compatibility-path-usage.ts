@@ -77,18 +77,26 @@ function isIso(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
-/** Reads a stored document, keeping only known ids with valid entries. */
-export function normalizeCompatibilityPathUsage(value: unknown): CompatibilityPathUsageSnapshot {
+/** Reads valid entries; persistence retains newer ids while public snapshots filter them. */
+export function normalizeCompatibilityPathUsage(
+  value: unknown,
+  includeUnknown = false,
+): CompatibilityPathUsageSnapshot {
   const paths: CompatibilityPathUsageSnapshot["paths"] = {};
   const stored =
     value && typeof value === "object" ? (value as { paths?: unknown }).paths : undefined;
   if (stored && typeof stored === "object") {
     for (const [id, entry] of Object.entries(stored)) {
-      if (!KNOWN_IDS.has(id) || !entry || typeof entry !== "object") continue;
+      if ((!includeUnknown && !KNOWN_IDS.has(id)) || !entry || typeof entry !== "object") continue;
       const { count, firstSeenAt, lastSeenAt } = entry as Record<string, unknown>;
       if (!Number.isSafeInteger(count) || (count as number) < 0) continue;
       if (!isIso(firstSeenAt) || !isIso(lastSeenAt)) continue;
-      paths[id as CompatibilityPathId] = { count: count as number, firstSeenAt, lastSeenAt };
+      Object.defineProperty(paths, id, {
+        value: { count: count as number, firstSeenAt, lastSeenAt },
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
     }
   }
   return { version: 1, paths };
@@ -117,6 +125,7 @@ export class CompatibilityPathUsage {
   private pending = new Map<CompatibilityPathId, PendingUsage>();
   private sink: CompatibilityPathUsageSink | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private persisted: CompatibilityPathUsageSnapshot = { version: 1, paths: {} };
 
   constructor(
     private readonly now: () => Date = () => new Date(),
@@ -154,13 +163,14 @@ export class CompatibilityPathUsage {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.sink = null;
+    this.persisted = { version: 1, paths: {} };
     sink.close?.();
   }
 
   /**
    * Merges pending counts into the sink and returns the totals. Without a
-   * sink, or if the write fails, the pending counts are kept and returned as
-   * the snapshot so nothing is lost.
+   * sink, the pending counts are returned. If a write fails, they are kept,
+   * retried at the flush interval, and added to the last persisted snapshot.
    */
   flush(): CompatibilityPathUsageSnapshot {
     if (this.timer) clearTimeout(this.timer);
@@ -169,11 +179,14 @@ export class CompatibilityPathUsage {
     if (!this.sink) return mergeCompatibilityPathUsage({ version: 1, paths: {} }, pending);
     this.pending = new Map();
     try {
-      return this.sink.merge(pending);
+      const snapshot = this.sink.merge(pending);
+      this.persisted = normalizeCompatibilityPathUsage(snapshot);
+      return snapshot;
     } catch {
-      // Keep the counts for the next flush; a read still reports them.
+      // Keep the counts and retry even when no further traffic arrives.
       this.pending = pending;
-      return mergeCompatibilityPathUsage({ version: 1, paths: {} }, pending);
+      if (pending.size > 0) this.scheduleFlush();
+      return mergeCompatibilityPathUsage(normalizeCompatibilityPathUsage(this.persisted), pending);
     }
   }
 

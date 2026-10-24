@@ -27,14 +27,16 @@ export function compatibilityPathUsageDatabaseSink(dataDir: string): Compatibili
         return normalizeCompatibilityPathUsage(db.readStore(COMPATIBILITY_PATH_USAGE_STORE)?.value);
       }
       return db.transaction(() => {
+        // Older backends must not erase valid ids introduced by newer peers.
         const document = mergeCompatibilityPathUsage(
           normalizeCompatibilityPathUsage(
             db.readStoreValueInTransaction(COMPATIBILITY_PATH_USAGE_STORE)?.value,
+            true,
           ),
           pending,
         );
         db.writeStoreInTransaction(COMPATIBILITY_PATH_USAGE_STORE, document);
-        return document;
+        return normalizeCompatibilityPathUsage(document);
       });
     },
     close() {

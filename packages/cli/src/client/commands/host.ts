@@ -186,6 +186,7 @@ function taskCommand(spec: {
 }): CommandSpec {
   return {
     path: spec.path,
+    action: spec.action,
     summary: spec.summary,
     ...(spec.description ? { description: spec.description } : {}),
     positionals: [],
@@ -226,6 +227,7 @@ function taskCommand(spec: {
 export const hostCommands: CommandSpec[] = [
   {
     path: ["host", "status"],
+    action: "host.status",
     summary: "Show the Orkestrator version on the backend's computer, its updater and any update.",
     positionals: [],
     options: [],
@@ -242,6 +244,7 @@ export const hostCommands: CommandSpec[] = [
   },
   {
     path: ["host", "update", "channel"],
+    action: "host.update.channel",
     summary: "Choose the host's update channel: stable, beta or unstable.",
     positionals: [{ name: "channel", required: true, description: "stable, beta or unstable" }],
     options: [REQUEST_ID_OPTION],
@@ -264,6 +267,7 @@ export const hostCommands: CommandSpec[] = [
   },
   {
     path: ["host", "update", "check"],
+    action: "host.update.check",
     summary: "Ask the backend's computer to check for an Orkestrator update.",
     positionals: [],
     options: [WAIT_OPTION, TIMEOUT_OPTION, REQUEST_ID_OPTION],
@@ -306,6 +310,13 @@ export const hostCommands: CommandSpec[] = [
   },
   {
     path: ["host", "update", "apply"],
+    action: "host.update.apply",
+    inputFields: {
+      release: "version",
+      yes: "confirm",
+      "when-idle": "drain",
+      "max-wait": "maxWaitSeconds",
+    },
     summary:
       "Install an Orkestrator update on the backend's computer. It restarts there after a 60 s countdown.",
     description:
@@ -395,6 +406,7 @@ export const hostCommands: CommandSpec[] = [
   },
   {
     path: ["host", "update", "cancel"],
+    action: "host.update.cancel",
     summary: "Cancel the host's update before it restarts.",
     positionals: [],
     options: [REQUEST_ID_OPTION],

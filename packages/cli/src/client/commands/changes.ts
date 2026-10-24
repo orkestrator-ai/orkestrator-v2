@@ -146,6 +146,7 @@ export function changesHistoryLines(history: PublicChangesHistory): string[] {
 export const changesCommands: CommandSpec[] = [
   {
     path: ["changes", "view"],
+    action: "changes.view",
     summary: "Show an environment's file and line changes as the backend measures them.",
     description:
       "Read-only: prints the backend's change projection for the environment — the numbers the desktop shows — and one page of changed files. Counts carry their quality: ~ partial or estimated, ? unknown, ≥/≤ a bound; binary files and submodules have no line counts. Nothing is ever shown as zero unless the backend measured zero. Pass the printed cursor as --cursor for the next page; a cursor stops working once the changes move on. --json prints the action result verbatim ({projection, files}).",
@@ -193,6 +194,7 @@ export const changesCommands: CommandSpec[] = [
   },
   {
     path: ["changes", "history"],
+    action: "changes.history",
     summary: "List a session's turns, oldest first, with the changes each one made.",
     description:
       "Read-only: each turn's backend measurement from its start to its end, with the same count qualities as `changes view`. No workspace scan, transcript or provider read. Pass the printed cursor as --cursor for newer turns.",

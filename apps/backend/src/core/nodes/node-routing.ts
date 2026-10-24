@@ -80,6 +80,9 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "get_gateway_token_settings",
   "set_gateway_token",
   "rotate_control_mcp_token",
+  "create_control_mcp_credential",
+  "rotate_control_mcp_credential",
+  "revoke_control_mcp_credential",
   "get_control_mcp_settings",
 ]);
 

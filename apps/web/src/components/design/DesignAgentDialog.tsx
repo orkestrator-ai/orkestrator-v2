@@ -18,6 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { createSessionKey } from "@/lib/utils";
+import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import type { DesignProjection } from "@/stores/designStore";
 import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -39,6 +40,16 @@ import {
   type DesignDraftAddition,
 } from "./design-agent-context";
 import {
+  DESIGN_LINK_CHECK_DEADLINE_MS,
+  DESIGN_LINK_CHECK_TIMED_OUT,
+  designLinkCheckFailure,
+  designLinkCheckFrom,
+  designLinkStatus,
+  resumeDesignLink,
+  type DesignLinkCheck,
+  type DesignLinkStatus,
+} from "./design-session-links";
+import {
   addDesignImagesToDraft,
   DESIGN_PROMPT_IMAGE_HINT,
   DesignPromptImages,
@@ -47,8 +58,29 @@ import {
 } from "./design-prompt-images";
 
 type AgentChoice = "claude" | "codex";
-type LinkStatus = "open" | "closed" | "checking";
 type Destination = { kind: "link"; linkId: string } | { kind: "new" };
+
+/** Status text after the platform and role. */
+const STATUS_TEXT: Partial<Record<DesignLinkStatus, string>> = {
+  checking: "Checking…",
+  retained: "Open in another window",
+  resumable: "Closed — can be resumed",
+  missing: "Closed — no conversation to resume",
+  unavailable: "Closed — could not check the backend",
+  closed: "Closed — conversation ended",
+};
+
+/** A destination the context can be added to: open now, or reopened first. */
+function canReceive(status: DesignLinkStatus): boolean {
+  return status === "open" || status === "retained" || status === "resumable";
+}
+
+function canResumePlatform(platform: string): boolean {
+  return (
+    (platform === "claude" || platform === "codex") &&
+    findNativeAgentAdapter(platform)?.capabilities.resume === true
+  );
+}
 
 const SCOPE_OPTIONS = [
   { value: "discuss" as const, label: "Discuss" },
@@ -199,27 +231,91 @@ function DesignAgentDialogBody({
     return map;
   }, [environmentId, paneEnvironment]);
 
+  // Session identities the backend recorded during this dialog's check, ahead
+  // of the projection's status sync. Each applies only while the link still
+  // points at the tab it was read for.
+  const [recordedSessions, setRecordedSessions] = useState<
+    ReadonlyMap<string, { tabId: string; sessionId: string }>
+  >(() => new Map());
+  const projectedLinks = projection?.workspace?.sessions;
   const links = useMemo(() => {
     const byId = new Map<string, DesignSessionLink>();
-    for (const link of projection?.workspace?.sessions ?? []) byId.set(link.id, link);
-    for (const link of addedLinks) if (!byId.has(link.id)) byId.set(link.id, link);
-    return orderDesignSessionLinks([...byId.values()].filter((link) => !removedLinks.has(link.id)));
-  }, [addedLinks, projection?.workspace?.sessions, removedLinks]);
+    for (const link of projectedLinks ?? []) byId.set(link.id, link);
+    // A link this dialog created or moved is newer than the projection.
+    for (const link of addedLinks) byId.set(link.id, link);
+    return orderDesignSessionLinks(
+      [...byId.values()]
+        .filter((link) => !removedLinks.has(link.id))
+        .map((link) => {
+          const recorded = recordedSessions.get(link.id);
+          return recorded?.tabId === link.tabId ? { ...link, sessionId: recorded.sessionId } : link;
+        }),
+    );
+  }, [addedLinks, projectedLinks, recordedSessions, removedLinks]);
 
-  const statusOf = (link: DesignSessionLink): LinkStatus => {
-    if (!hydrated) return "checking";
-    return tabs.get(link.tabId)?.type === "agent-native" ? "open" : "closed";
+  // What the backend retains for each closed tab: asked once when the dialog
+  // opens and again on Retry, never polled.
+  const [check, setCheck] = useState<DesignLinkCheck>({ kind: "pending" });
+  const [checkGeneration, setCheckGeneration] = useState(0);
+  const recheck = () => {
+    setCheck({ kind: "pending" });
+    setCheckGeneration((generation) => generation + 1);
   };
-  const openLinks = links.filter((link) => statusOf(link) === "open");
-  const [destination, setDestination] = useState<Destination>(() =>
-    openLinks[0] ? { kind: "link", linkId: openLinks[0].id } : { kind: "new" },
-  );
+  const hasLinks = (projectedLinks?.length ?? 0) > 0;
+  useEffect(() => {
+    if (!hasLinks) return;
+    let cancelled = false;
+    // A backend that accepts the request but never answers would otherwise
+    // leave every closed link on "Checking…" with nothing to press. A late
+    // answer still replaces this.
+    const deadline = setTimeout(() => {
+      if (!cancelled) setCheck(DESIGN_LINK_CHECK_TIMED_OUT);
+    }, DESIGN_LINK_CHECK_DEADLINE_MS);
+    designApi
+      .sessionLinkStates(environmentId, context.canvasId)
+      .then((result) => {
+        if (cancelled) return;
+        setRecordedSessions(
+          new Map(
+            result.sessions.flatMap((link) =>
+              link.sessionId
+                ? [[link.id, { tabId: link.tabId, sessionId: link.sessionId }] as const]
+                : [],
+            ),
+          ),
+        );
+        setCheck(designLinkCheckFrom(result));
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setCheck(designLinkCheckFailure(reason));
+      })
+      .finally(() => clearTimeout(deadline));
+    return () => {
+      cancelled = true;
+      clearTimeout(deadline);
+    };
+  }, [checkGeneration, context.canvasId, environmentId, hasLinks]);
+
+  const statusOf = (link: DesignSessionLink): DesignLinkStatus =>
+    designLinkStatus(link, {
+      hydrated,
+      tabOpen: tabs.get(link.tabId)?.type === "agent-native",
+      canResume: canResumePlatform(link.platform),
+      check,
+    });
+  const receivingLinks = links.filter((link) => canReceive(statusOf(link)));
+  // Until the user picks, prefer an open conversation, then one that can be
+  // resumed, and only then a new one.
+  const [destination, setDestination] = useState<Destination | null>(null);
+  const autoLink =
+    links.find((link) => statusOf(link) === "open") ??
+    links.find((link) => canReceive(statusOf(link)));
+  const chosen: Destination =
+    destination ?? (autoLink ? { kind: "link", linkId: autoLink.id } : { kind: "new" });
   const destinationLink =
-    destination.kind === "link"
-      ? openLinks.find((link) => link.id === destination.linkId)
-      : undefined;
+    chosen.kind === "link" ? receivingLinks.find((link) => link.id === chosen.linkId) : undefined;
   const effectiveDestination: Destination =
-    destination.kind === "link" && !destinationLink ? { kind: "new" } : destination;
+    chosen.kind === "link" && !destinationLink ? { kind: "new" } : chosen;
   const linksFull = links.length >= DESIGN_SESSION_LINK_LIMIT;
   const needsReplacement = effectiveDestination.kind === "new" && linksFull;
   const replacement = needsReplacement ? links.find((link) => link.id === replaceId) : undefined;
@@ -280,14 +376,10 @@ function DesignAgentDialogBody({
   };
 
   /** Returns false when the draft could not be changed. */
-  const applyDraft = (
-    tabId: string,
-    addition: DesignDraftAddition,
-    inlineText: boolean,
-  ): boolean => {
+  const applyDraft = (tabId: string, addition: DesignDraftAddition): boolean => {
     const sessionKey = createSessionKey(environmentId, tabId);
     const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
-    const plan = planDesignDraft(current, addition, { inlineText });
+    const plan = planDesignDraft(current, addition);
     // Both checks run before either change, so a refusal leaves the draft as it was.
     if (!plan.ok || !addDesignImagesToDraft(sessionKey, images)) {
       setError(
@@ -299,19 +391,77 @@ function DesignAgentDialogBody({
     return true;
   };
 
-  const addToExisting = (link: DesignSessionLink) => {
-    const tab = usePaneLayoutStore
+  const hasAgentTab = (tabId: string) =>
+    usePaneLayoutStore
       .getState()
       .getAllTabs(environmentId)
-      .find((candidate) => candidate.id === link.tabId);
-    if (!tab || tab.type !== "agent-native") {
-      setError("That conversation has ended. Start a new conversation instead.");
-      return;
+      .some((candidate) => candidate.id === tabId && candidate.type === "agent-native");
+
+  /** Reopen a closed conversation; null when it could not be (the error is shown). */
+  const reopen = async (link: DesignSessionLink): Promise<string | null> => {
+    if (!createTab) {
+      setError("Open this design in the active environment to resume a conversation.");
+      return null;
     }
-    // A conversation whose provider is not chosen yet sends text only.
-    const inlineText = !tab.nativeAgentData?.platform;
-    if (!applyDraft(link.tabId, buildAddition(), inlineText)) return;
-    focusTab(environmentId, link.tabId);
+    try {
+      const resumed = await resumeDesignLink({
+        environmentId,
+        canvasId: context.canvasId,
+        link,
+        retainTab: statusOf(link) === "retained",
+        onClaimed: (claimed) => {
+          // Keep the adopted tab even if local creation fails. Retry and a
+          // later projection sync must converge on this already-open mapping.
+          setAddedLinks((current) => [
+            ...current.filter((candidate) => candidate.id !== claimed.id),
+            claimed,
+          ]);
+          onLinksChanged?.();
+        },
+        claim: (input) => designApi.resumeSessionLink(environmentId, context.canvasId, input),
+        hasTab: hasAgentTab,
+        createTab,
+        focus: (tabId) => focusTab(environmentId, tabId),
+      });
+      return resumed.tabId;
+    } catch (reason) {
+      // A refused move means the link changed under us; read it again.
+      recheck();
+      setError(messageOf(reason));
+      return null;
+    }
+  };
+
+  const resumeOnly = async (link: DesignSessionLink) => {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      if (await reopen(link)) {
+        // The tab reports whether the agent still has the session; this only
+        // says it is opening.
+        toast("Reopening the conversation");
+        onClose();
+      }
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  };
+
+  const addToExisting = async (link: DesignSessionLink) => {
+    let tabId: string | null = link.tabId;
+    if (!hasAgentTab(tabId)) {
+      if (!canReceive(statusOf(link))) {
+        setError("That conversation has ended. Start a new conversation instead.");
+        return;
+      }
+      tabId = await reopen(link);
+      if (!tabId) return;
+    }
+    if (!applyDraft(tabId, buildAddition())) return;
+    focusTab(environmentId, tabId);
     toast.success(
       handoff
         ? "Handoff draft added — review it before sending"
@@ -335,7 +485,7 @@ function DesignAgentDialogBody({
       setError("Could not open a new conversation. Close a tab or pane and try again.");
       return;
     }
-    if (!applyDraft(tabId, addition, true)) return;
+    if (!applyDraft(tabId, addition)) return;
     try {
       const link = await designApi.linkSession(
         environmentId,
@@ -375,7 +525,8 @@ function DesignAgentDialogBody({
     setPending(true);
     setError(null);
     try {
-      if (effectiveDestination.kind === "link" && destinationLink) addToExisting(destinationLink);
+      if (effectiveDestination.kind === "link" && destinationLink)
+        await addToExisting(destinationLink);
       else await startNew();
     } catch (reason) {
       setError(messageOf(reason));
@@ -417,12 +568,17 @@ function DesignAgentDialogBody({
       </p>
     </>
   );
+  const reopening = destinationLink !== undefined && statusOf(destinationLink) === "resumable";
   const actionLabel =
     effectiveDestination.kind === "new"
       ? "Start a new conversation"
-      : handoff
-        ? "Add handoff to composer"
-        : "Add to composer";
+      : reopening
+        ? handoff
+          ? "Resume and add handoff"
+          : "Resume and add to composer"
+        : handoff
+          ? "Add handoff to composer"
+          : "Add to composer";
 
   return (
     <DialogContent className="max-h-[min(90vh,48rem)] overflow-y-auto sm:max-w-[min(40rem,calc(100%-2rem))]">
@@ -576,7 +732,7 @@ function DesignAgentDialogBody({
                   data-testid={`design-link-${link.id}`}
                   className="flex items-center gap-2 rounded-md border border-border/60 px-2 py-1.5"
                 >
-                  {status === "open" ? (
+                  {canReceive(status) ? (
                     <input
                       type="radio"
                       name="design-agent-destination"
@@ -594,8 +750,7 @@ function DesignAgentDialogBody({
                     <p className="text-xs text-muted-foreground">
                       {platformLabel(link.platform)} ·{" "}
                       {link.role === "implementation" ? "Implementation" : "Design"}
-                      {status === "closed" ? " · Closed — conversation ended" : ""}
-                      {status === "checking" ? " · Checking…" : ""}
+                      {STATUS_TEXT[status] ? ` · ${STATUS_TEXT[status]}` : ""}
                     </p>
                   </div>
                   {status === "open" ? (
@@ -611,7 +766,31 @@ function DesignAgentDialogBody({
                       Open
                     </Button>
                   ) : null}
-                  {status === "closed" ? (
+                  {status === "resumable" || status === "retained" ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={pending}
+                      aria-label={`${status === "retained" ? "Open" : "Resume"} ${title}`}
+                      onClick={() => void resumeOnly(link)}
+                    >
+                      {status === "retained" ? "Open conversation" : "Resume conversation"}
+                    </Button>
+                  ) : null}
+                  {status === "unavailable" ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={pending}
+                      aria-label={`Check ${title} again`}
+                      onClick={recheck}
+                    >
+                      Retry
+                    </Button>
+                  ) : null}
+                  {status !== "open" && status !== "checking" ? (
                     <Button
                       type="button"
                       variant="ghost"
@@ -667,7 +846,7 @@ function DesignAgentDialogBody({
                 />
                 <span className="truncate">
                   {linkTitle(link, tabs.get(link.tabId))}
-                  {statusOf(link) === "closed" ? " (closed)" : ""}
+                  {statusOf(link) === "open" ? "" : " (closed)"}
                 </span>
               </label>
             ))}

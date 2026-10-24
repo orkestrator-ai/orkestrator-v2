@@ -1,10 +1,14 @@
 import {
   PUBLIC_API_LIMITS,
   type PublicActionName,
-  type PublicExecutionState,
   type PublicReceipt,
 } from "@orkestrator/protocol/public-api";
 import type { PublicEnvironmentSummary } from "@orkestrator/protocol/public-api-resources";
+import {
+  classifyReceiptForWait,
+  isTerminalPublicReceipt,
+  terminalReceiptErrorCode,
+} from "@orkestrator/protocol/public-api-wait";
 import { CliError } from "../errors.js";
 import type { ClientSession } from "../session.js";
 import type { CommandContext, OptionSpec } from "../spec.js";
@@ -193,7 +197,7 @@ export async function readOperation(
 }
 
 export function isTerminalReceipt(receipt: PublicReceipt): boolean {
-  return !["admitted", "running", "unknown"].includes(receipt.state);
+  return isTerminalPublicReceipt(receipt);
 }
 
 function stoppedError(
@@ -225,20 +229,17 @@ function stoppedError(
 
 /** Map a terminal receipt to success or a structured failure. */
 export function receiptFailure(receipt: PublicReceipt): CliError | undefined {
-  if (receipt.state === "succeeded") return undefined;
+  const code = terminalReceiptErrorCode(receipt);
+  if (!code) return undefined;
   const message = receipt.error?.message ?? `Operation ended ${receipt.state}`;
-  const code =
-    receipt.state === "partial"
-      ? "partial-failure"
-      : receipt.state === "cancelled"
-        ? "run-cancelled"
-        : receipt.state === "interrupted"
-          ? "run-interrupted"
-          : receipt.state === "unknown"
-            ? "run-unknown"
-            : (receipt.error?.code ?? "operation-failed");
   return new CliError(code, message, { receipt, action: receipt.action });
 }
+
+/** CLI wording for the early stops whose fix is a CLI command. */
+const CLI_STOP_MESSAGES: Partial<Record<string, string>> = {
+  "dispatch-unknown":
+    "The provider may or may not have received the prompt; use `run retry` (same key) or `run discard`",
+};
 
 /**
  * Observe an operation until it is terminal. Interaction-required and
@@ -275,44 +276,15 @@ export async function waitForOperation(
             throw new ObservationStopped("deadline");
           throw error;
         }
-        if (isTerminalReceipt(latest)) return { done: true as const, value: latest };
-        const execution: PublicExecutionState | undefined = latest.execution;
-        if (execution?.state === "waiting-for-input" && !options.continueOnInteraction) {
-          throw new CliError(
-            "interaction-required",
-            "The run is waiting for an answer to a pending interaction",
-            {
-              receipt: latest,
-              action: latest.action,
-              details: { interactions: execution.interactions ?? [] },
-            },
-          );
-        }
-        if (latest.state === "unknown" && latest.dispatch?.state === "unknown") {
-          throw new CliError(
-            "dispatch-unknown",
-            "The provider may or may not have received the prompt; use `run retry` (same key) or `run discard`",
-            { receipt: latest, action: latest.action, retryable: true },
-          );
-        }
-        if (latest.state === "unknown") {
-          // The backend concluded it cannot prove the outcome; waiting longer
-          // would not change that.
-          throw new CliError(
-            "run-unknown",
-            latest.error?.message ?? "The outcome of this run is not known",
-            {
-              receipt: latest,
-              action: latest.action,
-            },
-          );
-        }
-        if (execution?.state === "unsupported") {
-          throw new CliError(
-            "capability-unavailable",
-            execution.reason ?? "Completion of this run cannot be observed for its provider",
-            { receipt: latest, action: latest.action },
-          );
+        const verdict = classifyReceiptForWait(latest, options);
+        if (verdict.kind === "terminal") return { done: true as const, value: latest };
+        if (verdict.kind === "stopped") {
+          throw new CliError(verdict.code, CLI_STOP_MESSAGES[verdict.code] ?? verdict.message, {
+            receipt: latest,
+            action: latest.action,
+            ...(verdict.retryable ? { retryable: true } : {}),
+            ...(verdict.interactions ? { details: { interactions: verdict.interactions } } : {}),
+          });
         }
         return { done: false };
       },

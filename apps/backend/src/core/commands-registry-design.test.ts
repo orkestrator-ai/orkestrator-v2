@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,7 @@ import { createCommandRegistry } from "./commands.js";
 import type { CommandContext } from "./commands-context.js";
 import { resolveDesignDestination } from "./design/exports.js";
 import { DesignService } from "./design/service.js";
+import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { createTestRenderer, trackUnhandledRejections } from "./design/test-support.js";
 import { StorageService } from "./storage.js";
 
@@ -575,5 +576,95 @@ describe("design command registry", () => {
     ).toMatchObject({
       kind: "missing",
     });
+  });
+  test("reports linked conversations from durable native-session records and resumes once", async () => {
+    const canvas = (await invoke("design_action", {
+      environmentId: "local",
+      action: "create_canvas",
+      input: { name: "Linked" },
+    })) as DesignCanvas;
+    const retain = (
+      environmentId: string,
+      agent: "claude" | "codex",
+      tabId: string,
+      providerSessionId: string,
+    ) => {
+      const logicalSessionKey = `env-${environmentId}:${tabId}`;
+      return storage.getOrCreateNativeAgentSession(
+        {
+          key: nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+          environmentId,
+          agent,
+          logicalSessionKey,
+        },
+        async () => providerSessionId,
+      );
+    };
+    const open = await value<{ id: string }>("design_session_link", {
+      environmentId: "local",
+      canvasId: canvas.id,
+      link: { tabId: "design-chat-1", platform: "claude", role: "design" },
+    });
+    const closed = await value<{ id: string }>("design_session_link", {
+      environmentId: "local",
+      canvasId: canvas.id,
+      // Recorded by tab teardown: Codex resumes its thread.
+      link: { tabId: "design-chat-2", sessionId: "thread-2", platform: "codex", role: "design" },
+    });
+    // The first tab is open; the same tab id in another environment must never
+    // answer for the second.
+    await retain("local", "claude", "design-chat-1", "provider-1");
+    await retain("container", "codex", "design-chat-2", "provider-elsewhere");
+
+    const report = await value<{
+      sessions: { id: string; sessionId?: string }[];
+      states: { linkId: string; session: string }[];
+    }>("design_session_link_states", { environmentId: "local", canvasId: canvas.id });
+    expect(report.states).toEqual([
+      { linkId: open.id, session: "retained" },
+      { linkId: closed.id, session: "missing" },
+    ]);
+
+    // The ordinary native resume: the provider reopens the thread as a new live
+    // session mapped to the resume tab.
+    const resumeProjectionSession = mock(
+      async (input: { environmentId: string; agent: "codex"; logicalSessionKey: string }) => {
+        await retain(
+          input.environmentId,
+          input.agent,
+          input.logicalSessionKey.split(":")[1]!,
+          "live-2",
+        );
+        return null;
+      },
+    );
+    context.nativeAgents = { resumeProjectionSession } as unknown as CommandContext["nativeAgents"];
+    const resume = { environmentId: "local", canvasId: canvas.id, linkId: closed.id };
+    const [first, second] = await Promise.all([
+      value("design_session_resume", { ...resume, expectedTabId: "design-chat-2", tabId: "r-1" }),
+      value("design_session_resume", { ...resume, expectedTabId: "design-chat-2", tabId: "r-1" }),
+    ]);
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({
+      link: { tabId: "r-1", sessionId: "thread-2" },
+      providerSessionId: "live-2",
+    });
+    expect(resumeProjectionSession).toHaveBeenCalledTimes(1);
+    expect(resumeProjectionSession.mock.calls[0]?.[0]).toMatchObject({
+      environmentId: "local",
+      agent: "codex",
+      logicalSessionKey: "env-local:r-1",
+      providerSessionId: "thread-2",
+    });
+    expect(
+      await typed("design_session_resume", {
+        ...resume,
+        expectedTabId: "design-chat-2",
+        tabId: "r-2",
+      }),
+    ).toMatchObject({ ok: false, failure: { code: "conflict" } });
+    expect(
+      await typed("design_session_link_states", { environmentId: "missing", canvasId: canvas.id }),
+    ).toMatchObject({ ok: false, failure: { code: "not-found" } });
   });
 });

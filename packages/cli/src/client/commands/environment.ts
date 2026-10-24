@@ -102,6 +102,7 @@ async function lifecycle(
 export const environmentCommands: CommandSpec[] = [
   {
     path: ["environment", "list"],
+    action: "environment.list",
     summary: "List environments from the backend snapshot.",
     positionals: [],
     options: [
@@ -151,6 +152,7 @@ export const environmentCommands: CommandSpec[] = [
   },
   {
     path: ["environment", "get"],
+    action: "environment.get",
     summary: "Show one environment by ID, or by --project and --name when unique.",
     positionals: [{ name: "environment", required: false }],
     options: [
@@ -189,6 +191,7 @@ export const environmentCommands: CommandSpec[] = [
   },
   {
     path: ["environment", "create"],
+    action: "environment.create",
     summary: "Create an environment record (does not start it).",
     description:
       "--base-branch with --base-commit (a full 40-character SHA) pins the exact base; the backend validates it and records what was used. Without them the project's default branch is used at start time.",
@@ -250,6 +253,7 @@ export const environmentCommands: CommandSpec[] = [
   },
   {
     path: ["environment", "start"],
+    action: "environment.start",
     summary: "Start an environment; setup continues in the backend.",
     description:
       "`--wait running` returns once processes run; `--wait ready` also requires setup to complete (an explicit setup override is reported, never applied by the CLI). Setup failure exits 1 with the recorded reason.",
@@ -260,6 +264,7 @@ export const environmentCommands: CommandSpec[] = [
   },
   {
     path: ["environment", "stop"],
+    action: "environment.stop",
     summary: "Stop an environment's processes (and container).",
     positionals: [{ name: "environment", required: true }],
     options: [waitOption(["stopped"]), TIMEOUT_OPTION, REQUEST_ID_OPTION],
@@ -268,6 +273,7 @@ export const environmentCommands: CommandSpec[] = [
   },
   {
     path: ["environment", "recreate"],
+    action: "environment.recreate",
     summary:
       "Rebuild the container, keeping its files; with --discard, DESTRUCTIVELY reset it (container environments only).",
     description:
@@ -295,6 +301,7 @@ export const environmentCommands: CommandSpec[] = [
   },
   {
     path: ["environment", "delete"],
+    action: "environment.delete",
     summary:
       "DESTRUCTIVE: stop and delete the environment, its worktree or container, and its record.",
     description:
@@ -306,6 +313,7 @@ export const environmentCommands: CommandSpec[] = [
   },
   {
     path: ["environment", "fork"],
+    action: "environment.fork",
     summary: "Create a new environment from this environment's current state.",
     positionals: [{ name: "environment", required: true }],
     options: [TYPE_OPTION, REQUEST_ID_OPTION],
@@ -333,6 +341,7 @@ export const environmentCommands: CommandSpec[] = [
   },
   {
     path: ["environment", "rename"],
+    action: "environment.rename",
     summary: "Rename an environment (and its branch).",
     positionals: [
       { name: "environment", required: true },
@@ -362,6 +371,7 @@ export const environmentCommands: CommandSpec[] = [
   },
   {
     path: ["environment", "launch"],
+    action: "environment.launch",
     summary: "Create and start an environment whose startup agent receives one first prompt.",
     description:
       "The backend owns the whole flow: create, start, setup, then exactly one initial prompt to the startup session. Do not follow it with `session start`. --wait ready observes setup; follow the prompt's run with `run wait`.",
@@ -491,6 +501,8 @@ export const environmentCommands: CommandSpec[] = [
   },
   {
     path: ["environment", "exec"],
+    action: "environment.exec",
+    inputFields: { "stdin-file": "stdinBase64", "exec-timeout": "timeoutMs" },
     summary: "Run one command in the environment workspace and report its exit status.",
     description:
       "Arguments after `--` are passed as argv without a shell; use `-- sh -c '...'` to opt into shell expansion. The command runs in a backend-owned worker that outlives this client; --wait observes it and exits with the operation's result (`--exit-code` passes the child's exit code through instead). Output is kept in bounded private artifacts; read it with `run output`.",

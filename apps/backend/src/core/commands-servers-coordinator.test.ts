@@ -266,6 +266,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
             url: "http://127.0.0.1:1234/mcp",
             token: "",
             error: null,
+            credentials: [],
           }),
           rotateToken: async () => ({
             enabled: true,
@@ -273,7 +274,17 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
             url: "http://127.0.0.1:1234/mcp",
             token: "",
             error: null,
+            credentials: [],
           }),
+          createCredential: async () => {
+            throw new Error("unused");
+          },
+          rotateCredential: async () => {
+            throw new Error("unused");
+          },
+          revokeCredential: async () => {
+            throw new Error("unused");
+          },
           issueCoordinatorCredential: issue,
           revokeCoordinatorCredentials: revoke,
         },
@@ -428,6 +439,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
           url: "http://127.0.0.1:1234/mcp",
           token: "",
           error: null,
+          credentials: [],
         }),
         rotateToken: async () => ({
           enabled: true,
@@ -435,7 +447,17 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
           url: "http://127.0.0.1:1234/mcp",
           token: "",
           error: null,
+          credentials: [],
         }),
+        createCredential: async () => {
+          throw new Error("unused");
+        },
+        rotateCredential: async () => {
+          throw new Error("unused");
+        },
+        revokeCredential: async () => {
+          throw new Error("unused");
+        },
         issueCoordinatorCredential: issue,
         revokeCoordinatorCredentials: () => undefined,
       },
@@ -500,6 +522,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
           url: "http://127.0.0.1:1234/mcp",
           token: "",
           error: null,
+          credentials: [],
         }),
         rotateToken: async () => ({
           enabled: true,
@@ -507,7 +530,17 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
           url: "http://127.0.0.1:1234/mcp",
           token: "",
           error: null,
+          credentials: [],
         }),
+        createCredential: async () => {
+          throw new Error("unused");
+        },
+        rotateCredential: async () => {
+          throw new Error("unused");
+        },
+        revokeCredential: async () => {
+          throw new Error("unused");
+        },
         issueCoordinatorCredential: issue,
         revokeCoordinatorCredentials: revoke,
       },
@@ -626,6 +659,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
           url: "http://127.0.0.1:1234/mcp",
           token: "",
           error: null,
+          credentials: [],
         }),
         rotateToken: async () => ({
           enabled: true,
@@ -633,7 +667,17 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
           url: "http://127.0.0.1:1234/mcp",
           token: "",
           error: null,
+          credentials: [],
         }),
+        createCredential: async () => {
+          throw new Error("unused");
+        },
+        rotateCredential: async () => {
+          throw new Error("unused");
+        },
+        revokeCredential: async () => {
+          throw new Error("unused");
+        },
         issueCoordinatorCredential: () => ({
           url: "http://127.0.0.1:1234/mcp",
           token: "scoped-token",
@@ -687,6 +731,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
           url: "http://127.0.0.1:1234/mcp",
           token: "",
           error: null,
+          credentials: [],
         }),
         rotateToken: async () => ({
           enabled: true,
@@ -694,7 +739,17 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
           url: "http://127.0.0.1:1234/mcp",
           token: "",
           error: null,
+          credentials: [],
         }),
+        createCredential: async () => {
+          throw new Error("unused");
+        },
+        rotateCredential: async () => {
+          throw new Error("unused");
+        },
+        revokeCredential: async () => {
+          throw new Error("unused");
+        },
         issueCoordinatorCredential: () => ({
           url: "http://127.0.0.1:1234/mcp",
           token: "scoped-token",

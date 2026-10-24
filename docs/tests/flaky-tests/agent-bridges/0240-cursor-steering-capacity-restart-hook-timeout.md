@@ -67,3 +67,7 @@ the same fix.
 - Reopened on the isolated pass. Shared-host I/O or hook contention is a
   hypothesis; the original fsync diagnosis does not explain this recurrence
   by itself. No owner implementation, assertion, timeout or skip changed.
+
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 7.6 s: `mise run test:logged -- --name design-links-owner-cursor-conformance -- bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/conformance-interactions.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.

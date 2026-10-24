@@ -332,16 +332,62 @@ include the legacy message plus a typed JSON failure.
 
 ## Agent context
 
-A canvas remembers bounded links (≤8) to the conversations that worked on it
-(environment + tab id, platform, role design/implementation). **Ask agent**
-adds a removable, revisioned design-context annotation to a conversation's
-draft without sending it (images pasted into its note or brief are added to
-that draft's attachments); the agent is told to re-read the canvas before
-editing, and every edit is still revision checked. **Use as implementation
-reference** prepares a reviewable handoff draft for an ordinary conversation;
-nothing is submitted, approved, committed or deployed automatically. Closing a
-native tab ends its conversation, so a link to a closed tab offers a new
-conversation instead of a silent replacement.
+A canvas remembers bounded links (≤8) to the conversations that worked on it:
+the tab id the conversation was last opened in, the identity to resume it by
+once that tab closes, platform, role design/implementation, creation time and an optional
+checkpoint. Never a transcript, credential or copy of native status. **Ask
+agent** adds a removable, revisioned design-context annotation to a
+conversation's draft without sending it (images pasted into its note or brief
+are added to that draft's attachments), including a brand-new tab's draft:
+the unassigned composer shows and sends annotations like every other native
+composer. The agent is told to re-read the canvas before editing, and every
+edit is still revision checked. **Use as implementation reference** prepares a
+reviewable handoff draft for an ordinary conversation; nothing is submitted,
+approved, committed or deployed automatically.
+
+Links survive tab closure, because closing a native tab retains its
+conversation (see [Tab close and conversation retention](../../AGENTS.md#tab-close-and-conversation-retention)).
+Code: `apps/backend/src/core/design/session-links.ts`,
+`apps/web/src/components/design/design-session-links.ts`.
+
+- **Session identity.** A new conversation has no session until its first
+  send, so a link starts with only its tab id, which names the backend's
+  native-session mapping (`env-<environmentId>:<tabId>`) only while the tab
+  is open: tab teardown retires that mapping. Teardown
+  (`commands-registry-teardown.ts`) therefore records on every link naming the
+  tab the identity a resume needs: Codex's thread id, read from the session
+  before it is closed (`NativeAgentService.resumableSessionIdIfRunning`,
+  observe only), and the provider session id for Claude, which resumes by it.
+  An identity that cannot be read is not recorded rather than guessed. The
+  link is written after the provider-session teardown lock is released (a
+  resume holds its canvas lane while waiting for that lock), and recording
+  never fails the close.
+- **Link states.** `design_session_link_states` reads each link's tab mapping
+  from storage (no bridge, no liveness route, nothing that defeats idle
+  detachment) and reports `retained` or `missing`; it writes nothing. The
+  dialog asks once when it opens and again on **Retry**, never on a timer, and
+  shows: open (the tab is in this client's pane layout), can be resumed
+  (closed, the link records a session), no conversation to resume (closed and
+  nothing recorded: it never started, or it closed before links kept
+  sessions; remove it or start a new conversation), could not check (the
+  backend failed or did not answer within 8 seconds: **Retry**, never a
+  replacement; a late answer still replaces it) and closed (a backend older
+  than this command, or an agent without resume). Native agents have no
+  archive state yet ([0006](../todo/agent-engines/0006-session-titles-and-history.md)).
+- **Resume conversation.** A closed link that can be resumed is offered ahead
+  of a new conversation, alone or as the destination for new context
+  ("Resume and add to composer"). The resume tab id is derived from the link
+  (`design-resume-<linkId>-<hash of its current tab id>`). `design_session_resume`
+  then, in the canvas lane, compare-and-sets the link's tab, resumes the
+  recorded session for the new tab through the ordinary native-agent resume
+  (`resumeProjectionSession`: environment ownership, a provider that still has
+  the session, never an empty replacement) and moves the link only when that
+  succeeded, returning the live session the tab adopts. A lost conversation is
+  therefore an error in the dialog, not a broken tab. Two clients resuming
+  together send the same tab id: the second waits on the lane and gets the
+  first one's link and live session without resuming again. The tab opens with
+  `resumeSessionId` and `requireExistingResumeSession` and no initial prompt,
+  so the design's opening prompt is never sent again.
 
 ## Bounds
 
@@ -356,20 +402,22 @@ credentials or prompts.
 
 Backend: the `core/design/` `service`, `operations`, `history`, `lifecycle`,
 `sync`, `records`, `exports`, `export-writer`, `renderer`, `mcp`,
-`cross-process` and `host-file` tests, and
-`commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
+`cross-process`, `host-file` and `session-links` tests,
+`commands-registry-teardown` (a closing tab records its session on design
+links) and `commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
 plus one real-Chromium renderer test). Backend tests reach a storage bound
 (change log, history entries) by lowering it with `withDesignLimit`, not with
 hundreds of fsynced commits, and check the shipped bound in memory. A test
 that counts hints after an HTML edit first holds the background validation
 with `renderer.block`. Web: controller, drafts, viewport,
-canvas tab, inspector, layer tree, history/export, entry and agent
-context tests. Browser: `e2e/DesignCanvas.spec.ts` runs the real runtime and
+canvas tab, inspector, layer tree, history/export, entry, agent context and
+`design-session-links` (link states, resume tab ids, concurrent resume)
+tests. Browser: `e2e/DesignCanvas.spec.ts` runs the real runtime and
 command registry at desktop and phone widths;
 `e2e/agent-testing/design-canvas.spec.ts` runs against the isolated stack, and
 `e2e/agent-testing/design-live.spec.ts` (opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1`)
-runs the full tool cycle, Ask agent, an approval and the handoff with real
-Claude and Codex.
+runs the full tool cycle, Ask agent, an approval, the handoff and closing and
+resuming the design conversation with real Claude and Codex.
 `e2e/DesignCanvasAccessibility.spec.ts` runs a keyboard-only journey with focus
 survival, accessibility-tree, reduced-motion, zoom and narrow-pane checks, and
 `e2e/agent-testing/design-canvas-electron.spec.ts` (`mise run test:agent:electron`)

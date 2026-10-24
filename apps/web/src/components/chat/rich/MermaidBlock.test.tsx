@@ -73,6 +73,27 @@ describe("MermaidBlock", () => {
     expect(searchRootText(container)).toBe(SOURCE);
   });
 
+  test("a closed fence keeps the preview's frame while its first render is pending", async () => {
+    let resolveRender!: (response: MermaidRenderResponse) => void;
+    renderer = mock(
+      () => new Promise<MermaidRenderResponse>((resolve) => (resolveRender = resolve)),
+    );
+    setMermaidRenderer(renderer);
+    const { container } = render(<MermaidBlock source={SOURCE} closed blockKey="m-frame" />);
+    await waitFor(() => expect(renderer).toHaveBeenCalledTimes(1));
+    // Not the variable-height source: the same fixed frame the diagram uses.
+    const placeholder = container.querySelector("[data-rich-preview-placeholder]");
+    expect(placeholder?.className).toContain("h-80");
+    expect(container.querySelector("pre") === null).toBe(true);
+    expect(searchRootText(container)).toBe(SOURCE);
+    await act(async () => resolveRender(ok()));
+    await waitFor(() =>
+      expect(container.querySelector("[data-rich-search-exclude] svg")).toBeTruthy(),
+    );
+    expect(container.querySelector("[data-rich-preview-placeholder]") === null).toBe(true);
+    expect(container.querySelector(".h-80")).toBeTruthy();
+  });
+
   test("never renders an open (streaming or clipped) fence", async () => {
     const { container } = render(
       <MermaidBlock source={SOURCE} closed={false} live blockKey="m2" />,

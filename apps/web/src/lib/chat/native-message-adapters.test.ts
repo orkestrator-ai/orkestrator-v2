@@ -3940,6 +3940,40 @@ describe("coalesceAdjacentToolMessages", () => {
     ...extra,
   });
 
+  test("a coalesced run keeps its id as history merges in front and calls append behind", () => {
+    const m2 = toolMessage("m2", "2026-09-03T10:43:20.000Z");
+    const m3 = toolMessage("m3", "2026-09-03T10:43:30.000Z");
+    const first = coalesceAdjacentToolMessages([m2, m3]);
+    expect(first.map((row) => row.id)).toEqual(["m2"]);
+    // A history page merges m1 in front: the row is not renamed to m1.
+    const m1 = toolMessage("m1", "2026-09-03T10:43:01.000Z");
+    const paged = coalesceAdjacentToolMessages([m1, m2, m3]);
+    expect(paged.map((row) => row.id)).toEqual(["m2"]);
+    expect(paged[0]!.earliestSourceMessageId).toBe("m1");
+    // A live call appends behind, and the tail member is a new object.
+    const m4 = toolMessage("m4", "2026-09-03T10:44:00.000Z");
+    const live = coalesceAdjacentToolMessages([m1, m2, { ...m3 }, m4]);
+    expect(live.map((row) => row.id)).toEqual(["m2"]);
+    // Unchanged inputs give the same row object (memoized rendering holds).
+    expect(coalesceAdjacentToolMessages([m1, m2, m3])[0]).toBe(paged[0]);
+  });
+
+  test("a run that splits never gives two rows one id", () => {
+    const a = toolMessage("a", "2026-09-03T10:43:01.000Z");
+    const b = toolMessage("b", "2026-09-03T10:43:02.000Z");
+    const c = toolMessage("c", "2026-09-03T10:43:03.000Z");
+    expect(coalesceAdjacentToolMessages([a, b, c]).map((row) => row.id)).toEqual(["a"]);
+    const prose: NativeMessage = {
+      id: "prose",
+      role: "assistant",
+      content: "Between",
+      createdAt: "2026-09-03T10:43:02.500Z",
+      parts: [{ type: "text", content: "Between" }],
+    };
+    const ids = coalesceAdjacentToolMessages([a, b, prose, c]).map((row) => row.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   test("merges consecutive tool-only messages into one tool group", () => {
     const rows = normalizeNativeMessages([
       toolMessage("m1", "2026-09-03T10:43:01.000Z", ["Read", "Read"]),

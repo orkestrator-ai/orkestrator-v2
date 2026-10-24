@@ -14,6 +14,8 @@ mock.module("react-virtuoso", () => ({
   Virtuoso: (props: any) => {
     lastVirtuosoProps = props;
     const { data, itemContent, components, context } = props;
+    // Like Virtuoso, rendered indices include `firstItemIndex`.
+    const base: number = props.firstItemIndex ?? 0;
 
     // Render EmptyPlaceholder when data is empty
     if (data.length === 0 && components?.EmptyPlaceholder) {
@@ -31,7 +33,7 @@ mock.module("react-virtuoso", () => ({
         {data.map((item: any, index: number) =>
           !renderedItemIndexes || renderedItemIndexes.has(index) ? (
             <div key={index} data-testid={`virtuoso-item-${index}`}>
-              {itemContent(index, item)}
+              {itemContent(base + index, item)}
             </div>
           ) : null,
         )}
@@ -553,7 +555,8 @@ describe("VirtualizedMessageList", () => {
   test("passes scrollerRef through to Virtuoso", () => {
     // The only scroll prop the pass-through test above omits; the scroll
     // container is what the find feature and the jump-to-bottom control need.
-    const scrollerRef = () => {};
+    const received: unknown[] = [];
+    const scrollerRef = (element: unknown) => received.push(element);
 
     render(
       <VirtualizedMessageList
@@ -565,7 +568,11 @@ describe("VirtualizedMessageList", () => {
       />,
     );
 
-    expect(lastVirtuosoProps.scrollerRef).toBe(scrollerRef);
+    // Forwarded, after naming the element as the transcript's own scroller.
+    const element = document.createElement("div");
+    lastVirtuosoProps.scrollerRef(element);
+    expect(received).toEqual([element]);
+    expect(element.getAttribute("data-transcript-scroller")).toBe("true");
   });
 
   test("passes computeItemKey through to Virtuoso", () => {
@@ -581,7 +588,27 @@ describe("VirtualizedMessageList", () => {
       />,
     );
 
-    expect(lastVirtuosoProps.computeItemKey).toBe(computeItemKey);
+    // Virtuoso passes absolute indices (offset by firstItemIndex); the list
+    // hands callers the local index.
+    const seen: number[] = [];
+    const key = lastVirtuosoProps.computeItemKey as (index: number, msg: TestMessage) => string;
+    expect(typeof lastVirtuosoProps.firstItemIndex).toBe("number");
+    expect(key(lastVirtuosoProps.firstItemIndex, { id: "1", text: "Hi" })).toBe("1");
+    const spy = (index: number, msg: TestMessage) => {
+      seen.push(index);
+      return computeItemKey(index, msg);
+    };
+    cleanup();
+    render(
+      <VirtualizedMessageList
+        messages={[{ id: "1", text: "Hi" }]}
+        computeItemKey={spy}
+        renderMessage={(_i, msg) => <span>{msg.text}</span>}
+        scrollProps={makeScrollProps()}
+        virtuosoRef={createRef<VirtuosoHandle>()}
+      />,
+    );
+    expect(seen.every((index) => index === 0)).toBe(true);
   });
 
   test("sets the transcript estimate and overscan", () => {

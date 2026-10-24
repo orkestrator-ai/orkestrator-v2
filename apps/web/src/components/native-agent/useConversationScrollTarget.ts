@@ -30,7 +30,11 @@ interface UseConversationScrollTargetOptions {
    */
   transcriptSettled: boolean;
   /** Scroll the list to one row; false when the list is not ready yet. */
-  scrollToIndex: (index: number) => boolean;
+  scrollToIndex: (
+    index: number,
+    anchor?: { rowKey?: string; offset?: number },
+    owner?: "message-link",
+  ) => boolean;
   /** Overrides for tests. */
   settledGraceMs?: number;
   highlightMs?: number;
@@ -82,9 +86,10 @@ export function useConversationScrollTarget({
     const attempt = () => {
       frame = null;
       retry = null;
-      // Deferred one frame so the activation jump-to-bottom scheduled by the
-      // same commit runs first; `scrollToIndex` then retires it.
-      if (scrollToIndex(targetIndex)) {
+      // The view's activation policy defers to this pending request
+      // (`explicitTargetPending`), so no ordering between effects decides
+      // the outcome; the navigation retires anything still in flight.
+      if (scrollToIndex(targetIndex, { rowKey: targetMessageId }, "message-link")) {
         clear(environmentId, tabId, pending.nonce);
         setHighlightedMessageId(targetMessageId);
         return;

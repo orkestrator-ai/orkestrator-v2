@@ -512,15 +512,19 @@ expanded Mermaid dialog does not yet).
 `VirtualizedMessageList` keeps Virtuoso and its stable header/footer
 components; rows are keyed by message id and carry `data-chat-message-key`.
 
+- **Scroll ownership.** One `TranscriptScrollController` per viewport owns
+  every scroll write; see [transcript-scroll.md](transcript-scroll.md) for
+  follow intent, cancellation, measured convergence, semantic anchors,
+  activation, tool-group viewports and streaming Markdown reuse.
 - **Follow pausing.** Auto-follow pauses while the reader has a
   non-collapsed selection inside a transcript row, while find is open, and
   while a live interactive artifact is in the panel or full screen or an
-  expanded viewer is pinned. `useVirtuosoScrollState` exposes
-  `setFollowPaused(reason, paused)`: while any reason is held, `followOutput`
-  returns false and growth pinning is suppressed but owed; on release a
-  reader who still wants the tail is brought to it. Stick intent itself is
-  unchanged (a user scroll-up during the pause still releases it). Lists
-  whose scroll props lack the setter pause Virtuoso's `followOutput` locally.
+  expanded viewer is pinned. `setFollowPaused(reason, paused)` holds one
+  reason; taking one retires an incompatible navigation, and Virtuoso
+  receives a literal `false` follow prop while any is held. Growth pinning is
+  suppressed but owed; releasing the last reason brings a reader who still
+  wants the tail to it, unless a navigation or their own movement superseded
+  the pause. Lists whose scroll props lack the setter pause locally.
 - **Keep-mounted.** The row holding the selection (or, failing that, the
   focused element) is protected: Virtuoso's `minOverscanItemCount` is raised
   just enough toward it — `KEEP_MOUNTED_MARGIN_ROWS` (2) beyond the visible

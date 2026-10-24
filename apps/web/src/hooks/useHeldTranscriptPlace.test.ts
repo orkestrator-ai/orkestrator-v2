@@ -34,15 +34,20 @@ const read = (id: string, createdAt: string): NativeMessage => ({
   ],
 });
 
-function setup(initial: NativeMessage[]) {
-  const scrollToIndex = mock((_index: number) => true);
+function setup(initial: NativeMessage[], loading?: boolean) {
+  const scrollToIndex = mock((_index: number, _anchor?: unknown, _owner?: string) => true);
   const hook = renderHook(
-    ({ messages }) => {
+    ({ messages, loading }) => {
       const place = useHeldTranscriptPlace();
-      useRestoreHeldPlace(place, messages, scrollToIndex);
+      useRestoreHeldPlace(place, messages, scrollToIndex, loading);
       return place;
     },
-    { initialProps: { messages: initial } },
+    {
+      initialProps: { messages: initial, loading } as {
+        messages: NativeMessage[];
+        loading?: boolean;
+      },
+    },
   );
   return { hook, scrollToIndex };
 }
@@ -134,7 +139,12 @@ describe("useRestoreHeldPlace", () => {
         read("r54", "2026-10-18T01:33:40.000Z"),
       ]),
     });
-    expect(scrollToIndex).toHaveBeenCalledWith(0, { partId: "call53", offset: -10 });
+    expect(scrollToIndex).toHaveBeenCalledWith(
+      0,
+      // The block keeps its id ("r52") although r51 merged in front of it.
+      { partId: "call53", rowKey: "r52", offset: -10 },
+      "history",
+    );
   });
 
   test("holds a visible source tool below prose whose author header can change", () => {
@@ -152,10 +162,14 @@ describe("useRestoreHeldPlace", () => {
       rect(180, 230);
     hook.result.current.hold(scroller);
     hook.rerender({ messages: [text("earlier"), text("intro"), tool] });
-    expect(scrollToIndex).toHaveBeenCalledWith(2, { partId: "call52", offset: 80 });
+    expect(scrollToIndex).toHaveBeenCalledWith(
+      2,
+      { partId: "call52", rowKey: "intro:text-block:1", offset: 80 },
+      "history",
+    );
   });
 
-  test("finds a head block that a cross-minute page merged into and renamed", () => {
+  test("finds a head block that a cross-minute page merged into", () => {
     // The live tail starts inside a tool run: its head block coalesces two reads.
     const tail = [
       read("r52", "2026-10-18T01:33:20.000Z"),
@@ -173,7 +187,9 @@ describe("useRestoreHeldPlace", () => {
       read("r51", "2026-10-18T01:33:05.000Z"),
       ...tail,
     ]);
-    expect(loaded.map((row) => row.id)).toEqual(["prompt", "r50", "answer"]);
+    // The merged block keeps its surviving id; where it now starts changed.
+    expect(loaded.map((row) => row.id)).toEqual(["prompt", "r52", "answer"]);
+    expect(loaded[1]!.earliestSourceMessageId).toBe("r50");
     hook.rerender({ messages: loaded });
     expect(scrollToIndex.mock.calls).toEqual([[1]]);
   });
@@ -193,6 +209,113 @@ describe("useRestoreHeldPlace", () => {
     expect(loaded.map((row) => row.id)).toEqual(["prompt", "r50", "r52", "answer"]);
     hook.rerender({ messages: loaded });
     expect(scrollToIndex.mock.calls).toEqual([[2]]);
+  });
+});
+
+describe("held place with the scroll controller", () => {
+  function fakeController(
+    anchors: Array<{ rowKey: string; index: number; partId?: string; offsetPx: number }>,
+  ) {
+    let holding = false;
+    let preCommit: (typeof anchors)[number] | null = null;
+    return {
+      captureAnchor: () => anchors[0] ?? null,
+      beginStructuralHold: mock(() => {
+        holding = true;
+      }),
+      endStructuralHold: mock(() => {
+        holding = false;
+      }),
+      get holdingStructure() {
+        return holding;
+      },
+      /** The list re-captures the reader's place just before a data commit. */
+      readerMovedTo(anchor: (typeof anchors)[number]) {
+        preCommit = anchor;
+      },
+      takePreCommitAnchor: mock(() => {
+        const anchor = preCommit;
+        preCommit = null;
+        return anchor;
+      }),
+    };
+  }
+
+  test("a reader who moved while the page loaded is held where they are, not where they clicked", () => {
+    const { hook, scrollToIndex } = setup([text("m52"), text("m53"), text("m54")]);
+    const controller = fakeController([{ rowKey: "m52", index: 0, offsetPx: 4 }]);
+    hook.result.current.hold(null, controller as never);
+    expect(controller.beginStructuralHold).toHaveBeenCalled();
+    // While the request is in flight the reader scrolls down to m54.
+    controller.readerMovedTo({ rowKey: "m54", index: 2, offsetPx: 120 });
+    hook.rerender({ messages: [text("m50"), text("m51"), text("m52"), text("m53"), text("m54")] });
+    expect(scrollToIndex.mock.calls).toEqual([
+      [4, { rowKey: "m54", offset: 120, partId: undefined }, "history"],
+    ]);
+    // The transaction is over: the controller stops capturing.
+    expect(controller.holdingStructure).toBe(false);
+  });
+
+  test("a tail update while waiting refreshes the place; the page then restores the latest one", () => {
+    const { hook, scrollToIndex } = setup([text("m52"), text("m53")]);
+    const controller = fakeController([{ rowKey: "m52", index: 0, offsetPx: 0 }]);
+    hook.result.current.hold(null, controller as never);
+    controller.readerMovedTo({ rowKey: "m53", index: 1, offsetPx: 30 });
+    hook.rerender({ messages: [text("m52"), text("m53"), text("m54")] });
+    expect(scrollToIndex).not.toHaveBeenCalled();
+    expect(controller.holdingStructure).toBe(true);
+    hook.rerender({ messages: [text("m51"), text("m52"), text("m53"), text("m54")] });
+    expect(scrollToIndex.mock.calls).toEqual([
+      [2, { rowKey: "m53", offset: 30, partId: undefined }, "history"],
+    ]);
+  });
+
+  test.each(["failed", "empty"])(
+    "a %s history request releases its hold before further streaming",
+    async (outcome) => {
+      const messages = [text("m52"), text("m53")];
+      const { hook, scrollToIndex } = setup(messages, true);
+      const controller = fakeController([{ rowKey: "m52", index: 0, offsetPx: 0 }]);
+      hook.result.current.hold(null, controller as never);
+      controller.readerMovedTo({ rowKey: "m53", index: 1, offsetPx: 30 });
+      hook.rerender({ messages: [...messages, text("m54")], loading: true });
+      expect(controller.holdingStructure).toBe(true);
+      const request =
+        outcome === "failed" ? Promise.reject(new Error("history unavailable")) : Promise.resolve();
+      await request.catch(() => {}).finally(() => hook.rerender({ messages, loading: false }));
+      expect(controller.holdingStructure).toBe(false);
+      expect(hook.result.current.scrollAnchor).toBeUndefined();
+      const captures = controller.takePreCommitAnchor.mock.calls.length;
+      const holds = controller.beginStructuralHold.mock.calls.length;
+      hook.rerender({ messages: [...messages, text("m55")], loading: false });
+      hook.rerender({ messages: [...messages, text("m56")], loading: false });
+      expect(controller.takePreCommitAnchor).toHaveBeenCalledTimes(captures);
+      expect(controller.beginStructuralHold).toHaveBeenCalledTimes(holds);
+      expect(scrollToIndex).not.toHaveBeenCalled();
+    },
+  );
+
+  test("completion restores a landed page before releasing the hold", () => {
+    const { hook, scrollToIndex } = setup([text("m52"), text("m53")], true);
+    const controller = fakeController([{ rowKey: "m52", index: 0, offsetPx: 4 }]);
+    hook.result.current.hold(null, controller as never);
+    hook.rerender({ messages: [text("m51"), text("m52"), text("m53")], loading: false });
+    expect(scrollToIndex.mock.calls).toEqual([
+      [1, { rowKey: "m52", offset: 4, partId: undefined }, "history"],
+    ]);
+    expect(controller.holdingStructure).toBe(false);
+  });
+
+  test("release ends the structural hold; a removed anchor restores nothing rather than jumping", () => {
+    const { hook, scrollToIndex } = setup([text("m52"), text("m53")]);
+    const controller = fakeController([{ rowKey: "m52", index: 0, partId: "gone", offsetPx: 0 }]);
+    hook.result.current.hold(null, controller as never);
+    hook.result.current.release();
+    expect(controller.endStructuralHold).toHaveBeenCalled();
+    hook.result.current.hold(null, controller as never);
+    // Authoritative reconciliation replaced the held rows entirely.
+    hook.rerender({ messages: [text("n1"), text("n2"), text("n3")] });
+    expect(scrollToIndex).not.toHaveBeenCalled();
   });
 });
 

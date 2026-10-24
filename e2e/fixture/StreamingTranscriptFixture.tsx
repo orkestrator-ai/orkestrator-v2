@@ -7,6 +7,7 @@ import type {
   NativeMessage as Message,
   NativeMessagePart,
 } from "../../apps/web/src/lib/chat/native-message-types";
+import { getNativeMessageSearchText } from "../../apps/web/src/components/chat/native-message-search";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 
 declare global {
@@ -104,26 +105,44 @@ function TrackedNativeMessage({
   return <NativeMessage message={message} previousMessage={previousMessage} platform="codex" />;
 }
 
+/** One finished tool run of `count` calls: the bounded-rendering stress case. */
+function bigGroupMessage(count: number, live: boolean): Message {
+  return {
+    id: "big-tool-group",
+    role: "assistant",
+    content: "",
+    createdAt: "2026-09-21T09:00:00Z",
+    parts: Array.from({ length: count }, (_, index) => ({
+      ...command(5_000 + index),
+      toolState: live && index === count - 1 ? "pending" : "success",
+    })),
+  };
+}
+
 export function StreamingTranscriptFixture() {
-  const longTranscript = new URLSearchParams(window.location.search).has("long");
-  const folding = new URLSearchParams(window.location.search).has("fold");
+  const query = new URLSearchParams(window.location.search);
+  const longTranscript = query.has("long");
+  const folding = query.has("fold");
+  const bigGroup = Number(query.get("bigGroup") ?? 0);
   const [messages, setMessages] = useState(() =>
-    folding
-      ? [
-          ...initialMessages(longTranscript),
-          {
-            id: "live-fold",
-            role: "assistant" as const,
-            content: "",
-            createdAt: "2026-09-21T11:00:00Z",
-            parts: [command(3_000), command(3_001)],
-          },
-        ]
-      : initialMessages(longTranscript),
+    bigGroup > 0
+      ? [...initialMessages(longTranscript), bigGroupMessage(bigGroup, query.has("liveGroup"))]
+      : folding
+        ? [
+            ...initialMessages(longTranscript),
+            {
+              id: "live-fold",
+              role: "assistant" as const,
+              content: "",
+              createdAt: "2026-09-21T11:00:00Z",
+              parts: [command(3_000), command(3_001)],
+            },
+          ]
+        : initialMessages(longTranscript),
   );
   const [listGeneration, setListGeneration] = useState(0);
   const [restoreStateFrom, setRestoreStateFrom] = useState<StateSnapshot>();
-  const { scrollProps, virtuosoRef } = useVirtuosoScrollState();
+  const { scrollProps, virtuosoRef, scrollToIndex, scrollToBottom } = useVirtuosoScrollState();
   const rows = useMemo(() => normalizeNativeMessages(messages), [messages]);
   const historicToolIndex = rows.findIndex((row) => row.id === toolHeavyMessage.id);
 
@@ -179,18 +198,10 @@ export function StreamingTranscriptFixture() {
     });
   };
 
+  // Navigation goes through the scroll controller like the product's own
+  // jumps: one bounded operation that measured convergence settles.
   const scrollToToolHistory = () => {
-    const scroll = () =>
-      virtuosoRef.current?.scrollToIndex({
-        index: historicToolIndex,
-        align: "start",
-        behavior: "auto",
-      });
-    scroll();
-    requestAnimationFrame(() => {
-      scroll();
-      requestAnimationFrame(scroll);
-    });
+    scrollToIndex(historicToolIndex, { rowKey: toolHeavyMessage.id, offset: 0 });
   };
 
   return (
@@ -214,6 +225,49 @@ export function StreamingTranscriptFixture() {
       >
         Grow tool group
       </button>
+      {bigGroup > 0 ? (
+        <>
+          <button
+            type="button"
+            onClick={() =>
+              setMessages((current) => {
+                const last = current.at(-1)!;
+                const settled = last.parts.map((part) => ({
+                  ...part,
+                  toolState: "success" as const,
+                }));
+                const appended = Array.from({ length: 8 }, (_, index) => ({
+                  ...command(5_000 + last.parts.length + index),
+                  toolState: index === 7 ? ("pending" as const) : ("success" as const),
+                }));
+                return [...current.slice(0, -1), { ...last, parts: [...settled, ...appended] }];
+              })
+            }
+          >
+            Append group calls
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setMessages((current) => {
+                const last = current.at(-1)!;
+                return [
+                  ...current.slice(0, -1),
+                  {
+                    ...last,
+                    parts: [
+                      ...Array.from({ length: 10 }, (_, index) => command(4_900 + index)),
+                      ...last.parts,
+                    ],
+                  },
+                ];
+              })
+            }
+          >
+            Prepend group calls
+          </button>
+        </>
+      ) : null}
       <button type="button" onClick={appendTool}>
         Append tool
       </button>
@@ -229,16 +283,7 @@ export function StreamingTranscriptFixture() {
       <button type="button" onClick={saveAndRemount}>
         Save and remount
       </button>
-      <button
-        type="button"
-        onClick={() =>
-          virtuosoRef.current?.scrollToIndex({
-            index: rows.length - 1,
-            align: "end",
-            behavior: "auto",
-          })
-        }
-      >
+      <button type="button" onClick={scrollToBottom}>
         Jump to latest
       </button>
       <output data-testid="transcript-row-count">{rows.length}</output>
@@ -253,6 +298,7 @@ export function StreamingTranscriptFixture() {
           )}
           scrollProps={{ ...scrollProps, restoreStateFrom }}
           virtuosoRef={virtuosoRef}
+          find={{ isActive: true, getSearchText: getNativeMessageSearchText }}
         />
       </div>
     </main>

@@ -7,8 +7,8 @@ import { canonicalJson, type PublicActionName } from "@orkestrator/protocol/publ
  *
  * The first call without a token is refused with `confirmation-required` and
  * a token; the second call with the identical input and that token runs. The
- * token is HMAC(secret, credential, action, input fingerprint, expiry), so a
- * changed input, an expired token or another credential's token is refused.
+ * token is HMAC(secret, credential, action, request ID, input fingerprint, expiry), so a
+ * changed input or request ID, an expired token or another credential's token is refused.
  * The secret lives only in this process: a backend restart invalidates every
  * outstanding token, which at a two-minute lifetime costs one repeated
  * question at most.
@@ -18,8 +18,12 @@ const TOKEN_PATTERN = /^ct1\.([0-9a-z]{1,12})\.([A-Za-z0-9_-]{43})$/;
 
 export type ConfirmTokenCheck = "valid" | "missing" | "malformed" | "expired" | "mismatch";
 
-export function confirmFingerprint(action: PublicActionName, input: unknown): string {
-  return createHash("sha256").update(canonicalJson({ action, input })).digest("hex");
+export function confirmFingerprint(
+  action: PublicActionName,
+  input: unknown,
+  requestId?: string,
+): string {
+  return createHash("sha256").update(canonicalJson({ action, input, requestId })).digest("hex");
 }
 
 export class ConfirmTokens {
@@ -42,9 +46,10 @@ export class ConfirmTokens {
     credentialId: string,
     action: PublicActionName,
     input: unknown,
+    requestId?: string,
   ): { token: string; expiresAt: string } {
     const expiresAt = this.now() + CONTROL_MCP_CONFIRM_TOKEN_TTL_MS;
-    const mac = this.mac(credentialId, confirmFingerprint(action, input), expiresAt);
+    const mac = this.mac(credentialId, confirmFingerprint(action, input, requestId), expiresAt);
     return {
       token: `ct1.${expiresAt.toString(36)}.${mac}`,
       expiresAt: new Date(expiresAt).toISOString(),
@@ -56,6 +61,7 @@ export class ConfirmTokens {
     credentialId: string,
     action: PublicActionName,
     input: unknown,
+    requestId?: string,
   ): ConfirmTokenCheck {
     if (token === undefined || token === null || token === "") return "missing";
     const match = typeof token === "string" ? TOKEN_PATTERN.exec(token) : null;
@@ -63,7 +69,7 @@ export class ConfirmTokens {
     const expiresAt = Number.parseInt(match[1]!, 36);
     if (!Number.isSafeInteger(expiresAt)) return "malformed";
     const expected = Buffer.from(
-      this.mac(credentialId, confirmFingerprint(action, input), expiresAt),
+      this.mac(credentialId, confirmFingerprint(action, input, requestId), expiresAt),
     );
     const presented = Buffer.from(match[2]!);
     // Compare before the expiry check, so a forged token never learns whether

@@ -111,9 +111,11 @@ export function createClient(url: string, token: string) {
       const started = performance.now();
       const { body } = await rpc("tools/call", { name: tool, arguments: args });
       const ms = performance.now() - started;
+      const payload = body as { error?: { code?: number | string } };
       const result = (
         body as {
           result?: {
+            isError?: boolean;
             content?: Array<{ text?: string }>;
             structuredContent?: Record<string, unknown> & {
               ok?: boolean;
@@ -123,12 +125,30 @@ export function createClient(url: string, token: string) {
         }
       ).result;
       const text = result?.content?.map((entry) => entry.text ?? "").join("\n") ?? "";
-      const structured = result?.structuredContent ?? {};
+      const envelope = result?.structuredContent;
+      const valid =
+        !payload.error &&
+        result?.isError !== true &&
+        envelope?.ok === true &&
+        envelope.schemaVersion === 1 &&
+        typeof envelope.action === "string" &&
+        "result" in envelope;
+      const code = payload.error
+        ? `json-rpc:${payload.error.code ?? "error"}`
+        : result?.isError
+          ? (envelope?.error?.code ?? "mcp-tool-error")
+          : (envelope?.error?.code ?? "invalid-envelope");
+      const structured = valid
+        ? envelope!
+        : {
+            ok: false,
+            error: { ...envelope?.error, code },
+          };
       calls.push({
         tool,
         ms,
         textBytes: Buffer.byteLength(text),
-        ok: structured.ok !== false,
+        ok: valid,
         ...(structured.error?.code ? { code: structured.error.code } : {}),
       });
       return { text, structured };
@@ -182,7 +202,10 @@ async function main() {
 
   // 1. overview (and repeated reads for latency).
   for (let index = 0; index < repeats; index += 1) await client.call("overview");
-  steps.push({ step: "overview", outcome: "read" });
+  steps.push({
+    step: "overview",
+    outcome: client.calls.slice(-repeats).every((call) => call.ok) ? "read" : "failed",
+  });
 
   // 2. start work.
   const runKey = `voice-qualify-${Date.now()}`;
@@ -263,7 +286,10 @@ async function main() {
     });
     for (let index = 0; index < repeats; index += 1)
       await client.call("read_session", { sessionId });
-    steps.push({ step: "read_session", outcome: "read" });
+    steps.push({
+      step: "read_session",
+      outcome: client.calls.slice(-repeats).every((call) => call.ok) ? "read" : "failed",
+    });
   }
 
   const summary = summarize(client.calls);

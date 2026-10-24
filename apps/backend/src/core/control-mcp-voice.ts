@@ -78,8 +78,6 @@ export function voiceToolListed(caller: ControlMcpCaller, tool: string): boolean
     : entry.actions.every((action) => allowed(caller, action));
 }
 
-const MAX_ENVIRONMENTS_FOR_SESSIONS = 20;
-
 const REQUEST_ID = text("New per request; reuse only to retry it.");
 const SESSION = {
   sessionId: text("ses_ handle, or pass environmentId and tabId."),
@@ -220,13 +218,13 @@ async function allPages<T>(
 ): Promise<T[] | null> {
   const items: T[] = [];
   let cursor: string | undefined;
-  for (let page = 0; page < 10; page += 1) {
+  for (;;) {
     const result = await readIfAllowed<{ items: T[]; nextCursor?: string }>(caller, action, {
       ...input,
       limit: 200,
       ...(cursor ? { cursor } : {}),
     });
-    if (!result) return page === 0 ? null : items;
+    if (!result) return null;
     items.push(...result.items);
     cursor = result.nextCursor;
     if (!cursor) break;
@@ -238,20 +236,26 @@ async function sessionsOf(
   caller: ControlMcpCaller,
   environments: readonly PublicEnvironmentSummary[],
 ): Promise<Array<{ environment: PublicEnvironmentSummary; sessions: PublicSessionSummary[] }>> {
-  const scanned = environments
-    .filter((environment) => environment.status === "running")
-    .slice(0, MAX_ENVIRONMENTS_FOR_SESSIONS);
-  return Promise.all(
-    scanned.map(async (environment) => ({
-      environment,
-      sessions:
-        (
-          await readIfAllowed<{ items: PublicSessionSummary[] }>(caller, "session.list", {
-            environmentId: environment.id,
-          })
-        )?.items ?? [],
-    })),
-  );
+  const scanned = environments.filter((environment) => environment.status === "running");
+  const result: Array<{ environment: PublicEnvironmentSummary; sessions: PublicSessionSummary[] }> =
+    [];
+  // Bound concurrent metadata reads without excluding any environment.
+  for (let offset = 0; offset < scanned.length; offset += 20) {
+    result.push(
+      ...(await Promise.all(
+        scanned.slice(offset, offset + 20).map(async (environment) => ({
+          environment,
+          sessions:
+            (
+              await readIfAllowed<{ items: PublicSessionSummary[] }>(caller, "session.list", {
+                environmentId: environment.id,
+              })
+            )?.items ?? [],
+        })),
+      )),
+    );
+  }
+  return result;
 }
 
 async function overview(caller: ControlMcpCaller, projectId?: string) {

@@ -1,7 +1,4 @@
-import {
-  isTerminalPublicOperationState,
-  PUBLIC_API_LIMITS,
-} from "@orkestrator/protocol/public-api";
+import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import {
   encodePublicSessionId,
   nativeTabLogicalSessionKey,
@@ -32,19 +29,31 @@ import type { PublicActionContext, PublicActionHandler, ReadActionHandler } from
  * `session.interactions` reads the detail.
  */
 
-const CURSOR_PATTERN = /^att1-([0-9a-z]{1,12})$/;
 const DEFAULT_WINDOW_MS = 60 * 60 * 1000;
-const MAX_ENVIRONMENTS_SCANNED = 200;
 
-export function encodeAttentionCursor(ms: number): string {
-  return `att1-${Math.max(0, Math.floor(ms)).toString(36)}`;
-}
+export { encodeAttentionCursor, decodeAttentionCursor } from "./attention-cursor.js";
+import {
+  attentionKey,
+  compareAttention,
+  encodeAttentionCursor,
+  encodeAttentionContinuation,
+  parseAttentionCursor,
+  type AttentionCursor,
+  type AttentionPosition,
+} from "./attention-cursor.js";
 
-export function decodeAttentionCursor(cursor: string): number | null {
-  const match = CURSOR_PATTERN.exec(cursor);
-  if (!match) return null;
-  const ms = Number.parseInt(match[1]!, 36);
-  return Number.isSafeInteger(ms) ? ms : null;
+function position(item: PublicAttentionItem): AttentionPosition {
+  const id =
+    item.kind === "run"
+      ? item.operationId
+      : item.kind === "setup"
+        ? item.environmentId
+        : `${item.sessionId}:${item.interactionId}:${item.revision}`;
+  return {
+    rank: item.kind === "interaction" && item.blocking ? 0 : 1,
+    at: Date.parse(item.at),
+    key: attentionKey(item.kind, id),
+  };
 }
 
 /**
@@ -92,18 +101,18 @@ async function pendingInteractions(
   return items;
 }
 
-const attentionList: ReadActionHandler<{ since?: number; limit: number }> = {
+const attentionList: ReadActionHandler<{ cursor?: AttentionCursor; limit: number }> = {
   kind: "read",
   action: "attention.list",
   parse(input) {
     onlyActionKeys(input, "attention.list");
     const cursor = optionalString(input, "cursor", 64);
-    const since = cursor === undefined ? undefined : decodeAttentionCursor(cursor);
-    if (since === null) {
+    const parsed = cursor === undefined ? undefined : parseAttentionCursor(cursor);
+    if (parsed === null) {
       throw new PublicActionError("invalid-input", "cursor is not an attention cursor");
     }
     return {
-      ...(since !== undefined ? { since } : {}),
+      ...(parsed !== undefined ? { cursor: parsed } : {}),
       limit:
         optionalInteger(input, "limit", 1, PUBLIC_API_LIMITS.attentionMaxItems) ??
         PUBLIC_API_LIMITS.attentionDefaultItems,
@@ -111,9 +120,15 @@ const attentionList: ReadActionHandler<{ since?: number; limit: number }> = {
   },
   async run(input, context) {
     const now = context.now();
-    const since = input.since ?? now - DEFAULT_WINDOW_MS;
+    const cursor = {
+      since: input.cursor?.since ?? Math.max(0, now - DEFAULT_WINDOW_MS),
+      // Leave the current millisecond open for writes that race this read.
+      until: input.cursor?.until ?? Math.max(now - 1, input.cursor?.since ?? 0),
+      after: input.cursor?.after,
+    };
+    const { since, until, after } = cursor;
     const storage = context.command.storage;
-    const environments = (await storage.loadEnvironments()).slice(0, MAX_ENVIRONMENTS_SCANNED);
+    const environments = await storage.loadEnvironments();
 
     const interactions: PublicAttentionItem[] = [];
     for (const environment of environments) {
@@ -127,32 +142,31 @@ const attentionList: ReadActionHandler<{ since?: number; limit: number }> = {
       );
     }
 
-    const runs: PublicAttentionItem[] = (
-      await storage.listPublicOperationsChangedSince(
-        context.authority,
-        since,
-        PUBLIC_API_LIMITS.attentionMaxItems,
-      )
-    )
-      .filter(
-        (record) => isTerminalPublicOperationState(record.state) || record.state === "unknown",
-      )
-      .map((record) => ({
-        kind: "run" as const,
-        at: record.completedAt ?? record.updatedAt,
-        operationId: record.operationId,
-        action: record.action,
-        state: record.state,
-        sessionId: record.resources.sessionId ?? null,
-        environmentId: record.resources.environmentId ?? null,
-        errorCode: record.error?.code ?? null,
-      }));
+    const runPage = await storage.listSettledPublicOperationsChangedSince(
+      context.authority,
+      since,
+      input.limit + 1,
+      {
+        until,
+        after,
+      },
+    );
+    const runs: PublicAttentionItem[] = runPage.records.map((record) => ({
+      kind: "run" as const,
+      at: record.updatedAt,
+      operationId: record.operationId,
+      action: record.action,
+      state: record.state,
+      sessionId: record.resources.sessionId ?? null,
+      environmentId: record.resources.environmentId ?? null,
+      errorCode: record.error?.code ?? null,
+    }));
 
     const setups: PublicAttentionItem[] = environments.flatMap((environment) => {
       const completedAt = environment.setupCompletedAt
         ? Date.parse(environment.setupCompletedAt)
         : Number.NaN;
-      if (!Number.isFinite(completedAt) || completedAt <= since) return [];
+      if (!Number.isFinite(completedAt) || completedAt <= since || completedAt > until) return [];
       if (environment.setupPhase !== "ready" && environment.setupPhase !== "failed") return [];
       return [
         {
@@ -165,18 +179,21 @@ const attentionList: ReadActionHandler<{ since?: number; limit: number }> = {
       ];
     });
 
-    // Blocking interactions first (someone is waiting), then everything else
-    // newest first.
-    const ordered = [...interactions, ...runs, ...setups].sort((a, b) => {
-      const blockingA = a.kind === "interaction" && a.blocking ? 1 : 0;
-      const blockingB = b.kind === "interaction" && b.blocking ? 1 : 0;
-      return blockingB - blockingA || Date.parse(b.at) - Date.parse(a.at);
-    });
+    // A continuation skips already delivered pending interactions as well as
+    // settled events. Only a fully drained window advances the polling watermark.
+    const ordered = [...interactions, ...runs, ...setups]
+      .filter((item) => !after || compareAttention(position(item), after) > 0)
+      .sort((a, b) => compareAttention(position(a), position(b)));
+    const items = ordered.slice(0, input.limit);
+    const more = Math.max(0, ordered.length + runPage.total - runPage.records.length - input.limit);
     const page: PublicAttentionPage = {
-      items: ordered.slice(0, input.limit),
-      more: Math.max(0, ordered.length - input.limit),
-      counts: { interactions: interactions.length, runs: runs.length, setups: setups.length },
-      cursor: encodeAttentionCursor(Math.max(now, input.since ?? 0)),
+      items,
+      more,
+      counts: { interactions: interactions.length, runs: runPage.total, setups: setups.length },
+      cursor:
+        more && items.length
+          ? encodeAttentionContinuation(cursor, position(items.at(-1)!))
+          : encodeAttentionCursor(until),
     };
     return { result: page };
   },

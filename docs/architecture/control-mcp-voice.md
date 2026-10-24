@@ -62,7 +62,7 @@ discarding a run need it in every profile. The first call returns
 `confirmation-required` with a `description` to read aloud ("This approves
 Run rm -rf dist: rm -rf dist.") and a `confirmToken`. After an explicit yes,
 repeat the identical call with `confirmToken`. The token lasts two minutes and
-is tied to the credential, the action and the exact input. Denials, cancels
+is tied to the credential, action, request ID and exact input. Denials, cancels
 and answers to questions run directly.
 
 ## Hearing about work without asking
@@ -85,7 +85,10 @@ or POSTs it to `--webhook URL`, and never calls a mutation. The same feed is
 `attention.list` returns pending questions and approvals (always), the
 caller's own runs that settled or ended unknown since the cursor, and
 environments whose setup finished or failed since it, blocking interactions
-first. Pass each response's `cursor` back to see only what changed.
+first. Pass each response's `cursor` back. When `more` is nonzero, continue
+immediately to drain the current window; only the final page advances the polling
+watermark. Pending interactions repeat on the next polling window, rather than
+occupying every continuation page. Equal-time events have a stable tie breaker.
 
 ## Hosted voice platforms: a local relay
 

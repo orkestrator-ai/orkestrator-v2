@@ -1,6 +1,12 @@
+import {
+  attentionKey,
+  compareAttention,
+  type AttentionPosition,
+} from "./public-api/attention-cursor.js";
 import path from "node:path";
 import {
   isPublicActionName,
+  isTerminalPublicOperationState,
   isPublicNamespace,
   isPublicRequestId,
   PUBLIC_OPERATION_RETENTION,
@@ -415,25 +421,37 @@ export class StoragePublicOperations extends StorageNodes {
   }
 
   /**
-   * One authority's records last changed after `sinceMs`, newest first and
+   * One authority's settled or unknown records last changed after `sinceMs`, newest first and
    * at most `limit`. Reads retained namespaces only; nothing is reconciled.
    */
-  async listPublicOperationsChangedSince(
+  async listSettledPublicOperationsChangedSince(
     authority: PublicAuthority,
     sinceMs: number,
     limit: number,
-  ): Promise<PublicOperationRecord[]> {
+    window?: { until: number; after?: AttentionPosition },
+  ): Promise<{ records: PublicOperationRecord[]; total: number }> {
     const index = await this.loadPublicOperationIndex();
     const changed: PublicOperationRecord[] = [];
     for (const entry of index.namespaces) {
       for (const record of await this.loadNamespaceRecords(entry.id)) {
         if (!isPublicOperationRecord(record) || record.authority !== authority) continue;
-        if (Date.parse(record.updatedAt) > sinceMs) changed.push(record);
+        if (!isTerminalPublicOperationState(record.state) && record.state !== "unknown") continue;
+        const at = Date.parse(record.updatedAt);
+        const position = { rank: 1, at, key: attentionKey("run", record.operationId) };
+        if (at <= sinceMs || at > (window?.until ?? Infinity)) continue;
+        if (window?.after && compareAttention(position, window.after) <= 0) continue;
+        changed.push(record);
       }
     }
-    return changed
-      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    const records = changed
+      .sort((a, b) =>
+        compareAttention(
+          { rank: 1, at: Date.parse(a.updatedAt), key: attentionKey("run", a.operationId) },
+          { rank: 1, at: Date.parse(b.updatedAt), key: attentionKey("run", b.operationId) },
+        ),
+      )
       .slice(0, Math.max(0, limit));
+    return { records, total: changed.length };
   }
 
   async listActivePublicOperations(): Promise<PublicOperationRecord[]> {

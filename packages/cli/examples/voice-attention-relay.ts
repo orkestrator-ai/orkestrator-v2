@@ -82,6 +82,7 @@ export async function runRelay(options: RelayOptions): Promise<void> {
   const seen = new Set<string>();
   let cursor: string | undefined;
   let delay = options.intervalMs;
+  let pending: ReturnType<typeof attentionPageFromResponse> | undefined;
   const emit =
     options.emit ??
     (async (record: Record<string, unknown>) => {
@@ -89,54 +90,66 @@ export async function runRelay(options: RelayOptions): Promise<void> {
         process.stdout.write(`${JSON.stringify(record)}\n`);
         return;
       }
-      await fetch(options.webhook, {
+      const response = await fetch(options.webhook, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(record),
+        signal: options.signal,
       });
+      if (!response.ok) throw new Error(`Webhook refused delivery: HTTP ${response.status}`);
     });
   while (!options.signal?.aborted) {
     try {
-      const response = await fetch(options.url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${options.token}`,
-          Accept: "application/json, text/event-stream",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: crypto.randomUUID(),
-          method: "tools/call",
-          params: {
-            name: "run_action",
-            arguments: { action: "attention.list", input: cursor ? { cursor } : {} },
+      if (!pending) {
+        const response = await fetch(options.url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${options.token}`,
+            Accept: "application/json, text/event-stream",
+            "content-type": "application/json",
           },
-        }),
-        signal: options.signal,
-      });
-      if (response.status === 401)
-        throw new Error("The credential was refused (revoked or rotated)");
-      const page = attentionPageFromResponse(
-        await response.text(),
-        response.headers.get("content-type"),
-      );
-      cursor = page.cursor;
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: crypto.randomUUID(),
+            method: "tools/call",
+            params: {
+              name: "run_action",
+              arguments: { action: "attention.list", input: cursor ? { cursor } : {} },
+            },
+          }),
+          signal: options.signal,
+        });
+        if (response.status === 401)
+          throw new Error("The credential was refused (revoked or rotated)");
+        if (!response.ok) throw new Error(`attention.list: HTTP ${response.status}`);
+        pending = attentionPageFromResponse(
+          await response.text(),
+          response.headers.get("content-type"),
+        );
+      }
+      const page = pending;
       for (const item of page.items) {
         const key = attentionKey(item);
         if (seen.has(key)) continue;
-        seen.add(key);
         await emit({ type: "attention", say: attentionSentence(item), item });
+        seen.add(key);
       }
+      cursor = page.cursor;
+      pending = undefined;
       if (seen.size > 10_000) seen.clear();
       delay = options.intervalMs;
       options.onPoll?.();
+      if (page.more > 0) continue;
     } catch (error) {
       if (options.signal?.aborted) return;
-      await emit({
-        type: "relay-error",
-        message: error instanceof Error ? error.message.slice(0, 200) : "poll failed",
-      });
+      try {
+        await emit({
+          type: "relay-error",
+          message: error instanceof Error ? error.message.slice(0, 200) : "poll failed",
+        });
+      } catch {
+        // The notification sink may be the outage; diagnostics are best effort.
+      }
       // Back off while the backend is away; never hammer it.
       delay = Math.min(delay * 2, 60_000);
     }

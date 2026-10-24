@@ -355,6 +355,19 @@ describe("Control MCP confirmation", () => {
     );
     expect(confirmed.error?.code).not.toBe("confirmation-required");
     expect(confirmed.backend).toBeDefined();
+
+    const newRequest = structured(
+      await harness.call(voice.token, "run_action", {
+        action: "environment.exec",
+        input,
+        requestId: "exec-2",
+        confirmToken: token,
+      }),
+    );
+    expect(newRequest.error).toMatchObject({
+      code: "confirmation-required",
+      details: { refused: "mismatch" },
+    });
   });
 
   test("voice approvals confirm, while denials and question answers run directly", async () => {
@@ -473,7 +486,62 @@ describe("Control MCP authority", () => {
   });
 });
 
+describe("direct read tools", () => {
+  test("run_get retains the action's requestId lookup input", async () => {
+    const harness = await open();
+    const created = structured(
+      await harness.call(harness.defaultToken, "ticket_create", {
+        projectId: harness.projectId,
+        title: "Lookup",
+        requestId: "lookup-ticket",
+      }),
+    );
+    expect(created.ok).toBe(true);
+    const found = structured(
+      await harness.call(harness.defaultToken, "run_get", {
+        requestId: "lookup-ticket",
+        action: "ticket.create",
+      }),
+    );
+    expect(found.ok).toBe(true);
+    expect(found.receipt?.operationId).toBe(created.receipt?.operationId);
+  });
+});
+
 describe("Control MCP voice core", () => {
+  test("resolution and overview scan sessions beyond the twentieth environment", async () => {
+    const harness = await open();
+    const voice = await harness.credential("voice");
+    const template = (await harness.harness.storage.loadEnvironments())[0]!;
+    for (let index = 2; index <= 21; index += 1) {
+      await harness.harness.storage.addEnvironment({
+        ...template,
+        id: `env-${index}`,
+        name: `environment-${index}`,
+        order: index,
+      });
+    }
+    for (const environmentId of ["env-1", "env-21"]) {
+      const launched = structured(
+        await harness.call(voice.token, "start_work", {
+          requestId: `scan-${environmentId}`,
+          environmentId,
+          agent: "claude",
+          prompt: "hello",
+        }),
+      );
+      expect(launched.ok).toBe(true);
+    }
+    const resolved = structured(
+      await harness.call(voice.token, "resolve_target", { query: "claude", kind: "session" }),
+    );
+    expect(resolved.error?.code).toBe("ambiguous-target");
+    const overview = structured(await harness.call(voice.token, "overview"));
+    expect(overview.result).toMatchObject({
+      counts: { environments: { running: 21 }, sessions: { scanned: 2 } },
+    });
+  });
+
   test("resolve_target never guesses", async () => {
     const harness = await open();
     const voice = await harness.credential("voice");

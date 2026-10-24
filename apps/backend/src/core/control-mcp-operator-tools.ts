@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { canonicalJson, type PublicActionName } from "@orkestrator/protocol/public-api";
+import type { PublicActionName } from "@orkestrator/protocol/public-api";
 import {
   encodePublicSessionId,
   type PublicProjectSummary,
@@ -195,27 +195,20 @@ export async function operatorCreateTicket(
   return ticketDetail(caller, input.projectId, created.ticketId, envelope.receipt);
 }
 
-/**
- * `update_ticket` never took a requestId: replacing fields is naturally
- * idempotent. Its request key is derived from the update itself, so a retry
- * replays and a different update is a different request.
- */
-export function updateTicketRequestId(input: JsonRecord): string {
-  return `update-ticket-${createHash("sha256").update(canonicalJson(input)).digest("hex").slice(0, 40)}`;
-}
-
+/** New edits get a fresh identity; callers may supply a key for explicit retries. */
 export async function operatorUpdateTicket(
   caller: ControlMcpCaller,
   input: { projectId: string; ticketId: string } & JsonRecord,
 ) {
+  const { requestId, ...updates } = input;
   const fields = Object.fromEntries(
-    Object.entries(input).filter(([, value]) => value !== undefined),
+    Object.entries(updates).filter(([, value]) => value !== undefined),
   );
   const envelope = await runPublicAction(
     caller,
     "ticket.update",
     fields,
-    updateTicketRequestId(fields),
+    typeof requestId === "string" ? requestId : `update-ticket-${randomUUID()}`,
     undefined,
   );
   if (!envelope.ok) return failure(envelope);
@@ -297,9 +290,15 @@ export async function operatorLaunchEnvironment(caller: ControlMcpCaller, input:
     undefined,
   );
   if (!envelope.ok) return failure(envelope);
-  const result = envelope.result as { environmentId: string; sessionId: string; runId: string };
+  const result = envelope.result as {
+    environment?: { id: string };
+    environmentId?: string;
+    sessionId: string;
+    runId: string;
+  };
   return legacyResult({
-    environmentId: result.environmentId,
+    environmentId:
+      result.environment?.id ?? result.environmentId ?? envelope.receipt?.resources.environmentId,
     tabId: "startup-agent",
     sessionId: result.sessionId,
     runId: result.runId,

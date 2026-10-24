@@ -157,6 +157,7 @@ export async function readControlMcpDescriptor(
 
 export class ControlMcpCredentialStore {
   private credentials: StoredControlMcpCredential[] = [];
+  private writes: Promise<unknown> = Promise.resolve();
   private lastUsedDirty = false;
   private lastUsedFlush: ReturnType<typeof setTimeout> | null = null;
 
@@ -167,14 +168,15 @@ export class ControlMcpCredentialStore {
   constructor(private readonly persist: () => Promise<void>) {}
 
   /**
-   * Load from a descriptor file, migrating version 1. Only a missing or
-   * unreadable file starts fresh with a new default credential; a readable
+   * Load from a descriptor file, migrating version 1. Only a missing
+   * file starts fresh with a new default credential; a readable
    * file whose credentials were all revoked stays empty.
    */
   async load(descriptorFile: string): Promise<void> {
     try {
       this.credentials = (await readControlMcpDescriptor(descriptorFile)).credentials;
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       this.credentials = [defaultCredential(newToken(), new Date())];
     }
   }
@@ -210,14 +212,18 @@ export class ControlMcpCredentialStore {
     if (this.lastUsedFlush) return;
     this.lastUsedFlush = setTimeout(() => {
       this.lastUsedFlush = null;
-      if (!this.lastUsedDirty) return;
-      this.lastUsedDirty = false;
-      void this.persist().catch(() => undefined);
+      void this.flush().catch(() => undefined);
     }, LAST_USED_FLUSH_MS);
     this.lastUsedFlush.unref?.();
   }
 
-  async create(input: CreateControlMcpCredentialInput): Promise<StoredControlMcpCredential> {
+  create(input: CreateControlMcpCredentialInput): Promise<StoredControlMcpCredential> {
+    return this.enqueue(() => this.createQueued(input));
+  }
+
+  private async createQueued(
+    input: CreateControlMcpCredentialInput,
+  ): Promise<StoredControlMcpCredential> {
     if (this.credentials.length >= MAX_CREDENTIALS) {
       throw new Error(`At most ${MAX_CREDENTIALS} MCP credentials can exist`);
     }
@@ -247,7 +253,11 @@ export class ControlMcpCredentialStore {
     return credential;
   }
 
-  async rotate(id: string): Promise<StoredControlMcpCredential> {
+  rotate(id: string): Promise<StoredControlMcpCredential> {
+    return this.enqueue(() => this.rotateQueued(id));
+  }
+
+  private async rotateQueued(id: string): Promise<StoredControlMcpCredential> {
     const existing = this.get(id);
     if (!existing) throw new Error(`MCP credential not found: ${id}`);
     const rotated = { ...existing, token: newToken() };
@@ -257,23 +267,46 @@ export class ControlMcpCredentialStore {
     return rotated;
   }
 
-  async revoke(id: string): Promise<void> {
-    if (!this.get(id)) throw new Error(`MCP credential not found: ${id}`);
-    await this.commit(this.credentials.filter((credential) => credential.id !== id));
+  revoke(id: string): Promise<void> {
+    return this.enqueue(async () => {
+      if (!this.get(id)) throw new Error(`MCP credential not found: ${id}`);
+      await this.commit(this.credentials.filter((credential) => credential.id !== id));
+    });
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     if (this.lastUsedFlush) clearTimeout(this.lastUsedFlush);
     this.lastUsedFlush = null;
+    await this.flush();
+  }
+
+  private enqueue<T>(write: () => Promise<T>): Promise<T> {
+    const run = this.writes.then(write);
+    this.writes = run.catch(() => undefined);
+    return run;
+  }
+
+  /** All snapshots and descriptor writes, including last-used metadata, share one queue. */
+  flush(force = false): Promise<void> {
+    return this.enqueue(async () => {
+      if (!force && !this.lastUsedDirty) return;
+      this.lastUsedDirty = false;
+      try {
+        await this.persist();
+      } catch (error) {
+        this.lastUsedDirty = true;
+        throw error;
+      }
+    });
   }
 
   /** Write first and adopt the list only once it is durable. */
   private async commit(next: StoredControlMcpCredential[]): Promise<void> {
     const previous = this.credentials;
     this.credentials = next;
+    this.lastUsedDirty = false;
     try {
       await this.persist();
-      this.lastUsedDirty = false;
     } catch (error) {
       this.credentials = previous;
       throw error;

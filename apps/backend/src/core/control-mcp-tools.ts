@@ -987,6 +987,7 @@ export async function createControlMcp(
       description: "Update specified editable fields of a ticket in one project.",
       inputSchema: z
         .object({
+          requestId: z.string().trim().min(1).max(256).optional(),
           projectId: z.string().trim().min(1).max(200),
           ticketId: z.string().trim().min(1).max(200),
           title: z.string().trim().min(1).max(500).optional(),
@@ -1009,8 +1010,9 @@ export async function createControlMcp(
         openWorldHint: false,
       },
     },
-    async ({ projectId, ticketId, ...updates }) => {
-      if (operator) return operatorUpdateTicket(operator, { projectId, ticketId, ...updates });
+    async ({ projectId, ticketId, requestId, ...updates }) => {
+      if (operator)
+        return operatorUpdateTicket(operator, { projectId, ticketId, requestId, ...updates });
       const existing = asArray(await invoke("get_kanban_tasks", { projectId })).find(
         (candidate) => candidate.id === ticketId,
       );

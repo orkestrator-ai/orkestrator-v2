@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { affirmativeAnswers, percentile, summarize } from "../examples/voice-qualify.js";
+import {
+  affirmativeAnswers,
+  createClient,
+  percentile,
+  summarize,
+} from "../examples/voice-qualify.js";
 
 describe("voice qualification harness", () => {
   test("percentiles use the nearest rank", () => {
@@ -14,6 +19,36 @@ describe("voice qualification harness", () => {
     ).toEqual({
       overview: { calls: 2, p50Ms: 2, p95Ms: 4, maxTextBytes: 60, failures: ["busy"] },
     });
+  });
+
+  test("records protocol errors, tool errors and malformed envelopes as failures", async () => {
+    const replies = [
+      { error: { code: -32601, message: "Unknown tool" } },
+      { result: { isError: true, content: [{ type: "text", text: "Failed" }] } },
+      { result: { content: [] } },
+      {
+        result: {
+          structuredContent: { schemaVersion: 1, ok: true, action: "overview", result: {} },
+        },
+      },
+    ];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => Response.json(replies.shift()),
+    });
+    try {
+      const client = createClient(`http://127.0.0.1:${server.port}`, "test");
+      for (let index = 0; index < 4; index += 1) await client.call("overview");
+      expect(client.calls.map((call) => call.ok)).toEqual([false, false, false, true]);
+      expect(summarize(client.calls).overview!.failures).toEqual([
+        "json-rpc:-32601",
+        "mcp-tool-error",
+        "invalid-envelope",
+      ]);
+    } finally {
+      server.stop(true);
+    }
   });
 
   test("answers the way a person saying yes would", () => {

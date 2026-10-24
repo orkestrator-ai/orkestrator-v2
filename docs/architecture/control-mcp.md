@@ -213,8 +213,9 @@ pre-public tools:
   `session prompt` does; it never queues or steers.
 - `launch_job` creates the tab without focusing it (`session.start` never
   activates a tab).
-- `update_ticket` takes no `requestId`; its key is derived from the update
-  itself, so a retry replays and a different update is a new request.
+- `update_ticket` accepts an optional `requestId` for retries. Without one,
+  each edit gets a fresh key, so repeating an earlier edit after an intervening
+  change applies it again. Reusing an explicit key replays its original receipt.
 - `send_message` returns `{id, toEnvironmentId, toTabId, placement}` and a
   receipt instead of the whole stored message record.
 - Errors are structured envelopes (`isError` with a public `error.code`)

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { controlMcpHarness } from "./control-mcp-test-support.js";
-import { updateTicketRequestId } from "./control-mcp-operator-tools.js";
 import { cleanupSessionHarnesses, setActivity } from "./public-api/test-provider.js";
 
 /**
@@ -84,6 +83,59 @@ describe("operator tools over public actions", () => {
     expect(!cli.ok && cli.error.code).toBe("not-found");
   });
 
+  test("launch_environment returns the created environment and replays its receipt", async () => {
+    const harness = await open();
+    const repository = await harness.harness.createRepository("operator-launch");
+    const added = await harness.harness.call<{ project: { id: string } }>(
+      "project.add",
+      { path: repository.projectPath },
+      { requestId: "launch-project" },
+    );
+    if (!added.ok) throw new Error(added.error.message);
+    const input = {
+      requestId: "environment-1",
+      projectId: added.result.project.id,
+      environmentType: "local",
+      agent: "claude",
+      conversationMode: "build",
+      prompt: "work",
+      name: "operator-launch",
+    };
+    const launched = await harness.call(harness.defaultToken, "launch_environment", input);
+    expect(launched.isError).not.toBe(true);
+    const result = launched.structuredContent as {
+      environmentId: string;
+      receipt: { operationId: string };
+    };
+    const environmentId = result.environmentId;
+    expect(typeof environmentId).toBe("string");
+    expect(result).toMatchObject({
+      environmentId: expect.any(String),
+      sessionId: expect.stringMatching(/^ses_/),
+      tabId: "startup-agent",
+      runId: result.receipt.operationId,
+      status: "accepted",
+      receipt: { action: "environment.launch", requestId: input.requestId },
+    });
+    const replay = await harness.call(harness.defaultToken, "launch_environment", input);
+    expect(replay.structuredContent).toMatchObject({
+      environmentId,
+      receipt: { operationId: result.receipt.operationId, replayed: true },
+    });
+    const conflict = await harness.call(harness.defaultToken, "launch_environment", {
+      ...input,
+      prompt: "different",
+    });
+    expect(conflict.structuredContent).toMatchObject({
+      ok: false,
+      error: { code: "request-conflict" },
+    });
+    await harness.harness.commands.get("delete_environment")!(
+      { environmentId },
+      harness.harness.context,
+    );
+  }, 60_000);
+
   test("send_prompt_to_tab follows the public busy rule and never steers", async () => {
     const harness = await open();
     const started = await harness.call(harness.defaultToken, "launch_job", {
@@ -148,7 +200,26 @@ describe("operator tools over public actions", () => {
     const updated = await harness.call(harness.defaultToken, "update_ticket", update);
     expect(updated.structuredContent).toMatchObject({
       ticket: { id: ticket.id, status: "done" },
-      receipt: { action: "ticket.update", requestId: updateTicketRequestId(update) },
+      receipt: { action: "ticket.update", requestId: expect.stringMatching(/^update-ticket-/) },
+    });
+
+    await harness.call(harness.defaultToken, "update_ticket", { ...update, status: "in-progress" });
+    const doneAgain = await harness.call(harness.defaultToken, "update_ticket", update);
+    expect(doneAgain.structuredContent).toMatchObject({ ticket: { status: "done" } });
+    expect(
+      (doneAgain.structuredContent as { receipt: { operationId: string } }).receipt.operationId,
+    ).not.toBe(
+      (updated.structuredContent as { receipt: { operationId: string } }).receipt.operationId,
+    );
+    const keyed = { ...update, requestId: "explicit-edit" };
+    const firstEdit = await harness.call(harness.defaultToken, "update_ticket", keyed);
+    const retriedEdit = await harness.call(harness.defaultToken, "update_ticket", keyed);
+    expect(retriedEdit.structuredContent).toMatchObject({
+      receipt: {
+        operationId: (firstEdit.structuredContent as { receipt: { operationId: string } }).receipt
+          .operationId,
+        replayed: true,
+      },
     });
 
     await harness.call(harness.defaultToken, "add_ticket_comment", {

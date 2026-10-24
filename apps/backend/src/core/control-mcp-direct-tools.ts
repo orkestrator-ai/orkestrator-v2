@@ -111,7 +111,9 @@ export function registerDirectTools(server: McpServer, caller: ControlMcpCaller)
         },
       },
       async (args) => {
-        const { requestId, confirmToken, ...input } = (args ?? {}) as Record<string, unknown>;
+        const { confirmToken, ...input } = (args ?? {}) as Record<string, unknown>;
+        const requestId = descriptor.mutation ? input.requestId : undefined;
+        if (descriptor.mutation) delete input.requestId;
         const envelope = await runPublicAction(
           caller,
           action,

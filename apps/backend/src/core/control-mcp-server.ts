@@ -329,7 +329,7 @@ export class ControlMcpServer {
         descriptorFile,
       };
       try {
-        await this.persistCredentials();
+        await this.credentials.flush(true);
       } catch (error) {
         this.server = null;
         this.info = null;
@@ -350,14 +350,18 @@ export class ControlMcpServer {
     const stop = this.lifecycle.then(async () => {
       const server = this.server;
       this.server = null;
-      this.info = null;
       this.coordinatorCredentials.clear();
-      this.credentials.dispose();
-      if (!server) return;
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeAllConnections?.();
-      });
+      try {
+        if (server) {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+            server.closeAllConnections?.();
+          });
+        }
+        await this.credentials.dispose();
+      } finally {
+        this.info = null;
+      }
     });
     this.lifecycle = stop.catch(() => undefined);
     await stop;

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 type Credential = {
@@ -72,10 +72,6 @@ mock.module("@/lib/native/clipboard", () => ({
   readText: mock(() => Promise.resolve("")),
   writeText,
 }));
-
-afterAll(() => {
-  mock.module("@/lib/native/backend", () => ({ invoke: mock(() => Promise.resolve()) }));
-});
 
 const { McpSettings } = await import("./McpSettings");
 
@@ -154,7 +150,41 @@ describe("McpSettings", () => {
       "create_control_mcp_credential",
       { label: "Voice assistant", profile: "voice" },
     ]);
-    expect(screen.getByDisplayValue("voice-test-token-12345678901234567")).toBeTruthy();
+    const token = screen.getByDisplayValue("voice-test-token-12345678901234567");
+    expect(token.getAttribute("type")).toBe("password");
+    fireEvent.click(screen.getByRole("button", { name: "Show access token" }));
+    expect(token.getAttribute("type")).toBe("text");
+    fireEvent.click(screen.getByRole("button", { name: "Show setup for Default" }));
+    expect(screen.getByDisplayValue(defaultCredential.token).getAttribute("type")).toBe("password");
+    fireEvent.click(screen.getByRole("button", { name: "Show setup for Voice assistant" }));
+    expect(
+      screen.getByDisplayValue("voice-test-token-12345678901234567").getAttribute("type"),
+    ).toBe("password");
+  });
+
+  test("submits exactly the checked custom capabilities and refuses an empty set", async () => {
+    render(<McpSettings />);
+    await screen.findByText("Control Orkestrator from another agent");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Custom client" } });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Profile" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Custom" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Discovery: projects, environments, runs" }),
+    );
+    expect(screen.getByRole("button", { name: "Create credential" }).hasAttribute("disabled")).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Read sessions and transcripts" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Kanban tickets" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create credential" }));
+    await screen.findByText("Set up a client with Custom client");
+    expect(invoke.mock.calls).toContainEqual([
+      "create_control_mcp_credential",
+      { label: "Custom client", profile: "custom", capabilities: ["sessions.read", "tickets"] },
+    ]);
+    expect(
+      screen.getByDisplayValue("voice-test-token-12345678901234567").getAttribute("type"),
+    ).toBe("password");
   });
 
   test("revokes a credential after confirmation", async () => {

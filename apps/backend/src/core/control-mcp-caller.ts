@@ -200,9 +200,15 @@ export async function runPublicAction(
   }
   const description = await confirmationFor(caller, action, input);
   if (description) {
-    const check = caller.confirmTokens.check(confirmToken, caller.credential.id, action, input);
+    const check = caller.confirmTokens.check(
+      confirmToken,
+      caller.credential.id,
+      action,
+      input,
+      requestId,
+    );
     if (check !== "valid") {
-      const issued = caller.confirmTokens.issue(caller.credential.id, action, input);
+      const issued = caller.confirmTokens.issue(caller.credential.id, action, input, requestId);
       const why =
         check === "missing"
           ? "Confirm before this runs."

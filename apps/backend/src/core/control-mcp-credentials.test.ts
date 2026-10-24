@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { CONTROL_MCP_PROFILE_CAPABILITIES } from "@orkestrator/protocol/control-mcp";
+import { ControlMcpCredentialStore, writeControlMcpDescriptor } from "./control-mcp-credentials.js";
 import { ConfirmTokens } from "./control-mcp-confirm.js";
 import { ControlMcpServer, readControlMcpDescriptor } from "./control-mcp-server.js";
 import { rpc } from "./control-mcp-test-support.js";
@@ -39,6 +40,76 @@ describe("Control MCP credentials", () => {
     await server.stop();
     await rm(dataDir, { recursive: true, force: true });
   });
+
+  test.each(["{broken", JSON.stringify({ version: 99, url: "http://localhost", pid: 1 })])(
+    "preserves invalid descriptors and reports startup failure: %s",
+    async (contents) => {
+      const file = path.join(dataDir, "control-mcp.json");
+      await writeFile(file, contents);
+      await expect(server.start()).rejects.toThrow();
+      expect(server.getSettings().running).toBe(false);
+      expect(server.getSettings().error).toBeTruthy();
+      expect(await readFile(file, "utf8")).toBe(contents);
+    },
+  );
+
+  test.each(["rotate", "revoke", "create"] as const)(
+    "serializes a paused last-used write with %s and drains it on disposal",
+    async (change) => {
+      const file = path.join(dataDir, "queued.json");
+      let release!: () => void;
+      let entered!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let pause = false;
+      const store = new ControlMcpCredentialStore(async () => {
+        const descriptor = {
+          version: 2 as const,
+          url: "http://localhost",
+          pid: 1,
+          credentials: structuredClone([...store.list()]),
+        };
+        if (pause) {
+          pause = false;
+          entered();
+          await paused;
+        }
+        await writeControlMcpDescriptor(file, descriptor);
+      });
+      await store.load(file);
+      await store.flush(true);
+      const original = store.get("default")!.token;
+      pause = true;
+      store.markUsed("default");
+      const flush = store.flush();
+      await started;
+      const mutation =
+        change === "create"
+          ? store.create({ label: "New", profile: "voice" })
+          : change === "rotate"
+            ? store.rotate("default")
+            : store.revoke("default");
+      let disposed = false;
+      const stopping = store.dispose().then(() => {
+        disposed = true;
+      });
+      await Promise.resolve();
+      expect(disposed).toBe(false);
+      release();
+      await Promise.all([flush, mutation, stopping]);
+      const restarted = new ControlMcpCredentialStore(async () => {});
+      await restarted.load(file);
+      expect(restarted.authenticate(original) !== null).toBe(change === "create");
+      if (change === "create") expect(restarted.list()).toHaveLength(2);
+      if (change === "rotate")
+        expect(restarted.authenticate(store.get("default")!.token)).not.toBeNull();
+      await restarted.dispose();
+    },
+  );
 
   test("a version 1 token becomes the full-profile default credential", async () => {
     const legacyToken = "legacy-token-abcdefghijklmnopqrstuvwxyz012345";

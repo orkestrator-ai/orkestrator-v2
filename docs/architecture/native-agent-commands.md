@@ -189,7 +189,7 @@ unavailable with a reason. Re-qualify on every pin change
 | Provider | Discovery | Names | Execution | Catalogue status |
 | --- | --- | --- | --- | --- |
 | Claude | Live `supportedCommands()`, replaced by `commands_changed`; init names as cold fallback; a config-parity probe | SDK spelling and SDK aliases; skills annotated, no `/skill:` rows | `provider-prompt`: canonical name plus verbatim arguments through the query | `ready` only from the session's own query or a push; probe and init lists are `stale` |
-| Codex skills | `skills/list` for the effective cwd | `$name`, alias `/skill:name` | `structured-skill`: `{type:"skill", name, path}` plus a text item | `SkillsListResponse.errors` make the list partial or stale; a child's first answer is `stale` until one settling re-read |
+| Codex skills | `skills/list` for the effective cwd | `$name`, alias `/skill:name` | `structured-skill`: `{type:"skill", name, path}` plus a text item | `SkillsListResponse.errors` make the list partial or stale; a child's list is `stale` until a settling re-read returns the same skills |
 | Codex templates | Bounded scan of `.codex/prompts` and `~/.codex/prompts` | Relative path | `bridge-template`: `$ARGUMENTS` expansion only | Scan errors reported as truncation |
 | Codex built-ins | Bridge | `/help`, `/models` | `bridge-local` | — |
 | OpenCode | One `command.list({directory})`; refresh reloads the directory instance when idle | Exact server key, case-sensitive, no aliases | `provider-command` via `session.command` with a reserved `messageID` | List errors fail the read; an empty list stays empty; `stale` while a requested reload waits for idle |
@@ -252,10 +252,12 @@ catalogue read cannot let `/clear` reach the CLI.
   are bridge-local; reserved names cannot be shadowed by a template.
   app-server answers the first `skills/list` after it starts before its plugin
   skills have loaded, and sends no `skills/changed` when they arrive (0.164.0:
-  26 skills for the first 100-300 ms, then 114). So the first answer from each
-  app-server generation is `stale`, and the bridge re-reads once 2 s later
-  (`coldSettleMs` in `commands/skill-inventory.ts`); that answer is
-  authoritative and bumps `commandRevision`.
+  26 skills for the first 100-300 ms, then 114). So each app-server
+  generation's list is `stale` until a re-read sent 1 s after the previous
+  answer (`coldSettleMs` in `commands/skill-inventory.ts`) returns the same
+  skills; a mismatch arms one more, up to `maxSettleReads`, after which the
+  newest answer is trusted. A read already in flight when the timer fires
+  never counts. Settling bumps `commandRevision`.
 - **OpenCode**: one directory-scoped `command.list`; `session.command` with
   the exact server key. The command response arrives only after the whole
   turn, and every failure maps to HTTP 400, so the provider does not abort it

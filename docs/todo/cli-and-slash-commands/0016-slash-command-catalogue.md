@@ -51,9 +51,11 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
 - **Codex cold plugin skills.** `SkillInventory`
   (`bridges/codex-bridge/src/commands/skill-inventory.ts`) reports the first
   `skills/list` answer from each app-server generation unsettled; the
-  catalogue reads `stale`, and one re-read 2 s later (`coldSettleMs`) settles
-  it and bumps `commandRevision`. A generation that dies first never marks its
-  successor settled.
+  catalogue reads `stale` until a re-read sent 1 s after the previous answer
+  (`coldSettleMs`) returns the same skills (at most `maxSettleReads` rounds),
+  which settles it and bumps `commandRevision`. A read already in flight when
+  the timer fires never settles it, and a failed settling read leaves it
+  `stale`. A generation that dies first never marks its successor settled.
 - Disabled by design, listed with a reason and never executed (now decided,
   see "Assumptions and decisions"):
   - Claude, in `bridges/claude-bridge/src/services/session-manager-commands.ts`:
@@ -401,12 +403,18 @@ Made on 2026-10-24 while completing this file.
    - Options: wait for a notification (none exists); force a disk rescan on
      the first read; report the first answer `stale` and re-read once after a
      delay; poll until two reads agree.
-   - Chosen: the first answer per app-server generation is unsettled
-     (`stale`), and one ordinary re-read 2 s later settles it.
+   - Chosen (revised 2026-10-24): each app-server generation's list is
+     unsettled (`stale`) until an ordinary re-read sent 1 s after the
+     previous answer agrees with it, at most five rounds. The first version
+     re-read once after 2 s and trusted that answer; review found a read
+     already in flight when the timer fired could stand in for it and settle
+     the pre-plugin list, and a single fixed delay has no margin on a slow
+     container.
    - Why: measured, the gap is time-based (a single first read at 1 s was
-     complete), so one delayed read fixes it at the cost of one extra
-     `skills/list` per child start. 2 s is five times the slowest arrival
-     measured, and the 30 s TTL still heals anything slower.
+     complete), so in the measured case the list settles about 2 s after the
+     child starts, as before, for two extra `skills/list` calls per child
+     start; a slower plugin load just takes more rounds. The 30 s TTL still
+     heals anything slower than five rounds.
    - Pros: the picker never calls an incomplete list `ready`; the revision
      bump reaches unmounted tabs. Cons: about 2 s of "may be out of date"
      after a child starts even when the first list was complete. A typed

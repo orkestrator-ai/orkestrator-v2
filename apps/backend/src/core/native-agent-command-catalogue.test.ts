@@ -202,6 +202,17 @@ describe("NativeAgentCommandCatalogueCache", () => {
     expect((await other.cache.refresh(KEY, "env-1", failing, "session-1")).outcome).toBe("failed");
   });
 
+  test("a refresh whose re-read fails says why, not just that it failed", async () => {
+    const h = harness();
+    const outdated = provider(async () => {
+      throw Object.assign(new Error("old bridge"), { catalogueErrorCode: "outdated-bridge" });
+    });
+    const result = await h.cache.refresh(KEY, "env-1", outdated, "session-1");
+    expect(result.outcome).toBe("failed");
+    expect(result.message).toContain("Restart the environment");
+    expect(h.cache.peek(KEY)!.state.lastRefresh?.message).toContain("Restart the environment");
+  });
+
   test("unsupported and missing provider answers never look like ready lists", async () => {
     const { cache } = harness();
     const unsupported = await cache.read(

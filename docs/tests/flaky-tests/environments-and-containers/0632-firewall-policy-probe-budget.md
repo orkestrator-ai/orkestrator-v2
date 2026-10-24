@@ -36,3 +36,10 @@
 - **Isolated rerun:** `mise run test:logged -- --name firewall-alone -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1` passed (21.1 s).
 - **Disposition:** recurrence confirmed by the isolated pass. No assertion,
   deadline or skip was changed.
+- **Again after rebasing onto `a5d78cfcd` (full-test-3):** 15 firewall cases hit
+  the five-second budget (evidence
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.xqyQcT/full-test-3.log.gz`).
+  The owning file also failed alone twice while the host load average was 33
+  to 98 (3 and more cases at about 5,008 ms), then passed alone (24 passed,
+  0 failed) once the one-minute load fell to 10. The branch changes no
+  firewall test or `docker/` script.

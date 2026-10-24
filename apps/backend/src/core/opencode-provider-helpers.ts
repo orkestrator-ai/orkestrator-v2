@@ -99,6 +99,8 @@ export interface OpenCodeProviderDependencies {
   commandChanges?: OpenCodeCommandChangeOptions;
   /** A coordinator's research tool ids, read when permission rules are built. */
   coordinatorResearchToolIds?: () => readonly string[];
+  ensureCoordinatorResearch?: () => Promise<void>;
+  invalidateCoordinatorResearch?: () => void;
 }
 
 export async function optionalOpenCodeSdkCall(

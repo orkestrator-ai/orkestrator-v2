@@ -184,6 +184,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly commandReload: OpenCodeInstanceReload;
   private readonly blockedSessions = new Set<string>();
   private readonly failedQuestionSessions = new Set<string>();
+  private readonly sessionResearchTools = new Map<string, string>();
   private readonly sessionPolicies = new Map<string, NativeAgentExecutionPolicy>();
   /** A coordinator's research tool ids; empty everywhere else. */
   private readonly researchTools: () => readonly string[];
@@ -229,7 +230,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
 
   constructor(
     private readonly connection: BridgeConnection,
-    dependencies: OpenCodeProviderDependencies,
+    private readonly dependencies: OpenCodeProviderDependencies,
   ) {
     const basic = Buffer.from(`opencode:${connection.authToken}`).toString("base64");
     const createClient = dependencies.openCodeClientFactory ?? createOpenCodeSdkClient;
@@ -284,6 +285,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         this.invalidateInteractiveMetadata();
         this.commands.reloaded();
       },
+      () => this.invalidateResearch(),
     );
     this.commands = new OpenCodeCommandRegistry(
       () => this.capabilitiesAdapter.readCommands(),
@@ -506,6 +508,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     }
     const properties = event.properties ?? {};
     this.commandReload.observeEvent(event.type, properties);
+    if (event.type === "server.instance.disposed" || event.type === "global.disposed") {
+      this.invalidateResearch();
+    }
     const rawSessionId =
       typeof properties.sessionID === "string" ? properties.sessionID : undefined;
     const globalEvent =
@@ -537,6 +542,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       if (effect.reconnect) {
         this.observation.lost();
         this.workflowResults.invalidate();
+        this.invalidateResearch();
         this.invalidateInteractiveMetadata();
         this.lifecycle.invalidateEvents();
         this.activeStreamController?.abort();
@@ -704,17 +710,23 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     label: string,
     options: ProviderCreateSessionOptions = {},
   ): Promise<string> {
-    try {
-      const created = await this.reviewPermissions.createSession(label, options);
-      this.lifecycle.rememberExistingSession(created.sessionId);
-      this.registerSession(created.sessionId, options.interaction);
-      if (created.policy) this.sessionPolicies.set(created.sessionId, created.policy);
-      return created.sessionId;
-    } catch (error) {
-      throw new ProviderUnavailableError("OpenCode session creation is unavailable", {
-        cause: error,
-      });
-    }
+    return this.commandReload.withinDispatch(async () => {
+      try {
+        await this.dependencies.ensureCoordinatorResearch?.();
+        const created = await this.reviewPermissions.createSession(label, options);
+        this.lifecycle.rememberExistingSession(created.sessionId);
+        this.registerSession(created.sessionId, options.interaction);
+        if (created.policy) {
+          this.sessionPolicies.set(created.sessionId, created.policy);
+          this.sessionResearchTools.set(created.sessionId, JSON.stringify(this.researchTools()));
+        }
+        return created.sessionId;
+      } catch (error) {
+        throw new ProviderUnavailableError("OpenCode session creation is unavailable", {
+          cause: error,
+        });
+      }
+    });
   }
 
   prepareDispatch(sessionId: string, options: ProviderPrepareDispatchOptions = {}): Promise<void> {
@@ -733,6 +745,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     options: ProviderSendOptions,
     commandDispatch: () => void,
   ) {
+    await this.dependencies.ensureCoordinatorResearch?.();
+    const policy = this.sessionPolicies.get(sessionId);
+    if (policy) await this.synchronizeSessionPolicyGated(sessionId, policy);
     await this.workflowResults.prepare(sessionId, {
       agentMcp: options.agentMcp,
       workflowResultTool: options.workflowResultTool,
@@ -1315,21 +1330,36 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     _controls?: NativeAgentControlUpdate,
     policy?: NativeAgentExecutionPolicy,
   ): Promise<string> {
-    const status = await this.status(sessionId);
-    if (status === "missing") throw new PromptRejectedError("OpenCode session was not found");
-    if (policy) await this.applySessionPolicy(sessionId, effectiveOpenCodePolicy(policy));
-    this.lifecycle.rememberExistingSession(sessionId);
-    return sessionId;
+    return this.commandReload.withinDispatch(async () => {
+      const status = await this.status(sessionId);
+      if (status === "missing") throw new PromptRejectedError("OpenCode session was not found");
+      if (policy) await this.applySessionPolicy(sessionId, effectiveOpenCodePolicy(policy));
+      this.lifecycle.rememberExistingSession(sessionId);
+      return sessionId;
+    });
   }
 
   async synchronizeSessionPolicy(
     sessionId: string,
     policy: NativeAgentExecutionPolicy,
   ): Promise<void> {
+    return this.commandReload.withinDispatch(() =>
+      this.synchronizeSessionPolicyGated(sessionId, policy),
+    );
+  }
+
+  private async synchronizeSessionPolicyGated(
+    sessionId: string,
+    policy: NativeAgentExecutionPolicy,
+  ): Promise<void> {
+    await this.dependencies.ensureCoordinatorResearch?.();
     const effectivePolicy = effectiveOpenCodePolicy(policy);
     // OpenCode appends permission rules on update. Readiness checks must not
     // append the same rules on every turn; a new provider rehydrates once.
-    if (JSON.stringify(this.sessionPolicies.get(sessionId)) === JSON.stringify(effectivePolicy))
+    if (
+      JSON.stringify(this.sessionPolicies.get(sessionId)) === JSON.stringify(effectivePolicy) &&
+      this.sessionResearchTools.get(sessionId) === JSON.stringify(this.researchTools())
+    )
       return;
     await this.applySessionPolicy(sessionId, effectivePolicy);
   }
@@ -1338,17 +1368,25 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     sessionId: string,
     effectivePolicy: NativeAgentExecutionPolicy,
   ): Promise<void> {
+    await this.dependencies.ensureCoordinatorResearch?.();
+    const researchTools = this.researchTools();
     const response = await this.client.session.update(
       {
         sessionID: sessionId,
         permission: openCodePermissionRules(effectivePolicy, {
-          researchTools: this.researchTools(),
+          researchTools,
         }),
       },
       this.requestOptions(),
     );
     assertSdkResponse(response, "OpenCode resumed session policy update");
     this.sessionPolicies.set(sessionId, effectivePolicy);
+    this.sessionResearchTools.set(sessionId, JSON.stringify(researchTools));
+  }
+
+  private invalidateResearch(): void {
+    this.dependencies.invalidateCoordinatorResearch?.();
+    this.sessionResearchTools.clear();
   }
 
   async forkSession(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome> {
@@ -1453,6 +1491,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.changeEvidence.forget(sessionId);
     this.interactiveMetadata.delete(sessionId);
     this.sessionPolicies.delete(sessionId);
+    this.sessionResearchTools.delete(sessionId);
     this.blockedSessions.delete(sessionId);
     this.failedQuestionSessions.delete(sessionId);
     this.actionRetry.forget(sessionId);

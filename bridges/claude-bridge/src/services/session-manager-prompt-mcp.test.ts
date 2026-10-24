@@ -6,6 +6,11 @@
  * MCP loader are the harness doubles and every assertion is about what the
  * prompt path asks for and records.
  */
+import { mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { COORDINATOR_COMMAND_SANDBOX_ENV } from "@orkestrator/protocol/coordinator";
+import { claudeExecutionSandbox } from "./claude-execution-sandbox.js";
 import { describe, expect, test } from "bun:test";
 import {
   MOCK_MCP_CONFIG_REVISION,
@@ -119,5 +124,51 @@ describe("sendPrompt MCP configuration revision", () => {
     secondCall.push({ type: "result", subtype: "success" });
     secondCall.finish();
     await second;
+  });
+});
+
+describe("coordinator query wiring", () => {
+  test("passes the cwd, realpath, unavailable authority and read-only instructions to the SDK", async () => {
+    const root = await mkdtemp(join(tmpdir(), "claude-coordinator-query-"));
+    const cwd = join(root, "checkout");
+    await symlink(root, cwd);
+    const previousCwd = process.env.CWD;
+    const previousSandbox = process.env[COORDINATOR_COMMAND_SANDBOX_ENV];
+    try {
+      process.env.CWD = cwd;
+      process.env[COORDINATOR_COMMAND_SANDBOX_ENV] = "unavailable";
+      const session = createSession("coordinator sandbox");
+      track(session.id);
+      session.executionPolicy = coordinatorProcessPolicy();
+      const prompt = sendPrompt(session.id, "Inspect the checkout");
+      const call = await nextQueryCall();
+      expect(call.options.cwd).toBe(cwd);
+      expect(call.options.sandbox).toMatchObject({
+        failIfUnavailable: false,
+        filesystem: { denyWrite: [cwd, await realpath(cwd)] },
+      });
+      const append = (call.options.systemPrompt as { append: string }).append;
+      expect(append).toContain("read-only coordinator");
+      expect(append).toContain("Delegate all mutations");
+      expect(append).not.toMatch(
+        /before editing|Write tools|docs\/|save the file|background command/i,
+      );
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await prompt;
+      for (const value of [undefined, "", "unknown"]) {
+        if (value === undefined) delete process.env[COORDINATOR_COMMAND_SANDBOX_ENV];
+        else process.env[COORDINATOR_COMMAND_SANDBOX_ENV] = value;
+        expect(
+          claudeExecutionSandbox(coordinatorProcessPolicy(), false, { cwd })?.failIfUnavailable,
+        ).toBe(true);
+      }
+    } finally {
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+      if (previousSandbox === undefined) delete process.env[COORDINATOR_COMMAND_SANDBOX_ENV];
+      else process.env[COORDINATOR_COMMAND_SANDBOX_ENV] = previousSandbox;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

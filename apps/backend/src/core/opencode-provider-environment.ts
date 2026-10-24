@@ -6,12 +6,20 @@
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import { openCodeCommandChangeJournalDirectory } from "./opencode-command-changes.js";
-import { openCodeCoordinatorResearchToolIds } from "./opencode-coordinator-research.js";
+import {
+  ensureOpenCodeCoordinatorResearch,
+  invalidateOpenCodeCoordinatorResearch,
+  openCodeCoordinatorResearchToolIds,
+} from "./opencode-coordinator-research.js";
 import type { OpenCodeProviderDependencies } from "./opencode-provider-helpers.js";
 
 export type OpenCodeEnvironmentDependencies = Pick<
   OpenCodeProviderDependencies,
-  "commandChanges" | "coordinatorResearchToolIds" | "resolveOpenCodeModelProviders"
+  | "commandChanges"
+  | "coordinatorResearchToolIds"
+  | "ensureCoordinatorResearch"
+  | "invalidateCoordinatorResearch"
+  | "resolveOpenCodeModelProviders"
 >;
 
 export function openCodeEnvironmentDependencies(
@@ -33,6 +41,10 @@ export function openCodeEnvironmentDependencies(
   // A coordinator's research tool ids, recorded when its launch registered
   // them, keyed like the launcher's agent-tools configuration.
   if (coordinatorIdFromRuntimeId(environment.environmentId)) {
+    dependencies.ensureCoordinatorResearch = () =>
+      ensureOpenCodeCoordinatorResearch(`local:${environment.environmentId}`).then(() => undefined);
+    dependencies.invalidateCoordinatorResearch = () =>
+      invalidateOpenCodeCoordinatorResearch(`local:${environment.environmentId}`);
     dependencies.coordinatorResearchToolIds = () =>
       openCodeCoordinatorResearchToolIds(`local:${environment.environmentId}`);
   }

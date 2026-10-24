@@ -17,43 +17,17 @@ import {
 import { openCodeHealthHeaders } from "./commands-server-health.js";
 import {
   configureOpenCodeCoordinatorResearch,
+  ensureOpenCodeCoordinatorResearch,
+  forgetOpenCodeCoordinatorResearch,
+  invalidateOpenCodeCoordinatorResearch,
   openCodeCoordinatorResearchToolIds,
 } from "./opencode-coordinator-research.js";
 
 const opencode = policyQualificationCli("opencode");
 
-/** A stateless MCP server over plain JSON: just enough for OpenCode to list tools. */
-function fixtureMcpServer(tools: string[]) {
-  let requests = 0;
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    async fetch(request) {
-      if (request.method !== "POST") return new Response(null, { status: 405 });
-      requests += 1;
-      const message = (await request.json()) as { id?: number; method: string };
-      if (message.id === undefined) return new Response(null, { status: 202 });
-      const result =
-        message.method === "initialize"
-          ? {
-              protocolVersion: "2025-06-18",
-              capabilities: { tools: {} },
-              serverInfo: { name: "fixture", version: "1.0.0" },
-            }
-          : message.method === "tools/list"
-            ? {
-                tools: tools.map((name) => ({
-                  name,
-                  description: `fixture ${name}`,
-                  inputSchema: { type: "object", properties: {} },
-                })),
-              }
-            : {};
-      return Response.json({ jsonrpc: "2.0", id: message.id, result });
-    },
-  });
-  return { url: server.url, requests: () => requests, stop: () => server.stop(true) };
-}
+import { OpenCodeProvider } from "./opencode-provider.js";
+import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { fixtureMcpServer } from "./opencode-coordinator-research-test-support.js";
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -81,7 +55,7 @@ describe("OpenCode coordinator research servers", () => {
             $schema: "https://opencode.ai/config.json",
             mcp: {
               context7_x: { type: "remote", url: `${project.url.origin}/mcp`, enabled: true },
-              context7: { type: "local", command: ["false"], enabled: true },
+              context7: { type: "remote", url: `${project.url.origin}/mcp`, enabled: true },
             },
           }),
         );
@@ -100,6 +74,7 @@ describe("OpenCode coordinator research servers", () => {
             stderr: "ignore",
           },
         );
+        let provider: OpenCodeProvider | undefined;
         try {
           const headers = openCodeHealthHeaders(password);
           const deadline = Date.now() + 20_000;
@@ -136,7 +111,49 @@ describe("OpenCode coordinator research servers", () => {
           expect(status.context7?.status).toBe("connected");
           expect(status.context7_x?.status).toBe("connected");
           expect(research.requests()).toBeGreaterThan(0);
+          provider = new OpenCodeProvider(
+            {
+              agent: "opencode",
+              baseUrl: `http://127.0.0.1:${port}`,
+              authToken: password,
+              directory: fixture.cwd,
+            },
+            {
+              coordinatorResearchToolIds: () => openCodeCoordinatorResearchToolIds("local:fixture"),
+              invalidateCoordinatorResearch: () =>
+                invalidateOpenCodeCoordinatorResearch("local:fixture"),
+              ensureCoordinatorResearch: () =>
+                ensureOpenCodeCoordinatorResearch("local:fixture").then(() => undefined),
+            },
+          );
+          const policy = resolveNativeAgentExecutionPolicy(
+            { environmentType: "local", networkAccessMode: "restricted" },
+            "coordinator",
+            undefined,
+            "search-and-mcp",
+          );
+          const session = await provider.createSession("coordinator", "Reload fixture", { policy });
+          await provider.refreshCommands();
+          expect(openCodeCoordinatorResearchToolIds("local:fixture")).toEqual([]);
+          const beforeRestore = research.requests();
+          await provider.synchronizeSessionPolicy(session, policy);
+          expect(research.requests()).toBeGreaterThan(beforeRestore);
+          expect(openCodeCoordinatorResearchToolIds("local:fixture")).toEqual(allowed);
+          const restored = (await fetch(
+            `http://127.0.0.1:${port}/session/${session}?directory=${encodeURIComponent(fixture.cwd)}`,
+            { headers },
+          ).then((response) => response.json())) as {
+            permission: { permission: string; action: string }[];
+          };
+          const action = (tool: string) =>
+            restored.permission.findLast(
+              (rule) => rule.permission === tool || rule.permission === "*",
+            )?.action;
+          expect(action("context7_query-docs")).toBe("allow");
+          expect(action("context7_x_query-docs")).toBe("deny");
         } finally {
+          await provider?.dispose();
+          forgetOpenCodeCoordinatorResearch("local:fixture");
           child.kill();
           await child.exited;
           research.stop();

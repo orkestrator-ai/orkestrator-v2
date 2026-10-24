@@ -20,6 +20,56 @@ import { readBoundedOpenCodeResponse } from "./opencode-bounded-response.js";
  * configuration (`local:<runtime id>`), set at launch and forgotten with it.
  */
 const researchToolIds = new Map<string, readonly string[]>();
+type ResearchRegistration = {
+  input: ResearchInput;
+  generation: number;
+  ready: boolean;
+  pending?: Promise<readonly string[]>;
+};
+const registrations = new Map<string, ResearchRegistration>();
+
+/** Disposal drops runtime MCP registrations, but persisted session rules survive. */
+export function invalidateOpenCodeCoordinatorResearch(serverKey: string): void {
+  researchToolIds.delete(serverKey);
+  const registration = registrations.get(serverKey);
+  if (registration) {
+    registration.generation += 1;
+    registration.ready = false;
+    registration.pending = undefined;
+  }
+}
+
+/** Restore the launcher-owned endpoint before granting any exact tool permissions. */
+export async function ensureOpenCodeCoordinatorResearch(
+  serverKey: string,
+  signal?: AbortSignal,
+): Promise<readonly string[]> {
+  const registration = registrations.get(serverKey);
+  if (!registration) return [];
+  if (registration.ready) return openCodeCoordinatorResearchToolIds(serverKey);
+  if (registration.pending) return registration.pending;
+  const generation = registration.generation;
+  const pending = registerResearchServers({
+    ...registration.input,
+    // Launch signals expire; every instance restoration needs a fresh deadline.
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+      : AbortSignal.timeout(15_000),
+  })
+    .then((allowed) => {
+      if (registrations.get(serverKey) !== registration || registration.generation !== generation) {
+        throw new Error("OpenCode research instance changed during registration");
+      }
+      registration.ready = true;
+      researchToolIds.set(serverKey, allowed);
+      return allowed;
+    })
+    .finally(() => {
+      if (registration.pending === pending) registration.pending = undefined;
+    });
+  registration.pending = pending;
+  return pending;
+}
 
 export function openCodeCoordinatorResearchToolIds(serverKey: string): readonly string[] {
   return researchToolIds.get(serverKey) ?? [];
@@ -27,6 +77,7 @@ export function openCodeCoordinatorResearchToolIds(serverKey: string): readonly 
 
 export function forgetOpenCodeCoordinatorResearch(serverKey: string): void {
   researchToolIds.delete(serverKey);
+  registrations.delete(serverKey);
 }
 
 /** OpenCode's MCP tool key part: other characters than these become `_`. */
@@ -87,15 +138,28 @@ async function listResearchTools(url: string, signal?: AbortSignal): Promise<str
  * tool ids they contributed. A server that does not connect is skipped: research
  * is optional, and the coordinator context only offers tools it has.
  */
-export async function configureOpenCodeCoordinatorResearch(input: {
+type ResearchInput = {
   serverKey: string;
   port: number;
   password: string;
   directory: string;
   servers: readonly CoordinatorResearchMcpServer[];
   signal?: AbortSignal;
-}): Promise<readonly string[]> {
+};
+
+export async function configureOpenCodeCoordinatorResearch(
+  input: ResearchInput,
+): Promise<readonly string[]> {
   researchToolIds.delete(input.serverKey);
+  registrations.set(input.serverKey, {
+    input: { ...input, signal: undefined },
+    generation: 0,
+    ready: false,
+  });
+  return ensureOpenCodeCoordinatorResearch(input.serverKey, input.signal);
+}
+
+async function registerResearchServers(input: ResearchInput): Promise<readonly string[]> {
   if (input.servers.length === 0) return [];
   const headers = openCodeHealthHeaders(input.password);
   const url = new URL(`http://127.0.0.1:${input.port}/mcp`);
@@ -136,7 +200,6 @@ export async function configureOpenCodeCoordinatorResearch(input: {
       ),
     );
   }
-  if (allowed.length > 0) researchToolIds.set(input.serverKey, allowed);
   return allowed;
 }
 

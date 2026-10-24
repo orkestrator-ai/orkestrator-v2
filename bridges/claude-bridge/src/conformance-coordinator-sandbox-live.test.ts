@@ -8,6 +8,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -32,7 +33,11 @@ type Scenario =
   /** The coordinator sandbox still lets a command read the checkout. */
   | "coordinator-sandbox-reads"
   /** The whole coordinator turn: the hook refuses the writing reader. */
-  | "coordinator-hook-refuses";
+  | "coordinator-hook-refuses"
+  | "unavailable-hook-refuses-quoted"
+  | "unavailable-hook-refuses-escaped"
+  | "unavailable-hook-refuses-glob"
+  | "unavailable-hook-refuses-abbreviation";
 
 const coordinatorPolicy = coordinatorProcessPolicy({});
 
@@ -41,12 +46,23 @@ async function qualify(scenario: Scenario) {
     // sandbox-exec matches canonical paths; macOS /var is a symlink.
     const cwd = await realpath(fixture.cwd);
     await writeFile(join(cwd, "in.txt"), "a\na\nb\n");
+    const unavailable = scenario.startsWith("unavailable-");
     const command =
-      scenario === "coordinator-sandbox-reads"
-        ? "cat in.txt"
-        : scenario === "coordinator-hook-refuses"
-          ? "uniq in.txt out.txt"
-          : "printf written > out.txt";
+      scenario === "unavailable-hook-refuses-quoted"
+        ? "sort '-oout.txt' in.txt"
+        : scenario === "unavailable-hook-refuses-escaped"
+          ? String.raw`sort --out\put=out.txt in.txt`
+          : scenario === "unavailable-hook-refuses-glob"
+            ? "uniq [io]*.txt"
+            : scenario === "unavailable-hook-refuses-abbreviation"
+              ? "sort --out=out.txt in.txt"
+              : scenario === "coordinator-sandbox-reads"
+                ? "cat in.txt"
+                : scenario === "coordinator-hook-refuses"
+                  ? "uniq in.txt out.txt"
+                  : "printf written > out.txt";
+    if (scenario === "unavailable-hook-refuses-glob")
+      await writeFile(join(cwd, "out.txt"), "sentinel\n");
     const endpoint = scriptedAnthropicEndpoint(() => [
       [
         {
@@ -60,7 +76,7 @@ async function qualify(scenario: Scenario) {
     ]);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
-    const coordinatorTurn = scenario === "coordinator-hook-refuses";
+    const coordinatorTurn = scenario === "coordinator-hook-refuses" || unavailable;
     const options: Options = {
       cwd,
       model: "claude-sonnet-4-6",
@@ -96,9 +112,32 @@ async function qualify(scenario: Scenario) {
             )
           : claudeExecutionSandbox(coordinatorPolicy, false, {
               cwd,
-              commandSandbox: "required",
+              commandSandbox: unavailable ? "unavailable" : "required",
             }),
-      env: scriptedClaudeEnv(fixture, endpoint, join(fixture.root, "claude")),
+      env: {
+        ...scriptedClaudeEnv(fixture, endpoint, join(fixture.root, "claude")),
+        ...(unavailable && process.platform === "linux" ? { PATH: fixture.root } : {}),
+      },
+      ...(unavailable && process.platform === "darwin"
+        ? {
+            spawnClaudeCodeProcess: (options) =>
+              spawn(
+                "/usr/bin/sandbox-exec",
+                [
+                  "-p",
+                  '(version 1)(allow default)(deny process-exec (literal "/usr/bin/sandbox-exec"))',
+                  options.command,
+                  ...options.args,
+                ],
+                {
+                  cwd: options.cwd,
+                  env: options.env,
+                  signal: options.signal,
+                  stdio: ["pipe", "pipe", "pipe"],
+                },
+              ),
+          }
+        : {}),
       stderr: () => {},
     };
     const messages: SDKMessage[] = [];
@@ -135,7 +174,9 @@ async function qualify(scenario: Scenario) {
       expect(JSON.stringify(toolResults[0]!.content)).toContain("a\\na\\nb");
     } else {
       expect(toolResults[0]!.is_error).toBe(true);
-      expect(written).toBe(false);
+      expect(written).toBe(scenario === "unavailable-hook-refuses-glob");
+      if (scenario === "unavailable-hook-refuses-glob")
+        expect(await Bun.file(join(cwd, "out.txt")).text()).toBe("sentinel\n");
       if (scenario === "coordinator-hook-refuses") {
         expect(JSON.stringify(toolResults[0]!.content)).toContain("Coordinator is read-only");
       }
@@ -150,6 +191,10 @@ describe("Claude coordinator sandbox qualification", () => {
     "coordinator-sandbox-refuses",
     "coordinator-sandbox-reads",
     "coordinator-hook-refuses",
+    "unavailable-hook-refuses-quoted",
+    "unavailable-hook-refuses-escaped",
+    "unavailable-hook-refuses-glob",
+    "unavailable-hook-refuses-abbreviation",
   ] as const) {
     (supported ? test : test.skip)(scenario, () => qualify(scenario), 20_000);
   }

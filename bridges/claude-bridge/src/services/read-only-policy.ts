@@ -312,7 +312,7 @@ const GIT_CONFIG_WRITE_SUBCOMMANDS = Object.freeze(
 );
 
 /** `git remote` operations that only report. Everything else rewrites remotes. */
-const GIT_REMOTE_READ_SUBCOMMANDS = Object.freeze(new Set(["get-url", "show"]));
+const GIT_REMOTE_READ_SUBCOMMANDS = Object.freeze(new Set(["get-url"]));
 
 function hasFlag(args: readonly string[], flags: ReadonlySet<string>): boolean {
   // A one-letter flag can be clustered (`-no out` is `-n -o out`) or carry its
@@ -325,6 +325,11 @@ function hasFlag(args: readonly string[], flags: ReadonlySet<string>): boolean {
       // `--output=x` is the same flag as `--output x`, so match the prefix too.
       flags.has(arg) ||
       flags.has(arg.split("=", 1)[0] ?? arg) ||
+      // GNU and Git parsers accept unambiguous long-option abbreviations.
+      (arg.startsWith("--") &&
+        [...flags].some(
+          (flag) => flag.startsWith("--") && flag.startsWith(arg.split("=", 1)[0]!),
+        )) ||
       (/^-[^-]/.test(arg) && letters.some((letter) => arg.slice(1).includes(letter))),
   );
 }
@@ -402,7 +407,9 @@ const NETWORK_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(["fetch", "ls-remot
  * Refusing the whole command is deliberate — a coordinator does not need shell
  * composition, and partial parsing here is how a bypass gets in.
  */
-const COMPOSITION_PATTERN = /[;&|><`$(){}\n\r]|\bsudo\b|\bexec\b/;
+// Quotes, escapes and globs transform arguments before execution. This hook
+// deliberately accepts only literal words, rather than approximating a shell parser.
+const COMPOSITION_PATTERN = /[;&|><`$(){}\n\r'"\\*?[\]]|\bsudo\b|\bexec\b/;
 
 export function isCoordinatorReadOnlyPolicy(
   policy: NativeAgentExecutionPolicy | undefined,
@@ -523,11 +530,11 @@ interface CommandVerdict {
 export function isReadOnlyShellCommand(command: string): CommandVerdict {
   const trimmed = command.trim();
   if (!trimmed) return { allowed: true };
-  if (COMPOSITION_PATTERN.test(trimmed)) {
+  if (COMPOSITION_PATTERN.test(trimmed) || /(?:^|\s)~/.test(trimmed)) {
     return {
       allowed: false,
       reason:
-        "Coordinator shells cannot use pipes, redirection, substitution or command chaining, because the command that runs would not be the one checked.",
+        "Coordinator shells cannot use quotes, escapes, globs, pipes, redirection, substitution or command chaining, because the command that runs would not be the one checked.",
     };
   }
   const tokens = trimmed.split(/\s+/).filter(Boolean);
@@ -546,7 +553,11 @@ export function isReadOnlyShellCommand(command: string): CommandVerdict {
     const subcommandIndex = tokens.findIndex((token, index) => index > 0 && !token.startsWith("-"));
     const subcommand = subcommandIndex > 0 ? tokens[subcommandIndex] : undefined;
     const args = subcommandIndex > 0 ? tokens.slice(subcommandIndex + 1) : [];
-    if (subcommand && NETWORK_GIT_SUBCOMMANDS.has(subcommand)) {
+    if (
+      subcommand &&
+      (NETWORK_GIT_SUBCOMMANDS.has(subcommand) ||
+        (subcommand === "remote" && args.some((arg) => arg === "show")))
+    ) {
       return networkRefusal(`git ${subcommand}`);
     }
     const permitted =

@@ -548,7 +548,7 @@ export function publicCursorMcpServers(state: SessionState): NativeAgentMcpServe
   const liveRunTools =
     state.runTools !== undefined && state.runTools !== state.retiredRunTools ? state.runTools : [];
   for (const toolName of liveRunTools) {
-    const parsed = parseMcpToolName(toolName, configuredByLength);
+    const parsed = parseMcpToolName(toolName, configuredByLength, false);
     if (!parsed) continue;
     const tools = ensureServer(inventory, parsed.server);
     if (!tools) continue;
@@ -556,22 +556,26 @@ export function publicCursorMcpServers(state: SessionState): NativeAgentMcpServe
     reportedInventory.add(parsed.server);
   }
   for (const toolName of state.observedMcpTools) {
-    const parsed = parseMcpToolName(toolName, configuredByLength);
+    const parsed = parseMcpToolName(toolName, configuredByLength, true);
     if (!parsed) continue;
     const tools = ensureServer(inventory, parsed.server);
     if (tools && tools.size < MAX_MCP_TOOLS) tools.add(parsed.tool);
   }
   // History only: the server stays listed (it was real, and may still be) but
   // contributes no tools, so without fresh evidence it reads as `unknown`.
-  const retired = [
-    ...(state.retiredMcpTools ?? []),
-    ...(state.retiredRunTools !== undefined && state.retiredRunTools === state.runTools
-      ? state.retiredRunTools
-      : []),
-  ];
-  for (const toolName of retired) {
-    const parsed = parseMcpToolName(toolName, configuredByLength);
-    if (parsed) ensureServer(inventory, parsed.server);
+  for (const [names, canonical] of [
+    [state.retiredMcpTools ?? [], true],
+    [
+      state.retiredRunTools !== undefined && state.retiredRunTools === state.runTools
+        ? state.retiredRunTools
+        : [],
+      false,
+    ],
+  ] as const) {
+    for (const toolName of names) {
+      const parsed = parseMcpToolName(toolName, configuredByLength, canonical);
+      if (parsed) ensureServer(inventory, parsed.server);
+    }
   }
 
   return [...inventory].map(([name, toolSet]) => {
@@ -664,20 +668,23 @@ function ensureServer(
 function parseMcpToolName(
   value: string,
   configuredByLength: readonly string[],
+  canonical: boolean,
 ): { server: string; tool: string } | undefined {
   if (!value.startsWith("mcp__")) return undefined;
   for (const server of configuredByLength) {
     const prefix = `mcp__${server}__`;
     if (!value.startsWith(prefix)) continue;
     const tool = value.slice(prefix.length, prefix.length + MAX_MCP_NAME_LENGTH);
-    if (nonBlank(tool)) return canonicalMcpTool(server, tool);
+    if (nonBlank(tool)) return canonical ? { server, tool } : canonicalMcpTool(server, tool);
   }
   const separator = value.indexOf("__", "mcp__".length);
   if (separator < 0) return undefined;
   const server = value.slice("mcp__".length, separator);
   const tool = value.slice(separator + 2, separator + 2 + MAX_MCP_NAME_LENGTH);
   return nonBlank(server) && nonBlank(tool) && server.length <= MAX_MCP_NAME_LENGTH
-    ? canonicalMcpTool(server, tool)
+    ? canonical
+      ? { server, tool }
+      : canonicalMcpTool(server, tool)
     : undefined;
 }
 

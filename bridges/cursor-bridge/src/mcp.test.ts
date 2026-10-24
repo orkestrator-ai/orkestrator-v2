@@ -25,6 +25,7 @@ import {
   mcpConnectionKey,
   parseAgentMcpConnection,
   publicCursorMcpServers,
+  retireMcpObservations,
   seedObservedMcpTools,
   setCursorMcpTimeoutsForTests,
   setCursorMcpTransportForTests,
@@ -420,6 +421,36 @@ describe("hosted coordinator research tools", () => {
       }),
     ).resolves.toBeUndefined();
     expect(connects).toBe(0);
+  });
+
+  test("a research server named custom-user-tools is unwrapped exactly once", () => {
+    const state = newSessionState();
+    state.mcpServerNames = ["custom-user-tools"];
+    state.researchMcpServerNames = ["custom-user-tools"];
+    callMcpTool(
+      state,
+      {
+        providerIdentifier: "custom-user-tools",
+        toolName: "custom-user-tools__query-docs",
+        args: {},
+      },
+      "research",
+    );
+    expect(state.observedMcpTools.has("mcp__custom-user-tools__query-docs")).toBe(true);
+    expect(JSON.stringify(state.messages)).toContain("mcp__custom-user-tools__query-docs");
+    expect(publicCursorMcpServers(state)).toEqual([
+      {
+        id: "custom-user-tools",
+        name: "custom-user-tools",
+        status: "connected",
+        scope: "orkestrator",
+        actions: [],
+      },
+    ]);
+    state.runTools = ["mcp__custom-user-tools__custom-user-tools__query-docs"];
+    expect(publicCursorMcpServers(state)[0]).toMatchObject({ toolCount: 1, tools: ["query-docs"] });
+    retireMcpObservations(state);
+    expect(publicCursorMcpServers(state).map((server) => server.id)).toEqual(["custom-user-tools"]);
   });
 
   test("a hosted research call is published under its own server, as Orkestrator-configured", () => {

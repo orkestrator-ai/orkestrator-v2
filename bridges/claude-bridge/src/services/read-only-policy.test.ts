@@ -218,6 +218,35 @@ describe("Claude coordinator read-only policy", () => {
     }
   });
 
+  test("shell argument transformations and abbreviated writing flags are refused", async () => {
+    for (const command of [
+      "sort '-oout.txt' in.txt",
+      'git diff "--output=patch.diff"',
+      "find . '-delete'",
+      "git grep '-O' sh",
+      "awk '-i' inplace NR==1 file",
+      String.raw`sort \-oout.txt in.txt`,
+      String.raw`git diff --out\put=patch.diff`,
+      `sort -o'out.txt' in.txt`,
+      `git diff --out"put"=patch.diff`,
+      "uniq *.txt",
+      "uniq [ab].txt",
+      "xxd ?.bin",
+      "sort --out=x in",
+      "sort --comp=sh in",
+      "git grep --open=rm TODO",
+      "file --comp -m magic",
+    ]) {
+      expect({ command, allowed: isReadOnlyShellCommand(command).allowed }).toEqual({
+        command,
+        allowed: false,
+      });
+      expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
+    }
+    expect(isReadOnlyShellCommand("uniq in.txt").allowed).toBe(true);
+    expect(isReadOnlyShellCommand("git remote get-url origin").allowed).toBe(true);
+  });
+
   test("network commands are refused because coordinator commands have no network", () => {
     for (const command of [
       "gh api repos/foo/bar",
@@ -226,6 +255,8 @@ describe("Claude coordinator read-only policy", () => {
       "git ls-remote https://example.com/repo",
       "git ls-remote --upload-pack=touch .",
       "git fetch origin",
+      "git remote show origin",
+      "git remote show https://example.com/repo",
       "curl https://example.com",
     ]) {
       const verdict = isReadOnlyShellCommand(command);
@@ -321,9 +352,9 @@ describe("Claude coordinator read-only policy", () => {
     );
     // The reading forms of the same tools stay available.
     for (const command of [
-      "find . -name *.ts",
+      "find . -name file.ts",
       "sort in.txt",
-      "yq '.a' f.yaml",
+      "yq .a f.yaml",
       "fd -e ts",
       "rg TODO src",
       "date",
@@ -353,13 +384,12 @@ describe("Claude coordinator read-only policy", () => {
     for (const command of [
       "git branch",
       "git branch -a",
-      "git branch --list feature-*",
+      "git branch --list feature-a",
       "git branch --show-current",
       "git tag",
-      "git tag --list v1.*",
+      "git tag --list v1.0",
       "git remote",
       "git remote -v",
-      "git remote show origin",
       "git remote get-url origin",
       "git config user.email",
       "git config --global user.email",

@@ -728,6 +728,29 @@ ORKESTRATOR_AGENT_TEST_PROFILE=qa-slash ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1 \
   e2e/agent-testing/slash-command-inactive.spec.ts
 ```
 
+### Live slash-command picker
+
+`e2e/agent-testing/slash-command-picker.spec.ts` plants two project commands
+in a disposable host worktree (`projectResources: true`), then checks the `/`
+menu against the real provider: one group header per run of a source, in the
+catalogue's order; arrow keys following the rendered order across groups and
+clamping at both ends; a command file added on disk appearing after a refresh;
+and the new row surviving a hard reload. It sends no prompt. On Pi, whose
+session lists nothing until it attaches, it first presses the menu's "Refresh
+commands", which attaches it (todo 0069). It needs
+`ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1`; `ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS`
+picks from `claude` (default), `pi` and `grok`.
+
+```bash
+mise run dev:test --profile qa-picker --fixture --credential-source claude \
+  --credential-source pi --credential-source grok --agent-platforms claude,pi,grok
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-picker ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1 \
+  ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS=claude,pi,grok \
+  mise run test:logged -- --name slash-picker -- mise run test:agent:browser -- \
+  e2e/agent-testing/slash-command-picker.spec.ts
+```
+
 ### Live close retention
 
 `e2e/agent-testing/close-retention-live.spec.ts` checks, with real providers

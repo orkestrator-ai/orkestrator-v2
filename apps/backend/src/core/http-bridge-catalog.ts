@@ -25,36 +25,72 @@ import {
 
 export type HttpBridgeAgent = "claude" | "codex" | "cursor" | "grok" | "pi";
 
+/**
+ * Session catalogue reads answered 404 by a bridge older than the contract,
+ * per agent, since this backend started. Content-free: no command names,
+ * sessions or environments. The legacy-route support window rests on it.
+ */
+const outdatedBridgeCatalogueReads = new Map<HttpBridgeAgent, number>();
+
+export function outdatedBridgeCatalogueReadCounts(): Partial<Record<HttpBridgeAgent, number>> {
+  return Object.fromEntries(outdatedBridgeCatalogueReads);
+}
+
+export function resetOutdatedBridgeCatalogueReadCounts(): void {
+  outdatedBridgeCatalogueReads.clear();
+}
+
 /** Optional discovery and account surfaces shared by the HTTP-backed agents. */
 export class HttpBridgeCatalogAdapter {
+  private warnedOutdatedBridge = false;
+
   constructor(
     private readonly agent: HttpBridgeAgent,
     private readonly connection: BridgeConnection,
     private readonly fetchImpl: typeof fetch,
   ) {}
 
+  /** Count every 404 from the session route; warn once per provider instance. */
+  private noteOutdatedBridge(): void {
+    const count = (outdatedBridgeCatalogueReads.get(this.agent) ?? 0) + 1;
+    outdatedBridgeCatalogueReads.set(this.agent, count);
+    if (this.warnedOutdatedBridge) return;
+    this.warnedOutdatedBridge = true;
+    console.warn(
+      `[native-agent] ${this.agent} bridge is older than the command catalogue (session route 404); ` +
+        `its commands stay unavailable until the environment runs a current bridge ` +
+        `(outdated-bridge reads for ${this.agent} so far: ${count})`,
+    );
+  }
+
   /**
-   * Read the command catalogue, preferring the session route.
+   * Read one session's command catalogue from `GET /session/:id/commands`.
    *
-   * An enhanced bridge answers an unknown session in band (`status:
-   * "missing"`), so a 404 here can only mean the session route predates the
-   * contract; only then does this fall back to the legacy global list. Rows
-   * are normalized and bounded by the shared protocol normalizer; nothing is
-   * seeded — a successful empty list stays empty.
+   * A current bridge answers an unknown session in band (`status:
+   * "missing"`), so a 404 comes only from a bridge older than the version 1
+   * contract (2.21.0): one from before the route (#599), or a pre-2.21 Pi,
+   * Cursor or Grok bridge that does not hold the session. Either way the
+   * answer is `outdated-bridge`, counted, and never a fallback to a global
+   * list: those legacy routes were retired, and their rows were not this
+   * session's. Without a session there is nothing to read: the answer is
+   * `missing`, with no request. An old bridge's 200 answer (rows without
+   * `catalogueVersion`) is still accepted as non-enhanced rows that run as
+   * typed text. Rows are normalized and bounded by the shared protocol
+   * normalizer; nothing is seeded — a successful empty list stays empty.
    */
   async commandCatalogue(sessionId?: string): Promise<ProviderCommandCatalogue> {
-    const globalRoute =
-      this.agent === "codex" || this.agent === "cursor"
-        ? "/global/slash-commands"
-        : "/plugins/commands";
-    let response = await bridgeFetch(
+    if (!sessionId) return { enhanced: true, status: "missing", commands: [] };
+    const response = await bridgeFetch(
       this.connection,
-      sessionId ? `/session/${encodeURIComponent(sessionId)}/commands` : globalRoute,
+      `/session/${encodeURIComponent(sessionId)}/commands`,
       {},
       this.fetchImpl,
     );
-    if (sessionId && response.status === 404) {
-      response = await bridgeFetch(this.connection, globalRoute, {}, this.fetchImpl);
+    if (response.status === 404) {
+      this.noteOutdatedBridge();
+      throw Object.assign(new Error(`${this.agent} bridge is older than the command catalogue`), {
+        catalogueErrorCode: "outdated-bridge",
+      });
     }
     assertOk(response, `${this.agent} slash command list`);
     const payload = asRecord(

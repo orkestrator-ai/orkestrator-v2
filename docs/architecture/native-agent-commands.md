@@ -68,8 +68,10 @@ one, and no public payload contains a path or a template body.
   retained list the bridge could not refresh), `unsupported` (this integration
   has no provider catalogue) or `missing` (the bridge does not hold the
   session). An enhanced bridge answers an unknown session **in band** with
-  `missing`; a 404 means the route predates this contract. The backend never
-  falls back from a `missing` session to a global list.
+  `missing`; a 404 means the bridge is older than this contract (it predates
+  the route, or it is a pre-2.21 bridge that does not hold the session). The
+  backend reports that as `unavailable` with the error code `outdated-bridge`
+  and counts it; it never falls back to a global list.
 - Enhanced rows without an `id` and `executionKind` are dropped. A bridge
   cannot mint a `session-action`; those are the backend's.
 - Rows are bounded (see `COMMAND_CATALOGUE_LIMITS`): 512 rows, 256-byte names
@@ -155,6 +157,13 @@ The backend merges runtime actions into the provider list
 
 Deduplication is by identity, never by lower-cased display name.
 
+No other shortcuts are planned (decided 2026-10-24 in
+[0016](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md#assumptions-and-decisions)).
+Clearing or starting a session, model and permission changes already have
+composer controls, and a `/review` alias would run a workflow whose scope
+differs from the provider's command. A new shortcut needs its own todo with
+its semantics qualified.
+
 ## Provider support
 
 Support was first qualified from installed SDK declarations and source and
@@ -180,7 +189,7 @@ unavailable with a reason. Re-qualify on every pin change
 | Provider | Discovery | Names | Execution | Catalogue status |
 | --- | --- | --- | --- | --- |
 | Claude | Live `supportedCommands()`, replaced by `commands_changed`; init names as cold fallback; a config-parity probe | SDK spelling and SDK aliases; skills annotated, no `/skill:` rows | `provider-prompt`: canonical name plus verbatim arguments through the query | `ready` only from the session's own query or a push; probe and init lists are `stale` |
-| Codex skills | `skills/list` for the effective cwd | `$name`, alias `/skill:name` | `structured-skill`: `{type:"skill", name, path}` plus a text item | `SkillsListResponse.errors` make the list partial or stale |
+| Codex skills | `skills/list` for the effective cwd | `$name`, alias `/skill:name` | `structured-skill`: `{type:"skill", name, path}` plus a text item | `SkillsListResponse.errors` make the list partial or stale; a child's first answer is `stale` until one settling re-read |
 | Codex templates | Bounded scan of `.codex/prompts` and `~/.codex/prompts` | Relative path | `bridge-template`: `$ARGUMENTS` expansion only | Scan errors reported as truncation |
 | Codex built-ins | Bridge | `/help`, `/models` | `bridge-local` | — |
 | OpenCode | One `command.list({directory})`; refresh reloads the directory instance when idle | Exact server key, case-sensitive, no aliases | `provider-command` via `session.command` with a reserved `messageID` | List errors fail the read; an empty list stays empty; `stale` while a requested reload waits for idle |
@@ -224,7 +233,10 @@ catalogue read cannot let `/clear` reach the CLI.
 - **Claude**: rows are the SDK's own names; `/skill:` is never synthesized.
   Session-changing (`/clear`, `/model`, `/permissions`, `/resume`),
   terminal-only and unqualified commands are listed unavailable, and the bridge
-  also refuses them as typed text. Local command output is persisted as a
+  also refuses them as typed text. The session-changing ones stay unavailable
+  by decision: the composer's model and permission controls, a new tab and the
+  session history already cover them, and running them through the CLI would
+  replace the conversation the bridge tracks. Local command output is persisted as a
   transcript row. Only a turn's init frame names the terminal-only commands
   (`SlashCommand` has no marker), so the bridge remembers the newest list per
   CLI version (`claude-terminal-commands.ts`, persisted under
@@ -235,8 +247,15 @@ catalogue read cannot let `/clear` reach the CLI.
 - **Codex**: skills run as structured `skill` input (`$name`, alias
   `/skill:name`); templates are an Orkestrator compatibility feature with
   bounded discovery and `$ARGUMENTS` only. Inline `` !`…` `` shell spans are
-  disabled. `/help` and `/models` are bridge-local; reserved names cannot be
-  shadowed by a template.
+  disabled for good: there is no shell executor for templates, and none is
+  planned (skills are the supported way to run tools). `/help` and `/models`
+  are bridge-local; reserved names cannot be shadowed by a template.
+  app-server answers the first `skills/list` after it starts before its plugin
+  skills have loaded, and sends no `skills/changed` when they arrive (0.164.0:
+  26 skills for the first 100-300 ms, then 114). So the first answer from each
+  app-server generation is `stale`, and the bridge re-reads once 2 s later
+  (`coldSettleMs` in `commands/skill-inventory.ts`); that answer is
+  authoritative and bumps `commandRevision`.
 - **OpenCode**: one directory-scoped `command.list`; `session.command` with
   the exact server key. The command response arrives only after the whole
   turn, and every failure maps to HTTP 400, so the provider does not abort it
@@ -267,9 +286,15 @@ catalogue read cannot let `/clear` reach the CLI.
   still has no guard of its own: `reload()` fires `session_shutdown`,
   invalidates the runner and resets the API providers, and Pi's terminal still
   refuses `/reload` while streaming. Extension commands wait for idle and take
-  no attachments. Run headless they see `ctx.hasUI === false`, and
-  `ctx.ui.confirm` answers `false` at once rather than blocking (checked live
-  on 1.2.0); an extension that needs an answer has to handle that itself.
+  no attachments. Run headless they see `ctx.hasUI === false`, and every
+  dialog answers at once with no answer (`confirm` is `false`; `select`,
+  `input`, `editor` and `custom` are `undefined`) rather than blocking. That
+  was checked live on 1.2.0 and is pinned against the real SDK runner
+  (`extension-headless-ui.test.ts`, 1.4.0). Pi gives a registered command no
+  way to say it needs a UI, so none is listed unavailable in advance; instead
+  the turn always ends with an outcome row, and one that produced nothing says
+  a command needing a dialog could not show one (`settleCommandRun`). The
+  bridge never binds a UI context, so `hasUI` is never faked.
 - **Grok**: push-only inventory. Grok may push its list before the session is
   attached on the bridge, so the bridge buffers the latest list and applies it
   on attach. A list restored from disk is `stale` and not executable until
@@ -292,15 +317,21 @@ projection is `null` and the picker shows nothing; afterwards
 `HttpBridgeCatalogAdapter` reads `GET /session/:id/commands`. The Claude bridge
 answers a session that has not run a turn from one control-only CLI probe
 (`status: "stale"`) and the picker shows `loading` while the first read is in
-flight, so a current bridge never serves the legacy rows to a new tab. The
+flight, so a new tab only ever shows its own session's rows. The
 probe sends no message (`controlOnlyQuery`): the Agent SDK drops
 `maxTurns: 0`, so a `prompt: ""` probe used to start a real turn.
 
-The legacy global route (`/global/slash-commands` for Codex and Cursor,
-`/plugins/commands` for Claude, Pi and Grok) is read only when the session
-route answers 404, or when `refreshProjectionCommands` runs for a key with no
-stored session; that read is cached under the key `global`, and its projection
-is `null`, so its rows are never shown. Legacy rows are non-enhanced: they get
-a synthetic `legacy:` ID (`legacyCommandId`) and run as typed text, never as a
-selection. Retiring that surface is tracked in
-[0016-slash-command-catalogue.md](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md).
+There is no global catalogue. The legacy routes (`/plugins/commands` on the
+Claude and Pi bridges, `/global/slash-commands` on Codex and Cursor) and the
+Claude filesystem scanner behind the first were retired on 2026-10-24, with the
+backend's fallback to them. A read without a session makes no request
+(`missing`), and an explicit refresh before the session exists reports
+`failed` without starting or reading the provider. A bridge older than the
+contract (2.21.0) answers the session route with 404; its catalogue is
+`unavailable` with `outdated-bridge` until the environment runs a current
+bridge, and each such read is counted per agent
+(`outdatedBridgeCatalogueReadCounts` in `http-bridge-catalog.ts`, with one
+warning per provider instance and no command names). A pre-2.21 bridge that
+does answer the session route sends rows without `catalogueVersion`; those are
+non-enhanced: they get a synthetic `legacy:` ID (`legacyCommandId`) and run as
+typed text, never as a selection.

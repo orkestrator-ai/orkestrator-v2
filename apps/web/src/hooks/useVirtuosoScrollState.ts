@@ -28,7 +28,7 @@ const ACTIVATION_SCROLL_READY_MAX_ATTEMPTS = 30;
  * Bumped when the meaning of a persisted entry changes, so an entry written by
  * another build is dropped rather than misread.
  */
-const PERSISTED_LAYOUT_VERSION = 2;
+const PERSISTED_LAYOUT_VERSION = 3;
 
 interface PersistedEntry {
   version: number;
@@ -42,6 +42,19 @@ interface PersistedEntry {
   anchor: SemanticAnchor | null;
   /** Scroller width the snapshot was measured at. */
   widthPx: number;
+  /**
+   * Window width and root font size at capture. Pixel sizes measured under
+   * another layout are stale after a reflow; the semantic anchor restores the
+   * place instead.
+   */
+  layout: string;
+}
+
+/** Layout the pixel snapshot depends on (window width, text scale). */
+function currentLayoutKey(): string {
+  if (typeof window === "undefined") return "";
+  const font = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  return `${Math.round(window.innerWidth)}:${font}`;
 }
 
 const persistedStates = new Map<string, PersistedEntry>();
@@ -254,10 +267,14 @@ export function useVirtuosoScrollState(
     return () => controller.attachScroller(null);
   }, [controller, scrollerEl]);
 
-  // Always restore the snapshot when one exists: it lands the reader near
+  // Restore the snapshot when its layout still holds: it lands the reader near
   // their place with no flash from the top; activation then catches a
-  // follower up, or settles a detached reader on their semantic anchor.
-  const restoreStateFrom = persisted?.snapshot;
+  // follower up, or settles a detached reader on their semantic anchor. After
+  // a reflow (another window width or text scale) its pixel sizes are stale,
+  // so only the semantic anchor is used.
+  const [restoreStateFrom] = useState(() =>
+    persisted && persisted.layout === currentLayoutKey() ? persisted.snapshot : undefined,
+  );
 
   /** The place captured as this view last deactivated (for a same-mount return). */
   const lastDeactivationAnchor = useRef<SemanticAnchor | null>(null);
@@ -283,6 +300,7 @@ export function useVirtuosoScrollState(
         wantsStick: controller.wantsFollow,
         anchor,
         widthPx,
+        layout: currentLayoutKey(),
       });
     });
   }, [controller, isActive, persistKey, scrollerEl]);

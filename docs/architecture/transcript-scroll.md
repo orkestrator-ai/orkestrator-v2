@@ -119,8 +119,10 @@ element's top relative to the viewport.
 is happening now: the build pipeline transcript and the spec chat.
 
 Persisted entries (bounded LRU, 200) hold the validated Virtuoso snapshot,
-follow intent, the semantic anchor and the scroller width, under a format
-version that drops entries from another build.
+follow intent, the semantic anchor, the scroller width and the layout the
+snapshot was measured under (window width and root font size), under a
+format version that drops entries from another build. After a reflow the
+pixel snapshot is not restored; the semantic anchor places the reader.
 
 ## Tool groups
 
@@ -135,7 +137,8 @@ whose body never exceeds `min(28rem, 55dvh)`, expanded details included.
   Virtuoso viewport (`data-transcript-inner-viewport`). It owns its scroll
   position and follow preference (a live group opens following its newest
   call, a finished one at its first), keeps place across history merges with
-  its own `firstItemIndex`, and protects a selection with the shared bound.
+  its own `firstItemIndex`, and protects a selection (or else focus) with the
+  shared bound.
   Entries are memoized on the member object and keyed by call id.
 - Anchors for members inside an inner viewport are composite: the transcript
   holds the group frame, the inner viewport puts the member back at its

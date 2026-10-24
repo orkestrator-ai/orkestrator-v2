@@ -215,10 +215,12 @@ function VirtualizedToolGroupBody({
   useLayoutEffect(() => {
     baseRef.current = base;
   });
-  // A selection inside an entry keeps that entry mounted while it stays near
-  // the window, with the transcript's own bound; virtualization stays on.
+  // A selection (or, failing that, focus) inside an entry keeps that entry
+  // mounted while it stays near the window, with the transcript's own bound;
+  // virtualization stays on.
   const hostRef = useRef<HTMLDivElement>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
   const [visibleRange, setVisibleRange] = useState<{ startIndex: number; endIndex: number } | null>(
     null,
   );
@@ -235,11 +237,26 @@ function VirtualizedToolGroupBody({
           : null;
       setSelectedIndex(entry ? Number(entry.dataset.toolGroupEntryIndex) : null);
     };
+    const entryIndexOf = (node: EventTarget | null) => {
+      const entry =
+        node instanceof Element ? node.closest<HTMLElement>("[data-tool-group-entry-index]") : null;
+      return entry && host.contains(entry) ? Number(entry.dataset.toolGroupEntryIndex) : null;
+    };
+    const onFocusIn = (event: FocusEvent) => setFocusedIndex(entryIndexOf(event.target));
+    const onFocusOut = (event: FocusEvent) => setFocusedIndex(entryIndexOf(event.relatedTarget));
     host.ownerDocument.addEventListener("selectionchange", onSelectionChange);
-    return () => host.ownerDocument.removeEventListener("selectionchange", onSelectionChange);
+    host.addEventListener("focusin", onFocusIn);
+    host.addEventListener("focusout", onFocusOut);
+    return () => {
+      host.ownerDocument.removeEventListener("selectionchange", onSelectionChange);
+      host.removeEventListener("focusin", onFocusIn);
+      host.removeEventListener("focusout", onFocusOut);
+    };
   }, []);
+  // A selection outranks focus, as in the transcript.
+  const protectedIndex = selectedIndex ?? focusedIndex;
   const keepMounted =
-    selectedIndex === null ? null : keepMountedOverscan(selectedIndex, visibleRange);
+    protectedIndex === null ? null : keepMountedOverscan(protectedIndex, visibleRange);
   const onRange = useCallback(
     (range: ListRange) => {
       const local = {

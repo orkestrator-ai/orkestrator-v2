@@ -192,18 +192,48 @@ test("a selection inside a long group's viewport survives nearby inner scrolling
     selection.removeAllRanges();
     selection.addRange(range);
   });
-  // Let selectionchange deliver, then move a few rows past it: inside the
-  // protection bound (8 rows beyond the visible range), it stays mounted.
+  // Let selectionchange deliver, then move the reader past the inner
+  // overscan (120 px) but inside the protection bound (8 rows beyond the
+  // visible range): it stays mounted only because it is protected.
   await page.waitForTimeout(50);
   const entryHeight = (await entry.boundingBox())!.height;
   await innerScroller.evaluate((element, by) => {
     element.scrollTop += by;
-  }, entryHeight * 5);
+  }, entryHeight * 7.5);
   await page.waitForTimeout(200);
   expect(await held!.evaluate((element) => element.isConnected)).toBe(true);
   expect(
     await page.evaluate(() => document.getSelection()?.toString().length ?? 0),
   ).toBeGreaterThan(0);
+  // Far past it, protection releases and the window stays bounded.
+  await innerScroller.evaluate((element) => {
+    element.scrollTop += 20_000;
+  });
+  await expect.poll(() => held!.evaluate((element) => element.isConnected)).toBe(false);
+  expect(await viewport.locator("[data-tool-group-entry-index]").count()).toBeLessThan(60);
+});
+
+test("focus inside a long group's viewport survives nearby inner scrolling", async ({ page }) => {
+  await page.goto("/streaming-transcript?long=1&bigGroup=1500");
+  await page.getByRole("button", { name: /^Show 1500 tool calls:/ }).click();
+  const viewport = page.locator("[data-transcript-inner-viewport]");
+  const innerScroller = viewport.locator("[data-virtuoso-scroller]");
+  await expect
+    .poll(() => viewport.locator("[data-tool-group-entry-index]").count())
+    .toBeGreaterThan(2);
+  const entry = viewport.locator('[data-tool-group-entry-index="1"]');
+  const control = entry.locator("button, [tabindex]").first();
+  await control.focus();
+  const held = await control.elementHandle();
+  const entryHeight = (await entry.boundingBox())!.height;
+  // Past the inner overscan but inside the protection bound: the focused
+  // control is neither unmounted nor blurred.
+  await innerScroller.evaluate((element, by) => {
+    element.scrollTop += by;
+  }, entryHeight * 7.5);
+  await page.waitForTimeout(200);
+  expect(await held!.evaluate((element) => element.isConnected)).toBe(true);
+  expect(await held!.evaluate((element) => document.activeElement === element)).toBe(true);
   // Far past it, protection releases and the window stays bounded.
   await innerScroller.evaluate((element) => {
     element.scrollTop += 20_000;

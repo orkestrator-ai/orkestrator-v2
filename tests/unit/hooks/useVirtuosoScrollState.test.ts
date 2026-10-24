@@ -1615,6 +1615,39 @@ describe("useVirtuosoScrollState", () => {
       clearPersistedVirtuosoState("sticky-key");
     });
 
+    test("drops the pixel snapshot after a reflow, keeping the semantic place", () => {
+      // Row sizes measured at another window width or text scale are stale:
+      // restoring them would land the reader somewhere arbitrary before the
+      // anchor corrects it. Only the semantic anchor is used then.
+      const persistKey = "reflow-key";
+      const snapshotAtWidth: StateSnapshot = {
+        ranges: [{ startIndex: 0, endIndex: Number.POSITIVE_INFINITY, size: 34 }],
+        scrollTop: 300,
+      };
+      const { result, rerender } = renderHook(
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey }),
+        { initialProps: { isActive: true } },
+      );
+      result.current.virtuosoRef.current = {
+        scrollToIndex: () => {},
+        getState: (cb: (state: any) => void) => cb(snapshotAtWidth),
+      } as any;
+      rerender({ isActive: false });
+
+      const sameLayout = renderHook(() => useVirtuosoScrollState({ persistKey }));
+      expect(sameLayout.result.current.scrollProps.restoreStateFrom).toEqual(snapshotAtWidth);
+
+      const width = window.innerWidth;
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: width + 240 });
+      try {
+        const reflowed = renderHook(() => useVirtuosoScrollState({ persistKey }));
+        expect(reflowed.result.current.scrollProps.restoreStateFrom).toBeUndefined();
+      } finally {
+        Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+        clearPersistedVirtuosoState(persistKey);
+      }
+    });
+
     test("does not persist when no persistKey is provided", () => {
       const { result, rerender } = renderHook(
         ({ isActive }) => useVirtuosoScrollState({ isActive }),

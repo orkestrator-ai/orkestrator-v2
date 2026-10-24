@@ -229,9 +229,12 @@ describe("firstItemIndex with the real virtualizer", () => {
       Array.from({ length: to - from }, (_, offset) => ({ id: `r${from + offset}` }));
     const handle = createRef<VirtuosoHandle>();
     const writes: Writes = { tops: [] };
-    let count = 0;
+    // Read by the instrumented scroller; set from the rendered rows.
+    const count = { current: 0 };
     function List({ messages }: { messages: Row[] }) {
-      count = messages.length;
+      useLayoutEffect(() => {
+        count.current = messages.length;
+      });
       return (
         <VirtuosoMockContext.Provider value={{ viewportHeight: VIEWPORT, itemHeight: ITEM }}>
           <div style={{ height: VIEWPORT }}>
@@ -245,7 +248,7 @@ describe("firstItemIndex with the real virtualizer", () => {
                 atBottomThreshold: 50,
                 restoreStateFrom: undefined,
                 scrollerRef: (element) => {
-                  if (element instanceof HTMLElement) instrument(element, () => count, writes);
+                  if (element instanceof HTMLElement) instrument(element, () => count.current, writes);
                 },
               }}
               virtuosoRef={handle}

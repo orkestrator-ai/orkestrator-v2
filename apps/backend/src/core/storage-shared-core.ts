@@ -64,6 +64,7 @@ import {
   normalizeDebugLogRetentionDays,
 } from "@orkestrator/protocol/debug-logging";
 import { MAX_SSH_AGENT_SOCKET_PATH_CHARS } from "@orkestrator/protocol/ssh-agent-socket";
+import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
 import {
   DEFAULT_NOTIFICATION_SOUND_SETTINGS,
   normalizeNotificationSoundSettings,
@@ -1661,6 +1662,13 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     path.isAbsolute(global.sshAgentSocketPath.trim())
       ? global.sshAgentSocketPath.trim()
       : undefined;
+  const defaultProjectsDirectory =
+    typeof global.defaultProjectsDirectory === "string" &&
+    global.defaultProjectsDirectory.trim().length <= MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS &&
+    !global.defaultProjectsDirectory.includes("\0") &&
+    path.isAbsolute(global.defaultProjectsDirectory.trim())
+      ? global.defaultProjectsDirectory.trim()
+      : undefined;
   const agentMessaging = normalizeAgentMessagingSettings(
     global.agentMessaging,
     config.schemaVersion === 2
@@ -1782,6 +1790,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global.terminalHistoryGlobalRetentionMb === terminalHistoryRetention.globalMb &&
     global.terminalHistoryRetentionDays === terminalHistoryRetention.days &&
     global.sshAgentSocketPath === sshAgentSocketPath &&
+    global.defaultProjectsDirectory === defaultProjectsDirectory &&
     global.useHostGitHubCredentials === useHostGitHubCredentials &&
     JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms) &&
     JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels) &&
@@ -1810,6 +1819,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       terminalHistoryGlobalRetentionMb: terminalHistoryRetention.globalMb,
       terminalHistoryRetentionDays: terminalHistoryRetention.days,
       sshAgentSocketPath,
+      defaultProjectsDirectory,
       useHostGitHubCredentials,
       enabledAgentPlatforms,
       favoriteModels,

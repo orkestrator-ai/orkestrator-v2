@@ -155,7 +155,7 @@ Every same-project message from a tab, a coordinator, or a workflow is given a
 
 | Route | Between | Wakes the recipient? |
 | --- | --- | --- |
-| `coordinator` | The main coordinator and a worker it (or a former main) launched; a coordinator and a tab no coordinator created; main ↔ side agent; workflow (`system`) notices | Yes |
+| `coordinator` | The main coordinator and a worker it (or a former main) launched; a coordinator and a tab no coordinator created; main ↔ side agent; workflow (`system`) notices; [node mail](#node-mail) | Yes |
 | `peer` | Two tabs, neither in an environment a coordinator created (including sibling tabs in one environment) | Yes, while **Wake peers** is on (off by default) |
 | `isolated` | A tab in a coordinator-created environment and anyone other than its own coordinator: sibling workers, a worker and a peer, a worker and another conversation | Only if the recipient's policy is `idle` and inject depth is 0, like unrouted mail |
 
@@ -181,6 +181,22 @@ the address the sender wrote, so a retry still matches after a redirect.
 
 **Side agents** send only to their main coordinator and receive only from it
 (and the user); anything else is `policy-denied`.
+
+### Node mail
+
+Mail between a command node's coordinator and an agent on a node it
+controls ([command-nodes.md](command-nodes.md#coordinators)) crosses the node
+link: the command node delivers coordinator mail with `deliver_node_mail`,
+and collects an agent's mail to `"coordinator"` (or a reply on such a
+thread) from that node's outbox. Each side stores it with a `node` sender
+(`NodeMailActor`): the node, the remote party's role (`coordinator` or
+`agent`) and its address on its own node, and the recipient's own project for
+the same repository. The node link authenticates it, so it is
+`same-project`, takes the `coordinator` route and wakes the recipient; it is
+budgeted as one remote sender (`nodeMailSenderKey`), and a new request
+starts a pair budget as a local delegation does. A leaf agent's report to a
+coordinator waiting on it is held for that remote delegation like a local
+worker's, and released when the delegation settles.
 
 A waking route ignores the default inject policy and inject depth. Only an
 explicit per-tab **Off**, a mute, or the pair hop budget stops it; per-tab

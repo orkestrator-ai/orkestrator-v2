@@ -22,9 +22,9 @@ const usage: PlanUsageSnapshot = {
 };
 let usageResult: PlanUsageSnapshot = usage;
 
-mock.module("@/lib/native/backend", () => ({
-  invoke: mock((command: string, args: Record<string, unknown> = {}) => {
-    calls.push({ command, args });
+function answer(command: string, args: Record<string, unknown>): Promise<unknown> {
+  calls.push({ command, args });
+  {
     switch (command) {
       case "list_agent_accounts":
         return Promise.resolve(snapshot);
@@ -60,6 +60,19 @@ mock.module("@/lib/native/backend", () => ({
       default:
         return Promise.resolve(undefined);
     }
+  }
+}
+
+mock.module("@/lib/native/backend", () => ({
+  invoke: mock((command: string, args: Record<string, unknown> = {}) => {
+    // Another machine's accounts are asked through the command node.
+    if (command === "invoke_on_node") {
+      calls.push({ command, args: { nodeId: args.nodeId, command: args.command } });
+      return answer(String(args.command), (args.args ?? {}) as Record<string, unknown>).then(
+        (result) => ({ outcome: "ok", result }),
+      );
+    }
+    return answer(command, args);
   }),
 }));
 
@@ -70,6 +83,7 @@ afterAll(() => {
 });
 
 const { AgentAccountsSection } = await import("./AgentAccountsSection");
+const { AccountMachineProvider } = await import("./account-machine");
 
 function account(overrides: Partial<AgentAccountSummary>): AgentAccountSummary {
   return {
@@ -122,6 +136,40 @@ function accountOrder(): string[] {
 }
 
 describe("AgentAccountsSection", () => {
+  test("acts on the chosen machine through the command node", async () => {
+    await act(async () => {
+      render(
+        <AccountMachineProvider value={{ machine: "node-leaf", name: "MBP3" }}>
+          <AgentAccountsSection platform="codex" />
+        </AccountMachineProvider>,
+      );
+    });
+    expect(await screen.findByText("Accounts on MBP3")).toBeTruthy();
+    expect(calls).toContainEqual({
+      command: "invoke_on_node",
+      args: { nodeId: "node-leaf", command: "list_agent_accounts" },
+    });
+    expect(calls.some((call) => call.command === "list_agent_accounts" && !call.args.nodeId)).toBe(
+      true,
+    );
+    const second = await screen.findByRole("listitem", { name: "second@example.com" });
+    await act(async () => {
+      fireEvent.click(within(second).getByRole("button", { name: "Use" }));
+    });
+    expect(calls).toContainEqual({
+      command: "invoke_on_node",
+      args: { nodeId: "node-leaf", command: "set_active_agent_account" },
+    });
+    // Nothing went to this window's own backend directly.
+    expect(
+      calls.filter(
+        (call, index) =>
+          call.command === "set_active_agent_account" &&
+          calls[index - 1]?.command !== "invoke_on_node",
+      ),
+    ).toEqual([]);
+  });
+
   test("forces a Claude usage reread when the credential refresh token changes", async () => {
     const view = render(<AgentAccountsSection platform="claude" reloadToken={0} />);
     await screen.findByText("5-hour limit");

@@ -1,5 +1,6 @@
 import {
   isAgentAccountPlatform,
+  isHostSignInPlatform,
   type AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
 
@@ -23,6 +24,9 @@ import {
   startAgentAccountLogin,
   submitAgentAccountLoginCode,
 } from "./agent-accounts.js";
+import { listMachineAgentAccounts } from "./agent-accounts-machines.js";
+import { readSessionAgentAccount } from "./agent-accounts-session.js";
+import { openAgentSignInTerminal, readHostAgentSignIns } from "./agent-sign-ins.js";
 import { openCodeProviderLogin, openCodeProviderLoginProgress } from "./opencode-provider-login.js";
 
 function asAccountPlatform(value: unknown): AgentAccountPlatform {
@@ -45,6 +49,39 @@ export function registerAgentAccountCommands(
   register("list_agent_accounts", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
     return listAgentAccounts(context);
+  });
+  register("list_machine_agent_accounts", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    return listMachineAgentAccounts(context);
+  });
+  /** Grok's and Pi's login on this machine, from files and variable names only. */
+  register("read_host_agent_sign_ins", async (args) => {
+    assertOnlyKeys(args, [], "arguments");
+    return readHostAgentSignIns();
+  });
+  /** A terminal tab on this machine running the platform's own fixed login command. */
+  register("open_agent_sign_in_terminal", async (args, context) => {
+    assertOnlyKeys(args, ["platform", "environmentId"], "arguments");
+    const platform = asNonBlankString(args.platform, "platform");
+    if (!isHostSignInPlatform(platform)) {
+      throw new Error(`A terminal sign-in is not offered for ${platform}`);
+    }
+    return openAgentSignInTerminal(context, platform, {
+      environmentId: asOptionalString(args.environmentId),
+      launchTerminalJob: async (jobArgs) => {
+        const launch = dependencies.commands.get("launch_terminal_job");
+        if (!launch) throw new Error("Terminal jobs are unavailable");
+        return (await launch(jobArgs, context)) as { tabId: string };
+      },
+    });
+  });
+  register("get_native_agent_session_account", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "agent"], "arguments");
+    return readSessionAgentAccount(
+      context,
+      asNonBlankString(args.environmentId, "environmentId"),
+      asNonBlankString(args.agent, "agent"),
+    );
   });
   register("set_active_agent_account", async (args, context) => {
     assertOnlyKeys(args, ["platform", "accountId"], "arguments");

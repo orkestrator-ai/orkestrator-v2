@@ -78,7 +78,10 @@ older backends wrote) is owned by
   `bridge-session-close.ts` (two), `http-bridge-progressive.ts`,
   `native-agent-transcript-projection.ts`, `http-bridge-runtime-health.ts`,
   `mcp-management/evidence.ts`, `multi-review-reviewer-transcript.ts`,
-  `gateway-proxy.ts` and `storage-native.ts`.
+  `gateway-proxy.ts` and `storage-native.ts`. The slash-catalogue legacy
+  routes were retired by 0016; session-route 404 rejections now record
+  `slash-catalogue.outdated-bridge`, alongside the per-agent count and
+  warning, without reading a global list.
 
 ## Outstanding work
 

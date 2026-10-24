@@ -290,3 +290,12 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - **Owning-file rerun:** `mise run test:logged -- --name env-move-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed twice (35.4 s and 36.7 s logged).
 - **Evidence:** `orkestrator-test-run.EveQv4/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Changes:** recorded evidence only; no test, timeout, assertion or skip changed.
+
+
+## Remote coordination and project copy review fixes — 2026-10-24
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`, on `coordinator-repo-environments-88e7fd2fdb7a-r1`, macOS arm64, Bun 1.4.3. Workspace/root/bridges/protocol reserved 4/1/2/1 workers, with two isolated backend workers; component browser validation ran concurrently.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded its five-second deadline (5044.44 ms), followed by termination of a dangling subprocess. The owning file and move implementation were unchanged.
+- **Complete unchanged owner:** `mise run test:logged -- --name move-recovery-recheck -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 11.1 seconds.
+- **Evidence:** `orkestrator-test-run.mrtrrc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. The aggregate's separate OpenCode version assertions expect 1.19.0 while the installed CLI reports 1.19.4; those failures are not classified as flakes.
+- **Assessment:** recurrence of the known aggregate deadline failure. No assertion, timeout, skip, or move code changed; host contention remains a hypothesis.

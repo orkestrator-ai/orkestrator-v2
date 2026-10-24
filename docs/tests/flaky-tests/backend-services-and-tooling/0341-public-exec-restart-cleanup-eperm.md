@@ -64,3 +64,11 @@
 - **Partial aggregate results:** web reported 8,818 passed, 10 skipped and zero failed; desktop reported 1,197 passed, 14 skipped and one failed (0694); root/support reported 3,376 passed, two failed and one error (Pi staging and disk-report timeouts). Backend totals are unavailable: the outer logger reached its 1,800-second deadline after workspace admission had waited 1,075.3 seconds. This run does not establish complete backend validation.
 - **Evidence:** `orkestrator-test-run.x5x58l/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.NEAVB6/draft-fix-suite.log.gz` below the host temporary directory. The child log was compressed after the outer watchdog stopped the process tree.
 - **Assessment:** another confirmed intermittent cleanup failure. No public API implementation, assertion, timeout or skip changed.
+
+## Transcript scroll main merge — 2026-10-24
+
+- **Original command:** `ORKESTRATOR_TEST_AREA_BASE=f12cc5a5382417bf1bfbda2a7fd93e0d6013aa95 mise run test:logged -- --name merge-repository -- mise run test` on `improve-scroll-smoothness-c791b057f3a2-r1`, merging parents `623df8ed5f24b5a26d7459809b348b8094987006` and `5282e441ab46bc47aa1a6eafcf71af917729278e`. Workspace/root/bridges/protocol used 4/1/2/1 worker slots; component and isolated-stack browser suites shared the host.
+- **Failure:** `environment.exec > the worker survives a backend restart and its result is reconciled, not re-run` failed during cleanup with `EPERM` removing `/tmp/ork-public-api-0Ay6I1` at `test-support.ts:143` (1139.44 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-public-exec-owner -- bun test --cwd apps/backend ./src/core/public-api/public-api-exec.test.ts --parallel=1 --only-failures` passed, exit 0 (17.0 s logged).
+- **Evidence:** `orkestrator-test-run.k5J28D/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate finalization.
+- **Assessment:** recurrence of the existing cleanup flake; host contention is a hypothesis. The test, support helper, assertions, deadlines and skips were unchanged from both merge parents.

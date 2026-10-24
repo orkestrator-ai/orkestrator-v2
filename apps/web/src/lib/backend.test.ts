@@ -1915,6 +1915,8 @@ describe("backend command wrapper coverage", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockImplementation(async (command: unknown) => {
+      // Machine-scoped wrappers reach the same boundary through the portal.
+      if (command === "invoke_on_node") return { outcome: "ok", result: undefined };
       if (command === "read_file_base64") return btoa("binary");
       if (command === "await_bridge_ready") {
         return { status: "ready", port: 4321, authToken: "token" };
@@ -2230,7 +2232,10 @@ describe("backend command wrapper coverage", () => {
     for (const [name, wrapper] of commandWrappers) {
       invokeMock.mockClear();
       const args = Array.from({ length: wrapper.length }, () => "value");
-      await wrapper(...args);
+      // Only reaching invoke is asserted. A wrapper that takes a machine routes
+      // a "value" machine through the command node and then rejects the mock's
+      // empty answer, after the call.
+      await wrapper(...args).catch(() => undefined);
       expect(invokeMock.mock.calls.length, `${name} must call invoke`).toBeGreaterThan(0);
     }
   });

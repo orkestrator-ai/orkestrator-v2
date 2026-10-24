@@ -19,8 +19,8 @@
  * each path's owner and removal condition.
  */
 export const COMPATIBILITY_PATH_IDS = [
-  /** A session-route 404 sent the catalogue read to `/plugins/commands` or `/global/slash-commands`. */
-  "slash-catalogue.legacy-route",
+  /** A session-route 404 was rejected as an outdated bridge, without reading a legacy route. */
+  "slash-catalogue.outdated-bridge",
   /** A bridge without `POST /session/:id/close` was closed through its legacy DELETE. */
   "bridge-close.legacy-delete",
   /** A bridge without the close route and with a destructive DELETE got the restart notice. */

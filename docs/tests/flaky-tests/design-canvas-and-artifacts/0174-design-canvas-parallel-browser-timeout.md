@@ -179,3 +179,22 @@ Branch `todo-0036-design-canvas-qualification-1477f37ca3cf` from `b83ae534`, on 
 - **Complete unchanged owner:** `mise run test:logged -- --name design-canvas-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output=output/playwright/design-owner` passed both viewport cases, exit 0 in 39.9 seconds.
 - **Evidence:** host temporary directory `orkestrator-test-run.QC9tF3/browser-suite.log.gz`; original traces under `output/playwright/test-results/DesignCanvas-*`. The sidebar fixes are commit `6d6f9b83f`; its final focused browser rerun passed all 30 cases.
 - **Assessment:** confirmed intermittent recurrence. Host or fixture contention remains a hypothesis. No canvas implementation, assertion, timeout or skip changed; the original aggregate remains failed.
+
+
+## Leaf coordinator review validation — 2026-10-24
+
+- `mise run test:logged -- --name browser-tests -- mise run test:browser` ran nine workers alongside repository checks: 537 passed, 101 skipped and four failed (282.4 s). The unchanged mobile canvas case could not find Element inspector at line 98 within five seconds. The other failures were mobile design history and both native branch-suggestion cases; see [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md).
+- The complete unchanged owner passed both viewport cases alone: `ORKESTRATOR_E2E_PORT=14373 mise run test:logged -- --name canvas-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output=output/playwright/canvas-owner` (exit 0, 16.3 s).
+- Evidence: host temporary artifact `orkestrator-test-run.E4tM8D/browser-tests.log.gz`. No canvas implementation, assertion, timeout or skip changed. Shared-host or fixture contention remains a hypothesis; the original aggregate remains failed.
+
+
+## Leaf grouping main merge — 2026-10-24
+
+- `ORKESTRATOR_E2E_PORT=53444 ORKESTRATOR_PUBLIC_E2E_PORT=53445 mise run test:logged -- --name merge-browser -- mise run test:browser` ran nine workers alongside repository validation on the shared host: 544 passed, 102 skipped and six failed in 9.4 minutes. Both canvas viewport cases exceeded the 30-second deadline; mobile was waiting to click Close inspector.
+- `ORKESTRATOR_E2E_PORT=59580 mise run test:logged -- --name merge-design-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output=output/agent-testing/merge-design-owner` passed the complete unchanged owner, exit 0 in 34.3 s.
+- Evidence: host temporary artifact `orkestrator-test-run.EtTM9R/merge-browser.log.gz`; original traces under `output/playwright/test-results/`. No implementation, assertion, timeout or skip changed. The original aggregate remains failed; see [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md) for the other owners.
+
+
+## Mixed-version compatibility main merge — 2026-10-24
+
+Both viewport cases exceeded the 30-second deadline in the nine-worker component aggregate (565 passed, 102 skipped, 15 failed). The complete unchanged owner passed with one worker on port 55723 in 45.7 s. Full commands, worker configuration, original failures and artifacts are recorded in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#mixed-version-compatibility-main-merge--2026-10-24). No assertion, timeout or skip changed.

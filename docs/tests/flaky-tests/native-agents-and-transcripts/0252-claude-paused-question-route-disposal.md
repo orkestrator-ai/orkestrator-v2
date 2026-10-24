@@ -55,3 +55,14 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Assessment:** confirmed intermittent recurrence. No implementation, assertion, timeout or skip changed. The public-site suite, blocked by the component failure in the combined task, passed separately (12.0 seconds).
 
 The separate native branch-selection owner rerun also failed unchanged at both viewport widths (two passed, two failed, 21.3 seconds): `mise run test:logged -- --name native-branch-browser-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1`. The input remained `rel` instead of `release/2.0`. This observation does not establish a flake for native branch selection. Evidence: `orkestrator-test-run.vQfkZW/native-branch-browser-isolated.log.gz`.
+
+## Transcript scroll smoothness validation — 2026-10-24
+
+- `mise run test:logged -- --name scroll-browser -- mise run test:browser`
+  (528 passed, 101 skipped, 3 failed) failed the desktop case with
+  `apiRequestContext.fetch: Target page, context or browser has been closed`
+  while running a route callback — the same response disposal.
+- The unchanged owning file passed alone with one worker on both this branch
+  and its base commit `f12cc5a53`:
+  `bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts e2e/ClaudeInteractions.spec.ts --workers=1`
+  (ClaudeInteractions cases all passed).

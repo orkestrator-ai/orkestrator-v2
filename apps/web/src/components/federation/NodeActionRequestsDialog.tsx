@@ -16,6 +16,7 @@ import {
   type NodeActionRequestView,
 } from "@/lib/portal/portal-store";
 import { portalListenAuthoritative } from "@/lib/portal/portal-transport";
+import { useProjectCopyStore } from "@/stores/projectCopyStore";
 import { useFederation } from "./FederationProvider";
 
 export const NODE_ACTION_REQUESTS_CHANGED_EVENT = "node-action-requests-changed";
@@ -26,7 +27,7 @@ function targetLabel(request: NodeActionRequestView): string {
       request.kind === "delete-environment"
         ? `“${target.environmentName ?? target.environmentId}” on ${target.nodeName}`
         : request.kind === "create-project"
-          ? `${target.projectName ?? target.gitRemote ?? "a project"} on ${target.nodeName} at ${target.location}`
+          ? `${target.projectName ?? target.gitRemote ?? "a project"} to ${target.nodeName}${target.location ? ` at ${target.location}` : ""}`
           : `${(target.files ?? []).join(", ")}${target.keys?.length ? ` (${target.keys.join(", ")})` : ""} on ${target.nodeName}`,
     )
     .join(", ");
@@ -34,7 +35,7 @@ function targetLabel(request: NodeActionRequestView): string {
 
 const TITLES: Record<NodeActionRequestView["kind"], string> = {
   "delete-environment": "Delete",
-  "create-project": "Create project",
+  "create-project": "Copy",
   "update-project-files": "Update project files",
   "reveal-env-value": "Show a value in plain text",
 };
@@ -46,7 +47,9 @@ const TITLES: Record<NodeActionRequestView["kind"], string> = {
  * names every node and environment involved.
  */
 export function NodeActionRequestsDialog() {
-  const { kind } = useFederation();
+  const { kind, portalState } = useFederation();
+  const copyRequest = useProjectCopyStore((state) => state.request);
+  const openCopy = useProjectCopyStore((state) => state.open);
   const [pending, setPending] = useState<NodeActionRequestView[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -79,7 +82,22 @@ export function NodeActionRequestsDialog() {
 
   const request = pending[0];
   if (!request) return null;
+  // A copy request is reviewed in the copy dialog, where the user settles
+  // the location and files before approving.
+  if (copyRequest?.actionRequestId === request.requestId) return null;
   const label = targetLabel(request);
+  const reviewCopy =
+    request.kind === "create-project" && request.requestedBy && portalState.selfId
+      ? () =>
+          openCopy({
+            source: { nodeId: portalState.selfId!, projectId: request.requestedBy!.projectId },
+            targetNodeId: request.targets[0]?.nodeId,
+            ...(request.targets[0]?.location ? { location: request.targets[0].location } : {}),
+            paths: request.targets[0]?.files ?? [],
+            actionRequestId: request.requestId,
+            ...(request.reason ? { reason: request.reason } : {}),
+          })
+      : null;
 
   const decide = async (decision: "approve" | "reject") => {
     setBusy(true);
@@ -121,16 +139,22 @@ export function NodeActionRequestsDialog() {
           <AlertDialogCancel disabled={busy} onClick={() => void decide("reject")}>
             Reject
           </AlertDialogCancel>
-          <Button
-            type="button"
-            variant={request.kind === "delete-environment" ? "destructive" : "default"}
-            disabled={busy}
-            onClick={() => void decide("approve")}
-          >
-            {request.kind === "delete-environment"
-              ? `Delete on ${request.targets.map((target) => target.nodeName).join(", ")}`
-              : "Approve"}
-          </Button>
+          {reviewCopy ? (
+            <Button type="button" disabled={busy} onClick={reviewCopy}>
+              Review and copy…
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant={request.kind === "delete-environment" ? "destructive" : "default"}
+              disabled={busy}
+              onClick={() => void decide("approve")}
+            >
+              {request.kind === "delete-environment"
+                ? `Delete on ${request.targets.map((target) => target.nodeName).join(", ")}`
+                : "Approve"}
+            </Button>
+          )}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

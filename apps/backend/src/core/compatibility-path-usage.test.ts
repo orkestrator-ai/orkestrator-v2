@@ -69,17 +69,17 @@ describe("CompatibilityPathUsage", () => {
     const time = clock();
     const first = new CompatibilityPathUsage(time.now);
     const firstSink = compatibilityPathUsageDatabaseSink(dir);
-    first.record("slash-catalogue.legacy-route");
+    first.record("slash-catalogue.outdated-bridge");
     first.attach(firstSink);
-    first.record("slash-catalogue.legacy-route");
+    first.record("slash-catalogue.outdated-bridge");
     first.detach(firstSink);
 
     time.advance(60_000);
     const second = new CompatibilityPathUsage(time.now);
     const secondSink = compatibilityPathUsageDatabaseSink(dir);
     second.attach(secondSink);
-    second.record("slash-catalogue.legacy-route");
-    expect(second.snapshot().paths["slash-catalogue.legacy-route"]).toEqual({
+    second.record("slash-catalogue.outdated-bridge");
+    expect(second.snapshot().paths["slash-catalogue.outdated-bridge"]).toEqual({
       count: 3,
       firstSeenAt: "2026-10-24T10:00:00.000Z",
       lastSeenAt: "2026-10-24T10:01:00.000Z",
@@ -92,7 +92,7 @@ describe("CompatibilityPathUsage", () => {
       expect(database.readStore(COMPATIBILITY_PATH_USAGE_STORE)?.value).toEqual({
         version: 1,
         paths: {
-          "slash-catalogue.legacy-route": {
+          "slash-catalogue.outdated-bridge": {
             count: 3,
             firstSeenAt: "2026-10-24T10:00:00.000Z",
             lastSeenAt: "2026-10-24T10:01:00.000Z",

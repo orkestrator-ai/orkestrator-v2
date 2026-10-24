@@ -7,7 +7,10 @@ import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
-import { MAX_AGENT_ACCOUNTS_PER_PLATFORM } from "@orkestrator/protocol/agent-accounts";
+import {
+  AGENT_ACCOUNTS_CHANGED_EVENT,
+  MAX_AGENT_ACCOUNTS_PER_PLATFORM,
+} from "@orkestrator/protocol/agent-accounts";
 
 import {
   agentAccountLoginProgress,
@@ -157,7 +160,11 @@ function usageReading(platform: "claude" | "codex", usedPercent = 42): PlanUsage
   };
 }
 
+/** Every event the backend announced during a test. */
+let emitted: Array<{ event: string; payload: unknown }> = [];
+
 beforeEach(async () => {
+  emitted = [];
   root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "ork-agent-accounts-")));
   process.env.CODEX_HOME = path.join(root, "host-codex");
   process.env.CLAUDE_CONFIG_DIR = path.join(root, "host-claude");
@@ -171,6 +178,7 @@ beforeEach(async () => {
     storage,
     runtimeFlavor: "agent-test",
     credentialSources: new Set(),
+    emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
   } as unknown as CommandContext;
   resetAgentAccountLoginForTests();
   terminalAccountHomes.clear();
@@ -849,6 +857,22 @@ describe("agent accounts", () => {
       spy.mockRestore();
     }
     await removeAgentAccount(context, "codex", accountId!);
+  });
+
+  test("announces every change to the accounts, and nothing for a switch to the same one", async () => {
+    const changes = () =>
+      emitted.filter((entry) => entry.event === AGENT_ACCOUNTS_CHANGED_EVENT).map((e) => e.payload);
+    const { accountId } = await addCodexAccount("second@example.com", "acct-2");
+    expect(changes()).toEqual([{ platform: "codex" }]);
+    await setActiveAgentAccount(context, "codex", accountId!);
+    await setActiveAgentAccount(context, "codex", accountId!);
+    expect(changes()).toHaveLength(2);
+    await renameAgentAccount(context, "codex", accountId!, "Work");
+    await setActiveAgentAccount(context, "codex", "default");
+    await removeAgentAccount(context, "codex", accountId!);
+    expect(changes()).toEqual(Array.from({ length: 5 }, () => ({ platform: "codex" })));
+    // The announcement only says that something changed.
+    expect(emitted.every((entry) => !JSON.stringify(entry.payload).includes("@"))).toBe(true);
   });
 
   test("rejects unknown accounts and renames added ones", async () => {

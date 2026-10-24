@@ -460,15 +460,18 @@ old Codex bridge asked about a session it does not hold. Both are covered.
 - **New backend, old bridge** (`apps/backend/src/core/http-bridge-commands.test.ts`,
   all five bridges): pre-#827 rows read as non-enhanced `legacy:` rows that run
   as typed text, and a guessed enhanced id is refused with nothing sent; a 404
-  falls back per read (never stickily) to the agent's legacy route, and ACP,
-  which has none, reads `unavailable`; old Claude `"/name - description"`
-  strings keep only bare names, so no built-in row survives; a version 1 body
+  fell back per read (never stickily) to the agent's legacy route, and ACP,
+  which has none, read `unavailable`; old Claude `"/name - description"`
+  strings kept only bare names, so no built-in row survived. Since 2026-10-24
+  (0016) there is no fallback: a 404 reads `unavailable` with
+  `outdated-bridge`, per read, and the legacy routes are gone; a version 1 body
   without its optional fields stays enhanced; an unknown `catalogueVersion`
   degrades to display rows; a malformed body is `unavailable` and keeps any
   held list as `stale`; a snapshot without `commandRevision` triggers nothing.
-- **Old backend, new bridge** (each bridge's route tests): the legacy routes,
-  session catalogue, snapshot and a prompt body without command flags are
-  still readable; `commandRevision` is additive; ACP still has no legacy route.
+- **Old backend, new bridge** (each bridge's route tests): the session
+  catalogue, snapshot and a prompt body without command flags are still
+  readable; `commandRevision` is additive. The legacy routes answered too until
+  0016 retired them on 2026-10-24; they now 404, as ACP's always did.
 - **Renderer and backend** (`commands-validation.test.ts`,
   `useNativeAgentSession.commands.test.tsx`, `workflows.commands.test.ts`,
   `useSlashCommandMenu.test.tsx`, `SlashCommandMenu.test.tsx`,
@@ -715,6 +718,17 @@ file passed in containers at low load earlier the same day.
    backend while watching for "Invalid native agent projection update
    response". Move the target to the floor if it has moved by the time this
    runs.
+
+   - Partial evidence (2026-10-24, 0016): the real ACP and Cursor bridges
+     built from `ff4026b4e^` (2.16.3) were run beside the current ones and
+     read through each side's real `HttpBridgeCatalogAdapter`. Current backend,
+     old bridge: one session-route request, 404, `unavailable` with
+     `outdated-bridge`, no legacy route read. Old backend, current bridge: an
+     unknown session answered 200 with an empty list (no fallback); a read
+     without a session got a 404 from the retired global route. A held session
+     on the old ACP bridge could not be created against today's Grok CLI
+     ("Invalid params"), and the Claude probe, the renderer bundle and sync-v1
+     are still unrun.
 
 ## Constraints and rationale
 

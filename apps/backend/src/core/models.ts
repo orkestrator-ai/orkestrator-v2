@@ -959,6 +959,12 @@ export interface AppConfig {
     /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
     sshAgentSocketPath?: string;
     /**
+     * Absolute directory new projects are cloned into on this machine, for
+     * example when a project is copied here from another machine. Absent
+     * means the most common parent of the existing projects, else `~/Projects`.
+     */
+    defaultProjectsDirectory?: string;
+    /**
      * Deliver the host's Claude Code OAuth credential into containers.
      *
      * Defaults to on, which is what keeps a container agent signed in. Turning

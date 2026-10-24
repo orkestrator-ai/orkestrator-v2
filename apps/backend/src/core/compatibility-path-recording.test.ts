@@ -9,8 +9,8 @@ import { olderBridgeOutcome } from "./mcp-management/evidence.js";
 
 const count = (id: CompatibilityPathId) => compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
 
-test("catalogue fallback counts the legacy read and leaves current reads uncounted", async () => {
-  const id = "slash-catalogue.legacy-route";
+test("catalogue rejection counts every outdated bridge read and leaves current reads uncounted", async () => {
+  const id = "slash-catalogue.outdated-bridge";
   const before = count(id);
   const current = httpProvider(() =>
     Response.json({ catalogueVersion: 1, status: "ready", commands: [] }),
@@ -24,8 +24,16 @@ test("catalogue fallback counts the legacy read and leaves current reads uncount
         : Response.json({ commands: [] }),
     codexConnection,
   );
-  await legacy.provider.commandCatalogue!("session-1");
+  await expect(legacy.provider.commandCatalogue!("session-1")).rejects.toMatchObject({
+    catalogueErrorCode: "outdated-bridge",
+  });
   expect(count(id)).toBe(before + 1);
+  await expect(legacy.provider.commandCatalogue!("session-1")).rejects.toMatchObject({
+    catalogueErrorCode: "outdated-bridge",
+  });
+  expect(count(id)).toBe(before + 2);
+  expect(legacy.requests).toHaveLength(2);
+  expect(legacy.requests.every((request) => request.url.includes("/session/"))).toBe(true);
 });
 
 test("retaining close only counts the legacy branch it takes", async () => {

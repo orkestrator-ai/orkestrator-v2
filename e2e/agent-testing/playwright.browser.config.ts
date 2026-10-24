@@ -26,6 +26,7 @@ export default defineConfig({
     "opencode-live.spec.ts",
     "close-retention-live.spec.ts",
     "slash-command-inactive.spec.ts",
+    "slash-command-picker.spec.ts",
     "mcp-apply-inactive.spec.ts",
     "multi-review-live.spec.ts",
     "transcript-paging-live.spec.ts",

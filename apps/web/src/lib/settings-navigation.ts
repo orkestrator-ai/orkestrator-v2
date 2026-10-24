@@ -61,6 +61,20 @@ export function onGlobalSettingsRequest(
   return () => window.removeEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, handle);
 }
 
+const GLOBAL_SETTINGS_CLOSE_EVENT = "orkestrator:close-global-settings";
+
+/** Close the global settings surface, for an action inside it that moves the user elsewhere. */
+export function requestCloseGlobalSettings(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(GLOBAL_SETTINGS_CLOSE_EVENT));
+}
+
+export function onGlobalSettingsCloseRequest(listener: () => void): () => void {
+  if (typeof window === "undefined") return () => undefined;
+  window.addEventListener(GLOBAL_SETTINGS_CLOSE_EVENT, listener);
+  return () => window.removeEventListener(GLOBAL_SETTINGS_CLOSE_EVENT, listener);
+}
+
 const MACHINE_UPDATES_REQUEST_EVENT = "orkestrator:open-machine-updates";
 let machineUpdatesPending = false;
 

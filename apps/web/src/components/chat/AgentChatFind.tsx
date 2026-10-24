@@ -28,7 +28,7 @@ interface UseAgentChatFindOptions<TItem> {
   getSearchText: (item: TItem) => string;
   isActive: boolean;
   ownerRef: RefObject<HTMLElement | null>;
-  onNavigate: (match: AgentChatFindMatch) => void;
+  onNavigate: (match: AgentChatFindMatch, query: string) => void;
 }
 
 interface AgentChatFindBarProps {
@@ -160,8 +160,8 @@ export function useAgentChatFind<TItem>({
 
   useEffect(() => {
     if (!isActive || !isOpen || !currentMatch) return;
-    onNavigate(currentMatch);
-  }, [currentMatch, isActive, isOpen, onNavigate]);
+    onNavigate(currentMatch, query);
+  }, [currentMatch, isActive, isOpen, onNavigate, query]);
 
   useEffect(() => {
     if (!isActive) return;

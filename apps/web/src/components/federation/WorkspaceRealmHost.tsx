@@ -16,6 +16,7 @@ import {
 } from "@/lib/federation/workspace-realm";
 import { useConfigStore } from "@/stores/configStore";
 import { useProjectStore } from "@/stores/projectStore";
+import { useRealmShellStore } from "@/stores/realmShellStore";
 import { useUIStore } from "@/stores/uiStore";
 
 /**
@@ -75,6 +76,10 @@ export function WorkspaceRealmHost() {
         // The window's sidebar: the toolbar here shows and toggles it.
         if (message.type === "sidebar" && useUIStore.getState().sidebarOpen !== message.open) {
           useUIStore.setState({ sidebarOpen: message.open });
+        }
+        // The window's grouping decides whether this node's coordinator opens directly.
+        if (message.type === "grouping") {
+          useRealmShellStore.setState({ grouping: message.grouping });
         }
       }),
     [],

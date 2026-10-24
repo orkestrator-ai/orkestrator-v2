@@ -465,8 +465,8 @@ mock.module("react-virtuoso", () => ({
           visibleData.map((item: any, localIndex: number) => {
             const index = offset + localIndex;
             return (
-              <div key={props.computeItemKey?.(index, item) ?? index}>
-                {props.itemContent(index, item)}
+              <div key={props.computeItemKey?.((props.firstItemIndex ?? 0) + index, item) ?? index}>
+                {props.itemContent((props.firstItemIndex ?? 0) + index, item)}
               </div>
             );
           })

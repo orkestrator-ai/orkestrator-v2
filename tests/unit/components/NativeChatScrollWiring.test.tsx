@@ -170,7 +170,8 @@ describe("native chat scroll wiring", () => {
         isActive: false,
         persistKey: `env-env-${platform}:tab-${platform}`,
         environmentId: `env-${platform}`,
-        stickToBottomOnActivation: true,
+        activation: "respect-intent",
+        explicitTargetPending: false,
       });
     },
   );
@@ -184,7 +185,7 @@ describe("native chat scroll wiring", () => {
       isActive: false,
       persistKey: "claude-tmux-env:env-tmux:tab:tab-tmux",
       environmentId: "env-tmux",
-      stickToBottomOnActivation: true,
+      activation: "respect-intent",
     });
   });
 
@@ -203,7 +204,7 @@ describe("native chat scroll wiring", () => {
       isActive: false,
       persistKey: "build-pipeline:pipeline-1",
       environmentId: "env-build",
-      stickToBottomOnActivation: true,
+      activation: "latest",
     });
   });
 

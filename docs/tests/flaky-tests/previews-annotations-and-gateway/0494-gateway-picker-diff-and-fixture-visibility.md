@@ -64,3 +64,15 @@ within 30 seconds. It also repeated the narrow Repository settings click timeout
 does not establish a new flaky classification. Exact commands and evidence are
 recorded in [0224](0224-host-picker-narrow-tools-popover.md#sidebar-collision-main-merge--2026-10-22).
 Both disposable profiles were stopped and reset; no owning source or test changed.
+
+
+## Latest-main refresh of per-machine accounts — 2026-10-24
+
+- **Parents:** merge `e25b6123` and main `553da7f54`.
+- **Original command:** `mise run test:logged -- --name update-main-isolated-browser -- mise run test:agent:browser:isolated`, one worker in credential-free Codex profile `qa-browser-bcd7c9c1-ad3`, alongside repository/component suites.
+- **Failure:** `capped file tree retains source files and shows incomplete folders after reload` could not find the `build` folder button within five seconds at `browser-gateway.spec.ts:777`, called from line 803. The narrow host-picker case passed in this run.
+- **Complete unchanged owner:** fresh credential-free Codex fixture `update-gateway-cb5bcc4a`; `ORKESTRATOR_AGENT_TEST_PROFILE=update-gateway-cb5bcc4a ORKESTRATOR_AGENT_TEST_RUN_ID=update-gateway-cb5bcc4a mise run test:logged -- --name update-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` passed all fourteen active cases with ten opt-in skips (116.2 s logged), including both picker viewports, capped-tree reload, account recovery and inactive-environment recovery.
+- **Evidence:** `orkestrator-test-run.3h0xtJ/update-main-isolated-browser.log.gz` under the host temporary directory after suite completion; original browser artifacts under `output/agent-testing/qa-browser-bcd7c9c1-ad3/browser/`.
+- **Assessment:** confirms intermittence in the capped-tree observation on this combined tree. No gateway implementation, assertion, timeout or skip changed during conflict resolution.
+
+- **Full-suite outcome:** 28 passed, 53 opt-in skips and only the capped-tree failure (534.6 s logged including lifecycle). Teardown also rejected an oversized artifact at its sanitization byte limit; this is a separate artifact failure. The one-shot runner stopped/reset `qa-browser-bcd7c9c1-ad3`, and its profile directory was confirmed absent. Manual owner profile `update-gateway-cb5bcc4a` was also stopped and reset; no live profile or disposable state was retained.

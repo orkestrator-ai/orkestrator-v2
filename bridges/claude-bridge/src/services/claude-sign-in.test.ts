@@ -97,14 +97,17 @@ describe("Claude prompt admission", () => {
     expect((await readClaudeAuthStatus()).state).toBe("needs-auth");
   });
 
-  test("a refused turn with a credential present stays a turn error", async () => {
+  test("a refused turn with a credential present reads as expired without locking", async () => {
     // An expired login still has a source; the probe cannot tell it from a good one.
     queryControlOverrides.accountInfo = mock(async () => ({ tokenSource: "claude.ai" }));
 
     await refuseTurnForMissingLogin();
 
-    expect((await readClaudeAuthStatus()).state).toBe("signed-in");
+    expect((await readClaudeAuthStatus()).state).toBe("expired");
     expect(claudeReadiness()).toBeUndefined();
+    // A model answering again proves the login works.
+    noteClaudeAuthenticationWorked();
+    expect((await readClaudeAuthStatus()).state).toBe("signed-in");
   });
 
   test("a failed account read never locks", async () => {
@@ -296,4 +299,29 @@ describe("Claude auth status carries no credential", () => {
       }
     }
   });
+});
+
+test("a fresh probe after terminal reauthentication can clear expired without a model turn", async () => {
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    queryControlOverrides.accountInfo = mock(async () => ({
+      tokenSource: "claude.ai",
+      subscriptionType: "max",
+    }));
+    noteClaudeAuthenticationFailure();
+    const failedProbe = await nextQueryCall();
+    await waitFor(() => failedProbe.isClosed());
+    expect((await readClaudeAuthStatus()).state).toBe("expired");
+    now += 30_001;
+    queryControlOverrides.accountInfo = mock(async () => ({
+      tokenSource: "claude.ai",
+      subscriptionType: "team",
+    }));
+    const status = await readClaudeAuthStatus();
+    expect(status).toMatchObject({ state: "signed-in", account: { plan: "team" } });
+    expect(claudeReadiness()).toBeUndefined();
+  } finally {
+    clock.mockRestore();
+  }
 });

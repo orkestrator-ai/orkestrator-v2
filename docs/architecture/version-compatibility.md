@@ -93,6 +93,12 @@ left (the transcript "unrecognized" notice is permanent, not a compatibility
 path), and the desktop's shared preview partition goes with the legacy
 preview route.
 
+The legacy slash catalogue routes and their 404 fallback were retired on
+2026-10-24 by [0016](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md).
+A session-route 404 now returns `outdated-bridge` without reading a global
+list. Each rejected read records `slash-catalogue.outdated-bridge` in the
+persistent usage counters, alongside the per-agent in-memory count.
+
 ## Register
 
 Paths waiting for retirement. When a Stable release is published, check this
@@ -103,7 +109,6 @@ supported peer already has the newer behaviour.
 
 | Path | Where | Counter | Serves | Retire when | Owner |
 | --- | --- | --- | --- | --- | --- |
-| Session-route 404 fallback to the legacy slash catalogue routes `/plugins/commands` (Claude, Pi) and `/global/slash-commands` (Codex, Cursor), and the routes themselves | `HttpBridgeCatalogAdapter.commandCatalogue` (`http-bridge-catalog.ts`); `bridges/claude-bridge/src/routes/plugins.ts`, `bridges/pi-bridge/src/http.ts`, `bridges/codex-bridge/src/index.ts`, `bridges/cursor-bridge/src/http.ts` | `slash-catalogue.legacy-route` (the 404 fallback) | Bridges before #599, and backends before #827 that read the legacy routes; both older than v2.21.0 | The window allows it now. The routes still answer the backend's sessionless reads, which 0016 removes first | [0016](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md) |
 | Bridges that predate `POST /session/:id/close`: legacy `DELETE` close and the `bridge-upgrade-required` restart notice | `closeBridgeSessionRetaining`, `LEGACY_DELETE_RETAINS_HISTORY` (`bridge-session-close.ts`) | `bridge-close.legacy-delete`, `bridge-close.upgrade-required` | Bridges before #853 (2026-09-26); every bridge in v2.21.0 has the close route | The window allows it now | [0002](../todo/agent-engines/0002-session-lifecycle-consistency.md) code item 1 |
 | Bridges that predate `/transcript`: progressive reads fall back to the whole `/messages` body | `readHttpBridgeTranscriptSnapshot` (`http-bridge-progressive.ts`) | `bridge-transcript.messages-fallback` | Bridges before #670 (2026-09-09) | The window allows it now | [0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md) item 3 |
 | Joined `sync-v1` history paging and the v1 cursor namespace | `getMessagePage` → `refreshProjection(… "sync-v1")` (`native-agent-transcript-projection.ts`) | `history.joined-v1-page` | Bridges without the v2 transcript contract (#875, 2026-09-27); all five bridges in v2.21.0 carry it | The window allows it now for bridges. Check first that no in-process provider still pages through it | [0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md) item 3 |

@@ -57,33 +57,24 @@
  * Bridge restarts use the profile's own per-environment stop and start
  * commands, so only this case's bridge is touched.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { NativeAgentDispatchOutcome } from "@orkestrator/protocol/native-agent";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { watchEventStream } from "./event-stream-outage";
-import { dismissSidebarTooltip } from "./sidebar-tooltip";
+import {
+  authenticatedInvoke,
+  assertRelative,
+  hostWorkspace,
+  profileStatus,
+  repositoryRoot,
+  sidebarNavigator,
+  type Environment,
+  type Project,
+  type Workspace,
+} from "./slash-command-live-support";
 
-type Status = {
-  status: string;
-  profile?: string;
-  flavor?: string;
-  browserUrl?: string;
-  testProject?: string;
-  dataDir?: string;
-};
-type Project = { id: string; name: string; localPath: string | null };
-type Environment = {
-  id: string;
-  name: string;
-  environmentType?: string;
-  status?: string;
-  setupPhase?: string;
-  containerId?: string | null;
-  worktreePath?: string | null;
-};
 type Message = { role?: unknown; content?: unknown };
 type Projection = {
   turn: { phase: string; error?: string };
@@ -92,9 +83,7 @@ type Projection = {
   recoverableDispatch?: { requestId: string; status?: "reconciling" | "action-required" };
   retiredDispatch?: { requestId: string; message: string };
 } | null;
-type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
-const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const LIVE_OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_LIVE_SLASH === "1";
 const NARROW_VIEWPORT = { width: 390, height: 844 };
@@ -136,41 +125,6 @@ function selectedEnvironmentKind(): EnvironmentKind {
   return raw as EnvironmentKind;
 }
 const ENVIRONMENT_KIND: EnvironmentKind = LIVE_OPT_IN ? selectedEnvironmentKind() : "local";
-
-/** Files in the environment's workspace, by path relative to its root. */
-type Workspace = {
-  write(relative: string, body: string): void;
-  remove(relative: string): void;
-  /** The file's text, or undefined when it does not exist. */
-  read(relative: string): string | undefined;
-};
-
-function assertRelative(relative: string) {
-  if (path.posix.isAbsolute(relative) || relative.split("/").includes("..")) {
-    throw new Error(`not a workspace-relative path: ${relative}`);
-  }
-}
-
-/** A host worktree: the provider reads the same files the runner writes. */
-function hostWorkspace(root: string): Workspace {
-  return {
-    write(relative, body) {
-      assertRelative(relative);
-      const file = path.join(root, relative);
-      mkdirSync(path.dirname(file), { recursive: true });
-      writeFileSync(file, body);
-    },
-    remove(relative) {
-      assertRelative(relative);
-      rmSync(path.join(root, relative), { force: true });
-    },
-    read(relative) {
-      assertRelative(relative);
-      const file = path.join(root, relative);
-      return existsSync(file) ? readFileSync(file, "utf8") : undefined;
-    },
-  };
-}
 
 /**
  * A container's `/workspace`, which exists only inside the container. Files
@@ -233,72 +187,6 @@ function selectedProviders(): Provider[] {
   });
 }
 
-function profileStatus(): Status {
-  const command = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-  });
-  if (!command.stdout.trim()) {
-    throw new Error(
-      `dev:status for profile "${profile}" returned no manifest: ${command.stderr.trim()}`,
-    );
-  }
-  return JSON.parse(command.stdout) as Status;
-}
-
-async function authenticatedInvoke(page: Page, status: Status): Promise<Invoke> {
-  // The one-shot login URL is parsed in memory and never copied into output.
-  const command = spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-  });
-  if (command.status !== 0) throw new Error(command.stderr || "dev:login failed");
-  const login = JSON.parse(command.stdout) as { loginUrl?: unknown };
-  if (typeof login.loginUrl !== "string") throw new Error("dev:login returned no login URL");
-  const response = await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
-  expect(response?.ok() ?? false).toBe(true);
-  return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
-    // `page.request` is not subject to `context.setOffline`, so backend truth
-    // stays readable while the page's own streams are cut.
-    const invokeResponse = await page.request.post(
-      new URL("/__orkestrator/invoke", status.browserUrl!).href,
-      { data: { command, args } },
-    );
-    expect(invokeResponse.ok(), `${command}: ${await invokeResponse.text()}`).toBe(true);
-    return ((await invokeResponse.json()) as { result: T }).result;
-  };
-}
-
-function sidebarNavigator(page: Page, projectName: string) {
-  return async (name: string) => {
-    const expand = page.getByRole("button", { name: `Expand project ${projectName}` });
-    const entry = page.getByText(name, { exact: true }).first();
-    // The mobile shell keeps the project list in a drawer.
-    const openDrawer = page.getByRole("button", { name: "Open projects and environments" });
-    await expect(expand.or(entry).or(openDrawer).first()).toBeVisible({ timeout: 30_000 });
-    for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
-      const continueButton = page.getByRole("button", { name: label, exact: true });
-      if (await continueButton.isVisible()) await continueButton.click();
-    }
-    // The mobile shell has a drawer toggle and may already show the drawer.
-    const mobile =
-      (await page
-        .getByRole("button", { name: /^(Open|Close) projects and environments$/ })
-        .count()) > 0;
-    if (mobile && (await openDrawer.isVisible())) await openDrawer.click();
-    await expect(expand.or(entry).first()).toBeVisible({ timeout: 30_000 });
-    if (await expand.isVisible()) await expand.click();
-    if (!mobile) {
-      // A sidebar tooltip from the previous hover can sit over the entry.
-      // Escape is Stop unless focus is safely in the sidebar.
-      await dismissSidebarTooltip(page, projectName);
-    }
-    await entry.click();
-    const closeDrawer = page.getByRole("button", { name: "Close projects and environments" });
-    if (await closeDrawer.first().isVisible()) await closeDrawer.first().click();
-  };
-}
-
 const textOf = (message: Message) => (typeof message.content === "string" ? message.content : "");
 const count = (messages: Message[] | undefined, role: string, needle: string) =>
   (messages ?? []).filter((message) => message.role === role && textOf(message).includes(needle))
@@ -342,11 +230,11 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
         },
       );
 
-      const status = profileStatus();
+      const status = profileStatus(profile);
       expect(status.profile, "dev:status answered for a different profile").toBe(profile);
       expect(status.status, `profile "${profile}" is not running`).toBe("ready");
       expect(status.flavor).toBe("agent-test");
-      const invoke = await authenticatedInvoke(page, status);
+      const invoke = await authenticatedInvoke(page, status, profile);
       const fixture = (await invoke<Project[]>("get_projects")).find(
         (project) => project.localPath === status.testProject,
       );

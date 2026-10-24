@@ -18,6 +18,7 @@ import type {
   PreferredEditor,
   ClaudeModelCatalogSnapshot,
 } from "@/types";
+import { machineInvoke, type AccountMachine } from "./agent-accounts";
 /** PR detection result containing URL, state, and merge conflict status */
 
 export async function checkDocker(): Promise<DockerAvailability> {
@@ -507,23 +508,33 @@ export interface GitHubCliLoginProgress {
   error?: string;
 }
 
-/** Whether the backend host's GitHub CLI is available and signed in. */
-export async function getGitHubCliStatus(): Promise<GitHubCliStatus> {
-  return invoke<GitHubCliStatus>("get_github_cli_status", {});
+/**
+ * Whether the backend host's GitHub CLI is available and signed in. Each
+ * machine has its own `gh`; `machine` names another node, through the command
+ * node.
+ */
+export async function getGitHubCliStatus(machine?: AccountMachine): Promise<GitHubCliStatus> {
+  return machineInvoke<GitHubCliStatus>(machine, "get_github_cli_status");
 }
 
 /** Start `gh auth login` with GitHub's device flow; poll with `getGitHubCliLogin`. */
-export async function startGitHubCliLogin(): Promise<GitHubCliLoginProgress> {
-  return invoke<GitHubCliLoginProgress>("start_github_cli_login", {});
+export async function startGitHubCliLogin(
+  machine?: AccountMachine,
+): Promise<GitHubCliLoginProgress> {
+  return machineInvoke<GitHubCliLoginProgress>(machine, "start_github_cli_login");
 }
 
-export async function getGitHubCliLogin(): Promise<GitHubCliLoginProgress> {
-  return invoke<GitHubCliLoginProgress>("get_github_cli_login", {});
+export async function getGitHubCliLogin(machine?: AccountMachine): Promise<GitHubCliLoginProgress> {
+  return machineInvoke<GitHubCliLoginProgress>(machine, "get_github_cli_login");
 }
 
 /** Cancel a pending GitHub sign-in, or dismiss a finished one. */
-export async function cancelGitHubCliLogin(operationId?: string): Promise<GitHubCliLoginProgress> {
-  return invoke<GitHubCliLoginProgress>(
+export async function cancelGitHubCliLogin(
+  operationId?: string,
+  machine?: AccountMachine,
+): Promise<GitHubCliLoginProgress> {
+  return machineInvoke<GitHubCliLoginProgress>(
+    machine,
     "cancel_github_cli_login",
     operationId ? { operationId } : {},
   );

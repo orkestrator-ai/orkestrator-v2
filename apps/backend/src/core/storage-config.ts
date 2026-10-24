@@ -22,6 +22,7 @@ import {
   MAX_SSH_AGENT_SOCKET_PATH_CHARS,
   SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES,
 } from "@orkestrator/protocol/ssh-agent-socket";
+import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
 import {
   createHash,
   defaultConfig,
@@ -578,10 +579,28 @@ export abstract class StorageConfig extends StorageProjects {
         throw new Error(SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES.notAbsolute);
       }
     }
+    const rawDefaultProjectsDirectory = reviewValidated.defaultProjectsDirectory as unknown;
+    if (
+      rawDefaultProjectsDirectory !== undefined &&
+      typeof rawDefaultProjectsDirectory !== "string"
+    ) {
+      throw new Error("Default projects folder must be a string");
+    }
+    const requestedDefaultProjectsDirectory = rawDefaultProjectsDirectory?.trim();
+    if (requestedDefaultProjectsDirectory) {
+      if (
+        requestedDefaultProjectsDirectory.length > MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS ||
+        requestedDefaultProjectsDirectory.includes("\0") ||
+        !path.isAbsolute(requestedDefaultProjectsDirectory)
+      ) {
+        throw new Error("Default projects folder must be an absolute path");
+      }
+    }
     const validated: AppConfig["global"] = {
       ...reviewValidated,
       notificationSounds: normalizeNotificationSoundSettings(reviewValidated.notificationSounds),
       sshAgentSocketPath: requestedSshAgentSocketPath || undefined,
+      defaultProjectsDirectory: requestedDefaultProjectsDirectory || undefined,
       debugLogRetentionDays: normalizeDebugLogRetentionDays(reviewValidated.debugLogRetentionDays),
       terminalHistoryEnabled: terminalHistoryRetention.enabled,
       terminalHistoryRetentionMb: terminalHistoryRetention.sessionMb,

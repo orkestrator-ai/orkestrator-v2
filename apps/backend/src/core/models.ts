@@ -427,6 +427,8 @@ export interface Environment {
       kind: TabTeardownKind;
       sessionId?: string;
       persistentSessionId?: string;
+      /** Backend-captured resume identity, durable before provider close. */
+      resumableSessionId?: string;
       createdAt: string;
     }
   >;

@@ -309,8 +309,12 @@ export function registerTeardownCommands(
     // Legacy/unmapped sessions are left to orphan reconciliation rather than
     // risking closing another tab's conversation.
     const providerSessionId = persistedSession?.providerSessionId;
-    if (!providerSessionId) return;
-    let resumable: string | undefined;
+    let resumable = intent.resumableSessionId;
+    if (!providerSessionId) {
+      if (resumable)
+        await recordDesignLinkSession(context, environment.id, intent.tabId, agent, resumable);
+      return;
+    }
     await withProviderSessionTeardownLock(
       context.storage,
       environment.id,
@@ -332,7 +336,23 @@ export function registerTeardownCommands(
         });
         // Read before the close: Codex resumes its thread, which only the open
         // session can name.
-        resumable = await resumableSessionId(context, environment.id, agent, providerSessionId);
+        const latestIntent = (await context.storage.getEnvironment(environment.id))
+          ?.tabTeardownIntents?.[intent.tabId];
+        resumable =
+          latestIntent?.createdAt === intent.createdAt
+            ? latestIntent.resumableSessionId
+            : resumable;
+        resumable ??= await resumableSessionId(context, environment.id, agent, providerSessionId);
+        if (resumable) {
+          // Persist before close: the provider may remove the session and lose
+          // its response. Reconciliation must not need that live session again.
+          await context.storage.recordTabTeardownSessionId(
+            environment.id,
+            intent.tabId,
+            intent.createdAt,
+            resumable,
+          );
+        }
         if (!heldElsewhere) {
           await closeProviderSession(environment, agent, providerSessionId, context);
           context.nativeAgents?.releaseProviderSession?.(environment.id, agent, providerSessionId);
@@ -343,8 +363,7 @@ export function registerTeardownCommands(
         await context.storage.invalidateNativeAgentSession(storageKey, providerSessionId);
       },
     );
-    // Outside the teardown lock: a design resume holds its canvas lane while it
-    // waits for that lock, so taking a canvas lane under it could deadlock.
+    // Canvas writes stay outside the provider teardown lock.
     if (resumable)
       await recordDesignLinkSession(context, environment.id, intent.tabId, agent, resumable);
   };

@@ -63,6 +63,7 @@ type Destination = { kind: "link"; linkId: string } | { kind: "new" };
 /** Status text after the platform and role. */
 const STATUS_TEXT: Partial<Record<DesignLinkStatus, string>> = {
   checking: "Checking…",
+  retained: "Open in another window",
   resumable: "Closed — can be resumed",
   missing: "Closed — no conversation to resume",
   unavailable: "Closed — could not check the backend",
@@ -71,7 +72,7 @@ const STATUS_TEXT: Partial<Record<DesignLinkStatus, string>> = {
 
 /** A destination the context can be added to: open now, or reopened first. */
 function canReceive(status: DesignLinkStatus): boolean {
-  return status === "open" || status === "resumable";
+  return status === "open" || status === "retained" || status === "resumable";
 }
 
 function canResumePlatform(platform: string): boolean {
@@ -308,7 +309,7 @@ function DesignAgentDialogBody({
   const [destination, setDestination] = useState<Destination | null>(null);
   const autoLink =
     links.find((link) => statusOf(link) === "open") ??
-    links.find((link) => statusOf(link) === "resumable");
+    links.find((link) => canReceive(statusOf(link)));
   const chosen: Destination =
     destination ?? (autoLink ? { kind: "link", linkId: autoLink.id } : { kind: "new" });
   const destinationLink =
@@ -407,16 +408,21 @@ function DesignAgentDialogBody({
         environmentId,
         canvasId: context.canvasId,
         link,
+        retainTab: statusOf(link) === "retained",
+        onClaimed: (claimed) => {
+          // Keep the adopted tab even if local creation fails. Retry and a
+          // later projection sync must converge on this already-open mapping.
+          setAddedLinks((current) => [
+            ...current.filter((candidate) => candidate.id !== claimed.id),
+            claimed,
+          ]);
+          onLinksChanged?.();
+        },
         claim: (input) => designApi.resumeSessionLink(environmentId, context.canvasId, input),
         hasTab: hasAgentTab,
         createTab,
         focus: (tabId) => focusTab(environmentId, tabId),
       });
-      setAddedLinks((current) => [
-        ...current.filter((candidate) => candidate.id !== resumed.link.id),
-        resumed.link,
-      ]);
-      onLinksChanged?.();
       return resumed.tabId;
     } catch (reason) {
       // A refused move means the link changed under us; read it again.
@@ -447,7 +453,7 @@ function DesignAgentDialogBody({
   const addToExisting = async (link: DesignSessionLink) => {
     let tabId: string | null = link.tabId;
     if (!hasAgentTab(tabId)) {
-      if (statusOf(link) !== "resumable") {
+      if (!canReceive(statusOf(link))) {
         setError("That conversation has ended. Start a new conversation instead.");
         return;
       }
@@ -760,16 +766,16 @@ function DesignAgentDialogBody({
                       Open
                     </Button>
                   ) : null}
-                  {status === "resumable" ? (
+                  {status === "resumable" || status === "retained" ? (
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
                       disabled={pending}
-                      aria-label={`Resume ${title}`}
+                      aria-label={`${status === "retained" ? "Open" : "Resume"} ${title}`}
                       onClick={() => void resumeOnly(link)}
                     >
-                      Resume conversation
+                      {status === "retained" ? "Open conversation" : "Resume conversation"}
                     </Button>
                   ) : null}
                   {status === "unavailable" ? (

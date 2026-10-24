@@ -3709,8 +3709,9 @@ export class NativeAgentService {
     }).catch(() => undefined);
     if (!provider?.sessionStateSnapshot) return undefined;
     const snapshot = await provider.sessionStateSnapshot(providerSessionId).catch(() => undefined);
-    if (!snapshot) return undefined;
-    return snapshot.resumableSessionId ?? providerSessionId;
+    if (!snapshot || snapshot.status === "missing") return undefined;
+    const resumable = snapshot.resumableSessionId?.trim();
+    return resumable || (agent === "codex" ? undefined : providerSessionId);
   }
 
   /**

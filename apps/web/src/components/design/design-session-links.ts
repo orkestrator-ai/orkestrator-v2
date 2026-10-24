@@ -22,6 +22,8 @@ export type DesignLinkStatus =
   | "checking"
   /** The tab is open in this client. */
   | "open"
+  /** Still mapped by the backend; adopt the existing tab without provider resume. */
+  | "retained"
   /** The tab is closed and its native session can be reopened. */
   | "resumable"
   /** The tab is closed and no session is known for it: it never started, or closed before links kept sessions. */
@@ -69,12 +71,11 @@ export function designLinkStatus(
   const { check } = input;
   if (check.kind === "pending") return "checking";
   if (check.kind === "failed") return "unavailable";
-  // A recorded identity is enough to offer Resume: the backend's resume
-  // reports a session the provider no longer has instead of starting an empty
-  // conversation, so a stale one fails visibly.
-  if (link.sessionId) return "resumable";
   if (check.kind === "unsupported") return "closed";
-  return check.states.get(link.id) === "retained" ? "resumable" : "missing";
+  const state = check.states.get(link.id);
+  if (state === "retained") return "retained";
+  if (state !== "missing") return "unavailable";
+  return link.sessionId?.trim() ? "resumable" : "missing";
 }
 
 /** 32-bit FNV-1a, enough to keep successive resume tab ids distinct. */
@@ -110,6 +111,10 @@ export interface ResumeDesignLinkInput {
     expectedTabId: string;
     tabId: string;
   }) => Promise<DesignSessionResumeResult>;
+  /** Adopt the retained mapping in its current tab. */
+  retainTab?: boolean;
+  /** Preserve the claimed tab for recovery even when local tab creation fails. */
+  onClaimed?: (link: DesignSessionLink) => void;
   hasTab: (tabId: string) => boolean;
   createTab: (type: CreatableTabType, options: CreateTabOptions) => boolean;
   focus: (tabId: string) => boolean;
@@ -156,7 +161,7 @@ async function runResume(input: ResumeDesignLinkInput): Promise<ResumedDesignLin
   const { link } = input;
   if (link.platform !== "claude" && link.platform !== "codex")
     throw new Error("This conversation's agent cannot be resumed from a design.");
-  const tabId = designResumeTabId(link);
+  const tabId = input.retainTab ? link.tabId : designResumeTabId(link);
   const { link: claimed, providerSessionId } = await input.claim({
     linkId: link.id,
     expectedTabId: link.tabId,
@@ -164,6 +169,7 @@ async function runResume(input: ResumeDesignLinkInput): Promise<ResumedDesignLin
   });
   if (claimed.tabId !== tabId)
     throw new Error("This conversation was reopened elsewhere. Close the dialog and try again.");
+  input.onClaimed?.(claimed);
   if (input.hasTab(tabId)) {
     input.focus(tabId);
     return { link: claimed, tabId, created: false };

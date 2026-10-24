@@ -135,17 +135,9 @@ function resumeFailure(error: unknown): DesignError {
 }
 
 /**
- * Reopen a link's conversation in the tab it is being resumed in, and move
- * the link there.
- *
- * Serialized by the canvas lane and guarded by a compare-and-set on the tab
- * the caller saw. Every client derives the resume tab id from the same link
- * state, so two clients pressing Resume together send the same `tabId`: the
- * first resumes the session and moves the link, the second waits for it and
- * gets the same association and live session back without resuming again. A
- * link that moved anywhere else is a conflict. The link moves only after the
- * provider reopened the session, so a lost conversation is reported here, not
- * as a broken tab or an empty replacement.
+ * Serialize provider work per link across processes, leaving the canvas lane
+ * available for edits and status reads. Re-read under the canvas lane before
+ * committing so concurrent edits, unlinking and identity changes are preserved.
  */
 export async function resumeSessionLink(
   design: DesignService,
@@ -155,26 +147,26 @@ export async function resumeSessionLink(
   resumer: DesignSessionResumer,
 ): Promise<DesignSessionResumeResult> {
   await design.initialize();
-  return design.lane(canvasId, async () => {
-    const { record, legacy } = await design.loadFor(canvasId, environmentId);
+  return design.lane(`resume-${canvasId}-${input.linkId}`, async () => {
+    const read = () => design.lane(canvasId, () => design.loadFor(canvasId, environmentId));
+    const { record } = await read();
     const current = record.sessions.find((candidate) => candidate.id === input.linkId);
     if (!current)
       throw new DesignError("not-found", "This conversation is no longer linked to the design");
     const stale = () =>
-      new DesignError(
-        "conflict",
-        "This conversation was reopened elsewhere; refresh and try again",
-        {
-          retry: "after-refresh",
-        },
-      );
+      new DesignError("conflict", "This conversation changed; refresh and try again", {
+        retry: "after-refresh",
+      });
+    // A retained mapping is adopted in its existing tab, never resumed into a
+    // second tab. This also recovers a successful claim whose UI tab failed.
     if (current.tabId === input.tabId) {
       const mapped = await resumer.mapped(current, input.tabId);
       if (!mapped) throw stale();
       return { link: current, providerSessionId: mapped };
     }
     if (current.tabId !== input.expectedTabId) throw stale();
-    if (!current.sessionId)
+    if (await resumer.mapped(current, current.tabId)) throw stale();
+    if (!current.sessionId?.trim())
       throw new DesignError("invalid-input", "This conversation has no session to resume", {
         retry: "never",
       });
@@ -184,16 +176,27 @@ export async function resumeSessionLink(
     } catch (error) {
       throw resumeFailure(error);
     }
-    const next = cloneRecord(record);
-    const link = next.sessions.find((candidate) => candidate.id === input.linkId)!;
-    link.tabId = input.tabId;
-    next.statusVersion++;
-    await design.commit(next, legacy, {
-      revision: next.document.revision,
-      kind: "status",
-      statusVersion: next.statusVersion,
+    return design.lane(canvasId, async () => {
+      const { record: latest, legacy } = await design.loadFor(canvasId, environmentId);
+      const observed = latest.sessions.find((candidate) => candidate.id === input.linkId);
+      if (
+        !observed ||
+        observed.tabId !== current.tabId ||
+        observed.sessionId !== current.sessionId ||
+        observed.platform !== current.platform
+      )
+        throw stale();
+      const next = cloneRecord(latest);
+      const link = next.sessions.find((candidate) => candidate.id === input.linkId)!;
+      link.tabId = input.tabId;
+      next.statusVersion++;
+      await design.commit(next, legacy, {
+        revision: next.document.revision,
+        kind: "status",
+        statusVersion: next.statusVersion,
+      });
+      return { link, providerSessionId };
     });
-    return { link, providerSessionId };
   });
 }
 
@@ -211,18 +214,29 @@ export async function recordTabSession(
   input: { environmentId: string; tabId: string; platform: string; providerSessionId: string },
 ): Promise<number> {
   await design.initialize();
+  if (!input.providerSessionId.trim()) return 0;
+  await design.refreshLibrary();
   let recorded = 0;
   for (const summary of Array.from(design.library.entries.values())) {
-    if (summary.environmentId !== input.environmentId || summary.state !== "live") continue;
+    if (
+      summary.environmentId !== input.environmentId ||
+      (summary.state !== "live" && summary.state !== "deleted")
+    )
+      continue;
     await design
       .lane(summary.id, async () => {
-        const { record, legacy } = await design.loadFor(summary.id, input.environmentId);
-        const index = record.sessions.findIndex(
-          (link) => link.tabId === input.tabId && link.platform === input.platform,
-        );
-        if (index < 0 || record.sessions[index]!.sessionId === input.providerSessionId) return;
+        const { record, legacy } = await design.loadFor(summary.id, input.environmentId, {
+          allowDeleted: true,
+        });
+        const index = record.sessions.findIndex((link) => link.tabId === input.tabId);
+        if (index < 0) return;
+        const existing = record.sessions[index]!;
+        // A saved identity is authoritative. Only a provisional, unsent link
+        // may change platform to match the tab's actual first-send provider.
+        if (existing.sessionId) return;
         const next = cloneRecord(record);
         next.sessions[index]!.sessionId = input.providerSessionId;
+        next.sessions[index]!.platform = input.platform;
         next.statusVersion++;
         await design.commit(next, legacy, {
           revision: next.document.revision,

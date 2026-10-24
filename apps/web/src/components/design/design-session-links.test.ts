@@ -46,8 +46,11 @@ describe("designLinkStatus", () => {
 
   test("a closed tab follows the backend's retained mapping", () => {
     expect(designLinkStatus(link(), { ...base, check: { kind: "pending" } })).toBe("checking");
-    expect(designLinkStatus(link(), { ...base, check: ready("retained") })).toBe("resumable");
+    expect(designLinkStatus(link(), { ...base, check: ready("retained") })).toBe("retained");
     expect(designLinkStatus(link(), { ...base, check: ready("missing") })).toBe("missing");
+    expect(
+      designLinkStatus(link({ sessionId: "s-1" }), { ...base, check: ready("retained") }),
+    ).toBe("retained");
     // A recorded identity is enough: the resumed tab refuses a lost session itself.
     expect(designLinkStatus(link({ sessionId: "s-1" }), { ...base, check: ready("missing") })).toBe(
       "resumable",
@@ -66,6 +69,9 @@ describe("designLinkStatus", () => {
     const unsupported = designLinkCheckFailure(new Error("Unknown backend command: x"));
     expect(unsupported).toEqual({ kind: "unsupported" });
     expect(designLinkStatus(link(), { ...base, check: unsupported })).toBe("closed");
+    expect(designLinkStatus(link({ sessionId: "s-1" }), { ...base, check: unsupported })).toBe(
+      "closed",
+    );
     expect(
       designLinkStatus(link({ sessionId: "s-1" }), {
         ...base,
@@ -249,6 +255,27 @@ describe("resumeDesignLink", () => {
       }),
     ).rejects.toThrow("conflict");
     expect(client.createTab).not.toHaveBeenCalled();
+  });
+
+  test("a failed tab creation is recovered by adopting the projected mapping without resuming again", async () => {
+    const backend = fakeBackend(resumable);
+    const client = fakeClient();
+    const resume = createDesignLinkResumer();
+    client.createTab.mockImplementationOnce(() => false);
+    const input = {
+      environmentId: "env-1",
+      canvasId: "canvas-1",
+      link: resumable,
+      ...client,
+      claim: backend.claim,
+    };
+    await expect(resume(input)).rejects.toThrow("Could not reopen");
+    const claimedTab = backend.current().tabId;
+    await resume({ ...input, link: backend.current(), retainTab: true });
+    expect(backend.moves()).toBe(1);
+    expect(client.tabs.size).toBe(1);
+    expect(client.tabs.has(claimedTab)).toBe(true);
+    expect(backend.claim.mock.calls[1]?.[0].tabId).toBe(claimedTab);
   });
 
   test("refuses an agent it cannot resume and a tab that did not open", async () => {

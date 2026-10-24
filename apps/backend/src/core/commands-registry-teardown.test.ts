@@ -21,6 +21,7 @@ import type { NativeAgentProvider } from "./models.js";
 import { replacedSessionCloseIntent } from "./provider-session-ownership.js";
 import { DesignService } from "./design/service.js";
 import { createTestRenderer } from "./design/test-support.js";
+import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 
 /**
  * Tab close retains conversation history on every platform. These cover the
@@ -357,6 +358,145 @@ describe("tab close retains conversation history", () => {
       { design, resumableSessionId: async () => undefined },
     );
   });
+
+  test("a lost close response journals the thread for reconciliation after restart", async () => {
+    const designDir = await fs.mkdtemp(path.join(tmpdir(), "ork-close-response-"));
+    const design = new DesignService(designDir, () => undefined, createTestRenderer());
+    let removed = false;
+    try {
+      const canvas = await design.create("e1", "Linked", undefined, "user");
+      // The draft was preselected Claude, but the actual first send chose Codex.
+      const link = await design.linkSession("e1", canvas.id, {
+        tabId: "switched",
+        platform: "claude",
+        role: "design",
+      });
+      await withTeardown(
+        async () => {
+          removed = true;
+          return new Promise<Response>(() => undefined);
+        },
+        async ({ invoke, storage }) => {
+          const key = await mapTab(storage, "codex", "switched", "bridge-live");
+          await expect(
+            invoke("teardown_tab", {
+              environmentId: "e1",
+              tabId: "switched",
+              kind: "codex-native",
+            }),
+          ).rejects.toThrow("timed out");
+          expect(removed).toBe(true);
+          const restarted = new StorageService(storage.getDataDir());
+          await restarted.init();
+          expect(
+            (await restarted.getEnvironment("e1"))?.tabTeardownIntents?.switched
+              ?.resumableSessionId,
+          ).toBe("thread-captured");
+          // Recreate the command registry and storage, as a restarted backend does.
+          const commands = createCommandRegistry({
+            tabTeardown: {
+              peekBridge: async () => ({ port: 4000, authToken: "test" }),
+              fetch: (async () => new Response(null, { status: 404 })) as unknown as typeof fetch,
+            },
+          });
+          const context = {
+            storage: restarted,
+            design,
+            nativeAgents: { resumableSessionIdIfRunning: async () => undefined },
+          } as unknown as CommandContext;
+          expect(await commands.get("reconcile_tab_teardowns")!({}, context)).toEqual({
+            completed: 1,
+          });
+          expect(await restarted.getNativeAgentSession(key)).toBeNull();
+          expect(
+            (await restarted.getEnvironment("e1"))?.tabTeardownIntents?.switched,
+          ).toBeUndefined();
+        },
+        {
+          design,
+          closeTimeoutMs: 10,
+          resumableSessionId: async () => (removed ? undefined : "thread-captured"),
+        },
+      );
+      const snapshot = await design.snapshot("e1", canvas.id);
+      if (snapshot.kind !== "snapshot") throw new Error(snapshot.kind);
+      expect(snapshot.workspace.sessions[0]).toMatchObject({
+        id: link.id,
+        platform: "codex",
+        sessionId: "thread-captured",
+      });
+      const resume = mock(
+        async (
+          _link: import("@orkestrator/protocol/design-operations").DesignSessionLink,
+          _tabId: string,
+        ) => "resumed-live",
+      );
+      await design.resumeSessionLink(
+        "e1",
+        canvas.id,
+        { linkId: link.id, expectedTabId: "switched", tabId: "reopened" },
+        { mapped: async () => null, resume },
+      );
+      expect(resume.mock.calls[0]?.[0]).toMatchObject({
+        sessionId: "thread-captured",
+        platform: "codex",
+      });
+    } finally {
+      await design.close();
+      await fs.rm(designDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["missing", "idle"] as const)(
+    "Codex teardown preserves an existing thread when snapshot is %s without a thread ID",
+    async (status) => {
+      const dir = await fs.mkdtemp(path.join(tmpdir(), "ork-close-missing-thread-"));
+      const design = new DesignService(dir, () => undefined, createTestRenderer());
+      try {
+        const canvas = await design.create("e1", "Linked", undefined, "user");
+        await design.linkSession("e1", canvas.id, {
+          tabId: "tab-codex",
+          sessionId: "verified-thread",
+          platform: "codex",
+          role: "design",
+        });
+        const stub = createProviderStub("codex", {
+          sessionStateSnapshot: async () => ({ status }),
+        });
+        await withService(
+          {
+            prefix: "ork-close-snapshot-",
+            environment: { id: "e1" },
+            provider: async () => stub.provider,
+          },
+          async ({ service }) => {
+            await withTeardown(
+              retained,
+              async ({ invoke, storage }) => {
+                await mapTab(storage, "codex", "tab-codex", "bridge-live");
+                await invoke("teardown_tab", {
+                  environmentId: "e1",
+                  tabId: "tab-codex",
+                  kind: "codex-native",
+                });
+              },
+              {
+                design,
+                resumableSessionId: async (_agent, providerSessionId) =>
+                  service.resumableSessionIdIfRunning("e1", "codex", providerSessionId),
+              },
+            );
+          },
+        );
+        const snapshot = await design.snapshot("e1", canvas.id);
+        if (snapshot.kind !== "snapshot") throw new Error(snapshot.kind);
+        expect(snapshot.workspace.sessions[0]?.sessionId).toBe("verified-thread");
+      } finally {
+        await design.close();
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("a design link that cannot be updated never holds up the close", async () => {
     const recordTabSession = mock(async () => {

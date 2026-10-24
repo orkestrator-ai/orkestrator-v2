@@ -394,6 +394,7 @@ describe("DesignAgentDialog", () => {
           },
         });
       if (command === "design_session_resume") {
+        states[String(args?.linkId)] = "retained";
         current = current.map((entry) =>
           entry.id === args?.linkId ? { ...entry, tabId: String(args?.tabId) } : entry,
         );
@@ -417,7 +418,7 @@ describe("DesignAgentDialog", () => {
   test("offers Resume for a closed conversation the backend retains, without resending anything", async () => {
     seedTabs([]);
     const sessions = [link("kept", "agent-closed", { label: "Design chat" })];
-    backendLinks(sessions, { kept: "retained" }, { kept: "provider-session-9" });
+    backendLinks(sessions, { kept: "missing" }, { kept: "provider-session-9" });
     const { onOpenChange } = await renderDialog({ sessions });
 
     const row = screen.getByTestId("design-link-kept");
@@ -491,7 +492,7 @@ describe("DesignAgentDialog", () => {
   test("resumes and adds the design context as a chip when that conversation is chosen", async () => {
     seedTabs([]);
     const sessions = [link("kept", "agent-closed")];
-    backendLinks(sessions, { kept: "retained" }, { kept: "provider-session-9" });
+    backendLinks(sessions, { kept: "missing" }, { kept: "provider-session-9" });
     await renderDialog({ sessions });
 
     await act(async () => {
@@ -508,6 +509,67 @@ describe("DesignAgentDialog", () => {
     expect(draft.annotations).toHaveLength(1);
     expect(draft.annotations[0]).toMatchObject({ source: "design" });
     expect(commandCalls("design_session_link")).toHaveLength(0);
+  });
+
+  test("a failed tab creation retries the projected tab through Open without moving again", async () => {
+    seedTabs([]);
+    const sessions = [
+      link("retry-kept", "closed-tab", { label: "Retry chat", sessionId: "saved" }),
+    ];
+    backendLinks(sessions, { "retry-kept": "missing" });
+    createTabMock.mockImplementationOnce(() => false);
+    await renderDialog({ sessions });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Resume Retry chat" }));
+    });
+    expect(screen.getByRole("alert").textContent).toContain("Could not reopen");
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Open Retry chat" }));
+    });
+    const claims = commandCalls("design_session_resume");
+    expect(claims).toHaveLength(2);
+    expect(claims[1]?.[1]).toMatchObject({
+      expectedTabId: claims[0]?.[1]?.tabId,
+      tabId: claims[0]?.[1]?.tabId,
+    });
+    expect(createTabMock).toHaveBeenCalledTimes(2);
+    expect(createTabMock.mock.calls[1]?.[1]?.tabId).toBe(createTabMock.mock.calls[0]?.[1]?.tabId);
+  });
+
+  test.each([undefined, "thread-1"])(
+    "retained mapping opens the original tab without offering Resume (identity %s)",
+    async (sessionId) => {
+      seedTabs([]);
+      const sessions = [link("kept", "original-tab", { label: "Live chat", sessionId })];
+      backendLinks(sessions, { kept: "retained" });
+      await renderDialog({ sessions });
+      const row = screen.getByTestId("design-link-kept");
+      expect(row.textContent).toContain("Open in another window");
+      expect(within(row).queryByRole("button", { name: "Resume Live chat" }) === null).toBe(true);
+      await act(async () => {
+        fireEvent.click(within(row).getByRole("button", { name: "Open Live chat" }));
+      });
+      expect(commandCalls("design_session_resume")[0]?.[1]).toMatchObject({
+        expectedTabId: "original-tab",
+        tabId: "original-tab",
+      });
+      expect(createTabMock.mock.calls[0]?.[1]).toMatchObject({
+        tabId: "original-tab",
+        resumeSessionId: "live-session-1",
+        requireExistingResumeSession: true,
+      });
+    },
+  );
+
+  test("an older backend never offers Resume for a saved identity", async () => {
+    seedTabs([]);
+    const sessions = [link("kept", "original", { sessionId: "saved-thread" })];
+    invokeMock.mockRejectedValue(new Error("Unknown backend command: design_session_link_states"));
+    await renderDialog({ sessions });
+    expect(screen.getByTestId("design-link-kept").textContent).toContain(
+      "Closed — conversation ended",
+    );
+    expect(screen.queryByRole("button", { name: /^Resume / }) === null).toBe(true);
   });
 
   test("a conversation that never started offers removal, not Resume", async () => {
@@ -534,7 +596,7 @@ describe("DesignAgentDialog", () => {
     expect(within(row).queryByRole("button", { name: "Resume Design chat" }) === null).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
 
-    backendLinks(sessions, { kept: "retained" });
+    backendLinks(sessions, { kept: "missing" });
     await act(async () => {
       fireEvent.click(within(row).getByRole("button", { name: "Check Design chat again" }));
     });

@@ -2101,6 +2101,66 @@ describe("AgentNativeTab", () => {
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-xl");
   });
 
+  test("an annotation-only first prompt starts the selected agent", async () => {
+    seedUnassignedDefaultCatalog();
+    const tabId = "tab-design-annotation-first";
+    const sessionKey = createSessionKey("env-1", tabId);
+    seedUnassignedPane(tabId);
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      annotations: [
+        {
+          id: "design-context",
+          source: "design",
+          text: "Canvas context: inspect the heading",
+          comment: "",
+        },
+      ],
+    });
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    const start = await screen.findByRole("button", { name: "Start agent" });
+    expect(start.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(start);
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0].prompt).toContain(
+      "Canvas context: inspect the heading",
+    );
+  });
+
+  test("clearing first-prompt annotations preserves unrelated attachments", async () => {
+    seedUnassignedDefaultCatalog();
+    const tabId = "tab-design-annotation-clear";
+    const sessionKey = createSessionKey("env-1", tabId);
+    seedUnassignedPane(tabId);
+    const unrelated = {
+      id: "unrelated",
+      type: "file" as const,
+      name: "notes.txt",
+      path: "/workspace/notes.txt",
+    };
+    const otherAnnotation = { ...unrelated, id: "other", annotationId: "other-context" };
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "claude",
+      annotations: [
+        { id: "design-context", source: "design", text: "Canvas context", comment: "" },
+      ],
+      attachments: [
+        unrelated,
+        otherAnnotation,
+        { ...unrelated, id: "linked", annotationId: "design-context" },
+      ],
+    });
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove design context" }));
+    expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).annotations).toEqual(
+      [],
+    );
+    expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments).toEqual([
+      unrelated,
+      otherAnnotation,
+    ]);
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+  });
+
   test("an ordinary unassigned local tab keeps its worktree paste destination", async () => {
     useEnvironmentStore.setState({
       environments: [

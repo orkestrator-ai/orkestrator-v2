@@ -78,11 +78,20 @@ describe("native agent service tab close", () => {
         await expect(
           service.resumableSessionIdIfRunning("env-1", "codex", "session-client-1"),
         ).resolves.toBe("thread-1");
-        // A provider that reports no separate identity resumes by the live id.
+        // Codex cannot resume a bridge session, even before thread creation.
         Object.assign(stub.provider, { sessionStateSnapshot: async () => ({ status: "idle" }) });
         await expect(
           service.resumableSessionIdIfRunning("env-1", "codex", "session-client-1"),
-        ).resolves.toBe("session-client-1");
+        ).resolves.toBeUndefined();
+        for (const snapshot of [
+          { status: "missing", resumableSessionId: "thread-stale" },
+          { status: "idle", resumableSessionId: "   " },
+        ]) {
+          Object.assign(stub.provider, { sessionStateSnapshot: async () => snapshot });
+          await expect(
+            service.resumableSessionIdIfRunning("env-1", "codex", "session-client-1"),
+          ).resolves.toBeUndefined();
+        }
         Object.assign(stub.provider, {
           sessionStateSnapshot: async () => {
             throw new Error("bridge restarted");

@@ -1,9 +1,12 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { DesignSessionLink } from "@orkestrator/protocol/design-operations";
+import { DesignService } from "./service.js";
 import { isDesignError } from "./errors.js";
 import type { DesignNativeSessionLookup, DesignSessionResumer } from "./session-links.js";
 import {
   createDesignHarness,
+  createTestRenderer,
+  deferred,
   trackUnhandledRejections,
   type DesignHarness,
 } from "./test-support.js";
@@ -231,5 +234,204 @@ describe("design session links: recorded identities and resume", () => {
     const other = await service().snapshot("env-2", elsewhere);
     if (other.kind !== "snapshot") throw new Error(other.kind);
     expect(other.workspace.sessions[0]?.sessionId).toBeUndefined();
+  });
+  test("a blocked provider leaves canvas reads and edits available and preserves those edits", async () => {
+    const canvasId = await setup();
+    const link = await service().linkSession("env-1", canvasId, {
+      tabId: "old",
+      sessionId: "thread-1",
+      platform: "codex",
+      role: "design",
+    });
+    const started = deferred();
+    const release = deferred();
+    const { resumer } = fakeResumer();
+    resumer.resume = async () => {
+      started.resolve();
+      await release.promise;
+      return "live";
+    };
+    const attempt = service().resumeSessionLink(
+      "env-1",
+      canvasId,
+      {
+        linkId: link.id,
+        expectedTabId: "old",
+        tabId: "new",
+      },
+      resumer,
+    );
+    try {
+      await started.promise;
+      await service().sessionLinkStates("env-1", canvasId, lookupFrom({}));
+      await service().linkSession("env-1", canvasId, {
+        tabId: "another",
+        platform: "claude",
+        role: "design",
+      });
+    } finally {
+      release.resolve();
+    }
+    await attempt;
+    expect((await workspace(canvasId)).sessions.map((link) => link.tabId)).toEqual([
+      "new",
+      "another",
+    ]);
+  });
+
+  test.each([undefined, "thread-1"])(
+    "retained mappings are adopted without moving or resuming (identity %s)",
+    async (sessionId) => {
+      const canvasId = await setup();
+      const link = await service().linkSession("env-1", canvasId, {
+        tabId: "in-use",
+        sessionId,
+        platform: "codex",
+        role: "design",
+      });
+      const { resumer, resume, mappings } = fakeResumer();
+      mappings.set("in-use", "live-existing");
+      expect(
+        await failureCode(
+          service().resumeSessionLink(
+            "env-1",
+            canvasId,
+            {
+              linkId: link.id,
+              expectedTabId: "in-use",
+              tabId: "second-tab",
+            },
+            resumer,
+          ),
+        ),
+      ).toBe("conflict");
+      const result = await service().resumeSessionLink(
+        "env-1",
+        canvasId,
+        {
+          linkId: link.id,
+          expectedTabId: "in-use",
+          tabId: "in-use",
+        },
+        resumer,
+      );
+      expect(result).toMatchObject({
+        link: { tabId: "in-use" },
+        providerSessionId: "live-existing",
+      });
+      expect(resume).not.toHaveBeenCalled();
+    },
+  );
+
+  test("records a peer-created canvas absent from an initialized service's index", async () => {
+    await service().initialize();
+    const peer = new DesignService(harness.dir, () => undefined, createTestRenderer());
+    try {
+      const canvas = await peer.create("env-1", "Peer", undefined, "user");
+      await peer.linkSession("env-1", canvas.id, {
+        tabId: "peer-tab",
+        platform: "claude",
+        role: "design",
+      });
+      expect(
+        await service().recordTabSession({
+          environmentId: "env-1",
+          tabId: "peer-tab",
+          platform: "codex",
+          providerSessionId: "peer-thread",
+        }),
+      ).toBe(1);
+      expect((await workspace(canvas.id)).sessions[0]).toMatchObject({
+        platform: "codex",
+        sessionId: "peer-thread",
+      });
+    } finally {
+      await peer.close();
+    }
+  });
+
+  test("records a deleted canvas before restore and resume", async () => {
+    const canvasId = await setup();
+    const link = await service().linkSession("env-1", canvasId, {
+      tabId: "deleted-tab",
+      platform: "claude",
+      role: "design",
+    });
+    await service().delete(canvasId, "env-1", "user");
+    expect(
+      await service().recordTabSession({
+        environmentId: "env-1",
+        tabId: "deleted-tab",
+        platform: "codex",
+        providerSessionId: "thread-kept",
+      }),
+    ).toBe(1);
+    await service().runOnce("env-1", "user", {
+      canvasId,
+      input: { kind: "restore_canvas" },
+      preconditions: {},
+    });
+    const { resumer } = fakeResumer();
+    expect(
+      await service().resumeSessionLink(
+        "env-1",
+        canvasId,
+        { linkId: link.id, expectedTabId: "deleted-tab", tabId: "restored-tab" },
+        resumer,
+      ),
+    ).toMatchObject({
+      link: { platform: "codex", sessionId: "thread-kept", tabId: "restored-tab" },
+    });
+  });
+
+  test("one unreadable canvas does not prevent recording the remaining links", async () => {
+    const bad = await setup();
+    const good = await setup();
+    for (const id of [bad, good])
+      await service().linkSession("env-1", id, {
+        tabId: "shared-tab",
+        platform: "codex",
+        role: "design",
+      });
+    const original = service().loadFor.bind(service());
+    const read = spyOn(service(), "loadFor").mockImplementation(async (...args) => {
+      if (args[0] === bad) throw new Error("unreadable");
+      return original(...args);
+    });
+    try {
+      expect(
+        await service().recordTabSession({
+          environmentId: "env-1",
+          tabId: "shared-tab",
+          platform: "codex",
+          providerSessionId: "thread-good",
+        }),
+      ).toBe(1);
+    } finally {
+      read.mockRestore();
+    }
+    expect((await workspace(good)).sessions[0]?.sessionId).toBe("thread-good");
+  });
+
+  test("an existing identity cannot be replaced by another identity or provider", async () => {
+    const canvasId = await setup();
+    await service().linkSession("env-1", canvasId, {
+      tabId: "verified",
+      sessionId: "thread-verified",
+      platform: "codex",
+      role: "design",
+    });
+    expect(
+      await service().recordTabSession({
+        environmentId: "env-1",
+        tabId: "verified",
+        platform: "claude",
+        providerSessionId: "unverified",
+      }),
+    ).toBe(0);
+    expect((await workspace(canvasId)).sessions[0]).toMatchObject({
+      platform: "codex",
+      sessionId: "thread-verified",
+    });
   });
 });

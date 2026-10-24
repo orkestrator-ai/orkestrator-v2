@@ -87,3 +87,42 @@ describe("readSessionAgentAccount", () => {
     expect(unreadable).toEqual({ platform: "claude", source: "unknown", running: true });
   });
 });
+
+test("an isolated Claude container reports its own login without reading the marker", async () => {
+  const config = await storage.loadConfig();
+  await storage.saveConfig({
+    ...config,
+    global: { ...config.global, useHostClaudeCredentials: false },
+  });
+  environment = {
+    id: "env-1",
+    containerId: "container-1",
+    environmentType: "containerized",
+    status: "running",
+  } as Environment;
+  const read = async (): Promise<string> => {
+    throw new Error("must not read marker");
+  };
+  expect(await readSessionAgentAccount(context, "env-1", "claude", read)).toEqual({
+    platform: "claude",
+    source: "container",
+    running: true,
+  });
+});
+
+test("a stopped container uses the active account on its next start without reading the container", async () => {
+  environment = {
+    id: "env-1",
+    containerId: "container-1",
+    environmentType: "containerized",
+    status: "stopped",
+  } as Environment;
+  let reads = 0;
+  const result = await readSessionAgentAccount(context, "env-1", "claude", async () => {
+    reads++;
+    return "default";
+  });
+  expect(result).toMatchObject({ source: "account", running: false, account: { id: SECOND } });
+  expect(result?.pendingActive).toBeUndefined();
+  expect(reads).toBe(0);
+});

@@ -76,7 +76,7 @@ test("asks each enabled machine and keeps going when one cannot answer", async (
             return {
               outcome: "ok",
               result: {
-                grok: { state: "signed-in", source: "Stored login", token: "leaked" },
+                grok: { state: "signed-in", source: "x".repeat(300), token: "leaked" },
                 pi: { state: "bogus" },
               },
             };
@@ -97,7 +97,7 @@ test("asks each enabled machine and keeps going when one cannot answer", async (
   ]);
   // Rebuilt field by field: nothing else another machine sends passes through.
   expect(result.machines[1]?.signIns).toEqual({
-    grok: { state: "signed-in", source: "Stored login" },
+    grok: { state: "signed-in", source: "x".repeat(120) },
   });
   expect(result.machines.map((machine) => [machine.name, machine.state])).toEqual([
     [(await storage.getBackendProfile()).displayName, "ok"],
@@ -107,4 +107,42 @@ test("asks each enabled machine and keeps going when one cannot answer", async (
   ]);
   expect(result.machines[0]?.nodeId).toBe("node-self");
   expect(result.machines[1]?.snapshot).toEqual(LEAF_SNAPSHOT);
+});
+
+test("a malformed peer row becomes an error cell instead of reaching Settings", async () => {
+  const result = await listMachineAgentAccounts(
+    context({
+      nodes: {
+        selfIdentity: async () => "self",
+        isLeaf: () => false,
+        listNodes: async () => ({
+          nodes: [{ nodeId: "bad", displayName: "Bad peer", enabled: true }],
+        }),
+      } as never,
+      nodePortal: {
+        invokeOnNode: async ({ command }: { command: string }) => ({
+          outcome: "ok",
+          result:
+            command === "list_agent_accounts"
+              ? {
+                  ...LEAF_SNAPSHOT,
+                  accounts: [
+                    {
+                      id: "default",
+                      platform: "claude",
+                      label: "Bad",
+                      signedIn: true,
+                      isDefault: true,
+                      isActive: true,
+                    },
+                  ],
+                }
+              : { grok: { state: "signed-in", token: "secret", source: "s".repeat(500) } },
+        }),
+      } as never,
+    }),
+    { readSignIns },
+  );
+  expect(result.machines[1]).toMatchObject({ state: "error", error: "Invalid account snapshot" });
+  expect(result.machines[1]?.snapshot).toBeUndefined();
 });

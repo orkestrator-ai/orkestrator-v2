@@ -403,8 +403,12 @@ receive). The refresh token is blanked and `last_refresh` set to now, so Codex
 uses its access token until it actually expires instead of refreshing early.
 Codex rotates the refresh token on every refresh, so a coordinator refreshing
 a whole copy would retire the account's own login. An API-key login is copied
-as is. Nothing refreshes a Codex login on the account's side: its access
-tokens last days, and the account's own Codex sessions refresh it as they run.
+as is. Before startup, or reuse of a bridge whose token is near expiry, the
+backend renews a due login in its owning home with Codex app-server's
+`account/read { refreshToken: true }`. Requests are serialized per owning home,
+re-read the saved login before refreshing, and back off after failed renewal.
+The owner retains the rotated refresh token; only the renewed access token is
+handed over. Agent-test profiles never renew a borrowed host login.
 App-server's `chatgptAuthTokens` login would avoid the file but needs the
 `experimentalApi` capability, which the bridge leaves off.
 
@@ -450,7 +454,10 @@ itself. Where each surface acts:
   (`list_machine_agent_accounts`). The command node asks each enabled machine
   for `list_agent_accounts` and `read_host_agent_sign_ins` in parallel, eight
   seconds each; one that cannot answer shows as not connected. A node in leaf mode lists only itself. Each
-  machine's own settings dialog shows its row.
+  machine's own settings dialog shows its row. Registry changes reload the
+  overview so attached and removed machines are reflected immediately. Peer
+  account summaries and live sign-in rereads are rebuilt from validated fields;
+  a malformed account row shows an error for that machine.
   - **Live.** Every machine announces a change to its accounts as
     `agent-accounts-changed` `{ platform }` (`AGENT_ACCOUNTS_CHANGED_EVENT`):
     a switch, an added, renamed or removed account, a renewed login. The
@@ -490,7 +497,9 @@ itself. Where each surface acts:
   bridge that is not running from the active account. It names a pending move
   to a newly active account, switches the machine's active account, and for
   Claude signs the active account in again. It re-reads on its own machine's
-  `agent-accounts-changed` (`useAgentAccountsChanged`).
+  `agent-accounts-changed` (`useAgentAccountsChanged`), on event-stream reconnect,
+  when opened, and when the turn or bridge changes. Reads are fenced against
+  newer requests, and a different environment or provider starts with fresh state.
 - **The composer chip** (`SessionAccountChip`) sits beside the model picker
   of a Claude or Codex tab whose machine holds more than one login for the
   platform, naming the session's account (`work@…`). It is amber while the

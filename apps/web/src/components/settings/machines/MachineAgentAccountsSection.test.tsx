@@ -240,3 +240,33 @@ describe("MachineAgentAccountsSection", () => {
     );
   });
 });
+
+test("live sign-in rereads strip secrets and clamp sources before display", async () => {
+  render(<MachineAgentAccountsSection />);
+  await waitFor(() => expect(subscribers.has("node-leaf")).toBe(true));
+  machines[1] = {
+    ...machines[1]!,
+    signIns: { grok: { state: "signed-in", source: "s".repeat(300), token: "secret" } } as never,
+  };
+  await act(async () =>
+    subscribers.get("node-leaf")!.onEvent("agent-accounts-changed", { platform: "claude" }),
+  );
+  await screen.findByText((text) => text.includes("s".repeat(120)));
+  expect(screen.queryByText("s".repeat(300)) === null).toBe(true);
+  expect(document.body.textContent).not.toContain("secret");
+});
+
+test("a malformed live account snapshot shows an error in By account", async () => {
+  render(<MachineAgentAccountsSection />);
+  await waitFor(() => expect(subscribers.has("node-leaf")).toBe(true));
+  rereads["node-leaf"] = {
+    ...SNAPSHOT,
+    accounts: [{ id: "default", platform: "claude", label: "Bad" } as never],
+  };
+  await act(async () =>
+    subscribers.get("node-leaf")!.onEvent("agent-accounts-changed", { platform: "claude" }),
+  );
+  await screen.findAllByText("Could not read accounts");
+  fireEvent.click(screen.getByRole("button", { name: "By account" }));
+  expect(document.body.textContent).toContain("MBP3");
+});

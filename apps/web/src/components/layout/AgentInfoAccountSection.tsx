@@ -57,26 +57,43 @@ export function useSessionMachineName(): string | null {
 export function AgentInfoAccountSection({
   environmentId,
   provider,
+  open = true,
+  refreshKey,
 }: {
   environmentId: string;
   provider: string;
+  open?: boolean;
+  refreshKey?: unknown;
 }) {
   if (!isAgentAccountPlatform(provider)) return null;
-  return <AccountSection environmentId={environmentId} platform={provider} />;
+  return (
+    <AccountSection
+      key={`${environmentId}:${provider}`}
+      environmentId={environmentId}
+      platform={provider}
+      open={open}
+      refreshKey={refreshKey}
+    />
+  );
 }
 
 function AccountSection({
   environmentId,
   platform,
+  open,
+  refreshKey,
 }: {
   environmentId: string;
   platform: AgentAccountPlatform;
+  open: boolean;
+  refreshKey?: unknown;
 }) {
   const [session, setSession] = useState<AgentSessionAccount | null>(null);
   const [snapshot, setSnapshot] = useState<AgentAccountsSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
+  const latest = useRef(0);
   const machineName = useSessionMachineName();
   const platformLabel = AGENT_PLATFORM_LABELS[platform];
   const reauth = useAgentAccountReauth(platform, platform === "claude");
@@ -85,34 +102,36 @@ function AccountSection({
     mounted.current = true;
     return () => {
       mounted.current = false;
+      latest.current += 1;
     };
   }, []);
 
   const load = useCallback(async () => {
+    const read = ++latest.current;
     try {
       const [nextSession, nextSnapshot] = await Promise.all([
         getNativeAgentSessionAccount(environmentId, platform),
         listAgentAccounts(),
       ]);
-      if (!mounted.current) return;
+      if (!mounted.current || latest.current !== read) return;
       setSession(nextSession);
       setSnapshot(nextSnapshot);
       setError(null);
     } catch (cause) {
-      if (mounted.current) setError(messageOf(cause));
+      if (mounted.current && latest.current === read) setError(messageOf(cause));
     }
   }, [environmentId, platform]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void Promise.resolve().then(load);
+  }, [load, open, refreshKey]);
   // A switch or sign-in elsewhere (Settings, another window) moves this too.
   useAgentAccountsChanged(platform, () => void load());
 
   // A finished sign-in changes what the account reports.
   const reauthState = reauth.progress.state;
   useEffect(() => {
-    if (reauthState === "succeeded") void load();
+    if (reauthState === "succeeded") void Promise.resolve().then(load);
   }, [load, reauthState]);
 
   const choose = async (accountId: string) => {

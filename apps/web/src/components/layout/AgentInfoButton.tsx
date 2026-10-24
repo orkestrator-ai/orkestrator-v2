@@ -1482,6 +1482,8 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                 <AgentInfoAccountSection
                   environmentId={activeSession.environmentId}
                   provider={activeSession.provider}
+                  open={open}
+                  refreshKey={`${neutralProjection?.generation}:${neutralProjection?.connection}:${neutralProjection?.turn.phase}`}
                 />
                 {accountReadFailed ? (
                   <div className="flex items-center justify-between gap-3 text-xs">

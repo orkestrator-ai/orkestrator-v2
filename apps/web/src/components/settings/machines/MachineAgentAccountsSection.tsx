@@ -35,6 +35,8 @@ import { useAccountMachineStore } from "@/components/settings/account-machine";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import {
+  parseHostAgentSignIns,
+  parseAgentAccountsSnapshot,
   AGENT_ACCOUNT_PLATFORMS,
   AGENT_ACCOUNTS_CHANGED_EVENT,
   HOST_SIGN_IN_PLATFORMS,
@@ -414,7 +416,7 @@ export function MachineAgentAccountsSection({
   }, [nextSeq]);
 
   useEffect(() => {
-    void load();
+    void Promise.resolve().then(load);
   }, [load]);
 
   /** Re-read one machine after its accounts changed or its events may have been missed. */
@@ -426,9 +428,11 @@ export function MachineAgentAccountsSection({
         listAgentAccounts(target),
         readHostAgentSignIns(target),
       ]);
-      if (snapshot.status === "rejected" || !Array.isArray(snapshot.value?.accounts)) {
+      const parsedSnapshot =
+        snapshot.status === "fulfilled" ? parseAgentAccountsSnapshot(snapshot.value) : undefined;
+      if (!parsedSnapshot) {
         patch(machine.nodeId, seq, {
-          state: machine.self ? "error" : "unavailable",
+          state: snapshot.status === "rejected" && !machine.self ? "unavailable" : "error",
           snapshot: undefined,
           error:
             snapshot.status === "rejected"
@@ -438,12 +442,10 @@ export function MachineAgentAccountsSection({
         return;
       }
       const signInsValue =
-        signIns.status === "fulfilled" && signIns.value && typeof signIns.value === "object"
-          ? signIns.value
-          : undefined;
+        signIns.status === "fulfilled" ? parseHostAgentSignIns(signIns.value) : undefined;
       patch(machine.nodeId, seq, {
         state: "ok",
-        snapshot: snapshot.value,
+        snapshot: parsedSnapshot,
         error: undefined,
         // An older machine has no sign-in read; keep what was known.
         ...(signInsValue ? { signIns: signInsValue } : {}),
@@ -501,7 +503,9 @@ export function MachineAgentAccountsSection({
     setError(null);
     try {
       const seq = nextSeq(machine.nodeId);
-      const snapshot = await setActiveAgentAccount(platform, accountId, machineTarget(machine));
+      const result = await setActiveAgentAccount(platform, accountId, machineTarget(machine));
+      const snapshot = parseAgentAccountsSnapshot(result);
+      if (!snapshot) throw new Error("Invalid account snapshot");
       patch(machine.nodeId, seq, { snapshot });
     } catch (cause) {
       if (mounted.current) setError(`${machine.name}: ${messageOf(cause)}`);

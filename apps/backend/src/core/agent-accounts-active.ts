@@ -444,11 +444,34 @@ export function coordinatorCodexLogin(
 
 /**
  * The active Codex login as a coordinator would receive it. Codex keeps its
- * login in a file only, refreshed by the account's own Codex sessions; nothing
- * here refreshes it.
+ * login in a file only. Renew it in the owning home before handing out an
+ * access-only copy; the coordinator never receives the renewable login.
  */
 export async function readCoordinatorCodexLogin(
   active: ResolvedAgentAccount,
 ): Promise<CoordinatorCodexLogin> {
-  return coordinatorCodexLogin(await readCodexAuthFile(active.home ?? coordinatorHostCodexHome()));
+  const home = active.home ?? coordinatorHostCodexHome();
+  let raw = await readCodexAuthFile(home);
+  let login = coordinatorCodexLogin(raw);
+  if (!login.text && localCodexLoginRefresher && codexHasRefreshToken(raw)) {
+    await localCodexLoginRefresher(home).catch(() => undefined);
+    raw = await readCodexAuthFile(home);
+    login = coordinatorCodexLogin(raw);
+  }
+  return login;
+}
+
+let localCodexLoginRefresher: ((home: string) => Promise<void>) | undefined;
+
+export function setLocalCodexLoginRefresher(refresher: typeof localCodexLoginRefresher): void {
+  localCodexLoginRefresher = refresher;
+}
+
+function codexHasRefreshToken(raw: string | undefined): boolean {
+  try {
+    const token = JSON.parse(raw ?? "").tokens?.refresh_token;
+    return typeof token === "string" && token.trim() !== "";
+  } catch {
+    return false;
+  }
 }

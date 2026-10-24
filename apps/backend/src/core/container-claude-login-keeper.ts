@@ -200,10 +200,7 @@ export class ContainerClaudeLoginKeeper {
    * afterwards; never throws.
    */
   refreshHostIfDue(): Promise<ClaudeOAuthSummary | undefined> {
-    this.refreshing ??= this.refreshHostOnce("containers").finally(() => {
-      this.refreshing = null;
-    });
-    return this.refreshing;
+    return this.refreshFor("containers");
   }
 
   /**
@@ -213,7 +210,14 @@ export class ContainerClaudeLoginKeeper {
    * not stop it. Returns the login as it is afterwards; never throws.
    */
   refreshLocalLoginIfDue(): Promise<ClaudeOAuthSummary | undefined> {
-    this.refreshing ??= this.refreshHostOnce("local").finally(() => {
+    return this.refreshFor("local");
+  }
+
+  private refreshFor(consumer: "containers" | "local"): Promise<ClaudeOAuthSummary | undefined> {
+    // Share the refresh operation, then read for this consumer. A container
+    // opt-out must not make a simultaneous local launch inherit an empty read.
+    if (this.refreshing) return this.refreshing.then(() => this.refreshFor(consumer));
+    this.refreshing = this.refreshHostOnce(consumer).finally(() => {
       this.refreshing = null;
     });
     return this.refreshing;

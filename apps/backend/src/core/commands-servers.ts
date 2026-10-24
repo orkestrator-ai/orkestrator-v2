@@ -179,14 +179,13 @@ import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,
   applyCoordinatorClaudeAccount,
-  coordinatorCodexLogin,
+  readCoordinatorCodexLogin,
   coordinatorHostCodexHome,
   localBridgeIsOnActiveAccount,
   resolveActiveAgentAccount,
   stripInheritedAgentCredentials,
   type CoordinatorAgentAccount,
 } from "./agent-accounts-active.js";
-import { readCodexAuthFile } from "./agent-accounts-homes.js";
 
 /** Deletion drains briefly: the container is removed right after. */
 const DELETION_DRAIN_GRACE_SECONDS = 5;
@@ -229,7 +228,7 @@ export async function prepareCoordinatorCodexHome(
   if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
     throw new Error("Codex authentication file must be a regular file, not a symbolic link");
   }
-  const login = coordinatorCodexLogin(await readCodexAuthFile(source));
+  const login = await readCoordinatorCodexLogin({ accountId: "default", home: source });
   if (!login.text) return { loginless: true };
   const temporary = `${destinationAuth}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   try {

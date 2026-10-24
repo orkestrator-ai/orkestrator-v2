@@ -11,6 +11,8 @@ import {
   localBridgeIsOnActiveAccount,
   markLocalBridgesForLoginRefresh,
   setLocalClaudeLoginRefresher,
+  setLocalCodexLoginRefresher,
+  readCoordinatorCodexLogin,
 } from "./agent-accounts-active.js";
 import type { CommandContext } from "./commands-context.js";
 import * as commandFiles from "./commands-files.js";
@@ -22,6 +24,8 @@ import {
 } from "./agent-account-bridge-state.js";
 import { localServerProcesses } from "./commands-runtime-state.js";
 import { prepareCoordinatorClaudeHome, prepareCoordinatorCodexHome } from "./commands-servers.js";
+import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
+import { claudeKeychainService } from "./agent-accounts-homes.js";
 import { StorageService } from "./storage.js";
 
 const ACCOUNT_IDS = {
@@ -110,6 +114,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  setLocalCodexLoginRefresher(undefined);
   restoreHostCredentialRead?.();
   restoreHostCredentialRead = undefined;
   for (const [key, value] of Object.entries(savedEnv)) {
@@ -545,4 +550,90 @@ describe("prepareCoordinatorCodexHome", () => {
     const raw = JSON.stringify({ OPENAI_API_KEY: "sk-test-key" });
     expect(coordinatorCodexLogin(raw)).toEqual({ text: raw });
   });
+});
+
+test("renews an expired owner login without ordinary sessions before the coordinator handoff", async () => {
+  await activate("codex");
+  const home = accountHome("codex");
+  await fs.mkdir(home, { recursive: true });
+  await fs.writeFile(path.join(home, "auth.json"), codexAuth(Date.now() - 60_000));
+  let calls = 0;
+  const production = { ...context, runtimeFlavor: "production" } as CommandContext;
+  setLocalCodexLoginRefresher(
+    createCodexLoginRefresher(production, async (owner) => {
+      calls++;
+      expect(owner).toBe(home);
+      await fs.writeFile(
+        path.join(owner, "auth.json"),
+        codexAuth(Date.now() + 3600_000, "renewed"),
+      );
+    }),
+  );
+  const destination = path.join(root, "coordinator-codex");
+  const [login] = await Promise.all([
+    prepareCoordinatorCodexHome(destination, home),
+    readCoordinatorCodexLogin({ accountId: ACCOUNT_IDS.codex, home }),
+  ]);
+  expect(login.loginless).toBeUndefined();
+  expect(calls).toBe(1);
+  const owner = JSON.parse(await fs.readFile(path.join(home, "auth.json"), "utf8"));
+  const copy = JSON.parse(await fs.readFile(path.join(destination, "auth.json"), "utf8"));
+  expect(owner.tokens.refresh_token).toBe("refresh-renewed");
+  expect(copy.tokens.access_token).toBe(owner.tokens.access_token);
+  expect(copy.tokens.refresh_token).toBe("");
+  // The following turn can use the renewed token and does not spend it again.
+  expect(
+    (await readCoordinatorCodexLogin({ accountId: ACCOUNT_IDS.codex, home })).text,
+  ).toBeTruthy();
+  expect(calls).toBe(1);
+});
+
+test("macOS removes only each coordinator home's Keychain login, once per home", async () => {
+  const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+  const removed: string[] = [];
+  try {
+    for (const name of ["one", "one", "two"]) {
+      await applyCoordinatorClaudeAccount(
+        context,
+        path.join(root, name),
+        {},
+        prepareCoordinatorClaudeHome,
+        async () => undefined,
+        async (service) => {
+          removed.push(service);
+        },
+      );
+    }
+    expect(removed).toEqual([
+      claudeKeychainService(path.join(root, "one")),
+      claudeKeychainService(path.join(root, "two")),
+    ]);
+    expect(removed).not.toContain(claudeKeychainService(accountHome("claude")));
+    expect(removed).not.toContain("Claude Code-credentials");
+  } finally {
+    Object.defineProperty(process, "platform", original);
+  }
+});
+
+test("a due Codex coordinator renews its owning login on reuse and moves only while idle", async () => {
+  await activate("codex");
+  const home = accountHome("codex");
+  const key = "codex:renew-on-use";
+  await fs.mkdir(home, { recursive: true });
+  await fs.writeFile(path.join(home, "auth.json"), codexAuth(Date.now() + 60_000));
+  localAgentAccountIds.set(key, ACCOUNT_IDS.codex);
+  localAgentAccountTokenExpiry.set(key, Date.now() + 60_000);
+  let refreshes = 0;
+  setLocalCodexLoginRefresher(
+    createCodexLoginRefresher({ ...context, runtimeFlavor: "production" }, async (owner) => {
+      refreshes++;
+      await fs.writeFile(path.join(owner, "auth.json"), codexAuth(Date.now() + 3600_000));
+    }),
+  );
+  liveWork = true;
+  expect(await localBridgeIsOnActiveAccount(key, "codex", "renew-on-use", context)).toBe(true);
+  liveWork = false;
+  expect(await localBridgeIsOnActiveAccount(key, "codex", "renew-on-use", context)).toBe(false);
+  expect(refreshes).toBe(1);
 });

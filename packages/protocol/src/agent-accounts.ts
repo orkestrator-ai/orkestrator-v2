@@ -178,3 +178,82 @@ export interface AgentAccountLoginProgress {
   codeSubmitted?: boolean;
   error?: string;
 }
+
+/** Reconstruct peer sign-in metadata without retaining credentials or extra fields. */
+export function parseHostAgentSignIns(value: unknown): HostAgentSignIns | undefined {
+  if (!isAccountRecord(value)) return undefined;
+  const result: HostAgentSignIns = {};
+  for (const platform of HOST_SIGN_IN_PLATFORMS) {
+    const entry = value[platform];
+    if (!isAccountRecord(entry)) continue;
+    if (entry.state !== "signed-in" && entry.state !== "signed-out") continue;
+    result[platform] = {
+      state: entry.state,
+      ...(typeof entry.source === "string" && entry.source
+        ? { source: entry.source.slice(0, 120) }
+        : {}),
+    };
+  }
+  return result;
+}
+
+function isAccountRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Peer summaries are untrusted. Reject malformed rows and copy only display fields. */
+export function parseAgentAccountsSnapshot(value: unknown): AgentAccountsSnapshot | undefined {
+  if (!isAccountRecord(value) || !Array.isArray(value.accounts) || !isAccountRecord(value.active)) {
+    return undefined;
+  }
+  const { claude, codex } = value.active;
+  if (
+    typeof claude !== "string" ||
+    !claude ||
+    claude.length > 128 ||
+    typeof codex !== "string" ||
+    !codex ||
+    codex.length > 128
+  )
+    return undefined;
+  if (value.accounts.length > 2 * (MAX_AGENT_ACCOUNTS_PER_PLATFORM + 1)) return undefined;
+  const accounts: AgentAccountSummary[] = [];
+  const seen = new Set<string>();
+  for (const row of value.accounts) {
+    if (
+      !isAccountRecord(row) ||
+      !isAgentAccountPlatform(row.platform) ||
+      typeof row.id !== "string" ||
+      !row.id ||
+      row.id.length > 128 ||
+      typeof row.label !== "string" ||
+      !row.label ||
+      typeof row.isDefault !== "boolean" ||
+      typeof row.isActive !== "boolean" ||
+      typeof row.signedIn !== "boolean" ||
+      !isAccountRecord(row.identity)
+    )
+      return undefined;
+    const key = `${row.platform}:${row.id}`;
+    if (seen.has(key)) return undefined;
+    seen.add(key);
+    const identity: AgentAccountIdentity = {};
+    for (const field of ["email", "organizationName", "plan"] as const) {
+      const text = row.identity[field];
+      if (text !== undefined && typeof text !== "string") return undefined;
+      if (typeof text === "string") identity[field] = text.slice(0, 320);
+    }
+    if (row.createdAt !== undefined && typeof row.createdAt !== "string") return undefined;
+    accounts.push({
+      id: row.id,
+      platform: row.platform,
+      label: row.label.slice(0, MAX_AGENT_ACCOUNT_LABEL_LENGTH),
+      isDefault: row.isDefault,
+      isActive: row.isActive,
+      signedIn: row.signedIn,
+      identity,
+      ...(typeof row.createdAt === "string" ? { createdAt: row.createdAt.slice(0, 80) } : {}),
+    });
+  }
+  return { accounts, active: { claude, codex } };
+}

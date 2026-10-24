@@ -1,6 +1,6 @@
 import {
-  HOST_SIGN_IN_PLATFORMS,
-  type AgentAccountsSnapshot,
+  parseHostAgentSignIns,
+  parseAgentAccountsSnapshot,
   type HostAgentSignIns,
   type MachineAgentAccounts,
   type MachineAgentAccountsResult,
@@ -21,32 +21,6 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
     (timer as { unref?: () => void }).unref?.();
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-function isSnapshot(value: unknown): value is AgentAccountsSnapshot {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    Array.isArray((value as AgentAccountsSnapshot).accounts) &&
-    typeof (value as AgentAccountsSnapshot).active === "object"
-  );
-}
-
-/** Rebuilt field by field: another machine's answer is never passed through. */
-function parseSignIns(value: unknown): HostAgentSignIns | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const signIns: HostAgentSignIns = {};
-  for (const platform of HOST_SIGN_IN_PLATFORMS) {
-    const entry = (value as Record<string, unknown>)[platform];
-    if (!entry || typeof entry !== "object") continue;
-    const { state, source } = entry as { state?: unknown; source?: unknown };
-    if (state !== "signed-in" && state !== "signed-out") continue;
-    signIns[platform] = {
-      state,
-      ...(typeof source === "string" && source ? { source: source.slice(0, 120) } : {}),
-    };
-  }
-  return signIns;
 }
 
 /**
@@ -102,7 +76,7 @@ export async function listMachineAgentAccounts(
           }),
           timeoutMs,
         ).then(
-          (routed) => (routed.outcome === "ok" ? parseSignIns(routed.result) : undefined),
+          (routed) => (routed.outcome === "ok" ? parseHostAgentSignIns(routed.result) : undefined),
           () => undefined,
         );
         try {
@@ -110,14 +84,16 @@ export async function listMachineAgentAccounts(
             portal.invokeOnNode({ nodeId: view.nodeId, command: "list_agent_accounts", args: {} }),
             timeoutMs,
           );
-          if (routed.outcome !== "ok" || !isSnapshot(routed.result)) {
+          if (routed.outcome !== "ok") {
             return { ...base, state: "unavailable" };
           }
+          const snapshot = parseAgentAccountsSnapshot(routed.result);
+          if (!snapshot) return { ...base, state: "error", error: "Invalid account snapshot" };
           const read = await signIns;
           return {
             ...base,
             state: "ok",
-            snapshot: routed.result,
+            snapshot,
             ...(read ? { signIns: read } : {}),
           };
         } catch (error) {

@@ -9,13 +9,14 @@ import type {
 const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 let snapshot: AgentAccountsSnapshot;
 let session: AgentSessionAccount | null;
+let readSession: (() => Promise<AgentSessionAccount | null>) | undefined;
 
 mock.module("@/lib/native/backend", () => ({
   invoke: mock((command: string, args: Record<string, unknown> = {}) => {
     calls.push({ command, args });
     switch (command) {
       case "get_native_agent_session_account":
-        return Promise.resolve(session);
+        return readSession ? readSession() : Promise.resolve(session);
       case "list_agent_accounts":
         return Promise.resolve(snapshot);
       case "get_agent_account_login":
@@ -52,6 +53,7 @@ function account(overrides: Partial<AgentAccountSummary>): AgentAccountSummary {
 
 beforeEach(() => {
   calls.length = 0;
+  readSession = undefined;
   snapshot = {
     active: { claude: "default", codex: "default" },
     accounts: [
@@ -124,3 +126,85 @@ describe("AgentInfoAccountSection", () => {
     expect(screen.queryByRole("combobox") === null).toBe(true);
   });
 });
+
+for (const trigger of ["open", "activity"] as const) {
+  test(`refreshes a replaced bridge on ${trigger} while the panel remains mounted`, async () => {
+    session = {
+      platform: "claude",
+      source: "account",
+      account: account({}),
+      running: true,
+      pendingActive: snapshot.accounts[1],
+    };
+    const view = render(
+      <AgentInfoAccountSection
+        environmentId="env-1"
+        provider="claude"
+        open={false}
+        refreshKey={0}
+      />,
+    );
+    await screen.findByText(/Moves to Work/);
+    expect(screen.queryByRole("button", { name: "Sign in again" }) === null).toBe(true);
+    session = {
+      platform: "claude",
+      source: "account",
+      account: snapshot.accounts[1],
+      running: true,
+    };
+    view.rerender(
+      <AgentInfoAccountSection
+        environmentId="env-1"
+        provider="claude"
+        open={trigger === "open"}
+        refreshKey={trigger === "activity" ? 1 : 0}
+      />,
+    );
+    await screen.findByRole("button", { name: "Sign in again" });
+    expect(screen.queryByText(/Moves to Work/) === null).toBe(true);
+    expect(screen.getByText("work@example.com · team")).toBeTruthy();
+  });
+}
+
+for (const change of ["environment", "provider", "activity"] as const) {
+  test(`discards an old response after changing ${change}`, async () => {
+    let finishOld!: (value: AgentSessionAccount | null) => void;
+    readSession = () =>
+      new Promise((resolve) => {
+        finishOld = resolve;
+      });
+    const view = render(
+      <AgentInfoAccountSection environmentId="old" provider="claude" refreshKey={0} />,
+    );
+    await waitFor(() => expect(finishOld).toBeTruthy());
+    const current = {
+      platform: change === "provider" ? ("codex" as const) : ("claude" as const),
+      source: "account" as const,
+      account: account({ label: "Current" }),
+      running: true,
+    };
+    readSession = async () => current;
+    view.rerender(
+      <AgentInfoAccountSection
+        environmentId={change === "environment" ? "new" : "old"}
+        provider={current.platform}
+        refreshKey={1}
+      />,
+    );
+    await screen.findByText("Current");
+    await act(async () =>
+      finishOld({
+        platform: "claude",
+        source: "account",
+        account: account({ label: "Obsolete" }),
+        running: true,
+        pendingActive: snapshot.accounts[1],
+      }),
+    );
+    expect(screen.getByText("Current")).toBeTruthy();
+    expect(screen.queryByText("Obsolete") === null).toBe(true);
+    expect(screen.queryByText(/Moves to Work/) === null).toBe(true);
+    if (change !== "provider")
+      expect(screen.getByRole("button", { name: "Sign in again" })).toBeTruthy();
+  });
+}

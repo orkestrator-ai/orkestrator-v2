@@ -242,6 +242,13 @@ export class BrowserPreviewPinSessions {
   }
 
   async showPins(value: BrowserPreviewPinsInput): Promise<BrowserPreviewAnchorResult[]> {
+    return this.resolvePins(value, true);
+  }
+
+  private async resolvePins(
+    value: BrowserPreviewPinsInput,
+    count: boolean,
+  ): Promise<BrowserPreviewAnchorResult[]> {
     const input = pinsInput(value);
     const handle = this.handle(input.tabId);
     const generation = handle.generation;
@@ -351,7 +358,7 @@ export class BrowserPreviewPinSessions {
       }
     }
     const results = this.results(tab);
-    for (const result of results) this.countResolution(result.resolution);
+    if (count) for (const result of results) this.countResolution(result.resolution);
     return results;
   }
 
@@ -596,12 +603,15 @@ export class BrowserPreviewPinSessions {
 
     let last: WebAnnotationAnchorResolution | null = null;
     for (;;) {
-      const results = await this.showPins({
-        tabId: input.tabId,
-        pins: [input.pin, ...(input.pins ?? [])],
-        focusedAnnotationId: input.pin.annotationId,
-        scrollIntoView: true,
-      });
+      const results = await this.resolvePins(
+        {
+          tabId: input.tabId,
+          pins: [input.pin, ...(input.pins ?? [])],
+          focusedAnnotationId: input.pin.annotationId,
+          scrollIntoView: true,
+        },
+        false,
+      );
       last =
         results.find((entry) => entry.annotationId === input.pin.annotationId)?.resolution ?? null;
       if (last?.state === "matched") return outcome("shown", navigated, last);

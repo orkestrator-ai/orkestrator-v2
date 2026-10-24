@@ -142,6 +142,14 @@ export function useAnnotationPins({
   // moves forward within one view (events and replies can arrive in either
   // order), and starts again when the tab or its attached view changes.
   const generationRef = useRef<number | null>(null);
+  const viewRef = useRef({});
+  useEffect(() => {
+    const view = {};
+    viewRef.current = view;
+    return () => {
+      if (viewRef.current === view) viewRef.current = {};
+    };
+  }, [tabId, previewAttached, wanted]);
   useEffect(() => {
     generationRef.current = null;
   }, [tabId, previewAttached]);
@@ -157,10 +165,20 @@ export function useAnnotationPins({
       update: (
         current: ReadonlyMap<string, WebAnnotationAnchorResolution>,
       ) => ReadonlyMap<string, WebAnnotationAnchorResolution>,
+      view = viewRef.current,
+      snapshotGeneration?: number | null,
     ) => {
       setPinResults((current) => {
+        if (view !== viewRef.current) return current;
         const next = update(current);
-        noteGeneration(newestGeneration(next.values()));
+        const generation = snapshotGeneration ?? newestGeneration(next.values());
+        if (
+          generation !== null &&
+          generationRef.current !== null &&
+          generation < generationRef.current
+        )
+          return current;
+        noteGeneration(generation);
         return currentDocumentResults(next, generationRef.current);
       });
     },
@@ -197,13 +215,20 @@ export function useAnnotationPins({
     async (pins: BrowserPreviewAnchorQuery[]) => {
       const api = getBrowserPreviewCaptureApi();
       if (!api) return;
+      const view = viewRef.current;
+      const generation = generationRef.current;
       lastPinsRef.current = pins;
       const results = await api.showPins({
         tabId,
         pins,
         focusedAnnotationId: selectedRef.current,
       });
-      if (wantedRef.current) applyResults(() => resultMap(results ?? []));
+      if (wantedRef.current)
+        applyResults(
+          () => resultMap(results ?? []),
+          view,
+          newestGeneration((results ?? []).map((entry) => entry.resolution)) ?? generation,
+        );
     },
     [applyResults, tabId],
   );
@@ -242,16 +267,16 @@ export function useAnnotationPins({
         // A new document: the previous page's results go now, not when the
         // re-sent pins come back.
         noteGeneration(event.documentGeneration);
-        applyResults((current) => current);
+        applyResults((current) => currentDocumentResults(current, generationRef.current));
         void send(lastPinsRef.current).catch(() => undefined);
       } else if (event.status === "pins-changed" && api.getPinResults) {
         noteGeneration(event.documentGeneration);
+        const view = viewRef.current;
         void api
           .getPinResults(tabId)
           .then((snapshot) => {
             if (!snapshot || !wantedRef.current) return;
-            noteGeneration(snapshot.documentGeneration);
-            applyResults(() => resultMap(snapshot.results));
+            applyResults(() => resultMap(snapshot.results), view, snapshot.documentGeneration);
           })
           .catch(() => undefined);
       }
@@ -286,6 +311,7 @@ export function useAnnotationPins({
           reason: "Showing notes on the page needs the Orkestrator desktop preview.",
         };
       }
+      const view = viewRef.current;
       const record = await loadWebAnnotationCapture(environmentId, annotation.currentCaptureId);
       const pin = record ? pinQuery(annotation, 1, record) : null;
       if (!record || !pin) {
@@ -313,8 +339,11 @@ export function useAnnotationPins({
           });
           // After a navigation this is the destination document: results
           // for the page that was left are dropped with it.
-          noteGeneration(result.documentGeneration);
-          applyResults((current) => new Map(current).set(annotation.id, result.resolution));
+          applyResults(
+            (current) => new Map(current).set(annotation.id, result.resolution),
+            view,
+            result.documentGeneration,
+          );
           switch (result.outcome) {
             case "shown":
               return { status: "shown", navigated: result.navigated };
@@ -348,7 +377,7 @@ export function useAnnotationPins({
         });
         const resolution = results.find((item) => item.annotationId === annotation.id)?.resolution;
         if (!resolution) return { status: "not-found", reason: "no match" };
-        applyResults(() => resultMap(results));
+        applyResults(() => resultMap(results), view);
         if (resolution.offPage) return { status: "off-page", route: annotation.page.route };
         if (resolution.state === "matched" && !resolution.historical) return { status: "shown" };
         return { status: "not-found", reason: anchorStateLabel(resolution), resolution };
@@ -359,7 +388,7 @@ export function useAnnotationPins({
         };
       }
     },
-    [applyResults, currentPage, environmentId, noteGeneration, previewAttached, tabId],
+    [applyResults, currentPage, environmentId, previewAttached, tabId],
   );
 
   return { pinResults, showOnPage };

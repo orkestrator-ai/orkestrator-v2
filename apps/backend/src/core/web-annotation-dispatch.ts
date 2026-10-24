@@ -40,7 +40,10 @@ import {
 } from "./native-agent-service-shared.js";
 import { assertValidPromptAttachments } from "./prompt-attachments.js";
 import type { StorageService } from "./storage.js";
-import { PROMPT_QUEUE_MESSAGE_CONFLICT } from "./storage-prompts.js";
+import {
+  PROMPT_QUEUE_MESSAGE_CONFLICT,
+  PROMPT_QUEUE_NEW_PUBLICATION_REFUSED,
+} from "./storage-prompts.js";
 import type {
   BriefDestinationCapabilities,
   CancelOutcome,
@@ -627,16 +630,6 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
       dispatchMode,
       sessionModeLeft,
     } = await this.dispatchModeFields(request);
-    if (sessionModeLeft && !(await this.queuedWithSameBody(queueKey, request, text))) {
-      // Read-only discussion relied on the session's own Plan mode, and the
-      // session left it after preparation. Sending would either switch the
-      // mode back or run the discussion with write access; neither happens.
-      return {
-        status: "rejected",
-        reason:
-          "The session is no longer in Plan mode, so this read-only discussion was not sent. Switch the session to Plan in its chat, or discuss again to send it as advisory.",
-      };
-    }
     const message = {
       id: request.id,
       requestId: request.id,
@@ -653,9 +646,18 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
         queueKey,
         request.environmentId,
         message,
+        undefined,
+        !sessionModeLeft,
       ));
     } catch (error) {
       const reason = errorMessage(error);
+      if (reason === PROMPT_QUEUE_NEW_PUBLICATION_REFUSED) {
+        return {
+          status: "rejected",
+          reason:
+            "The session is no longer in Plan mode, so this read-only discussion was not sent. Switch the session to Plan in its chat, or discuss again to send it as advisory.",
+        };
+      }
       if (reason.startsWith(PROMPT_QUEUE_MESSAGE_CONFLICT)) {
         // The same request/body may already be queued with other delivery
         // fields (a message written by an earlier backend version). That is

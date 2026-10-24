@@ -41,7 +41,9 @@ import { useThreadHistory } from "./useThreadHistory";
  */
 function regionCropAssetId(capture: WebAnnotationCapture): string | null {
   if (capture.regionCrop) return capture.regionCrop.assetId;
-  return capture.target.kind === "region" ? (capture.assetIds[1] ?? null) : null;
+  return capture.target.kind === "region" && !capture.producerSource
+    ? (capture.assetIds[1] ?? null)
+    : null;
 }
 
 function CaptureEvidence({ capture }: { capture: WebAnnotationCapture }) {
@@ -450,6 +452,21 @@ export function AnnotationThread({
                 className="max-h-32"
               />
             )}
+            {captureRecord.assetIds
+              .filter(
+                (id) =>
+                  id !== (captureRecord.regionCrop?.sourceAssetId ?? captureRecord.assetIds[0]) &&
+                  id !== regionCropAssetId(captureRecord),
+              )
+              .map((id) => (
+                <AnnotationImage
+                  key={id}
+                  environmentId={environmentId}
+                  assetId={id}
+                  alt={`Evidence for ${annotation.targetLabel}`}
+                  className="max-h-32"
+                />
+              ))}
             {captureRecord.regionCrop && (
               <p className="text-[11px] text-muted-foreground" data-region-crop>
                 The region is cut from the full screenshot above.

@@ -127,7 +127,7 @@ export function regionCropRelation(
   const height = Math.max(0, Math.min(source.height - y, Math.round(rect.height)));
   if (width < 1 || height < 1) return null;
   if (Math.abs(crop.width - width) > 1 || Math.abs(crop.height - height) > 1) return null;
-  return { assetId: crop.id, sourceAssetId: source.id, sourceRect: { ...rect } };
+  return { assetId: crop.id, sourceAssetId: source.id, sourceRect: { x, y, width, height } };
 }
 
 function continuationTitle(title: string): string {

@@ -257,6 +257,72 @@ describe("web annotation request flow (real queue and adapter)", () => {
     expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([]);
   });
 
+  test("a prepared session-Plan discussion recovers its consumed receipt after switching to Build", async () => {
+    const target: WebAnnotationDestination = {
+      agent: "codex",
+      tabId: "codex",
+      logicalSessionKey: `env-${ENV_A}:codex`,
+    };
+    const key = nativeAgentSessionStorageKey(ENV_A, "codex", target.logicalSessionKey);
+    const queueKey = webAnnotationQueueKey(target);
+    await storage.getOrCreateNativeAgentSession(
+      {
+        key,
+        environmentId: ENV_A,
+        agent: "codex",
+        logicalSessionKey: target.logicalSessionKey,
+        controls: { mode: "plan" },
+      },
+      async () => "provider-codex",
+    );
+    const x = await note(ENV_A, "Discuss the spacing");
+    const { annotation } = await service.get(ENV_A, x.annotationId);
+    const preparation = await service.prepare({
+      environmentId: ENV_A,
+      operation: "discuss",
+      destination: target,
+      annotations: [
+        {
+          annotationId: annotation.id,
+          expectedContentRevision: annotation.contentRevision,
+          expectedCaptureId: annotation.currentCaptureId,
+        },
+      ],
+      instruction: "",
+    });
+    expect(preparation.readOnly).toBe("plan-mode");
+    const original = storage.enqueuePromptQueueMessageIfAbsent.bind(storage);
+    storage.enqueuePromptQueueMessageIfAbsent = async (...args) => {
+      const receipt = await original(...args);
+      throw new Error(`crash before committing ${receipt.status} receipt`);
+    };
+    const sent = await service.send({
+      environmentId: ENV_A,
+      preparationId: preparation.preparationId,
+      requestId: "plan-recovery",
+      bodyHash: preparation.bodyHash,
+    });
+    expect(sent.request.state).toBe("prepared");
+    storage.enqueuePromptQueueMessageIfAbsent = original;
+    await storage.reservePromptQueueHeadForDispatch(queueKey);
+    await storage.dispatchNativeAgentPromptOnce(key, "plan-recovery", async () => {});
+    await storage.acknowledgePromptQueueDispatch(queueKey, "plan-recovery");
+    await storage.updateNativeAgentSessionControls(key, "provider-codex", { mode: "build" });
+    activity.set(ENV_A, "idle");
+    await restart();
+    await service.reconcileOnce();
+    await service.reconcileOnce();
+    expect(await requestOf(ENV_A, "plan-recovery")).toMatchObject({
+      state: "completed",
+      turnOutcome: "completed",
+      reservation: false,
+    });
+    expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([]);
+    expect((await storage.getNativeAgentSession(key))?.dispatchedRequestIds).toEqual([
+      "plan-recovery",
+    ]);
+  });
+
   test("a crash after commit but before the queue write re-publishes the same id once", async () => {
     const x = await note(ENV_A, "Fix the typo");
     const original = storage.enqueuePromptQueueMessageIfAbsent.bind(storage);

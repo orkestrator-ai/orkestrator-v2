@@ -115,6 +115,37 @@ describe("request composer", () => {
     );
   });
 
+  test("refreshing a selected session updates its Plan status and clears advisory notices", async () => {
+    backend.destinations = [
+      {
+        ...backend.destinations[0]!,
+        destination: {
+          agent: "codex",
+          tabId: "tab-codex",
+          logicalSessionKey: "env-env-1:tab-codex",
+        },
+        title: "Codex",
+        planMode: false,
+        planModeScope: "session",
+      },
+    ];
+    render(<AnnotationHarness />);
+    fireEvent.click(await screen.findByRole("button", { name: "Discuss…" }));
+    const composer = await screen.findByRole("region", { name: "Ask an agent" });
+    fireEvent.click(await within(composer).findByRole("radio", { name: /Codex/ }));
+    await waitFor(() => expect(composer.querySelector("[data-discuss-advisory]")).not.toBeNull());
+    backend.destinations = [{ ...backend.destinations[0]!, planMode: true }];
+    fireEvent.click(within(composer).getByRole("button", { name: "Refresh agent sessions" }));
+    await waitFor(() => {
+      expect(composer.querySelector("[data-discuss-advisory]") === null).toBe(true);
+      expect(composer.querySelector("[data-read-only-alternatives]") === null).toBe(true);
+    });
+    expect(within(composer).getByRole("button", { name: "Discuss with Codex" })).toBeTruthy();
+    expect(
+      within(composer).getByRole("radio", { name: /Codex/ }).getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
   test("with no read-only session the advisory label stands", async () => {
     backend.destinations = [{ ...backend.destinations[0]!, planMode: false }];
     render(<AnnotationHarness />);

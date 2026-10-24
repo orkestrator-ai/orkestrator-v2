@@ -737,6 +737,7 @@ export class NativeAgentPromptQueueDispatcher {
         reasoningEffort: queueReasoningEffort(message),
         phase: queueExecutionMode(agent, message) === "plan" ? "review" : "build",
         mode: queueDispatchMode(agent, message),
+        ...(requiredMode === "plan" ? { requireSessionMode: requiredMode } : {}),
         fastMode: queueFastMode(agent, message),
         subAgent: queueString(message, "agent"),
         executionAgent: queueString(message, "executionAgent") ?? queueString(message, "agent"),

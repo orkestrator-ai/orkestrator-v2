@@ -365,6 +365,33 @@ describe("compileWebAnnotationBrief", () => {
     expect(plainImages.every((image) => image.role === undefined)).toBe(true);
   });
 
+  test("deduplicated viewport and crop digests retain each annotation's image roles", () => {
+    const annotations = ["first", "second"].map((id) => {
+      const full = asset(`full-${id}`, "shared-viewport");
+      const crop = asset(`crop-${id}`, "shared-crop");
+      return item(id, {
+        capture: fixtureCapture("region", {
+          id: `capture-${id}`,
+          assetIds: [full.id, crop.id],
+          regionCrop: {
+            assetId: crop.id,
+            sourceAssetId: full.id,
+            sourceRect: { x: 20, y: 40, width: 320, height: 120 },
+          },
+        }),
+        assets: [full, crop],
+      });
+    });
+    const brief = compileWebAnnotationBrief(input({ annotations }));
+    expect(brief.attachments).toHaveLength(2);
+    for (const annotation of envelope(brief.body).annotations) {
+      expect((annotation.image as { images: unknown[] }).images).toEqual([
+        expect.objectContaining({ role: "viewport", digest: annotations[0]!.assets[0]!.digest }),
+        expect.objectContaining({ role: "region-crop", cropOf: annotations[0]!.assets[0]!.digest }),
+      ]);
+    }
+  });
+
   test("images are deduplicated by digest and capped by count and bytes", () => {
     const shared = asset("asset-a", "same");
     const twin = { ...asset("asset-b", "same"), id: "asset-b" };

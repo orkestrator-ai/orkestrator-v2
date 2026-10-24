@@ -53,7 +53,11 @@ describe("region crop relation", () => {
         { id: "full", width: 1280, height: 800 },
         { id: "crop", width: 181, height: 100 },
       ]),
-    ).not.toBeNull();
+    ).toEqual({
+      assetId: "crop",
+      sourceAssetId: "full",
+      sourceRect: { x: 1100, y: 700, width: 180, height: 100 },
+    });
   });
 
   test("records nothing for other shapes", () => {

@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useAnnotationUiTestBudget } from "@/test/web-annotation-harness";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { fixtureEntry } from "@orkestrator/protocol/testing/web-annotations-fixtures";
+import {
+  fixtureCapture,
+  fixtureEntry,
+} from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import {
@@ -143,6 +146,55 @@ describe("annotation threads and list", () => {
     expect(backend.annotations.get("annotation-b")!.state).toBe("open");
     expect(await screen.findByRole("button", { name: "Open note: Footer links" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open note: Header spacing" }) === null).toBe(true);
+  });
+
+  for (const kind of ["related", "legacy", "unrelated"] as const) {
+    test(`renders ${kind} region images with their provenance`, async () => {
+      const annotation = backend.seed({ id: "annotation-region", title: "Region note" });
+      backend.assets.set("full", "data:image/png;base64,iVBORw0KGgo=");
+      backend.assets.set("second", "data:image/png;base64,iVBORw0KGgo=");
+      backend.captures.set(
+        annotation.currentCaptureId,
+        fixtureCapture("region", {
+          id: annotation.currentCaptureId,
+          assetIds: ["full", "second"],
+          producerSource: kind === "legacy" ? undefined : "client-declared",
+          ...(kind === "related"
+            ? {
+                regionCrop: {
+                  assetId: "second",
+                  sourceAssetId: "full",
+                  sourceRect: { x: 0, y: 0, width: 10, height: 10 },
+                },
+              }
+            : {}),
+        }),
+      );
+      openThread(annotation.id);
+      render(<AnnotationHarness />);
+      await screen.findByRole("region", { name: "Captured target" });
+      await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(2));
+      expect(screen.queryByRole("img", { name: /Selected region/ }) !== null).toBe(
+        kind !== "unrelated",
+      );
+      expect(document.querySelector("[data-region-crop]") !== null).toBe(kind === "related");
+      expect(document.querySelector("[data-capture-producer]")?.textContent).toContain(
+        "reported by the client, not verified",
+      );
+    });
+  }
+
+  test("backend capture provenance is shown as an after-capture", async () => {
+    const annotation = backend.seed({ id: "annotation-backend", title: "After" });
+    const capture = backend.captures.get(annotation.currentCaptureId)!;
+    backend.captures.set(capture.id, {
+      ...capture,
+      producer: "result-capture",
+      producerSource: "backend",
+    });
+    openThread(annotation.id);
+    render(<AnnotationHarness />);
+    expect(await screen.findByText("After-capture for review")).toBeTruthy();
   });
 
   test("shows missing images distinctly from stale captures", async () => {

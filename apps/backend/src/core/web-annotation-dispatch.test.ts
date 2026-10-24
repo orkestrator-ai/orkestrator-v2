@@ -10,6 +10,7 @@ import {
 } from "@orkestrator/protocol/web-annotations";
 import { fixtureRequest } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
+import { AmbiguousPromptDispatchError } from "./native-agent-provider.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { StorageService } from "./storage.js";
 import {
@@ -371,6 +372,64 @@ describe("WebAnnotationDispatchAdapter.publish", () => {
       await adapter.publish({ request: discuss("req-d1"), text: text("req-d1", "b", "discuss") }),
     ).toEqual({ status: "queued", dispatchMode: "plan" });
   });
+
+  for (const receipt of ["consumed", "pending", "removed"] as const) {
+    test(`a ${receipt} session-Plan discussion is recovered after leaving Plan without republishing`, async () => {
+      const destination: WebAnnotationDestination = {
+        agent: "codex",
+        tabId: "codex",
+        logicalSessionKey: `env-${ENV}:codex`,
+      };
+      const key = nativeAgentSessionStorageKey(ENV, "codex", destination.logicalSessionKey);
+      const queueKey = webAnnotationQueueKey(destination);
+      await storage.getOrCreateNativeAgentSession(
+        {
+          key,
+          environmentId: ENV,
+          agent: "codex",
+          logicalSessionKey: destination.logicalSessionKey,
+          controls: { mode: "plan" },
+        },
+        async () => "provider-codex",
+      );
+      const prepared = request({
+        state: "prepared",
+        operation: "discuss",
+        readOnly: "plan-mode",
+        destination,
+        queueKey,
+      });
+      const publication = { request: prepared, text: text("req-1", "brief", "discuss") };
+      expect((await adapter.publish(publication)).status).toBe("queued");
+      if (receipt === "removed") {
+        await storage.removePromptQueueMessage(queueKey, ENV, prepared.id);
+      } else {
+        await storage.reservePromptQueueHeadForDispatch(queueKey);
+        if (receipt === "consumed") {
+          await storage.dispatchNativeAgentPromptOnce(key, prepared.id, async () => {});
+        } else {
+          await expect(
+            storage.dispatchNativeAgentPromptOnce(
+              key,
+              prepared.id,
+              async () => {
+                throw new AmbiguousPromptDispatchError("socket closed");
+              },
+              {
+                requestId: prepared.id,
+                prompt: publication.text,
+                createdAt: new Date().toISOString(),
+              },
+            ),
+          ).rejects.toThrow("socket closed");
+        }
+        await storage.acknowledgePromptQueueDispatch(queueKey, prepared.id);
+      }
+      await storage.updateNativeAgentSessionControls(key, "provider-codex", { mode: "build" });
+      expect(await adapter.publish(publication)).toEqual({ status: "consumed" });
+      expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([]);
+    });
+  }
 
   test("an id removed from the chat queue is consumed and never republished", async () => {
     await adapter.publish({ request: request(), text: text() });

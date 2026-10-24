@@ -329,17 +329,18 @@ function sectionValues(
     // backend-recorded relation says which is which.
     const crop = capture?.regionCrop;
     const digestOf = (assetId: string) =>
-      plan.images.find((image) => image.assetId === assetId)?.digest;
+      input.assets.find((asset) => asset.id === assetId)?.digest;
     const cropSource = crop ? digestOf(crop.sourceAssetId) : undefined;
+    const cropDigest = crop ? digestOf(crop.assetId) : undefined;
     values.set("image", {
       images: plan.images.map((image) => ({
         digest: image.digest,
         width: image.width,
         height: image.height,
         bytes: image.bytes,
-        ...(crop && cropSource && image.assetId === crop.assetId
+        ...(crop && cropSource && image.digest === cropDigest
           ? { role: "region-crop", cropOf: cropSource, sourceRect: crop.sourceRect }
-          : crop && cropSource && image.assetId === crop.sourceAssetId
+          : crop && cropSource && image.digest === cropSource
             ? { role: "viewport" }
             : {}),
       })),

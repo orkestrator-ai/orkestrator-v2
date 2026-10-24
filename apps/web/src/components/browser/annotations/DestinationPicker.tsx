@@ -108,6 +108,10 @@ export function DestinationPicker({
         ? result.options.filter((option) => option.destination.tabId !== excludeTabId)
         : result.options;
       setOptions(usable);
+      const selected = usable.find(
+        (option) => option.destination.tabId === latest.current.valueTabId,
+      );
+      if (selected) latest.current.onChange(selected);
       return usable;
     } catch (loadError) {
       setError(describeWebAnnotationError(loadError));

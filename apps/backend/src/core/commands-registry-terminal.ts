@@ -1203,7 +1203,10 @@ export function registerTerminalCommands(
   // workspace (web annotation file checks). Runs `stat` only, inside the
   // container, with the same bounds as the local check; never reads contents.
   register("check_container_workspace_paths", async ({ containerId, paths }) => {
-    const id = asString(containerId, "containerId");
+    const id = asNonBlankString(containerId, "containerId");
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(id)) {
+      throw new Error("containerId must be a Docker container name or ID");
+    }
     if (
       !Array.isArray(paths) ||
       paths.length > MAX_WORKSPACE_PATH_CHECKS ||

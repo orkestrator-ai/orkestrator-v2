@@ -142,6 +142,9 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
+/** New insertion was refused after all existing dispatch receipts were checked. */
+export const PROMPT_QUEUE_NEW_PUBLICATION_REFUSED = "Prompt queue new publication refused";
+
 /** Prefix of an idempotent enqueue whose id is already used by a different body. */
 export const PROMPT_QUEUE_MESSAGE_CONFLICT = "Prompt queue message conflict:";
 
@@ -334,12 +337,14 @@ export abstract class StoragePrompts extends StorageNative {
    *
    * `fingerprint` defaults to {@link canonicalPromptQueueMessageFingerprint}
    * of `message`; a present id with a different fingerprint is a conflict.
+   * `allowNewMessage` gates only insertion, after checking durable receipts.
    */
   async enqueuePromptQueueMessageIfAbsent(
     queueKey: string,
     environmentId: string,
     message: unknown,
     fingerprint?: string,
+    allowNewMessage = true,
   ): Promise<{ status: "queued" | "present" | "consumed"; queue: PersistedPromptQueue | null }> {
     if (!isNonBlankString(queueKey)) {
       throw new Error("Prompt queue key must not be blank");
@@ -397,6 +402,10 @@ export abstract class StoragePrompts extends StorageNative {
       ) {
         return { status: "consumed" as const, queue: previous ?? null };
       }
+
+      // Recovery receipts above remain authoritative even when new publication
+      // is no longer allowed (for example, a read-only session left Plan).
+      if (!allowNewMessage) throw new Error(PROMPT_QUEUE_NEW_PUBLICATION_REFUSED);
 
       const queue = await this.savePromptQueueMutation(
         queues,

@@ -15,7 +15,7 @@ async function createTempDir(prefix: string): Promise<string> {
 }
 
 afterEach(async () => {
-  commandTesting.resetLocalServerLifecycle();
+  commandTesting.resetOpenCodeHostStart();
   await Promise.all(
     tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
   );

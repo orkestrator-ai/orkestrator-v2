@@ -73,8 +73,8 @@ mostly inside containers. How accounts work is in
     (`linkSharedEntries` in `agent-accounts-homes.ts`).
   - Backend-driven CLI login (`agent-accounts-login.ts`).
   - The active-account launch and the stale-login flags (`agent-accounts-active.ts`,
-    `agent-account-bridge-state.ts`: `localAgentAccountIds`,
-    `staleLoginLocalBridges`, `staleLoginEnvironmentIds`).
+    and the per-bridge launch facts and stale-login flags in
+    `LocalServerRuntime`, `local-server-runtime.ts`).
   - Container hand-off (`agent-accounts-containers.ts`:
     `refreshStagedAgentAccountLogins`, `syncContainerAgentAccountsOnStart`,
     `reconcileContainerAgentAccount`, `syncContainerClaudeLogin`). Claude
@@ -224,7 +224,7 @@ Each was checked against the current code.
   are folded into the new account's card". The code now gates folding on the
   reporting bridge's account: `contextUsageWithPlanUsage`
   (`plan-usage-cache.ts`) folds only when the connection's `accountId`
-  (`localAgentAccountIds`, set at launch) matches the active account. Container
+  (`LocalServerRuntime.launchedAccountId`, set at launch) matches the active account. Container
   bridges report `"unknown"`, so their windows never fold. Confirm with a live
   switch during a running turn, then drop the gap or restate it.
 

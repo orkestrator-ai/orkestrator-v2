@@ -67,9 +67,7 @@ import {
 } from "./commands-registry-mcp.js";
 import { McpManagementService } from "./mcp-management/service.js";
 import {
-  closeLocalServerAdmission,
   createCommandRegistry,
-  shutdownLocalServers,
   shutdownPrMonitorTracking,
   type BackendEmit,
   type CommandContext,
@@ -578,6 +576,7 @@ export class OrkestratorBackend {
       },
       {
         changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
+        localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
@@ -1921,7 +1920,7 @@ export class OrkestratorBackend {
         // Close both admission gates before waiting on any in-flight work.
         // Starting the pipeline drain immediately also prevents its scheduler
         // from admitting more backend-owned work during shutdown.
-        closeLocalServerAdmission();
+        this.runtime.localServers.closeAdmission();
         const lifecycleDrain = this.environmentLifecycleTasks.beginShutdown(
           this.environmentLifecycleDrainTimeoutMs,
         );
@@ -1968,7 +1967,7 @@ export class OrkestratorBackend {
         this.workflowAdmission.close();
         await lifecycleDrain;
         await flushTerminalHistories(true);
-        await shutdownLocalServers({
+        await this.runtime.localServers.shutdown({
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });
       } finally {

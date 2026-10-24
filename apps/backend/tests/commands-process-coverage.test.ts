@@ -928,7 +928,9 @@ describe("process and platform command behavior", () => {
 
       // Once the POST lands, the same observer reports usable ticket tools.
       await waitFor(
-        () => __testing.openCodeAgentToolsState("container:container-existing") === "connected",
+        () =>
+          context.runtime.localServers.openCodeAgentTools.state("container:container-existing") ===
+          "connected",
         "the recorded connected outcome",
       );
       await expect(
@@ -946,7 +948,7 @@ describe("process and platform command behavior", () => {
     } finally {
       // Retire the memo so a later test against this container reconciles
       // rather than inheriting this generation's recorded outcome.
-      __testing.cancelOpenCodeAgentToolsConfiguration("container:container-existing");
+      context.runtime.localServers.openCodeAgentTools.cancel("container:container-existing");
       await openCode.close();
     }
   });

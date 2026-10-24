@@ -1,4 +1,4 @@
-import { describe, expect, test, spyOn } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 
 import type { CommandContext } from "./commands-context.js";
 import {
@@ -8,10 +8,17 @@ import {
   ContainerClaudeLoginKeeper,
 } from "./container-claude-login-keeper.js";
 import * as credentialFiles from "./commands-files.js";
-import {
-  localAgentAccountTokenExpiry,
-  loginlessLocalBridges,
-} from "./agent-account-bridge-state.js";
+import { BackendRuntime } from "./backend-runtime.js";
+
+const runtimes: BackendRuntime[] = [];
+function trackedRuntime(): BackendRuntime {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  runtimes.push(runtime);
+  return runtime;
+}
+afterEach(() => {
+  for (const runtime of runtimes.splice(0)) runtime.shutdown();
+});
 import type { Environment } from "./models.js";
 
 const NOW = Date.parse("2026-10-21T12:00:00Z");
@@ -45,6 +52,7 @@ function harness(options: {
   const refreshed: string[] = [];
   let credentialIndex = 0;
   const context = {
+    runtime: trackedRuntime(),
     runtimeFlavor: options.runtimeFlavor,
     credentialSources: new Set(["claude"]),
     registryWriterLease:
@@ -290,6 +298,7 @@ test("default local bridge detection reads the host login and ignores other prov
     login(NOW + 3600_000),
   );
   const context = {
+    runtime: trackedRuntime(),
     runtimeFlavor: "production",
     storage: {
       loadConfig: async () => ({ global: { useHostClaudeCredentials: false } }),
@@ -298,14 +307,26 @@ test("default local bridge detection reads the host login and ignores other prov
   } as unknown as CommandContext;
   const keeper = new ContainerClaudeLoginKeeper(context, { now: () => NOW });
   try {
-    loginlessLocalBridges.add("codex:other");
+    context.runtime.localServers.adoptProcess("codex:other", {} as never, {
+      workingDirectory: "/isolated",
+      loginless: true,
+    });
     await keeper.tick();
     expect(read).not.toHaveBeenCalled();
-    loginlessLocalBridges.add("claude:waiting");
+    context.runtime.localServers.adoptProcess("claude:waiting", {} as never, {
+      workingDirectory: "/isolated",
+      loginless: true,
+    });
     await keeper.tick();
     expect(read).toHaveBeenCalledTimes(1);
-    loginlessLocalBridges.delete("claude:waiting");
-    localAgentAccountTokenExpiry.set("claude:running", NOW + 3600_000);
+    context.runtime.localServers.releaseOwnership(
+      "claude:waiting",
+      context.runtime.localServers.process("claude:waiting")!,
+    );
+    context.runtime.localServers.adoptProcess("claude:running", {} as never, {
+      workingDirectory: "/isolated",
+      tokenExpiresAt: NOW + 3600_000,
+    });
     await keeper.tick();
     expect(read).toHaveBeenCalledTimes(2);
     context.runtimeFlavor = "agent-test";
@@ -313,9 +334,18 @@ test("default local bridge detection reads the host login and ignores other prov
     expect(read).toHaveBeenCalledTimes(2);
   } finally {
     read.mockRestore();
-    loginlessLocalBridges.delete("codex:other");
-    loginlessLocalBridges.delete("claude:waiting");
-    localAgentAccountTokenExpiry.delete("claude:running");
+    context.runtime.localServers.releaseOwnership(
+      "codex:other",
+      context.runtime.localServers.process("codex:other")!,
+    );
+    context.runtime.localServers.releaseOwnership(
+      "claude:waiting",
+      context.runtime.localServers.process("claude:waiting")!,
+    );
+    context.runtime.localServers.releaseOwnership(
+      "claude:running",
+      context.runtime.localServers.process("claude:running")!,
+    );
   }
 });
 
@@ -328,6 +358,7 @@ test("the default local read resolves an added account's own credentials", async
   );
   const id = "11111111-2222-4333-8444-555555555555";
   const context = {
+    runtime: trackedRuntime(),
     runtimeFlavor: "production",
     storage: {
       loadConfig: async () => ({ global: { useHostClaudeCredentials: false } }),
@@ -421,10 +452,9 @@ test("local and container consumers serialize refresh and both observe the renew
 });
 
 test("default local detection includes token and loginless Claude bridges only", async () => {
-  const { localAgentAccountTokenExpiry, loginlessLocalBridges } =
-    await import("./agent-account-bridge-state.js");
   let reads = 0;
   const context = {
+    runtime: trackedRuntime(),
     storage: {
       loadConfig: async () => ({ global: { useHostClaudeCredentials: false } }),
       loadAgentAccounts: async () => ({ active: {} }),
@@ -438,19 +468,40 @@ test("default local detection includes token and loginless Claude bridges only",
     now: () => NOW,
   });
   try {
-    loginlessLocalBridges.add("codex:keeper-test");
+    context.runtime.localServers.adoptProcess("codex:keeper-test", {} as never, {
+      workingDirectory: "/isolated",
+      loginless: true,
+    });
     await keeper.tick();
     expect(reads).toBe(0);
-    loginlessLocalBridges.add("claude:keeper-test");
+    context.runtime.localServers.adoptProcess("claude:keeper-test", {} as never, {
+      workingDirectory: "/isolated",
+      loginless: true,
+    });
     await keeper.tick();
     expect(reads).toBe(1);
-    loginlessLocalBridges.delete("claude:keeper-test");
-    localAgentAccountTokenExpiry.set("claude:keeper-test", NOW + 60_000);
+    context.runtime.localServers.releaseOwnership(
+      "claude:keeper-test",
+      context.runtime.localServers.process("claude:keeper-test")!,
+    );
+    context.runtime.localServers.adoptProcess("claude:keeper-test", {} as never, {
+      workingDirectory: "/isolated",
+      tokenExpiresAt: NOW + 60_000,
+    });
     await keeper.tick();
     expect(reads).toBe(2);
   } finally {
-    loginlessLocalBridges.delete("codex:keeper-test");
-    loginlessLocalBridges.delete("claude:keeper-test");
-    localAgentAccountTokenExpiry.delete("claude:keeper-test");
+    context.runtime.localServers.releaseOwnership(
+      "codex:keeper-test",
+      context.runtime.localServers.process("codex:keeper-test")!,
+    );
+    context.runtime.localServers.releaseOwnership(
+      "claude:keeper-test",
+      context.runtime.localServers.process("claude:keeper-test")!,
+    );
+    context.runtime.localServers.releaseOwnership(
+      "claude:keeper-test",
+      context.runtime.localServers.process("claude:keeper-test")!,
+    );
   }
 });

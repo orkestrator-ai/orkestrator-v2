@@ -42,7 +42,8 @@ import { APP_SLUG, APP_VERSION } from "../src/core/constants";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
-import { BackendRuntime } from "../src/core/backend-runtime";
+import { BackendRuntime, type BackendRuntimeOptions } from "../src/core/backend-runtime";
+import { terminateProcessTree } from "../src/core/process-tree";
 
 import { createOwnedTempDir, sweepStaleTempDirs } from "../../../tests/temp-sweep";
 
@@ -83,9 +84,39 @@ export async function createCommandFixtures() {
   const shutdownRuntimes = () => {
     for (const runtime of runtimes.splice(0)) runtime.shutdown();
   };
+  /**
+   * Process launch and teardown for every runtime this fixture builds. A test
+   * swaps one in for its own duration; teardown restores the real ones.
+   */
+  const localServerHooks: {
+    spawn: typeof spawnCommand;
+    terminateProcessTree: typeof terminateProcessTree;
+  } = { spawn: spawnCommand, terminateProcessTree };
+  const resetLocalServerHooks = () => {
+    localServerHooks.spawn = spawnCommand;
+    localServerHooks.terminateProcessTree = terminateProcessTree;
+  };
+  const runtimeOptions = (
+    emit: CommandContext["emit"],
+    options: Omit<BackendRuntimeOptions, "emit"> = {},
+  ): BackendRuntimeOptions => ({
+    ...options,
+    emit,
+    localServers: {
+      spawn: (...args) => localServerHooks.spawn(...args),
+      terminateProcessTree: (...args) => localServerHooks.terminateProcessTree(...args),
+      ...options.localServers,
+    },
+  });
   /** A runtime for a hand-built context, released with the fixture's own. */
-  const createRuntime = (emit: CommandContext["emit"] = () => undefined): BackendRuntime =>
-    trackRuntime(new BackendRuntime({ emit }));
+  const createRuntime = (
+    emit: CommandContext["emit"] = () => undefined,
+    options: Omit<BackendRuntimeOptions, "emit"> = {},
+  ): BackendRuntime => trackRuntime(new BackendRuntime(runtimeOptions(emit, options)));
+  /** Drains every fixture runtime's owned local servers, as backend shutdown does. */
+  const shutdownLocalServers = async (options: { operationDrainTimeoutMs?: number } = {}) => {
+    for (const runtime of runtimes) await runtime.localServers.shutdown(options);
+  };
 
   const ptySpawn = mock((command: string, _args: string[], options: Record<string, unknown>) => {
     const dataCallbacks: Array<(data: string) => void> = [];
@@ -128,7 +159,6 @@ export async function createCommandFixtures() {
 
   const {
     __testing: commandTesting,
-    closeLocalServerAdmission,
     CONTAINER_UNTRACKED_STATS_SCANNER,
     createCommandRegistry,
     environmentBranchBase,
@@ -136,7 +166,6 @@ export async function createCommandFixtures() {
     isImmutableCommitRef,
     resolveBrowserOpenCommand,
     resolveFileManagerRevealCommands,
-    shutdownLocalServers,
     shutdownPrMonitorTracking,
     toClientEnvironment,
   } = await import("../src/core/commands");
@@ -450,6 +479,9 @@ export async function createCommandFixtures() {
       ) => Promise<unknown>;
       dataDir?: string;
       worktreeDir?: string;
+      /** Shares state with another context, as two callers of one backend do. */
+      runtime?: BackendRuntime;
+      runtimeOptions?: Omit<BackendRuntimeOptions, "emit">;
     } = {},
   ): {
     context: CommandContext;
@@ -481,9 +513,9 @@ export async function createCommandFixtures() {
       resourceRoot: "",
       worktreeDir: options.worktreeDir ?? createWorktreeDir(),
       environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-      runtime: trackRuntime(
-        new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
-      ),
+      runtime:
+        options.runtime ??
+        createRuntime((event, payload) => context.emit(event, payload), options.runtimeOptions),
       emit: mock((event: string, payload: unknown) => {
         emitted.push({ event, payload });
       }),
@@ -1484,9 +1516,10 @@ exit 0
       // dropping the entries here keeps a scheduled poll from spawning `gh`
       // against a fixture worktree later in the run.
       shutdownPrMonitorTracking();
-      commandTesting.resetLocalServerLifecycle();
+      resetLocalServerHooks();
+      commandTesting.resetOpenCodeHostStart();
       commandTesting.resetDockerContainerStateCache();
-      commandTesting.resetTerminalOutputBuffers();
+      commandTesting.resetTerminalHistory();
       await Promise.all(
         tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
       );
@@ -1533,7 +1566,6 @@ exit 0
     UNATTENDED_AGENT_INTERACTION_POLICY,
     afterAll,
     afterEach,
-    closeLocalServerAdmission,
     codexSlugScript,
     commandTesting,
     configuredGitPushBehaviour,
@@ -1592,6 +1624,7 @@ exit 0
     resolveFileManagerRevealCommands,
     runGit,
     setAgentSkillsHomeForTesting,
+    localServerHooks,
     shutdownLocalServers,
     shutdownPrMonitorTracking,
     spawnCommand,

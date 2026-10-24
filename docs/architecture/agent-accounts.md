@@ -1,7 +1,7 @@
 # Agent accounts
 
 Status: Living — `apps/backend/src/core/agent-accounts*.ts`,
-`apps/backend/src/core/agent-account-bridge-state.ts`,
+`apps/backend/src/core/local-server-runtime.ts` (per-bridge launch facts),
 `packages/protocol/src/agent-accounts.ts`,
 `apps/web/src/components/settings/AgentAccountsSection.tsx`,
 `apps/web/src/components/settings/account-machine.tsx`,
@@ -85,7 +85,8 @@ rotate, so a copy goes stale as soon as the original refreshes.
 `set_active_agent_account` records the choice; nothing is killed. The next
 `start_local_<agent>_server_cmd` for an environment asks
 `localBridgeIsOnActiveAccount` whether the running bridge was launched on the
-active account (`localAgentAccountIds`). An idle bridge on another account is
+active account (`LocalServerRuntime.launchedAccountId`, recorded by
+`adoptProcess` at launch). An idle bridge on another account is
 replaced. A bridge with observed live work keeps running on the old account
 until it is idle. The replacement resumes its sessions from the shared
 transcripts on the next prompt.
@@ -156,12 +157,13 @@ read the host login its harness granted.
 
 Every bridge that may hold the previous login is then flagged:
 
-- Live local Claude bridges go into `staleLoginLocalBridges`.
+- Live local Claude bridges are flagged (`LocalServerRuntime.markLoginStale`).
   `localBridgeIsOnActiveAccount` treats a flagged bridge as being on another
   account, so it is replaced the next time it is used while idle; a busy one
   finishes first.
 - When containers share the host login (`useHostClaudeCredentials` on), every
-  container environment goes into `staleLoginEnvironmentIds`.
+  container environment is flagged
+  (`LocalServerRuntime.markContainerLoginStale`).
   `reconcileContainerAgentAccount` then pushes the new login in and replaces
   the idle in-container bridge even when its marker already matches. The
   in-process flag is only a hint: the durable `loginGeneration` in the
@@ -275,11 +277,11 @@ auth routes (`opencode-provider-login.ts`):
 OpenCode reads a provider's credentials once per directory instance and keeps
 them until the instance is disposed: a key replaced in the store is not used by
 a running server, though a newly connected provider is listed. After every
-change, `markLocalBridgesForLoginRefresh("opencode")` flags each live local
-OpenCode server, and `localBridgeIsOnActiveAccount` has the next
-`start_local_opencode_server_cmd` replace it once idle, as for a renewed Claude
-login. A container copies `auth.json` in when it starts, so it needs a
-restart.
+change, `markLocalBridgesForLoginRefresh(context, "opencode")` flags each live
+local OpenCode server. These refresh flags live in `LocalServerRuntime`, and
+`localBridgeIsOnActiveAccount` has the next `start_local_opencode_server_cmd`
+replace it once idle, as for a renewed Claude login. A container copies
+`auth.json` in when it starts, so it needs a restart.
 
 An OpenCode model request refused with HTTP 401 (or a 403 or OpenCode's own
 auth error that says so) gets the failed provider's sign-in inside its error
@@ -413,14 +415,14 @@ App-server's `chatgptAuthTokens` login would avoid the file but needs the
 `experimentalApi` capability, which the bridge leaves off.
 
 Either token cannot be renewed by the coordinator, so its expiry is recorded
-(`localAgentAccountTokenExpiry`). Within five minutes of expiry an idle
+(`LocalServerRuntime.launchedTokenExpiry`). Within five minutes of expiry an idle
 coordinator bridge is replaced if a fresher login is available, and otherwise
 once the token has expired. Coordinator bridges also move to a newly active
 account once idle, like other bridges.
 
 When there is no live token to hand over (signed out, or an access token that
 lapsed while nothing used the account), the bridge launches without one and
-answers "Not logged in". It is recorded in `loginlessLocalBridges`, and every
+answers "Not logged in". It is recorded as loginless (`LocalServerRuntime.isLoginless`), and every
 later use checks the account again, so an idle bridge is replaced as soon as a
 token exists. This covers sign-ins Orkestrator is never told about, such as
 `claude auth login` in a terminal. A Codex coordinator with an inherited
@@ -494,7 +496,7 @@ itself. Where each surface acts:
     environment.
 - **The agent information panel** shows which account the session's bridge
   runs on (`get_native_agent_session_account`): a local or coordinator bridge
-  from `localAgentAccountIds`, a container from its account marker after checking that provider’s bridge health, and a
+  from `LocalServerRuntime.launchedAccountId`, a container from its account marker after checking that provider’s bridge health, and a
   bridge that is not running from the active account. It names a pending move
   to a newly active account, switches the machine's active account, and for
   Claude signs the active account in again. It re-reads on its own machine's

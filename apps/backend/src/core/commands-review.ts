@@ -27,11 +27,7 @@ import {
   type ReviewPackageReference,
   type ReviewValidationPlan,
 } from "@orkestrator/protocol/review-workflow";
-import {
-  deletingLocalServerEnvironments,
-  mergingEnvironments,
-  withContainerRuntimeCredential,
-} from "./commands-runtime-state.js";
+import { withContainerRuntimeCredential } from "./container-scripts.js";
 import { asString, asRecord, assertOnlyKeys } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
@@ -1222,10 +1218,10 @@ async function runStoredEnvironmentMergeOnce<T>(
     }
     deleteBranch = false;
   }
-  if (environment.deletionRequestedAt || deletingLocalServerEnvironments.has(environment.id)) {
+  if (environment.deletionRequestedAt || context.runtime.environments.isDeleting(environment.id)) {
     throw new Error(`Environment is already being deleted: ${environment.id}`);
   }
-  if (mergingEnvironments.has(environment.id)) {
+  if (context.runtime.environments.isMerging(environment.id)) {
     throw new Error(`Environment is already being merged: ${environment.id}`);
   }
   if (environment.environmentType === "local") {
@@ -1239,7 +1235,7 @@ async function runStoredEnvironmentMergeOnce<T>(
     throw new Error("Container environment is not available");
   }
 
-  mergingEnvironments.add(environment.id);
+  context.runtime.environments.beginMerge(environment.id);
   try {
     await context.storage.updateEnvironment(environment.id, {
       lifecycleOperation: "merging",
@@ -1264,7 +1260,7 @@ async function runStoredEnvironmentMergeOnce<T>(
     // tombstone without a user delete racing through the middle.
     return await onResult(result);
   } finally {
-    mergingEnvironments.delete(environment.id);
+    context.runtime.environments.endMerge(environment.id);
     await context.storage
       .updateEnvironment(environment.id, {
         lifecycleOperation: null,

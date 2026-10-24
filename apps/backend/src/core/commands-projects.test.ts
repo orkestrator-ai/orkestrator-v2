@@ -30,6 +30,7 @@ describe("refreshClaudeModelCatalog", () => {
 
     const snapshot = await refreshClaudeModelCatalog("docker-env", context, {
       enqueueContainerBridgeOperation: async (
+        _context: unknown,
         _agent: "claude",
         _containerId: string,
         operation: () => Promise<unknown>,

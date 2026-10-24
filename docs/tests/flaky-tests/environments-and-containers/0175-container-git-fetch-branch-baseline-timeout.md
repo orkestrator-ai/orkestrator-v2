@@ -90,3 +90,11 @@
 - **Suite counts:** backend 10,568 passed, 77 skipped and 16 failed across 10,661 tests in 618 files (855.84 s); the other failures were this run's watchdog recurrence (0512) and 14 OpenCode execution-policy conformance cases that also fail on the unchanged baseline (host CLI 1.19.4 against an expected 1.19.0).
 - **Evidence:** `orkestrator-test-run.4LYtCC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence; concurrent load remains a hypothesis. No assertion, deadline or skip changed.
+
+
+## Coordinator adapter review — 2026-10-24
+
+The aggregate repeated this case during coordinator adapter validation. Exact
+commands, timing, owner rerun results and evidence are recorded in
+[0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
+The owning implementation, assertions, timeouts and skips were unchanged.

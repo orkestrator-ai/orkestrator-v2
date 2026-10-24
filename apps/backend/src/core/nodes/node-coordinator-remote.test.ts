@@ -37,12 +37,29 @@ describe("NodeCoordinatorRemote", () => {
       environment: "running",
       tab: "idle",
       name: "feature",
+      requestPending: false,
     });
-    expect(calls.at(-1)).toEqual({
-      command: "get_agent_registry",
-      args: { projectId: "p-leaf", environmentId: "e1" },
+    expect(calls.find((call) => call.command === "get_agent_registry")?.args).toEqual({
+      projectId: "p-leaf",
+      environmentId: "e1",
+    });
+    expect(calls.find((call) => call.command === "get_worker_request_state")?.args).toEqual({
+      environmentId: "e1",
+      tabId: "startup-agent",
     });
     expect(await access.nodeName("bk_leaf")).toBe("Build box");
+  });
+
+  test("a worker with a request it has not read is reported as such", async () => {
+    const { access } = remote({
+      get_environment: { projectId: "p-leaf", status: "stopped" },
+      get_worker_request_state: { requestPending: true },
+    });
+    expect(await access.workerState("bk_leaf", "e1", "startup-agent")).toEqual({
+      environment: "stopped",
+      tab: "unknown",
+      requestPending: true,
+    });
   });
 
   test("maps lifecycle states and treats a missing node answer as unavailable", async () => {

@@ -202,7 +202,7 @@ export class NodeCoordination {
   /** Mail from a command node's coordinator to an agent on this node. */
   async deliverIncoming(
     args: Record<string, unknown>,
-  ): Promise<{ messageId: string; toTabId: string }> {
+  ): Promise<{ messageId: string; toTabId: string; placement: string }> {
     const controllerId = args.controllerId;
     if (!isBackendId(controllerId)) throw new Error("Expected controllerId.");
     const controller = this.options.nodes
@@ -249,7 +249,7 @@ export class NodeCoordination {
     if (!parseMailState(state).origins[toEnvironmentId]) {
       await this.leafMail.recordOrigin(toEnvironmentId, mailbox);
     }
-    return { messageId: message.id, toTabId: message.toTabId };
+    return { messageId: message.id, toTabId: message.toTabId, placement: message.placement };
   }
 
   async recordOrigin(args: Record<string, unknown>): Promise<{ recorded: true }> {
@@ -529,7 +529,7 @@ export class NodeCoordination {
           toTabId: request.requestedBy.coordinatorTabId,
           subject: `Project copy ${done ? "finished" : "failed"}: ${what}`.slice(0, 200),
           body: done
-            ? `Copied ${what}: ${record.progress.files} file(s) besides the clone${record.tooLarge.length ? `; ${record.tooLarge.length} file(s) over 64 MiB were not copied` : ""}. Its environments can now be launched there with nodeId ${record.target.nodeId}.`
+            ? `Copied ${what}: ${record.progress.files - (record.progress.existing ?? 0)} file(s) besides the clone${record.tooLarge.length ? `; ${record.tooLarge.length} file(s) over 64 MiB were not copied` : ""}. Its environments can now be launched there with nodeId ${record.target.nodeId}.`
             : `Copying ${what} failed: ${record.error?.message ?? "unknown error"}`,
         },
       )

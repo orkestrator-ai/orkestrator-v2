@@ -95,6 +95,20 @@ export function registerControllerWorkflowCommands(
   register("create_controller_environment", async (args, context) => {
     if (!record(args.input)) throw new Error("Expected input.");
     const controlRequestId = asNonBlankString(args.controlRequestId, "controlRequestId");
+    const input = args.input;
+    // A container is made from the remote: its base commit must be published,
+    // as for a coordinator's container worker on its own node.
+    if (
+      input.environmentType === "containerized" &&
+      typeof input.projectId === "string" &&
+      typeof input.delegationBaseCommit === "string"
+    ) {
+      await assertContainerDelegationCommitPublished(
+        context,
+        input.projectId,
+        input.delegationBaseCommit,
+      );
+    }
     const create = dependencies.commands.get("create_environment");
     if (!create) throw new Error("Environment creation is unavailable.");
     const created = await create({ ...args.input, controlRequestId }, context);

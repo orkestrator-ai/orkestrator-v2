@@ -22,6 +22,11 @@ export type RemoteWorkerState =
       /** The worker tab's turn state; `unknown` when its node does not report it. */
       tab: AgentTabState | "unknown";
       name?: string;
+      /**
+       * Coordinator mail to that tab has not reached a turn yet, so the turn
+       * that ends now cannot be its answer (always false for older nodes).
+       */
+      requestPending?: boolean;
     };
 
 /** A workflow's persisted record on its node: what the local status reducers read. */
@@ -51,4 +56,6 @@ export interface CoordinatorRemoteAccess {
     environmentId: string,
   ): Promise<{ prUrl?: unknown; prState?: unknown }>;
   nodeName(nodeId: string): Promise<string>;
+  /** Collect what that node's agents have sent here, so a report is in before a close. */
+  collectMail?(nodeId: string): Promise<void>;
 }

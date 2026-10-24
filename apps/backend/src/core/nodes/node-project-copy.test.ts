@@ -250,6 +250,74 @@ describe("NodeProjectCopies", () => {
     );
   });
 
+  test("a retry into a copy that was already there still leaves its settings alone", async () => {
+    const { root, a, b, source } = await network();
+    const existing = await b.invoke<{ id: string; localPath: string }>("add_project", {
+      gitUrl: REMOTE,
+      localPath: path.join(root, "b", "theirs"),
+    });
+    await b.invoke("update_repository_config", {
+      projectId: existing.id,
+      repoConfig: { ...(await b.storage.getRepositoryConfig(existing.id)), prBaseBranch: "theirs" },
+    });
+    // The first run fails while copying; the second goes through.
+    let failWrite = true;
+    const invokerFor = (nodeId: string) => {
+      const machine = nodeId === a.id ? a : b;
+      return async <T>(command: string, args: Record<string, unknown>): Promise<T> => {
+        if (command === "begin_node_file_write" && failWrite) {
+          failWrite = false;
+          throw new Error("disk full");
+        }
+        return machine.invoke<T>(command, args);
+      };
+    };
+    const copies = new NodeProjectCopies({
+      selfId: async () => "a",
+      selfName: async () => a.name,
+      summaries: async () =>
+        ({
+          selfId: "a",
+          nodes: [{ nodeId: "b", available: true, view: { displayName: b.name } }],
+        }) as unknown as NodeSummariesResult,
+      invokerFor,
+      transfer: new NodeFileTransfer({ invokerFor }),
+      emit: () => undefined,
+    });
+    const input = {
+      requestKey: "reuse",
+      source: { nodeId: a.id, projectId: source.id },
+      target: { nodeId: b.id },
+      paths: [".env"],
+      rememberFiles: false,
+    };
+    const first = await copies.start(input);
+    await copies.settled(first.copyId);
+    expect(copies.get(first.copyId)).toMatchObject({ stage: "failed", reusedProject: true });
+
+    await copies.start(input);
+    await copies.settled(first.copyId);
+    expect(copies.get(first.copyId)).toMatchObject({ stage: "completed", reusedProject: true });
+    expect((await b.storage.getRepositoryConfig(existing.id)).prBaseBranch).toBe("theirs");
+    expect(await fs.readFile(path.join(existing.localPath, ".env"), "utf8")).toBe("SECRET=1\n");
+  });
+
+  test("starting the same copy twice at once runs it once", async () => {
+    const { a, b, copies, source } = await network();
+    const input = {
+      requestKey: "twice",
+      source: { nodeId: a.id, projectId: source.id },
+      target: { nodeId: b.id },
+      paths: [".env"],
+      rememberFiles: false,
+    };
+    const [one, two] = await Promise.all([copies.start(input), copies.start(input)]);
+    expect(two.copyId).toBe(one.copyId);
+    await copies.settled(one.copyId);
+    expect(copies.list()).toHaveLength(1);
+    expect(await projectsOn(b)).toHaveLength(1);
+  });
+
   test("a failed copy runs again under its request key and keeps the clone", async () => {
     const { root, a, b, copies, source } = await network();
     const location = path.join(root, "b", "projects", "site");

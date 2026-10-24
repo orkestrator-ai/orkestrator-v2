@@ -133,7 +133,19 @@ type PersistedAgentMailStore = {
     coalescing?: true;
   }>;
   counterparts: Record<string, AgentMailMessageSummary>;
+  /**
+   * Budget epochs of pairs whose one side is a sender on another node, which
+   * has no mailbox here to carry the epoch: keyed by `pairEpochKey`.
+   */
+  pairEpochs?: Record<string, number>;
 };
+
+/** Pairs whose epoch the store keeps (`pairEpochs`); the oldest are dropped. */
+const MAX_PAIR_EPOCHS = 2_000;
+
+function pairEpochKey(firstId: string, secondId: string): string {
+  return firstId < secondId ? `${firstId}\n${secondId}` : `${secondId}\n${firstId}`;
+}
 
 export type AgentMailSender =
   | { kind: "tab"; environmentId: string; projectId: string; tabId: string }
@@ -315,6 +327,7 @@ function pairBudgetEpoch(
   return Math.max(
     store.mailboxes[firstMailboxId]?.budgetResetSequence ?? 0,
     store.mailboxes[secondMailboxId]?.budgetResetSequence ?? 0,
+    store.pairEpochs?.[pairEpochKey(firstMailboxId, secondMailboxId)] ?? 0,
     ...[firstMailboxId, secondMailboxId].flatMap((id) =>
       (store.mailboxes[id]?.messages ?? [])
         .filter((message) => sameMailboxPair(message, firstMailboxId, secondMailboxId))
@@ -1215,7 +1228,8 @@ export class StorageAgentMail extends StorageDrafts {
     if (!mailbox) return false;
     return mailbox.messages.some(
       (message) =>
-        message.from.kind === "coordinator" &&
+        (message.from.kind === "coordinator" ||
+          (message.from.kind === "node" && message.from.role === "coordinator")) &&
         !message.injectedAt &&
         !message.ackedAt &&
         !message.discardedAt &&
@@ -1825,42 +1839,51 @@ export class StorageAgentMail extends StorageDrafts {
    * already reports the hold.
    */
   private async noticeCoordinatorBudgetHold(message: AgentMailMessage): Promise<void> {
-    if (message.from.kind !== "tab" || message.route !== "coordinator") return;
+    const from = message.from;
+    if (
+      !(from.kind === "tab" || (from.kind === "node" && from.role === "agent")) ||
+      message.route !== "coordinator"
+    )
+      return;
     if (!isAgentMailBudgetHeld(message)) return;
     const store = await this.loadAgentMailStore();
     const coordinatorMailboxId = agentMailboxId(message.toEnvironmentId, message.toTabId);
     if (store.mailboxes[coordinatorMailboxId]?.ownerKind !== "coordinator") return;
-    const workerMailboxId = agentMailboxId(message.from.environmentId, message.from.tabId);
+    const workerMailboxId =
+      from.kind === "node"
+        ? nodeMailSenderKey(from)
+        : agentMailboxId(from.environmentId, from.tabId);
+    const onNode = from.kind === "node" ? ` on ${from.nodeName}` : "";
     const hourly = message.placementReason === AGENT_MAIL_HOURLY_LIMIT_REASON;
     const window = hourly
       ? `hour-${Math.floor(Date.parse(message.createdAt) / 3_600_000)}`
       : `epoch-${pairBudgetEpoch(store, workerMailboxId, coordinatorMailboxId)}`;
-    const worker = message.from.title ?? message.from.tabId;
+    const worker = from.title ?? from.tabId;
     try {
       await this.sendAgentMail(
         {
           kind: "system",
-          projectId: message.from.projectId,
+          projectId: from.projectId,
           source: "workflow",
-          resourceId: message.from.environmentId,
+          resourceId: from.environmentId,
         },
         {
-          requestId: `mail-budget:${message.from.tabId}:${message.toTabId}:${window}`,
+          requestId: `mail-budget:${from.tabId}:${message.toTabId}:${window}`,
           toEnvironmentId: message.toEnvironmentId,
           toTabId: message.toTabId,
           subject: hourly ? "Worker mail held: hourly limit" : "Worker mail held: loop budget",
           body: hourly
-            ? `Mail from worker ${worker} (environment ${message.from.environmentId}) reached the hourly message limit for this conversation and is being held. It is delivered automatically as the hour passes. Read it now with read_messages if it cannot wait.`
-            : `Mail from worker ${worker} (environment ${message.from.environmentId}) used up its unattended message budget and is being held. Read it with read_messages, then send the worker a new request (which starts a new budget) or ask the user to resume delivery.`,
+            ? `Mail from worker ${worker} (environment ${from.environmentId}${onNode}) reached the hourly message limit for this conversation and is being held. It is delivered automatically as the hour passes. Read it now with read_messages if it cannot wait.`
+            : `Mail from worker ${worker} (environment ${from.environmentId}${onNode}) used up its unattended message budget and is being held. Read it with read_messages, then send the worker a new request (which starts a new budget) or ask the user to resume delivery.`,
         },
         {
           notice: {
             resource: {
               kind: "agent-tab",
-              id: message.from.tabId,
-              environmentId: message.from.environmentId,
-              tabId: message.from.tabId,
-              ...(message.from.title ? { label: message.from.title } : {}),
+              id: from.tabId,
+              environmentId: from.environmentId,
+              tabId: from.tabId,
+              ...(from.title ? { label: from.title } : {}),
             },
             state: "mail-held",
             tone: "attention",
@@ -1873,6 +1896,37 @@ export class StorageAgentMail extends StorageDrafts {
         error instanceof Error ? error.message : error,
       );
     }
+  }
+
+  /**
+   * Start a new routed budget between a coordinator and a worker on another
+   * node, as admitting a new local delegation does. The request itself went
+   * to that node, so nothing here would otherwise mark the new epoch, and the
+   * worker's reports would keep counting against every earlier delegation.
+   */
+  async startRemoteWorkerBudget(
+    coordinator: { environmentId: string; tabId: string },
+    worker: { nodeId: string; environmentId: string; tabId: string },
+  ): Promise<void> {
+    await this.enqueueAgentMailMutation(async () => {
+      const store = await this.loadAgentMailStore();
+      const key = pairEpochKey(
+        agentMailboxId(coordinator.environmentId, coordinator.tabId),
+        nodeMailSenderKey(worker),
+      );
+      const epochs = { ...store.pairEpochs, [key]: store.revision + 1 };
+      const keys = Object.keys(epochs);
+      if (keys.length > MAX_PAIR_EPOCHS) {
+        for (const stale of keys
+          .sort((a, b) => epochs[a]! - epochs[b]!)
+          .slice(0, keys.length - MAX_PAIR_EPOCHS)) {
+          delete epochs[stale];
+        }
+      }
+      store.pairEpochs = epochs;
+      store.revision += 1;
+      await this.saveAgentMailStore(store);
+    });
   }
 
   /**

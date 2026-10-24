@@ -835,18 +835,27 @@ export class CoordinatorService {
       this.remoteSeenWorking.add(association.id);
     }
     const seenWorking = this.remoteSeenWorking.has(association.id);
+    // As here: a turn that ends before the worker has read the request is not
+    // its answer, and a stopped worker with the request waiting may still start.
+    const waiting = state.requestPending === true;
     const outcome: "completed" | "failed" | "stopped" | null =
       state.environment === "missing" || state.environment === "deleting"
         ? "stopped"
         : state.environment === "error"
           ? "failed"
           : // A worker launched moments ago may still read as stopped.
-            state.environment === "stopped" && (seenWorking || graceOver)
+            state.environment === "stopped" && !waiting && (seenWorking || graceOver)
             ? "stopped"
-            : state.environment === "running" && state.tab === "idle" && (seenWorking || graceOver)
+            : state.environment === "running" &&
+                state.tab === "idle" &&
+                !waiting &&
+                (seenWorking || graceOver)
               ? "completed"
               : null;
     if (!outcome) return;
+    // The worker's report may still be in its node's outbox: collect it first,
+    // so it is held for this delegation and released as the wake.
+    await this.remote.collectMail?.(association.nodeId).catch(() => undefined);
     this.remoteSeenWorking.delete(association.id);
     this.remoteAskedAt.delete(association.id);
     await this.storage.closeCoordinatorDelegation(association.id, outcome);

@@ -99,6 +99,14 @@ export function isWorkspaceExcludedCommand(command: string): boolean {
       "apply_env_keys",
       "fingerprint_project_files",
       "get_project_seed_files",
+      // A command node's coordinator acts through these: a delegation's
+      // framing and presentation are its to give, not a workspace client's.
+      "create_controller_environment",
+      "start_controller_build_pipeline",
+      "launch_controller_multi_review",
+      "controller_multi_review_surface",
+      "start_controller_multi_review",
+      "get_worker_request_state",
     ].includes(command)
   );
 }

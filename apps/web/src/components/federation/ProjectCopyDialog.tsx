@@ -154,7 +154,16 @@ function ProjectCopyDialogBody({
     refreshRecord();
     let stop: (() => void) | null = null;
     let active = true;
-    void listenProjectCopies(refreshRecord).then((unlisten) => {
+    // A copy reports every file; read at most a few times a second.
+    let queued: ReturnType<typeof setTimeout> | null = null;
+    const throttled = () => {
+      if (queued) return;
+      queued = setTimeout(() => {
+        queued = null;
+        refreshRecord();
+      }, 400);
+    };
+    void listenProjectCopies(throttled).then((unlisten) => {
       if (active) stop = unlisten;
       else unlisten();
     });
@@ -164,6 +173,7 @@ function ProjectCopyDialogBody({
       active = false;
       stop?.();
       clearInterval(timer);
+      if (queued) clearTimeout(queued);
     };
   }, [tracking, refreshRecord]);
 

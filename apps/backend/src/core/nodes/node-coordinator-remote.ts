@@ -34,6 +34,8 @@ export interface NodeCoordinatorRemoteDeps {
     args: Record<string, unknown>;
   }): Promise<{ outcome: string; result?: unknown }>;
   summaries(nodeIds?: string[]): Promise<NodeSummariesResult>;
+  /** Collect a node's outbox now (the mail collector). */
+  collectMail?(nodeId: string): Promise<void>;
 }
 
 /** A routed read, or `"unavailable"` when the node did not answer. */
@@ -75,8 +77,19 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
             : environment.status === "creating"
               ? "creating"
               : "running";
-    if (!tabId || lifecycle !== "running") {
+    if (!tabId || (lifecycle !== "running" && lifecycle !== "stopped")) {
       return { environment: lifecycle, tab: "unknown", ...(name ? { name } : {}) };
+    }
+    const pending = await read<{ requestPending?: unknown }>(
+      this.deps,
+      nodeId,
+      "get_worker_request_state",
+      { environmentId, tabId },
+    );
+    // An older node does not report it: no news, as before.
+    const requestPending = pending !== "unavailable" && pending?.requestPending === true;
+    if (lifecycle === "stopped") {
+      return { environment: lifecycle, tab: "unknown", ...(name ? { name } : {}), requestPending };
     }
     const registry = await read<AgentRegistrySnapshot>(this.deps, nodeId, "get_agent_registry", {
       ...(typeof environment.projectId === "string" ? { projectId: environment.projectId } : {}),
@@ -86,7 +99,16 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
     const entry = (
       isRecord(registry) && Array.isArray(registry.entries) ? registry.entries : []
     ).find((candidate) => candidate.environmentId === environmentId && candidate.tabId === tabId);
-    return { environment: lifecycle, tab: entry?.state ?? "unknown", ...(name ? { name } : {}) };
+    return {
+      environment: lifecycle,
+      tab: entry?.state ?? "unknown",
+      ...(name ? { name } : {}),
+      requestPending,
+    };
+  }
+
+  async collectMail(nodeId: string): Promise<void> {
+    await this.deps.collectMail?.(nodeId);
   }
 
   async lastAssistantExcerpt(

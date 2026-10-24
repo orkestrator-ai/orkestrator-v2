@@ -168,6 +168,8 @@ export interface ProjectCopyRecord {
     totalFiles: number;
     bytes: number;
     totalBytes: number;
+    /** Of `files`, the ones the target already had and kept. */
+    existing?: number;
   };
   skipped: number;
   tooLarge: string[];

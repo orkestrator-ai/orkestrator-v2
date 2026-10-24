@@ -5,6 +5,7 @@
  * the leaf is simulated (`FakeRemote`).
  */
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { AGENT_MAIL_LOOP_BUDGET_REASON } from "@orkestrator/protocol/agent-mail";
 import type { AgentTabState } from "@orkestrator/protocol/agent-registry";
 
 import { MailWorld } from "./agent-mail-world-test-support.js";
@@ -21,10 +22,21 @@ class FakeRemote implements CoordinatorRemoteAccess {
   tab: AgentTabState | "unknown" = "working";
   workflows = new Map<string, RemoteWorkflowRecord>();
   excerpt: string | undefined;
+  requestPending = false;
+  collected: string[] = [];
 
   async workerState(): Promise<RemoteWorkerState> {
     if (!this.available) return "unavailable";
-    return { environment: this.environment, tab: this.tab, name: "remote-worker" };
+    return {
+      environment: this.environment,
+      tab: this.tab,
+      name: "remote-worker",
+      requestPending: this.requestPending,
+    };
+  }
+
+  async collectMail(nodeId: string): Promise<void> {
+    this.collected.push(nodeId);
   }
 
   async lastAssistantExcerpt(): Promise<string | undefined> {
@@ -158,6 +170,58 @@ describe("remote delegations", () => {
 
     expect((await delegationState(world, association.id))?.wakeKind).toBe("report");
     expect(world.received(main)).toEqual(["Finished: tests pass."]);
+  });
+
+  test("a request the worker has not read yet keeps it open, and its mail is collected before a close", async () => {
+    const { world, remote, association } = await remoteWorld();
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    remote.tab = "idle";
+    remote.requestPending = true;
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    expect((await delegationState(world, association.id))?.state).toBe("running");
+    remote.environment = "stopped";
+    setSystemTime(new Date(Date.now() + 60_000));
+    await world.coordinator.reconcileWorkerDelegations();
+    expect((await delegationState(world, association.id))?.state).toBe("running");
+    expect(remote.collected).toEqual([]);
+
+    remote.environment = "running";
+    remote.requestPending = false;
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    expect((await delegationState(world, association.id))?.state).toBe("completed");
+    expect(remote.collected).toEqual(["bk_leaf"]);
+  });
+
+  test("a new remote request starts a fresh budget for that worker's reports", async () => {
+    const { world, main } = await remoteWorld();
+    const config = await world.storage.loadConfig();
+    await world.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: { ...config.global.agentMessaging!, autonomousWakeBudget: 2 },
+    });
+    const report = (requestId: string) =>
+      world.storage.sendAgentMail(
+        {
+          kind: "node",
+          nodeId: "bk_leaf",
+          nodeName: "Build box",
+          role: "agent",
+          projectId: world.projectId,
+          environmentId: "other-env",
+          tabId: "startup-agent",
+          title: null,
+        },
+        { requestId, toEnvironmentId: main.environmentId, toTabId: main.tabId, body: requestId },
+      );
+    await report("r1");
+    await report("r2");
+    expect((await report("r3")).placementReason).toBe(AGENT_MAIL_LOOP_BUDGET_REASON);
+    await world.storage.startRemoteWorkerBudget(main, {
+      nodeId: "bk_leaf",
+      environmentId: "other-env",
+      tabId: "startup-agent",
+    });
+    expect((await report("r4")).placement).toBe("pending-inject");
   });
 
   test("a local turn end never settles a remote delegation with the same environment ID", async () => {

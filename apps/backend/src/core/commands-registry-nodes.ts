@@ -246,6 +246,21 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     return coordination(context).deliverIncoming(args);
   });
 
+  // Whether coordinator mail to a worker tab has reached a turn yet; a
+  // command node asks before treating that tab's turn end as its answer.
+  register("get_worker_request_state", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "tabId"], "arguments");
+    if (typeof args.environmentId !== "string" || typeof args.tabId !== "string") {
+      throw new Error("Expected environmentId and tabId.");
+    }
+    return {
+      requestPending: await context.storage.hasUndeliveredCoordinatorRequest(
+        args.environmentId,
+        args.tabId,
+      ),
+    };
+  });
+
   register("record_node_environment_origin", async (args, context) => {
     assertOnlyKeys(
       args,

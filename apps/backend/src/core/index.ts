@@ -1,5 +1,6 @@
 import { coordinatorNodeContext } from "./nodes/node-context.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   bridgeRemoteCoordinatorEvents,
   NodeCoordinatorRemote,
@@ -521,6 +522,7 @@ export class OrkestratorBackend {
       new NodeCoordinatorRemote({
         invokeOnNode: (input) => this.nodePortal.invokeOnNode(input),
         summaries: (nodeIds) => this.nodePortal.summaries(nodeIds),
+        collectMail: (nodeId) => this.nodeCoordination.collector.collect(nodeId as BackendId),
       }),
     );
     bridgeRemoteCoordinatorEvents({

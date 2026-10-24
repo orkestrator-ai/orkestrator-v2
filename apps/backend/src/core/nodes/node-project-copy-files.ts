@@ -11,7 +11,7 @@ import {
   type ProjectCopyFileList,
 } from "@orkestrator/protocol/project-copy";
 
-import { normalizeConfiguredProjectFiles } from "../commands-project-files.js";
+import { isPathInsideRoot, normalizeConfiguredProjectFiles } from "../commands-project-files.js";
 import { validateRelativeFilePath } from "../path-safety.js";
 import { runCommandBuffer } from "../shell.js";
 import { MAX_NODE_FILE_BYTES } from "./node-files.js";
@@ -234,7 +234,12 @@ export async function listProjectCopyFiles(
       continue;
     }
     const absolute = path.join(realRoot, safe);
-    const stat = await fs.lstat(absolute).catch(() => null);
+    // A folder on the way may itself be a link out of the project.
+    const parent = await fs.realpath(path.dirname(absolute)).catch(() => null);
+    const stat =
+      parent && isPathInsideRoot(parent, realRoot)
+        ? await fs.lstat(absolute).catch(() => null)
+        : null;
     if (!stat || stat.isSymbolicLink()) {
       skipped += 1;
       continue;

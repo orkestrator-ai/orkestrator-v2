@@ -38,6 +38,7 @@ import {
 
 const CLONE_POLL_MS = 1_500;
 const CLONE_TIMEOUT_MS = 60 * 60 * 1_000;
+const MAX_FAILED_CLONE_POLLS = 10;
 /** Remembered files are added to the target's files to copy only up to this many. */
 const MAX_REMEMBERED_FILES = 200;
 
@@ -87,6 +88,8 @@ export interface NodeProjectCopiesOptions {
 export class NodeProjectCopies {
   private records: ProjectCopyRecord[] = [];
   private readonly running = new Map<string, Promise<void>>();
+  /** Starts in flight by request key, so a resent start joins the first. */
+  private readonly starting = new Map<string, Promise<ProjectCopyRecord>>();
   /** Runs per copy, so a run again clones under a fresh key rather than replaying a failure. */
   private readonly attempts = new Map<string, number>();
 
@@ -245,9 +248,29 @@ export class NodeProjectCopies {
   }): Promise<ProjectCopyRecord> {
     const requestKey = input.requestKey.trim().slice(0, 200);
     if (!requestKey) throw new Error("Expected requestKey.");
+    const inFlight = this.starting.get(requestKey);
+    if (inFlight) return inFlight;
+    const started = this.startOnce({ ...input, requestKey }).finally(() => {
+      if (this.starting.get(requestKey) === started) this.starting.delete(requestKey);
+    });
+    this.starting.set(requestKey, started);
+    return started;
+  }
+
+  private async startOnce(input: {
+    requestKey: string;
+    source: { nodeId: string; projectId: string };
+    target: { nodeId: string; location?: string };
+    paths: string[];
+    rememberFiles: boolean;
+    actionRequestId?: string;
+  }): Promise<ProjectCopyRecord> {
+    const { requestKey } = input;
     if (input.paths.length > 2_000) throw new Error("Pick at most 2,000 paths.");
     const existing = this.records.find((entry) => entry.requestKey === requestKey);
-    if (existing && existing.stage !== "failed") return structuredClone(existing);
+    if (existing && (existing.stage !== "failed" || this.running.has(existing.copyId))) {
+      return structuredClone(existing);
+    }
     if (input.source.nodeId === input.target.nodeId) {
       throw new Error("Pick a different machine to copy to.");
     }
@@ -309,7 +332,7 @@ export class NodeProjectCopies {
           finishedAt: new Date((this.deps.now ?? Date.now)()).toISOString(),
           error: {
             code:
-              typeof (error as { code?: unknown }).code === "string"
+              typeof (error as { code?: unknown } | null)?.code === "string"
                 ? (error as { code: string }).code
                 : "failed",
             message: message(error),
@@ -333,7 +356,8 @@ export class NodeProjectCopies {
     const existing = await this.targetProject(record.target.nodeId, hint);
     if (existing) {
       this.update(record, {
-        reusedProject: !record.target.projectId,
+        // A run again keeps what the first run found: a copy that was there before.
+        reusedProject: record.reusedProject || !record.target.projectId,
         target: {
           ...record.target,
           projectId: existing.projectId,
@@ -344,6 +368,13 @@ export class NodeProjectCopies {
       if (!record.target.location) {
         const resolved = await target<{ location: string }>("get_default_project_location", {
           name: repositoryName(gitUrl, record.source.projectName),
+        }).catch((error: unknown) => {
+          if (unknownCommand(error, "get_default_project_location")) {
+            throw new Error(
+              `Update Orkestrator on ${record.target.nodeName} to copy projects to it.`,
+            );
+          }
+          throw error;
         });
         record.target.location = resolved.location;
       }
@@ -366,6 +397,11 @@ export class NodeProjectCopies {
       list = await source<ProjectCopyFileList>("list_project_copy_files", {
         projectId: record.source.projectId,
         paths: record.paths,
+      }).catch((error: unknown) => {
+        if (unknownCommand(error, "list_project_copy_files")) {
+          throw new Error(`Update Orkestrator on ${record.source.nodeName} to copy its projects.`);
+        }
+        throw error;
       });
       this.update(record, {
         stage: "copying",
@@ -395,6 +431,7 @@ export class NodeProjectCopies {
           onFile: (file) => {
             record.progress.files += 1;
             record.progress.bytes += file.bytes;
+            if (file.skipped) record.progress.existing = (record.progress.existing ?? 0) + 1;
             this.publish(record);
           },
         });
@@ -439,15 +476,23 @@ export class NodeProjectCopies {
     const sleep = this.deps.sleep ?? ((ms: number) => Bun.sleep(ms));
     const deadline = (this.deps.now ?? Date.now)() + CLONE_TIMEOUT_MS;
     let job = started;
+    let failedPolls = 0;
     while (job.state === "running") {
       if ((this.deps.now ?? Date.now)() > deadline) {
         throw new Error(`Cloning on ${record.target.nodeName} took longer than an hour.`);
       }
       await sleep(CLONE_POLL_MS);
-      job = await target<{ state: string; projectId?: string; error?: string }>(
-        "get_project_clone",
-        { requestKey },
-      );
+      try {
+        job = await target<{ state: string; projectId?: string; error?: string }>(
+          "get_project_clone",
+          { requestKey },
+        );
+        failedPolls = 0;
+      } catch (error) {
+        // A dropped poll is not a failed clone; a node that stays away is.
+        failedPolls += 1;
+        if (failedPolls >= MAX_FAILED_CLONE_POLLS) throw error;
+      }
     }
     if (job.state === "completed" && job.projectId) return job.projectId;
     if (job.state === "failed") {
@@ -474,7 +519,7 @@ export class NodeProjectCopies {
     const remembered = record.rememberFiles
       ? list.files.length <= MAX_REMEMBERED_FILES
         ? list.files.map((file) => file.path)
-        : record.paths.filter((entry) => !entry.endsWith("/"))
+        : record.paths.filter((entry) => !entry.endsWith("/")).slice(0, MAX_REMEMBERED_FILES)
       : [];
     if (record.reusedProject) {
       if (remembered.length === 0) return;

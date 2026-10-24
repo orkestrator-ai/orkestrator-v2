@@ -136,6 +136,18 @@ describe("listProjectCopyFiles", () => {
     expect(list.tooLarge).toEqual([]);
   });
 
+  test("skips a path reached through a linked folder outside the project", async () => {
+    const root = await repository({ "README.md": "x" }, ["README.md"]);
+    const outside = await mkdtemp(path.join(os.tmpdir(), "ork-copy-outside-"));
+    dirs.push(outside);
+    await writeFile(path.join(outside, "secret.txt"), "s");
+    await symlink(outside, path.join(root, "linked"));
+
+    const list = await listProjectCopyFiles(root, ["linked/secret.txt"]);
+
+    expect(list).toEqual({ files: [], totalBytes: 0, skipped: 1, tooLarge: [] });
+  });
+
   test("refuses paths that leave the project", async () => {
     const root = await repository({ "README.md": "x" }, ["README.md"]);
 

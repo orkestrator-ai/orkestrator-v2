@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => {
 
 for (const shape of ["circle", "square"]) {
   for (const state of ["idle", "working", "waiting"]) {
-    test(`hovering the ${shape} center opens the machine tooltip through its ${state} ring`, async ({
+    test(`hovering the ${shape} center opens the machine tooltip over its ${state} halo`, async ({
       page,
     }, testInfo) => {
       test.skip(testInfo.project.name !== "desktop-chromium", "tooltips require a hover pointer");
@@ -31,7 +31,7 @@ for (const shape of ["circle", "square"]) {
   }
 }
 
-test("forced colors keep inactive rings and machine or neutral centers visible in both shapes", async ({
+test("forced colors hide the activity halo and keep machine or neutral centers visible in both shapes", async ({
   page,
 }) => {
   await page.emulateMedia({ forcedColors: "active" });
@@ -39,7 +39,7 @@ test("forced colors keep inactive rings and machine or neutral centers visible i
     for (const state of ["inactive", "idle", "working", "waiting", "neutral"]) {
       const marker = page.getByTestId(`${shape}-${state}`).getByTestId("environment-status-marker");
       const styles = await marker.evaluate((element) => {
-        const ring = getComputedStyle(element.firstElementChild!);
+        const halo = getComputedStyle(element.firstElementChild!);
         const dot = getComputedStyle(element.lastElementChild!);
         const probe = document.createElement("span");
         probe.style.color = "CanvasText";
@@ -48,15 +48,13 @@ test("forced colors keep inactive rings and machine or neutral centers visible i
         probe.remove();
         return {
           active: matchMedia("(forced-colors: active)").matches,
-          border: ring.borderTopColor,
-          width: ring.borderTopWidth,
+          halo: halo.display,
           fill: dot.backgroundColor,
           canvasText,
         };
       });
       expect(styles.active).toBe(true);
-      expect(styles.border).toBe(styles.canvasText);
-      expect(styles.width).toBe("2px");
+      expect(styles.halo).toBe("none");
       expect(styles.fill).toBe(styles.canvasText);
     }
   }

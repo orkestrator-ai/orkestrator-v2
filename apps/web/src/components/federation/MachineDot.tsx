@@ -96,6 +96,23 @@ export function MachineHomeIcon({
   );
 }
 
+/**
+ * A repository group's leading home, two text lines tall, in the command
+ * node's colour: the group belongs to the machine that commands the others.
+ */
+export function CommandNodeHomeIcon({ colorToken }: { colorToken: string | undefined }) {
+  return (
+    <span
+      data-testid="command-node-home-icon"
+      data-machine-color={colorToken ?? "neutral"}
+      aria-hidden="true"
+      className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.06]"
+    >
+      <House className={cn("h-4 w-4", machineTextClass(colorToken))} />
+    </span>
+  );
+}
+
 /** Dot plus a compact machine name, for mixed-machine lists. */
 export function MachineBadge({
   colorToken,

@@ -56,7 +56,7 @@ import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
 import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { useFederation } from "./FederationProvider";
-import { MachineDot, machineStatusText } from "./MachineDot";
+import { CommandNodeHomeIcon, MachineDot, machineStatusText } from "./MachineDot";
 import {
   RemoteEnvironmentItem,
   RemoteMachineTree,
@@ -65,6 +65,10 @@ import {
   useRemoteEnvironments,
 } from "./RemoteMachineTree";
 import { UnknownOutcomesNotice } from "./UnknownOutcomesNotice";
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
 
 function reportLayoutError(error: unknown): void {
   toast.error("Could not save the sidebar order", {
@@ -432,10 +436,24 @@ export function MergedProjectList({
         isCollapsed={collapsedProjectKeys.includes(item.id)}
         onToggleCollapse={() => setProjectKeyCollapsed(item.id)}
         sortable={isMachineWritable(item.machine) && !item.machine.truncated}
-        showMachine
+        showMachine={mode === "project"}
         label={label}
+        labelClassName={
+          mode === "repository" ? machineTextClass(item.machine.colorToken) : undefined
+        }
       />
     );
+  const commandNodeColor = machines.find(
+    (machine) => machine.backendId === portalState.selfId,
+  )?.colorToken;
+  const repositorySummary = (group: readonly MergedProject[]) => {
+    const machineCount = new Set(group.map((item) => item.machine.connectionId)).size;
+    const environmentCount = group.reduce(
+      (total, item) => total + environmentsOf(item.machine, item.project).length,
+      0,
+    );
+    return `${plural(machineCount, "machine")} · ${plural(environmentCount, "environment")}`;
+  };
 
   return (
     <div
@@ -481,6 +499,12 @@ export function MergedProjectList({
                 sortableId={mode === "repository" ? `project-folder:${entry.key}` : undefined}
                 label={mode === "repository" ? repositoryLabel(entry.name) : entry.name}
                 repository={mode === "repository"}
+                {...(mode === "repository"
+                  ? {
+                      icon: <CommandNodeHomeIcon colorToken={commandNodeColor} />,
+                      subtitle: repositorySummary(entry.projects),
+                    }
+                  : {})}
                 projectCount={entry.projects.length}
                 isCollapsed={isFolderCollapsed(entry.name)}
                 onToggleCollapse={() => setFolderKeyCollapsed(folderCollapseKey(entry.name))}

@@ -16,9 +16,9 @@ for (const local of [true, false]) {
       const shape = local ? "circle" : "square";
       expect(marker.getAttribute("data-shape")).toBe(shape);
       expect(center.classList).toContain(local ? "rounded-full" : "rounded-[1px]");
-      expect(ring.classList).toContain(local ? "rounded-full" : "rounded-[3px]");
+      expect(ring.classList).toContain(local ? "rounded-full" : "rounded-[4px]");
       expect(ring.classList).toContain("pointer-events-none");
-      expect(ring.classList).toContain("forced-colors:border-[CanvasText]");
+      expect(ring.classList).toContain("forced-colors:hidden");
       expect(center.classList).toContain("forced-colors:bg-[CanvasText]");
       expect(center.classList).toContain(machine ? "bg-teal-500" : "bg-muted-foreground");
       if (machine) {
@@ -30,10 +30,10 @@ for (const local of [true, false]) {
       }
       const centerClasses = center.className;
       const states: Array<[EnvironmentMarkerState, string, boolean]> = [
-        ["inactive", "border-muted-foreground/60", false],
-        ["idle", "border-success", false],
-        ["working", "border-blue-500", true],
-        ["waiting", "border-amber-500", true],
+        ["inactive", "opacity-0", false],
+        ["idle", "opacity-0", false],
+        ["working", "bg-red-500/50", true],
+        ["waiting", "bg-yellow-400/50", true],
       ];
       for (const [state, color, pulsing] of states) {
         rerender(<EnvironmentStatusMarker local={local} state={state} machine={machine} />);

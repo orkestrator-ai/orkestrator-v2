@@ -2,21 +2,22 @@ import { MachineDot } from "@/components/federation/MachineDot";
 import { cn } from "@/lib/utils";
 import type { AgentActivityState } from "@/types";
 
-/** What the ring shows: a stopped environment, or a running one's agent activity. */
+/** What the halo shows: a stopped environment, or a running one's agent activity. */
 export type EnvironmentMarkerState = "inactive" | AgentActivityState;
 
-const RING_CLASSES: Record<EnvironmentMarkerState, string> = {
-  inactive: "border-muted-foreground/60",
-  idle: "border-success",
-  working: "border-blue-500 animate-pulse",
-  waiting: "border-amber-500 animate-pulse",
+// Settled states draw no halo; only an agent at work or awaiting input pulses.
+const HALO_CLASSES: Record<EnvironmentMarkerState, string> = {
+  inactive: "opacity-0",
+  idle: "opacity-0",
+  working: "bg-red-500/50 animate-pulse",
+  waiting: "bg-yellow-400/50 animate-pulse",
 };
 
 /**
  * An environment row's leading marker: the owning machine's dot (a square for
- * a container, a circle for a local environment) inside a ring that carries
- * the environment's state. The dot fills the ring's interior so the colour
- * meets the ring directly. Only the ring pulses; the machine colour stays a
+ * a container, a circle for a local environment) over a halo that pulses red
+ * while the agent works and yellow while it awaits input. Settled
+ * environments have no halo. Only the halo pulses; the machine colour stays a
  * steady identity. Without a machine to name (a single-machine client) the
  * dot is a neutral fill.
  */
@@ -31,7 +32,7 @@ export function EnvironmentStatusMarker({
   machine: { name: string; colorToken: string | undefined; status?: string } | null;
 }) {
   const shape = local ? "circle" : "square";
-  const rounded = shape === "square" ? "rounded-[3px]" : "rounded-full";
+  const rounded = shape === "square" ? "rounded-[4px]" : "rounded-full";
   return (
     <span
       data-testid="environment-status-marker"
@@ -43,9 +44,9 @@ export function EnvironmentStatusMarker({
         data-testid="environment-status-ring"
         aria-hidden="true"
         className={cn(
-          "pointer-events-none absolute inset-0 border-2 transition-colors forced-colors:border-[CanvasText]",
+          "pointer-events-none absolute inset-0 transition-colors forced-colors:hidden",
           rounded,
-          RING_CLASSES[state],
+          HALO_CLASSES[state],
         )}
       />
       {machine ? (
@@ -53,14 +54,14 @@ export function EnvironmentStatusMarker({
           colorToken={machine.colorToken}
           machineName={machine.name}
           shape={shape}
-          className="size-3 ring-0"
+          className="size-2 ring-0"
           {...(machine.status ? { status: machine.status } : {})}
         />
       ) : (
         <span
           aria-hidden="true"
           className={cn(
-            "size-3 shrink-0 bg-muted-foreground forced-colors:bg-[CanvasText]",
+            "size-2 shrink-0 bg-muted-foreground forced-colors:bg-[CanvasText]",
             shape === "square" ? "rounded-[1px]" : "rounded-full",
           )}
         />

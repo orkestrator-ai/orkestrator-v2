@@ -334,7 +334,7 @@ test("merged lists draw this window's own projects and rows with its full contro
   }
 });
 
-test("a repository group names each member by its machine and shows a machine dot, not a count", async () => {
+test("a repository group names each member by its machine in its colour and shows a machine dot, not a count", async () => {
   const hint = "github.com/acme/app";
   const first = machineView();
   first.projects[0]!.repositoryHint = hint;
@@ -373,19 +373,25 @@ test("a repository group names each member by its machine and shows a machine do
     "teal",
   );
   expect(within(heading).queryByText("2") === null).toBe(true);
-  const members = screen.getAllByTestId("federated-project");
-  expect(members.map((member) => member.querySelector(".truncate")?.textContent)).toEqual([
-    "Machine A",
-    "Machine B",
-  ]);
-  // Members lead with a home in their machine's colour instead of a trailing
-  // dot, and put the chevron last.
+  // The heading leads with the command node's home (no command node is known
+  // here) over "owner/repo" and a machine and environment count.
   expect(
-    members.map((member) =>
-      within(member).getByTestId("machine-home-icon").getAttribute("data-machine-color"),
-    ),
-  ).toEqual(["teal", "rose"]);
+    within(heading).getByTestId("command-node-home-icon").getAttribute("data-machine-color"),
+  ).toBe("neutral");
+  expect(within(heading).getByText("acme/").classList).toContain("text-muted-foreground");
+  expect(within(heading).getByText("app").classList).toContain("text-foreground");
+  expect(within(heading).getByText("2 machines · 2 environments")).toBeTruthy();
+  const content = document.querySelector("[data-project-folder-content]")!;
+  expect(content.className).not.toContain("ml-3");
+  const members = screen.getAllByTestId("federated-project");
+  const labels = members.map((member) => member.querySelector(".truncate")!);
+  expect(labels.map((label) => label.textContent)).toEqual(["Machine A", "Machine B"]);
+  // Members are named in their machine's colour, with no leading home and no
+  // trailing dot, and put the chevron last.
+  expect(labels[0]!.classList).toContain("text-teal-500");
+  expect(labels[1]!.classList).toContain("text-rose-500");
   for (const member of members) {
+    expect(within(member).queryByTestId("machine-home-icon") === null).toBe(true);
     const header = member.firstElementChild!.firstElementChild as HTMLElement;
     expect(within(header).queryByTestId("machine-dot") === null).toBe(true);
     expect(header.lastElementChild!.getAttribute("aria-label")).toMatch(/^Collapse project /);
@@ -456,13 +462,12 @@ describe("CL-05: machine identity visual rules", () => {
               environmentType === "local" ? "circle" : "square",
             );
             const ring = within(marker).getByTestId("environment-status-ring");
-            const color = !active
-              ? "border-muted-foreground/60"
-              : activity === "idle"
-                ? "border-success"
+            const color =
+              !active || activity === "idle"
+                ? "opacity-0"
                 : activity === "working"
-                  ? "border-blue-500"
-                  : "border-amber-500";
+                  ? "bg-red-500/50"
+                  : "bg-yellow-400/50";
             expect(ring.classList).toContain(color);
             expect(ring.classList.contains("animate-pulse")).toBe(active && activity !== "idle");
             expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);

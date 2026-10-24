@@ -2,15 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode 
 import { useDndContext } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import {
-  ArrowDownAZ,
-  ChevronRight,
-  Folder,
-  FolderGit2,
-  FolderOpen,
-  FolderMinus,
-  Pencil,
-} from "lucide-react";
+import { ArrowDownAZ, ChevronRight, Folder, FolderOpen, FolderMinus, Pencil } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -45,8 +37,12 @@ interface SortableProjectFolderProps {
   onUngroup?: () => void | Promise<void>;
   /** Shown instead of `name`, which stays the folder's identity. */
   label?: string;
-  /** A repository group rather than a folder. */
+  /** A repository group rather than a folder: a two-line heading over unindented members. */
   repository?: boolean;
+  /** A repository group's leading icon, spanning both lines of its heading. */
+  icon?: ReactNode;
+  /** A repository group's second line. */
+  subtitle?: string;
   /** Clicking the name opens this instead of toggling; the chevron still toggles. */
   onOpen?: () => void;
   /** Destination named by the repository navigation control. */
@@ -74,6 +70,8 @@ export function SortableProjectFolder({
   onUngroup,
   label = name,
   repository = false,
+  icon,
+  subtitle,
   onOpen,
   openMachineName,
   badge,
@@ -132,7 +130,9 @@ export function SortableProjectFolder({
   // context menu restores focus to its trigger, which would blur — and so
   // cancel — an inline field the moment it appeared.
 
-  const FolderIcon = repository ? FolderGit2 : isCollapsed ? Folder : FolderOpen;
+  const FolderIcon = isCollapsed ? Folder : FolderOpen;
+  // "owner/repo": the owner recedes so the repository name leads.
+  const ownerEnd = repository ? label.lastIndexOf("/") + 1 : 0;
   const hasMenu = Boolean(onRename || onSort || onUngroup);
 
   // The whole heading is the drag handle. A repository heading also opens on
@@ -162,7 +162,10 @@ export function SortableProjectFolder({
             ? `Expand folder ${label}`
             : `Collapse folder ${label}`
       }
-      className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing"
+      className={cn(
+        "flex min-w-0 flex-1 cursor-grab items-center rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing",
+        repository ? "gap-2.5" : "gap-2",
+      )}
       onClick={(event) => {
         event.stopPropagation();
         if (suppressClick.current) return;
@@ -170,14 +173,27 @@ export function SortableProjectFolder({
         else onToggleCollapse();
       }}
     >
-      <FolderIcon
-        className={cn(
-          "h-4 w-4 shrink-0",
-          repository ? "text-muted-foreground" : "text-amber-400/80",
-        )}
-        aria-hidden="true"
-      />
-      <span className="truncate font-medium">{label}</span>
+      {repository ? (
+        <>
+          {icon}
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate font-medium">
+              <span className="text-muted-foreground">{label.slice(0, ownerEnd)}</span>
+              <span className="text-foreground">{label.slice(ownerEnd)}</span>
+            </span>
+            {subtitle ? (
+              <span className="truncate text-[11px] leading-4 text-muted-foreground">
+                {subtitle}
+              </span>
+            ) : null}
+          </span>
+        </>
+      ) : (
+        <>
+          <FolderIcon className="h-4 w-4 shrink-0 text-amber-400/80" aria-hidden="true" />
+          <span className="truncate font-medium">{label}</span>
+        </>
+      )}
       {badge ?? (
         <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
           {projectCount}
@@ -266,7 +282,10 @@ export function SortableProjectFolder({
         still resolve drops.
       */}
       {!isCollapsed && (
-        <div className="ml-3 border-l border-zinc-800/80 pl-1" data-project-folder-content={name}>
+        <div
+          className={repository ? "-mx-2" : "ml-3 border-l border-zinc-800/80 pl-1"}
+          data-project-folder-content={name}
+        >
           {children}
         </div>
       )}

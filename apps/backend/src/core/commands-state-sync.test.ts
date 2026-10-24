@@ -27,7 +27,6 @@ import {
   firstUseCatalogFetchTimeoutMs,
 } from "./commands-registry-projects.js";
 import { cachedLaunchModels } from "./control-shared-actions.js";
-import { appendTerminalOutputBuffer } from "./commands-terminal.js";
 import { StorageService } from "./storage.js";
 import { seedUnreadableStore } from "./storage-test-support.js";
 import type { ClaudeModelCatalogEntry } from "./models.js";
@@ -50,6 +49,7 @@ async function withCommands<T>(
     storage: StorageService,
     dataDir: string,
     commands: ReturnType<typeof createCommandRegistry>,
+    context: CommandContext,
   ) => Promise<T>,
   options: {
     claudeStatePolls?: ClaudeStatePollManager;
@@ -109,7 +109,7 @@ async function withCommands<T>(
   };
 
   try {
-    return await run(invoke, storage, dataDir, commands);
+    return await run(invoke, storage, dataDir, commands, context);
   } finally {
     context.runtime.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });
@@ -2478,7 +2478,8 @@ describe("setup session wait command", () => {
     // The renderer retires a completed setup tab only when the backend proves
     // its transcript is gone, so the durable-rehydration branch has to answer
     // `hasOutput` from the retained buffer rather than always reporting false.
-    await withCommands(async (invoke, storage) => {
+    await withCommands(async (invoke, storage, _dataDir, _commands, context) => {
+      const { terminals } = context.runtime;
       try {
         await storage.updateEnvironment("e1", {
           setupPhase: "ready",
@@ -2498,7 +2499,7 @@ describe("setup session wait command", () => {
           }),
         );
 
-        appendTerminalOutputBuffer("e1:setup", "cloning repository...\r\n");
+        terminals.appendOutput("e1:setup", "cloning repository...\r\n");
         await expect(
           invoke("await_environment_setup_session", { environmentId: "e1", timeoutMs: 0 }),
         ).resolves.toEqual(
@@ -2512,12 +2513,12 @@ describe("setup session wait command", () => {
 
         // Freeing the retained buffer is what flips the answer back, which is
         // the transition that makes the tab retirable minutes after setup ends.
-        commandTesting.deleteRetainedTerminalOutputBuffer("e1:setup");
+        terminals.deleteRetainedOutput("e1:setup");
         await expect(
           invoke("await_environment_setup_session", { environmentId: "e1", timeoutMs: 0 }),
         ).resolves.toEqual(expect.objectContaining({ hasOutput: false }));
       } finally {
-        commandTesting.deleteRetainedTerminalOutputBuffer("e1:setup");
+        terminals.deleteRetainedOutput("e1:setup");
       }
     });
   });
@@ -3307,100 +3308,8 @@ describe("prompt queue commands", () => {
     });
   });
 
-  test("atomically claims the expected queue head", async () => {
+  test("rejects a malformed enqueue message", async () => {
     await withCommands(async (invoke) => {
-      await invoke("enqueue_prompt_queue_message", {
-        queueKey: KEY,
-        environmentId: "e1",
-        message: { id: "m1" },
-      });
-      await invoke("enqueue_prompt_queue_message", {
-        queueKey: KEY,
-        environmentId: "e1",
-        message: { id: "m2" },
-      });
-      const first = (await invoke("claim_prompt_queue_head", {
-        queueKey: KEY,
-        environmentId: "e1",
-        expectedMessageId: "m1",
-      })) as { claimToken: string };
-      expect(first).toMatchObject({
-        claimed: { id: "m1" },
-        queue: { messages: [{ id: "m2" }], revision: 3 },
-      });
-
-      await expect(
-        invoke("claim_prompt_queue_head", {
-          queueKey: KEY,
-          environmentId: "e1",
-          expectedMessageId: "m2",
-        }),
-      ).resolves.toMatchObject({
-        claimed: null,
-        claimToken: null,
-        queue: {
-          messages: [{ id: "m2" }],
-          revision: 3,
-          outstandingClaim: { message: { id: "m1" } },
-        },
-      });
-      await expect(
-        invoke("acknowledge_prompt_queue_claim", {
-          queueKey: KEY,
-          environmentId: "e1",
-          claimToken: first.claimToken,
-        }),
-      ).resolves.toMatchObject({
-        messages: [{ id: "m2" }],
-        revision: 4,
-      });
-    });
-  });
-
-  test("requeues, nacks, and acknowledges through registry commands", async () => {
-    await withCommands(async (invoke) => {
-      await invoke("requeue_prompt_queue_message", {
-        queueKey: KEY,
-        environmentId: "e1",
-        message: { id: "m1", text: "first", attachments: [] },
-      });
-      const claim = (await invoke("claim_prompt_queue_head", {
-        queueKey: KEY,
-        environmentId: "e1",
-        expectedMessageId: "m1",
-      })) as { claimToken: string };
-      await expect(
-        invoke("reject_prompt_queue_claim", {
-          queueKey: KEY,
-          environmentId: "e1",
-          claimToken: claim.claimToken,
-        }),
-      ).resolves.toMatchObject({ messages: [{ id: "m1" }] });
-
-      const retry = (await invoke("claim_prompt_queue_head", {
-        queueKey: KEY,
-        environmentId: "e1",
-        expectedMessageId: "m1",
-      })) as { claimToken: string };
-      await expect(
-        invoke("acknowledge_prompt_queue_claim", {
-          queueKey: KEY,
-          environmentId: "e1",
-          claimToken: retry.claimToken,
-        }),
-      ).resolves.toMatchObject({ messages: [] });
-    });
-  });
-
-  test("rejects malformed atomic-claim arguments", async () => {
-    await withCommands(async (invoke) => {
-      await expect(
-        invoke("claim_prompt_queue_head", {
-          queueKey: KEY,
-          environmentId: "e1",
-          expectedMessageId: "",
-        }),
-      ).rejects.toThrow();
       await expect(
         invoke("enqueue_prompt_queue_message", {
           queueKey: KEY,
@@ -3408,24 +3317,10 @@ describe("prompt queue commands", () => {
           message: "bad",
         }),
       ).rejects.toThrow("non-blank ID");
-      await expect(
-        invoke("acknowledge_prompt_queue_claim", {
-          queueKey: KEY,
-          environmentId: "e1",
-          claimToken: "",
-        }),
-      ).rejects.toThrow();
-      await expect(
-        invoke("reject_prompt_queue_claim", {
-          queueKey: KEY,
-          environmentId: "e1",
-          claimToken: "",
-        }),
-      ).rejects.toThrow();
     });
   });
 
-  test("rejects malformed reorder, removal, and requeue arguments", async () => {
+  test("rejects malformed reorder and removal arguments", async () => {
     // Each of these coerces at the registry boundary, so a bad payload must
     // fail there rather than reaching storage as a plausible-looking value.
     await withCommands(async (invoke) => {
@@ -3459,13 +3354,6 @@ describe("prompt queue commands", () => {
           messageId: 7,
         }),
       ).rejects.toThrow("messageId");
-      await expect(
-        invoke("requeue_prompt_queue_message", {
-          queueKey: KEY,
-          environmentId: "e1",
-          message: "bad",
-        }),
-      ).rejects.toThrow("non-blank ID");
     });
   });
 

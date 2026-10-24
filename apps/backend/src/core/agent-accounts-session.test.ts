@@ -4,12 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { CommandContext } from "./commands-context.js";
-import { localAgentAccountIds } from "./agent-account-bridge-state.js";
+import { BackendRuntime } from "./backend-runtime.js";
 import * as containerExec from "./commands-container-exec.js";
 import * as serverHealth from "./commands-server-health.js";
 import { CLAUDE_BRIDGE_PORT, CODEX_BRIDGE_PORT } from "./constants.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
-import { localServerProcesses } from "./commands-runtime-state.js";
 import type { Environment } from "./models.js";
 import { StorageService } from "./storage.js";
 
@@ -36,6 +35,7 @@ beforeEach(async () => {
   }));
   environment = null;
   context = {
+    runtime: new BackendRuntime({ emit: () => undefined }),
     storage: Object.assign(Object.create(storage) as StorageService, {
       getEnvironment: async () => environment,
     }),
@@ -46,8 +46,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  localAgentAccountIds.clear();
-  localServerProcesses.delete("claude:env-1");
+  context.runtime.shutdown();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -63,8 +62,11 @@ describe("readSessionAgentAccount", () => {
   });
 
   test("a running bridge on the previous account names the one it moves to", async () => {
-    localServerProcesses.set("claude:env-1", { exitCode: null, signalCode: null } as never);
-    localAgentAccountIds.set("claude:env-1", "default");
+    context.runtime.localServers.adoptProcess(
+      "claude:env-1",
+      { exitCode: null, signalCode: null } as never,
+      { workingDirectory: root, accountId: "default" },
+    );
     const result = await readSessionAgentAccount(context, "env-1", "claude");
     expect(result).toMatchObject({
       source: "account",

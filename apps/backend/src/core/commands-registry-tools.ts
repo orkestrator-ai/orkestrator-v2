@@ -2,7 +2,7 @@ import path from "node:path";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
 import { readAgentSkillFile, scanAgentSkills } from "./agent-skills.js";
-import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./commands-runtime-state.js";
+import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./agent-credential-files.js";
 import {
   cancelGitHubCliLogin,
   getGitHubCliStatus,

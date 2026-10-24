@@ -383,6 +383,15 @@ export type EngineEvent = EngineEventMeta &
     | { kind: "thread.model.updated"; threadId: string; model: string }
     | { kind: "turn.model.updated"; threadId: string; turnId: string; model: string }
     | {
+        /** `modelProvider/authRecovery{Started,Completed}`; thread-scoped. */
+        kind: "thread.authRecovery";
+        threadId: string;
+        phase: "started" | "completed";
+        /** Codex's own wording, bounded; never a credential. */
+        message?: string;
+        provider?: string;
+      }
+    | {
         kind: "turn.configuration.updated";
         threadId: string;
         turnId: string;

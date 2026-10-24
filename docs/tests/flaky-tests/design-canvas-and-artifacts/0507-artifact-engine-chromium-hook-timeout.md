@@ -36,3 +36,9 @@
 - **Owning-file rerun:** `mise run test:logged -- --name artifact-engines-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1 --only-failures` passed the complete unchanged file, exit 0 in 59.8 seconds.
 - **Assessment:** Recurrence of the existing intermittent hook timeout. Host contention remains an unproven explanation; assertions, deadlines and skips were unchanged.
 - **Aggregate counts:** Backend 10,076 passed, 86 skipped and two failed across 585 files (650.46 seconds); the aggregate exited 1 after 959.6 seconds. The web suite passed 8,824 tests with 10 skips. The initial root group also caught an unsafe DOM absence assertion in the newly added unit coverage; that assertion was corrected, and its owning diagnostics guard passed separately. Bridges, protocol regeneration and all remaining workspace packages passed.
+
+## Coordinator adapters main merge — 2026-10-24
+
+Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. The Chromium policy hook timed out after 5001.89 ms. `mise run test:logged -- --name merge-artifact-engine-owner -- bun --cwd=apps/backend test ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (122.9 s); unavailable Firefox/WebKit coverage remained skipped.
+
+Full failure names, counts, evidence paths and unresolved limitations are in [0724](../aggregate-validation-runs/0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.

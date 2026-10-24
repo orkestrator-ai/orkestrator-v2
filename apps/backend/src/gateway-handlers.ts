@@ -34,6 +34,7 @@ import type {
   DrainAwareEventClientWriter,
   GatewayEventClient,
 } from "./gateway-internals.js";
+import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import { recurringWorkDiagnostics } from "./core/recurring-diagnostics.js";
 
 /** The invoke, event-stream, metrics and loopback-proxy routes. */
@@ -320,6 +321,8 @@ export class GatewayHandlers {
       replay: { ...snapshot.replay, ring: this.ctx.eventReplay.getStats() },
       // Additive: bounded, content-free recurring-work counters (kinds only).
       recurringWork: recurringWorkDiagnostics(),
+      // Additive: content-free mixed-version compatibility-path usage.
+      compatibilityPaths: compatibilityPathUsage.snapshot().paths,
     });
   }
 

@@ -19,12 +19,21 @@
   `example.com` and `example.net` through the host resolver. Under aggregate
   load the spawn plus two DNS round trips can exceed Bun's five-second generic
   budget, and the whole file takes 22 s alone, so these cases have little
-  headroom. The same class as [0159](0159-artifact-sanitizer-aggregate-timeout.md),
+  headroom. The same class as [0159](../design-canvas-and-artifacts/0159-artifact-sanitizer-aggregate-timeout.md),
   where real subprocess work outgrew the generic budget.
 - **Notes:** unrelated to the branch it was observed on (the settings Usage
   tab); nothing in `tests/unit/firewall-policy.test.ts`,
   `docker/firewall-domains.sh` or the network allowlist changed there. The
   likely fix is an explicit outer budget for these cases, as 0159 took.
+- **2026-10-24 (node mbp3, macOS, Apple Silicon):** `mise run test` on the
+  0011 runtime-state branch failed five of these cases at 5.0 s. Unlike the
+  original observation, the owner also failed alone here:
+  `mise run test:logged -- --name firewall -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1`
+  → 12 pass, 12 fail (67.4 s), and the same command in a clean `origin/main`
+  (`8454d18b`) worktree → 11 pass, 13 fail (70.1 s). On this host it is a
+  host condition (slow DNS in the shell harness), not a branch regression and
+  not a flake by the register's definition; the branch touches neither the
+  test nor `docker/`.
 
 - **Recurrence 2026-10-24 (node mbp3, Control MCP voice branch `todo-0041-control-mcp-voice-4a2c0ccc548b`):** failed in both `mise run test` aggregates (artifacts `orkestrator-test-run.SqxFKk` and `orkestrator-test-run.NcXAI6` under `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/`); the unchanged owner `tests/unit/firewall-policy.test.ts` passed alone (24 pass, 0 fail). The branch does not touch this area.
 
@@ -55,3 +64,27 @@
 - **Assessment:** the owner remains non-green, so this observation does not independently confirm a flake or its cause. Host load exceeded 100 during validation. No firewall implementation, assertion, deadline or skip changed.
 
 - **Aggregate disposition:** the outer logged runner reached its 1800000 ms deadline after the workspace and bridge groups waited 1708.7 s and 1782.4 s for host capacity. Those groups are incomplete; the protocol-lockfile check passed. Outer evidence: `orkestrator-test-run.WDZkGn/merge-full-tests.log.gz`. Static checks and all 28 changed owner test files passed separately on the combined merge.
+
+
+## Runtime-state ownership main merge — 2026-10-24
+
+`mise run test:logged -- --name merge-suite -- mise run test` used the default 4/1/2/1 workspace/root/bridge/protocol plan alongside browser suites and other validating worktrees. Root/support ran with one worker after waiting 953.5 s: 3,369 passed, twelve failed and one error across 3,381 tests in 161 files (609.28 s execution). Evidence: host temporary artifact `orkestrator-test-run.BJKk4l/root-and-agent-support-tests.log` (compressed at aggregate completion). Nine firewall-policy cases exceeded five seconds (5004–5221 ms), including tuple application, seven parametrized probe cases and GitHub range fallback. The complete unchanged owner also failed: `mise run test:logged -- --name merge-firewall-policy-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` reported twenty passes and four failures in 51.1 s logged (stored-domain bootstrap, policy 2 host ports, and two example.org/example.com probe cases). Evidence: host temporary artifact `orkestrator-test-run.gK2ocG/merge-firewall-policy-owner.log.gz`. This host-condition recurrence does not establish a flake; the branch changes neither this owner nor its Docker scripts. No assertion, deadline or skip changed.
+
+
+## Agent accounts and sign-in (0003) validation — 2026-10-24
+
+Recurred in the non-iOS aggregate on node mbp3 (thirteen `container firewall policy` cases at ~5,003 ms); the unchanged owner passed alone (24 passed). Details in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Agent accounts main merge — 2026-10-24
+
+The broad run and complete unchanged owner both retained five-second failures. This is not newly classified as a flake. Exact commands, counts and artifacts are in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md#merge-through-main-8290f2ca9--2026-10-24). No assertion, deadline or skip changed.
+
+## Control MCP voice merge through `95c9cb46a` — 2026-10-24
+
+- **Parents:** `3f04356fd947464d652e31709ac3c3e8a7c45823` and `95c9cb46ae0a2b12fbc10ff73fa7c0614b254a0d`; base `0014505caeed69395b3cc996dd541fcc6df12c23`.
+- **Aggregate command:** testing-guide GNU-tool PATH with `ORKESTRATOR_TEST_AREA_BASE=0014505caeed69395b3cc996dd541fcc6df12c23 mise run test:logged -- --name merge95-tests -- mise run test`. Root used one isolated worker: 3,380 passed and two failed across 161 files (241.63 s execution). `policy 2 narrows host access to named ports and records what it applied` timed out at 5006.33 ms; `policy 3 allowlist  EXAMPLE.COM:443/tcp  chooses blocked HTTPS probe example.net` at 5007.44 ms.
+- **Complete unchanged owner:** the same GNU-tool PATH with `mise run test:logged -- --name merge95-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` reported 21 passed and three failed (39.0 s). Policy 2 host ports (5004.52 ms), policy 3 tuples (5020.40 ms), and the policy 2 example.org/example.com probe (5007.94 ms) exhausted five seconds. The aggregate's upper-case probe case passed on this rerun.
+- **Evidence:** host temporary artifacts `orkestrator-test-run.N9YUtx/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.YEJsXs/merge95-firewall-owner.log.gz`.
+- **Assessment:** this complete owner remains non-green; no new flake classification or cause is established. Neither `tests/unit/firewall-policy.test.ts` nor `docker/firewall-domains.sh` differs from the merge base. No implementation, assertion, deadline or skip changed for this observation.
+
+- **Completed aggregate:** workspace (web, backend, desktop, web-public, CLI, protocol, toolchain), bridge and protocol-lockfile groups passed; only the two root firewall timeouts remained. The outer command exited 1 after 638.3 s. Full evidence: `orkestrator-test-run.lyZaoe/merge95-tests.log.gz`; group evidence is under `orkestrator-test-run.N9YUtx/`. Static checks and the flake-index contract test passed on the merged result.

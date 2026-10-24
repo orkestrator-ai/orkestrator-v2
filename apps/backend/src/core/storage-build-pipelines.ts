@@ -40,11 +40,6 @@ import { StoreCorruptError } from "./storage-database.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 type PersistedBuildPipeline = shared.PersistedBuildPipeline;
 
-export type BuildPipelineDowngradeExport =
-  | { status: "exported"; record: PersistedBuildPipeline; bytes: number }
-  | { status: "incompatible"; reason: "too-large" | "transcript-unavailable"; bytes?: number }
-  | { status: "missing" };
-
 /** Committed control records and the store revision they were read at. */
 interface LoadedBuildPipelines {
   records: Readonly<Record<string, PersistedBuildPipeline>>;
@@ -785,48 +780,5 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
     const orphans = this.liveBuildPipelineTags() ? await store.sweepOrphans(options.graceMs) : 0;
     const repair = await store.repair(options.graceMs);
     return { orphans, removedChunks: repair.removedChunks, complete: repair.complete };
-  }
-
-  /**
-   * Explicit, bounded export of one pipeline in the pre-split schema (inline
-   * transcripts, no references) for a downgrade. A record that cannot fit the
-   * old 32 MiB snapshot bound is reported incompatible instead of truncated;
-   * the current format stays authoritative either way. This does not modify
-   * storage, and running an older binary against this data directory is not a
-   * supported downgrade by itself.
-   */
-  async exportBuildPipelineForDowngrade(pipelineId: string): Promise<BuildPipelineDowngradeExport> {
-    const record = await this.getBuildPipeline(pipelineId);
-    if (!record) return { status: "missing" };
-    const snapshot = record.snapshot as { sessions?: unknown };
-    const sessions = Array.isArray(snapshot.sessions)
-      ? (snapshot.sessions as PipelineSession[])
-      : [];
-    let bytes = Buffer.byteLength(JSON.stringify(record.snapshot), "utf8");
-    const exported: PipelineSession[] = [];
-    for (const session of sessions) {
-      if (bytes > LEGACY_BUILD_PIPELINE_SNAPSHOT_LIMIT_BYTES) {
-        return { status: "incompatible", reason: "too-large", bytes };
-      }
-      const { transcript, legacyStructuredRequestId: _recovered, ...legacy } = session;
-      if (!transcript) {
-        exported.push(legacy);
-        continue;
-      }
-      const read = await this.readBuildPipelineTranscript(pipelineId, session);
-      if (read.status !== "found") {
-        return { status: "incompatible", reason: "transcript-unavailable" };
-      }
-      bytes += Buffer.byteLength(JSON.stringify(read.messages), "utf8");
-      exported.push({ ...legacy, messages: read.messages });
-    }
-    if (bytes > LEGACY_BUILD_PIPELINE_SNAPSHOT_LIMIT_BYTES) {
-      return { status: "incompatible", reason: "too-large", bytes };
-    }
-    return {
-      status: "exported",
-      record: { ...record, snapshot: { ...(record.snapshot as object), sessions: exported } },
-      bytes,
-    };
   }
 }

@@ -32,6 +32,7 @@ import {
   isOrkestratorArtifactTool,
   isOrkestratorMailTool,
   isOrkestratorMcpTool,
+  isResearchMcpTool,
   isOwnWorkflowResultCall,
 } from "./mcp.js";
 import { schedulePersist } from "./persistence.js";
@@ -64,8 +65,11 @@ export async function requestToolApproval(
   toolName: string,
   input: unknown,
 ): Promise<ToolCallDecision> {
+  // A coordinator's own mail and delegation tools, and its research servers'
+  // tools: the read-only gate admits these by exact registered name.
   const coordinatorMail =
-    state.policy?.id === "coordinator-read-only" && isOrkestratorMcpTool(state, toolName);
+    state.policy?.id === "coordinator-read-only" &&
+    (isOrkestratorMcpTool(state, toolName) || isResearchMcpTool(state, toolName));
   const ownAttempt =
     isOwnWorkflowResultCall(state, toolName, input) || isOrkestratorArtifactTool(state, toolName);
   if (state.readOnly && !READ_ONLY_TOOLS.has(toolName) && !coordinatorMail && !ownAttempt) {

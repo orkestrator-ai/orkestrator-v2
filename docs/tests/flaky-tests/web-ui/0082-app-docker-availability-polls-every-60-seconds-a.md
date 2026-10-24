@@ -15,3 +15,9 @@
 ## Reopened during Electron preview main merge — 2026-10-18
 
 `mise run test:logged -- --name merge-tests -- mise run test` failed the same availability-poll case (1315.09 ms), alongside component and isolated browser validation and other worktrees. The unchanged owning file passed with `mise run test:logged -- --name merge-web-app-owner -- bun test --cwd apps/web ./src/App.test.tsx --parallel=1 --only-failures` (exit 0, 8.4 seconds). Evidence: `orkestrator-test-run.ItrRrn/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. The earlier fix and diagnosis above remain historical; this occurrence establishes intermittence, not its cause. No implementation, assertion, timeout or skip changed.
+
+## Coordinator adapters main merge — 2026-10-24
+
+Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. The availability-poll case failed after 1035.71 ms. `mise run test:logged -- --name merge-owner-app -- bun --cwd=apps/web test ./src/App.test.tsx --parallel=1 --only-failures` passed the complete unchanged owner (9.4 s).
+
+Full failure names, counts, evidence paths and unresolved limitations are in [0724](../aggregate-validation-runs/0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.

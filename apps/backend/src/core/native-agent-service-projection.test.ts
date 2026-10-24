@@ -2,7 +2,7 @@
  * Authoritative projection state: connection grace, composer capabilities,
  * execution profiles, the bounded read cache, and resume.
  */
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 
 import { AGENT_INTERACTION_CONTRACT_VERSION } from "@orkestrator/protocol/agent-interactions";
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
@@ -812,6 +812,57 @@ describe("NativeAgentService", () => {
       );
     },
   );
+
+  test.each([true, false])(
+    "cancelling a sign-in forwards to the provider when it can cancel (%s)",
+    async (canCancel) => {
+      const stub = createProviderStub("codex");
+      const cancelSignIn = mock(async () => ({ cancelled: true }));
+      if (canCancel) Object.assign(stub.provider, { cancelSignIn });
+      await withService(
+        { prefix: "orkestrator-sign-in-cancel-", provider: async () => stub.provider },
+        async ({ service }) => {
+          await expect(
+            service.cancelProjectionSignIn({
+              environmentId: "env-1",
+              agent: "codex",
+              logicalSessionKey: "env-env-1:tab-sign-in",
+            }),
+          ).resolves.toEqual({ cancelled: canCancel });
+          expect(cancelSignIn).toHaveBeenCalledTimes(canCancel ? 1 : 0);
+        },
+      );
+    },
+  );
+
+  test("cancelling with an absent bridge only observes and invalidates the projection", async () => {
+    const invoke = mock(async (command: string): Promise<never> => {
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    await withService({ prefix: "orkestrator-cancel-absent-", invoke }, async ({ service }) => {
+      const internal = service as unknown as {
+        observeBridgeConnection: () => Promise<undefined>;
+        projections: { invalidateProjection: (key: string) => void };
+      };
+      const observe = spyOn(internal, "observeBridgeConnection").mockResolvedValue(undefined);
+      const invalidate = spyOn(internal.projections, "invalidateProjection");
+      try {
+        expect(
+          await service.cancelProjectionSignIn({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey: "tab-sign-in",
+          }),
+        ).toEqual({ cancelled: false });
+        expect(observe).toHaveBeenCalledTimes(1);
+        expect(invoke).not.toHaveBeenCalled();
+        expect(invalidate).toHaveBeenCalledTimes(1);
+      } finally {
+        observe.mockRestore();
+        invalidate.mockRestore();
+      }
+    });
+  });
 
   test("account reads preserve auth failures rather than reporting unsupported", async () => {
     const stub = createProviderStub("cursor", {

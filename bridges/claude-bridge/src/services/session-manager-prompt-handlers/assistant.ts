@@ -13,6 +13,7 @@ import {
 } from "../claude-sign-in.js";
 import { claudeEvidenceTurnId, claudeToolUses, recordClaudeToolUse } from "../change-evidence.js";
 import { eventEmitter } from "../event-emitter.js";
+import { noteSessionLoginRefused, setSessionAuthNotice } from "../session-auth-notice.js";
 import { debugLog } from "../logger.js";
 import {
   recordBackgroundTaskLaunch,
@@ -115,8 +116,19 @@ export function handleAssistantMessage(turn: TurnState, message: SDKMessage): vo
   // code ("Not logged in · Please run /login"). Re-read the account so a
   // missing login locks the composer; any real answer proves one works.
   const assistantError = (message as SDKAssistantMessage).error;
-  if (assistantError === "authentication_failed") noteClaudeAuthenticationFailure();
-  else if (!assistantError) noteClaudeAuthenticationWorked();
+  if (assistantError === "authentication_failed") {
+    noteClaudeAuthenticationFailure();
+    noteSessionLoginRefused(
+      session,
+      sessionId,
+      typeof (message as { uuid?: unknown }).uuid === "string"
+        ? (message as { uuid: string }).uuid
+        : crypto.randomUUID(),
+    );
+  } else if (!assistantError) {
+    noteClaudeAuthenticationWorked();
+    setSessionAuthNotice(session, sessionId, undefined);
+  }
   const usageReport = (message as SDKAssistantMessage).usage_report;
   if (usageReport) {
     const usage = applyClaudeUsageReport(session, usageReport);

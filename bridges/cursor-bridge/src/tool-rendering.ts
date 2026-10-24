@@ -21,6 +21,7 @@ import {
   MAX_TOOL_OUTPUT_BYTES,
   MAX_TOOL_TITLE_BYTES,
 } from "./config.js";
+import { CURSOR_CUSTOM_USER_TOOLS_SERVER, hostedToolOwner } from "./mcp.js";
 import { boundText } from "./transcript.js";
 import {
   isObject,
@@ -339,8 +340,12 @@ function renderSemSearch(rendered: RenderedToolCall, args: JsonObject, result: T
 
 function renderMcp(rendered: RenderedToolCall, args: JsonObject, result: ToolResult): void {
   const provider = readString(args.providerIdentifier);
-  const publishedProvider = provider === "custom-user-tools" ? "orkestrator" : provider;
-  const tool = readString(args.toolName);
+  const named = readString(args.toolName);
+  // Hosted calls arrive under the SDK's carrier server; publish the owner.
+  const hosted =
+    provider === CURSOR_CUSTOM_USER_TOOLS_SERVER && named ? hostedToolOwner(named) : undefined;
+  const publishedProvider = hosted?.server ?? provider;
+  const tool = hosted?.tool ?? named;
   // Name the card after the MCP tool rather than "mcp": a session with several
   // servers attached is otherwise a column of identical cards. The qualified
   // `mcp__<server>__<tool>` form is also how `publicCursorMcpServers` learns

@@ -76,6 +76,7 @@ export class OpenCodeReviewSessionPermissions {
     private readonly directory: string | undefined,
     private readonly requestOptions: () => { signal: AbortSignal },
     private readonly onPolicy: (sessionId: string, policy: NativeAgentExecutionPolicy) => void,
+    private readonly researchTools: () => readonly string[] = () => [],
   ) {}
 
   registerCandidate(sessionId: string): void {
@@ -90,7 +91,9 @@ export class OpenCodeReviewSessionPermissions {
     if (options.reviewerSession && !policy) {
       throw new Error("OpenCode reviewer sessions require an execution policy");
     }
-    const permission = policy ? openCodePermissionRules(policy) : undefined;
+    const permission = policy
+      ? openCodePermissionRules(policy, { researchTools: this.researchTools() })
+      : undefined;
     const model = openCodeSessionCreateModel(options.model, options.effort);
     const response = await this.client.session.create(
       {
@@ -160,7 +163,7 @@ export class OpenCodeReviewSessionPermissions {
         {
           sessionID: sessionId,
           directory: this.directory,
-          permission: openCodePermissionRules(policy),
+          permission: openCodePermissionRules(policy, { researchTools: this.researchTools() }),
         },
         this.requestOptions(),
       );

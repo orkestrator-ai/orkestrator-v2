@@ -177,7 +177,10 @@ app.get("/global/auth", async (c) => c.json(await readClaudeAuthStatus()));
 /** Plan-allocation windows for the global settings pane; no session required. */
 app.get("/global/usage", async (c) => c.json({ account: await readClaudePlanUsage() }));
 app.post("/global/auth/login", (c) =>
-  c.json({ error: "Open a Claude terminal tab and run /login." }, 405),
+  c.json(
+    { error: "Claude signs in from the sign-in card in its tab or from Settings → Claude." },
+    405,
+  ),
 );
 app.post("/global/auth/logout", (c) =>
   c.json({ error: "Claude sign-out is available from a terminal tab." }, 405),

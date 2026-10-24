@@ -5,7 +5,7 @@ import { runCommand } from "./shell.js";
 import type { Environment } from "./models.js";
 import type { PrDetection, PrMonitorKanbanTask, PrMonitorTarget } from "./pr-monitor.js";
 import type { StorageService } from "./storage.js";
-import { withContainerRuntimeCredential } from "./commands-runtime-state.js";
+import { withContainerRuntimeCredential } from "./container-scripts.js";
 import { quoteShell } from "./commands-agent-support.js";
 import {
   parsePrCheckSummary,

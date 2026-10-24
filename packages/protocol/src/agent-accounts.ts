@@ -42,6 +42,13 @@ export interface AgentAccountSummary {
   signedIn: boolean;
   identity: AgentAccountIdentity;
   createdAt?: string;
+  /**
+   * Shared entries (settings, skills, transcripts, …) this added account now
+   * keeps as its own copy instead of a link to the host's, because its CLI
+   * replaced the link when saving. Names only; absent when every entry is
+   * still shared and always absent for the host login.
+   */
+  privateEntries?: string[];
 }
 
 export interface AgentAccountsSnapshot {

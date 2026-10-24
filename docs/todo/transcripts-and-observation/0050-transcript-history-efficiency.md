@@ -114,6 +114,12 @@ qualification that was never run.
    (`apps/backend/src/core/http-bridge-progressive.ts`) at the same time: a
    bridge that predates `/transcript` is read through its whole `/messages`
    body and trimmed afterwards.
+   Window decided 2026-10-24 by 0034 (published releases from v2.21.0 today,
+   [`version-compatibility.md`](../../architecture/version-compatibility.md)):
+   all five bridges in v2.21.0 have `/transcript` (#670) and the v2 contract
+   (#875), so both fallbacks serve only unpublished builds and may be
+   removed. `bridge-transcript.messages-fallback` and `history.joined-v1-page`
+   count their use.
 4. Give Codex a per-response row boundary. The bridge infers a model response
    from a reasoning or agent-message item after a tool call
    (`TurnAccumulator.opensModelStep`), so responses that are only a tool call

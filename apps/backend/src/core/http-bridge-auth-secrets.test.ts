@@ -149,4 +149,25 @@ describe.each(CONNECTIONS)("%s bridge auth boundary", (_agent, connection) => {
 
     expect(bodies).toEqual([JSON.stringify({ method: "device-code" }), null]);
   });
+
+  test("cancels an in-tab sign-in, keeping only whether one was open", async () => {
+    const requests: Array<{ url: string; method?: string }> = [];
+    const { provider } = httpProvider((url, init) => {
+      requests.push({ url, method: init.method });
+      return Response.json({ cancelled: true, loginId: AUTH_SECRET_CANARIES.oauthCode, ...TOKENS });
+    }, connection);
+
+    const { result, output } = await captureOutput(() => provider.cancelSignIn!());
+
+    expect(result).toEqual({ cancelled: true });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.url.endsWith("/global/auth/login/cancel")).toBe(true);
+    expect(requests[0]!.method).toBe("POST");
+    expectNothingSecretLogged(output, "sign-in cancel");
+  });
+
+  test("treats a bridge without a sign-in cancel route as nothing to cancel", async () => {
+    const { provider } = httpProvider(() => new Response("Not Found", { status: 404 }), connection);
+    await expect(provider.cancelSignIn!()).resolves.toEqual({ cancelled: false });
+  });
 });

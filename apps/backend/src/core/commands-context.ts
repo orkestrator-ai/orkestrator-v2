@@ -1,5 +1,9 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { AgentToolConnection, StateSignalCredential } from "./agent-tools.js";
+import type {
+  AgentToolConnection,
+  StateSignalCredential,
+  WorktreeSignalReason,
+} from "./agent-tools.js";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { BackendRuntime } from "./backend-runtime.js";
 import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
@@ -59,6 +63,10 @@ export type CommandContext = {
     servicePort?(): number | null;
     /** Doorbell credential for the Claude terminal state signal. */
     issueStateSignal?(onSignal: () => void): StateSignalCredential | null;
+    /** Doorbell credential for a container worktree watcher (`container-worktree-signal.ts`). */
+    issueWorktreeSignal?(
+      onSignal: (reason: WorktreeSignalReason) => void,
+    ): StateSignalCredential | null;
   };
   /** Container → host agent tools reachability checks (startup, bridges, preflight). */
   containerHostReachability?: import("./container-host-reachability.js").ContainerHostReachabilityService;

@@ -52,6 +52,7 @@ export async function refreshClaudeModelCatalog(
       throw new Error("Container ID is required for Claude model discovery");
     }
     const started = await dependencies.enqueueContainerBridgeOperation(
+      context,
       "claude",
       containerId,
       async () => {

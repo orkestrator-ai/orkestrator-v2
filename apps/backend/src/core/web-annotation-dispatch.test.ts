@@ -12,6 +12,7 @@ import { fixtureRequest } from "@orkestrator/protocol/testing/web-annotations-fi
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { StorageService } from "./storage.js";
+import { seedLegacyPromptQueueClaim } from "./storage-test-support.js";
 import {
   WebAnnotationDispatchAdapter,
   webAnnotationQueueKey,
@@ -516,9 +517,10 @@ describe("WebAnnotationDispatchAdapter.observe", () => {
       cancelSource: "chat-queue",
       reason: expect.stringContaining("Removed from the chat queue"),
     });
-    // A claimed item leaves `messages` for the claim, not as a removal.
+    // An item an older backend claimed leaves `messages` for the claim, not as
+    // a removal.
     await adapter.publish({ request: request({}, "req-2"), text: text("req-2") });
-    await storage.claimPromptQueueHead(QUEUE_KEY, ENV, "req-2");
+    seedLegacyPromptQueueClaim(dataDir, QUEUE_KEY, "req-2");
     expect((await adapter.observe(request({ state: "queued" }, "req-2"))).state).toBe(
       "dispatching",
     );

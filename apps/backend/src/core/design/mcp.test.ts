@@ -310,7 +310,7 @@ describe("design MCP", () => {
     });
   });
 
-  test("a receipt settled before digests were kept replays only a matching retry", async () => {
+  test("a receipt settled before digests were kept refuses every retry", async () => {
     const canvas = await design.create(environmentId, "Older receipts", undefined, "user");
     const { frame } = await design.createFrame(
       canvas.id,
@@ -328,30 +328,31 @@ describe("design MCP", () => {
     };
     const first = await call("submit_operation", descriptor);
     if (first.error) throw new Error(first.text);
-    // Drop the digest index, as a record written by an older backend has none.
+    const token = (first.value as { token: string }).token;
+    // Drop the digest index, as a record written before 2.21.0 has none.
     await design.lane(canvas.id, async () => {
       const { record } = await design.loadFor(canvas.id, environmentId);
-      expect(Object.keys(record.receiptDigests ?? {})).toEqual([
-        (first.value as { token: string }).token,
-      ]);
+      expect(Object.keys(record.receiptDigests ?? {})).toEqual([token]);
       const older = structuredClone(record);
       delete older.receiptDigests;
       await design.commit(older, false);
     });
     expect((await design.loadFor(canvas.id, environmentId)).record.receiptDigests).toBeUndefined();
-    const retry = await call("submit_operation", descriptor);
-    expect(retry.error ? retry.text : retry.value).toEqual(first.value);
-    // Without a digest only the fields the receipt carries can disagree.
-    for (const changed of [
-      { ...descriptor, preconditions: { frameRevision: 2 } },
-      { ...descriptor, input: { kind: "delete_frame", frameId: frame.id } },
-      { ...descriptor, gestureId: "drag-1" },
+    // Backends before 2.21.0 are outside the support window, so a receipt
+    // without a digest cannot prove the retry is the same edit: even an
+    // identical retry is refused, and nothing runs twice.
+    for (const retry of [
+      descriptor,
+      { ...descriptor, input: { ...descriptor.input, patch: { x: 7 } } },
     ])
-      expect(await call("submit_operation", changed)).toMatchObject({
+      expect(await call("submit_operation", retry)).toMatchObject({
         error: true,
         text: expect.stringContaining("different edit"),
       });
     expect((await design.get(canvas.id, environmentId)).revision).toBe(3);
+    // The client still reconciles from the receipt itself.
+    const status = await call("operation_status", { canvasId: canvas.id, token });
+    expect(status.error ? status.text : status.value).toEqual(first.value);
   });
 
   test("compact responses omit HTML while full responses keep the legacy shape", async () => {

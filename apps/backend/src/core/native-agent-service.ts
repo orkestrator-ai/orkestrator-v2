@@ -112,7 +112,6 @@ import {
   resolveCoordinatorRuntime,
   coordinatorRuntimeEnvironment,
 } from "./coordinator-runtime.js";
-import { localAgentAccountIds } from "./agent-account-bridge-state.js";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import {
@@ -702,7 +701,10 @@ export class NativeAgentService {
         baseUrl: `http://127.0.0.1:${result.port}`,
         authToken: result.authToken,
         ...(agent === "claude" || agent === "codex"
-          ? { accountId: localAgentAccountIds.get(`${agent}:${environment.id}`) ?? "unknown" }
+          ? {
+              accountId:
+                this.options.localBridgeAccountId?.(`${agent}:${environment.id}`) ?? "unknown",
+            }
           : {}),
         directory: environment.worktreePath,
         model,
@@ -753,7 +755,10 @@ export class NativeAgentService {
         baseUrl: `http://127.0.0.1:${result.port}`,
         authToken: result.authToken,
         ...(agent === "claude" || agent === "codex"
-          ? { accountId: localAgentAccountIds.get(`${agent}:${environment.id}`) ?? "unknown" }
+          ? {
+              accountId:
+                this.options.localBridgeAccountId?.(`${agent}:${environment.id}`) ?? "unknown",
+            }
           : {}),
         directory: environment.worktreePath,
       };

@@ -6,7 +6,6 @@ import { randomUUID } from "node:crypto";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { StorageService } from "./storage.js";
-import { terminalProcesses, terminalSessionConfigs } from "./commands-runtime-state.js";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
@@ -1099,8 +1098,10 @@ describe("bootstrap_terminal_session command", () => {
     if (!bootstrap) throw new Error("bootstrap_terminal_session was not registered");
     const sessionId = `bootstrap-test-${randomUUID()}`;
     const write = mock((_data: string) => undefined);
-    terminalProcesses.set(sessionId, { write } as never);
-    terminalSessionConfigs.set(sessionId, {
+    const runtime = new BackendRuntime({ emit: () => undefined });
+    const context = { runtime } as CommandContext;
+    runtime.terminals.registerProcess(sessionId, { write, kill: () => undefined } as never);
+    runtime.terminals.rememberSession(sessionId, {
       kind: "local",
       environmentId: "env-1",
       cols: 80,
@@ -1109,20 +1110,22 @@ describe("bootstrap_terminal_session command", () => {
     });
 
     try {
-      expect(
-        bootstrap({ sessionId, data: 'codex "Fix it"\n' }, {} as CommandContext),
-      ).toMatchObject({ delivered: true, duplicate: false });
-      expect(
-        bootstrap({ sessionId, data: 'codex "Fix it"\n' }, {} as CommandContext),
-      ).toMatchObject({ duplicate: true, matchesExisting: true });
-      expect(bootstrap({ sessionId, data: "codex\n" }, {} as CommandContext)).toMatchObject({
+      expect(bootstrap({ sessionId, data: 'codex "Fix it"\n' }, context)).toMatchObject({
+        delivered: true,
+        duplicate: false,
+      });
+      expect(bootstrap({ sessionId, data: 'codex "Fix it"\n' }, context)).toMatchObject({
+        duplicate: true,
+        matchesExisting: true,
+      });
+      expect(bootstrap({ sessionId, data: "codex\n" }, context)).toMatchObject({
         duplicate: true,
         matchesExisting: false,
       });
       expect(write).toHaveBeenCalledTimes(1);
     } finally {
-      terminalProcesses.delete(sessionId);
-      terminalSessionConfigs.delete(sessionId);
+      runtime.terminals.explicitlyCloseSession(sessionId);
+      runtime.shutdown();
     }
   });
 });

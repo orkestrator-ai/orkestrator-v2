@@ -21,9 +21,8 @@ import {
   startAgentAccountLogin,
 } from "./agent-accounts.js";
 import { applyActiveAgentAccountEnvironment } from "./agent-accounts-active.js";
-import { staleLoginLocalBridges } from "./agent-account-bridge-state.js";
+import { BackendRuntime } from "./backend-runtime.js";
 import type { SpawnLike } from "./agent-accounts-login.js";
-import { localServerProcesses } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import type { PlanUsageReader } from "./plan-usage.js";
 import {
@@ -171,6 +170,7 @@ beforeEach(async () => {
     storage,
     runtimeFlavor: "agent-test",
     credentialSources: new Set(),
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as unknown as CommandContext;
   resetAgentAccountLoginForTests();
   terminalAccountHomes.clear();
@@ -181,6 +181,7 @@ afterEach(async () => {
   cancelAgentAccountLogin();
   resetAgentAccountLoginForTests();
   terminalAccountHomes.clear();
+  context.runtime.shutdown();
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -379,14 +380,9 @@ describe("agent accounts", () => {
       return progress.accountId!;
     }
 
-    afterEach(() => {
-      staleLoginLocalBridges.clear();
-      localServerProcesses.delete("claude:env-1");
-    });
-
     test("renews the active account in place and flags running bridges", async () => {
       const accountId = await addActiveClaudeAccount("claude-one");
-      localServerProcesses.set("claude:env-1", {} as never);
+      context.runtime.localServers.adoptProcess("claude:env-1", {} as never);
       let command: string[] = [];
       await startAgentAccountLogin(context, "claude", {
         reauthenticate: true,
@@ -408,7 +404,7 @@ describe("agent accounts", () => {
       );
       expect(claude).toHaveLength(2);
       expect(claude.some((a) => a.id === accountId && a.isActive)).toBe(true);
-      expect(staleLoginLocalBridges.has("claude:env-1")).toBe(true);
+      expect(context.runtime.localServers.hasStaleLogin("claude:env-1")).toBe(true);
     });
 
     test.each(["original", "replacement"])(
@@ -498,6 +494,7 @@ describe("agent accounts", () => {
     test("rejects sibling identity without changing the active credential, identity or registry", async () => {
       await addActiveClaudeAccount("sibling");
       const id = await addActiveClaudeAccount("original");
+      context.runtime.localServers.adoptProcess("claude:env-1", {} as never);
       const home = path.join(context.storage.agentAccountsDirectory(), "claude", id);
       const before = await savedLogin(home);
       const registry = await context.storage.loadAgentAccounts();
@@ -512,7 +509,7 @@ describe("agent accounts", () => {
       });
       expect(await savedLogin(home)).toEqual(before);
       expect(await context.storage.loadAgentAccounts()).toEqual(registry);
-      expect(staleLoginLocalBridges.size).toBe(0);
+      expect(context.runtime.localServers.hasStaleLogin("claude:env-1")).toBe(false);
     });
 
     test("rejects renewing an added account as the host identity", async () => {

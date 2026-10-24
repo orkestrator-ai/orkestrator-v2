@@ -5,7 +5,6 @@ import { createCommandFixtures } from "./command-fixtures";
 const {
   ASYNC_TEST_BUDGET_MS,
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
-  commandTesting,
   createCommandRegistry,
   createContext,
   createEnvironment,
@@ -14,6 +13,7 @@ const {
   dockerOwnerNamespace,
   expectClearsPendingAgentLaunch,
   fs,
+  localServerHooks,
   path,
   toClientEnvironment,
   updatesWithStatus,
@@ -920,14 +920,14 @@ exit 0
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
     const child = createFakeChild(95001);
-    commandTesting.setLocalServerProcess(`codex:${environment.id}`, child);
-    commandTesting.setTerminateProcessTree(async () => true);
+    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, child);
+    localServerHooks.terminateProcessTree = async () => true;
 
     await commands.get("stop_environment")?.({ environmentId: environment.id }, context);
 
     // The bridge is gone and its ownership entry released, so a later start
     // does not think a server is already running.
-    expect(commandTesting.getLocalServerProcess(`codex:${environment.id}`)).toBeUndefined();
+    expect(context.runtime.localServers.process(`codex:${environment.id}`)).toBeUndefined();
     expect(updates).toContainEqual({ codexBridgePid: null, localCodexPort: null });
     expect(updates).toContainEqual({
       status: "stopped",
@@ -946,8 +946,8 @@ exit 0
     });
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
-    commandTesting.setLocalServerProcess(`codex:${environment.id}`, createFakeChild(95002));
-    commandTesting.setTerminateProcessTree(async () => false);
+    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, createFakeChild(95002));
+    localServerHooks.terminateProcessTree = async () => false;
 
     // The failure is surfaced...
     await expect(
@@ -958,7 +958,7 @@ exit 0
     // way for the user to stop it from the UI.
     expect(updates).toContainEqual({ status: "stopped", pendingAgentLaunch: false });
 
-    commandTesting.setTerminateProcessTree(async () => true);
+    localServerHooks.terminateProcessTree = async () => true;
   });
 
   test("stores PR metadata, normalized settings, and deduplicated domain changes", async () => {

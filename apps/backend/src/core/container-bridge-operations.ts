@@ -1,6 +1,5 @@
 import type { CommandContext } from "./commands-context.js";
-import type { LocalServerKind } from "./commands-runtime-state.js";
-import { containerBridgeOperations } from "./commands-runtime-state.js";
+import type { LocalServerKind } from "./local-server-runtime.js";
 
 /** Use the persisted ID so Docker's abbreviated IDs cannot create a second lock. */
 export async function containerBridgeOperationId(
@@ -17,22 +16,14 @@ export async function containerBridgeOperationId(
 }
 
 export function enqueueContainerBridgeOperation<T>(
+  context: Pick<CommandContext, "runtime">,
   agent: LocalServerKind,
   containerId: string,
   operation: () => Promise<T>,
 ): Promise<T> {
-  const key = `${agent}:${containerId}`;
-  const previous = containerBridgeOperations.get(key) ?? Promise.resolve();
-  const result = previous.then(operation, operation);
-  const tail = result.then(
-    () => undefined,
-    () => undefined,
+  return context.runtime.localServers.enqueueContainerBridgeOperation(
+    agent,
+    containerId,
+    operation,
   );
-  containerBridgeOperations.set(key, tail);
-  void tail.finally(() => {
-    if (containerBridgeOperations.get(key) === tail) {
-      containerBridgeOperations.delete(key);
-    }
-  });
-  return result;
 }

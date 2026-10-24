@@ -25,3 +25,12 @@
   tab); nothing in `tests/unit/firewall-policy.test.ts`,
   `docker/firewall-domains.sh` or the network allowlist changed there. The
   likely fix is an explicit outer budget for these cases, as 0159 took.
+- **2026-10-24 (node mbp3, macOS, Apple Silicon):** `mise run test` on the
+  0011 runtime-state branch failed five of these cases at 5.0 s. Unlike the
+  original observation, the owner also failed alone here:
+  `mise run test:logged -- --name firewall -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1`
+  → 12 pass, 12 fail (67.4 s), and the same command in a clean `origin/main`
+  (`8454d18b`) worktree → 11 pass, 13 fail (70.1 s). On this host it is a
+  host condition (slow DNS in the shell harness), not a branch regression and
+  not a flake by the register's definition; the branch touches neither the
+  test nor `docker/`.

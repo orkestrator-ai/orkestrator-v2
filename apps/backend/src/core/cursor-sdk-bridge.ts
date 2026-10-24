@@ -10,6 +10,8 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveCursorCredential } from "./agent-test-cursor-credential.js";
 import type { CommandContext } from "./commands-context.js";
+import { dockerExec } from "./commands-container-exec.js";
+import { runCommand } from "./shell.js";
 
 /**
  * Where a login minted through Orkestrator is stored.
@@ -413,12 +415,8 @@ export async function syncContainerCursorSdkCredentials(
 }
 
 const defaultRunners = {
-  exec: async (containerId: string, command: string): Promise<string> => {
-    const { dockerExec } = await import("./commands-container-exec.js");
-    return dockerExec(containerId, command);
-  },
+  exec: (containerId: string, command: string): Promise<string> => dockerExec(containerId, command),
   pipe: async (containerId: string, command: string, stdin: string): Promise<void> => {
-    const { runCommand } = await import("./shell.js");
     await runCommand("docker", ["exec", "-i", containerId, "sh", "-c", command], {
       stdin,
       timeoutMs: 30_000,

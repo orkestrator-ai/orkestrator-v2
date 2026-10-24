@@ -7,18 +7,20 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { CommandContext } from "./commands-context.js";
 import * as commandFiles from "./commands-files.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
-import { __testing as commandTesting } from "./commands-testing.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
-import {
-  localAgentAccountIds,
-  localAgentAccountTokenExpiry,
-  loginlessLocalBridges,
-  staleLoginLocalBridges,
-} from "./agent-account-bridge-state.js";
-import { BackendRuntime } from "./backend-runtime.js";
+import { BackendRuntime, type BackendRuntimeOptions } from "./backend-runtime.js";
+
+const runtimes: BackendRuntime[] = [];
+
+/** One backend's runtime, released after the test like the backend would. */
+function trackedRuntime(options: Omit<BackendRuntimeOptions, "emit"> = {}): BackendRuntime {
+  const runtime = new BackendRuntime({ emit: () => undefined, ...options });
+  runtimes.push(runtime);
+  return runtime;
+}
 
 describe("Coordinator Codex server", () => {
   let root: string;
@@ -32,7 +34,6 @@ describe("Coordinator Codex server", () => {
   let cleanupKind: "codex" | "claude" | "cursor" = "codex";
 
   beforeEach(async () => {
-    commandTesting.resetLocalServerLifecycle();
     cleanupContext = null;
     cleanupRuntimeId = null;
     // Spawned processes canonicalize macOS's /var temporary-directory alias.
@@ -90,11 +91,10 @@ describe("Coordinator Codex server", () => {
         () => undefined,
       );
     }
-    commandTesting.resetLocalServerLifecycle();
-    staleLoginLocalBridges.clear();
-    localAgentAccountIds.clear();
-    localAgentAccountTokenExpiry.clear();
-    loginlessLocalBridges.clear();
+    for (const runtime of runtimes.splice(0)) {
+      expect(runtime.localServers.hasEnvironmentOperations()).toBe(false);
+      runtime.shutdown();
+    }
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -132,7 +132,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       emit: () => undefined,
       runtimeFlavor: "production",
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime: trackedRuntime(),
       nativeAgents: { hasObservedLiveWork: async () => busy },
     } as unknown as CommandContext;
     const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
@@ -156,15 +156,15 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     try {
       const first = await startLocalServerUnlocked(runtimeId, context, "claude");
       expect(first.wasRunning).toBe(false);
-      expect(loginlessLocalBridges.has(key)).toBe(true);
-      expect(localAgentAccountIds.get(key)).toBe("default");
+      expect(context.runtime.localServers.isLoginless(key)).toBe(true);
+      expect(context.runtime.localServers.launchedAccountId(key)).toBe("default");
       await stopLocalServerUnlocked(runtimeId, context, "claude");
-      expect(commandTesting.getLocalServerProcess(key)).toBeUndefined();
-      expect(loginlessLocalBridges.has(key)).toBe(false);
-      expect(localAgentAccountIds.has(key)).toBe(false);
+      expect(context.runtime.localServers.process(key)).toBeUndefined();
+      expect(context.runtime.localServers.isLoginless(key)).toBe(false);
+      expect(context.runtime.localServers.launchedAccountId(key)).toBeUndefined();
 
       const signedOut = await startLocalServerUnlocked(runtimeId, context, "claude");
-      expect(loginlessLocalBridges.has(key)).toBe(true);
+      expect(context.runtime.localServers.isLoginless(key)).toBe(true);
       // A terminal login creates the file without sending a refresh event.
       await fs.writeFile(
         path.join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"),
@@ -175,13 +175,13 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       busy = true;
       const retained = await startLocalServerUnlocked(runtimeId, context, "claude");
       expect(retained).toMatchObject({ pid: signedOut.pid, wasRunning: true });
-      expect(loginlessLocalBridges.has(key)).toBe(true);
+      expect(context.runtime.localServers.isLoginless(key)).toBe(true);
       busy = false;
       const signedIn = await startLocalServerUnlocked(runtimeId, context, "claude");
       expect(signedIn.wasRunning).toBe(false);
       expect(signedIn.pid).not.toBe(signedOut.pid);
-      expect(loginlessLocalBridges.has(key)).toBe(false);
-      expect(staleLoginLocalBridges.has(key)).toBe(false);
+      expect(context.runtime.localServers.isLoginless(key)).toBe(false);
+      expect(context.runtime.localServers.hasStaleLogin(key)).toBe(false);
       const coordinatorHome = path.join(
         storage.getDataDir(),
         "coordinator-runtime",
@@ -194,8 +194,8 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         "new-login",
       );
       await stopLocalServerUnlocked(runtimeId, context, "claude");
-      expect(commandTesting.getLocalServerProcess(key)).toBeUndefined();
-      expect(loginlessLocalBridges.has(key)).toBe(false);
+      expect(context.runtime.localServers.process(key)).toBeUndefined();
+      expect(context.runtime.localServers.isLoginless(key)).toBe(false);
     } finally {
       hostCredentialRead.mockRestore();
       for (const [name, value] of savedCredentials) {
@@ -238,7 +238,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         resourceRoot: root,
         emit: () => undefined,
         environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-        runtime: new BackendRuntime({ emit: () => undefined }),
+        runtime: trackedRuntime(),
         controlMcp: {
           getSettings: () => ({
             enabled: true,
@@ -317,18 +317,19 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       // A renewed login must retain busy work, then replace an idle bridge and
       // acknowledge the refresh only after the replacement has launched.
       const key = `claude:${runtimeId}`;
-      staleLoginLocalBridges.add(key);
+      context.runtime.localServers.markLoginStale("claude");
+      expect(context.runtime.localServers.hasStaleLogin(key)).toBe(true);
       let busy = true;
       context.nativeAgents = {
         hasObservedLiveWork: async () => busy,
       } as unknown as CommandContext["nativeAgents"];
       const retained = await startLocalServerUnlocked(runtimeId, context, "claude");
       expect(retained.pid).toBe(started.pid);
-      expect(staleLoginLocalBridges.has(key)).toBe(true);
+      expect(context.runtime.localServers.hasStaleLogin(key)).toBe(true);
       busy = false;
       const replaced = await startLocalServerUnlocked(runtimeId, context, "claude");
       expect(replaced.pid).not.toBe(started.pid);
-      expect(staleLoginLocalBridges.has(key)).toBe(false);
+      expect(context.runtime.localServers.hasStaleLogin(key)).toBe(false);
       const current = await storage.loadConfig();
       const nextMode = researchMode === "off" ? "search" : "off";
       await storage.updateGlobalConfig({ ...current.global, coordinatorWebResearch: nextMode });
@@ -336,7 +337,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       await expect(startLocalServerUnlocked(runtimeId, context, "claude")).rejects.toThrow(
         "current work finishes",
       );
-      expect(commandTesting.getLocalServerProcess(key)?.pid).toBe(replaced.pid);
+      expect(context.runtime.localServers.process(key)?.pid).toBe(replaced.pid);
       busy = false;
       const changed = await startLocalServerUnlocked(runtimeId, context, "claude");
       expect(changed.pid).not.toBe(replaced.pid);
@@ -386,7 +387,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime: trackedRuntime(),
       controlMcp: {
         getSettings: () => ({
           enabled: true,
@@ -457,7 +458,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       toolchainBinDir: managedBin,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime: trackedRuntime(),
       controlMcp: {
         getSettings: () => ({
           enabled: true,
@@ -536,10 +537,10 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     expect(await fs.readFile(path.join(isolatedHome, "auth.json"), "utf8")).toContain(
       "replacement",
     );
-    expect(localAgentAccountIds.get(`codex:${runtimeId}`)).toBe(addedId);
+    expect(context.runtime.localServers.launchedAccountId(`codex:${runtimeId}`)).toBe(addedId);
 
     revoke.mockClear();
-    commandTesting.getLocalServerProcess(`codex:${runtimeId}`)!.kill("SIGTERM");
+    context.runtime.localServers.process(`codex:${runtimeId}`)!.kill("SIGTERM");
     for (let attempt = 0; attempt < 100 && revoke.mock.calls.length === 0; attempt += 1) {
       await Bun.sleep(10);
     }
@@ -577,7 +578,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime: trackedRuntime(),
       controlMcp: {
         getSettings: () => ({
           enabled: true,
@@ -632,7 +633,13 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime: trackedRuntime({
+        localServers: {
+          spawn: () => {
+            throw new Error("spawn exploded");
+          },
+        },
+      }),
       controlMcp: {
         getSettings: () => ({
           enabled: true,
@@ -655,9 +662,6 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         revokeCoordinatorCredentials: revoke,
       },
     } as CommandContext;
-    commandTesting.setSpawnLocalServerCommand(() => {
-      throw new Error("spawn exploded");
-    });
 
     await expect(
       startLocalServerUnlocked(
@@ -693,7 +697,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime: trackedRuntime(),
     } as CommandContext;
     // The conversation belongs to Codex, so starting a Claude bridge against
     // its runtime id must be refused: it would inherit that conversation's
@@ -755,7 +759,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime: trackedRuntime(),
     } as CommandContext;
     cleanupContext = context;
     cleanupRuntimeId = environment.id;
@@ -799,7 +803,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime: trackedRuntime(),
       nativeAgents: { hasObservedLiveWork: async () => false },
     } as unknown as CommandContext;
     cleanupContext = context;
@@ -839,7 +843,9 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         openaiKey: null,
         codexKey: null,
       });
-      expect(localAgentAccountIds.get(`codex:${environment.id}`)).toBe(accountId);
+      expect(context.runtime.localServers.launchedAccountId(`codex:${environment.id}`)).toBe(
+        accountId,
+      );
     } finally {
       if (previousOpenaiKey === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = previousOpenaiKey;
@@ -875,7 +881,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime: trackedRuntime(),
     } as CommandContext;
     cleanupContext = context;
     cleanupRuntimeId = environment.id;
@@ -938,7 +944,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       toolchainBinDir: managedBin,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime: trackedRuntime(),
     } as CommandContext;
     cleanupContext = context;
     cleanupRuntimeId = environment.id;
@@ -972,7 +978,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime: trackedRuntime(),
     } as CommandContext;
 
     // Unassigned: nothing has been chosen yet, so there is no bridge to start.

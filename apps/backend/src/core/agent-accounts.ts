@@ -264,7 +264,7 @@ export async function removeAgentAccount(
   accountId: string,
 ): Promise<AgentAccountsSnapshot> {
   if (!isStoredAgentAccountId(accountId)) throw new Error("The host login cannot be removed");
-  if (isAgentAccountInUseByLocalBridge(platform, accountId)) {
+  if (isAgentAccountInUseByLocalBridge(context, platform, accountId)) {
     throw new Error("An agent is still running on this account. Try again once it is idle.");
   }
   return withAccountMutation(async () => {
@@ -458,7 +458,7 @@ async function finishReauthentication(context: CommandContext, entry: ActiveLogi
       console.warn("[agent-accounts] Temporary login cleanup failed"),
     );
   });
-  markLocalBridgesForLoginRefresh(platform);
+  markLocalBridgesForLoginRefresh(context, platform);
   if (platform === "claude")
     await markContainersForClaudeLoginRefresh(context, true).catch(() =>
       console.warn(

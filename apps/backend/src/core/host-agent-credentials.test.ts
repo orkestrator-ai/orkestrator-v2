@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
-import { AGENT_TEST_HOST_PI_AGENT_DIR_ENV } from "./commands-runtime-state.js";
+import { AGENT_TEST_HOST_PI_AGENT_DIR_ENV } from "./agent-credential-files.js";
 import { applyPiHostCredentialEnvironment, readPiDefaultModel } from "./host-agent-credentials.js";
 
 let root: string;

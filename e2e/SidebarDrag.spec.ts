@@ -148,6 +148,23 @@ for (const input of ["pointer", "keyboard"] as const) {
   });
 }
 
+test("machine name drop targets the machine under the pointer while a tall machine is expanded", async ({
+  page,
+}) => {
+  await page.goto("/sidebar-drag?machines=1&spare=1");
+  await expect(page.getByText("q-env-3", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Move Spare", exact: true })).toBeVisible();
+  // Self stays expanded, so its section is far taller than Remote's or Spare's.
+  await drag(
+    page,
+    page.getByRole("button", { name: "Move Self", exact: true }),
+    page.getByRole("button", { name: "Move Remote", exact: true }),
+  );
+  await expect(page.getByTestId("sidebar-writes")).toContainText('"machineOrder"');
+  const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
+  expect(writes.at(-1).args.machineOrder).toEqual(["bk_remote", "bk_self", "bk_spare"]);
+});
+
 test("project grouping leads bound project headings with the machine home icon", async ({
   page,
 }) => {

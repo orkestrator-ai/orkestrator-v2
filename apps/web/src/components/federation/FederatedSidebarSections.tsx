@@ -1,7 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import {
   DndContext,
-  closestCenter,
   KeyboardSensor,
   PointerSensor,
   useSensor,
@@ -302,7 +301,14 @@ export function MachineSectionList({
   };
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+    // A machine's section spans its heading and its whole tree, so comparing
+    // centres sends a drop on an expanded machine's heading to its neighbour.
+    // The section under the pointer is the target instead.
+    <DndContext
+      sensors={sensors}
+      collisionDetection={sidebarCollisionDetection}
+      onDragEnd={handleDragEnd}
+    >
       <SortableContext
         items={shown.map((machine) => `${MACHINE_DRAG_PREFIX}${machine.connectionId}`)}
         strategy={verticalListSortingStrategy}

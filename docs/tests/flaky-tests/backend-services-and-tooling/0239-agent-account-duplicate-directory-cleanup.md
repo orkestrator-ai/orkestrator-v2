@@ -60,3 +60,13 @@ The aggregate repeated this case during coordinator adapter validation. Exact
 commands, timing, owner rerun results and evidence are recorded in
 [0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
 The owning implementation, assertions, timeouts and skips were unchanged.
+
+
+## Bun gate and preview coverage review — 2026-10-24
+
+- **Original command:** `mise run test:logged -- --name review-default-suite -- mise run test`, Bun 1.4.4 on macOS arm64, workspace/root/bridges/protocol reservations 4/1/2/1. The backend package used two Bun workers while other worktrees shared the host.
+- **Failure:** `agent accounts > the same login cannot be added twice` at `apps/backend/src/core/agent-accounts.test.ts:811` observed two account directories instead of the accepted account's one directory after the duplicate was rejected (301.05 ms).
+- **Unchanged owner:** `mise run test:logged -- --name review-agent-accounts-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/agent-accounts.test.ts --parallel=1` passed the complete owning file (exit 0, 4.0 seconds logged).
+- **Suite counts:** backend reported 11013 passed, 79 skipped and one failed across 11093 tests in 660 files (687.40 seconds). Twelve of thirteen workspace build/test tasks passed. The full aggregate completed with this failure and the Codex timeout in case 0210; root/support and protocol-lockfile groups passed.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.2BemPO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after aggregate finalization; outer run `orkestrator-test-run.LLUEZq`.
+- **Assessment:** confirmed intermittent recurrence of the cleanup/publication ordering symptom. No account implementation, assertion, timeout or skip changed.

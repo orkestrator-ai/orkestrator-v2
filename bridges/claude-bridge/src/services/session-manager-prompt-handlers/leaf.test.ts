@@ -98,7 +98,55 @@ describe("leaf message handlers", () => {
       role: "system",
       parts: [{ type: "status", content, severity }],
     });
-    expect(events.map((event) => event.type)).toEqual(["message.updated"]);
+    expect(events.map((event) => event.type)).toEqual(
+      message.type === "auth_status" ? ["message.updated", "session.updated"] : ["message.updated"],
+    );
+  });
+
+  test("auth_status raises, keeps and clears the session's auth notice", () => {
+    const { session, turn } = fixture();
+    const failed = dispatch(turn, {
+      type: "auth_status",
+      isAuthenticating: false,
+      output: [],
+      error: "token expired",
+      uuid: "auth-1",
+    });
+    expect(session.authNotice).toEqual({
+      state: "expired",
+      message:
+        "Claude authentication failed: token expired. Sign in to Claude again to keep working.",
+      occurrenceId: "auth-1",
+    });
+    expect(failed.at(-1)).toEqual({
+      type: "session.updated",
+      sessionId: session.id,
+      data: { authNotice: session.authNotice },
+    });
+
+    dispatch(turn, { type: "auth_status", isAuthenticating: true, output: [], uuid: "auth-2" });
+    expect(session.authNotice).toMatchObject({ state: "needs-auth", occurrenceId: "auth-2" });
+
+    const finished = dispatch(turn, {
+      type: "auth_status",
+      isAuthenticating: false,
+      output: [],
+      uuid: "auth-3",
+    });
+    expect(session.authNotice).toBeUndefined();
+    expect(finished.at(-1)).toEqual({
+      type: "session.updated",
+      sessionId: session.id,
+      data: { authNotice: null },
+    });
+    // Nothing to clear: no second update.
+    const again = dispatch(turn, {
+      type: "auth_status",
+      isAuthenticating: false,
+      output: [],
+      uuid: "auth-4",
+    });
+    expect(again.map((event) => event.type)).toEqual(["message.updated"]);
   });
 
   test("rate_limit_event merges the window and asks for a structured refresh", () => {

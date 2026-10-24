@@ -198,3 +198,17 @@ Branch `todo-0036-design-canvas-qualification-1477f37ca3cf` from `b83ae534`, on 
 ## Mixed-version compatibility main merge — 2026-10-24
 
 Both viewport cases exceeded the 30-second deadline in the nine-worker component aggregate (565 passed, 102 skipped, 15 failed). The complete unchanged owner passed with one worker on port 55723 in 45.7 s. Full commands, worker configuration, original failures and artifacts are recorded in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#mixed-version-compatibility-main-merge--2026-10-24). No assertion, timeout or skip changed.
+
+## Agent accounts main merge — 2026-10-24
+
+`mise run test:logged -- --name merge-browser-fixed -- mise run test:browser`
+(nine workers) reported 577 passed, 102 skipped and seven failed in 694.4 s.
+The complete unchanged owner passed in the sequential one-worker command
+`mise run test:logged -- --name merge-browser-owners -- bunx playwright test --config e2e/playwright.config.ts AgentUsage.spec.ts DesignCanvas.spec.ts PaneBreakpoint.spec.ts AgentLaunchDialog.spec.ts MonacoRuntime.spec.ts VirtuosoFollow.spec.ts --workers=1`.
+That combined command reported twenty passed, four skipped and two failures
+(127.0 s), both in AgentLaunchDialog; this owner had no failures. Evidence:
+`orkestrator-test-run.BIyzun/merge-browser-fixed.log.gz` and
+`orkestrator-test-run.ngoXeT/merge-browser-owners.log.gz` below the host temporary
+directory. No assertion, timeout, skip or implementation changed in this owner.
+
+The mobile canvas reached 30 seconds while clicking Switch tab.

@@ -102,6 +102,7 @@ import {
   resolveCursorHostCredentialMaterial,
 } from "./host-agent-credentials.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
+import { createBridgeOutputForwarder } from "./bridge-output-redaction.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import {
@@ -1133,8 +1134,7 @@ async function startLocalServerAttempt(
     loginless: launchedLoginless,
   });
   if (coordinatorId) coordinatorResearchLaunches.set(child, researchSignature);
-  child.stdout.on("data", (data) => console.debug(`[${kind}:${environmentId}] ${data.toString()}`));
-  child.stderr.on("data", (data) => console.error(`[${kind}:${environmentId}] ${data.toString()}`));
+  forwardBridgeOutput(child, `[${kind}:${environmentId}]`);
   child.once("exit", () => {
     // An unhealthy child may exit after its replacement has already claimed the
     // key. Only the process that still owns the entry may remove it.
@@ -1704,4 +1704,20 @@ export async function allocateLocalPort(): Promise<number> {
     });
     server.once("error", reject);
   });
+}
+
+/**
+ * Forward a local bridge's output to the console, which Debug logging writes
+ * to disk, scrubbed of credential-shaped text and reassembled into whole lines.
+ */
+export function forwardBridgeOutput(
+  child: Pick<ChildProcessWithoutNullStreams, "stdout" | "stderr">,
+  prefix: string,
+): void {
+  const stdout = createBridgeOutputForwarder((text) => console.debug(`${prefix} ${text}`));
+  const stderr = createBridgeOutputForwarder((text) => console.error(`${prefix} ${text}`));
+  child.stdout.on("data", stdout.push);
+  child.stderr.on("data", stderr.push);
+  child.stdout.once("end", stdout.flush);
+  child.stderr.once("end", stderr.flush);
 }

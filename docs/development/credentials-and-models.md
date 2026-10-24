@@ -454,9 +454,10 @@ expired host login into opaque authentication failures rather than the
 signed-out state the agent reports clearly. The general backend and terminal
 environments receive no Keychain path or OAuth token. Container sync uses the
 same explicit Claude service lookup and still sends the complete JSON over stdin
-so the container can retain refresh information. On hosts that keep credentials
-on disk, lookup prefers the recorded host `CLAUDE_CONFIG_DIR` before the host
-home fallback.
+so the container can retain refresh information. When the launching shell set
+`CLAUDE_CONFIG_DIR` explicitly, lookup uses that directory's hashed Keychain
+entry or its `.credentials.json` only, as Claude itself does; otherwise it reads
+the default login and the host home.
 
 Startup also removes the legacy `<isolated HOME>/Library/Keychains` symlink from
 profiles created by earlier builds. Real profile-owned directories at that path

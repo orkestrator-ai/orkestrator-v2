@@ -795,6 +795,12 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * that is not on the agent's machine. A platform without one ignores it.
    */
   beginSignIn?(options?: { deviceCode?: boolean }): Promise<{ url?: string; code?: string }>;
+  /**
+   * Abandon the sign-in `beginSignIn` started, releasing the provider's side
+   * of it. `cancelled` is false when nothing was open or the platform has no
+   * cancel; either way the pending sign-in is gone afterwards.
+   */
+  cancelSignIn?(): Promise<{ cancelled: boolean }>;
   signOut?(): Promise<void>;
   setSessionTitle?(sessionId: string, title: string): Promise<void>;
   /** Drop provider-side model/command caches so the next read re-discovers. */

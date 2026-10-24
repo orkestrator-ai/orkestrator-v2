@@ -220,6 +220,7 @@ export function createBackendProcessEnvironment(
   delete env.ORKESTRATOR_CREDENTIAL_SOURCE;
   delete env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
   delete env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
+  delete env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT;
   delete env.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR;
   if (runtime?.flavor === "agent-test") {
     const allowed = new Set(runtime.credentialSources ?? []);
@@ -248,11 +249,17 @@ export function createBackendProcessEnvironment(
     }
     if (allowed.has("claude")) {
       if (inherited.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = inherited.ANTHROPIC_API_KEY;
+      // A shell that set CLAUDE_CONFIG_DIR (an Orkestrator agent tab on an
+      // added account, say) uses that directory's own Keychain entry, even
+      // when it spells ~/.claude. The backend reads the same login.
+      const explicitClaudeConfigDir = inherited.CLAUDE_CONFIG_DIR?.trim();
       const claudeConfigDir =
-        inherited.CLAUDE_CONFIG_DIR?.trim() ||
+        explicitClaudeConfigDir ||
         (inheritedHome ? path.join(inheritedHome, ".claude") : undefined);
       if (claudeConfigDir) {
         env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = claudeConfigDir;
+        if (explicitClaudeConfigDir)
+          env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT = "1";
       }
     }
     if (runtime.isolatedCredentialRoot) {

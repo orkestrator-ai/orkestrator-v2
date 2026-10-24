@@ -20,6 +20,13 @@ export const CONTAINER_CURSOR_CREDENTIAL_DIR = path.posix.dirname(CONTAINER_CURS
 export const HOST_CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 export const AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV =
   "ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR";
+/**
+ * `1` when the shell `dev:test` was started from set `CLAUDE_CONFIG_DIR` itself,
+ * so the host directory above names a Keychain entry of its own. Absent means
+ * the desktop fell back to `~/.claude` and Claude's plain entry.
+ */
+export const AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV =
+  "ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT";
 /** The host's Pi agent directory, set by the desktop only when Pi is authorized. */
 export const AGENT_TEST_HOST_PI_AGENT_DIR_ENV = "ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR";
 export const CLAUDE_GITHUB_CREDENTIAL_FILE_ENV = "ORKESTRATOR_GITHUB_CREDENTIAL_FILE";

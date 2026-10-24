@@ -8,8 +8,6 @@ import type {
   AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
 
-import { HOST_CLAUDE_KEYCHAIN_SERVICE } from "./agent-credential-files.js";
-
 /**
  * Filesystem side of an added account: its configuration directory, the links
  * that share everything but the login with the host directory, and reading the
@@ -82,20 +80,8 @@ const CLAUDE_JSON_LOCK_STALE_MS = 10_000;
 const CLAUDE_JSON_LOCK_WAIT_MS = 3_000;
 const MAX_ACCOUNT_FILE_BYTES = 8 * 1024 * 1024;
 
-/**
- * The Keychain service Claude Code reads for a configuration directory.
- *
- * Unset means the host's plain entry. Otherwise the suffix is the first eight
- * hex digits of SHA-256 over the literal `CLAUDE_CONFIG_DIR` string (verified
- * against Claude Code 2.1.283), so callers must pass exactly the string the
- * CLI is launched with: a trailing slash or symlinked spelling is a different
- * entry.
- */
-export function claudeKeychainService(configDir: string | undefined): string {
-  if (!configDir) return HOST_CLAUDE_KEYCHAIN_SERVICE;
-  const suffix = createHash("sha256").update(configDir).digest("hex").slice(0, 8);
-  return `${HOST_CLAUDE_KEYCHAIN_SERVICE}-${suffix}`;
-}
+/** See `claude-host-credentials.ts`; re-exported where account code has always imported it. */
+export { claudeKeychainService } from "./claude-host-credentials.js";
 
 export function hostClaudeConfigDir(
   env: NodeJS.ProcessEnv = process.env,
@@ -172,6 +158,27 @@ export async function linkSharedEntries(
       if (!isErrno(error, "EEXIST")) throw error;
     }
   }
+}
+
+/**
+ * Shared entries the account directory now holds as its own file or directory
+ * rather than a link to the host's: the CLI saved one by atomic rename, so that
+ * account no longer sees the host's copy (or the other accounts' changes).
+ * Reported, never re-linked here: replacing the file would race a CLI writing
+ * it and discard whatever the account saved. Names only, in list order.
+ */
+export async function privateSharedEntries(
+  platform: AgentAccountPlatform,
+  accountHome: string,
+): Promise<string[]> {
+  const entries = platform === "claude" ? CLAUDE_SHARED_ENTRIES : CODEX_SHARED_ENTRIES;
+  const found = await Promise.all(
+    entries.map(async (entry) => {
+      const current = await fs.lstat(path.join(accountHome, entry)).catch(() => null);
+      return current && !current.isSymbolicLink() ? entry : undefined;
+    }),
+  );
+  return found.filter((entry): entry is (typeof entries)[number] => entry !== undefined);
 }
 
 type JsonObject = Record<string, unknown>;

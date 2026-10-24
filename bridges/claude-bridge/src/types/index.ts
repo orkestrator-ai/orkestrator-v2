@@ -459,6 +459,14 @@ export interface ClaudeCommandInventoryState {
 export type SessionTurnActivity = "compacting";
 
 /** Session state */
+/** A turn-time sign-in notice; see {@link SessionState.authNotice}. */
+export interface SessionAuthNotice {
+  state: "needs-auth" | "expired";
+  message: string;
+  /** Distinguishes a new occurrence from one the user already dismissed. */
+  occurrenceId: string;
+}
+
 export interface SessionState {
   id: string;
   executionPolicy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
@@ -622,6 +630,13 @@ export interface SessionState {
   inProgressUsageGeneration?: number;
   /** Predicted next prompt emitted by the SDK after a completed turn. */
   promptSuggestion?: string;
+  /**
+   * A sign-in problem met during a turn: Claude's `auth_status` failing or
+   * re-authenticating, or a turn refused with `authentication_failed`. Served
+   * on `GET /session/:id` and shown as the tab's `auth` notice. Cleared once a
+   * model answers or Claude reports the authentication finished.
+   */
+  authNotice?: SessionAuthNotice;
   /**
    * What the CLI reports doing inside the running turn when the transcript
    * shows nothing (a `system/status` frame). Cleared when the turn ends.

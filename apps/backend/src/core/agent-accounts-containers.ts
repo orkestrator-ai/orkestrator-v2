@@ -56,9 +56,12 @@ import {
  * container nobody switched is never touched.
  *
  * Only images with staged inputs carry an account across a restart. An older
- * image mounts the host homes directly, so a restart brings the host login
- * back. A real start invalidates the Codex marker so the next idle bridge
- * request reconciles the imported copy, even if startup later fails.
+ * image mounts the host homes read-only and its entrypoint copies the host
+ * login in at every boot, so the start path writes the active account back
+ * over that copy (Claude's credential and identity, and Codex's login when no
+ * Codex work is live). A real start invalidates the Codex marker so the next
+ * idle bridge request reconciles the imported copy, even if startup later
+ * fails.
  *
  * Claude, Codex and Grok refresh tokens are single-use, and most OpenCode and
  * Pi OAuth logins rotate theirs, so containers receive these logins access-only
@@ -853,11 +856,19 @@ async function readMarker(
  */
 export async function syncContainerAgentAccountsOnStart(
   context: CommandContext,
-  environment: Pick<Environment, "revokedInputProviders"> | null | undefined,
+  environment:
+    | (Pick<Environment, "revokedInputProviders"> & Partial<Pick<Environment, "id">>)
+    | null
+    | undefined,
   containerId: string,
   global: AppConfig["global"],
   runners: ContainerRunners = defaultRunners,
 ): Promise<void> {
+  // An image without staged inputs copies the host homes at every boot, so
+  // nothing staged carries the active account across a restart.
+  const legacyHostMounts = !(await runners
+    .label(containerId, DOCKER_LABEL_INPUTS_REVISION)
+    .catch(() => null));
   if (providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, "claude")) {
     try {
       // Capture before reading/copying: a concurrent renewal must not stamp
@@ -878,12 +889,66 @@ export async function syncContainerAgentAccountsOnStart(
         await restrictClaudeLogin(runners, containerId);
       }
       if (await accountHasBeenUsed(context, "claude")) {
+        // The boot copied the host's `.claude.json`, so the identity still
+        // names the host login even though the credential above does not.
+        if (legacyHostMounts && global.useHostClaudeCredentials !== false) {
+          const identity = await activeClaudeOAuthAccount(context, active);
+          if (identity !== undefined) {
+            await runners
+              .pipe(containerId, SYNC_CONTAINER_CLAUDE_ACCOUNT_COMMAND, JSON.stringify(identity))
+              .catch((error: unknown) =>
+                logFailure("Failed to update the container's Claude account", error),
+              );
+          }
+        }
         await writeMarker(runners, containerId, "claude", marker);
       }
     } catch (error) {
       logFailure("Failed to sync Claude credentials into container", error);
     }
   }
+  if (
+    legacyHostMounts &&
+    providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, "codex")
+  ) {
+    try {
+      await applyActiveCodexLoginAfterLegacyBoot(
+        context,
+        environment,
+        containerId,
+        global,
+        runners,
+      );
+    } catch (error) {
+      logFailure("Failed to sync the Codex login into container", error);
+    }
+  }
+}
+
+/**
+ * A legacy boot copies the host's `~/.codex/auth.json` in, so a terminal
+ * `codex` would run on the host login until the next bridge start. Hand the
+ * active account's login over now. Only after a real boot (the entrypoint and
+ * the start path leave the `unstaged` marker) and with no live Codex work, so a
+ * no-op start never changes the login under a busy bridge. The marker stays
+ * `unstaged`: the next bridge start still replaces any bridge and acknowledges.
+ */
+async function applyActiveCodexLoginAfterLegacyBoot(
+  context: CommandContext,
+  environment: Partial<Pick<Environment, "id">> | null | undefined,
+  containerId: string,
+  global: AppConfig["global"],
+  runners: ContainerRunners,
+): Promise<void> {
+  if (!(await accountHasBeenUsed(context, "codex"))) return;
+  if ((await readMarker(runners, containerId, "codex")) !== UNSTAGED_CODEX_MARKER) return;
+  const environmentId =
+    environment?.id ?? (await environmentForContainer(context, containerId))?.id;
+  if (environmentId && (await context.nativeAgents?.hasObservedLiveWork(environmentId, "codex"))) {
+    return;
+  }
+  const active = await resolveActiveAgentAccount(context, "codex");
+  await pushContainerLogin(context, runners, containerId, "codex", global, active);
 }
 
 /** Write one platform's active login into a running container. */
@@ -953,7 +1018,7 @@ export async function reconcileContainerAgentAccount(
   context: CommandContext,
   containerId: string,
   platform: AgentAccountPlatform,
-  bridge: ContainerBridgeControl,
+  bridge: ContainerBridgeControl | null,
   runners: ContainerRunners = defaultRunners,
 ): Promise<void> {
   const environment = (await context.storage.loadEnvironments()).find(
@@ -961,6 +1026,9 @@ export async function reconcileContainerAgentAccount(
   );
   if (!environment) return;
   const { global } = await context.storage.loadConfig();
+  // A container with its own Claude login is signed in from a terminal inside
+  // it; opening one must never revoke what an earlier one signed in.
+  if (!bridge && platform === "claude" && global.useHostClaudeCredentials === false) return;
   // The account was signed in again: the container still holds the login it
   // was given before, whichever account that was.
   const loginRenewed =
@@ -987,7 +1055,10 @@ export async function reconcileContainerAgentAccount(
   if (await context.nativeAgents?.hasObservedLiveWork(environment.id, platform)) {
     return;
   }
-  const running = await bridge.isRunning();
+  const running = bridge ? await bridge.isRunning() : false;
+  // The marker acknowledges both the files and the bridge. Invalidate it
+  // before a terminal handoff changes files, including a partial failed push.
+  if (!bridge) await writeMarker(runners, containerId, platform, "terminal-handoff");
   await pushContainerLogin(context, runners, containerId, platform, global, active);
   const revision = await runners.label(containerId, DOCKER_LABEL_INPUTS_REVISION);
   if (revision) {
@@ -995,10 +1066,53 @@ export async function reconcileContainerAgentAccount(
       (error: unknown) => logFailure("Failed to refresh the staged login", error),
     );
   }
+  // Without a bridge to replace (a terminal opening), the login is in place
+  // for the CLI it runs, but any idle bridge still launched on the old one:
+  // keep the marker invalid so the next bridge start replaces it and acknowledges.
+  if (!bridge) return;
   if (running) await bridge.stop();
   // Publish completion only after the old bridge has relinquished its login.
   await writeMarker(runners, containerId, platform, expectedMarker);
   if (platform === "claude") context.runtime.localServers.clearStaleContainerLogin(environment.id);
+}
+
+/**
+ * Before a container terminal starts its shell: hand each platform's active
+ * login to the container, so a `claude` or `codex` run there uses the account
+ * the user switched to rather than whichever one the container last received.
+ * Serialized with that platform's bridge starts, never while its work is live
+ * (the terminal then keeps the previous account until the bridge is idle and
+ * next starts), and bounded: a slow container must not hold the shell back.
+ */
+export async function applyActiveAgentAccountsForContainerTerminal(
+  context: CommandContext,
+  containerId: string,
+  runners: ContainerRunners = defaultRunners,
+  timeoutMs = 10_000,
+): Promise<void> {
+  const operationId = await containerBridgeOperationId(context, containerId).catch(
+    (error: unknown) => {
+      logFailure("Failed to resolve a terminal's container", error);
+      return undefined;
+    },
+  );
+  if (!operationId) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const work = Promise.all(
+    AGENT_ACCOUNT_PLATFORMS.map((platform) =>
+      enqueueContainerBridgeOperation(context, platform, operationId, () =>
+        reconcileContainerAgentAccount(context, operationId, platform, null, runners),
+      ).catch((error: unknown) =>
+        logFailure(`Failed to hand the active ${platform} login to a terminal`, error),
+      ),
+    ),
+  );
+  await Promise.race([
+    work,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 /**

@@ -49,8 +49,9 @@ export function codexProtocolDrift(value: unknown): unknown {
 /**
  * The notices one interactive snapshot carries.
  *
- * Two sources, both bounded. The transport-limit warning is Orkestrator's own
- * and is about the transcript the user is looking at. Provider advisories are
+ * Three sources, all bounded. A turn-time sign-in notice comes first, because
+ * it is the one the user can act on. The transport-limit warning is
+ * Orkestrator's own and is about the transcript the user is looking at. Provider advisories are
  * promoted out of the health panel into the tab only when they are errors:
  * warnings and inventory — deprecations, rerouted models, MCP servers that did
  * not start — stay in the health panel, which is where they can be expanded.
@@ -58,8 +59,11 @@ export function codexProtocolDrift(value: unknown): unknown {
 export function snapshotNotices(options: {
   transcriptTruncated: boolean;
   runtime?: NativeAgentRuntimeSummary;
+  /** A login that stopped working during a turn (`normalizeProviderAuthNotice`). */
+  auth?: NativeAgentNotice;
 }): NativeAgentNotice[] {
   return [
+    ...(options.auth ? [options.auth] : []),
     ...(options.transcriptTruncated
       ? [
           {

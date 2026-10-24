@@ -386,6 +386,9 @@ session.get("/:id", async (c) => {
     // Bridge-wide: the login belongs to the process, not the session. Present
     // only once Claude's own account read found no credential.
     ...readinessField(),
+    // Session-scoped: a login that stopped working during this session's
+    // turns. The backend shows it as the tab's `auth` notice.
+    ...(sessionData.authNotice ? { authNotice: sessionData.authNotice } : {}),
   });
 });
 

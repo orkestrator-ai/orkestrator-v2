@@ -2649,6 +2649,54 @@ describe("AgentInfoButton Claude session options", () => {
     };
   }
 
+  test("offers Claude's in-app account sign-in instead of a terminal", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string, input?: unknown) => {
+      if (command === "list_agent_accounts") return { accounts: [], active: {} };
+      if (command === "get_native_agent_session_account") return null;
+      if (command === "get_native_agent_auth_status") {
+        return {
+          state: "needs-auth",
+          signIn: {
+            kind: "terminal",
+            hint: "Sign in to Claude from the sign-in card in this tab or from Settings → Claude.",
+          },
+          signOut: false,
+        };
+      }
+      if (command === "get_agent_account_login") return { state: "idle" };
+      if (command === "start_agent_account_login") {
+        expect(input).toEqual({ platform: "claude", reauthenticate: true });
+        return {
+          state: "pending",
+          operationId: "reauth-1",
+          accountId: "default",
+          platform: "claude",
+          mode: "reauthenticate",
+          url: "https://claude.example.test/authorize",
+          needsCode: true,
+        };
+      }
+      return {};
+    });
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(CLAUDE_KEY, neutralClaudeProjection({ executionProfiles: [] }));
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+    await waitFor(() =>
+      expect(
+        nativeInvokeMock.mock.calls.some(([command]) => command === "start_agent_account_login"),
+      ).toBe(true),
+    );
+    expect(
+      screen.getByText(
+        "Sign in to Claude from the sign-in card in this tab or from Settings → Claude.",
+      ),
+    ).toBeTruthy();
+  });
+
   test("keeps Claude informational diagnostics in the runtime panel", () => {
     useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, {
       ...neutralClaudeProjection(),
@@ -4542,6 +4590,31 @@ describe("AgentInfoButton ACP agents", () => {
       .map(([, input]) => input as { serverId?: string; action?: string });
   }
 
+  test.each(["signed-in", "signed-out", "needs-auth", "expired", "unknown"] as const)(
+    "shows the %s auth fixture in the session's account card",
+    async (state) => {
+      nativeInvokeMock.mockImplementation(async (command: string) => {
+        if (command === "get_native_agent_auth_status") {
+          return {
+            state,
+            account: { label: "fixture@example.test", plan: "pro" },
+            signIn: { kind: "terminal", hint: "Open a terminal and run grok login." },
+            signOut: false,
+          };
+        }
+        return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+      });
+      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      open();
+      expect(await screen.findByText("fixture@example.test")).toBeTruthy();
+      expect(screen.getByText(`${state.replaceAll("-", " ")} · pro`)).toBeTruthy();
+      expect(screen.queryByText("Open a terminal and run grok login.") !== null).toBe(
+        state !== "signed-in",
+      );
+    },
+  );
+
   test("reads the account when the panel opens and again after signing out", async () => {
     const accountReads = () =>
       nativeInvokeMock.mock.calls.filter(([command]) => command === "get_native_agent_auth_status")
@@ -4694,6 +4767,49 @@ describe("AgentInfoButton ACP agents", () => {
       fireEvent.focus(window);
       await screen.findByRole("button", { name: "Sign out" });
       expect(mockToastDismiss).toHaveBeenCalledWith(options.id);
+    } finally {
+      window.orkestratorGateway = previousGateway;
+    }
+  });
+
+  test("the device-code toast cancels the sign-in on the provider's side", async () => {
+    const previousGateway = window.orkestratorGateway;
+    window.orkestratorGateway = { enabled: true, desktop: true };
+    const pendingSignIn = {
+      url: "https://auth.example.test/device",
+      code: "CANCEL-CODE",
+      expiresAt: Date.now() + 60_000,
+    };
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_native_agent_auth_status")
+        return { state: "signed-out", signIn: { kind: "device-code" } };
+      if (command === "begin_native_agent_sign_in") return pendingSignIn;
+      if (command === "cancel_native_agent_sign_in") return { cancelled: true };
+      return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+    });
+    try {
+      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      open();
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+      await waitFor(() =>
+        expect(
+          mockToastInfo.mock.calls.some(([message]) => message === "Device code: CANCEL-CODE"),
+        ).toBe(true),
+      );
+      const options = mockToastInfo.mock.calls.find(
+        ([message]) => message === "Device code: CANCEL-CODE",
+      )![1] as { id: string; cancel: { label: string; onClick: () => void } };
+      expect(options.cancel.label).toBe("Cancel sign-in");
+      options.cancel.onClick();
+      expect(mockToastDismiss).toHaveBeenCalledWith(options.id);
+      await waitFor(() =>
+        expect(
+          nativeInvokeMock.mock.calls.find(
+            ([command]) => command === "cancel_native_agent_sign_in",
+          )?.[1],
+        ).toMatchObject({ environmentId: ENVIRONMENT_ID, agent: "cursor" }),
+      );
     } finally {
       window.orkestratorGateway = previousGateway;
     }

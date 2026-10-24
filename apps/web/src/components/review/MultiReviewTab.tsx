@@ -361,22 +361,20 @@ function InspectorTranscriptTabs({
   tab: InspectorBodyTab;
   onTabChange: (tab: InspectorBodyTab) => void;
 }) {
-  const active = report ? tab : "transcript";
+  if (!report) return transcript;
   return (
     <Tabs
-      value={active}
+      value={tab}
       onValueChange={(value) => onTabChange(value as InspectorBodyTab)}
       className="flex min-h-0 min-w-0 flex-1 flex-col gap-2"
     >
-      <TabsList className="h-7 rounded-md p-0.5">
+      <TabsList aria-label="Inspector views" className="h-7 rounded-md p-0.5">
         <TabsTrigger className="h-6 px-2 text-xs" value="transcript">
           Transcript
         </TabsTrigger>
-        {report ? (
-          <TabsTrigger className="h-6 px-2 text-xs" value="report">
-            Report
-          </TabsTrigger>
-        ) : null}
+        <TabsTrigger className="h-6 px-2 text-xs" value="report">
+          Report
+        </TabsTrigger>
       </TabsList>
       <TabsContent
         value="transcript"
@@ -385,11 +383,9 @@ function InspectorTranscriptTabs({
       >
         {transcript}
       </TabsContent>
-      {report ? (
-        <TabsContent value="report" className="min-w-0">
-          {report}
-        </TabsContent>
-      ) : null}
+      <TabsContent value="report" className="min-w-0">
+        {report}
+      </TabsContent>
     </Tabs>
   );
 }

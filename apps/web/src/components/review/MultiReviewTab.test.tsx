@@ -1213,7 +1213,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       "true",
     );
     expect(inspector().getByTestId("multi-review-transcript-tail")).toBeTruthy();
-    expect(screen.queryByRole("article", { name: "Reviewer report" })).toBeNull();
+    expect(screen.queryByRole("article", { name: "Reviewer report" }) === null).toBe(true);
 
     showInspectorTab("Report");
     expect(screen.getByRole("article", { name: "Reviewer report" })).toBeTruthy();
@@ -1224,12 +1224,51 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
     // A reviewer without a report has only its transcript.
     selectFlowNode("Reviewer 2 ·");
-    expect(inspector().getByRole("tab", { name: "Transcript" })).toBeTruthy();
-    expect(inspector().queryByRole("tab", { name: "Report" })).toBeNull();
+    expect(inspector().getByTestId("multi-review-transcript-tail")).toBeTruthy();
+    expect(inspector().queryByRole("tablist") === null).toBe(true);
+    expect(inspector().queryByRole("tab", { name: "Transcript" }) === null).toBe(true);
+    expect(inspector().queryByRole("tab", { name: "Report" }) === null).toBe(true);
 
     // Each node remembers which tab was last shown.
     selectFlowNode("Reviewer 1 ·");
     expect(screen.getByRole("article", { name: "Reviewer report" })).toBeTruthy();
+  });
+
+  test("navigates inspector views from the keyboard without changing the pipeline selection", async () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    const node = selectFlowNode("Reviewer 1 ·");
+    const views = within(inspector().getByRole("tablist", { name: "Inspector views" }));
+    act(() => views.getByRole("tab", { name: "Transcript" }).focus());
+    for (const [key, name] of [
+      ["ArrowRight", "Report"],
+      ["ArrowLeft", "Transcript"],
+      ["End", "Report"],
+      ["Home", "Transcript"],
+      ["ArrowLeft", "Report"],
+      ["ArrowRight", "Transcript"],
+    ]) {
+      fireEvent.keyDown(document.activeElement!, { key });
+      await waitFor(() => {
+        const selected = views.getByRole("tab", { name });
+        expect(document.activeElement === selected).toBe(true);
+        expect(selected.getAttribute("aria-selected")).toBe("true");
+      });
+      const pipeline = within(screen.getByRole("tablist", { name: "Multi Review pipeline" }));
+      expect(pipeline.getAllByRole("tab", { selected: true }).length).toBe(1);
+      expect(pipeline.getByRole("tab", { selected: true }) === node).toBe(true);
+      expect(inspector().getByRole("heading", { name: /^Reviewer 1 ·/ }).textContent).toBe(
+        "Reviewer 1 · claude",
+      );
+    }
   });
 
   test("cannot open a reviewer that never opened a provider session", () => {
@@ -1390,7 +1429,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
 
     selectFlowNode("Consolidation");
-    expect(screen.queryByRole("article", { name: "Consolidated Multi Review" })).toBeNull();
+    expect(screen.queryByRole("article", { name: "Consolidated Multi Review" }) === null).toBe(
+      true,
+    );
     showInspectorTab("Report");
     const consolidated = screen.getByRole("article", { name: "Consolidated Multi Review" });
     expect(screen.getByRole("button", { name: "Review Scope" })).toBeTruthy();

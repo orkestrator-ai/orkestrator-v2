@@ -26,7 +26,6 @@ import { TmuxBackend } from "./tmux-backend.js";
 import { claudeTmuxRuntimeRootPrefix, tmuxSessionName } from "./tmux-shared.js";
 import { realTmux, withPrivateTmux } from "../../tests/tmux-lifecycle-fixture.js";
 import * as pathSafety from "./path-safety.js";
-import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
 import { createProject, StorageService } from "./storage.js";
 import { parseWorktreeMoveRecord } from "./storage-projects.js";
 import { BackendRuntime } from "./backend-runtime.js";
@@ -63,7 +62,6 @@ afterEach(async () => {
   mock.restore();
   if (optionalLocks === undefined) delete process.env.GIT_OPTIONAL_LOCKS;
   else process.env.GIT_OPTIONAL_LOCKS = optionalLocks;
-  setLocalServerShutdownRequested(false);
   for (const runtime of runtimes.splice(0)) runtime.shutdown();
   prMonitorService.sync([]);
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
@@ -779,7 +777,7 @@ describe("move failure boundaries", () => {
     await expect(
       moveEnvironmentTask(environment.id, path.join(root, "moved"), context),
     ).rejects.toThrow("setup is still running");
-    setLocalServerShutdownRequested(true);
+    context.runtime.localServers.closeAdmission();
     await expect(
       moveEnvironmentTask(environment.id, path.join(root, "moved"), context),
     ).rejects.toThrow("shutting down");

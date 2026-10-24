@@ -31,6 +31,12 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+test("git-status scanners stay statically imported without a dynamic import cycle workaround", async () => {
+  const source = await fs.readFile(new URL("./diff-stats-tracking.ts", import.meta.url), "utf8");
+  expect(source).toMatch(/^\s*import\s[^;]*from\s+["']\.\/commands-files\.js["'];/m);
+  expect(source).not.toMatch(/\bimport\s*\(\s*["']\.\/commands-files(?:\.js)?["']/);
+});
+
 test("runtimes isolate snapshots, revisions, emitters, fetch state and reconciliation queues for the same environment", async () => {
   const first = await harness();
   const second = await harness();

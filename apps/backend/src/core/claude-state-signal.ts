@@ -1,3 +1,4 @@
+import type { ImageCapability } from "@orkestrator/protocol/image-manifest";
 import type { StateSignalCredential } from "./agent-tools.js";
 import type { CommandContext } from "./commands-context.js";
 import {
@@ -68,7 +69,27 @@ export function claudeStateSignalInstallCommand(
  */
 export async function claudeStateSignalSupport(
   containerId: string,
-  context: CommandContext,
+  context: Pick<CommandContext, "storage">,
+  readManifest = readImageManifest,
+): Promise<ClaudeStateSignalSupport> {
+  return containerImageCapabilitySupport(
+    containerId,
+    context,
+    "claude-state-signal",
+    2,
+    readManifest,
+  );
+}
+
+/**
+ * Whether the image of the container's current runtime declares `capability`
+ * at `minimum` or later. Shared by the container change signals.
+ */
+export async function containerImageCapabilitySupport(
+  containerId: string,
+  context: Pick<CommandContext, "storage">,
+  capability: ImageCapability,
+  minimum: number,
   readManifest = readImageManifest,
 ): Promise<ClaudeStateSignalSupport> {
   const environment = findEnvironmentByContainerId(
@@ -79,7 +100,7 @@ export async function claudeStateSignalSupport(
   if (!imageId) return "unknown";
   const read = await readManifest(imageId, context);
   if (read.kind === "unavailable") return "unknown";
-  return read.kind === "manifest" && (read.manifest.capabilities["claude-state-signal"] ?? 0) >= 2
+  return read.kind === "manifest" && (read.manifest.capabilities[capability] ?? 0) >= minimum
     ? "supported"
     : "unsupported";
 }

@@ -140,13 +140,6 @@ export function registerBuildPipelineCommands(
       return withoutTranscriptBodies(record);
     },
   );
-  /**
-   * Explicit downgrade export of one pipeline in the pre-split inline schema,
-   * bounded by the old 32 MiB snapshot limit. Read-only.
-   */
-  register("export_build_pipeline_for_downgrade", ({ pipelineId }, { storage }) =>
-    storage.exportBuildPipelineForDowngrade(asNonBlankString(pipelineId, "pipelineId")),
-  );
   register(
     "get_build_pipeline_session_projection",
     async ({ pipelineId, sessionKey, refreshUsage }, context) => {

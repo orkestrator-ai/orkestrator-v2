@@ -46,3 +46,17 @@ passed in 27.0 s with
 `mise run test:logged -- --name merge-electron-main-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts e2e/agent-testing/electron-main.spec.ts --workers=1`.
 Evidence: host temporary artifact `orkestrator-test-run.C6gvdK/merge-electron.log.gz`.
 No assertion, timeout, skip or implementation changed.
+
+## Agent accounts main merge — 2026-10-24
+
+The Workstation five-second reload poll recurred. The complete unchanged main-window owner passed (three passed, one skipped, 97.7 s) with `ORKESTRATOR_AGENT_TEST_RUN_ID=merge-electron-owners mise run test:logged -- --name merge-electron-main-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts --workers=1`.
+
+Original command: `mise run test:logged -- --name merge-electron -- mise run test:agent:electron` (one worker): 26 passed, four failed, one skipped, one not run, 558.2 s. Evidence: `orkestrator-test-run.3IicXN/merge-electron.log.gz` below the host temporary directory. No implementation, assertion, deadline or skip changed. See [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md).
+
+## Container state observation main merge — 2026-10-24
+
+- **Original command:** `mise run test:logged -- --name merge-electron -- mise run test:agent:electron`, merging feature `66a9736cc` and main `d6ed0717d`; one Playwright worker alongside repository, component-browser, isolated-browser and Docker checks.
+- **Aggregate:** the renderer's nickname snapshot did not reach Workstation within the five-second poll budget at `electron-main.spec.ts:452`. Electron reported 28 passed, one skipped and three failed in 1059.8 s logged.
+- **Complete unchanged owner:** `ORKESTRATOR_AGENT_TEST_RUN_ID=merge-electron-main-owner mise run test:logged -- --name merge-electron-main-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts --workers=1` retained the same nickname deadline: two passed, one skipped and one failed (165.4 s logged; 163.7 s Playwright execution).
+- **Evidence:** host temporary artifacts `orkestrator-test-run.zGyXkd/merge-electron.log.gz` and `orkestrator-test-run.bzBeMP/merge-electron-main-owner.log.gz`.
+- **Assessment:** no new complete-owner pass or cause was established. No implementation, assertion, timeout or skip changed.

@@ -115,8 +115,7 @@ export function designActions(
     } else if (descriptor.input.kind === "create_canvas") {
       const found = await findCreate(service, environmentId, descriptor.correlationId);
       if (found?.receipt) {
-        if (!settledMatches(found.receipt, found.digest, descriptor))
-          throw reusedCorrelation(found.receipt.token);
+        if (!settledMatches(found.digest, descriptor)) throw reusedCorrelation(found.receipt.token);
         return compactStatus(found.receipt);
       }
     }

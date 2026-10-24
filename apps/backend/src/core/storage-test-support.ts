@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { STORAGE_DATABASE_FILE, StorageDatabase } from "./storage-database.js";
@@ -46,6 +47,57 @@ export function readStoredValue<T = unknown>(dataDir: string, file: string): T |
     const snapshot = database.readStore(storeName(file));
     return snapshot ? (snapshot.value as T) : undefined;
   });
+}
+
+type StoredPromptQueueRecord = {
+  messages: unknown[];
+  outstandingClaim?: unknown;
+  updatedAt: string;
+  revision: number;
+};
+
+/**
+ * Moves the head of a stored prompt queue into `outstandingClaim`, the way the
+ * removed prompt-queue claim command did (and an older backend sharing
+ * the data directory still can): a fresh token, the message, `claimedAt`, and
+ * `expiresAt` (default: a five-minute lease), with the revision bumped. A
+ * running `StorageService` reads the result on its next load, but only a
+ * mutation, `init()` or recovery arms its expiry timer. Returns the token.
+ */
+export function seedLegacyPromptQueueClaim(
+  dataDir: string,
+  queueKey: string,
+  messageId: string,
+  options: { claimedAt?: string | number | Date; expiresAt?: string | number | Date } = {},
+): string {
+  const queues = readStoredValue<Record<string, StoredPromptQueueRecord>>(
+    dataDir,
+    "prompt-queues.json",
+  );
+  const queue = queues?.[queueKey];
+  if (!queues || !queue) throw new Error(`No stored prompt queue ${queueKey}`);
+  if (queue.outstandingClaim) throw new Error(`${queueKey} already has a claim`);
+  const [head, ...rest] = queue.messages;
+  if (typeof head !== "object" || head === null || (head as { id?: unknown }).id !== messageId) {
+    throw new Error(`${messageId} is not the head of ${queueKey}`);
+  }
+  const claimedAt = new Date(options.claimedAt ?? Date.now());
+  const expiresAt = new Date(options.expiresAt ?? claimedAt.getTime() + 5 * 60 * 1000);
+  const token = randomUUID();
+  queues[queueKey] = {
+    ...queue,
+    messages: rest,
+    outstandingClaim: {
+      token,
+      message: head,
+      claimedAt: claimedAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    },
+    updatedAt: new Date().toISOString(),
+    revision: queue.revision + 1,
+  };
+  seedStore(dataDir, "prompt-queues.json", queues);
+  return token;
 }
 
 export function hasStore(dataDir: string, file: string): boolean {

@@ -2,6 +2,7 @@ import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactio
 import { isContentRevision } from "@orkestrator/protocol/session-activity-batch";
 import {
   NATIVE_AGENT_SIGN_IN_KINDS,
+  type NativeAgentNotice,
   type NativeAgentReadiness,
   type NativeAgentSignInRoute,
 } from "@orkestrator/protocol/native-agent";
@@ -194,6 +195,29 @@ export function normalizeSignInRoute(value: unknown): NativeAgentSignInRoute | u
   if (!kind) return undefined;
   const hint = nonEmptyString(route?.hint)?.trim();
   return { kind, ...(hint ? { hint: hint.slice(0, 500) } : {}) };
+}
+
+/**
+ * A bridge's turn-time sign-in notice (`authNotice` on the Claude and Codex
+ * session reads) as the tab's `auth` notice. Read field by field, like every
+ * auth answer, so nothing beyond the state, a bounded message and an
+ * occurrence id crosses. Only the two states a turn can discover are accepted:
+ * a missing login is readiness, not a notice.
+ */
+export function normalizeProviderAuthNotice(
+  value: unknown,
+): Extract<NativeAgentNotice, { kind: "auth" }> | undefined {
+  const notice = asRecord(value);
+  if (notice?.state !== "expired" && notice?.state !== "needs-auth") return undefined;
+  const message = nonEmptyString(notice.message)?.trim();
+  if (!message) return undefined;
+  const occurrenceId = nonEmptyString(notice.occurrenceId)?.trim();
+  return {
+    kind: "auth",
+    state: notice.state,
+    message: message.slice(0, 500),
+    ...(occurrenceId ? { occurrenceId: occurrenceId.slice(0, 128) } : {}),
+  };
 }
 
 /** Validate the provider-neutral prompt-admission state at the bridge boundary. */

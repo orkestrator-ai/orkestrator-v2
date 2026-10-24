@@ -5,6 +5,7 @@ import {
   resetMergeCleanupSchedulerForTesting,
   setMergeCleanupScheduler,
 } from "@/../../backend/src/core/commands-pr-monitor";
+import { BackendRuntime } from "@/../../backend/src/core/backend-runtime";
 import type { CommandContext } from "@/../../backend/src/core/commands-context";
 
 /**
@@ -20,6 +21,7 @@ import type { CommandContext } from "@/../../backend/src/core/commands-context";
 const context = {
   storage: { getEnvironment: async () => null },
   emit: () => undefined,
+  runtime: new BackendRuntime({ emit: () => undefined }),
 } as unknown as CommandContext;
 
 afterEach(() => {

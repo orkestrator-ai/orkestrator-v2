@@ -71,7 +71,6 @@ const {
   buildFileTree,
   createCommandRegistry,
   parseContainerFileTree,
-  __testing: commandTesting,
 } = await import("../src/core/commands");
 const { resolveBunBinary } = await import("../src/core/commands-agent-support");
 const { getWorktreeBaseDir } = await import("../src/core/commands-environment");
@@ -1201,12 +1200,20 @@ done
       ),
     ).resolves.toEqual({ running: false, port: 4201, pid: 5201 });
 
-    commandTesting.setLocalServerProcess("opencode:env-tools", {
+    const { localServers } = withAgentTools.runtime;
+    const openCodeChild = {
       pid: 5201,
       exitCode: null,
       signalCode: null,
       kill: mock(() => true),
-    } as unknown as ChildProcessWithoutNullStreams);
+    } as unknown as ChildProcessWithoutNullStreams;
+    const claudeChild = {
+      pid: 5202,
+      exitCode: null,
+      signalCode: null,
+      kill: mock(() => true),
+    } as unknown as ChildProcessWithoutNullStreams;
+    localServers.adoptProcess("opencode:env-tools", openCodeChild);
     try {
       // Live, but nothing has been reconciled yet: readiness is unknown rather
       // than an unqualified claim that the ticket tools are wired up.
@@ -1224,12 +1231,7 @@ done
 
       // Claude has no MCP wiring of its own, and a backend built without an
       // agent-tools server must not advertise the field at all.
-      commandTesting.setLocalServerProcess("claude:env-tools", {
-        pid: 5202,
-        exitCode: null,
-        signalCode: null,
-        kill: mock(() => true),
-      } as unknown as ChildProcessWithoutNullStreams);
+      localServers.adoptProcess("claude:env-tools", claudeChild);
       await expect(
         commands.get("get_local_claude_server_status")?.(
           { environmentId: "env-tools" },
@@ -1237,14 +1239,15 @@ done
         ),
       ).resolves.toEqual({ running: true, port: null, pid: 5202 });
       await expect(
-        commands.get("get_local_opencode_server_status")?.(
-          { environmentId: "env-tools" },
-          createContext(environment),
-        ),
+        commands.get("get_local_opencode_server_status")?.({ environmentId: "env-tools" }, {
+          ...createContext(environment),
+          runtime: withAgentTools.runtime,
+        } as CommandContext),
       ).resolves.toEqual({ running: true, port: 4201, pid: 5201 });
       expect(agentTools.connection).not.toHaveBeenCalled();
     } finally {
-      commandTesting.resetLocalServerLifecycle();
+      localServers.releaseOwnership("opencode:env-tools", openCodeChild);
+      localServers.releaseOwnership("claude:env-tools", claudeChild);
     }
   });
 

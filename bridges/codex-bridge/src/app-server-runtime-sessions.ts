@@ -24,6 +24,7 @@ import {
   type BridgeSession,
   CODEX_RESTARTED_MID_TURN_MESSAGE,
   type SessionPhase,
+  type ThreadAuthNotice,
   type ThreadContext,
 } from "./sessions/thread-registry.js";
 import { TurnAccumulator } from "./sessions/turn-accumulator.js";
@@ -992,6 +993,10 @@ export class CodexRuntimeSessions {
     return this.ctx.options.engine.logoutAccount();
   }
 
+  cancelAuthLogin(): Promise<"canceled" | "none"> {
+    return this.ctx.options.engine.cancelAccountLogin();
+  }
+
   async rewindMessages(
     sessionId: string,
     messageId: string,
@@ -1278,6 +1283,7 @@ export class CodexRuntimeSessions {
     commandRevision?: number;
     policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
     readiness?: NativeAgentReadiness;
+    authNotice?: ThreadAuthNotice;
   } | null {
     const session = this.ctx.registry.getSession(sessionId);
     if (!session) return null;
@@ -1333,6 +1339,8 @@ export class CodexRuntimeSessions {
       ...(this.ctx.commandCatalogue.revision > 0
         ? { commandRevision: this.ctx.commandCatalogue.revision }
         : {}),
+      // A provider login Codex had to renew during this thread's turns.
+      ...(context?.authNotice ? { authNotice: context.authNotice } : {}),
       // Omitted rather than "ready" otherwise: only a confirmed sign-out is known.
       ...(this.ctx.options.engine.isAccountSignInRequired()
         ? {

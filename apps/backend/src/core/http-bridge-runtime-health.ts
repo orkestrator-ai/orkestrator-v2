@@ -28,6 +28,7 @@ import {
   providerAdvisoryNotices,
   providerInventoryCount,
 } from "./agent-provider-runtime.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 /**
  * Codex reports drift as `protocol.unknownNotifications` plus the last method
@@ -48,8 +49,9 @@ export function codexProtocolDrift(value: unknown): unknown {
 /**
  * The notices one interactive snapshot carries.
  *
- * Two sources, both bounded. The transport-limit warning is Orkestrator's own
- * and is about the transcript the user is looking at. Provider advisories are
+ * Three sources, all bounded. A turn-time sign-in notice comes first, because
+ * it is the one the user can act on. The transport-limit warning is
+ * Orkestrator's own and is about the transcript the user is looking at. Provider advisories are
  * promoted out of the health panel into the tab only when they are errors:
  * warnings and inventory — deprecations, rerouted models, MCP servers that did
  * not start — stay in the health panel, which is where they can be expanded.
@@ -57,8 +59,11 @@ export function codexProtocolDrift(value: unknown): unknown {
 export function snapshotNotices(options: {
   transcriptTruncated: boolean;
   runtime?: NativeAgentRuntimeSummary;
+  /** A login that stopped working during a turn (`normalizeProviderAuthNotice`). */
+  auth?: NativeAgentNotice;
 }): NativeAgentNotice[] {
   return [
+    ...(options.auth ? [options.auth] : []),
     ...(options.transcriptTruncated
       ? [
           {
@@ -266,8 +271,8 @@ export function bridgeMcpConfigEvidence(payload: unknown): ProviderMcpConfigEvid
 export function bridgeReportsMcpConfig(payload: unknown): boolean {
   const body = asRecord(payload);
   if (!body) return false;
-  return (
-    (typeof body.mcpConfigReporting === "number" && body.mcpConfigReporting >= 1) ||
-    asRecord(body.mcpConfig) !== null
-  );
+  if (typeof body.mcpConfigReporting === "number" && body.mcpConfigReporting >= 1) return true;
+  if (asRecord(body.mcpConfig) === null) return false;
+  compatibilityPathUsage.record("mcp-report.unmarked-config");
+  return true;
 }

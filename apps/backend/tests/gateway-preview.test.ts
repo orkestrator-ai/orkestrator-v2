@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { compatibilityPathUsage } from "../src/core/compatibility-path-usage.js";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -79,6 +80,8 @@ describe("gateway preview integration", () => {
   };
 
   test("the tunnel reaches the service through the real gateway without a gateway credential", async () => {
+    const before =
+      compatibilityPathUsage.snapshot().paths["preview.legacy-loopback-route"]?.count ?? 0;
     const { info } = await startGateway({ previews: harness.runtime });
     const attachment = await harness.runtime.access.createAttachment({
       serviceId,
@@ -103,6 +106,9 @@ describe("gateway preview integration", () => {
     expect(Buffer.concat(client.data).toString()).toContain('"marker":"gateway-app"');
     // The gateway token never reached the application.
     expect(fixture.requests.at(-1)?.authorization).toBeUndefined();
+    expect(
+      compatibilityPathUsage.snapshot().paths["preview.legacy-loopback-route"]?.count ?? 0,
+    ).toBe(before);
   });
 
   test("terminal upgrades are unaffected by the preview route", async () => {
@@ -169,6 +175,8 @@ describe("gateway preview integration", () => {
   }
 
   test("scoped preview credentials never authenticate legacy or control routes", async () => {
+    const before =
+      compatibilityPathUsage.snapshot().paths["preview.legacy-loopback-route"]?.count ?? 0;
     const { info } = await startGateway({ previews: harness.runtime });
     const attachment = await harness.runtime.access.createAttachment({
       serviceId,
@@ -193,6 +201,9 @@ describe("gateway preview integration", () => {
       { headers: { authorization: `Bearer ${info.token}` } },
     );
     expect(allowed.status).toBe(200);
+    expect(compatibilityPathUsage.snapshot().paths["preview.legacy-loopback-route"]?.count).toBe(
+      before + 1,
+    );
   });
 
   test("rollback drill: stop issuance, revoke, preserve services, re-enable and reconnect", async () => {

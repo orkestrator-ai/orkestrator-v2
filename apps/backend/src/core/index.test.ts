@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { __testing as commandTesting } from "./commands.js";
+import { BackendRuntime } from "./backend-runtime.js";
 import { OrkestratorBackend } from "./index.js";
 import { RECURRING_JOB_CATALOGUE } from "@orkestrator/protocol/recurring-work";
 import type { BackendActivityJob } from "./backend-activity-jobs.js";
@@ -1692,7 +1692,6 @@ test("startup re-admits interrupted deletion while its tombstone continues block
   const terminationStarted = deferred<void>();
   const environmentId = "interrupted-delete";
   const originalWarn = console.warn;
-  commandTesting.resetLocalServerLifecycle();
   await storage.init();
   await storage.addEnvironment({
     id: environmentId,
@@ -1713,18 +1712,24 @@ test("startup re-admits interrupted deletion while its tombstone continues block
     lifecycleOperation: "deleting",
     lifecycleOperationStartedAt: new Date(1).toISOString(),
   });
-  commandTesting.setLocalServerProcess(`codex:${environmentId}`, createFakeChild(96001));
-  commandTesting.setTerminateProcessTree(async () => {
-    terminationStarted.resolve();
-    await releaseTermination.promise;
-    return true;
+  const runtime = new BackendRuntime({
+    emit: () => undefined,
+    localServers: {
+      terminateProcessTree: async () => {
+        terminationStarted.resolve();
+        await releaseTermination.promise;
+        return true;
+      },
+    },
   });
+  runtime.localServers.adoptProcess(`codex:${environmentId}`, createFakeChild(96001));
   const backend = new OrkestratorBackend({
     dataDir,
     toolchainBinDir: "",
     appRoot: "",
     resourceRoot: "",
     emit: () => undefined,
+    runtime,
     startupReapers: {
       localServers: async () => [],
       claudeTmuxRuntimes: async () => [],
@@ -1751,12 +1756,11 @@ test("startup re-admits interrupted deletion while its tombstone continues block
       async () => (await storage.getEnvironment(environmentId)) === null,
       "re-admitted deletion to remove the environment",
     );
-    expect(commandTesting.getLocalServerProcess(`codex:${environmentId}`)).toBeUndefined();
+    expect(runtime.localServers.process(`codex:${environmentId}`)).toBeUndefined();
   } finally {
     console.warn = originalWarn;
     releaseTermination.resolve();
     await backend.shutdown().catch(() => undefined);
-    commandTesting.resetLocalServerLifecycle();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
@@ -1769,7 +1773,6 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
   const environmentId = "blocked-delete";
   let terminationAttempts = 0;
   const originalWarn = console.warn;
-  commandTesting.resetLocalServerLifecycle();
   await storage.init();
   await storage.addEnvironment({
     id: environmentId,
@@ -1787,21 +1790,27 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
     environmentType: "local",
     worktreePath: path.join(dataDir, "blocked-delete-worktree"),
   });
-  commandTesting.setLocalServerProcess(`codex:${environmentId}`, createFakeChild(96002));
-  commandTesting.setTerminateProcessTree(async () => {
-    terminationAttempts += 1;
-    if (terminationAttempts === 1) {
-      firstTerminationStarted.resolve();
-      await releaseFirstTermination.promise;
-    }
-    return true;
+  const runtime = new BackendRuntime({
+    emit: () => undefined,
+    localServers: {
+      terminateProcessTree: async () => {
+        terminationAttempts += 1;
+        if (terminationAttempts === 1) {
+          firstTerminationStarted.resolve();
+          await releaseFirstTermination.promise;
+        }
+        return true;
+      },
+    },
   });
+  runtime.localServers.adoptProcess(`codex:${environmentId}`, createFakeChild(96002));
   const backend = new OrkestratorBackend({
     dataDir,
     toolchainBinDir: "",
     appRoot: "",
     resourceRoot: "",
     emit: () => undefined,
+    runtime,
     environmentLifecycleDrainTimeoutMs: 20,
     startupReapers: {
       localServers: async () => [],
@@ -1824,7 +1833,7 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
     const shutdown = backend.shutdown();
     await expect(resolvesWithin(shutdown, 1_000)).resolves.toBe("resolved");
     expect(terminationAttempts).toBe(2);
-    expect(commandTesting.getLocalServerProcess(`codex:${environmentId}`)).toBeUndefined();
+    expect(runtime.localServers.process(`codex:${environmentId}`)).toBeUndefined();
     expect(closeDesign).not.toHaveBeenCalled();
 
     releaseFirstTermination.resolve();
@@ -1840,7 +1849,6 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
     await deletion?.catch(() => undefined);
     await backend.shutdown().catch(() => undefined);
     closeDesign.mockRestore();
-    commandTesting.resetLocalServerLifecycle();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });

@@ -1,3 +1,4 @@
+import { OpenCodeAgentToolsReconciler } from "./opencode-agent-tools.js";
 import { describe, expect, test } from "bun:test";
 import {
   configureOpenCodeCoordinatorResearch,
@@ -87,6 +88,31 @@ describe("OpenCode research registration", () => {
         "context7_query-docs",
       ]);
     } finally {
+      f.close();
+    }
+  });
+
+  test("the runtime reconciler forgets research registrations on cancellation and shutdown", async () => {
+    const f = fixture();
+    const reconciler = new OpenCodeAgentToolsReconciler();
+    try {
+      for (const cancel of [
+        () => reconciler.cancel(f.input.serverKey),
+        () => reconciler.cancelAll(),
+      ]) {
+        await configureOpenCodeCoordinatorResearch(f.input);
+        reconciler.recordLaunchConnection(f.input.serverKey, {
+          url: f.input.servers[0]!.url,
+          token: "fixture",
+        });
+        const posts = f.posts.length;
+        cancel();
+        invalidateOpenCodeCoordinatorResearch(f.input.serverKey);
+        expect(await ensureOpenCodeCoordinatorResearch(f.input.serverKey)).toEqual([]);
+        expect(f.posts).toHaveLength(posts);
+      }
+    } finally {
+      reconciler.cancelAll();
       f.close();
     }
   });

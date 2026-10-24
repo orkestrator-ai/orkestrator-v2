@@ -805,9 +805,11 @@ export interface PersistedPromptQueue {
     failedAt: string;
   };
   /**
-   * A durable, exclusive claim on the message currently being handed to an
-   * agent. The message stays here until the renderer acknowledges that the
-   * bridge accepted it, so a renderer crash cannot silently discard it.
+   * A durable, exclusive claim on the message an older renderer was handing to
+   * an agent through the removed prompt-queue claim commands. Only backends
+   * older than this one write it now, into a shared data directory. It still
+   * validates, blocks dispatch of the queue while live, and expiry recovery
+   * (`recoverExpiredPromptQueueClaims`) restores the message to the head.
    */
   outstandingClaim?: {
     token: string;

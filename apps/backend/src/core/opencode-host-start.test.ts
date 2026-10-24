@@ -5,10 +5,8 @@ import path from "node:path";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
-import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
 import { withShortLivedBridge } from "./host-model-catalog-refresh.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
-import { __testing as commandTesting } from "./commands-testing.js";
 import {
   acquireOpenCodeHostStart,
   isOpenCodeDatabaseLockedError,
@@ -29,7 +27,6 @@ describe("local OpenCode server starts on one host", () => {
   const started: string[] = [];
 
   beforeEach(async () => {
-    commandTesting.resetLocalServerLifecycle();
     setOpenCodeLockedStartRetryDelaysForTests([20, 20]);
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ork-opencode-host-start-")));
     await fs.mkdir(path.join(root, "managed-bin"));
@@ -83,7 +80,8 @@ process.on("SIGTERM", () => process.exit(0));
     for (const environmentId of started.splice(0)) {
       await stopLocalServerUnlocked(environmentId, context, "opencode").catch(() => undefined);
     }
-    commandTesting.resetLocalServerLifecycle();
+    expect(context.runtime.localServers.hasEnvironmentOperations()).toBe(false);
+    context.runtime.shutdown();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -150,6 +148,7 @@ process.on("SIGTERM", () => process.exit(0));
       const environmentId = await localEnvironment(purpose);
       const probe = () =>
         withShortLivedBridge(
+          context.runtime.localServers,
           {
             kind: "opencode",
             purpose,
@@ -174,7 +173,7 @@ process.on("SIGTERM", () => process.exit(0));
         "launch",
         "healthy",
       ]);
-      expect(commandTesting.getLocalServerProcessCount()).toBe(1);
+      expect(context.runtime.localServers.processCount()).toBe(1);
     },
   );
 
@@ -187,19 +186,19 @@ process.on("SIGTERM", () => process.exit(0));
       // Tokens are allocated immediately before joining the host-start queue.
       for (
         let attempt = 0;
-        !commandTesting.getLocalOpenCodeServerPassword(environmentId);
+        !context.runtime.localServers.bridgeToken("opencode", environmentId);
         attempt += 1
       ) {
         if (attempt === 100) throw new Error("Start did not reach the host queue");
         await Bun.sleep(5);
       }
-      setLocalServerShutdownRequested(true);
+      context.runtime.localServers.closeAdmission();
     } finally {
       release();
     }
     expect(((await outcome) as Error).message).toContain("shutting down");
     expect(await events()).toEqual([]);
-    expect(commandTesting.getLocalOpenCodeServerPassword(environmentId)).toBeUndefined();
+    expect(context.runtime.localServers.bridgeToken("opencode", environmentId)).toBeUndefined();
     const releaseNext = await acquireOpenCodeHostStart();
     releaseNext();
   });
@@ -210,7 +209,7 @@ process.on("SIGTERM", () => process.exit(0));
     const warn = spyOn(console, "warn").mockImplementation((message) => {
       if (String(message).includes("retrying in")) {
         // Runs after the retry delay has started, before its next attempt.
-        queueMicrotask(() => setLocalServerShutdownRequested(true));
+        queueMicrotask(() => context.runtime.localServers.closeAdmission());
       }
     });
     try {
@@ -219,8 +218,8 @@ process.on("SIGTERM", () => process.exit(0));
       );
       expect(warn).toHaveBeenCalled();
       expect((await events()).filter((event) => event.startsWith("launch"))).toHaveLength(1);
-      expect(commandTesting.getLocalServerProcessCount()).toBe(0);
-      expect(commandTesting.getLocalOpenCodeServerPassword(environmentId)).toBeUndefined();
+      expect(context.runtime.localServers.processCount()).toBe(0);
+      expect(context.runtime.localServers.bridgeToken("opencode", environmentId)).toBeUndefined();
     } finally {
       warn.mockRestore();
     }

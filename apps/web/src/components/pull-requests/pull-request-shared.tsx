@@ -1,4 +1,8 @@
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useState, type KeyboardEvent, type ReactNode, type TimeHTMLAttributes } from "react";
+import type { Components, ExtraProps } from "react-markdown";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
+import type { PluggableList } from "unified";
 import { AlertCircle, Loader2, RefreshCw, Send, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import type { GitHubPullRequestUser } from "@orkestrator/protocol/github-pull-requests";
@@ -9,6 +13,7 @@ import { formatRelativeTime } from "@/lib/format-relative-time";
 import { writeText } from "@/lib/native/clipboard";
 import { cn } from "@/lib/utils";
 import { isCredentialError } from "./pull-request-format";
+import { remarkGitHubHtml } from "./remark-github-html";
 
 export function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) return error.message;
@@ -124,13 +129,43 @@ export function SkeletonLines({ lines = 4, className }: { lines?: number; classN
   );
 }
 
+/** GitHub renders single newlines in comments as line breaks, like the transcript. */
+const GITHUB_MARKDOWN_PLUGINS: PluggableList = [remarkGfm, remarkBreaks, remarkGitHubHtml];
+
+/**
+ * A `<relative-time>` from a GitHub body (see `remark-github-html`). Keeps the
+ * author's fallback text when the timestamp does not parse.
+ */
+function GitHubRelativeTime({
+  dateTime,
+  children,
+  node: _node,
+  ...props
+}: TimeHTMLAttributes<HTMLTimeElement> & ExtraProps) {
+  const date = dateTime ? new Date(dateTime) : null;
+  if (!date || Number.isNaN(date.getTime())) return <time {...props}>{children}</time>;
+  return (
+    <time {...props} dateTime={dateTime} title={date.toLocaleString()}>
+      {formatRelativeTime(date)}
+    </time>
+  );
+}
+
+const GITHUB_MARKDOWN_COMPONENTS: Components = { time: GitHubRelativeTime };
+
 export function MarkdownBody({ body, className }: { body: string; className?: string }) {
   if (!body.trim()) {
     return <p className={cn("text-xs italic text-muted-foreground", className)}>No description.</p>;
   }
   return (
     <div className={cn("min-w-0 text-sm break-words", className)}>
-      <MessageMarkdown content={body} />
+      {/* Images sit inline, as on GitHub: status dots and badges share a line with their text. */}
+      <MessageMarkdown
+        content={body}
+        remarkPlugins={GITHUB_MARKDOWN_PLUGINS}
+        components={GITHUB_MARKDOWN_COMPONENTS}
+        className="[&_img]:my-0 [&_img]:inline [&_img]:align-middle"
+      />
     </div>
   );
 }

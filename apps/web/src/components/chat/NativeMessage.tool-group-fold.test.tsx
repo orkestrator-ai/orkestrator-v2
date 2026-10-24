@@ -186,7 +186,7 @@ describe("folded tool group", () => {
     ).toBe("true");
   });
 
-  test("keeps a pending question visible, then offers the fold without collapsing it", () => {
+  test("keeps a pending question visible, then folds once it is answered", () => {
     const id = `question-${++messageCounter}`;
     const question = shell(2, "", {
       toolName: "AskUserQuestion",
@@ -198,37 +198,42 @@ describe("folded tool group", () => {
     expect(screen.queryByRole("button", { name: /^Show .*tool calls:/ }) === null).toBe(true);
     expect(screen.getByText("Which approach?")).toBeTruthy();
     rerender(messageView(id, [...calls.slice(0, 2), { ...question, toolState: "success" }]));
-    // The group the reader was looking at stays open; folding is theirs.
-    const fold = screen.getByRole("button", { name: /^Fold 3 tool calls:/ });
-    expect(fold.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText("git status")).toBeTruthy();
+    const show = screen.getByRole("button", { name: /^Show 3 tool calls:/ });
+    expect(show.getAttribute("aria-expanded")).toBe("false");
   });
 
-  test("a visible group crossing the threshold keeps its rows and gains the fold control", () => {
+  test("a visible group crossing the threshold folds in the same host and animates its line in", () => {
     const id = `threshold-${++messageCounter}`;
     const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
-    const { rerender } = render(messageView(id, calls.slice(0, 2)));
-    const firstRow = screen.getByText("git status").closest(".px-2");
+    const { container, rerender } = render(messageView(id, calls.slice(0, 2)));
+    const frame = container.querySelector("[data-transcript-group-frame]");
+    const content = container.querySelector(".tool-group-fold-content");
+    expect(content?.getAttribute("data-state")).toBe("open");
     rerender(messageView(id, calls));
-    const fold = screen.getByRole("button", { name: /^Fold 3 tool calls:/ });
-    expect(fold.getAttribute("aria-expanded")).toBe("true");
-    // Same host and rows: crossing the threshold remounted nothing.
-    expect(screen.getByText("git status").closest(".px-2")).toBe(firstRow);
-    fireEvent.click(fold);
-    expect(screen.queryByText("git status") === null).toBe(true);
-    // Folded by the reader, it stays folded as calls keep arriving.
+    const show = screen.getByRole("button", { name: /^Show 3 tool calls:/ });
+    expect(show.getAttribute("aria-expanded")).toBe("false");
+    // Same host and body: the fold closes them rather than remounting, so the
+    // close animation plays from the rows' measured height.
+    expect(container.querySelector("[data-transcript-group-frame]")).toBe(frame);
+    expect(container.querySelector(".tool-group-fold-content")).toBe(content);
+    expect(content?.getAttribute("data-state")).toBe("closed");
+    expect(container.querySelector(".tool-group-head-enter")).toBeTruthy();
+    // Opened by the reader, it stays open as calls keep arriving.
+    fireEvent.click(show);
     rerender(messageView(id, [...calls, shell(3, "git branch")]));
     expect(
-      screen.getByRole("button", { name: /^Show 4 tool calls:/ }).getAttribute("aria-expanded"),
-    ).toBe("false");
+      screen.getByRole("button", { name: /^Fold 4 tool calls:/ }).getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(screen.getByText("git status")).toBeTruthy();
   });
 
   test("renders a group that arrives already long folded without animating", () => {
     const calls = [shell(0, "git status"), shell(1, "git diff --stat"), shell(2, "git log -5")];
-    render(messageView(`arrives-folded-${++messageCounter}`, calls));
+    const { container } = render(messageView(`arrives-folded-${++messageCounter}`, calls));
     expect(
       screen.getByRole("button", { name: /^Show 3 tool calls:/ }).getAttribute("aria-expanded"),
     ).toBe("false");
+    expect(container.querySelector(".tool-group-head-enter") === null).toBe(true);
   });
 
   test("lets a folded line stand in for its newest call's transcript position", () => {
@@ -301,8 +306,9 @@ describe("folded tool group", () => {
 
   test("members prepended by history keep the existing rows mounted", () => {
     const id = `prepend-${++messageCounter}`;
-    const later = [shell(4, "git log"), shell(5, "git show")];
+    const later = [shell(3, "git status"), shell(4, "git log"), shell(5, "git show")];
     const { rerender } = render(messageView(id, later));
+    fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
     const row = screen.getByText("git log").closest(".px-2");
     rerender(messageView(id, [shell(2, "git fetch"), ...later]));
     expect(screen.getByText("git log").closest(".px-2")).toBe(row);

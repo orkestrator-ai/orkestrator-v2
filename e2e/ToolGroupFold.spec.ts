@@ -13,11 +13,17 @@ async function bottomGap(page: Page) {
 /** Records every animation and every height the group's body takes, after layout. */
 async function observeGroupBody(page: Page) {
   await page.evaluate((selector) => {
-    const probe = { animations: [] as string[], heights: [] as number[] };
+    const probe = {
+      animations: [] as { name: string; duration: number }[],
+      heights: [] as number[],
+    };
     (window as unknown as { groupProbe: typeof probe }).groupProbe = probe;
     document.addEventListener("animationstart", (event) => {
       if (event.target instanceof HTMLElement && event.target.matches(selector)) {
-        probe.animations.push(event.animationName);
+        probe.animations.push({
+          name: event.animationName,
+          duration: Number.parseFloat(getComputedStyle(event.target).animationDuration) * 1000,
+        });
       }
     });
     const body = Array.from(document.querySelectorAll<HTMLElement>(selector)).at(-1)!;
@@ -25,8 +31,27 @@ async function observeGroupBody(page: Page) {
   }, contentSelector);
 }
 
+/** Waits for every running fold or open animation to finish. */
+async function settleFold(page: Page) {
+  await page.evaluate(
+    (selector) =>
+      Promise.all(
+        Array.from(document.querySelectorAll(selector)).flatMap((element) =>
+          element.getAnimations().map((animation) => animation.finished),
+        ),
+      ),
+    contentSelector,
+  );
+}
+
+type GroupProbe = { animations: { name: string; duration: number }[]; heights: number[] };
+
+async function readGroupProbe(page: Page) {
+  return page.evaluate(() => (window as unknown as { groupProbe: GroupProbe }).groupProbe);
+}
+
 for (const reducedMotion of ["no-preference", "reduce"] as const) {
-  test(`a live group crossing the fold threshold stays open with ${reducedMotion} motion`, async ({
+  test(`a live group crossing the fold threshold folds into its line with ${reducedMotion} motion`, async ({
     page,
   }) => {
     await page.emulateMedia({ reducedMotion });
@@ -35,55 +60,40 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
     await expect(row.getByRole("button", { name: "Exec Command success" })).toHaveCount(2);
     await expect.poll(() => bottomGap(page)).toBeLessThanOrEqual(2);
     const rowCount = await page.getByTestId("transcript-row-count").textContent();
-    const firstCall = await row
-      .getByRole("button", { name: "Exec Command success" })
-      .first()
-      .elementHandle();
+    const frame = await row.locator("[data-transcript-group-frame]").elementHandle();
     await observeGroupBody(page);
 
     await page.getByRole("button", { name: "Grow tool group" }).click();
-    // The reader was looking at these rows: they stay, with the fold control
-    // added above them. Nothing collapses on its own and nothing remounts.
-    const fold = page.getByRole("button", { name: /^Fold 3 tool calls:/ });
-    await expect(fold).toHaveAttribute("aria-expanded", "true");
-    await expect(row.getByRole("button", { name: "Exec Command success" })).toHaveCount(3);
-    expect(await firstCall!.evaluate((element) => element.isConnected)).toBe(true);
-    await expect(page.getByTestId("transcript-row-count")).toHaveText(rowCount!);
-    await expect.poll(() => bottomGap(page)).toBeLessThanOrEqual(2);
-
-    // Folding is the reader's, immediate, and never animates layout height.
-    await fold.click();
-    await expect(row.getByRole("button", { name: "Exec Command success" })).toHaveCount(0);
-    await expect.poll(() => bottomGap(page)).toBeLessThanOrEqual(2);
+    // The rows fold away under the head line in the same host.
     const show = page.getByRole("button", { name: /^Show 3 tool calls:/ });
     await expect(show).toHaveAttribute("aria-expanded", "false");
+    await expect(row.getByRole("button", { name: "Exec Command success" })).toHaveCount(0);
+    expect(await frame!.evaluate((element) => element.isConnected)).toBe(true);
+    await expect(page.getByTestId("transcript-row-count")).toHaveText(rowCount!);
+    await expect.poll(() => bottomGap(page)).toBeLessThanOrEqual(2);
+    const folded = await readGroupProbe(page);
+    if (reducedMotion === "reduce") {
+      expect(folded.animations).toEqual([]);
+    } else {
+      expect(folded.animations).toContainEqual({ name: "tool-group-fold-close", duration: 500 });
+      // The height passed through intermediate values on its way to zero.
+      const settled = new Set(folded.heights.map(Math.round));
+      expect(settled.size).toBeGreaterThan(4);
+    }
+
     await show.click();
     await expect(row.getByRole("button", { name: "Exec Command success" })).toHaveCount(3);
     await expect.poll(() => bottomGap(page)).toBeLessThanOrEqual(2);
-    const probe = await page.evaluate(
-      () => (window as unknown as { groupProbe: { animations: string[] } }).groupProbe,
-    );
-    expect(probe.animations.includes("tool-group-fold-close")).toBe(false);
     const animationName = await page
       .locator(contentSelector)
       .last()
       .evaluate((element) => getComputedStyle(element).animationName);
     expect(animationName).toBe(reducedMotion === "reduce" ? "none" : "tool-group-fold-open");
-    if (reducedMotion === "no-preference") {
-      // Opening fades settled rows in: opacity only, never a height keyframe.
-      const keyframes = await page.evaluate(() =>
-        Array.from(document.styleSheets).flatMap((sheet) =>
-          Array.from(sheet.cssRules)
-            .filter(
-              (rule): rule is CSSKeyframesRule =>
-                rule instanceof CSSKeyframesRule && rule.name.startsWith("tool-group-fold"),
-            )
-            .map((rule) => rule.cssText),
-        ),
-      );
-      expect(keyframes.length).toBeGreaterThan(0);
-      for (const text of keyframes) expect(text).not.toContain("height");
-    }
+
+    // Folded by the reader, the rows animate away again.
+    await page.getByRole("button", { name: /^Fold 3 tool calls:/ }).click();
+    await expect(row.getByRole("button", { name: "Exec Command success" })).toHaveCount(0);
+    await expect.poll(() => bottomGap(page)).toBeLessThanOrEqual(2);
   });
 }
 
@@ -159,7 +169,9 @@ test("a 1,500-call group opens in a bounded viewport that owns its own scrolling
   );
   const rowHeight = (await row.boundingBox())!.height;
   expect(rowHeight).toBeLessThanOrEqual(ceiling + 120);
-  // A wheel over the group scrolls the group, not the transcript.
+  // A wheel over the group scrolls the group, not the transcript. The open
+  // animation settles first: the transcript follows the group as it grows.
+  await settleFold(page);
   const outerBefore = await scroller.evaluate((element) => element.scrollTop);
   const innerScroller = viewport.locator("[data-virtuoso-scroller]");
   const innerBefore = await innerScroller.evaluate((element) => element.scrollTop);

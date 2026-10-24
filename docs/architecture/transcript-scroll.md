@@ -150,10 +150,13 @@ pixel snapshot is not restored; the semantic anchor places the reader.
 `NativeMessage.tool-group.tsx` renders a run of tool calls in one stable host
 whose body never exceeds `min(28rem, 55dvh)`, expanded details included.
 
-- From `TOOL_GROUP_FOLD_MIN_CALLS` (3) calls a head line appears. Folding is
-  the reader's choice: a group the reader saw unfolded stays open when it
-  crosses the threshold; a group that arrives long starts folded. Nothing
-  animates layout height (opening fades in, folding is immediate).
+- From `TOOL_GROUP_FOLD_MIN_CALLS` (3) calls a head line appears. A group the
+  reader saw unfolded folds when it crosses the threshold: its body animates
+  its layout height to zero over 500 ms while the head line grows in, in the
+  same host (`--tool-group-fold-duration`). A group that arrives long starts
+  folded without animating. From then on folding is the reader's, and opening
+  and folding animate the same way. The bottom-anchored transcript follows
+  the height as it animates; reduced motion makes both immediate.
 - From `TOOL_GROUP_VIRTUALIZE_MIN_ENTRIES` (12) entries the body is an inner
   Virtuoso viewport (`data-transcript-inner-viewport`). It owns its scroll
   position and follow preference (a live group opens following its newest

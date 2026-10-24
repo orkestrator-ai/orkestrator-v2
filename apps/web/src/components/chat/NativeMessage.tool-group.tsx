@@ -371,10 +371,10 @@ function ToolGroupBody(props: BodyProps) {
  * body folds under it. The same host and body element serve every state, so
  * crossing the threshold never remounts the rows.
  *
- * Folding is the reader's choice. A group the reader saw unfolded stays open
- * when it crosses the threshold (no automatic collapse of what they are
- * reading, no height animation); a group that arrives already long — history,
- * a page — starts folded. Opening is remembered across virtualized unmounts.
+ * A group the reader saw unfolded folds when it crosses the threshold, its
+ * body animating down into the head line; a group that arrives already long —
+ * history, a page — starts folded without animating. From then on folding is
+ * the reader's, and opening is remembered across virtualized unmounts.
  */
 export function ToolGroupPart({
   part,
@@ -386,16 +386,9 @@ export function ToolGroupPart({
   partKey: string;
 }) {
   const folds = shouldFoldToolGroup(part.parts);
-  // "pending" while the group is short on screen: crossing the threshold then
-  // opens it once. A group that mounts already long starts "done" (folded).
-  const [crossing, setCrossing] = useState<"pending" | "done">(folds ? "done" : "pending");
-  // Set by the crossing itself, cleared by the reader's first toggle.
-  const [openedByCrossing, setOpenedByCrossing] = useState(false);
-  if (!folds && crossing === "done") setCrossing("pending");
-  if (folds && crossing === "pending") {
-    setCrossing("done");
-    setOpenedByCrossing(true);
-  }
+  // Only a group that was short on screen animates its head line in when it
+  // folds; one that mounts already long draws the line at once.
+  const [mountedFolded] = useState(folds);
 
   const messageScope = useContext(MessageExpansionScopeContext);
   const transcriptScope = useContext(AgentExpansionScopeContext);
@@ -415,33 +408,22 @@ export function ToolGroupPart({
    * ids. All aliases are cleared together when the reader folds the group.
    */
   const [isOpen, setIsOpen] = useMessagePartExpansion([groupKey(), ...toolKeys.map(groupKey)]);
-  // Crossing the threshold on screen keeps the rows the reader is looking at,
-  // and remembers them open across virtualized unmounts; from then on folding
-  // and unfolding are the reader's.
-  useLayoutEffect(() => {
-    if (openedByCrossing) setIsOpen(true);
-  }, [openedByCrossing, setIsOpen]);
-  const handleOpenChange = useCallback(
-    (next: boolean) => {
-      setOpenedByCrossing(false);
-      setIsOpen(next);
-    },
-    [setIsOpen],
-  );
 
   if (part.parts.length === 0) return null;
-  const open = !folds || isOpen || openedByCrossing;
+  // Short, the body is open; crossing the threshold closes it in the same
+  // host, so Radix measures the rows and plays the fold from their height.
+  const open = !folds || isOpen;
 
   return (
     <Collapsible
       open={open}
-      onOpenChange={handleOpenChange}
+      onOpenChange={setIsOpen}
       // The transcript's anchor for members whose scrolling an inner
       // viewport owns: hold this frame, then the member within it.
       data-transcript-group-frame="true"
       className="my-0 divide-y divide-divider overflow-hidden rounded-lg border border-divider bg-sidebar"
     >
-      {folds ? <ToolGroupHeadLine part={part} isOpen={open} /> : null}
+      {folds ? <ToolGroupHeadLine part={part} isOpen={open} entering={!mountedFolded} /> : null}
       {/*
         Padding lives on the rows, not the card, so the separators run the
         full width of the block rather than stopping short of its outline.
@@ -453,7 +435,16 @@ export function ToolGroupPart({
   );
 }
 
-function ToolGroupHeadLine({ part, isOpen }: { part: NativeToolGroupPart; isOpen: boolean }) {
+function ToolGroupHeadLine({
+  part,
+  isOpen,
+  entering,
+}: {
+  part: NativeToolGroupPart;
+  isOpen: boolean;
+  /** Grows in alongside the fold of rows the reader was looking at. */
+  entering: boolean;
+}) {
   const summary = summarizeToolGroup(part.parts);
   if (!summary) return null;
   const { latestTool, toolCount, pendingCount, failureCount, spanMs } = summary;
@@ -496,7 +487,7 @@ function ToolGroupHeadLine({ part, isOpen }: { part: NativeToolGroupPart; isOpen
       scrolling the inner viewport owns.
     */
     <div
-      className="px-2 py-0.5"
+      className={cn("px-2 py-0.5", entering && "tool-group-head-enter")}
       data-transcript-part-id={isOpen && !virtualized ? undefined : latestPartId}
     >
       <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">

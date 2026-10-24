@@ -46,3 +46,13 @@ passed in 27.0 s with
 `mise run test:logged -- --name merge-electron-main-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts e2e/agent-testing/electron-main.spec.ts --workers=1`.
 Evidence: host temporary artifact `orkestrator-test-run.C6gvdK/merge-electron.log.gz`.
 No assertion, timeout, skip or implementation changed.
+
+## Agent accounts main merge — 2026-10-24
+
+The Workstation five-second reload poll recurred. The complete unchanged main-window owner passed (three passed, one skipped, 97.7 s) with `ORKESTRATOR_AGENT_TEST_RUN_ID=merge-electron-owners mise run test:logged -- --name merge-electron-main-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts --workers=1`.
+
+Original command: `mise run test:logged -- --name merge-electron -- mise run test:agent:electron` (one worker): 26 passed, four failed, one skipped, one not run, 558.2 s. Evidence: `orkestrator-test-run.3IicXN/merge-electron.log.gz` below the host temporary directory. No implementation, assertion, deadline or skip changed. See [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md).
+
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The full Electron suite repeated the five-second Workstation title deadline at `electron-main.spec.ts:452` (25 passed, four failed, one skipped and two did not run). `mise run test:logged -- --name design-links-final-electron-main -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts --workers=1` passed the complete unchanged owner in 26.6 s. Exact parents, original commands and artifacts are in [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md). No assertion, deadline or skip changed.

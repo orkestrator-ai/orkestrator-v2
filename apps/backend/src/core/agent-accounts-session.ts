@@ -10,8 +10,6 @@ import { getHostPort } from "./commands-container-exec.js";
 import { checkHttpHealth } from "./commands-server-health.js";
 
 import type { CommandContext } from "./commands-context.js";
-import { localServerProcesses } from "./commands-runtime-state.js";
-import { localAgentAccountIds } from "./agent-account-bridge-state.js";
 import { listAgentAccounts } from "./agent-accounts.js";
 import { readContainerAgentAccountId } from "./agent-accounts-containers.js";
 
@@ -72,9 +70,10 @@ export async function readSessionAgentAccount(
     }
   } else {
     const key = `${platform}:${environmentId}`;
-    const child = localServerProcesses.get(key);
+    const child = context.runtime.localServers.process(key);
     running = Boolean(child && child.exitCode === null && child.signalCode === null);
-    if (running) launchedId = localAgentAccountIds.get(key) ?? DEFAULT_AGENT_ACCOUNT_ID;
+    if (running)
+      launchedId = context.runtime.localServers.launchedAccountId(key) ?? DEFAULT_AGENT_ACCOUNT_ID;
   }
 
   const account = accountFor(launchedId ?? activeId);

@@ -43,7 +43,16 @@ import {
   claudeModelReasoningIds,
 } from "@orkestrator/protocol/claude-model-catalog";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
-import { localServerStopCommandName } from "./commands-runtime-state.js";
+import { localServerStopCommandName } from "./local-server-runtime.js";
+import { getBridgePath } from "./commands-servers.js";
+import { resolveBunBinary } from "./commands-agent-support.js";
+import {
+  cancelCursorSdkLogin,
+  cursorSdkAuthStatus,
+  cursorSdkLoginProgress,
+  cursorSdkLogout,
+  startCursorSdkLogin,
+} from "./cursor-sdk-bridge.js";
 import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
@@ -930,9 +939,6 @@ export function registerProjectCommands(
    * opens the returned URL and polls.
    */
   register("cursor_sdk_login_start", async (payload, context) => {
-    const { getBridgePath } = await import("./commands-servers.js");
-    const { resolveBunBinary } = await import("./commands-agent-support.js");
-    const { startCursorSdkLogin } = await import("./cursor-sdk-bridge.js");
     return startCursorSdkLogin(context, {
       bridgeEntrypoint: nodePath.join(getBridgePath(context, "cursor-bridge"), "dist", "index.js"),
       runtime: resolveBunBinary(context),
@@ -943,20 +949,16 @@ export function registerProjectCommands(
     });
   });
   register("cursor_sdk_login_status", async (_payload, context) => {
-    const { cursorSdkLoginProgress } = await import("./cursor-sdk-bridge.js");
     const config = await context.storage.loadConfig();
     // The stored key is read only to report *which* credential is in play; it
     // is never returned.
     return cursorSdkLoginProgress(context, config.global.cursorApiKey);
   });
   register("cursor_sdk_login_cancel", async () => {
-    const { cancelCursorSdkLogin } = await import("./cursor-sdk-bridge.js");
     cancelCursorSdkLogin();
     return { cancelled: true };
   });
   register("cursor_sdk_logout", async (_payload, context) => {
-    const { cancelCursorSdkLogin, cursorSdkAuthStatus, cursorSdkLogout } =
-      await import("./cursor-sdk-bridge.js");
     cancelCursorSdkLogin();
     await cursorSdkLogout(context);
     const config = await context.storage.loadConfig();

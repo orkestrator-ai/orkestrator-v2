@@ -6,10 +6,6 @@ import {
   resolveActiveAgentAccount,
   type ResolvedAgentAccount,
 } from "./agent-accounts-active.js";
-import {
-  localAgentAccountTokenExpiry,
-  loginlessLocalBridges,
-} from "./agent-account-bridge-state.js";
 import { readRuntimeHostClaudeCredentials } from "./commands-files.js";
 import { providerCredentialsAllowed } from "./portable-input-status.js";
 
@@ -180,7 +176,8 @@ export class ContainerClaudeLoginKeeper {
                 "claude",
               ),
           );
-    const localBridges = (this.options.hasLocalTokenBridges ?? hasLocalClaudeTokenBridges)();
+    const localBridges =
+      this.options.hasLocalTokenBridges?.() ?? hasLocalClaudeTokenBridges(this.context);
     if (containers.length === 0 && !localBridges) return this.intervalMs;
 
     const login =
@@ -310,12 +307,14 @@ export class ContainerClaudeLoginKeeper {
 }
 
 /** Whether any local Claude bridge runs on a handed-over token or waits for one. */
-function hasLocalClaudeTokenBridges(): boolean {
-  for (const key of localAgentAccountTokenExpiry.keys()) {
-    if (key.startsWith("claude:")) return true;
-  }
-  for (const key of loginlessLocalBridges) {
-    if (key.startsWith("claude:")) return true;
+function hasLocalClaudeTokenBridges(context: CommandContext): boolean {
+  const localServers = context.runtime.localServers;
+  for (const key of localServers.processKeys()) {
+    if (
+      key.startsWith("claude:") &&
+      (localServers.launchedTokenExpiry(key) !== undefined || localServers.isLoginless(key))
+    )
+      return true;
   }
   return false;
 }

@@ -5,13 +5,13 @@ import { promises as fs } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { __testing as commandTesting } from "./commands.js";
+import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { withShortLivedBridge, __testing as refreshTesting } from "./host-model-catalog-refresh.js";
-import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
 import { HOST_ACP_MODEL_FETCH_TIMEOUT_MS } from "./commands-servers.js";
 import { openCodeSdkFetch } from "./http-bridge-transport.js";
 import { acquireOpenCodeHostStart } from "./opencode-host-start.js";
+import { spawnCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
 
 type ProbeSpawn = {
@@ -30,6 +30,9 @@ let spawns: ProbeSpawn[] = [];
 let servers: Server[] = [];
 let children: FakeChild[] = [];
 let nextPid = 510_000;
+/** The backend under test; its spawn delegates to `spawnImpl`. */
+let runtime: BackendRuntime;
+let spawnImpl: typeof spawnCommand = spawnCommand;
 
 function createFakeChild(): FakeChild {
   const emitter = new EventEmitter() as unknown as FakeChild;
@@ -65,7 +68,7 @@ async function listenAsBridge(
 }
 
 function stubBridgeSpawn(respond: (spawned: ProbeSpawn, child: FakeChild) => unknown): void {
-  commandTesting.setSpawnLocalServerCommand(((
+  spawnImpl = ((
     command: string,
     args: string[] = [],
     options: { cwd?: string; env?: NodeJS.ProcessEnv; detached?: boolean } = {},
@@ -82,7 +85,7 @@ function stubBridgeSpawn(respond: (spawned: ProbeSpawn, child: FakeChild) => unk
     children.push(child);
     void Promise.resolve(respond(spawned, child));
     return child;
-  }) as never);
+  }) as never;
 }
 
 function context(overrides: Partial<CommandContext> = {}): CommandContext {
@@ -92,6 +95,7 @@ function context(overrides: Partial<CommandContext> = {}): CommandContext {
     toolchainBinDir: path.join(appRoot, "bin"),
     storage,
     emit: () => undefined,
+    runtime,
     ...overrides,
   } as CommandContext;
 }
@@ -111,13 +115,18 @@ beforeEach(async () => {
   spawns = [];
   servers = [];
   children = [];
-  commandTesting.setTerminateProcessTree(
-    mock(async (child: { pid?: number }) => {
-      const target = children.find((candidate) => candidate.pid === child.pid);
-      if (target) target.exited = true;
-      return true;
-    }) as never,
-  );
+  spawnImpl = spawnCommand;
+  runtime = new BackendRuntime({
+    emit: () => undefined,
+    localServers: {
+      spawn: (...args) => spawnImpl(...args),
+      terminateProcessTree: mock(async (child: { pid?: number }) => {
+        const target = children.find((candidate) => candidate.pid === child.pid);
+        if (target) target.exited = true;
+        return true;
+      }) as never,
+    },
+  });
 });
 
 afterEach(async () => {
@@ -125,8 +134,8 @@ afterEach(async () => {
   delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
   delete process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
   for (const server of servers) await new Promise((resolve) => server.close(resolve));
-  commandTesting.resetLocalServerLifecycle();
-  setLocalServerShutdownRequested(false);
+  expect(runtime.localServers.hasEnvironmentOperations()).toBe(false);
+  runtime.shutdown();
   await fs.rm(appRoot, { recursive: true, force: true });
 });
 
@@ -197,7 +206,7 @@ describe("host model catalogue refresh", () => {
     expect(second).toEqual(first);
     expect(spawns).toHaveLength(1);
     expect(children[0]?.exited).toBe(true);
-    expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+    expect(runtime.localServers.processCount()).toBe(0);
   });
 
   test("rejects a non-live Codex catalogue without leaking the probe", async () => {
@@ -214,7 +223,7 @@ describe("host model catalogue refresh", () => {
       refreshTesting.createHostModelCatalogRefresher()(context(), "codex"),
     ).rejects.toThrow(/live app-server catalogue/);
     expect(children[0]?.exited).toBe(true);
-    expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+    expect(runtime.localServers.processCount()).toBe(0);
   });
 
   test("tears down a child that exits during startup", async () => {
@@ -226,12 +235,12 @@ describe("host model catalogue refresh", () => {
       refreshTesting.createHostModelCatalogRefresher()(context(), "codex"),
     ).rejects.toThrow(/exited before becoming healthy/);
     expect(children[0]?.exited).toBe(true);
-    expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+    expect(runtime.localServers.processCount()).toBe(0);
   });
 
   test("rechecks shutdown admission after registering the probe", async () => {
     stubBridgeSpawn(() => {
-      setLocalServerShutdownRequested(true);
+      runtime.localServers.closeAdmission();
     });
 
     await expect(
@@ -239,7 +248,7 @@ describe("host model catalogue refresh", () => {
     ).rejects.toThrow(/shutting down/);
     expect(spawns).toHaveLength(1);
     expect(children[0]?.exited).toBe(true);
-    expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+    expect(runtime.localServers.processCount()).toBe(0);
   });
 
   test("rejects Claude fallback data and applies agent-test host credentials", async () => {
@@ -350,7 +359,7 @@ describe("host model catalogue refresh", () => {
 
     await expect(refresh(context(), "opencode")).rejects.toThrow();
     expect(children[0]?.exited).toBe(true);
-    expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+    expect(runtime.localServers.processCount()).toBe(0);
   });
 });
 
@@ -358,11 +367,12 @@ describe("OpenCode probe host-start ownership", () => {
   test.each(["catalog-refresh", "provider-sign-in"] as const)(
     "%s releases its turn when spawn throws",
     async (purpose) => {
-      commandTesting.setSpawnLocalServerCommand(() => {
+      spawnImpl = () => {
         throw new Error("spawn refused");
-      });
+      };
       await expect(
         withShortLivedBridge(
+          runtime.localServers,
           {
             kind: "opencode",
             purpose,
@@ -378,17 +388,18 @@ describe("OpenCode probe host-start ownership", () => {
       ).rejects.toThrow("spawn refused");
       const release = await acquireOpenCodeHostStart();
       release();
-      expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+      expect(runtime.localServers.processCount()).toBe(0);
     },
   );
 
   test.each(["catalog-refresh", "provider-sign-in"] as const)(
     "%s releases its turn and child when shutdown begins during spawn",
     async (purpose) => {
-      stubBridgeSpawn(() => setLocalServerShutdownRequested(true));
+      stubBridgeSpawn(() => runtime.localServers.closeAdmission());
       const read = mock(async () => undefined);
       await expect(
         withShortLivedBridge(
+          runtime.localServers,
           {
             kind: "opencode",
             purpose,
@@ -405,7 +416,7 @@ describe("OpenCode probe host-start ownership", () => {
       expect(spawns).toHaveLength(1);
       expect(children[0]?.exited).toBe(true);
       expect(read).not.toHaveBeenCalled();
-      expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+      expect(runtime.localServers.processCount()).toBe(0);
       const release = await acquireOpenCodeHostStart();
       release();
     },
@@ -419,9 +430,10 @@ describe("OpenCode probe host-start ownership", () => {
       const spawn = mock(() => {
         throw new Error("must not spawn");
       });
-      commandTesting.setSpawnLocalServerCommand(spawn);
+      spawnImpl = spawn;
       const read = mock(async () => undefined);
       const probe = withShortLivedBridge(
+        runtime.localServers,
         {
           kind: "opencode",
           purpose,
@@ -443,7 +455,7 @@ describe("OpenCode probe host-start ownership", () => {
           if (attempt === 100) throw new Error("Probe did not reach the host queue");
           await Bun.sleep(5);
         }
-        setLocalServerShutdownRequested(true);
+        runtime.localServers.closeAdmission();
       } finally {
         release();
       }
@@ -452,7 +464,7 @@ describe("OpenCode probe host-start ownership", () => {
       expect(read).not.toHaveBeenCalled();
       const releaseNext = await acquireOpenCodeHostStart();
       releaseNext();
-      expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+      expect(runtime.localServers.processCount()).toBe(0);
     },
   );
 });

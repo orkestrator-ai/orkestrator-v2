@@ -8,7 +8,7 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
-import { localServerStopCommandName } from "./commands-runtime-state.js";
+import { localServerStopCommandName } from "./local-server-runtime.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import { randomUUID } from "node:crypto";

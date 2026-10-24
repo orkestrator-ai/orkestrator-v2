@@ -18,7 +18,6 @@ import {
   resolveOpenCodeBinary,
 } from "./commands-agent-support.js";
 import {
-  assertLocalServerStartAllowed,
   allocateLocalPort,
   fetchAcpNormalizedModelsAt,
   getBridgePath,
@@ -30,13 +29,7 @@ import {
   claudeBridgeAuthHeaders,
   openCodeHealthHeaders,
 } from "./commands-server-health.js";
-import {
-  isLocalServerShutdownRequested,
-  localServerProcesses,
-  spawnLocalServerCommandImpl,
-  type LocalServerKind,
-} from "./commands-runtime-state.js";
-import { terminateLocalServerChild } from "./commands-local-server-lifecycle.js";
+import type { LocalServerKind, LocalServerRuntime } from "./local-server-runtime.js";
 import { acquireOpenCodeHostStart } from "./opencode-host-start.js";
 import { fetchClaudeBridgeModelCatalog } from "./commands-containers.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
@@ -97,23 +90,31 @@ const defaultDependencies: HostRefreshDependencies = {
   runCommand,
 };
 
+/** A probe key is never an environment id, so only the shutdown gate applies. */
+function assertProbeStartAllowed(localServers: LocalServerRuntime): void {
+  if (localServers.isShuttingDown()) {
+    throw new Error("Backend is shutting down; local servers cannot be started");
+  }
+}
+
 export async function withShortLivedBridge<T>(
+  localServers: LocalServerRuntime,
   probe: BridgeProbe,
   read: (port: number, token: string) => Promise<T>,
 ): Promise<T> {
   const purpose = probe.purpose ?? "catalog-refresh";
-  assertLocalServerStartAllowed(`${purpose}:${probe.kind}`);
+  assertProbeStartAllowed(localServers);
   const port = await allocateLocalPort();
   const key = `${probe.kind}:${purpose}:${randomUUID()}`;
   const args = typeof probe.args === "function" ? probe.args(port) : probe.args;
   // OpenCode servers share the host's database; see `opencode-host-start.ts`.
   const releaseOpenCodeHostStart =
     probe.kind === "opencode" ? await acquireOpenCodeHostStart() : () => undefined;
-  let child: ReturnType<typeof spawnLocalServerCommandImpl>;
+  let child: ReturnType<LocalServerRuntime["spawn"]>;
   try {
     // Shutdown may have begun while the probe waited behind an environment start.
-    assertLocalServerStartAllowed(`${purpose}:${probe.kind}`);
-    child = spawnLocalServerCommandImpl(probe.command, args, {
+    assertProbeStartAllowed(localServers);
+    child = localServers.spawn(probe.command, args, {
       cwd: probe.cwd,
       env: { ...probe.env, PORT: String(port), HOSTNAME: "127.0.0.1" },
       detached: process.platform !== "win32",
@@ -122,12 +123,12 @@ export async function withShortLivedBridge<T>(
     releaseOpenCodeHostStart();
     throw error;
   }
-  localServerProcesses.set(key, child);
+  localServers.adoptProcess(key, child);
   child.stdout.resume();
   child.stderr.resume();
   try {
     try {
-      if (isLocalServerShutdownRequested()) {
+      if (localServers.isShuttingDown()) {
         throw new Error(
           purpose === "catalog-refresh"
             ? "Backend is shutting down; model catalogues cannot be refreshed"
@@ -140,7 +141,7 @@ export async function withShortLivedBridge<T>(
     }
     return await read(port, probe.token);
   } finally {
-    await terminateLocalServerChild(key, child).catch((error: unknown) => {
+    await localServers.terminate(key, child).catch((error: unknown) => {
       console.warn(
         `[ElectronBackend] The ${probe.kind} ${purpose === "catalog-refresh" ? "catalogue probe" : "sign-in server"} did not exit cleanly:`,
         error instanceof Error ? error.message : "unknown error",
@@ -185,6 +186,7 @@ async function refreshClaude(
   };
   await applyClaudeHostCredentialEnvironment(context, env);
   const catalog = await withShortLivedBridge(
+    context.runtime.localServers,
     {
       kind: "claude",
       command: resolveBunBinary(context),
@@ -208,6 +210,7 @@ async function refreshCodex(context: CommandContext): Promise<HostCatalog> {
   const token = randomBytes(32).toString("base64url");
   const config = await context.storage.loadConfig();
   const models = await withShortLivedBridge(
+    context.runtime.localServers,
     {
       kind: "codex",
       command: resolveBunBinary(context),
@@ -298,6 +301,7 @@ async function refreshAcp(
     });
   }
   const models = await withShortLivedBridge(
+    context.runtime.localServers,
     {
       kind: agent,
       command: resolveBunBinary(context),
@@ -341,6 +345,7 @@ export async function withHostOpenCodeServer<T>(
   const token = randomBytes(32).toString("base64url");
   const headers = openCodeHealthHeaders(token);
   return withShortLivedBridge(
+    context.runtime.localServers,
     {
       kind: "opencode",
       command: resolveOpenCodeBinary(context),

@@ -7,8 +7,9 @@ import {
   type ControlledTimeout,
   installControlledTimeout,
 } from "../../../tests/helpers/controlled-timeout";
+import * as containerAccounts from "../src/core/agent-accounts-containers";
 import type { AgentAccountStore } from "../src/core/agent-accounts-store";
-import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/commands-runtime-state";
+import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/terminal-runtime";
 import { MAX_TEXT_FILE_BYTES } from "../src/core/path-safety";
 import { terminalAccountHomes } from "../src/core/terminal-account-usage";
 
@@ -17,7 +18,6 @@ import { createCommandFixtures } from "./command-fixtures";
 const {
   ASYNC_TEST_BUDGET_MS,
   RUNNING_CONTAINER_DOCKER_SCRIPT,
-  commandTesting,
   createCommandRegistry,
   createContext,
   createDeferred,
@@ -125,18 +125,18 @@ describe("Electron backend command registry", () => {
       expect(await commands.get("get_terminal_output_snapshot")?.({ sessionId }, context)).toEqual(
         beforeExit,
       );
-      expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(1);
+      expect(context.runtime.terminals.retainedOutputCount()).toBe(1);
 
       // Retention is bounded in time; pin the expiry result without making the
       // suite sleep for the production recovery window.
-      commandTesting.deleteRetainedTerminalOutputBuffer(sessionId);
+      context.runtime.terminals.deleteRetainedOutput(sessionId);
       expect(await commands.get("get_terminal_output_snapshot")?.({ sessionId }, context)).toEqual({
         output: "",
         revision: 0,
         generation: 0,
         truncated: false,
       });
-      expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+      expect(context.runtime.terminals.retainedOutputCount()).toBe(0);
     },
     ASYNC_TEST_BUDGET_MS,
   );
@@ -303,9 +303,10 @@ describe("Electron backend command registry", () => {
         containerId: null,
         status: "running",
       });
-      const { context } = createContext(environment);
+      const { context } = createContext(environment, {
+        runtimeOptions: { terminals: { outputRetentionMs: 5 } },
+      });
       const commands = createCommandRegistry();
-      commandTesting.setTerminalOutputRetentionMs(5);
 
       const sessionId = terminalSessionResult(
         await commands.get("create_local_terminal_session")?.(
@@ -316,11 +317,11 @@ describe("Electron backend command registry", () => {
       await commands.get("start_local_terminal_session")?.({ sessionId }, context);
       ptyProcesses.at(-1)?.emitData("short-lived tail");
       ptyProcesses.at(-1)?.emitExit({ exitCode: 0 });
-      expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(1);
+      expect(context.runtime.terminals.retainedOutputCount()).toBe(1);
 
       await new Promise((resolve) => setTimeout(resolve, 20));
 
-      expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+      expect(context.runtime.terminals.retainedOutputCount()).toBe(0);
       expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context)).toEqual({
         output: "",
         revision: 0,
@@ -356,7 +357,7 @@ describe("Electron backend command registry", () => {
 
       await commands.get("close_local_terminal_session")?.({ sessionId }, context);
 
-      expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+      expect(context.runtime.terminals.retainedOutputCount()).toBe(0);
       expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context)).toEqual({
         output: "",
         revision: 0,
@@ -396,7 +397,7 @@ describe("Electron backend command registry", () => {
         process.emitExit({ exitCode: 0 });
       }
 
-      expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(32);
+      expect(context.runtime.terminals.retainedOutputCount()).toBe(32);
       expect(
         await commands.get("get_terminal_output_snapshot")?.({ sessionId: sessionIds[0] }, context),
       ).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
@@ -444,12 +445,14 @@ describe("Electron backend command registry", () => {
       for (let index = 0; index < 2_048; index += 1) {
         ptyProcesses[0]?.emitData("x");
       }
-      expect(commandTesting.terminalOutputBufferStats(sessionId)).toMatchObject({
+      expect(context.runtime.terminals.outputBufferStats(sessionId)).toMatchObject({
         chars: maxChars,
         sequence: 2_050,
         chunks: expect.any(Number),
       });
-      expect(commandTesting.terminalOutputBufferStats(sessionId).chunks).toBeLessThanOrEqual(1_024);
+      expect(context.runtime.terminals.outputBufferStats(sessionId).chunks).toBeLessThanOrEqual(
+        1_024,
+      );
       const buffer = (await commands.get("get_terminal_output_buffer")?.(
         { sessionId },
         context,
@@ -3713,3 +3716,58 @@ test("terminal creation rechecks a move admitted during its environment read", a
     endEnvironmentMove(environment.id);
   }
 });
+
+test.each([false, true])(
+  "container terminal waits for account handoff and rechecks replacement (%s)",
+  async (replace) => {
+    const environment = createEnvironment({
+      id: "env-handoff-race",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const args = {
+      containerId: "container-1",
+      environmentId: environment.id,
+      terminalKey: "handoff",
+      user: "node",
+    };
+    const { sessionId } = terminalSessionResult(
+      await commands.get("create_terminal_session")!(args, context),
+    );
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const handoff = spyOn(
+      containerAccounts,
+      "applyActiveAgentAccountsForContainerTerminal",
+    ).mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const count = ptyProcesses.length;
+    const starting = Promise.resolve(
+      commands.get("start_terminal_session")!({ sessionId }, context),
+    );
+    void starting.catch(() => undefined);
+    try {
+      await entered.promise;
+      expect(ptyProcesses.length).toBe(count);
+      expect(handoff).toHaveBeenCalledWith(context, "container-1");
+      if (replace)
+        await commands.get("create_terminal_session")!({ ...args, user: "root" }, context);
+      release.resolve();
+      if (replace) {
+        await expect(starting).rejects.toThrow("Container terminal session is no longer available");
+        expect(ptyProcesses.length).toBe(count);
+      } else {
+        await starting;
+        expect(ptyProcesses.length).toBe(count + 1);
+      }
+    } finally {
+      release.resolve();
+      handoff.mockRestore();
+    }
+  },
+);

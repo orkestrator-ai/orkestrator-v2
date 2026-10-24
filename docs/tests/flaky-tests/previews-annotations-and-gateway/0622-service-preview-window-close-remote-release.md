@@ -53,3 +53,9 @@ This does not reproduce or resolve the earlier window-close release symptom.
 See [0623](../aggregate-validation-runs/0623-preview-main-merge-validation.md) for the original suite,
 other validation limitations and artifacts. No source, assertion or timeout
 changed between these Electron runs.
+
+## Agent accounts main merge — 2026-10-24
+
+This run failed earlier than window close: the local attachment count missed the five-second poll at line 1972. The complete unchanged service-preview owner passed all fourteen cases in 130.4 s with `ORKESTRATOR_AGENT_TEST_RUN_ID=merge-preview-owner mise run test:logged -- --name merge-preview-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts --workers=1`. This does not reproduce the original window-close symptom.
+
+Original command: `mise run test:logged -- --name merge-electron -- mise run test:agent:electron` (one worker): 26 passed, four failed, one skipped, one not run, 558.2 s. Evidence: `orkestrator-test-run.3IicXN/merge-electron.log.gz` below the host temporary directory. No implementation, assertion, deadline or skip changed. See [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md).

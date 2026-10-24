@@ -49,3 +49,7 @@ No assertion, timeout, production account behavior or skip was changed.
 - **Alone:** `bun test --preload ../../tests/setup-node.ts ./src/core/agent-accounts.test.ts --parallel=1`
   in `apps/backend`: 37 passed (4.55 s) at load 36.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.txKi1Z/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 6.4 s: `mise run test:logged -- --name design-links-owner-agent-accounts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/agent-accounts.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.

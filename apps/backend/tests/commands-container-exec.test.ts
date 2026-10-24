@@ -54,7 +54,7 @@ describe("Electron backend command registry", () => {
     expect(environment.lifecycleError).toBe("Previous failure");
     // A refused delete must not keep the tombstone that blocks local-server
     // starts and merges for this environment.
-    expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(false);
+    expect(context.runtime.environments.isDeleting(environment.id)).toBe(false);
   });
 
   test("keeps credential sync compatible with repeated workspace Git configuration", async () => {

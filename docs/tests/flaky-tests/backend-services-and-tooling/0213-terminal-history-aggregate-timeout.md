@@ -73,3 +73,7 @@ The unchanged owner pass confirms intermittence. No implementation, assertion, t
 - Failure: `terminal history > normalizes lines, CRLF, Unicode, and ANSI across transport chunks and pages` at 5013.95 ms. Backend: 9909 passed, 84 skipped, 4 failed across 9997 tests in 572 files (630.59 s); the other failures were 0213, 0175 and 0165 (two cases).
 - Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.iQtiOF/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - Isolated rerun: `mise exec -- bun test --cwd apps/backend ./src/core/terminal-history.test.ts --parallel=1` passed unchanged (25 passed) at load 11.
+
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 16.0 s: `mise run test:logged -- --name design-links-owner-terminal-history -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.

@@ -20,6 +20,7 @@ const {
   isLoopedReviewWorkflow,
   isReviewPackageReference,
   isProcessRunning,
+  localServerHooks,
   loopedReviewWorkflowAround,
   path,
   requestOk,
@@ -2181,7 +2182,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       try {
         process.kill(started.pid, "SIGTERM");
         await waitForCondition(
-          () => commandTesting.getLocalServerProcess(`codex:${environment.id}`) === undefined,
+          () => context.runtime.localServers.process(`codex:${environment.id}`) === undefined,
           "exited Codex bridge ownership release",
         );
       } finally {
@@ -2193,7 +2194,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         port: started.port,
         pid: started.pid,
       });
-      expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
+      expect(context.runtime.localServers.bridgeToken("codex", environment.id)).toBeUndefined();
     },
     ASYNC_TEST_BUDGET_MS,
   );
@@ -2342,8 +2343,8 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
           pid: null,
         },
       });
-      expect(commandTesting.getLocalServerProcess(`codex:${environment.id}`)).toBeUndefined();
-      expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
+      expect(context.runtime.localServers.process(`codex:${environment.id}`)).toBeUndefined();
+      expect(context.runtime.localServers.bridgeToken("codex", environment.id)).toBeUndefined();
     },
     ASYNC_TEST_BUDGET_MS,
   );
@@ -2356,14 +2357,14 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     });
     const { context } = createContext(environment);
     const child = createFakeChild(50124);
-    commandTesting.setLocalServerProcess(`codex:${environment.id}`, child);
+    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, child);
     const terminationStarted = createDeferred();
     const releaseTermination = createDeferred();
-    commandTesting.setTerminateProcessTree(async () => {
+    localServerHooks.terminateProcessTree = async () => {
       terminationStarted.resolve(undefined);
       await releaseTermination.promise;
       return true;
-    });
+    };
     const commands = createCommandRegistry();
 
     const stopPromise = commands.get("stop_local_codex_server_cmd")?.(
@@ -2403,14 +2404,14 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     });
     const { context } = createContext(environment);
     const child = createFakeChild(50125);
-    commandTesting.setLocalServerProcess(`codex:${environment.id}`, child);
+    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, child);
     const terminationStarted = createDeferred();
     const releaseTermination = createDeferred();
-    commandTesting.setTerminateProcessTree(async () => {
+    localServerHooks.terminateProcessTree = async () => {
       terminationStarted.resolve(undefined);
       await releaseTermination.promise;
       return true;
-    });
+    };
     const commands = createCommandRegistry();
 
     const stopPromise = commands.get("stop_local_codex_server_cmd")?.(
@@ -2493,7 +2494,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     const spawnAttempt = mock(() => {
       throw new Error("local server spawned after shutdown");
     });
-    commandTesting.setSpawnLocalServerCommand(spawnAttempt as unknown as typeof spawnCommand);
+    localServerHooks.spawn = spawnAttempt as unknown as typeof spawnCommand;
 
     const start = commands.get("start_local_opencode_server_cmd")?.(
       { environmentId: environment.id },
@@ -2531,9 +2532,9 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       pi: createFakeChild(94004),
     };
     for (const [kind, child] of Object.entries(children)) {
-      commandTesting.setLocalServerProcess(`${kind}:${environment.id}`, child);
+      context.runtime.localServers.adoptProcess(`${kind}:${environment.id}`, child);
     }
-    commandTesting.setTerminateProcessTree(async () => true);
+    localServerHooks.terminateProcessTree = async () => true;
 
     await expect(
       Promise.all([
@@ -2578,7 +2579,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       piBridgePid: null,
     });
     for (const kind of Object.keys(children)) {
-      expect(commandTesting.getLocalServerProcess(`${kind}:${environment.id}`)).toBeUndefined();
+      expect(context.runtime.localServers.process(`${kind}:${environment.id}`)).toBeUndefined();
     }
   });
 
@@ -2676,7 +2677,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     const spawnAttempt = mock(() => {
       throw new Error("peek must not spawn a bridge");
     });
-    commandTesting.setSpawnLocalServerCommand(spawnAttempt as unknown as typeof spawnCommand);
+    localServerHooks.spawn = spawnAttempt as unknown as typeof spawnCommand;
     await expect(
       commands.get("peek_local_agent_bridge")?.(
         { environmentId: environment.id, agent: "claude" },
@@ -2684,7 +2685,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       ),
     ).resolves.toBeNull();
     expect(spawnAttempt).not.toHaveBeenCalled();
-    commandTesting.setSpawnLocalServerCommand(spawnCommand);
+    localServerHooks.spawn = spawnCommand;
 
     const started = (await commands.get("start_local_claude_server_cmd")?.(
       { environmentId: environment.id },
@@ -2773,7 +2774,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
 
     // A bridge inherited from a previous backend process: still healthy, but its
     // token was never handed to us, so the renderer could not authenticate.
-    commandTesting.deleteLocalClaudeBridgeToken(environment.id);
+    context.runtime.localServers.forgetBridgeToken("claude", environment.id);
 
     const second = (await commands.get("start_local_claude_server_cmd")?.(
       { environmentId: environment.id },
@@ -2935,7 +2936,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
 
     // A bridge inherited from a previous backend process: still healthy, but its
     // token was never handed to us, so the renderer could not authenticate.
-    commandTesting.deleteLocalCodexBridgeToken(environment.id);
+    context.runtime.localServers.forgetBridgeToken("codex", environment.id);
 
     const second = (await commands.get("start_local_codex_server_cmd")?.(
       { environmentId: environment.id },
@@ -2966,18 +2967,18 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     context.appRoot = appRoot;
     context.resourceRoot = appRoot;
     const commands = createCommandRegistry();
-    commandTesting.setSpawnLocalServerCommand(() => {
+    localServerHooks.spawn = () => {
       throw new Error("spawn refused");
-    });
+    };
 
     try {
       await expect(
         commands.get("start_local_codex_server_cmd")?.({ environmentId: environment.id }, context),
       ).rejects.toThrow("spawn refused");
-      expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
+      expect(context.runtime.localServers.bridgeToken("codex", environment.id)).toBeUndefined();
       expect(updates).toHaveLength(0);
     } finally {
-      commandTesting.setSpawnLocalServerCommand(spawnCommand);
+      localServerHooks.spawn = spawnCommand;
     }
   });
 
@@ -2990,20 +2991,18 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     context.appRoot = appRoot;
     context.resourceRoot = appRoot;
     const commands = createCommandRegistry();
-    commandTesting.setSpawnLocalServerCommand(() =>
-      spawnCommand(path.join(appRoot, "missing-executable")),
-    );
+    localServerHooks.spawn = () => spawnCommand(path.join(appRoot, "missing-executable"));
     try {
       await expect(
         commands.get("start_local_codex_server_cmd")?.({ environmentId: environment.id }, context),
       ).rejects.toThrow("ENOENT");
-      expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
+      expect(context.runtime.localServers.bridgeToken("codex", environment.id)).toBeUndefined();
       expect(updates).toContainEqual({ localCodexPort: null, codexBridgePid: null });
       expect(environment.localCodexPort).toBeNull();
       expect(environment.codexBridgePid).toBeNull();
 
       // A healthy retry proves the failed child no longer owns the session key.
-      commandTesting.setSpawnLocalServerCommand(spawnCommand);
+      localServerHooks.spawn = spawnCommand;
       const restarted = (await commands.get("start_local_codex_server_cmd")?.(
         { environmentId: environment.id },
         context,
@@ -3013,7 +3012,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       expect(restarted.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
       await expect(requestOk(restarted.port, "/global/health")).resolves.toBe(true);
     } finally {
-      commandTesting.setSpawnLocalServerCommand(spawnCommand);
+      localServerHooks.spawn = spawnCommand;
       await commands.get("stop_local_codex_server_cmd")?.(
         { environmentId: environment.id },
         context,
@@ -3053,7 +3052,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     context.appRoot = appRoot;
     context.resourceRoot = appRoot;
     const commands = createCommandRegistry();
-    commandTesting.setTerminateProcessTree(async () => false);
+    localServerHooks.terminateProcessTree = async () => false;
 
     await expect(
       commands.get("start_local_codex_server_cmd")?.({ environmentId: environment.id }, context),
@@ -3066,6 +3065,6 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     });
     expect(environment.localCodexPort).toBeNull();
     expect(environment.codexBridgePid).toBeNull();
-    commandTesting.setTerminateProcessTree(async () => true);
+    localServerHooks.terminateProcessTree = async () => true;
   });
 });

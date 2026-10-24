@@ -1,16 +1,24 @@
 import { createHash } from "node:crypto";
 import { runCommand } from "./shell.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import {
-  ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
-  LOCAL_SERVER_HEALTH_ATTEMPTS,
-  LOCAL_SERVER_HEALTH_INTERVAL_MS,
-  LOCAL_SERVER_REUSE_FIRST_PROBE_TIMEOUT_MS,
-  LOCAL_SERVER_REUSE_HEALTH_ATTEMPTS,
-  LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS,
-  LOCAL_SERVER_REUSE_RETRY_PROBE_TIMEOUT_MS,
-} from "./commands-runtime-state.js";
-import type { LocalServerKind } from "./commands-runtime-state.js";
+import type { LocalServerKind } from "./local-server-runtime.js";
+
+export const LOCAL_SERVER_HEALTH_ATTEMPTS = 75;
+export const LOCAL_SERVER_HEALTH_INTERVAL_MS = 200;
+/**
+ * Reusing a running bridge re-checks its health first. The first probe keeps
+ * the historical 2s budget so a healthy bridge costs nothing extra; only a miss
+ * pays for the slower retries. Worst case before replacement is about 13s.
+ */
+export const LOCAL_SERVER_REUSE_HEALTH_ATTEMPTS = 3;
+export const LOCAL_SERVER_REUSE_FIRST_PROBE_TIMEOUT_MS = 2_000;
+export const LOCAL_SERVER_REUSE_RETRY_PROBE_TIMEOUT_MS = 5_000;
+export const LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS = 500;
+/**
+ * Grok, Cursor, and Pi may need longer to initialize their agent runtime before
+ * binding than the lightweight HTTP bridges.
+ */
+export const ACP_LOCAL_SERVER_HEALTH_ATTEMPTS = 120;
 
 /**
  * Liveness probing for locally bound agent servers and bridges.

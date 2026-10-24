@@ -256,3 +256,15 @@ host-contention hypothesis.
   to 98 (3 and more cases at about 5,008 ms), then passed alone (24 passed,
   0 failed) once the one-minute load fell to 10. The branch changes no
   firewall test or `docker/` script.
+
+## Agent accounts and sign-in (0003) validation — 2026-10-24
+
+Recurred in the non-iOS aggregate on node mbp3 (thirteen `container firewall policy` cases at ~5,003 ms); the unchanged owner passed alone (24 passed). Details in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Agent accounts main merge — 2026-10-24
+
+The broad run and complete unchanged owner both retained five-second failures. This is not newly classified as a flake. Exact commands, counts and artifacts are in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md#merge-through-main-8290f2ca9--2026-10-24). No assertion, deadline or skip changed.
+
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 48.4 s: `mise run test:logged -- --name design-links-owner-firewall -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.

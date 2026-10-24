@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PINNED_TOOL_VERSIONS } from "@orkestrator/toolchain/manifest";
 import { isHostIdle } from "@orkestrator/protocol/host-maintenance";
+import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
 import { readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
@@ -21,6 +22,7 @@ afterEach(async () => {
 
 test("restart impact counts working and waiting agents and unfinished pipelines", async () => {
   const context = {
+    runtime: new BackendRuntime({ emit: () => undefined }),
     agentRegistry: {
       snapshot: async () => ({
         entries: [
@@ -119,6 +121,7 @@ for (const reader of ["agents", "pipelines"] as const) {
 test("unknown terminal activity in an inactive environment stays busy; paused pipelines are idle", async () => {
   let entries = [{ kind: "terminal", state: "unknown", environmentId: "inactive" }];
   const context = {
+    runtime: new BackendRuntime({ emit: () => undefined }),
     agentRegistry: { snapshot: async () => ({ entries }) },
     storage: { listAllBuildPipelines: async () => [{ snapshot: { phase: "paused" } }] },
   } as unknown as CommandContext;

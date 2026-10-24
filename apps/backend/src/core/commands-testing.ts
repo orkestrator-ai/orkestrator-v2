@@ -1,7 +1,5 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { spawnCommand } from "./shell.js";
-import { terminateProcessTree } from "./process-tree.js";
 import { resetOpenCodeHostStartForTests } from "./opencode-host-start.js";
+import { terminalHistoryTesting } from "./terminal-history.js";
 import {
   ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
   BRANCH_REF_EXISTS_SENTINEL,
@@ -13,8 +11,6 @@ import {
   CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER,
   LOCAL_SERVER_HEALTH_ATTEMPTS,
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
-  configuredOpenCodeAgentTools,
-  deletingLocalServerEnvironments,
   enableGitScanCaches,
   establishCreatedFromCommit,
   ensureContainerAgentToolsHost,
@@ -23,25 +19,13 @@ import {
   buildOpenCodeGitHubEnvironmentPluginSource,
   buildSyncContainerClaudeCredentialCommand,
   buildSyncContainerGitHubCredentialCommand,
-  cancelAllOpenCodeAgentToolsConfigurations,
-  cancelOpenCodeAgentToolsConfiguration,
   countLocalFileLines,
   countPrunedDockerResources,
-  deleteRetainedTerminalOutputBuffer,
   dockerOwnerMatches,
   environmentLifecycleErrorMessage,
   getClaudeOAuthAccessToken,
   getHostClaudeCredentials,
   invalidateDockerContainerStateCache,
-  localClaudeBridgeTokens,
-  localCodexBridgeTokens,
-  localOpenCodeServerPasswords,
-  localServerEnvironmentOperations,
-  localServerProcesses,
-  localServerUnresponsiveSince,
-  mergingEnvironments,
-  openCodeAgentToolsConfigurations,
-  openCodeAgentToolsState,
   parseContainerGitStatusResponse,
   parseContainerUntrackedStats,
   parseDockerByteSize,
@@ -49,17 +33,10 @@ import {
   parseHeadCommit,
   parseOpenCodeEnvironmentSkills,
   readBoundedOpenCodeResponse,
-  releaseLocalServerOwnership,
-  resetOpenCodeAgentToolsTuning,
-  resetTerminalOutputBuffers,
   resolveContainerClaudeCredentials,
   runEnvironmentAgentSkills,
-  scheduleOpenCodeAgentToolsConfiguration,
   scrubLifecycleLogDetail,
   shouldAddDockerHostGatewayAlias,
-  terminalOutputBuffers,
-  terminalOutputRevisions,
-  terminalOutputRetentionTimers,
   waitForHttpServerExit,
   waitForLocalServerHealth,
   waitForUnhealthy,
@@ -68,13 +45,6 @@ import {
   createExtensionCommandRunner,
   hasCursorSdkBridge,
   agentToolConnectionFingerprint,
-  setOpenCodeAgentToolsMemoWindows,
-  setOpenCodeAgentToolsRetryDelays,
-  setLocalServerShutdownRequested,
-  setLocalServerShutdownPromise,
-  setSpawnLocalServerCommandImplementation,
-  setTerminateProcessTreeImplementation,
-  setTerminalOutputRetentionMs,
 } from "./commands-helpers.js";
 
 export const __testing = {
@@ -85,28 +55,6 @@ export const __testing = {
   dockerOwnerMatches,
   parseDockerByteSize,
   configureOpenCodeAgentTools,
-  scheduleOpenCodeAgentToolsConfiguration,
-  cancelOpenCodeAgentToolsConfiguration,
-  openCodeAgentToolsConfigurationCount(): number {
-    return openCodeAgentToolsConfigurations.size;
-  },
-  configuredOpenCodeAgentToolsCount(): number {
-    return configuredOpenCodeAgentTools.size;
-  },
-  /** Settles with the key's in-flight reconcile, which a status read starts without waiting. */
-  async openCodeAgentToolsConfigurationSettled(key: string): Promise<void> {
-    await openCodeAgentToolsConfigurations.get(key)?.task;
-  },
-  openCodeAgentToolsState,
-  // `resetLocalServerLifecycle` restores the production windows and backoff, so
-  // an override cannot outlive the test that set it.
-  setOpenCodeAgentToolsRetryDelaysMs(delays: readonly number[]): void {
-    setOpenCodeAgentToolsRetryDelays(delays);
-  },
-  setOpenCodeAgentToolsMemoWindowsMs(connectedTtlMs: number, unavailableCooldownMs: number): void {
-    setOpenCodeAgentToolsMemoWindows(connectedTtlMs, unavailableCooldownMs);
-  },
-  resetOpenCodeAgentToolsTuning,
   readBoundedOpenCodeResponse,
   ensureContainerAgentToolsHost,
   shouldAddDockerHostGatewayAlias,
@@ -117,12 +65,6 @@ export const __testing = {
   runEnvironmentAgentSkills,
   environmentLifecycleErrorMessage,
   scrubLifecycleLogDetail,
-  isEnvironmentDeleting(environmentId: string): boolean {
-    return deletingLocalServerEnvironments.has(environmentId);
-  },
-  markEnvironmentMerging(environmentId: string): void {
-    mergingEnvironments.add(environmentId);
-  },
   resetDockerContainerStateCache(): void {
     // The cache is private to the environment status helpers; their invalidator
     // keeps the ownership and fetch bookkeeping in that module.
@@ -146,98 +88,17 @@ export const __testing = {
   establishCreatedFromCommit,
   completeEnvironmentSetup,
   enableGitScanCaches,
-  terminalOutputBufferStats(sessionId: string): {
-    chars: number;
-    chunks: number;
-    sequence: number;
-  } {
-    const buffer = terminalOutputBuffers.get(sessionId);
-    return {
-      chars: buffer?.length ?? 0,
-      chunks: buffer ? buffer.chunks.length - buffer.headIndex : 0,
-      sequence: terminalOutputRevisions.get(sessionId) ?? 0,
-    };
-  },
-  deleteRetainedTerminalOutputBuffer,
-  retainedTerminalOutputBufferCount(): number {
-    return terminalOutputRetentionTimers.size;
-  },
-  // `resetTerminalOutputBuffers` restores the production window, so an override
-  // cannot outlive the test that set it.
-  setTerminalOutputRetentionMs(retentionMs: number): void {
-    setTerminalOutputRetentionMs(retentionMs);
-  },
-  resetTerminalOutputBuffers,
   CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER,
   CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL,
   CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL,
-  setLocalServerProcess(key: string, child: ChildProcessWithoutNullStreams): void {
-    localServerProcesses.set(key, child);
-  },
-  getLocalServerProcess(key: string): ChildProcessWithoutNullStreams | undefined {
-    return localServerProcesses.get(key);
-  },
-  getLocalServerProcessCount(): number {
-    return localServerProcesses.size;
-  },
-  releaseLocalServerOwnership,
   LOCAL_SERVER_HEALTH_ATTEMPTS,
   ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
   waitForLocalServerHealth,
   waitForHttpServerExit,
   waitForUnhealthy,
-  setTerminateProcessTree(implementation: typeof terminateProcessTree): void {
-    setTerminateProcessTreeImplementation(implementation);
-  },
-  setSpawnLocalServerCommand(implementation: typeof spawnCommand): void {
-    setSpawnLocalServerCommandImplementation(implementation);
-  },
-  getLocalCodexBridgeToken(environmentId: string): string | undefined {
-    return localCodexBridgeTokens.get(environmentId);
-  },
-  deleteLocalCodexBridgeToken(environmentId: string): void {
-    localCodexBridgeTokens.delete(environmentId);
-  },
-  getLocalClaudeBridgeToken(environmentId: string): string | undefined {
-    return localClaudeBridgeTokens.get(environmentId);
-  },
-  deleteLocalClaudeBridgeToken(environmentId: string): void {
-    localClaudeBridgeTokens.delete(environmentId);
-  },
-  getLocalOpenCodeServerPassword(environmentId: string): string | undefined {
-    return localOpenCodeServerPasswords.get(environmentId);
-  },
-  deleteLocalOpenCodeServerPassword(environmentId: string): void {
-    localOpenCodeServerPasswords.delete(environmentId);
-  },
-  /** Backdates when a running bridge first failed its reuse health check. */
-  markLocalServerUnresponsiveSince(key: string, since: number): void {
-    const child = localServerProcesses.get(key);
-    if (!child) throw new Error(`No local server owns ${key}`);
-    localServerUnresponsiveSince.set(key, { child, since, lastFailureAt: Date.now() });
-  },
-  markLocalServerLastFailureAt(key: string, lastFailureAt: number): void {
-    const marker = localServerUnresponsiveSince.get(key);
-    if (!marker) throw new Error(`No unresponsive marker for ${key}`);
-    marker.lastFailureAt = lastFailureAt;
-  },
-  resetLocalServerLifecycle(): void {
-    if (localServerEnvironmentOperations.size > 0) {
-      throw new Error("Cannot reset local server lifecycle while operations are active");
-    }
-    localServerProcesses.clear();
-    localServerUnresponsiveSince.clear();
-    localCodexBridgeTokens.clear();
-    localClaudeBridgeTokens.clear();
-    localOpenCodeServerPasswords.clear();
-    cancelAllOpenCodeAgentToolsConfigurations();
-    resetOpenCodeAgentToolsTuning();
-    resetOpenCodeHostStartForTests();
-    deletingLocalServerEnvironments.clear();
-    mergingEnvironments.clear();
-    setLocalServerShutdownRequested(false);
-    setLocalServerShutdownPromise(null);
-    setTerminateProcessTreeImplementation(terminateProcessTree);
-    setSpawnLocalServerCommandImplementation(spawnCommand);
+  // Module state outside `BackendRuntime` that fixtures reset between tests.
+  resetOpenCodeHostStart: resetOpenCodeHostStartForTests,
+  resetTerminalHistory(): void {
+    terminalHistoryTesting.clear();
   },
 };

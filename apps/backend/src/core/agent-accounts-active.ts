@@ -14,13 +14,6 @@ import {
   getHostClaudeCredentials,
   readRuntimeHostClaudeCredentials,
 } from "./commands-files.js";
-import { localServerProcesses } from "./commands-runtime-state.js";
-import {
-  localAgentAccountIds,
-  localAgentAccountTokenExpiry,
-  loginlessLocalBridges,
-  staleLoginLocalBridges,
-} from "./agent-account-bridge-state.js";
 import {
   agentAccountHome,
   claudeKeychainService,
@@ -105,23 +98,24 @@ export async function localBridgeIsOnActiveAccount(
   environmentId: string,
   context: CommandContext,
 ): Promise<boolean> {
+  const localServers = context.runtime.localServers;
   if (kind === "opencode") {
     // OpenCode has no accounts, but a server keeps the provider credentials it
     // loaded until restarted, so a provider signed in from the app since
     // launch moves it over once idle.
-    if (!staleLoginLocalBridges.has(key)) return true;
+    if (!localServers.hasStaleLogin(key)) return true;
     return (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
   }
   if (kind !== "claude" && kind !== "codex") return true;
-  const launchedWith = localAgentAccountIds.get(key) ?? DEFAULT_AGENT_ACCOUNT_ID;
+  const launchedWith = localServers.launchedAccountId(key) ?? DEFAULT_AGENT_ACCOUNT_ID;
   const active = await resolveActiveAgentAccount(context, kind);
-  const tokenExpiresAt = localAgentAccountTokenExpiry.get(key);
+  const tokenExpiresAt = localServers.launchedTokenExpiry(key);
   const tokenLapsed =
     tokenExpiresAt !== undefined && Date.now() >= tokenExpiresAt - TOKEN_REPLACEMENT_LEAD_MS;
   // Signed in again since launch: the bridge's login is out of date even
   // though it is on the right account.
-  if (launchedWith === active.accountId && !staleLoginLocalBridges.has(key)) {
-    if (loginlessLocalBridges.has(key)) {
+  if (launchedWith === active.accountId && !localServers.hasStaleLogin(key)) {
+    if (localServers.isLoginless(key)) {
       // It answers "Not logged in" to everything; relaunching only helps once
       // the account has a token to hand over.
       const usable =
@@ -167,23 +161,20 @@ export const TOKEN_REPLACEMENT_LEAD_MS = 5 * 60_000;
  * Every live local bridge may hold the old one, so each is replaced the next
  * time it is used while idle.
  */
-export function markLocalBridgesForLoginRefresh(platform: AgentAccountPlatform | "opencode"): void {
-  for (const key of localServerProcesses.keys()) {
-    if (key.startsWith(`${platform}:`)) staleLoginLocalBridges.add(key);
-  }
+export function markLocalBridgesForLoginRefresh(
+  context: CommandContext,
+  platform: AgentAccountPlatform | "opencode",
+): void {
+  context.runtime.localServers.markLoginStale(platform);
 }
 
 /** Whether any live local bridge was launched on this account. */
 export function isAgentAccountInUseByLocalBridge(
+  context: CommandContext,
   platform: AgentAccountPlatform,
   accountId: string,
 ): boolean {
-  for (const [key, launchedWith] of localAgentAccountIds) {
-    if (launchedWith !== accountId || !key.startsWith(`${platform}:`)) continue;
-    const child = localServerProcesses.get(key);
-    if (child && child.exitCode === null && child.signalCode === null) return true;
-  }
-  return false;
+  return context.runtime.localServers.isAccountInUse(platform, accountId);
 }
 
 /**

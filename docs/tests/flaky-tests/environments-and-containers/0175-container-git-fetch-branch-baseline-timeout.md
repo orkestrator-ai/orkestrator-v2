@@ -90,3 +90,7 @@
 - **Suite counts:** backend 10,568 passed, 77 skipped and 16 failed across 10,661 tests in 618 files (855.84 s); the other failures were this run's watchdog recurrence (0512) and 14 OpenCode execution-policy conformance cases that also fail on the unchanged baseline (host CLI 1.19.4 against an expected 1.19.0).
 - **Evidence:** `orkestrator-test-run.4LYtCC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence; concurrent load remains a hypothesis. No assertion, deadline or skip changed.
+
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 11.7 s: `mise run test:logged -- --name design-links-owner-container-fetch -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-git-fetch-git.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.

@@ -36,3 +36,5 @@ aggregate-load timeouts.
 - **Failure:** `firewall allowlist refresh and edits > policy 3 refreshes the stored tuples and add/remove edit them` hit the five-second timeout (5003.39 ms). It was the only failure in the root group.
 - **Owning-file rerun:** `mise run test:logged -- --name firewall-owner -- bun test ./tests/unit/firewall-refresh.test.ts --parallel=1 --only-failures` passed the complete unchanged file, exit 0 in 5.0 seconds.
 - **Evidence:** `orkestrator-test-run.IoyN8C/full-test.log.gz` under the host temporary directory. No assertion, timeout or skip changed.
+
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3, `mise run test` via `test:logged`): two `firewall allowlist refresh and edits` cases hit the 5 s timeout in the root group; `bun test ./tests/unit/firewall-policy.test.ts ./tests/unit/firewall-refresh.test.ts --parallel=1` then passed (64.4 s).

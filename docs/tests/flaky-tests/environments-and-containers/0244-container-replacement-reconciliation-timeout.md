@@ -12,3 +12,5 @@
 - **Failure evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.4v9Bnb/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and adjacent `summary.json`.
 - **Isolated rerun:** the same GNU-tool PATH prefix with `mise run test:logged -- --name container-replacement-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-replacement.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 5.7 seconds.
 - **Hypothesis:** the subprocess-based reconciliation fixture exhausted its outer deadline during aggregate execution. The unchanged owning file passed in isolation; host contention may contribute, but the root cause remains unconfirmed. The change being validated adds account-refresh tests and does not alter container replacement, its fixtures, or their deadlines.
+
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3, `mise run test` via `test:logged`): timed out at 5,001 ms in the workspace group; `bun test --cwd apps/backend ./tests/container-replacement.test.ts --parallel=1` then passed (11.8 s).

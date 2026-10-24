@@ -57,3 +57,5 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Owning-file rerun:** `mise run test:logged -- --name merge-validation-worker-owner -- bun test --cwd apps/backend ./src/core/review-validation-worker.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 40.3 seconds logged).
 - **Evidence:** `orkestrator-test-run.d10zQ4/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Aggregate counts are recorded in [0630](../aggregate-validation-runs/0630-modal-width-main-merge-validation.md).
 - **Assessment:** confirms intermittent deadline behavior. Host contention remains an unproven hypothesis; no source, assertion, deadline or skip changed.
+
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3, `mise run test` via `test:logged`): failed once (2,351 ms) in the first of two full runs; it passed in the second.

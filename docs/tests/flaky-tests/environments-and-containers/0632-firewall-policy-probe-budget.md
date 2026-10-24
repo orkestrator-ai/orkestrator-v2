@@ -25,3 +25,5 @@
   tab); nothing in `tests/unit/firewall-policy.test.ts`,
   `docker/firewall-domains.sh` or the network allowlist changed there. The
   likely fix is an explicit outer budget for these cases, as 0159 took.
+
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3, `mise run test` via `test:logged`): eleven to fourteen `container firewall policy` cases hit the 5 s budget in the root group in both full runs that day; the owner passed alone with firewall-refresh (64.4 s).

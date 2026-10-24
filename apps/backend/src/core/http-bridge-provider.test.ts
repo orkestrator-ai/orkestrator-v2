@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import {
   AmbiguousPromptDispatchError,
@@ -299,24 +299,28 @@ describe("HTTP bridge provider", () => {
     );
   });
 
-  test("falls back to the global slash-command route for older bridges", async () => {
-    const { provider, requests } = httpProvider((url) => {
-      if (url.endsWith("/session/session-1/commands")) {
+  test("never falls back to a global slash-command route for older bridges", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { provider, requests } = httpProvider((url) => {
+        if (url.endsWith("/session/session-1/commands")) {
+          return new Response(null, { status: 404 });
+        }
+        if (url.endsWith("/global/slash-commands")) {
+          return Response.json({ commands: [{ name: "/legacy", source: "builtin" }] });
+        }
         return new Response(null, { status: 404 });
-      }
-      if (url.endsWith("/global/slash-commands")) {
-        return Response.json({ commands: [{ name: "/legacy", source: "builtin" }] });
-      }
-      return new Response(null, { status: 404 });
-    }, cursorConnection);
+      }, cursorConnection);
 
-    await expect(provider.slashCommands?.("session-1")).resolves.toEqual([
-      expect.objectContaining({ name: "/legacy", source: "builtin" }),
-    ]);
-    expect(requests.map((request) => request.url)).toEqual([
-      `${cursorConnection.baseUrl}/session/session-1/commands`,
-      `${cursorConnection.baseUrl}/global/slash-commands`,
-    ]);
+      await expect(provider.slashCommands?.("session-1")).rejects.toMatchObject({
+        catalogueErrorCode: "outdated-bridge",
+      });
+      expect(requests.map((request) => request.url)).toEqual([
+        `${cursorConnection.baseUrl}/session/session-1/commands`,
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   for (const [agent, connection] of [

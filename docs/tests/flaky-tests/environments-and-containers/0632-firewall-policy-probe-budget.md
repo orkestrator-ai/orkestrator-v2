@@ -27,3 +27,21 @@
   likely fix is an explicit outer budget for these cases, as 0159 took.
 
 - **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3, `mise run test` via `test:logged`): eleven to fourteen `container firewall policy` cases hit the 5 s budget in the root group in both full runs that day; the owner passed alone with firewall-refresh (64.4 s).
+
+## Recurrence during 0016 validation (2026-10-24)
+
+- **Failure:** every parametrized `policy 2`/`policy 3 allowlist … chooses blocked HTTPS probe` case hit the five-second budget (5,003-5,069 ms).
+- **Original command:** `mise run test:logged -- --name full-test-2 -- mise run test`
+  on branch `todo-0016-slash-command-catalogue` after rebasing onto `712274379`,
+  node mbp3, other worktrees validating on the host.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.CfvSIY/full-test-2.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name firewall-alone -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1` passed (21.1 s).
+- **Disposition:** recurrence confirmed by the isolated pass. No assertion,
+  deadline or skip was changed.
+- **Again after rebasing onto `a5d78cfcd` (full-test-3):** 15 firewall cases hit
+  the five-second budget (evidence
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.xqyQcT/full-test-3.log.gz`).
+  The owning file also failed alone twice while the host load average was 33
+  to 98 (3 and more cases at about 5,008 ms), then passed alone (24 passed,
+  0 failed) once the one-minute load fell to 10. The branch changes no
+  firewall test or `docker/` script.

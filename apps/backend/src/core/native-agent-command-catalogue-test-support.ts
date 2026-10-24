@@ -203,9 +203,6 @@ export function fakeCatalogueBridge(
     if (/^\/session\/[^/]+\/commands$/.test(url.pathname)) {
       return options.legacy ? json('{"error":"not found"}', 404) : json(payload);
     }
-    if (url.pathname === "/plugins/commands" || url.pathname === "/global/slash-commands") {
-      return json(payload);
-    }
     return json('{"error":"not found"}', 404);
   }) as typeof fetch;
   return {

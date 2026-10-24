@@ -15,6 +15,8 @@ import {
 } from "../src/core/container-git-fetch.js";
 import { PrMonitorService, type PrMonitorTarget } from "../src/core/pr-monitor.js";
 import { ClaudeStatePollManager } from "../src/core/tmux-poll.js";
+import type { WorktreeSignalReason } from "../src/core/agent-tools.js";
+import { ContainerWorktreeSignals } from "../src/core/container-worktree-signal.js";
 import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
 import { ManualTime } from "../src/core/recurring-test-support.js";
 import {
@@ -83,6 +85,12 @@ export const PHYSICAL_COST = {
    * the config write that rings once (1). Once per poll lineage.
    */
   claudeStateSignalInstallDockerExecs: 4,
+  /**
+   * Arming the worktree watcher (`container-worktree-signal-install.ts`): the
+   * same host alias (2) and service-port (1) preparation, then the
+   * `orkestrator-worktree-signal start` exec (1). Once per tracking lineage.
+   */
+  worktreeSignalInstallDockerExecs: 4,
 } as const;
 
 export interface BaselineScenario {
@@ -99,6 +107,12 @@ export interface BaselineScenario {
   untrackedFilesPerEnvironment: number;
   /** Container images implement `claude-state-signal`, so state polls arm the doorbell. */
   claudeStateSignal?: boolean;
+  /**
+   * Container images implement `container-worktree-signal`: each tracked
+   * container arms a watcher whose probe ring confirms it, and an idle
+   * workspace never rings again.
+   */
+  worktreeSignal?: boolean;
 }
 
 export const DEFAULT_SCENARIOS: readonly BaselineScenario[] = [
@@ -120,6 +134,13 @@ export const DEFAULT_SCENARIOS: readonly BaselineScenario[] = [
   // Added with the Claude state signal: the 50-container scenario on images
   // that ring on change, so state reads drop to the safety read.
   { ...scenario("env50-container-c1-pr-signal", 50, 0, 1, "mixed", 0), claudeStateSignal: true },
+  // Added with the container worktree signal: the same scenario with both
+  // signals, so diff scans, list reads and tree walks drop to the safety scan.
+  {
+    ...scenario("env50-container-c1-pr-signals", 50, 0, 1, "mixed", 0),
+    claudeStateSignal: true,
+    worktreeSignal: true,
+  },
 ];
 
 function scenario(
@@ -367,9 +388,45 @@ export async function runScenario(
     return [];
   };
 
+  // Worktree doorbells; the fake install rings `ready`, as the real watcher
+  // does once its watches are established.
+  const worktreeRings = new Map<string, (reason: WorktreeSignalReason) => void>();
+  const worktreeSignals = input.worktreeSignal
+    ? new ContainerWorktreeSignals({
+        installer: {
+          support: async () => "supported",
+          install: async (_containerId, credential) => {
+            metrics.work("docker-exec", PHYSICAL_COST.worktreeSignalInstallDockerExecs);
+            worktreeRings.get(credential.token)?.("ready");
+          },
+        },
+        context: () =>
+          ({
+            storage: {},
+            agentTools: {
+              issueWorktreeSignal: (ring: (reason: WorktreeSignalReason) => void) => {
+                const token = `worktree-signal-${worktreeRings.size}`;
+                worktreeRings.set(token, ring);
+                return {
+                  url: "http://agent-tools.invalid/worktree-signal",
+                  token,
+                  revoke: () => worktreeRings.delete(token),
+                };
+              },
+            },
+          }) as never,
+        nowMs: time.now,
+        delay: (callback, delayMs) => time.setTimeout(callback, delayMs),
+        cancelDelay: (timer) => time.clear(timer),
+      })
+    : null;
+
   diffStats = new DiffStatsService({
     metrics,
     admission,
+    ...(worktreeSignals
+      ? { startContainerWatcher: (watch) => worktreeSignals.start(watch) }
+      : {}),
     remoteFreshness: (target) =>
       target.containerId
         ? containerFetches.freshness(target.containerId, target.comparisonRef)

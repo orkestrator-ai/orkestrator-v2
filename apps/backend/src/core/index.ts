@@ -82,6 +82,7 @@ import {
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import { containerWorktreeSignalInstaller } from "./container-worktree-signal-install.js";
 import { AgentToolsServer } from "./agent-tools.js";
 import type { TranscriptArtifactService } from "./transcript-artifacts/service.js";
 import type { TranscriptArtifactRuntime } from "./transcript-artifacts/runtime.js";
@@ -229,7 +230,11 @@ export class OrkestratorBackend {
     Partial<
       Pick<
         AgentToolsServer,
-        "revokeTab" | "workflowResultConnection" | "servicePort" | "issueStateSignal"
+        | "revokeTab"
+        | "workflowResultConnection"
+        | "servicePort"
+        | "issueStateSignal"
+        | "issueWorktreeSignal"
       >
     >;
   private readonly controlMcp: Pick<
@@ -266,7 +271,11 @@ export class OrkestratorBackend {
       Partial<
         Pick<
           AgentToolsServer,
-          "revokeTab" | "workflowResultConnection" | "servicePort" | "issueStateSignal"
+          | "revokeTab"
+          | "workflowResultConnection"
+          | "servicePort"
+          | "issueStateSignal"
+          | "issueWorktreeSignal"
         >
       >;
     controlMcp?: Pick<
@@ -385,7 +394,12 @@ export class OrkestratorBackend {
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
     this.runtime =
       options.runtime ??
-      new BackendRuntime({ emit: (event, payload) => options.emit(event, payload) });
+      new BackendRuntime({
+        emit: (event, payload) => options.emit(event, payload),
+        // Docker-backed, so unit tests keep the unwatched bounds unless they inject one.
+        worktreeSignal:
+          process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
+      });
     this.environmentLifecycleDrainTimeoutMs =
       options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
     // Backend-owned file-change tracking (docs/architecture/change-tracking.md):

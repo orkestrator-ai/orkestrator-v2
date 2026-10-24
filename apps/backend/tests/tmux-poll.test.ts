@@ -743,7 +743,7 @@ describe("ClaudeStatePollManager", () => {
         "container-abc",
         "sh",
         "-c",
-        "if [ -f /tmp/.claude-state-snapshot ]; then head -c 256 /tmp/.claude-state-snapshot; else head -c 256 /tmp/.claude-state; fi",
+        "if [ -f /tmp/.claude-state-snapshot ]; then head -c 256 /tmp/.claude-state-snapshot; elif [ -f /tmp/.claude-state ]; then head -c 256 /tmp/.claude-state; else printf '\\036absent'; fi",
       ],
       options: { timeoutMs: CLAUDE_STATE_READ_TIMEOUT_MS },
     });

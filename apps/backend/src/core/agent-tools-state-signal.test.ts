@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentToolsServer, CLAUDE_STATE_SIGNAL_PATH } from "./agent-tools.js";
+import {
+  AgentToolsServer,
+  CLAUDE_STATE_SIGNAL_PATH,
+  WORKTREE_SIGNAL_PATH,
+  type WorktreeSignalReason,
+} from "./agent-tools.js";
 import { OrkestratorBackend } from "./index.js";
 import type { CommandContext } from "./commands-context.js";
 import { StorageService } from "./storage.js";
@@ -132,6 +137,37 @@ describe("Claude state signal route", () => {
     old.revoke();
     expect((await ring(current.url, current.token)).status).toBe(204);
     expect(rings).toEqual(["current"]);
+  });
+
+  test("a worktree credential rings only its own route and reports its reason", async () => {
+    const reasons: WorktreeSignalReason[] = [];
+    let claudeRings = 0;
+    const worktree = server.issueWorktreeSignal((reason) => reasons.push(reason))!;
+    const claude = server.issueStateSignal(() => {
+      claudeRings += 1;
+    })!;
+    expect(new URL(worktree.url).pathname).toBe(WORKTREE_SIGNAL_PATH);
+
+    const send = (url: string, token: string, reason?: string) =>
+      ring(url, token, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(reason === undefined ? {} : { "X-Orkestrator-Signal": reason }),
+        },
+      });
+    expect((await send(worktree.url, worktree.token, "ready")).status).toBe(204);
+    expect((await send(worktree.url, worktree.token, "overflow")).status).toBe(204);
+    expect((await send(worktree.url, worktree.token, "lost")).status).toBe(204);
+    // Anything unrecognised (or absent) only ever asks for a rescan.
+    expect((await send(worktree.url, worktree.token, "trust-me")).status).toBe(204);
+    expect((await send(worktree.url, worktree.token)).status).toBe(204);
+    expect(reasons).toEqual(["ready", "overflow", "lost", "change", "change"]);
+
+    // Neither credential opens the other's route.
+    expect((await send(claude.url, worktree.token)).status).toBe(401);
+    expect((await send(worktree.url, claude.token)).status).toBe(401);
+    expect(claudeRings).toBe(0);
+    expect(reasons).toHaveLength(5);
   });
 
   test("stopping the server forgets every doorbell", async () => {

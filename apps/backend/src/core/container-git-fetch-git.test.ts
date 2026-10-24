@@ -6,6 +6,7 @@ import {
   buildContainerFetchScript,
   buildContainerGitStatusScript,
   getContainerGitStatusDetailed,
+  revertContainerFile,
   type ContainerGitStatusDeps,
 } from "./commands-files.js";
 import {
@@ -268,6 +269,75 @@ describe("container status and fetch scripts against a local remote", () => {
     await box.read("main");
     await box.policy.idle();
     expect(box.fetchCalls).toHaveLength(2);
+  });
+
+  test("a status scan never writes the index, and still reports real changes", async () => {
+    const box = container();
+    const index = path.join(workspace, ".git", "index");
+    // Stale cached stat data with unchanged contents: an ordinary status or
+    // diff would refresh and rewrite the index, which a container worktree
+    // watcher would ring for, so every scan would schedule another.
+    await fs.utimes(index, new Date("2000-01-01T00:00:00Z"), new Date("2000-01-01T00:00:00Z"));
+    await fs.utimes(
+      path.join(workspace, "base.txt"),
+      new Date("2001-01-01T00:00:00Z"),
+      new Date("2001-01-01T00:00:00Z"),
+    );
+    const before = await fs.readFile(index);
+    const mtimeBefore = (await fs.stat(index)).mtimeMs;
+    expect((await box.read("main")).rows).toEqual([{ path: "local.txt", status: "?" }]);
+    expect(await fs.readFile(index)).toEqual(before);
+    expect((await fs.stat(index)).mtimeMs).toBe(mtimeBefore);
+
+    // Positive control: this fixture does need a refresh.
+    git(workspace, "status", "--porcelain=v1");
+    expect((await fs.stat(index)).mtimeMs).not.toBe(mtimeBefore);
+
+    await fs.appendFile(path.join(workspace, "base.txt"), "edited\n");
+    expect((await box.read("main")).rows).toEqual([
+      { path: "base.txt", status: "M" },
+      { path: "local.txt", status: "?" },
+    ]);
+  });
+
+  test("a revert resolves the same base the old inline fetch did", async () => {
+    const box = container();
+    // The revert script's own `cd /workspace` is the container's clone.
+    const exec = (_containerId: string, script: string) =>
+      shell(workspace, script.replaceAll("cd /workspace", "cd ."));
+    await fs.writeFile(path.join(workspace, "base.txt"), "local edit\n");
+
+    // Upstream moved after the clone last fetched: like `git fetch || true`
+    // followed by `origin/main`, the revert restores the remote's newest.
+    await pushToRemote("base.txt", "upstream v2\n");
+    await revertContainerFile(box.id, "base.txt", "main", { exec, fetches: box.policy });
+    expect(await fs.readFile(path.join(workspace, "base.txt"), "utf8")).toBe("upstream v2\n");
+    expect(box.fetchCalls).toEqual(["main"]);
+
+    // An unreachable remote: the fetch fails and the local origin/main decides.
+    await fs.writeFile(path.join(workspace, "base.txt"), "local edit\n");
+    await pushToRemote("base.txt", "upstream v3\n");
+    await fs.rename(remote, path.join(root, "remote-offline.git"));
+    try {
+      box.time.jump(15_000);
+      await revertContainerFile(box.id, "base.txt", "main", { exec, fetches: box.policy });
+      expect(await fs.readFile(path.join(workspace, "base.txt"), "utf8")).toBe("upstream v2\n");
+      expect(box.fetchCalls).toHaveLength(2);
+    } finally {
+      await fs.rename(path.join(root, "remote-offline.git"), remote);
+    }
+
+    // A ref with no remote counterpart falls back to the local branch.
+    git(workspace, "branch", "-q", "local-only", "HEAD");
+    await fs.writeFile(path.join(workspace, "base.txt"), "local edit\n");
+    box.time.jump(15_000);
+    await revertContainerFile(box.id, "base.txt", "local-only", { exec, fetches: box.policy });
+    expect(await fs.readFile(path.join(workspace, "base.txt"), "utf8")).toBe(
+      git(workspace, "show", "local-only:base.txt") + "\n",
+    );
+    await expect(
+      revertContainerFile(box.id, "base.txt", "missing-ref", { exec, fetches: box.policy }),
+    ).rejects.toThrow("Target ref not found: missing-ref");
   });
 
   test("the status script performs no fetch of its own", () => {

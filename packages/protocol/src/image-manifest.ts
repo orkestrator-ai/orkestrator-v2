@@ -58,6 +58,12 @@ export const IMAGE_CAPABILITIES = {
    * atomically, so failed rings cannot hide a complete turn.
    */
   "claude-state-signal": 2,
+  /**
+   * `orkestrator-worktree-signal` watches `/workspace` with inotify and rings
+   * the backend when it changes, so a quiet container's Files panel and diff
+   * counts are served from the last scan with only a slow safety scan.
+   */
+  "container-worktree-signal": 1,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;

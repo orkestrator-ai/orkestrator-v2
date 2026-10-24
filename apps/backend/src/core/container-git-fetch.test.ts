@@ -318,6 +318,57 @@ describe("ContainerGitFetchPolicy", () => {
     expect(owner.changes.at(-1)).toMatchObject({ baselineMoved: false });
   });
 
+  test("a revert fetches inline like an explicit refresh, rate limited and backed off", async () => {
+    const owner = createPolicy({ auto: () => ok(SHA_A, SHA_B) });
+    // No scan yet: the action fetches at once and waits for it.
+    expect(owner.policy.knownRepoId("container-1")).toBeUndefined();
+    expect(await owner.policy.refreshForAction(scope())).toBe(true);
+    expect(owner.calls).toHaveLength(1);
+    // Inline: the caller rescans after its mutation, so no baseline hook fires.
+    expect(owner.changes.every((change) => !change.baselineMoved)).toBe(true);
+    expect(owner.policy.knownRepoId("container-1")).toBe(containerRepoId(REPO));
+
+    // A second revert within 15 s reuses that fetch; one after it fetches again
+    // even though the 5 min cooldown has not passed.
+    await owner.time.advance(5_000);
+    expect(await owner.policy.refreshForAction(scope())).toBe(false);
+    expect(owner.calls).toHaveLength(1);
+    await owner.time.advance(15_000);
+    expect(await owner.policy.refreshForAction(scope())).toBe(true);
+    expect(owner.calls).toHaveLength(2);
+    expect(owner.policy.freshness("container-1", "main")).toBeUndefined();
+    owner.policy.observe(scope(), "tracking-ref");
+    expect(owner.policy.freshness("container-1", "main")).toMatchObject({ state: "current" });
+
+    // A failing remote: the action still resolves, at most once per 15 s.
+    owner.setAuto(() => failed("fatal: Could not resolve host: example.invalid"));
+    await owner.time.advance(15_000);
+    expect(await owner.policy.refreshForAction(scope())).toBe(false);
+    expect(owner.calls).toHaveLength(3);
+    await owner.time.advance(5_000);
+    expect(await owner.policy.refreshForAction(scope())).toBe(false);
+    expect(owner.calls).toHaveLength(3);
+    expect(owner.policy.freshness("container-1", "main")).toMatchObject({
+      state: "stale",
+      failure: "network",
+    });
+  });
+
+  test("a revert joins a running fetch and takes over a queued one", async () => {
+    const owner = createPolicy();
+    owner.policy.observe(scope(), "tracking-ref");
+    await flushMicrotasks();
+    const joined = owner.policy.refreshForAction(scope());
+    await flushMicrotasks();
+    expect(owner.calls).toHaveLength(1);
+    owner.calls[0]!.gate.resolve(ok());
+    expect(await joined).toBe(true);
+
+    // A recreated container is a new generation: its clone identity is unknown.
+    owner.policy.forgetContainer("container-1");
+    expect(owner.policy.knownRepoId("container-1")).toBeUndefined();
+  });
+
   test("a fetch reporting a different clone is superseded and stamps nothing", async () => {
     const owner = createPolicy({ auto: () => ok(SHA_A, SHA_B, "/workspace\t/other\t1:1") });
     owner.policy.observe(scope(), "tracking-ref");

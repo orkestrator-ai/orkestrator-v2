@@ -45,6 +45,20 @@ const MAX_COMMENT_OUTPUT_BYTES = 24 * 1024;
 const AGENT_MCP_PATH = "/mcp";
 /** Claude terminal state doorbell (`orkestrator-state-signal`); carries no state. */
 export const CLAUDE_STATE_SIGNAL_PATH = "/claude-state-signal";
+/** Container worktree doorbell (`orkestrator-worktree-signal`); carries no paths or content. */
+export const WORKTREE_SIGNAL_PATH = "/worktree-signal";
+/**
+ * What a worktree ring asks for, from its `X-Orkestrator-Signal` header. Every
+ * reason makes the receiver do at least a full rescan; none can make it trust
+ * a stale result. Anything unrecognised is `change`.
+ */
+export type WorktreeSignalReason = "ready" | "change" | "overflow" | "lost";
+const WORKTREE_SIGNAL_REASONS = new Set<WorktreeSignalReason>([
+  "ready",
+  "change",
+  "overflow",
+  "lost",
+]);
 
 export const ORKESTRATOR_AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
 export const ORKESTRATOR_AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
@@ -585,7 +599,11 @@ export class AgentToolsServer {
   }
   private readonly credentialsByEnvironment = new Map<string, StoredCredential>();
   private readonly scopesByDigest = new Map<string, AgentToolScope>();
-  private readonly stateSignalsByDigest = new Map<string, () => void>();
+  /** Doorbell credentials, each valid on exactly the route it was issued for. */
+  private readonly stateSignalsByDigest = new Map<
+    string,
+    { path: string; ring: (reason: WorktreeSignalReason) => void }
+  >();
   private lifecycle: Promise<void> = Promise.resolve();
   private designRequests = 0;
   private readonly mailRateWindows = new Map<string, number[]>();
@@ -748,15 +766,34 @@ export class AgentToolsServer {
    * server listens.
    */
   issueStateSignal(onSignal: () => void): StateSignalCredential | null {
+    return this.issueSignal(CLAUDE_STATE_SIGNAL_PATH, () => onSignal());
+  }
+
+  /**
+   * The same kind of credential for a container worktree watcher
+   * (`orkestrator-worktree-signal`). It rings only `/worktree-signal`, and a
+   * Claude state credential never rings it.
+   */
+  issueWorktreeSignal(
+    onSignal: (reason: WorktreeSignalReason) => void,
+  ): StateSignalCredential | null {
+    return this.issueSignal(WORKTREE_SIGNAL_PATH, onSignal);
+  }
+
+  private issueSignal(
+    path: string,
+    ring: (reason: WorktreeSignalReason) => void,
+  ): StateSignalCredential | null {
     if (!this.server || !this.port) return null;
     const token = randomBytes(32).toString("base64url");
     const digest = credentialDigest(token);
-    this.stateSignalsByDigest.set(digest, onSignal);
+    const entry = { path, ring };
+    this.stateSignalsByDigest.set(digest, entry);
     return {
-      url: `http://host.docker.internal:${this.port}${CLAUDE_STATE_SIGNAL_PATH}`,
+      url: `http://host.docker.internal:${this.port}${path}`,
       token,
       revoke: () => {
-        if (this.stateSignalsByDigest.get(digest) === onSignal) {
+        if (this.stateSignalsByDigest.get(digest) === entry) {
           this.stateSignalsByDigest.delete(digest);
         }
       },
@@ -840,7 +877,11 @@ export class AgentToolsServer {
     consumeAgentMailRateLimit(this.mailRateWindows, scope, kind);
   }
 
-  private handleStateSignal(request: IncomingMessage, response: ServerResponse): void {
+  private handleStateSignal(
+    request: IncomingMessage,
+    response: ServerResponse,
+    path: string,
+  ): void {
     // A doorbell has no body. Discard anything sent rather than buffer it.
     request.resume();
     if (request.method !== "POST") {
@@ -849,12 +890,18 @@ export class AgentToolsServer {
       return;
     }
     const token = bearerToken(request);
-    const ring = token ? this.stateSignalsByDigest.get(credentialDigest(token)) : undefined;
-    if (!ring) {
+    const entry = token ? this.stateSignalsByDigest.get(credentialDigest(token)) : undefined;
+    if (!entry || entry.path !== path) {
       jsonResponse(response, 401, { error: "Invalid state signal credential" });
       return;
     }
-    ring();
+    const header = request.headers["x-orkestrator-signal"];
+    const reason = typeof header === "string" ? header.trim() : "";
+    entry.ring(
+      WORKTREE_SIGNAL_REASONS.has(reason as WorktreeSignalReason)
+        ? (reason as WorktreeSignalReason)
+        : "change",
+    );
     response.writeHead(204, { "cache-control": "no-store" });
     response.end();
   }
@@ -915,8 +962,8 @@ export class AgentToolsServer {
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://agent-tools.invalid");
-    if (url.pathname === CLAUDE_STATE_SIGNAL_PATH) {
-      this.handleStateSignal(request, response);
+    if (url.pathname === CLAUDE_STATE_SIGNAL_PATH || url.pathname === WORKTREE_SIGNAL_PATH) {
+      this.handleStateSignal(request, response, url.pathname);
       return;
     }
     if (url.pathname === ORKESTRATOR_ARTIFACT_MCP_PATH) {

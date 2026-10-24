@@ -2,6 +2,7 @@ import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
+import { gitDockerScanPool } from "./git-docker-scan-pool.js";
 import {
   assertEnvironmentNotMoving,
   beginEnvironmentMutation,
@@ -115,7 +116,7 @@ import {
   createLocalFolder,
   requireLocalMutationEnvironment,
   requireContainerMutationEnvironment,
-  containerRevertFileCommand,
+  revertContainerFile,
   containerDeleteFileCommand,
   resolveWorkspaceFileMove,
   resolveWorkspaceFileRename,
@@ -1224,7 +1225,11 @@ export function registerTerminalCommands(
     const id = environment.containerId!;
     const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
     const branch = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
-    await dockerExec(id, containerRevertFileCommand(target, branch));
+    await revertContainerFile(id, target, branch, {
+      exec: (containerId, script) => dockerExec(containerId, script),
+      fetches: context.runtime.diffStats.containerGitFetchPolicy,
+      admission: gitDockerScanPool,
+    });
     context.runtime.diffStats.service.invalidateChanges({ containerId: id });
     context.runtime.diffStats.service.refresh(environmentIdString);
     return target;

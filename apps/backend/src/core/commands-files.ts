@@ -39,9 +39,13 @@ import {
   CONTAINER_FETCH_STDERR_BYTES,
   CONTAINER_REPO_IDENTITY_SNIPPET,
   CONTAINER_REPO_MARKER,
+  CONTAINER_REPO_PROBE_SCRIPT,
   containerRepoId,
+  parseContainerRepoProbe,
   type ContainerGitFetchPolicy,
 } from "./container-git-fetch.js";
+import type { WorkAdmissionPool } from "./work-admission.js";
+import { worktreeTargetKey } from "./worktree-adhoc-reads.js";
 import type { WorktreeRemoteFreshness } from "@orkestrator/protocol/worktree-snapshots";
 import {
   UNTRACKED_SCAN_CONCURRENCY,
@@ -494,6 +498,10 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
   const untrackedScanner = `node -e ${quoteShell(CONTAINER_UNTRACKED_STATS_SCANNER)} -- ${MAX_BINARY_FILE_BYTES} ${UNTRACKED_SCAN_MAX_FILES}`;
   return `
       set -e -o pipefail
+      # Read-only, like the local scan: an opportunistic index refresh is a
+      # write the container's worktree watcher would ring for, so every scan
+      # would schedule its own rescan.
+      export GIT_OPTIONAL_LOCKS=0
       # A bare 'exit 0' here would come back as exit 1: this runs under 'bash -l',
       # whose ~/.bash_logout calls 'clear_console -q', and that fails with no
       # console attached. Under 'set -e' the failing logout hook replaces the
@@ -544,9 +552,9 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
       printf '\\036ORKESTRATOR_BASE_OID\\037%s' "$(git rev-parse --verify --quiet "$base^{commit}")"
       end_ref=${includeWorkingTree ? "" : "HEAD"}
       printf '\\036ORKESTRATOR_NAME_STATUS\\037'
-      git diff --name-status -z -M "$base" $end_ref | base64 -w0
+      git -c diff.autoRefreshIndex=false diff --name-status -z -M "$base" $end_ref | base64 -w0
       printf '\\036ORKESTRATOR_NUMSTAT\\037'
-      git diff --numstat -z -M "$base" $end_ref | base64 -w0
+      git -c diff.autoRefreshIndex=false diff --numstat -z -M "$base" $end_ref | base64 -w0
       printf '\\036ORKESTRATOR_UNTRACKED\\037'
       ${includeWorkingTree ? `git status --porcelain=v1 -z --untracked-files=all | ${untrackedScanner} | base64 -w0` : ""}
       printf '\\036ORKESTRATOR_END\\037'
@@ -723,7 +731,13 @@ function parseContainerGitStatusSections(
     output.slice(numstatStart + GIT_STATUS_NUMSTAT_MARKER.length, untrackedStart),
     "container git numstat section",
   );
-  const changes = parseGitFileChanges(nameStatusOutput, numstatOutput);
+  // The script diffs without refreshing the index (it must not write), so
+  // name-status may report stat-only modifications. Numstat checks contents
+  // and omits them, as in the local scan.
+  const changedPaths = parseGitNumstat(numstatOutput);
+  const changes = parseGitFileChanges(nameStatusOutput, numstatOutput).filter(
+    (change) => change.status !== "M" || changedPaths.has(change.path),
+  );
   if (!includeWorkingTree) return { changes, truncated: false };
 
   const existingPaths = new Set(changes.map((change) => change.path));
@@ -1904,7 +1918,62 @@ export const CONTAINER_SAFE_MUTATION_FUNCTIONS = [
   "}",
 ].join("\n");
 
-/** Container-owned Git/SSH configuration; excluded from the host runRemoteGit boundary. */
+export interface ContainerRevertDeps {
+  /** Runs a script in the container (`dockerExec`). */
+  exec: (containerId: string, script: string) => Promise<string>;
+  fetches: Pick<ContainerGitFetchPolicy, "knownRepoId" | "refreshForAction">;
+  /** The shared `git-docker-scan` pool, so the fetch never overlaps a scan of the container. */
+  admission?: Pick<WorkAdmissionPool, "run"> | null;
+}
+
+/**
+ * `revert_container_file`: refresh the comparison base through the container
+ * fetch policy, then revert. The policy's fetch replaces the script's old
+ * inline `git fetch ... || true` and keeps its contract: the revert waits for
+ * one bounded fetch, and nothing about that fetch (refused admission, a
+ * failing remote, a failed identity probe) stops the revert, which then
+ * resolves the base from local refs exactly as the old script did after a
+ * failed fetch.
+ */
+export async function revertContainerFile(
+  containerId: string,
+  target: string,
+  branch: string,
+  deps: ContainerRevertDeps,
+): Promise<void> {
+  const refresh = async () => {
+    const repoId =
+      deps.fetches.knownRepoId(containerId) ??
+      parseContainerRepoProbe(await deps.exec(containerId, CONTAINER_REPO_PROBE_SCRIPT));
+    await deps.fetches.refreshForAction({ containerId, repoId, ref: branch });
+  };
+  try {
+    if (deps.admission) {
+      await deps.admission.run(
+        {
+          kind: "git-fetch-container",
+          priority: "interactive",
+          target: worktreeTargetKey({ containerId }),
+        },
+        refresh,
+      );
+    } else {
+      await refresh();
+    }
+  } catch {
+    // As before: a fetch that could not run leaves the local refs to decide.
+  }
+  await deps.exec(containerId, containerRevertFileCommand(target, branch));
+}
+
+/**
+ * Reverts one path to the comparison base, resolved exactly as before:
+ * `origin/<branch>`, then the local `<branch>`. The fetch that used to run
+ * inline here (`git fetch origin "$branch" || true`) is now the caller's, through
+ * `ContainerGitFetchPolicy.refreshForAction` (see `revertContainerFile`), so
+ * the script itself never touches the network. Container-owned Git/SSH
+ * configuration; excluded from the host runRemoteGit boundary.
+ */
 export function containerRevertFileCommand(target: string, branch: string): string {
   return `
     set -euo pipefail
@@ -1912,7 +1981,6 @@ export function containerRevertFileCommand(target: string, branch: string): stri
     branch=${quoteShell(branch)}
     target=${quoteShell(target)}
     ${CONTAINER_SAFE_MUTATION_FUNCTIONS}
-    git fetch origin "$branch" >/dev/null 2>&1 || true
     if git rev-parse --verify --quiet "origin/$branch^{commit}" >/dev/null; then
       base="origin/$branch"
     elif git rev-parse --verify --quiet "$branch^{commit}" >/dev/null; then

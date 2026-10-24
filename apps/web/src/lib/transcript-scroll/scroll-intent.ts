@@ -14,7 +14,15 @@
  */
 
 /** Who owns a bounded navigation. */
-export type NavigationOwner = "latest" | "find" | "message-link" | "history" | "restore" | "row";
+export type NavigationOwner =
+  | "latest"
+  | "find"
+  | "message-link"
+  | "history"
+  | "restore"
+  | "row"
+  /** Holds a reading place across a change of the scroller's width. */
+  | "reflow";
 
 /** A reason automatic following is temporarily suppressed. */
 export type FollowPauseReason = "selection" | "find" | "expanded-artifact";

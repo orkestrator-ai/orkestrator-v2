@@ -76,3 +76,9 @@ After the aggregate finished, `mise run test:logged -- --name mermaid-watchdog-p
 - Evidence: `orkestrator-test-run.NMPAwO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.gKgVC2/mermaid-owner.log.gz` under the host temporary directory. No implementation, assertion, deadline, or skip in this owner changed.
 
 - Aggregate backend totals: 9909 passed, 60 skipped, three failed across 9972 tests in 576 files (968.42 s). The two other backend failures were reconciliation-backoff tests, tracked in 0229. The complete repository command exited 1 after 1022.1 s. Its initial web composer-layout and root bounded-diagnostics failures were corrected during this implementation; both complete controller owners and the diagnostics owner passed afterward.
+
+## Transcript scroll validation — 2026-10-24
+
+- `mise run test:logged -- --name final-repository -- mise run test`, alongside focused Playwright and unit runs in the same worktree. The unchanged watchdog owner measured 5375 ms against `< 5000 ms` (5698.97 ms test duration).
+- `mise run test:logged -- --name backend-mermaid -- bun --cwd=apps/backend test src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (13.6 s logged, exit 0).
+- Evidence: `orkestrator-test-run.4LYtCC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory. No implementation, assertion, deadline, or skip in this owner changed.

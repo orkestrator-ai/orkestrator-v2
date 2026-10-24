@@ -303,3 +303,57 @@ test("a real wheel after a history jump is never pulled back", async ({ page }) 
   await page.waitForTimeout(1_000);
   expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(afterWheel, 0);
 });
+
+test("a detached reader holds their place through a reflow in either direction", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/streaming-transcript?long=1");
+  await releaseStickyScroll(page);
+  await page.getByRole("button", { name: "Scroll to tool history" }).click();
+  const scroller = page.locator(scrollerSelector);
+  await expect
+    .poll(async () => (await scrollDiagnostics(scroller)).lastOutcome)
+    .toMatch(/converged|clamped/);
+  const part = await page
+    .locator('[data-chat-message-index="40"] [data-transcript-part-id]')
+    .first()
+    .getAttribute("data-transcript-part-id");
+  // The rows above the reader, whose re-wrapping is what moves them.
+  const heightsAbove = () =>
+    scroller.evaluate((element) =>
+      Object.fromEntries(
+        Array.from(element.querySelectorAll<HTMLElement>("[data-chat-message-index]"))
+          .filter((row) => Number(row.dataset.chatMessageIndex) < 40)
+          .map((row) => [row.dataset.chatMessageIndex!, row.getBoundingClientRect().height]),
+      ),
+    );
+  await waitForFrames(page, 12);
+  for (const width of [420, 1200]) {
+    const before = await heightsAbove();
+    await startAnchorProbe(scroller, part!);
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(800);
+    const probe = await stopAnchorProbe(scroller);
+    // Not vacuous: the rows above that stayed mounted really re-wrapped.
+    const after = await heightsAbove();
+    const changed = Object.keys(before)
+      .filter((index) => index in after)
+      .reduce((total, index) => total + Math.abs(after[index]! - before[index]!), 0);
+    expect(changed).toBeGreaterThan(40);
+    expect(probe.count).toBeGreaterThan(10);
+    expect(probe.missing).toBe(0);
+    expect(probe.maxError).toBeLessThanOrEqual(3);
+  }
+  await expect.poll(() => distanceFromBottom(page)).toBeGreaterThan(100);
+});
+
+test("a follower stays at the latest row through a reflow", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/streaming-transcript?long=1");
+  await expect(page.locator(scrollerSelector)).toBeVisible();
+  await expect.poll(() => distanceFromBottom(page)).toBeLessThan(2);
+  await page.setViewportSize({ width: 420, height: 900 });
+  await waitForFrames(page, 12);
+  await expect.poll(() => distanceFromBottom(page)).toBeLessThan(2);
+});

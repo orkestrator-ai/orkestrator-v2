@@ -82,6 +82,22 @@ its desired offset and writes at most one correction per phase per frame.
   and re-render again: without the ratchet that cycled until React's update
   depth limit (a reader moving while a history page loads).
 
+### Reflow
+
+A change of the scroller's width re-wraps text, and Virtuoso keeps
+`scrollTop`, so a reader's row would move by however much the rows above it
+grew or shrank (114 px for a 1200 → 420 px window in the long fixture). The
+controller observes the scroller itself; on a width change while reading, it
+starts a bounded `reflow` navigation to the place captured before it (the
+reading anchor, refreshed when the reader's scrolling or a measurement change
+settles). Its first correction runs in the operation frame, after Virtuoso has
+applied the new row sizes; correcting in the resize delivery as well
+compensated the same growth twice for one painted frame. A follower is kept at
+the end by growth, and another navigation keeps converging on its own target.
+A hidden pane (zero width) keeps its last width, so showing it at another
+width counts as a reflow. Persisted pixel snapshots from another layout are
+not restored (see Activation and persistence).
+
 ## Semantic anchors and history
 
 A place is `{ rowKey, index, partId, offsetPx, inner? }`: a display row by

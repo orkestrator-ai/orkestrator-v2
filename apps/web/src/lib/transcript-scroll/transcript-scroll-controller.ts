@@ -241,6 +241,8 @@ export class TranscriptScrollController {
   private growthFrame: number | null = null;
   private anchorTimer: ReturnType<typeof setTimeout> | null = null;
   private lastReadingAnchor: SemanticAnchor | null = null;
+  /** The scroller's last laid-out width; 0 until known (or while hidden). */
+  private lastWidth = 0;
 
   private rowIndexOf: ((key: string) => number) | null = null;
   private structuralHold = false;
@@ -567,6 +569,10 @@ export class TranscriptScrollController {
     }
     if (source === "resize") this.cancelGrowthFrame();
     const op = this.op;
+    // A settled reader's place follows measurement changes that keep it (a
+    // card growing below): recapture once they stop, so a later reflow
+    // restores what is on screen now.
+    if (!op && source === "resize") this.scheduleAnchorCapture();
     if (op) {
       if (source === "resize") {
         // A measurement changed: not converged until two frames pass without one.
@@ -582,6 +588,37 @@ export class TranscriptScrollController {
       return;
     }
     this.followGrowth();
+  }
+
+  /**
+   * The scroller's width changed. Text above the reader re-wraps and Virtuoso
+   * keeps `scrollTop`, so a reading place would drift by however much those
+   * rows grew or shrank. Put the place captured before the reflow back, as a
+   * bounded navigation (the reader's input still cancels it). A follower is
+   * kept at the end by growth; another navigation converges on its own target.
+   */
+  private holdPlaceAcrossReflow(width: number): void {
+    // Hidden (zero width): keep the last real width, so showing the pane at a
+    // new width still counts as a reflow.
+    if (width <= 0) return;
+    const previous = this.lastWidth;
+    this.lastWidth = width;
+    if (previous === 0 || Math.abs(width - previous) < 1) return;
+    if (!this.state.active || this.state.wantsFollow) return;
+    if (this.op && this.op.owner !== "reflow") return;
+    const anchor = this.lastReadingAnchor;
+    if (!anchor) return;
+    this.navigateTo(
+      {
+        kind: "row",
+        index: anchor.index ?? 0,
+        key: anchor.rowKey,
+        partId: anchor.partId,
+        offsetPx: anchor.offsetPx,
+        inner: anchor.inner,
+      },
+      "reflow",
+    );
   }
 
   /** The first useful visible content, as an identity and viewport offset. */
@@ -1187,7 +1224,17 @@ export class TranscriptScrollController {
     let resizeObserver: ResizeObserver | null = null;
     let mutationObserver: MutationObserver | null = null;
     if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(() => this.notifyLayout("resize"));
+      resizeObserver = new ResizeObserver((entries) => {
+        this.notifyLayout("resize");
+        // A reflow's restore starts after this delivery's reconcile: its first
+        // correction runs in the operation frame, after Virtuoso has applied
+        // the re-wrapped rows' sizes. Correcting here as well compensated the
+        // same growth twice for one painted frame.
+        if (entries.some((entry) => entry.target === el))
+          this.holdPlaceAcrossReflow(el.clientWidth);
+      });
+      this.lastWidth = el.clientWidth;
+      resizeObserver.observe(el);
       const observed = new WeakSet<Element>();
       // Virtuoso's viewport child is absolutely sized to the scroller; the
       // list inside it (and the header and footer) is what grows. Observe two

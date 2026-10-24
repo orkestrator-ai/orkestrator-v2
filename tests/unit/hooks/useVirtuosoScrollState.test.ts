@@ -849,10 +849,16 @@ describe("useVirtuosoScrollState", () => {
       try {
         act(() => result.current.scrollProps.scrollerRef(scroller));
 
-        // After mounting, the viewport and the list inside it are observed.
+        // After mounting, the viewport and the list inside it are observed,
+        // and the scroller itself (its width changes reflow the rows).
         // Capture that baseline before firing the deep mutation.
         const observedBeforeDeepMutation = harness.resizeObserved.length;
-        expect(harness.resizeObserved).toEqual([viewport, directChild]);
+        // Compared by label: a failed toEqual on DOM nodes prints the whole tree.
+        const label = (element: Element) =>
+          ({ [0]: "scroller", [1]: "viewport", [2]: "list" })[
+            [scroller, viewport, directChild].indexOf(element as HTMLDivElement)
+          ] ?? "other";
+        expect(harness.resizeObserved.map(label)).toEqual(["scroller", "viewport", "list"]);
 
         // Add a node below the observed levels and dispatch a record whose
         // target is the list (not an observed parent) — no re-walk.
@@ -901,7 +907,10 @@ describe("useVirtuosoScrollState", () => {
 
       try {
         act(() => result.current.scrollProps.scrollerRef(scroller));
-        expect(harness.resizeObserved).toEqual([initialChild]);
+        // Compared by label: a failed toEqual on DOM nodes prints the whole tree.
+        const label = (element: Element) =>
+          element === scroller ? "scroller" : element === initialChild ? "initial" : "other";
+        expect(harness.resizeObserved.map(label)).toEqual(["scroller", "initial"]);
 
         const newChild = document.createElement("div");
         scroller.appendChild(newChild);
@@ -916,7 +925,9 @@ describe("useVirtuosoScrollState", () => {
           harness.mutationCallback?.([directRecord], {} as MutationObserver);
         });
 
-        expect(harness.resizeObserved).toEqual([initialChild, newChild]);
+        expect(
+          harness.resizeObserved.map((element) => (element === newChild ? "new" : label(element))),
+        ).toEqual(["scroller", "initial", "new"]);
       } finally {
         unmount();
         document.body.removeChild(scroller);

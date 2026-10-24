@@ -25,7 +25,7 @@ export interface ResourceWindow {
   end: MemorySample;
   /** Memory after a forced collection at the end: what the case left reachable. */
   retained: MemorySample;
-  /** Largest values seen at any sample, including start and end. */
+  /** Largest values seen at any sample, including start, end and retained. */
   peak: MemorySample;
   /** How late each timer tick fired, in ms (non-negative). */
   lagMs: number[];
@@ -113,6 +113,7 @@ export function startResourceSampler(
       observe(end);
       collect();
       const retained = memory();
+      observe(retained);
       return { start, end, retained, peak: { ...peak }, lagMs };
     },
   };

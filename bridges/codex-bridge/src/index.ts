@@ -457,6 +457,24 @@ function createShutdownHandler(
   };
 }
 
+function createParentExitHandler(
+  interrupt: (budgetMs: number) => Promise<number>,
+  shutdown: () => void,
+  report: (turns: number, elapsedMs: number) => void = (turns, ms) => {
+    console.error(`[codex-bridge] Stopped ${turns} running turn(s) in ${ms} ms`);
+  },
+): () => Promise<void> {
+  return async () => {
+    const detectedAt = performance.now();
+    try {
+      const turns = await interrupt(PARENT_EXIT_INTERRUPT_BUDGET_MS).catch(() => 0);
+      report(turns, Math.round(performance.now() - detectedAt));
+    } finally {
+      shutdown();
+    }
+  };
+}
+
 const FALLBACK_MODELS: BridgeModel[] = [
   {
     id: "gpt-5.4",
@@ -903,6 +921,7 @@ export const __testing = {
   createCodexProcessDiagnosticsForTesting: createCodexProcessDiagnostics,
   createSharedTranscriptMetaLoaderForTesting: createSharedTranscriptMetaLoader,
   createShutdownHandlerForTesting: createShutdownHandler,
+  createParentExitHandlerForTesting: createParentExitHandler,
   emitForTesting: emit,
   eventRingForTesting: () => eventRing,
   /**
@@ -2169,18 +2188,13 @@ if (parentPid !== null) {
   startParentWatchdog({
     parentPid,
     onParentExit: () => {
-      const detectedAt = performance.now();
       console.error(`[codex-bridge] Backend process ${parentPid} is gone; shutting down`);
       // Nothing supervises a turn once its backend is gone: stop it now rather
       // than letting the agent keep editing until the drain kills app-server.
-      void appServerRuntime
-        .interruptForParentExit(PARENT_EXIT_INTERRUPT_BUDGET_MS)
-        .catch(() => 0)
-        .then((turns) => {
-          const ms = Math.round(performance.now() - detectedAt);
-          console.error(`[codex-bridge] Stopped ${turns} running turn(s) in ${ms} ms`);
-        })
-        .finally(shutdownHandler);
+      void createParentExitHandler(
+        (budgetMs) => appServerRuntime.interruptForParentExit(budgetMs),
+        shutdownHandler,
+      )();
     },
   });
 }

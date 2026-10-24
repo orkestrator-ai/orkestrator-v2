@@ -1129,3 +1129,36 @@ describe("codex bridge private boundary coverage", () => {
     });
   });
 });
+
+describe("parent exit shutdown wiring", () => {
+  test.each(["resolved", "rejected"] as const)(
+    "shutdown follows the bounded interrupt when it is %s",
+    async (outcome) => {
+      let settle!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      const calls: string[] = [];
+      const handler = __testing.createParentExitHandlerForTesting(
+        async (budgetMs) => {
+          expect(budgetMs).toBe(2000);
+          calls.push("interrupt");
+          await gate;
+          if (outcome === "rejected") throw new Error("interrupt failed");
+          return 2;
+        },
+        () => {
+          calls.push("shutdown");
+        },
+        (turns) => {
+          calls.push(`report:${turns}`);
+        },
+      );
+      const stopping = handler();
+      expect(calls).toEqual(["interrupt"]);
+      settle();
+      await stopping;
+      expect(calls).toEqual(["interrupt", `report:${outcome === "resolved" ? 2 : 0}`, "shutdown"]);
+    },
+  );
+});

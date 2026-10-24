@@ -21,17 +21,14 @@
  *
  *   bun scripts/activity-sweep-live.ts --codex <binary> [--sweeps 50] [--warmup 5] [--out <file>]
  */
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { cpus, homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { execFileSync } from "node:child_process";
+import { rmSync, writeFileSync } from "node:fs";
+import { cpus } from "node:os";
+import { resolve } from "node:path";
+import { startBridge, stopBridge, type RunningBridge } from "./activity-sweep-bridge";
 import { readActivityGroup } from "../apps/backend/src/core/native-agent-activity-reads";
 import { createNativeAgentProvider } from "../apps/backend/src/core/native-agent-provider";
 import { SESSION_ACTIVITY_BATCH_PATH } from "../packages/protocol/src/session-activity-batch";
-
-type BridgeKind = "codex" | "claude";
 
 interface Options {
   root: string;
@@ -79,81 +76,6 @@ function summarize(samples: number[]): { p50Ms: number; p95Ms: number; maxMs: nu
     p95Ms: round(quantile(samples, 0.95)),
     maxMs: round(Math.max(...samples)),
   };
-}
-
-interface RunningBridge {
-  kind: BridgeKind;
-  child: ChildProcess;
-  baseUrl: string;
-  token: string;
-  home: string;
-}
-
-async function startBridge(kind: BridgeKind, options: Options): Promise<RunningBridge> {
-  const home = mkdtempSync(join(tmpdir(), `activity-sweep-${kind}-`));
-  chmodSync(home, 0o700);
-  const workspace = join(home, "workspace");
-  mkdirSync(workspace, { recursive: true });
-  const port = 20_000 + Math.floor(Math.random() * 20_000);
-  const token = randomBytes(24).toString("base64url");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    PORT: String(port),
-    HOSTNAME: "127.0.0.1",
-    CWD: workspace,
-  };
-  // An inherited parent PID would tie the bridge to whoever ran this script.
-  delete env.ORKESTRATOR_PARENT_PID;
-  let entry: string;
-  if (kind === "codex") {
-    const codexHome = join(home, "codex-home");
-    mkdirSync(codexHome, { recursive: true });
-    copyFileSync(join(homedir(), ".codex", "auth.json"), join(codexHome, "auth.json"));
-    chmodSync(join(codexHome, "auth.json"), 0o600);
-    Object.assign(env, {
-      CODEX_PATH: options.codex,
-      CODEX_HOME: codexHome,
-      CODEX_BRIDGE_TOKEN: token,
-    });
-    entry = "bridges/codex-bridge/src/index.ts";
-  } else {
-    const userHome = join(home, "user-home");
-    mkdirSync(join(userHome, ".claude"), { recursive: true });
-    Object.assign(env, {
-      HOME: userHome,
-      CLAUDE_CONFIG_DIR: join(userHome, ".claude"),
-      CLAUDE_BRIDGE_TOKEN: token,
-    });
-    entry = "bridges/claude-bridge/src/index.ts";
-  }
-  const child = spawn("bun", [join(options.root, entry)], {
-    cwd: workspace,
-    env,
-    stdio: "ignore",
-    detached: true,
-  });
-  const baseUrl = `http://127.0.0.1:${port}`;
-  for (let attempt = 0; attempt < 300; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/session/list`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (response.status === 200) return { kind, child, baseUrl, token, home };
-    } catch {
-      // Not listening yet.
-    }
-    await delay(100);
-  }
-  stopBridge({ kind, child, baseUrl, token, home });
-  throw new Error(`${kind} bridge did not start`);
-}
-
-function stopBridge(bridge: RunningBridge): void {
-  try {
-    if (bridge.child.pid) process.kill(-bridge.child.pid, "SIGTERM");
-  } catch {
-    // Already gone.
-  }
 }
 
 async function createSessions(bridge: RunningBridge, count: number): Promise<string[]> {
@@ -263,14 +185,11 @@ async function main(): Promise<void> {
       cases.push(await measure(bridge, sessionIds.slice(0, 10), options, false));
       (report.bridges as Record<string, unknown>)[kind] = cases;
     } finally {
-      stopBridge(bridge);
-      await delay(500);
       try {
-        if (bridge.child.pid) process.kill(-bridge.child.pid, "SIGKILL");
-      } catch {
-        // Already gone.
+        await stopBridge(bridge);
+      } finally {
+        rmSync(bridge.home, { recursive: true, force: true });
       }
-      rmSync(bridge.home, { recursive: true, force: true });
     }
   }
   const json = JSON.stringify(report, null, 2);

@@ -116,6 +116,8 @@ export interface ReparentWatchdogOptions {
   pollIntervalMs?: number;
   /** Injected in tests. */
   readParentPid?: () => number;
+  /** Injected in tests. */
+  timers?: IntervalTimers;
 }
 
 /**
@@ -133,11 +135,17 @@ export function startReparentWatchdog(options: ReparentWatchdogOptions): (() => 
   const initialParentPid = options.initialParentPid ?? readParentPid();
   if (initialParentPid <= 1) return null;
 
-  const timer = setInterval(() => {
-    if (readParentPid() === initialParentPid) return;
-    clearInterval(timer);
+  const timers = options.timers ?? runtimeIntervalTimers;
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    timers.clearInterval(timer);
+  };
+  const timer = timers.setInterval(() => {
+    if (stopped || readParentPid() === initialParentPid) return;
+    stop();
     options.onReparented();
   }, options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
-  timer.unref?.();
-  return () => clearInterval(timer);
+  return stop;
 }

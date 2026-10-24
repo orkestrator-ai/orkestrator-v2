@@ -1128,7 +1128,8 @@ export class CodexRuntimeLifecycle {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
         this.discardOutlivingCommandWindows(turn);
-        if (turn.stoppedByShutdown) this.completeRecoveredTurn(turn, event.status);
+        if (turn.stoppedByShutdown && event.status === "interrupted")
+          this.completeRecoveredTurn(turn, event.status);
         else turn.complete(event.status, event.error);
         this.ctx.options.changeEvidence?.turn(this.evidenceSource(context, turn), event.status);
         const finalize = () =>

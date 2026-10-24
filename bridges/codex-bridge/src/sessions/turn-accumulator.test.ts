@@ -775,6 +775,20 @@ describe("one row per model response", () => {
     expect(turn.opensModelStep(event("item.started", command("c3")))).toBe(true);
   });
 
+  test("opening a steer's row consumes the pending response boundary once", () => {
+    const turn = accumulator();
+    turn.onItemStarted(command("c1"));
+    turn.noteModelResponseCompleted();
+    const boundary = turn.freezeAssistantSegment();
+    turn.startAssistantSegment("assistant-2", boundary);
+    turn.onItemStarted(command("c2"));
+    expect(turn.opensModelStep(event("item.started", command("c3")))).toBe(false);
+    turn.noteModelResponseCompleted();
+    expect(turn.opensModelStep(event("item.started", command("c3")))).toBe(true);
+    expect(turn.orderedForAssistantSegment("assistant-1").map((item) => item.id)).toEqual(["c1"]);
+    expect(turn.orderedForAssistantSegment("assistant-2").map((item) => item.id)).toEqual(["c2"]);
+  });
+
   test("a usage report never splits a steer, a code-mode cell, or an ended turn", () => {
     const steered = accumulator();
     steered.onItemStarted(command("c1"));

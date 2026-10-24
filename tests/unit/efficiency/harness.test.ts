@@ -283,6 +283,25 @@ describe("efficiency resources", () => {
     });
   });
 
+  test("peak includes memory first reported by the final collection", () => {
+    let heap = 100;
+    const sampler = startResourceSampler(1, {
+      now: () => 0,
+      memory: () => ({ heapUsedBytes: heap, rssBytes: heap * 10 }),
+      collect: () => {
+        heap = 500;
+      },
+    });
+    const window = sampler.stop();
+    expect(window.end.heapUsedBytes).toBe(100);
+    expect(window.peak).toEqual(window.retained);
+    expect(summarizeResources([window])).toMatchObject({
+      coldRetainedHeapDeltaBytes: 400,
+      heapUsedPeakBytes: 500,
+      rssPeakBytes: 5000,
+    });
+  });
+
   test("a sampler that yields records non-negative lag", async () => {
     const sampler = startResourceSampler(1);
     await new Promise((resolve) => setTimeout(resolve, 15));

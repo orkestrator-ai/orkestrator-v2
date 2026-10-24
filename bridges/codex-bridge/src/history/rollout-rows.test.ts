@@ -307,6 +307,43 @@ describe("tool-only responses", () => {
     expect(reloaded).toEqual(responses);
   });
 
+  test("legacy token_count alone splits tool-only responses and preserves late outputs", async () => {
+    const legacyUsage = (second: number) => ({
+      timestamp: at(second),
+      type: "event_msg",
+      payload: { type: "token_count" },
+    });
+    await writeRollouts([
+      { timestamp: at(0), type: "session_meta", payload: { id: "steps", cwd: "/fixture" } },
+      { timestamp: at(0), type: "turn_context", payload: { turn_id: "turn-1" } },
+      message(0, "user", "Follow the trail"),
+      call(1, "read-1"),
+      call(1, "read-2"),
+      legacyUsage(1),
+      call(2, "read-3"),
+      legacyUsage(2),
+      output(3, "read-1"),
+      output(3, "read-2"),
+      output(3, "read-3"),
+      call(4, "read-4"),
+      legacyUsage(4),
+      output(4, "read-4"),
+    ]);
+    const hydrated = await hydrateMessagesFromPersistedSession("steps");
+    const rows = hydrated.messages.filter((row) => row.role === "assistant");
+    expect(rows.map((row) => row.parts.map((part) => part.toolUseId))).toEqual([
+      ["read-1", "read-2"],
+      ["read-3"],
+      ["read-4"],
+    ]);
+    expect(rows.flatMap((row) => row.parts).map((part) => part.toolOutput)).toEqual([
+      "next",
+      "next",
+      "next",
+      "next",
+    ]);
+  });
+
   test("without usage reports a tool-only run stays one row, as before", async () => {
     await writeRollouts([
       { timestamp: at(0), type: "session_meta", payload: { id: "steps", cwd: "/fixture" } },

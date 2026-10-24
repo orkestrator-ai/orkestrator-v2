@@ -6,9 +6,10 @@
  * more than one login for the platform, so which one this session uses is not
  * obvious. It is highlighted while the session is still on an account other
  * than the machine's active one (it moves over the next time it starts work
- * while idle). Clicking it opens the agent information panel, which switches
- * accounts and signs in again. Every read goes to this view's own backend,
- * the machine the session runs on.
+ * while idle). Clicking it opens the agent information panel for machine-wide
+ * account switching and a link to account management in Settings. Claude
+ * reauthentication happens in Settings. Every read goes to this view's own
+ * backend, the machine the session runs on.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { UserRound } from "lucide-react";

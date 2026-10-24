@@ -590,6 +590,44 @@ describe("Electron backend process supervisor", () => {
     expect(isolated.CLAUDE_CONFIG_DIR).toBe("/profiles/qa/credentials/claude");
     expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR).toBe("/Users/tester/.claude");
     expect(isolated.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBeUndefined();
+    // Defaulted, so the backend reads Claude's plain Keychain entry.
+    expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT).toBeUndefined();
+  });
+
+  test("records that the shell named its Claude directory, so its own login is used", () => {
+    const runtime = {
+      flavor: "agent-test" as const,
+      credentialSources: ["claude"],
+      isolatedCredentialRoot: "/profiles/qa/credentials",
+    };
+    const added = createBackendProcessEnvironment(
+      {
+        HOME: "/Users/tester",
+        CLAUDE_CONFIG_DIR: "/data/agent-accounts/claude/11111111-2222-4333-8444-555555555555",
+      },
+      "2.8.2",
+      runtime,
+    );
+    expect(added.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR).toBe(
+      "/data/agent-accounts/claude/11111111-2222-4333-8444-555555555555",
+    );
+    expect(added.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT).toBe("1");
+
+    // An explicit ~/.claude has a hashed Keychain entry of its own too.
+    const spelled = createBackendProcessEnvironment(
+      { HOME: "/Users/tester", CLAUDE_CONFIG_DIR: "/Users/tester/.claude" },
+      "2.8.2",
+      runtime,
+    );
+    expect(spelled.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT).toBe("1");
+
+    // Never inherited from the parent, and never set without a Claude grant.
+    const injected = createBackendProcessEnvironment(
+      { HOME: "/Users/tester", ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT: "1" },
+      "2.8.2",
+      { ...runtime, credentialSources: ["codex"] },
+    );
+    expect(injected.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT).toBeUndefined();
   });
 
   test("a profile without a Claude source receives no host Claude path", () => {

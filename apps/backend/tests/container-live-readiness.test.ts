@@ -683,7 +683,6 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
       const scene = await scenario({});
       const environment = launchingEnvironment(`env-${RUN}-restart`);
       const fixture = readinessContext(scene, environment, { image: await heldBootImage() });
-      const { environmentSetupTasks } = await import("../src/core/commands-runtime-state");
       const outcome = startEnvironment(environment.id, fixture.context).then(
         (result) => ({ result, error: null as unknown }),
         (error: unknown) => ({ result: null, error }),
@@ -710,7 +709,7 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
         ));
         expect(error).toBeNull();
       }
-      await environmentSetupTasks.get(environment.id);
+      await fixture.context.runtime.environments.setupTask(environment.id);
       const ready = fixture.environments.get(environment.id)!;
       expect(ready.status).toBe("running");
       expect(ready.setupPhase).toBe("ready");
@@ -884,8 +883,6 @@ describe("C10 setup interrupted after a possible side effect", () => {
   live(
     "C10: a setup whose terminal dies after its side effect is failed, never ready, never rerun",
     async () => {
-      const { terminalProcesses, environmentSetupTasks } =
-        await import("../src/core/commands-runtime-state");
       const { setupTerminalSessionId } = await import("../src/core/commands-terminal");
       const scene = await scenario({
         setupContainer: "date +%s%N >> /home/node/.c10-side-effects && sleep 600",
@@ -928,14 +925,14 @@ describe("C10 setup interrupted after a possible side effect", () => {
 
       // The setup's controlling terminal process dies, as it does with the
       // backend.
-      const pty = terminalProcesses.get(setupTerminalSessionId(environment.id));
+      const pty = fixture.context.runtime.terminals.process(setupTerminalSessionId(environment.id));
       expect(pty).toBeDefined();
       process.kill(pty!.pid, "SIGKILL");
       for (let attempt = 0; attempt < 240; attempt += 1) {
         if (fixture.environments.get(environment.id)!.setupPhase !== "running") break;
         await Bun.sleep(250);
       }
-      await environmentSetupTasks.get(environment.id)?.catch(() => undefined);
+      await fixture.context.runtime.environments.setupTask(environment.id)?.catch(() => undefined);
       const failed = fixture.environments.get(environment.id)!;
       expect(failed.setupPhase).toBe("failed");
       expect(failed.status).toBe("error");
@@ -946,7 +943,7 @@ describe("C10 setup interrupted after a possible side effect", () => {
       expect(failed.pendingAgentLaunch).toBe(false);
       expect(fixture.launches).toEqual([]);
       expect(lifecycleRecord(failed).setup).toBeUndefined();
-      expect(environmentSetupTasks.has(environment.id)).toBe(false);
+      expect(fixture.context.runtime.environments.setupTask(environment.id)).toBeUndefined();
 
       // Nothing reruns it: not the backend, not the container.
       await Bun.sleep(20_000);

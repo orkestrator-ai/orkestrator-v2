@@ -15,7 +15,6 @@ import {
 import { StorageDatabase } from "./storage-database.js";
 import { reconcileEnvironmentCleanup } from "./environment-cleanup-reconciler.js";
 import { environmentStateDirectories } from "./environment-state-paths.js";
-import { terminalProcesses } from "./commands-runtime-state.js";
 import { setupTerminalSessionId } from "./commands-terminal.js";
 import type { PtyProcess } from "./pty.js";
 import { runCommand } from "./shell.js";
@@ -193,7 +192,7 @@ describe("delete_environment host cleanup", () => {
       async (storage) => {
         worktreePath = await seedWorktree(storage);
       },
-      async (invokeDelete, storage) => {
+      async (invokeDelete, storage, context) => {
         let exited = false;
         const process = {
           pid: 1,
@@ -205,7 +204,7 @@ describe("delete_environment host cleanup", () => {
           terminate: async () => exited,
         } satisfies PtyProcess;
         const id = setupTerminalSessionId("e1");
-        terminalProcesses.set(id, process);
+        context.runtime.terminals.registerProcess(id, process);
         try {
           await expect(invokeDelete()).rejects.toThrow("Terminal process trees are still running");
           expect(await exists(worktreePath)).toBe(true);
@@ -221,7 +220,7 @@ describe("delete_environment host cleanup", () => {
           expect(await exists(worktreePath)).toBe(false);
           expect(await environmentCleanupLedger(storage.getDataDir()).list()).toEqual([]);
         } finally {
-          terminalProcesses.delete(id);
+          context.runtime.terminals.explicitlyCloseSession(id);
         }
       },
     );

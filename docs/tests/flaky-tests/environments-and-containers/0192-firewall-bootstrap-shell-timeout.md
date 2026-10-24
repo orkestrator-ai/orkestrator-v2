@@ -256,3 +256,20 @@ temporary directory. No firewall implementation, assertion, timeout or skip chan
 - **Follow-up:** a one-worker rerun of the complete firewall and disk-report owners failed a different firewall probe case (`policy 2 allowlist example.org,example.com chooses blocked HTTPS probe example.net`, 5010.36 ms); the four original firewall cases passed. The disk-report case also timed out again. This rerun is retained as a failed result, without attributing a cause to host load.
 - **Evidence:** `orkestrator-test-run.iTzv5K/` under the host temporary directory; the full aggregate remains failed. None of these owning files was changed.
 - **Separate complete-owner rerun:** `mise run test:logged -- --name watcher-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` failed again: policy 3 tuples (5240.73 ms), the policy 2/3 example.org/example.com probes (5002.97/5005.95 ms), and the policy 3 example.com:443/tcp probe (5004.92 ms); 20 passed, four failed in 53.46 seconds. No new complete-owner pass was established. Evidence: `orkestrator-test-run.gFLKmk/watcher-firewall-owner.log.gz`.
+
+## Agent accounts and sign-in (0003) validation — 2026-10-24
+
+Recurred in the non-iOS aggregate on node mbp3 (thirteen `container firewall policy` cases at ~5,003 ms); the unchanged owner passed alone (24 passed). Details in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Agent accounts main merge — 2026-10-24
+
+The broad run and complete unchanged owner both retained five-second failures. This is not newly classified as a flake. Exact commands, counts and artifacts are in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md#merge-through-main-8290f2ca9--2026-10-24). No assertion, deadline or skip changed.
+
+## Container state observation main merge — 2026-10-24
+
+- **Parents:** feature `66a9736cc0c663bef147a65fc2d158e1951482dd` and main `d6ed0717d00a9a04ba658ba6c50e0978bc2011a6`.
+- **Original command:** `mise run test:logged -- --name merge-suite -- mise run test`; workspace/root/bridge/protocol reservations 4/1/2/1, alongside component, isolated-browser, Electron and Docker validation on the same host.
+- **Aggregate failure:** GitHub seed/live/cache fixture exceeded five seconds (5021.43 ms), receiving null process status.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` failed: 22 passed, two failed in 49.11 s. Seed/live/cache timed out at 5040.02 ms, and the policy-3 address/protocol/port probe timed out at 5024.83 ms.
+- **Evidence:** `orkestrator-test-run.bFHIz7/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.ixE6Kq/merge-firewall-owner.log.gz` below the host temporary directory.
+- **Assessment:** no new complete-owner pass or cause was established; this observation is not newly classified as flaky. No implementation, assertion, timeout or skip changed.

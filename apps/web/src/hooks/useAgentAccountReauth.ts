@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import {
   cancelAgentAccountLogin,
   getAgentAccountLogin,
@@ -23,6 +24,7 @@ export function useAgentAccountReauth(
   enabled = true,
   failureAt?: string,
 ) {
+  const { machine } = useAccountMachine();
   const [progress, setProgress] = useState<AgentAccountLoginProgress>(IDLE);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -52,7 +54,7 @@ export function useAgentAccountReauth(
     setProgress(IDLE);
     setError(null);
     if (enabled) {
-      void getAgentAccountLogin()
+      void getAgentAccountLogin(machine)
         .then(async (existing) => {
           if (
             existing.completedAt &&
@@ -61,7 +63,7 @@ export function useAgentAccountReauth(
           )
             return;
           if (existing.operationId && existing.accountId && existing.state !== "pending") {
-            const accounts = await listAgentAccounts();
+            const accounts = await listAgentAccounts(machine);
             if (accounts.active[platform] !== existing.accountId) return;
           }
           if (epoch.current === version) adopt(existing);
@@ -71,7 +73,7 @@ export function useAgentAccountReauth(
     return () => {
       epoch.current += 1;
     };
-  }, [adopt, enabled, platform, failureAt]);
+  }, [adopt, enabled, platform, failureAt, machine]);
 
   useEffect(() => {
     if (!enabled || !pending) return;
@@ -80,7 +82,7 @@ export function useAgentAccountReauth(
     const version = epoch.current;
     const poll = async () => {
       try {
-        const next = await getAgentAccountLogin();
+        const next = await getAgentAccountLogin(machine);
         if (active && epoch.current === version) adopt(next);
       } catch {
         /* Retry transient read failures while pending. */
@@ -94,7 +96,7 @@ export function useAgentAccountReauth(
       active = false;
       clearTimeout(timer);
     };
-  }, [enabled, pending, adopt]);
+  }, [enabled, pending, adopt, machine]);
 
   const start = useCallback(async () => {
     if (!enabled) return;
@@ -104,14 +106,14 @@ export function useAgentAccountReauth(
     setError(null);
     setStarting(true);
     try {
-      const next = await startAgentAccountLogin(platform, { reauthenticate: true });
+      const next = await startAgentAccountLogin(platform, { reauthenticate: true }, machine);
       if (epoch.current === version) adopt(next);
     } catch (cause) {
       if (epoch.current === version) setError(messageOf(cause));
     } finally {
       if (epoch.current === version) setStarting(false);
     }
-  }, [adopt, enabled, platform]);
+  }, [adopt, enabled, platform, machine]);
 
   const cancel = useCallback(async () => {
     const operationId = current.current.operationId;
@@ -121,12 +123,12 @@ export function useAgentAccountReauth(
     setProgress(IDLE);
     setError(null);
     try {
-      const next = await cancelAgentAccountLogin(operationId);
+      const next = await cancelAgentAccountLogin(operationId, machine);
       if (epoch.current === version) adopt(next);
     } catch (cause) {
       if (epoch.current === version) setError(messageOf(cause));
     }
-  }, [adopt]);
+  }, [adopt, machine]);
 
   return { progress, error, starting, start, cancel, reportError: setError };
 }

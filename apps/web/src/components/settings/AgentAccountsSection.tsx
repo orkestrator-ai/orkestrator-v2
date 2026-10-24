@@ -182,6 +182,13 @@ function AccountRow({
             </p>
           )}
           {identity ? <p className="mt-0.5 text-xs text-muted-foreground">{identity}</p> : null}
+          {account.privateEntries?.length ? (
+            <p className="mt-1 text-xs text-amber-500">
+              No longer shared with the host login: {account.privateEntries.join(", ")}.{" "}
+              {account.platform === "claude" ? "Claude" : "Codex"} saved its own copy, so changes
+              here and on other accounts no longer reach each other.
+            </p>
+          ) : null}
         </div>
         {!editing ? (
           <div className="flex shrink-0 items-center gap-1">
@@ -237,9 +244,11 @@ function AccountRow({
 export function AgentAccountsSection({
   platform,
   reloadToken = 0,
+  onAccountsChanged,
 }: {
   platform: AgentAccountPlatform;
   reloadToken?: number;
+  onAccountsChanged?: () => void;
 }) {
   const [snapshot, setSnapshot] = useState<AgentAccountsSnapshot | null>(null);
   const [login, setLogin] = useState<AgentAccountLoginProgress>({ state: "idle" });
@@ -280,9 +289,10 @@ export function AgentAccountsSection({
       if (previous === "pending" && next.state !== "pending") {
         if (next.state === "failed" && next.error) setError(next.error);
         void reload();
+        onAccountsChanged?.();
       }
     },
-    [reload],
+    [reload, onAccountsChanged],
   );
 
   // Signing the active account in again is driven from the agent's own tab; it
@@ -311,6 +321,7 @@ export function AgentAccountsSection({
       const next = await operation();
       if (!mounted.current) return;
       setSnapshot(next);
+      onAccountsChanged?.();
       if (activeChanged) setUsageReloadToken((token) => token + 1);
     } catch (cause) {
       if (mounted.current) setError(messageOf(cause));

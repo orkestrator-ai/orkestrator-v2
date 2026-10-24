@@ -55,9 +55,6 @@ import {
   openCodeHealthHeaders,
   claudeBridgeAuthHeaders,
   agentToolConnectionFingerprint,
-  openCodeAgentToolsState,
-  scheduleOpenCodeAgentToolsConfiguration,
-  cancelOpenCodeAgentToolsConfiguration,
   syncContainerCursorApiKey,
   startContainerServer,
   startContainerOpenCodeServer,
@@ -120,12 +117,12 @@ export function registerServerCommands(
   register("start_opencode_server", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const operationId = await containerBridgeOperationId(context, id);
-    return enqueueContainerBridgeOperation("opencode", operationId, async () => {
+    return enqueueContainerBridgeOperation(context, "opencode", operationId, async () => {
       await syncContainerLoginUnlocked(context, "opencode", id);
       const started = await startContainerOpenCodeServer(id);
       const connection = await resolveContainerAgentToolConnection(context, id);
       if (connection) {
-        scheduleOpenCodeAgentToolsConfiguration(
+        context.runtime.localServers.openCodeAgentTools.schedule(
           `container:${id}`,
           started.hostPort,
           started.authToken,
@@ -139,8 +136,8 @@ export function registerServerCommands(
   register("stop_opencode_server", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const operationId = await containerBridgeOperationId(context, id);
-    return enqueueContainerBridgeOperation("opencode", operationId, () => {
-      cancelOpenCodeAgentToolsConfiguration(`container:${id}`);
+    return enqueueContainerBridgeOperation(context, "opencode", operationId, () => {
+      context.runtime.localServers.openCodeAgentTools.cancel(`container:${id}`);
       // Bracketing avoids matching the `bash -lc` shell carrying this command.
       return dockerExec(
         id,
@@ -161,7 +158,7 @@ export function registerServerCommands(
     if (running && context.agentTools) {
       const connection = await resolveContainerAgentToolConnection(context, id);
       if (connection && hostPort) {
-        scheduleOpenCodeAgentToolsConfiguration(
+        context.runtime.localServers.openCodeAgentTools.schedule(
           `container:${id}`,
           hostPort,
           authToken,
@@ -175,7 +172,7 @@ export function registerServerCommands(
       hostPort,
       ...(running ? { authToken } : {}),
       ...(running && context.agentTools
-        ? { agentTools: openCodeAgentToolsState(`container:${id}`) }
+        ? { agentTools: context.runtime.localServers.openCodeAgentTools.state(`container:${id}`) }
         : {}),
     };
   });
@@ -230,7 +227,7 @@ export function registerServerCommands(
   });
   register("start_claude_server", async ({ containerId }, context) => {
     const id = await containerBridgeOperationId(context, asString(containerId, "containerId"));
-    return enqueueContainerBridgeOperation("claude", id, async () => {
+    return enqueueContainerBridgeOperation(context, "claude", id, async () => {
       await reconcileContainerAgentAccount(
         context,
         id,
@@ -249,9 +246,9 @@ export function registerServerCommands(
       );
     });
   });
-  register("stop_claude_server", ({ containerId }) => {
+  register("stop_claude_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("claude", id, () =>
+    return enqueueContainerBridgeOperation(context, "claude", id, () =>
       // The bracketed pattern keeps pkill from matching the `bash -lc` shell that
       // carries it, which would kill the shell before `rm -f` runs.
       dockerExec(
@@ -348,7 +345,7 @@ export function registerServerCommands(
   });
   register("start_codex_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("codex", id, async () => {
+    return enqueueContainerBridgeOperation(context, "codex", id, async () => {
       await reconcileContainerAgentAccount(
         context,
         id,
@@ -450,9 +447,9 @@ export function registerServerCommands(
       return startWithFreshToken();
     });
   });
-  register("stop_codex_server", ({ containerId }) => {
+  register("stop_codex_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("codex", id, () =>
+    return enqueueContainerBridgeOperation(context, "codex", id, () =>
       // The bracketed pattern keeps pkill from matching the `bash -lc` shell that
       // carries it, which would kill the shell before `rm -f` runs.
       dockerExec(
@@ -507,7 +504,7 @@ export function registerServerCommands(
       const id = asString(containerId, "containerId");
       probeContainerAgentTools(context, id);
       const operationId = provider === "grok" ? await containerBridgeOperationId(context, id) : id;
-      return enqueueContainerBridgeOperation(provider, operationId, async () => {
+      return enqueueContainerBridgeOperation(context, provider, operationId, async () => {
         const bridgeConfig = await context.storage.loadConfig();
         const cursorApiKey =
           provider === "cursor" ? resolveCursorApiKey(bridgeConfig.global).apiKey : undefined;
@@ -600,7 +597,7 @@ export function registerServerCommands(
     register(`stop_${provider}_server`, async ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
       const operationId = provider === "grok" ? await containerBridgeOperationId(context, id) : id;
-      return enqueueContainerBridgeOperation(provider, operationId, () =>
+      return enqueueContainerBridgeOperation(context, provider, operationId, () =>
         dockerExec(
           id,
           `pkill -f '${bridgePattern}' || true; rm -f ${tokenFile}` +
@@ -669,7 +666,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
     const id = asString(containerId, "containerId");
     probeContainerAgentTools(context, id);
     const operationId = await containerBridgeOperationId(context, id);
-    return enqueueContainerBridgeOperation("pi", operationId, async () => {
+    return enqueueContainerBridgeOperation(context, "pi", operationId, async () => {
       await syncContainerLoginUnlocked(context, "pi", id);
       const config = await context.storage.loadConfig();
       const hostPort = await getHostPort(id, PI_BRIDGE_PORT);
@@ -712,7 +709,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
   register("stop_pi_server", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const operationId = await containerBridgeOperationId(context, id);
-    return enqueueContainerBridgeOperation("pi", operationId, () =>
+    return enqueueContainerBridgeOperation(context, "pi", operationId, () =>
       dockerExec(id, `pkill -f '${processPattern}' || true; rm -f ${tokenFile}`).then(
         () => undefined,
       ),

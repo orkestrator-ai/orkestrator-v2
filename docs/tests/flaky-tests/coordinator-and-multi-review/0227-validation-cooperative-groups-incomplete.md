@@ -66,3 +66,12 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Owning-file rerun:** `mise run test:logged -- --name watcher-validation-worker-owner -- bun test --cwd <checkout>/apps/backend ./src/core/review-validation-worker.test.ts --parallel=1 --only-failures` passed unchanged in 50.5 seconds.
 - **Evidence:** `orkestrator-test-run.iTzv5K/` under the host temporary directory; the full aggregate remains failed. None of these owning files was changed.
 - **Final aggregate counts:** backend 10705 passed, 116 skipped, 20 failed and five between-test errors across 10841 tests (747.20 seconds). Fourteen failures were the unchanged OpenCode conformance expectation for CLI 1.19.0 versus the installed 1.19.4; the other six were the timing cases recorded here and in companion records. The complete repository run exited 1 after 1189.0 seconds, including time queued for shared worker capacity.
+
+## Container state observation main merge — 2026-10-24
+
+- **Original command:** `mise run test:logged -- --name merge-suite -- mise run test`, merging feature `66a9736cc` and main `d6ed0717d`; default workspace/root/bridge/protocol 4/1/2/1 plan alongside browser, Electron and Docker checks.
+- **Aggregate:** `cooperative parallel groups do not multiply queue or execution deadlines` reported `incomplete` instead of `passed` after 2989.36 ms.
+- **Owning-file rerun:** the same case again reported `incomplete` (4299.43 ms); the cooperative-stop stdout case also failed.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-review-worker-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review-validation-worker.test.ts --parallel=1 --only-failures` failed: 47 passed and two failed across 49 tests in 100.73 s.
+- **Evidence:** `orkestrator-test-run.bFHIz7/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.pQ8a8n/merge-review-worker-owner.log.gz` below the host temporary directory.
+- **Assessment:** no new isolated pass or root cause was established. No implementation, assertion, timeout or skip changed.

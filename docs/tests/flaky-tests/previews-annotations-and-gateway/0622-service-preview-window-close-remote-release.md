@@ -53,3 +53,17 @@ This does not reproduce or resolve the earlier window-close release symptom.
 See [0623](../aggregate-validation-runs/0623-preview-main-merge-validation.md) for the original suite,
 other validation limitations and artifacts. No source, assertion or timeout
 changed between these Electron runs.
+
+## Agent accounts main merge — 2026-10-24
+
+This run failed earlier than window close: the local attachment count missed the five-second poll at line 1972. The complete unchanged service-preview owner passed all fourteen cases in 130.4 s with `ORKESTRATOR_AGENT_TEST_RUN_ID=merge-preview-owner mise run test:logged -- --name merge-preview-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts --workers=1`. This does not reproduce the original window-close symptom.
+
+Original command: `mise run test:logged -- --name merge-electron -- mise run test:agent:electron` (one worker): 26 passed, four failed, one skipped, one not run, 558.2 s. Evidence: `orkestrator-test-run.3IicXN/merge-electron.log.gz` below the host temporary directory. No implementation, assertion, deadline or skip changed. See [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md).
+
+## Container state observation main merge — 2026-10-24
+
+- **Original command:** `mise run test:logged -- --name merge-electron -- mise run test:agent:electron`, merging feature `66a9736cc` and main `d6ed0717d`; one worker alongside other validation.
+- **Failure:** the same multi-backend preview scenario missed the five-second attachment-count poll at `service-preview-electron.spec.ts:1972`, immediately after attaching the second window, before the historical window-close step. Electron reported 28 passed, one skipped and three failed in 1059.8 s logged.
+- **Complete unchanged owner:** `ORKESTRATOR_AGENT_TEST_RUN_ID=merge-preview-electron-owner mise run test:logged -- --name merge-preview-electron-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts --workers=1` passed all fourteen cases in 228.7 s logged (226.9 s Playwright execution).
+- **Evidence:** `orkestrator-test-run.zGyXkd/merge-electron.log.gz` below the host temporary directory; rerun results under `output/agent-testing/merge-preview-electron-owner/electron/results.json`.
+- **Assessment:** confirmed intermittent failure in the same scenario at an earlier attachment-count check; no cause was established. No implementation, assertion, timeout or skip changed.

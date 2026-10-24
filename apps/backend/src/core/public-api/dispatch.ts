@@ -16,8 +16,10 @@ import { boundedMessage, isPublicActionError, PublicActionError } from "./errors
 import {
   intentFingerprint,
   isActiveRecord,
+  isPublicAuthority,
   requestKey,
   toReceipt,
+  type PublicAuthority,
   type PublicOperationRecord,
 } from "./operation-ledger.js";
 import { ensureReconciler } from "./reconciler.js";
@@ -80,15 +82,37 @@ function errorResponse(
   );
 }
 
+/**
+ * In-process authority of a `public_action` call. A symbol key cannot cross
+ * the gateway's JSON boundary, so only backend code (Control MCP, dispatching
+ * for one of its credentials) can set it; every other caller is the operator.
+ */
+export const PUBLIC_ACTION_AUTHORITY: unique symbol = Symbol("orkestrator.public-action-authority");
+
+export function withPublicAuthority(
+  request: Record<string, unknown>,
+  authority: PublicAuthority,
+): Record<string, unknown> {
+  return Object.assign({ ...request }, { [PUBLIC_ACTION_AUTHORITY]: authority });
+}
+
+function authorityOf(args: Record<string, unknown>): PublicAuthority {
+  const authority = (args as { [PUBLIC_ACTION_AUTHORITY]?: unknown })[PUBLIC_ACTION_AUTHORITY];
+  if (authority === undefined) return "operator";
+  if (!isPublicAuthority(authority)) throw new Error("public_action authority is invalid");
+  return authority;
+}
+
 export function createPublicActionContext(
   command: CommandContext,
   dependencies: RegistryDependencies,
   identity: { installationId: string; generation: string },
+  authority: PublicAuthority = "operator",
 ): PublicActionContext {
   return {
     command,
     dependencies,
-    authority: "operator",
+    authority,
     installationId: identity.installationId,
     generation: identity.generation,
     now: () => Date.now(),
@@ -395,12 +419,18 @@ export function registerPublicActionCommand(
 ): void {
   register("public_action", async (args, command) => {
     const identity = await command.storage.getPreviewBackendIdentity();
-    const context = createPublicActionContext(command, dependencies, {
+    const backend = {
       installationId: identity.instanceId,
       generation: command.storage.getResourceGeneration(),
-    });
-    // Backend-owned completion and restart recovery of admitted work.
-    ensureReconciler(context);
-    return dispatchPublicAction(table, args, context);
+    };
+    const authority = authorityOf(args);
+    // Backend-owned completion and restart recovery of admitted work, which
+    // belongs to no single caller and so always runs as the operator.
+    ensureReconciler(createPublicActionContext(command, dependencies, backend));
+    return dispatchPublicAction(
+      table,
+      args,
+      createPublicActionContext(command, dependencies, backend, authority),
+    );
   });
 }

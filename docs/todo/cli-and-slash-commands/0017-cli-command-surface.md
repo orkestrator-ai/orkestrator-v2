@@ -130,6 +130,11 @@ names a provider command runs that command.
   authenticates callers and reaches the same command registry as the web
   client, so a server solely for the CLI would add a listener and no
   capability. Do not add either, and never expose raw registry dispatch.
+  Control MCP's gateway keeps this constraint: it dispatches only
+  `PUBLIC_ACTIONS` through `public_action`, in-process, and the CLI stays a
+  gateway client
+  ([0041-control-mcp-voice-surface.md](../mcp/0041-control-mcp-voice-surface.md),
+  [control-mcp.md](../../architecture/control-mcp.md#tool-tiers)).
 - Auto-start needs process ownership, readiness detection and data-directory
   exclusivity. Starting a second backend over the desktop's data directory is
   never a valid fallback.

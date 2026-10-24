@@ -191,6 +191,8 @@ export function createBrowserPreviewCaptureApi(
       ipcRenderer.invoke("orkestrator:browser-preview:capture-show-on-page", input),
     captureResponsiveSet: (input) =>
       ipcRenderer.invoke("orkestrator:browser-preview:capture-responsive-set", input),
+    getCaptureDiagnostics: () =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-diagnostics"),
   };
 }
 

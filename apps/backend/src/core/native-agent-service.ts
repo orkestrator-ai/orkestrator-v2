@@ -2540,20 +2540,19 @@ export class NativeAgentService {
     if (input.update.promptSuggestions !== undefined && !capabilities.promptSuggestions) {
       throw new Error("Native agent prompt suggestions are unavailable");
     }
-    if (resolved.provider.updateInteractiveControls) {
-      await resolved.provider.updateInteractiveControls(
-        resolved.session.providerSessionId,
-        // Leaving plan mode returns a live Claude session to the session's
-        // approval mode, which this update may not restate.
-        input.update.mode === "build" && input.update.approvalMode === undefined
-          ? { ...input.update, approvalMode: composer?.selectedApprovalModeId }
-          : input.update,
-      );
-    }
     await this.storage.updateNativeAgentSessionControls(
       resolved.key,
       resolved.session.providerSessionId,
       input.update,
+      async () => {
+        await resolved.provider.updateInteractiveControls?.(
+          resolved.session.providerSessionId,
+          // Leaving Plan restores the session's existing approval mode.
+          input.update.mode === "build" && input.update.approvalMode === undefined
+            ? { ...input.update, approvalMode: composer?.selectedApprovalModeId }
+            : input.update,
+        );
+      },
     );
     return this.projections.refreshProjection(input, true);
   }
@@ -3355,6 +3354,13 @@ export class NativeAgentService {
                 ...(preparation.notice ? { incompleteTurnNotice: preparation.notice } : {}),
               };
             }
+            // The storage session lease also serializes durable control updates.
+            // Recheck after provider preparation, immediately before delivery.
+            if (input.requireSessionMode && durable.controls?.mode !== input.requireSessionMode) {
+              throw new PromptRejectedError(
+                "The session is no longer in Plan mode, so this read-only prompt was not sent. Switch the session back to Plan and retry, or cancel it.",
+              );
+            }
             // Reuse the credential resolved for the warm-up attach when it
             // succeeded; otherwise resolve it here, inside the at-most-once
             // window, which is the authoritative path.
@@ -3705,6 +3711,31 @@ export class NativeAgentService {
     this.providerRegistry
       .cached(providerCacheKey(environmentId, agent))
       ?.releaseSession?.(providerSessionId);
+  }
+
+  /**
+   * The identity a later resume of this live session must name, read before
+   * the session is closed. Codex resumes a thread, not the bridge session that
+   * served it; providers that report nothing resume by the live id itself.
+   *
+   * Observe only: never starts a bridge. `undefined` when no bridge answers
+   * or the read fails, so a caller never mistakes a guess for an identity.
+   */
+  async resumableSessionIdIfRunning(
+    environmentId: string,
+    agent: EnsureNativeAgentSessionInput["agent"],
+    providerSessionId: string,
+  ): Promise<string | undefined> {
+    const provider = await this.observeProvider({
+      environmentId,
+      agent,
+      logicalSessionKey: "tab-close",
+    }).catch(() => undefined);
+    if (!provider?.sessionStateSnapshot) return undefined;
+    const snapshot = await provider.sessionStateSnapshot(providerSessionId).catch(() => undefined);
+    if (!snapshot || snapshot.status === "missing") return undefined;
+    const resumable = snapshot.resumableSessionId?.trim();
+    return resumable || (agent === "codex" ? undefined : providerSessionId);
   }
 
   /**

@@ -1,5 +1,6 @@
 /**
- * Snapshot + hint synchronization for the web annotation cache (plan step 03).
+ * Snapshot + hint synchronization for the web annotation cache
+ * ("Synchronization" in docs/architecture/web-page-annotations.md).
  *
  * Per environment:
  * 1. Subscribe to `web-annotations-changed` BEFORE fetching the snapshot and

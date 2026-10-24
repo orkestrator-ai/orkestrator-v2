@@ -22,6 +22,7 @@ const PAGE_OPTIONS: OptionSpec[] = [
 export const projectCommands: CommandSpec[] = [
   {
     path: ["project", "list"],
+    action: "project.list",
     summary: "List projects.",
     positionals: [],
     options: PAGE_OPTIONS,
@@ -46,6 +47,7 @@ export const projectCommands: CommandSpec[] = [
   },
   {
     path: ["project", "get"],
+    action: "project.get",
     summary: "Show one project by ID, or by --name when unique.",
     positionals: [{ name: "project", required: false }],
     options: [
@@ -74,6 +76,7 @@ export const projectCommands: CommandSpec[] = [
   },
   {
     path: ["project", "add"],
+    action: "project.add",
     summary: "Register a repository, attach a backend checkout, or clone into a backend path.",
     description:
       "--remote alone registers the remote. --path alone attaches an existing checkout on the BACKEND's filesystem and reads its origin there. Both together attach the checkout if it exists, or clone the remote into that backend path when it is missing or empty. No GitHub repository is created.",
@@ -116,6 +119,7 @@ export const projectCommands: CommandSpec[] = [
   },
   {
     path: ["project", "create"],
+    action: "project.create",
     summary: "Create a new repository: git init, a PRIVATE GitHub repository, and a push.",
     description:
       "This creates an external repository on GitHub using the backend's GitHub CLI credentials, pushes the initial commit, and registers the project. It requires --github-private to confirm that effect. Local-only initialization is not supported.",
@@ -160,6 +164,15 @@ export const projectCommands: CommandSpec[] = [
   },
   {
     path: ["project", "update"],
+    action: "project.update",
+    inputFields: {
+      name: "set",
+      folder: "set",
+      "no-folder": "set",
+      remote: "set",
+      path: "set",
+      "no-path": "set",
+    },
     summary: "Edit project metadata (does not move checkouts or rewrite .git/config).",
     positionals: [{ name: "project", required: true }],
     options: [
@@ -231,6 +244,7 @@ export const projectCommands: CommandSpec[] = [
   },
   {
     path: ["project", "remove"],
+    action: "project.remove",
     summary: "Remove an empty project registration (refused while environments exist).",
     description:
       "Only the registration is removed. The checkout on disk and any remote repository are never deleted.",

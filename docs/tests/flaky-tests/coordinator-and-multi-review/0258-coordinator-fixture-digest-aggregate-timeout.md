@@ -187,3 +187,5 @@ The unchanged owning file passed alone (48 pass, 2.3 s, after failing twice more
 - **Complete unchanged owner:** `mise run test:logged -- --name update-coordinator-fixture-owner -- bun test --cwd apps/desktop ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures` passed, exit 0 in 4.9 s logged.
 - **Evidence:** `orkestrator-test-run.fA9A1i/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate completion.
 - **Assessment:** confirmed recurrence of the existing intermittent failure. No implementation, assertion, timeout or skip changed.
+
+- **Recurrence 2026-10-24 (node mbp3, Control MCP voice branch `todo-0041-control-mcp-voice-4a2c0ccc548b`):** failed in both `mise run test` aggregates (artifacts `orkestrator-test-run.SqxFKk` and `orkestrator-test-run.NcXAI6` under `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/`); failed in the second aggregate only; the unchanged owner passed alone (48 pass, 0 fail). The branch does not touch this area.

@@ -589,6 +589,19 @@ assertion, timeout or skip changed.
   host picker (web transcript scrolling, tool groups, Markdown streaming,
   the Virtuoso patch). No assertion, timeout or skip changed.
 
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3): the narrow host-picker case failed in `mise run test:agent:browser:isolated` (27 passed, 55 skipped, two failed) and again in an unchanged owning-file run on a fresh profile `qa-0043-gw` (12 passed, ten skipped, two failed); still unresolved.
+
+## Control MCP voice main merge — 2026-10-24
+
+- **Parents:** feature `fc04c130d805d2c52b064d0d504eadc6188ac540` and main `0014505caeed69395b3cc996dd541fcc6df12c23`.
+- **Full command:** `mise run test:agent:browser:isolated`, credential-free Codex fixture `qa-browser-a34c7ac6-c9f`, one worker. The run reached case 56 of 83 before its 900000 ms browser deadline (932.75 s including lifecycle); no complete suite summary was produced. The runner stopped/reset its profile.
+- **Picker failure:** at `browser-gateway.spec.ts:224`, neither drawer-toggle button appeared within 5000 ms. The screenshot shows a blank dark page; this differs from earlier hidden Repository settings click failures.
+- **Complete unchanged owner rerun:** fresh credential-free Codex fixture `merge-gateway-0041-fc04c130`; `ORKESTRATOR_AGENT_TEST_PROFILE=merge-gateway-0041-fc04c130 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-gateway-0041-fc04c130 mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` reported 13 passed, ten skipped and the same picker failure (346.0 s, exit 1).
+- **Evidence:** `orkestrator-test-run.E1H1rN/merge-gateway-owner.log.gz` below the host temporary directory; artifacts under `output/agent-testing/qa-browser-a34c7ac6-c9f/browser/` and `output/agent-testing/merge-gateway-0041-fc04c130/browser/`.
+- **Assessment:** this recurrence remains unresolved in isolation; it does not independently confirm intermittence or establish the cause. No gateway implementation, assertion, deadline or skip changed for this observation.
+
+The owner profile was stopped and reset after its gateway and design checks.
+
 
 ## Runtime-state ownership main merge — 2026-10-24
 

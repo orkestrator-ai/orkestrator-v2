@@ -27,8 +27,26 @@ import {
 
 export const PUBLIC_OPERATION_RECORD_VERSION = 1;
 
-/** Who admitted an operation. Only the gateway operator exists today. */
-export type PublicAuthority = "operator";
+/**
+ * Who admitted an operation: the gateway operator (the CLI and the app), or
+ * one Control MCP credential. Authority is part of every request key and
+ * scopes every receipt read, so one credential can neither replay into nor
+ * read another's operations. It is always set in-process from the caller's
+ * credential, never read from request input.
+ */
+export type PublicAuthority = "operator" | `control-mcp:${string}`;
+
+const CONTROL_MCP_AUTHORITY = /^control-mcp:[a-z0-9][a-z0-9-]{0,47}$/;
+
+export function isPublicAuthority(value: unknown): value is PublicAuthority {
+  return value === "operator" || (typeof value === "string" && CONTROL_MCP_AUTHORITY.test(value));
+}
+
+export function controlMcpAuthority(credentialId: string): PublicAuthority {
+  const authority = `control-mcp:${credentialId}`;
+  if (!isPublicAuthority(authority)) throw new Error("Control MCP credential ID is invalid");
+  return authority;
+}
 
 export interface PublicOperationRecord {
   version: typeof PUBLIC_OPERATION_RECORD_VERSION;
@@ -250,7 +268,7 @@ export function isPublicOperationRecord(value: unknown): value is PublicOperatio
     typeof record.namespace === "string" &&
     typeof record.requestId === "string" &&
     typeof record.requestKey === "string" &&
-    record.authority === "operator" &&
+    isPublicAuthority(record.authority) &&
     typeof record.action === "string" &&
     typeof record.scope === "string" &&
     typeof record.fingerprint === "string" &&

@@ -128,6 +128,15 @@ The final-source retry, `mise run test:logged -- --name final-complete-tests -- 
 - **Evidence:** `orkestrator-test-run.Dq33wp/root-and-agent-support-tests.log.gz` and outer `orkestrator-test-run.G461RT/merge-complete-suite.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence; concurrent staging and browser load remain hypotheses. No Pi implementation, assertion, timeout or skip changed.
 
+## Design-agent links main merge — 2026-10-24
+
+- **Original command:** the testing guide's GNU-tool PATH with `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, merging `0014505caeed69395b3cc996dd541fcc6df12c23` into `ce4e1b007c4797868255438bd67d5d5168098773`.
+- **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1; one root worker on a shared macOS host, with other worktrees validating concurrently.
+- **Root counts:** 3368 passed and 15 failed across 3383 tests in 162 files (1001.90 seconds).
+- **Evidence:** `orkestrator-test-run.O0jvRO/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
+- **Failure:** `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` exceeded its 30-second deadline (30000.43 ms).
+- **Unchanged owner:** `mise run test:logged -- --name merge-owner-pi-vendor -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed (exit 0, 25.2 seconds logged).
+- **Assessment:** confirmed intermittent deadline recurrence. Host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
 
 ## Transcript-history main merge — 2026-10-24
 

@@ -66,3 +66,7 @@ The separate native branch-selection owner rerun also failed unchanged at both v
   and its base commit `f12cc5a53`:
   `bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts e2e/ClaudeInteractions.spec.ts --workers=1`
   (ClaudeInteractions cases all passed).
+
+## Refresh through 95c9cb46a — 2026-10-24
+
+The desktop paused-question case again raised `apiRequestContext.fetch: Request context disposed` in the route callback at line 107 during the nine-worker `mise run test:logged -- --name refresh-95c9-browser -- mise run test:browser` run (579 passed, five failed, 102 skipped; 254.2 s). The complete unchanged owner passed with one worker in 13.5 s: `ORKESTRATOR_E2E_PORT=64238 mise run test:logged -- --name refresh-95c9-owner-ClaudeInteractions -- bunx playwright test --config e2e/playwright.config.ts ClaudeInteractions.spec.ts --workers=1 --output output/playwright/refresh-95c9-ClaudeInteractions`. Evidence: host temporary artifact `orkestrator-test-run.6yNWW5/refresh-95c9-browser.log.gz`. This confirms a recurrence; no assertion, timeout, skip or implementation changed. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the merge parents and other validation outcomes.

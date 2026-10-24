@@ -30,6 +30,7 @@ import {
   WEB_ANNOTATION_EVIDENCE_OPEN,
   WEB_ANNOTATION_LIMITS,
   WEB_ANNOTATION_WORKSPACE_DIRECTORY,
+  webAnnotationProducerSource,
   webAnnotationRequestMarker,
   webAnnotationUtf8Bytes,
   type WebAnnotationAnchor,
@@ -271,6 +272,8 @@ function sectionValues(
       capturedAt: capture.capturedAt,
       documentGeneration: capture.documentGeneration,
       producer: capture.producer,
+      // A client-declared producer is a label, not an attestation.
+      producerSource: webAnnotationProducerSource(capture),
       redaction: capture.redaction,
       ...(capture.stateReason ? { stateReason: capture.stateReason } : {}),
     });
@@ -322,12 +325,24 @@ function sectionValues(
   }
 
   if (plan.images.length > 0) {
+    // A region keeps its full-viewport screenshot next to the crop; the
+    // backend-recorded relation says which is which.
+    const crop = capture?.regionCrop;
+    const digestOf = (assetId: string) =>
+      input.assets.find((asset) => asset.id === assetId)?.digest;
+    const cropSource = crop ? digestOf(crop.sourceAssetId) : undefined;
+    const cropDigest = crop ? digestOf(crop.assetId) : undefined;
     values.set("image", {
       images: plan.images.map((image) => ({
         digest: image.digest,
         width: image.width,
         height: image.height,
         bytes: image.bytes,
+        ...(crop && cropSource && image.digest === cropDigest
+          ? { role: "region-crop", cropOf: cropSource, sourceRect: crop.sourceRect }
+          : crop && cropSource && image.digest === cropSource
+            ? { role: "viewport" }
+            : {}),
       })),
     });
   }
@@ -406,9 +421,17 @@ function operationSection(input: CompileBriefInput, readOnly: WebAnnotationReadO
       "",
       "Answer the user's question about the annotated page, analyze the likely cause, and suggest approaches.",
       "Do not implement changes for this request: do not edit files, commit, or run commands that modify the repository or environment.",
-      readOnly === "plan-mode"
-        ? "This request was sent in the agent's plan (read-only) mode."
-        : "This is an instruction for this request, not a technical restriction; the session keeps its existing permissions.",
+      ...(readOnly === "plan-mode"
+        ? [
+            "This request was sent in the agent's plan (read-only) mode.",
+            // Live runs: in plan mode, Claude often ended a discussion by
+            // proposing its answer as a plan for approval, which left the
+            // request waiting on a plan approval nobody asked for.
+            "Give your answer in your reply and end the turn there. This is not a planning task: do not submit a plan for approval or ask to leave plan mode.",
+          ]
+        : [
+            "This is an instruction for this request, not a technical restriction; the session keeps its existing permissions.",
+          ]),
       "The user reviews the answer and decides whether to request changes.",
     ];
   }

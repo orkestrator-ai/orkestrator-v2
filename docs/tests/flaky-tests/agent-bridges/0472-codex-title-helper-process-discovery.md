@@ -21,3 +21,7 @@
 - **Complete unchanged owner:** `env -u PORT mise run test:logged -- --name merge-codex-session-titles-owner -- bun test --cwd bridges/codex-bridge ./src/session-titles.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed (exit 0, 6.6 seconds logged).
 - **Evidence:** `orkestrator-test-run.YFMbrr/bridges.log.gz` below the host temporary directory after aggregate finalization; outer run `orkestrator-test-run.I7HssJ`.
 - **Assessment:** confirmed intermittent recurrence. Host contention remains a hypothesis; no implementation, assertion, deadline or skip changed.
+
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 5.6 s: `mise run test:logged -- --name design-links-owner-codex-titles -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/session-titles.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.

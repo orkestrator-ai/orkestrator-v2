@@ -171,6 +171,7 @@ function parseAnswers(options: Record<string, unknown>): PublicInteractionAnswer
 export const sessionCommands: CommandSpec[] = [
   {
     path: ["agent", "options"],
+    action: "agent.options",
     summary: "Enabled agents, model catalogues (with freshness), and supported controls.",
     description:
       "Reads the backend's cached catalogues; --refresh asks providers again, which can take a while. An `empty` catalogue is a successful empty answer; `stale`/`unavailable` means the backend could not read it.",
@@ -223,6 +224,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "list"],
+    action: "session.list",
     summary: "List native-agent sessions of an environment (no transcripts are read).",
     positionals: [],
     options: [
@@ -253,6 +255,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "get"],
+    action: "session.get",
     summary: "Show one session (activity, latest request, pending interactions).",
     positionals: [{ name: "session", required: true }],
     options: [],
@@ -273,6 +276,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "start"],
+    action: "session.start",
     summary: "Start an independent conversation in a ready environment and send its first prompt.",
     description:
       "Creates a new agent tab without focusing it. The response is a submission receipt; add --wait (or run `run wait`) to observe the turn. Independent sessions in one environment share its files.",
@@ -355,6 +359,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "prompt"],
+    action: "session.prompt",
     summary: "Send a follow-up prompt to an idle session.",
     description:
       "Busy sessions are refused (exit 8); use `session steer` to redirect an active turn. The target must be the exact session: a vanished session is never replaced by a new one.",
@@ -408,6 +413,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "stop"],
+    action: "session.stop",
     summary: "Stop the session's current turn (not the environment).",
     description:
       "--expect-run binds the stop to that run: if a different turn is now active the stop is refused (exit 8). Success requires the provider to confirm the turn ended; otherwise the result is unknown (exit 7).",
@@ -447,6 +453,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "steer"],
+    action: "session.steer",
     summary: "Redirect the active turn (providers that support steering only).",
     positionals: [{ name: "session", required: true }],
     options: [
@@ -502,6 +509,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "config", "get"],
+    action: "session.config.get",
     summary: "Show the live session's effective controls.",
     positionals: [{ name: "session", required: true }],
     options: [],
@@ -520,6 +528,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "config", "set"],
+    action: "session.config.set",
     summary: "Change the live session's controls (not environment defaults).",
     description:
       "Applies to this conversation now, as validated by its provider; the response shows the values actually in force (a provider may clamp them). To change defaults for future sessions use `environment config set`.",
@@ -547,6 +556,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "history"],
+    action: "session.history",
     summary: "List earlier provider conversations this session can resume.",
     positionals: [{ name: "session", required: true }],
     options: [],
@@ -575,6 +585,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "resume"],
+    action: "session.resume",
     summary: "Rebind the session to an earlier conversation from `session history`.",
     description: "The current conversation's history is kept; nothing is deleted.",
     positionals: [
@@ -594,6 +605,8 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "fork"],
+    action: "session.fork",
+    inputFields: { message: "messageId" },
     summary: "Fork the conversation into a new session (optionally at a message).",
     positionals: [{ name: "session", required: true }],
     options: [
@@ -629,6 +642,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "interactions", "list"],
+    action: "session.interactions",
     summary: "List pending questions and approvals with their permitted answers.",
     positionals: [{ name: "session", required: true }],
     options: [],
@@ -661,6 +675,8 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "interactions", "resolve"],
+    action: "session.interaction.resolve",
+    inputFields: { revision: "expectedRevision", choose: "answers", text: "answers" },
     summary: "Answer one pending interaction at its current revision.",
     description:
       "--revision must match the interaction's current revision; a replaced or expired interaction is refused (exit 8), never answered. Nothing is approved implicitly.",
@@ -742,6 +758,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "transcript"],
+    action: "session.transcript",
     summary: "Read a bounded transcript page; --follow polls for new messages.",
     description:
       "Pages are oldest-first and hold at most --limit messages (max 100). Pass the returned olderCursor as --before for earlier history. --follow --jsonl streams one record per new message by polling snapshots; it stops at --timeout or Ctrl+C and never affects the session.",

@@ -1,7 +1,7 @@
 /**
  * Gateway authorization scope for web annotation commands.
  *
- * Findings this suite documents (step 03): the gateway authenticates one
+ * Findings this suite documents: the gateway authenticates one
  * user credential (the gateway token / session cookie). It carries no
  * environment scope — an authenticated client may address every environment
  * of this backend, exactly like every other environment-scoped command

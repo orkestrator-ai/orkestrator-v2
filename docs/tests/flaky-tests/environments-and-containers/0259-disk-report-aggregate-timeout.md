@@ -181,6 +181,10 @@ Full failure names, counts, evidence paths and unresolved limitations are in [07
 
 Root aggregate: 3,377 passed, six failed and one error (546.21 s), including this five-second deadline and error between tests. The complete unchanged owner also failed: four passed, one failed and one error (6.0 s), command `mise run test:logged -- --name merge-disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`. Evidence: `orkestrator-test-run.kKsk4G/merge-disk-report-owner.log.gz` below the host temporary directory. This observation is not newly classified as a flake. See [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md).
 
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The aggregate timed out at 5017.45 ms (root/support: 3381 passed, two failed). Its first unchanged one-worker rerun retained the timeout (4 passed, one failed, one error; 7.5 s). After observed host load fell from above 120 to 23.20, `mise run test:logged -- --name design-links-owner-disk-final -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed the complete unchanged owner in 2.2 s. Exact parents, original commands and artifacts are in [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md). No assertion, deadline or skip changed.
+
 ## Container state observation main merge — 2026-10-24
 
 - **Parents:** feature `66a9736cc0c663bef147a65fc2d158e1951482dd` and main `d6ed0717d00a9a04ba658ba6c50e0978bc2011a6`.
@@ -189,3 +193,13 @@ Root aggregate: 3,377 passed, six failed and one error (546.21 s), including thi
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` also failed: four passed, one failed and one error in 8.50 s; the report timed out at 5437.40 ms.
 - **Evidence:** `orkestrator-test-run.bFHIz7/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.iZxjhX/merge-disk-owner.log.gz` below the host temporary directory.
 - **Assessment:** no new isolated pass or cause was established; the aggregate and owner remain failed. No implementation, assertion, timeout or skip changed.
+
+## Annotation limitations latest-main refresh — 2026-10-24
+
+- **Parents:** feature `2e7edbc161b60cb188437783168f8bc8135f5953` and main `95c9cb46ae0a2b12fbc10ff73fa7c0614b254a0d`.
+- **Original command:** `ORKESTRATOR_TEST_AREA_BASE=0014505caeed69395b3cc996dd541fcc6df12c23 mise run test:logged -- --name refresh-0043-suite -- mise run test`, standard 4/1/2/1 workspace/root/bridge/protocol worker plan.
+- **Failure:** the isolated-checkout report case exceeded the five-second outer deadline (5,025.93 ms); its subprocess status was null instead of zero, also reported as a between-test assertion at line 53.
+- **Complete unchanged owner:** `mise run test:logged -- --name refresh-0043-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed (exit 0, 2.6 s).
+- **Evidence:** `orkestrator-test-run.fqu9cJ/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirms recurrence; no implementation, assertion, deadline or skip changed. The original aggregate remains non-green.
+- **Final root counts:** 3,381 passed, one failed and one between-test error across 161 files (255.86 s).

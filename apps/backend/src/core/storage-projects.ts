@@ -1030,6 +1030,26 @@ export abstract class StorageProjects extends StorageBase {
     });
   }
 
+  /** Capture identity without overwriting a newer teardown for the tab. */
+  async recordTabTeardownSessionId(
+    environmentId: string,
+    tabId: string,
+    expectedCreatedAt: string,
+    resumableSessionId: string,
+  ): Promise<void> {
+    if (!isNonBlankString(resumableSessionId)) throw new Error("Resume identity is blank");
+    await this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      const intent = environment?.tabTeardownIntents?.[tabId];
+      if (!intent || intent.createdAt !== expectedCreatedAt)
+        throw new Error("Tab teardown changed before identity capture");
+      if (intent.resumableSessionId) return;
+      intent.resumableSessionId = resumableSessionId;
+      await this.saveEnvironments(environments);
+    });
+  }
+
   /** Clears only the intent this caller completed, preserving newer retries. */
   async clearTabTeardownIntent(
     environmentId: string,

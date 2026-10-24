@@ -172,6 +172,11 @@ not advertise at its version before sending it.
 | `session transcript` | `session.transcript` | transcript window + message pages | read (content) |
 | `changes view ENV` | `changes.view` | `ChangeTrackingService.getView` / `projections.files` after `diffStats.sync` (the `changes_get_view` path) | read |
 | `changes history SESSION` | `changes.history` | `ChangeTrackingService.getHistory` + each turn's projection (no scan) | read |
+| `attention [--follow --jsonl]` | `attention.list` | pending interactions of sessions observed waiting, the caller's settled runs, finished setups | read |
+| `ticket list/get` | `ticket.list/get` | Kanban storage | read |
+| `ticket create/update/comment` | `ticket.create/update/comment` | Kanban storage; the operation ID is the store's request key | metadata |
+| `mail mailboxes` | `mail.mailboxes` | agent-mail directory (refused while messaging is disabled) | read |
+| `mail send ENV TAB` | `mail.send` | external agent mail, inbox-only, never injected | metadata |
 | `run get/wait` | `run.get` | operation store + reconciler | read |
 | `run retry/discard` | `run.retry/discard` | `retry/discard_native_agent_dispatch` | provider |
 | `run cancel/output` | `run.cancel/output` | exec worker control | process / read |
@@ -191,6 +196,20 @@ live in [`control-shared-actions.ts`](../../apps/backend/src/core/control-shared
 and are used by both Control MCP and the public actions. Control MCP keeps its
 own result formatting, annotations and coordinator scope; an operator request
 cannot assert coordinator fields.
+
+Control MCP reaches the same actions in-process for its operator credentials
+([control-mcp.md](control-mcp.md#tool-tiers)), and the two surfaces are kept
+in step by tests: each `CommandSpec` names the action it runs (`action`), and
+[`command-actions.test.ts`](../../packages/cli/tests/command-actions.test.ts)
+requires every public action except `capabilities` to have a command, every
+backend command to name its action, and every flag and positional to name one
+of that action's input properties (directly, through `SHARED_INPUT_FIELDS`, or
+through the command's own `inputFields`). The same test pins
+`PUBLIC_ACTION_CLI_COMMANDS` (`packages/protocol/src/public-api-cli.ts`), which
+Control MCP's `describe_action` reports as each action's CLI equivalent.
+`--wait` classifies receipts with the shared `classifyReceiptForWait`
+(`packages/protocol/src/public-api-wait.ts`), as Control MCP's `run_status`
+does.
 
 Paths passed to project commands are on the **backend** host. Prompt, patch,
 stdin and credential files are read on the machine running the client.
@@ -212,9 +231,13 @@ nothing runs.
 - Same key, same intent → the original operation (`replayed: true`), whatever
   its state. A deleted resource is never recreated by a replay.
 - Same key, different intent → `request-conflict` (exit 8).
-- Control MCP `launch_environment` passes its own fingerprint to
-  `create_environment`, so both transports share one conflict rule. Records
-  created before fingerprints existed keep converging (legacy recovery).
+- Control MCP's operator tools and gateway submit the same public actions
+  under the credential's own authority (`control-mcp:<credentialId>`), so one
+  conflict rule covers both transports, and a key reused across the CLI and an
+  MCP credential is two independent requests. Records created before
+  fingerprints existed keep converging (legacy recovery).
+- Authority also scopes reads: `run get`, request-key lookups and every action
+  that names an operation see only the caller's own operations.
 
 Operations persist their resource IDs as soon as they are known, their stage,
 dispatch and execution state, and a small content-free result. `run get OP`

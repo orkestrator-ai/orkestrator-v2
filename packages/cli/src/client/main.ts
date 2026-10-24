@@ -6,14 +6,17 @@ import {
   sniffOutputMode,
   type CommandTree,
 } from "./argv.js";
+import { attentionCommands } from "./commands/attention.js";
 import { changesCommands } from "./commands/changes.js";
 import { connectionCommands } from "./commands/connection.js";
 import { environmentCommands } from "./commands/environment.js";
 import { hostCommands } from "./commands/host.js";
+import { mailCommands } from "./commands/mail.js";
 import { serviceCommands } from "./commands/service.js";
 import { projectCommands } from "./commands/project.js";
 import { runCommands } from "./commands/run.js";
 import { sessionCommands } from "./commands/session.js";
+import { ticketCommands } from "./commands/ticket.js";
 import { toolchainCommands } from "./commands/toolchain.js";
 import { CliConfigStore, defaultCliConfigDir } from "./config.js";
 import { CliError } from "./errors.js";
@@ -34,6 +37,9 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...environmentCommands,
   ...sessionCommands,
   ...changesCommands,
+  ...attentionCommands,
+  ...ticketCommands,
+  ...mailCommands,
   ...runCommands,
   ...toolchainCommands,
   ...hostCommands,

@@ -14,6 +14,10 @@
 - **Hypothesis:** the subprocess-based reconciliation fixture exhausted its outer deadline during aggregate execution. The unchanged owning file passed in isolation; host contention may contribute, but the root cause remains unconfirmed. The change being validated adds account-refresh tests and does not alter container replacement, its fixtures, or their deadlines.
 - **Recurrence (2026-10-24, node mbp3, load average 19 to 31):** the todo-0050 branch's `env -u PORT mise run test:logged -- --name full-test -- mise run test` failed it again, at 5006.28 ms. This time the owning file also failed when rerun alone (`bun test --cwd apps/backend --preload ../../tests/setup-node.ts tests/container-replacement.test.ts`: 22 passed, 1 failed, `unreachable` instead of `settled`). So did the same file on a worktree of `main` at `71227437`, run straight afterwards under the same load. With `--timeout 30000` the case passed on both trees in about 3 s. This is the first evidence that host contention alone reproduces it, with no change involved: the fake-docker fixture's calls take long enough under load for reconciliation to answer `unreachable`. The branch touches neither container replacement nor its fixtures.
 
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3, `mise run test` via `test:logged`): timed out at 5,001 ms in the workspace group; `bun test --cwd apps/backend ./tests/container-replacement.test.ts --parallel=1` then passed (11.8 s).
+
+- **Recurrence 2026-10-24 (node mbp3, Control MCP voice branch `todo-0041-control-mcp-voice-4a2c0ccc548b`):** failed in both `mise run test` aggregates (artifacts `orkestrator-test-run.SqxFKk` and `orkestrator-test-run.NcXAI6` under `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/`); the unchanged owner failed alone once at the same 5 s budget, then passed alone (23 pass, 0 fail). The branch does not touch this area.
+
 ## Recurrence during 0016 validation (2026-10-24)
 
 - **Failure:** the same case failed in the aggregate at 5,000.71 ms (five-second deadline).

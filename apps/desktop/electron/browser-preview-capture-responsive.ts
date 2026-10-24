@@ -1,5 +1,5 @@
 /**
- * Responsive capture sets (plan step 13): one explicit user action captures
+ * Responsive capture sets: one explicit user action captures
  * the current page at a bounded set of emulated viewport widths.
  *
  * Each width is its own pending capture with its own viewport, route, time,

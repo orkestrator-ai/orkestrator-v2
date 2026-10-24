@@ -75,7 +75,7 @@ are never mailboxes.
 | `coordinator` | A project coordinator conversation | Control MCP with a coordinator credential |
 | `user` | The human in the Orkestrator UI | `send_agent_mail` |
 | `system` | A backend workflow | Completion notices with a stable outbox id |
-| `external` | Control MCP operator token | `send_external_agent_mail` — inbox only |
+| `external` | A Control MCP operator credential, or `orkestrator mail send` | `send_external_agent_mail` (public action `mail.send`) — inbox only |
 
 **Trust.** Derived at send time from sender and recipient project/environment:
 
@@ -375,9 +375,10 @@ having a working mailbox.
 `apps/backend/src/core/control-mcp-server.ts`, documented in
 [`control-mcp.md`](./control-mcp.md).
 
-An operator token can `list_mailboxes` and `send_message`. Those sends are
-always `external` and **never injected**. The human reads them in the
-global inbox.
+An operator credential with the `mail` capability can `list_mailboxes` and
+`send_message` (the public actions `mail.mailboxes` and `mail.send`, which the
+CLI reaches as `orkestrator mail mailboxes/send`). Those sends are always
+`external` and **never injected**. The human reads them in the global inbox.
 
 ### Control MCP — coordinator credential
 
@@ -590,7 +591,7 @@ claim `tabId`.
 | Addressable mailbox | Y | Y | Y | N | — | — |
 | Agent pull / send | Y | Y | Y | N | N | — |
 | Idle inject | Y | Y | N | N | N (never) | via policy / retry |
-| Orkestrator-owned MCP attach | Y | Y | P | N | operator token | — |
+| Orkestrator-owned MCP attach | Y | Y | P | N | operator credential | — |
 | Coordinator delegation | Y | — | — | — | — | — |
 
 Terminal cursor/grok/pi are not in `TERMINAL_TYPES`, so they never enter

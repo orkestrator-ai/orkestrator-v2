@@ -37,6 +37,23 @@ aggregate-load timeouts.
 - **Owning-file rerun:** `mise run test:logged -- --name firewall-owner -- bun test ./tests/unit/firewall-refresh.test.ts --parallel=1 --only-failures` passed the complete unchanged file, exit 0 in 5.0 seconds.
 - **Evidence:** `orkestrator-test-run.IoyN8C/full-test.log.gz` under the host temporary directory. No assertion, timeout or skip changed.
 
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3, `mise run test` via `test:logged`): two `firewall allowlist refresh and edits` cases hit the 5 s timeout in the root group; `bun test ./tests/unit/firewall-policy.test.ts ./tests/unit/firewall-refresh.test.ts --parallel=1` then passed (64.4 s).
+
+## Annotation limitations validation — 2026-10-24
+
+- **Original command:** `mise run test`, root group using `--parallel=1`; the workspace group was waiting for four shared host slots while browser and Electron validations also ran.
+- **Failure:** `firewall allowlist refresh and edits > adding to an empty stored list keeps the image defaults` timed out after 5006.99 ms; the subprocess exit code was `null` rather than `0`.
+- **Owning-file rerun:** `mise exec -- bun test ./tests/unit/firewall-refresh.test.ts --parallel=1 --only-failures` passed the complete unchanged owner: 15 passed, zero failed, 101 assertions, 26.59 seconds.
+- **Suite counts:** The aggregate had not finished when the owner was checked. Its root group also reported Pi vendoring, diagnostic scanning and disk-report timeouts; Pi and disk-report still timed out in a separate four-owner rerun, so they are not newly confirmed flakes from this observation.
+- **Evidence:** Aggregate logs under `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.B8BU4Y/`; focused result `/tmp/annotation-firewall-owner.log`.
+- **Assessment:** Shared host contention remains plausible (load averages around 90–100); no firewall code, test, assertion or timeout changed.
+
+## Control MCP voice main merge — 2026-10-24
+
+- The testing guide's GNU-tool PATH with `mise run test:logged -- --name merge-full-tests -- mise run test` (one root worker) timed out `add and remove edit the stored list through the same swap` (5012.53 ms) and `adding to an empty stored list keeps the image defaults` (5006.92 ms). Root result: 3,368 passed, 15 failed across 162 files, 863.15 s execution.
+- The same PATH with `mise run test:logged -- --name merge-0041-firewall-refresh-owner -- bun test ./tests/unit/firewall-refresh.test.ts --parallel=1 --only-failures` passed the complete unchanged owner in 33.6 s.
+- Evidence: host temporary-directory `orkestrator-test-run.LK1I3Y/root-and-agent-support-tests.log`, retained from the interrupted aggregate. No implementation, assertion, deadline or skip changed.
+
 
 ## Container state observation (0020) recurrence — 2026-10-24
 

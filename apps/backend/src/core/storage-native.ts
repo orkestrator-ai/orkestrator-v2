@@ -647,6 +647,7 @@ export abstract class StorageNative extends StorageReviews {
     key: string,
     expectedProviderSessionId: string,
     update: import("@orkestrator/protocol/native-agent").NativeAgentControlUpdate,
+    applyControls?: () => Promise<void>,
   ): Promise<PersistedNativeAgentSession> {
     if (!isNonBlankString(key) || !isNonBlankString(expectedProviderSessionId)) {
       throw new Error("Native agent control update identity is invalid");
@@ -659,6 +660,9 @@ export abstract class StorageNative extends StorageReviews {
       if (!existing || existing.providerSessionId !== expectedProviderSessionId) {
         throw new Error("Native agent control update target is stale");
       }
+      // Apply provider controls and persist them under the same session lease
+      // that guards prompt delivery; neither side may overtake a send.
+      await applyControls?.();
       const modelChanged =
         update.modelId !== undefined && update.modelId !== existing.controls?.modelId;
       // Most parameter values are model-scoped and must be cleared when their

@@ -262,6 +262,102 @@ describe("annotation panel flows", () => {
     expect(await screen.findByText(/too large to search in time/)).toBeTruthy();
   });
 
+  test("results resolved against the page being left are dropped on a new document", async () => {
+    backend.seed({ id: "annotation-left", title: "Left behind" });
+    capture.mocks.showPins.mockImplementation((async (input: {
+      pins: Array<{ annotationId: string }>;
+    }) =>
+      input.pins.map((pin) => ({
+        annotationId: pin.annotationId,
+        resolution: {
+          state: "too-complex" as const,
+          rule: "none" as const,
+          candidateCount: 0,
+          documentGeneration: 4,
+          rect: null,
+        },
+      }))) as never);
+    seedBrowserLayout({ open: true });
+    render(<AnnotationHarness />);
+    expect(await screen.findByText(/too large to search in time/)).toBeTruthy();
+    // A navigation: main reports document 5, and a reply still resolved
+    // against document 4 arrives afterwards. It describes the page that was
+    // left, so it is not shown.
+    bus.emit(BROWSER_PREVIEW_CAPTURE_EVENT, {
+      tabId: "browser-1",
+      captureId: null,
+      status: "pins-invalidated",
+      documentGeneration: 5,
+    });
+    await waitFor(() =>
+      expect(screen.queryByText(/too large to search in time/) === null).toBe(true),
+    );
+  });
+
+  for (const reply of ["showPins", "getPinResults"] as const) {
+    test(`late ${reply} document 4 snapshot retains already applied document 5 results`, async () => {
+      backend.seed({ id: "annotation-race", title: "Pinned race" });
+      const results = (generation: number) => [
+        {
+          annotationId: "annotation-race",
+          resolution: {
+            state: "too-complex" as const,
+            rule: "none" as const,
+            candidateCount: 0,
+            documentGeneration: generation,
+            rect: null,
+          },
+        },
+      ];
+      let resolveOld!: (value: unknown) => void;
+      const old = new Promise((resolve) => {
+        resolveOld = resolve;
+      });
+      const getPinResults = mock(async () => ({
+        tabId: "browser-1",
+        documentGeneration: 5,
+        revision: 1,
+        diagnostics: null,
+        results: results(5),
+      }));
+      Object.assign(capture.api, { getPinResults });
+      if (reply === "showPins") capture.mocks.showPins.mockImplementationOnce(() => old as never);
+      seedBrowserLayout({ open: true });
+      render(<AnnotationHarness />);
+      await waitFor(() => expect(capture.mocks.showPins).toHaveBeenCalled());
+      if (reply === "getPinResults") {
+        getPinResults.mockImplementationOnce(() => old as never);
+        bus.emit(BROWSER_PREVIEW_CAPTURE_EVENT, {
+          tabId: "browser-1",
+          captureId: null,
+          status: "pins-changed",
+          documentGeneration: 4,
+        });
+        await waitFor(() => expect(getPinResults).toHaveBeenCalledTimes(1));
+      }
+      bus.emit(BROWSER_PREVIEW_CAPTURE_EVENT, {
+        tabId: "browser-1",
+        captureId: null,
+        status: "pins-changed",
+        documentGeneration: 5,
+      });
+      expect(await screen.findByText(/too large to search in time/)).toBeTruthy();
+      resolveOld(
+        reply === "showPins"
+          ? results(4)
+          : {
+              tabId: "browser-1",
+              documentGeneration: 4,
+              revision: 1,
+              diagnostics: null,
+              results: results(4),
+            },
+      );
+      await flush();
+      expect(screen.getByText(/too large to search in time/)).toBeTruthy();
+    });
+  }
+
   test("Show on page uses the desktop flow and explains each outcome", async () => {
     backend.seed({ id: "annotation-show", title: "Show me" });
     const showOnPage = mock(async () => ({

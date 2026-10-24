@@ -1,6 +1,8 @@
 import {
   webAnnotationPageKey,
+  webAnnotationProducerSource,
   type WebAnnotationAnchorResolution,
+  type WebAnnotationCapture,
   type WebAnnotationPageIdentity,
   type WebAnnotationServiceIdentity,
   type WebAnnotationSummary,
@@ -124,7 +126,27 @@ export const CAPTURE_MODE_LABELS: Record<BrowserPreviewCaptureMode, string> = {
   page: "Page",
 };
 
-/** Target precision explanation shown next to a capture (step 13). */
+/**
+ * Who produced a capture, and whether that is known or only claimed. A
+ * producer named by the submitting client is a label: the backend cannot tell
+ * a desktop capture from one sent by any other authenticated client.
+ */
+export function captureProducerLabel(
+  capture: Pick<WebAnnotationCapture, "producer" | "producerSource">,
+): string {
+  const declared = webAnnotationProducerSource(capture) === "client-declared";
+  const label =
+    capture.producer === "desktop-native"
+      ? "Desktop capture"
+      : capture.producer === "text-only"
+        ? "Text-only capture"
+        : capture.producer === "result-capture"
+          ? "After-capture for review"
+          : "Imported from a legacy chat draft";
+  return declared ? `${label} (reported by the client, not verified)` : label;
+}
+
+/** Target precision explanation shown next to a capture. */
 export function targetPrecision(kind: WebAnnotationTargetKind): string {
   switch (kind) {
     case "element":

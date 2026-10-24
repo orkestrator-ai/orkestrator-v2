@@ -350,6 +350,12 @@ export class WebAnnotationService {
     return this.requests.reconcileOnce(...args);
   }
 
+  noteTurnEnded(
+    ...args: Parameters<WebAnnotationRequests["noteTurnEnded"]>
+  ): ReturnType<WebAnnotationRequests["noteTurnEnded"]> {
+    return this.requests.noteTurnEnded(...args);
+  }
+
   // -------------------------------------------------------------------------
   // Legacy compose-draft migration
 

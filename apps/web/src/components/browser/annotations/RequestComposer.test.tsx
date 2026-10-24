@@ -57,6 +57,110 @@ describe("request composer", () => {
     invokeMock.mockImplementation(() => Promise.resolve());
   });
 
+  test("advisory Discuss offers the sessions that can discuss read-only instead", async () => {
+    const claude = backend.destinations[0]!;
+    backend.destinations = [
+      {
+        ...claude,
+        destination: {
+          agent: "codex",
+          tabId: "tab-codex",
+          logicalSessionKey: "env-env-1:tab-codex",
+        },
+        title: "Codex build",
+        planMode: false,
+      },
+      {
+        ...claude,
+        destination: {
+          agent: "cursor",
+          tabId: "tab-cursor",
+          logicalSessionKey: "env-env-1:tab-cursor",
+        },
+        title: "Cursor plan",
+        planMode: true,
+        planModeScope: "session",
+      },
+    ];
+    render(<AnnotationHarness />);
+    fireEvent.click(await screen.findByRole("button", { name: "Discuss…" }));
+    const composer = await screen.findByRole("region", { name: "Ask an agent" });
+    const codex = await within(composer).findByRole("radio", { name: /Codex build/ });
+    expect(
+      within(codex).getByText(
+        "Discuss is advisory: switch this session to Plan in its chat for read-only",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(composer).getByText("Discuss runs in this session's Plan mode (read-only)"),
+    ).toBeTruthy();
+    fireEvent.click(codex);
+    const alternatives = await waitFor(() => {
+      const element = composer.querySelector("[data-read-only-alternatives]");
+      if (!element) throw new Error("no alternatives yet");
+      return element as HTMLElement;
+    });
+    fireEvent.click(within(alternatives).getByRole("button", { name: /Cursor plan/ }));
+    await waitFor(() =>
+      expect(
+        within(composer)
+          .getByRole("radio", { name: /Cursor plan/ })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+    expect(composer.querySelector("[data-read-only-alternatives]") === null).toBe(true);
+    // Nothing was sent, and no session's mode was changed to get here.
+    expect(backend.calls.some((call) => call.command === "web_annotation_request_send")).toBe(
+      false,
+    );
+  });
+
+  test("refreshing a selected session updates its Plan status and clears advisory notices", async () => {
+    backend.destinations = [
+      {
+        ...backend.destinations[0]!,
+        destination: {
+          agent: "codex",
+          tabId: "tab-codex",
+          logicalSessionKey: "env-env-1:tab-codex",
+        },
+        title: "Codex",
+        planMode: false,
+        planModeScope: "session",
+      },
+    ];
+    render(<AnnotationHarness />);
+    fireEvent.click(await screen.findByRole("button", { name: "Discuss…" }));
+    const composer = await screen.findByRole("region", { name: "Ask an agent" });
+    fireEvent.click(await within(composer).findByRole("radio", { name: /Codex/ }));
+    await waitFor(() => expect(composer.querySelector("[data-discuss-advisory]")).not.toBeNull());
+    backend.destinations = [{ ...backend.destinations[0]!, planMode: true }];
+    fireEvent.click(within(composer).getByRole("button", { name: "Refresh agent sessions" }));
+    await waitFor(() => {
+      expect(composer.querySelector("[data-discuss-advisory]") === null).toBe(true);
+      expect(composer.querySelector("[data-read-only-alternatives]") === null).toBe(true);
+    });
+    expect(within(composer).getByRole("button", { name: "Discuss with Codex" })).toBeTruthy();
+    expect(
+      within(composer).getByRole("radio", { name: /Codex/ }).getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  test("with no read-only session the advisory label stands", async () => {
+    backend.destinations = [{ ...backend.destinations[0]!, planMode: false }];
+    render(<AnnotationHarness />);
+    const composer = await openComposer("Discuss…");
+    expect(
+      (
+        await waitFor(() => {
+          const element = composer.querySelector('[data-read-only-alternatives="none"]');
+          if (!element) throw new Error("no notice yet");
+          return element;
+        })
+      ).textContent,
+    ).toContain("No session in this environment can discuss read-only");
+  });
+
   test("previews exactly which agent receives which instruction and evidence", async () => {
     backend.destinations = [{ ...backend.destinations[0]!, holds: ["compose-draft"] }];
     const composer = await (async () => {

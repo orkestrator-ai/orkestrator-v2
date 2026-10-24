@@ -13,6 +13,7 @@ import {
   webAnnotationCommand,
 } from "@/lib/web-annotations/client";
 import { refreshAllWebAnnotationCapabilities } from "@/lib/web-annotations/sync";
+import { WebAnnotationDiagnostics } from "./WebAnnotationDiagnostics";
 
 const MODE_LABELS: Record<WebAnnotationRolloutMode, { title: string; detail: string }> = {
   enabled: {
@@ -120,6 +121,7 @@ export function WebAnnotationSettings() {
           {error}
         </p>
       )}
+      {snapshot && <WebAnnotationDiagnostics />}
     </section>
   );
 }

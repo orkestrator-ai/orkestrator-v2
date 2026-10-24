@@ -1,5 +1,5 @@
 /**
- * Step 03 completion: two authenticated clients converge after concurrent
+ * Synchronization: two authenticated clients converge after concurrent
  * changes, disconnects, ring expiry, and a backend restart, using only the
  * public contract (hints as invalidations, `web_annotations_changes`, and
  * snapshots). Also: snapshots racing create/edit/delete, and logs that never
@@ -45,7 +45,7 @@ interface CachedItem {
   state: string;
 }
 
-/** A client that follows the step 03 sync protocol against one environment. */
+/** A client that follows the snapshot + hint sync protocol against one environment. */
 class SimulatedClient {
   readonly cache = new Map<string, CachedItem>();
   revision = -1;

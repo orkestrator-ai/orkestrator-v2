@@ -140,3 +140,12 @@ Aggregate result: exit 1 after 664.7 seconds logged. Codex bridge reported 2230 
 - **Complete unchanged owner:** `env -u PORT mise run test:logged -- --name merge-codex-fake-process-owner -- bun test --cwd bridges/codex-bridge ./src/testing/fake-codex-app-server.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed (exit 0, 0.3 seconds logged).
 - **Evidence:** `orkestrator-test-run.YFMbrr/bridges.log.gz` below the host temporary directory after aggregate finalization; outer run `orkestrator-test-run.I7HssJ`.
 - **Assessment:** confirmed intermittent recurrence. Host contention remains a hypothesis; no implementation, assertion, deadline or skip changed.
+
+## Design-agent links main merge — 2026-10-24
+
+- **Original command:** the testing guide's GNU-tool PATH with `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, merging `0014505caeed69395b3cc996dd541fcc6df12c23` into `ce4e1b007c4797868255438bd67d5d5168098773`.
+- **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1; bridge packages each used one Bun worker on the shared macOS host.
+- **Failure:** `fake Codex app-server process > reports its version and rejects unsupported invocations` exceeded five seconds (5000.00 ms). Four of the five bridge package tasks passed; this was the only bridge test failure.
+- **Unchanged owner:** `mise run test:logged -- --name merge-codex-fixture-owner -- bun --cwd=bridges/codex-bridge test ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed (exit 0, 0.1 seconds logged).
+- **Evidence:** `orkestrator-test-run.O0jvRO/bridges.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent fixture-process deadline; contention remains a hypothesis. No implementation, assertion, timeout or skip changed.

@@ -55,6 +55,16 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
 - **Evidence:** `orkestrator-test-run.PmXIK0/root-and-agent-support-tests.log` under the host temporary directory (compressed after aggregate finalization); outer run `orkestrator-test-run.xSSTYy`.
 - **Assessment:** the same diagnostics case previously recorded here recurred at its newer deadline. Its unchanged owner passed separately, confirming intermittent behavior. Host contention is a possible contributor, not a proven root cause. No assertion, deadline or skip changed.
 
+## Diagnostic scan recurrence during design-agent links merge — 2026-10-24
+
+- **Original command:** the testing guide's GNU-tool PATH with `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, merging `0014505caeed69395b3cc996dd541fcc6df12c23` into `ce4e1b007c4797868255438bd67d5d5168098773`.
+- **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1; one root worker on a shared macOS host, with other worktrees validating concurrently.
+- **Root counts:** 3368 passed and 15 failed across 3383 tests in 162 files (1001.90 seconds).
+- **Evidence:** `orkestrator-test-run.O0jvRO/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
+- **Failure:** `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull` exceeded its current 30-second deadline (30028.53 ms).
+- **Unchanged owner:** `mise run test:logged -- --name merge-owner-diagnostic-bounds -- bun test ./tests/unit/test-diagnostic-bounds.test.ts --parallel=1 --only-failures` passed (exit 0, 17.5 seconds logged).
+- **Assessment:** reopened for this confirmed intermittent scan timeout at the current deadline. Host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
+
 ## Coordinator adapters main merge — 2026-10-24
 
 Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. Reopened for `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull`, which exceeded its current 30-second budget (30050.80 ms). `mise run test:logged -- --name merge-owner-diagnostics -- bun test ./tests/unit/test-diagnostic-bounds.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (28.9 s). The older Electron failures remain historical.

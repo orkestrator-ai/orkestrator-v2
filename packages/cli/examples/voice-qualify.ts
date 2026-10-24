@@ -8,8 +8,10 @@
  *
  * 1. overview
  * 2. start work (a new session in --environment, with --agent and --prompt)
- * 3. answer an approval, if the agent asks for one within --approval-wait
- *    (confirmation-required first, then the confirmed call)
+ * 3. answer an approval or question, if the agent asks one within
+ *    --approval-wait: read it with `session.interactions`, choose the option a
+ *    "yes" means, and for an approval confirm first (confirmation-required,
+ *    then the confirmed call)
  * 4. stop the turn
  * 5. read the result
  *
@@ -134,6 +136,32 @@ export function createClient(url: string, token: string) {
   };
 }
 
+interface InteractionDetail {
+  id: string;
+  kind: string;
+  questions: Array<{
+    id: string;
+    required: boolean;
+    allowFreeText: boolean;
+    options: Array<{ id: string; label: string }>;
+  }>;
+}
+
+/** Answers a person saying "yes" would give: an affirmative option, else the first. */
+export function affirmativeAnswers(detail: InteractionDetail) {
+  return detail.questions
+    .filter((question) => question.required || question.options.length > 0)
+    .map((question) => {
+      const option =
+        question.options.find((candidate) =>
+          /\b(yes|allow|approve|proceed|continue|ok)\b/i.test(candidate.label),
+        ) ?? question.options[0];
+      return option
+        ? { questionId: question.id, optionIds: [option.id] }
+        : { questionId: question.id, freeText: "yes" };
+    });
+}
+
 function argument(name: string, fallback?: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
   return index >= 0 ? process.argv[index + 1] : fallback;
@@ -176,7 +204,7 @@ async function main() {
   });
 
   // 3. answer an approval if one appears.
-  let answered = "no approval was requested";
+  let answered = "nothing was asked";
   const deadline = Date.now() + approvalWaitMs;
   while (receipt && sessionId && Date.now() < deadline) {
     const status = await client.call("run_status", { operationId: receipt.operationId });
@@ -191,11 +219,21 @@ async function main() {
         ? execution.execution.interactions?.[0]
         : undefined;
     if (pending) {
+      // Read it the way a voice agent would before answering, and pick the
+      // option a person saying "yes" means.
+      const listed = await client.call("run_action", {
+        action: "session.interactions",
+        input: { sessionId },
+      });
+      const detail = (
+        (listed.structured.result as { items?: InteractionDetail[] } | undefined)?.items ?? []
+      ).find((item) => item.id === pending.id);
       const answer = {
         sessionId,
         interactionId: pending.id,
         revision: pending.revision,
         action: "answer",
+        ...(detail ? { answers: affirmativeAnswers(detail) } : {}),
         requestId: `${runKey}-approve`,
       };
       const first = await client.call("answer_question", answer);
@@ -207,8 +245,8 @@ async function main() {
         confirmed.structured.ok === false
           ? `refused: ${confirmed.structured.error?.code}`
           : confirmToken
-            ? "confirmed and answered"
-            : "answered";
+            ? `${detail?.kind ?? "interaction"} confirmed and answered`
+            : `${detail?.kind ?? "interaction"} answered`;
       break;
     }
     if (execution?.state && !["admitted", "running"].includes(execution.state)) break;

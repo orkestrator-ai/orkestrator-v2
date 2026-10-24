@@ -11,7 +11,18 @@ import type { ControlMcpInvoker } from "./control-shared-actions.js";
 /** Named operator credentials: migration, independent rotation and revocation, and validation. */
 
 const invoke: ControlMcpInvoker = async <T>(command: string) => {
-  if (command === "get_config") return { global: { agentMessaging: { enabled: false } } } as T;
+  if (command === "get_config") return { global: { agentMessaging: { enabled: true } } } as T;
+  if (command === "get_project_coordinator") {
+    return {
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "tab-1", mailboxIncarnationId: "incarnation-1" },
+        ],
+      },
+    } as T;
+  }
   throw new Error(`Unexpected command: ${command}`);
 };
 
@@ -116,6 +127,32 @@ describe("Control MCP credentials", () => {
     } finally {
       await fresh.stop();
     }
+  });
+
+  test("a coordinator lists only the tools its capabilities allow", async () => {
+    await server.start();
+    const side = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery", "mail"],
+    });
+    const listed = await rpc(side.url, side.token, "tools/list");
+    const names = (listed.body.result?.tools ?? []).map((tool) => tool.name);
+    expect(names).toContain("list_projects");
+    expect(names).toContain("send_message");
+    for (const hidden of [
+      "launch_environment",
+      "launch_job",
+      "create_ticket",
+      "start_build_pipeline",
+    ]) {
+      expect(names).not.toContain(hidden);
+    }
+    // Operator-only tiers never reach a coordinator.
+    expect(names).not.toContain("run_action");
   });
 
   test("refuses ungrantable capabilities, unknown profiles and empty custom lists", async () => {

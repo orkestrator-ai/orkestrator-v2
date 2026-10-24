@@ -222,3 +222,5 @@ cache` at 5007.56 ms. The root group had 3382 passed and one failed test.
 complete unchanged owner in 19.6 s. Original group evidence is
 `orkestrator-test-run.AW4scv/root-and-agent-support-tests.log.gz` under the host
 temporary directory. No firewall implementation, assertion, timeout or skip changed.
+
+- **Recurrence 2026-10-24 (node mbp3, Control MCP voice branch `todo-0041-control-mcp-voice-4a2c0ccc548b`):** failed in both `mise run test` aggregates (artifacts `orkestrator-test-run.SqxFKk` and `orkestrator-test-run.NcXAI6` under `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/`); the unchanged owner `tests/unit/firewall-policy.test.ts` passed alone (24 pass, 0 fail). The branch does not touch this area.

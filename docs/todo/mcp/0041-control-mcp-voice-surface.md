@@ -2,7 +2,7 @@
 
 Checked against `main` at `9906db30` (2026-10-16). Items 2 to 11 implemented on
 branch `todo-0041-control-mcp-voice-4a2c0ccc548b` (2026-10-24, rebased onto
-`main` at `71227437`).
+`main` at `a5d78cfc`).
 
 The goal is to let an external agent, in particular a realtime voice agent,
 do everything the public CLI can do through Control MCP, without loading
@@ -52,8 +52,9 @@ What exists, by part:
   - New handlers: `public-api/actions-attention.ts`, `actions-tickets.ts`,
     `actions-mail.ts`.
   - Control MCP split: `control-mcp-server.ts` (listener, authentication,
-    credentials; 515 lines) and `control-mcp-tools.ts` (the shared and
-    coordinator tools; was one 2,373-line file), plus
+    credentials), `control-mcp-tools.ts` (shared tools),
+    `control-mcp-coordinator-tools.ts` and `control-mcp-tool-support.ts`
+    (was one file, 2,824 lines on `main`), plus
     `control-mcp-credentials.ts`, `-confirm.ts`, `-caller.ts`, `-results.ts`,
     `-gateway.ts`, `-voice.ts`, `-resolve.ts`, `-direct-tools.ts`,
     `-operator-tools.ts` and `-lean-schema.ts`.
@@ -97,8 +98,9 @@ Measured on this branch (2026-10-24, `control-mcp-voice.test.ts` harness):
      profiles, empty custom lists and bad `deniedActions` refused; invalid
      stored credentials dropped); `control-mcp-voice.test.ts` exact
      `tools/list` per profile; coordinator `tools/list` filtered by capability
-     (`control-mcp-tools.ts` `filteredToolServer`, covered by the existing
-     coordinator tests in `control-mcp-server.test.ts`); Settings →
+     (`control-mcp-tools.ts` `filteredToolServer`; a side agent with
+     `discovery` and `mail` lists no launch, ticket or pipeline tool:
+     `control-mcp-credentials.test.ts`); Settings →
      `McpSettings.test.tsx` (7 tests: list, copy each recipe, create, rotate,
      revoke, disabled, errors).
 5. **Result mapper.** Done: `control-mcp-results.ts` (`envelopeToolResult`,
@@ -125,7 +127,8 @@ Measured on this branch (2026-10-24, `control-mcp-voice.test.ts` harness):
    `packages/cli/examples/voice-attention-relay.ts`. Evidence:
    `public-api/public-api-attention.test.ts`,
    `packages/cli/tests/attention-ticket-mail-command.test.ts`,
-   `packages/cli/tests/voice-attention-relay.test.ts`.
+   `packages/cli/tests/voice-attention-relay.test.ts`; the qualification
+   harness: `packages/cli/tests/voice-qualify.test.ts`.
 9. **Convergence.** Done, with the read tools narrowed (D7).
    - The original mutation tools for operator credentials are one public
      action each; `list_projects`, `list_tickets`, `get_ticket` and
@@ -158,7 +161,9 @@ Measured on this branch (2026-10-24, `control-mcp-voice.test.ts` harness):
 | Authority isolation | Done | `public-api-authority.test.ts`, `control-mcp-voice.test.ts` |
 | Portability of every profile | Done | `mcp-tool-schema-portability.test.ts` (full, voice, read-only, custom, coordinator) |
 | Coordinator regression | Done | `control-mcp-server.test.ts`: the coordinator tests pass as they were; nine former operator tests now run under a coordinator credential (the path that keeps those implementations) and two that covered removed operator-only branches moved to `control-mcp-operator-tools.test.ts` |
-| Live: a realtime voice runtime runs the script | **Not done** | see Remaining work |
+| `mise run test` (non-iOS) on the rebased branch | Fails only on unrelated cases | every failure passed alone and is a registered flake (0192, 0632, 0244, 0258, new 0775), except the 14 OpenCode execution-policy conformance cases, which fail on `main` too: #1198 moved the OpenCode pin to 1.19.4 and `conformance-execution-policy.test.ts` still expects 1.19.0 |
+| Live: the script over MCP with a real agent; real MCP clients on `full` | Done (no speaking model) | Live evidence |
+| Live: a realtime voice runtime runs the script | **Not done** | Remaining work 1 |
 
 ## Remaining work
 
@@ -168,18 +173,73 @@ Measured on this branch (2026-10-24, `control-mcp-voice.test.ts` harness):
    tool latency (target p95 under 1 s for reads), misresolved targets,
    session-handle copy errors, and tool-definition and result token counts.
    `packages/cli/examples/voice-qualify.ts` runs the same script without a
-   model and measures everything but the two model-dependent counts; see
-   Live evidence for what it produced on node mbp3. Not done because no
-   realtime voice runtime (audio in and out, a realtime model session) is
-   installed or credentialed on mbp3, and misresolution and copy errors can
-   only be measured with a speaking model and a person.
+   speaking model and measures everything but the two model-dependent
+   counts; Live evidence records its run on node mbp3 with a real Claude
+   session. Still needed: (a) the same script driven by a realtime voice
+   runtime, for misresolved targets and handle copy errors; (b) the approval
+   step with a real command approval, which needs a profile whose execution
+   policy asks for approvals. Not done because no realtime voice runtime
+   (audio in and out, a realtime model session) is installed or credentialed
+   on mbp3, misresolution and copy errors can only be judged with a speaking
+   model and a person, and no public setting enables approvals for a test
+   profile.
 2. **Optional, deferred:** `delegate` into a coordinator turn (D13), and a
    stateful MCP session with `list_changed` and subscriptions (D14). Each
    needs its own todo file when it is wanted.
 
 ## Live evidence
 
-LIVE_EVIDENCE_PLACEHOLDER
+Node mbp3 (macOS, Darwin 25.6), 2026-10-24, isolated profile
+`dev:test --profile mcp-voice-0041 --fixture --credential-source claude
+--agent-platforms claude` on this branch; profile stopped and reset afterwards.
+
+- **Migration on a real backend.** The profile's `control-mcp.json` was
+  written as version 2, mode 0600, with one credential `default` / `full`.
+- **Settings → MCP in a real browser** (Playwright on the profile's
+  `browserUrl`): the panel listed `Default`, created a `Voice assistant`
+  credential with the Voice profile and switched the setup to it; after a
+  page reload both credentials came back from the backend; the narrow
+  (420 px) layout showed the credential cards, Rotate and Revoke. Screenshots
+  are under `output/agent-testing/mcp-voice-0041/` (not committed).
+- **CLI against the real backend:** `orkestrator attention` listed the CLI's
+  own settled `environment.create`/`environment.start` runs and the finished
+  setup; `ticket create`, `comment`, `update --status done` and
+  `ticket list --status done` round-tripped; `mail mailboxes` answered.
+- **Voice script over MCP with a real Claude session**
+  (`packages/cli/examples/voice-qualify.ts`, voice credential, 20 repeats per
+  read): overview → `start_work` (Claude, a prompt that makes it ask a
+  question) → a real pending question detected through `run_status`
+  (`waiting-for-input`), read with `run_action session.interactions` and
+  answered with `answer_question` (no confirmation: a question) →
+  `stop_session` → `read_session`. Every step succeeded.
+
+  | Measure | Result |
+  | --- | --- |
+  | Voice `tools/list` | 12 tools, 7,118 bytes (about 1,780 tokens) |
+  | Reads (`overview`, `read_session`, `run_status`), p50 / p95 | 2.7 ms / 4.1 ms (target p95 < 1 s: met) |
+  | `start_work` (provider dispatch) | 517 ms |
+  | `answer_question`, `stop_session` | 15 ms, 123 ms |
+  | Largest result text | 427 bytes (about 107 tokens), `overview` |
+
+  An earlier run, whose prompt only said "ask before running anything",
+  produced a real question too; the harness then answered `answer` with no
+  answers and the public action refused it as `invalid-input` (a required
+  question must be answered), which is why the harness now reads the
+  interaction first (D18). No command approval was raised: the profile ran
+  Claude with the default (auto-approve) host policy, and no public setting
+  turns approvals on, so the approval-confirmation path is covered by the
+  scripted-provider tests only.
+- **Real MCP clients on the `full` profile** (the migrated `default`
+  credential, 82 tools):
+  - Claude Code 2.1.310 (`claude -p --strict-mcp-config`) called
+    `find_actions` (returned the five `ticket.*` actions), the original
+    `list_projects`, the generated `ticket_list` direct tool and `overview`,
+    and reported each correctly.
+  - Codex CLI 0.162.1 (`codex exec`, bearer token from an environment
+    variable) called `find_actions`, `attention_list` and `describe_action`
+    (`cli: orkestrator session prompt`); 13,566 tokens for the whole run.
+- Not measured: misresolved spoken targets and session-handle copy errors
+  (no speaking model or person; see Remaining work 1).
 
 ## Constraints and rationale
 
@@ -425,11 +485,29 @@ the choice, why, and its pros and cons.
   command at once (by design).
 
 **D17. Splitting `control-mcp-server.ts`.**
-- It was 2,373 lines, over the repository's 2,000-line limit. The listener,
-  authentication and credentials stay in `control-mcp-server.ts`; the shared
-  and coordinator tools moved unchanged to `control-mcp-tools.ts`; each new
-  part has its own module. The original test file stays as it was apart from
-  the converted tests; new behaviour is tested in new files.
+- It was 2,373 lines, over the repository's 2,000-line limit, and `main`
+  grew it to 2,824 (remote workflows, #1211) while this branch was open. The
+  listener, authentication and credentials stay in `control-mcp-server.ts`;
+  the shared tools are in `control-mcp-tools.ts`; the coordinator-only
+  workflow tools moved unchanged to `control-mcp-coordinator-tools.ts`, with
+  the helpers both use in `control-mcp-tool-support.ts`; each new part has its
+  own module. Operator credentials are refused a `nodeId`, which `main` made
+  coordinator-only, with `main`'s own message.
+- Pros: no source file over the limit; the rebase replayed this branch's
+  edits onto `main`'s file mechanically. Cons: `control-mcp-server.test.ts`
+  (2,872 lines on `main` before this change) is still over the limit;
+  splitting it would rewrite a file `main` keeps changing, so it is left for
+  its own change.
+
+**D18. How the qualification harness answers.**
+- Options: (a) send `answer` with no answers; (b) read the interaction with
+  `session.interactions` and choose the option a "yes" means (an option
+  labelled yes, allow, approve, proceed, continue or ok, else the first; free
+  text "yes" where a required question has no options).
+- Chosen: (b), after (a) was refused live.
+- Pros: behaves like a voice agent that heard the question. Cons: it is a
+  heuristic for a harness, not product behaviour; `answer_question` itself
+  never guesses an answer.
 
 **Assumptions.**
 - `capabilities` stays without a CLI command of its own; `connection check`

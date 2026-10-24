@@ -589,6 +589,8 @@ assertion, timeout or skip changed.
   host picker (web transcript scrolling, tool groups, Markdown streaming,
   the Virtuoso patch). No assertion, timeout or skip changed.
 
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3): the narrow host-picker case failed in `mise run test:agent:browser:isolated` (27 passed, 55 skipped, two failed) and again in an unchanged owning-file run on a fresh profile `qa-0043-gw` (12 passed, ten skipped, two failed); still unresolved.
+
 ## Control MCP voice main merge — 2026-10-24
 
 - **Parents:** feature `fc04c130d805d2c52b064d0d504eadc6188ac540` and main `0014505caeed69395b3cc996dd541fcc6df12c23`.

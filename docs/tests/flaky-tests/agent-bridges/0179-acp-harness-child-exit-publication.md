@@ -18,3 +18,5 @@ machine environments ran suites concurrently. The owning file passed alone with
 `bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts
 ./src/acp-test-harness.test.ts` (1 passed). Evidence:
 `/tmp/orkestrator-test-run.J2NQoU/bridges.log.gz`.
+
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3, `mise run test` via `test:logged`): failed in the bridges group; `bun test --cwd bridges/acp-bridge ./src/acp-test-harness.test.ts --parallel=1` then passed.

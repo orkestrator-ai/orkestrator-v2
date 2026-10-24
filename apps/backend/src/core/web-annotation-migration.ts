@@ -1,5 +1,6 @@
 /**
- * Legacy browser-annotation migration (plan step 09, backend side).
+ * Legacy browser-annotation migration, backend side ("Legacy migration" in
+ * docs/architecture/web-page-annotations.md).
  *
  * Browser notes used to be copied into every open native compose draft as
  * `TranscriptAnnotation { source: "browser" }` plus a screenshot attachment.
@@ -420,6 +421,7 @@ export class WebAnnotationMigration {
         annotationId,
         revision,
         producer: "legacy-import",
+        producerSource: "backend",
         capturedAt: tx.now,
         documentGeneration: null,
         page: {

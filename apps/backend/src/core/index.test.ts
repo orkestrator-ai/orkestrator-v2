@@ -1919,6 +1919,64 @@ test("startup fails closed when reconciliation cannot persist its result", async
   }
 });
 
+test("turn-end observation finishes before the same-edge prompt queue drain", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-turn-end-order-"));
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    agentTools: fakeAgentTools(),
+  });
+  const internal = backend as unknown as {
+    context: { webAnnotations: { noteTurnEnded: (input: unknown) => Promise<void> } };
+    nativeAgents: {
+      options: { onActivityTransition: (event: Record<string, unknown>) => void };
+      drainPromptQueueForSession: (input: unknown) => Promise<void>;
+    };
+  };
+  let resume!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  const order: string[] = [];
+  const note = spyOn(internal.context.webAnnotations, "noteTurnEnded").mockImplementation(
+    async () => {
+      order.push("observe");
+      await paused;
+      order.push("outcome-recorded");
+    },
+  );
+  const drain = spyOn(internal.nativeAgents, "drainPromptQueueForSession").mockImplementation(
+    async () => {
+      order.push("next-prompt");
+    },
+  );
+  try {
+    internal.nativeAgents.options.onActivityTransition({
+      environmentId: "env-1",
+      logicalSessionKey: "env-env-1:tab-1",
+      agent: "codex",
+      owner: "environment",
+      previousState: "working",
+      state: "idle",
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(drain).not.toHaveBeenCalled();
+    resume();
+    await waitForCondition(() => drain.mock.calls.length === 1, "same-edge prompt drain");
+    expect(order).toEqual(["observe", "outcome-recorded", "next-prompt"]);
+  } finally {
+    resume();
+    note.mockRestore();
+    drain.mockRestore();
+    await backend.shutdown();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("production activity wiring forwards only worker waiting/working edges and preserves the tab key", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worker-edges-"));
   const backend = new OrkestratorBackend({

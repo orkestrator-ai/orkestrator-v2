@@ -8,7 +8,7 @@
  * delivered by `webContents.sendInputEvent`, so the page runtime sees trusted
  * input exactly as it does from a user; nothing calls page hooks to select.
  *
- * Covers (step 14): capture without an agent tab + renderer reload + backend
+ * Covers: capture without an agent tab + renderer reload + backend
  * restart persistence; pending spool survival across renderer reload;
  * sensitive-field masking in evidence and pixels; adversarial page strings
  * inert in the compiled brief and forged provenance rejected; pins after

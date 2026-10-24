@@ -693,6 +693,20 @@ export class OrkestratorBackend {
             if (event.owner !== "coordinator") {
               this.probeForAgentCreatedPullRequest(event.environmentId, context);
             }
+            // Web annotation requests sent to this session read their turn
+            // outcome now, while the bridge that ran the turn is still up,
+            // rather than on a later reconcile pass that may find it gone.
+            let annotationsObserved: Promise<unknown> = Promise.resolve();
+            if (event.owner !== "coordinator" && event.agent && event.logicalSessionKey) {
+              annotationsObserved =
+                context.webAnnotations
+                  ?.noteTurnEnded({
+                    environmentId: event.environmentId,
+                    agent: event.agent,
+                    logicalSessionKey: event.logicalSessionKey,
+                  })
+                  .catch(() => undefined) ?? Promise.resolve();
+            }
             /*
              * The turn that was holding this session's work just ended, so the
              * things that were waiting for it can run now rather than on the
@@ -702,7 +716,7 @@ export class OrkestratorBackend {
              * dispatch latency instead of the mail backoff, which for a
              * coordinator could previously reach thirty seconds.
              */
-            void changesFinalized
+            void Promise.all([changesFinalized, annotationsObserved])
               .then(() => this.nativeAgents.drainPromptQueueForSession(event))
               .catch((error: unknown) => {
                 console.warn(

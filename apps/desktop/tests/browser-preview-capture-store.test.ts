@@ -233,6 +233,23 @@ describe("browser preview capture spool", () => {
     expect(await perBytes.store.list()).toHaveLength(3);
   });
 
+  test("stats report spool depth and image bytes against the limits, content-free", async () => {
+    const spool = harness({ limits: { perProcess: 5 } });
+    expect(await spool.store.stats()).toMatchObject({ pending: 0, imageBytes: 0, maxPending: 5 });
+    await spool.store.create(createInput("tab-a"));
+    await spool.store.create(createInput("tab-b", { image: null }));
+    const stats = await spool.store.stats();
+    expect(stats).toEqual({
+      pending: 2,
+      imageBytes: pngBytes(64, 40, 1).length,
+      maxPending: 5,
+      maxImageBytes: expect.any(Number),
+    });
+    expect(Object.keys(stats).sort()).toEqual(
+      ["imageBytes", "maxImageBytes", "maxPending", "pending"].sort(),
+    );
+  });
+
   test("acknowledgement clears the record; duplicate and unknown acks are harmless", async () => {
     const spool = harness();
     const created = await spool.store.create(createInput());

@@ -8,6 +8,8 @@
  */
 import {
   WEB_ANNOTATION_METRIC_BUCKETS_MS,
+  type WebAnnotation,
+  type WebAnnotationAnchorResolution,
   type WebAnnotationDurationSummary,
   type WebAnnotationMetricsSnapshot,
   type WebAnnotationRequest,
@@ -122,6 +124,48 @@ export class WebAnnotationMetrics {
       if (!after) continue;
       this.observeRequest(before, after);
     }
+    for (const annotationId of observation.annotationIds ?? []) {
+      const before = observation.previous.annotations[annotationId];
+      const after = observation.next.annotations[annotationId];
+      if (!before || !after) continue;
+      this.observeAnnotation(before, after, observation.next.requests);
+    }
+  }
+
+  /**
+   * Anchor resolution outcome of an original target re-resolved on the
+   * current page for a result capture (the backend's only view of anchor
+   * resolution; pins resolve on the desktop and count there).
+   */
+  recordTargetResolution(resolution: WebAnnotationAnchorResolution): void {
+    this.increment(
+      `anchor_resolutions|source=result-capture|state=${segment(resolution.state)}|rule=${segment(resolution.rule)}`,
+    );
+  }
+
+  /** Acceptance and reopening, derived from committed annotation rows. */
+  private observeAnnotation(
+    before: WebAnnotation,
+    after: WebAnnotation,
+    requests: Readonly<Record<string, WebAnnotationRequest>>,
+  ): void {
+    if (before.state === "resolved" && after.state === "open") {
+      this.increment("annotations_reopened");
+    }
+    if (before.state !== "resolved" && after.state === "resolved" && after.resolution) {
+      const request = after.resolution.requestId ? requests[after.resolution.requestId] : undefined;
+      if (request) {
+        // From sending the request to the human accepting its result.
+        const ms = sinceMs(request.createdAt, after.resolution.acceptedAt);
+        if (ms !== null) {
+          this.observe(`acceptance_ms|source=request|operation=${segment(request.operation)}`, ms);
+        }
+      } else {
+        // Resolved without a request: from the note's creation.
+        const ms = sinceMs(after.createdAt, after.resolution.acceptedAt);
+        if (ms !== null) this.observe("acceptance_ms|source=note", ms);
+      }
+    }
   }
 
   private observeRequest(
@@ -131,7 +175,23 @@ export class WebAnnotationMetrics {
     const operation = segment(after.operation);
     if (!before) {
       this.increment(`requests_created|operation=${operation}`);
+      // Evidence the brief budget left out, or that the capture never had.
+      // Section names are a closed vocabulary.
+      for (const item of after.evidence.items) {
+        for (const section of item.omitted) {
+          this.increment(`evidence_omitted|section=${segment(section)}`);
+        }
+        for (const section of item.unavailable) {
+          this.increment(`evidence_unavailable|section=${segment(section)}`);
+        }
+      }
       return;
+    }
+    if (!before.turnOutcome && after.turnOutcome) {
+      // Which providers still settle without a known outcome.
+      this.increment(
+        `request_turn_outcomes|agent=${segment(after.destination.agent)}|operation=${operation}|outcome=${segment(after.turnOutcome)}`,
+      );
     }
     if (before.state !== after.state) {
       this.increment(

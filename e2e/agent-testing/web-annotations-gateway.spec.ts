@@ -587,9 +587,7 @@ async function recordLiveOutcome(setup: Setup, requestId: string, testInfo: Test
   return settled;
 }
 
-test("live agent discusses a note and the turn outcome is known", async ({
-  browser,
-}, testInfo) => {
+test("live agent discusses a note and the turn outcome is known", async ({ browser }, testInfo) => {
   test.skip(
     !LIVE,
     "Live annotation runs need ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1 and a profile started with agent credentials",
@@ -655,9 +653,10 @@ test("live session-scoped agent already in Plan discusses read-only and never ha
       "Why might this label read awkwardly? Answer briefly; do not change anything.",
       EXPECTED_SOURCE_CHANGE.route,
     );
-    return prepare(setup.invoke, setup, [receipt.annotationId], "discuss").then(
-      (preparation) => ({ preparation, requestId }),
-    );
+    return prepare(setup.invoke, setup, [receipt.annotationId], "discuss").then((preparation) => ({
+      preparation,
+      requestId,
+    }));
   };
   const send = async ({ preparation, requestId }: Awaited<ReturnType<typeof discussOnce>>) =>
     setup.invoke<{ request: WebAnnotationRequest }>(C.requestSend, {

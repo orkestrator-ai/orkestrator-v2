@@ -264,19 +264,19 @@ describe("annotation panel flows", () => {
 
   test("results resolved against the page being left are dropped on a new document", async () => {
     backend.seed({ id: "annotation-left", title: "Left behind" });
-    capture.mocks.showPins.mockImplementation(
-      async (input: { pins: Array<{ annotationId: string }> }) =>
-        input.pins.map((pin) => ({
-          annotationId: pin.annotationId,
-          resolution: {
-            state: "too-complex" as const,
-            rule: "none" as const,
-            candidateCount: 0,
-            documentGeneration: 4,
-            rect: null,
-          },
-        })),
-    );
+    capture.mocks.showPins.mockImplementation((async (input: {
+      pins: Array<{ annotationId: string }>;
+    }) =>
+      input.pins.map((pin) => ({
+        annotationId: pin.annotationId,
+        resolution: {
+          state: "too-complex" as const,
+          rule: "none" as const,
+          candidateCount: 0,
+          documentGeneration: 4,
+          rect: null,
+        },
+      }))) as never);
     seedBrowserLayout({ open: true });
     render(<AnnotationHarness />);
     expect(await screen.findByText(/too large to search in time/)).toBeTruthy();

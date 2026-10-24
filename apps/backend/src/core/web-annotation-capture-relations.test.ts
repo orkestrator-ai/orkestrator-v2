@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import type { WebAnnotationRegionTarget } from "@orkestrator/protocol/web-annotations";
 import { fixtureCaptureInput } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { regionCropRelation } from "./web-annotation-service-threads.js";
 import {
@@ -30,7 +31,7 @@ function sha256(data: Buffer): string {
 }
 
 describe("region crop relation", () => {
-  const region = fixtureCaptureInput("region").target;
+  const region = fixtureCaptureInput("region").target as WebAnnotationRegionTarget;
 
   test("records a crop whose size matches the target's image rectangle", () => {
     expect(

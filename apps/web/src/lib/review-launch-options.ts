@@ -93,13 +93,16 @@ export function includeMissingOpenCodeModels(
  * `"default"` placeholder; launchers that know a project overlay the backend's
  * durable OpenCode model cache on top of it.
  */
-export function buildReviewModelCatalog(): ReviewModelCatalog {
-  const liveClaudeModels = useAgentModelCatalogStore
-    .getState()
-    .claudeModels.map(claudeReviewModelOption);
+export function buildReviewModelCatalog(
+  models: Pick<
+    ReturnType<typeof useAgentModelCatalogStore.getState>,
+    "claudeModels" | "codexModels" | "cursorModels" | "grokModels" | "piModels"
+  > = useAgentModelCatalogStore.getState(),
+): ReviewModelCatalog {
+  const liveClaudeModels = models.claudeModels.map(claudeReviewModelOption);
   const claude = liveClaudeModels.length > 0 ? liveClaudeModels : CLAUDE_FALLBACK_MODELS;
 
-  const codexModels = useAgentModelCatalogStore.getState().codexModels;
+  const codexModels = models.codexModels;
   const codex = (codexModels.length > 0 ? codexModels : CODEX_MODELS).map((model) => ({
     id: model.id,
     name: model.name,
@@ -108,7 +111,7 @@ export function buildReviewModelCatalog(): ReviewModelCatalog {
     supportsSpeed: true as const,
   }));
 
-  const cachedAcpCatalog = useAgentModelCatalogStore.getState();
+  const cachedAcpCatalog = models;
   const toLaunchOptions = (models: typeof cachedAcpCatalog.cursorModels) =>
     models.map((model) => ({
       id: model.id,

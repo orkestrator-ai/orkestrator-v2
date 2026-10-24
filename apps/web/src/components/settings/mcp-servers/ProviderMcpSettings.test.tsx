@@ -15,7 +15,8 @@ import * as federation from "@/components/federation/FederationProvider";
 import { AccountMachineProvider } from "@/components/settings/account-machine";
 import { resetNodeEventsForTests } from "@/lib/federation/node-events";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { listen as nativeListen } from "@/lib/native/events";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { listen as nativeListen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { requestMcpServerSettings } from "@/lib/mcp-settings-navigation";
 import { expectDomAbsent } from "../../../../../../tests/bounded-test-diagnostics";
 
@@ -966,4 +967,140 @@ describe("ProviderMcpSettings on another machine", () => {
     fireEvent.keyDown(screen.getByLabelText("Configuration for"), { key: "Enter" });
     expect(await screen.findByRole("option", { name: "Leaf worktree (worktree)" })).toBeTruthy();
   });
+});
+
+test("command-node environments, changes and reconnection come from the portal in a leaf window", async () => {
+  const originalEnvironments = useEnvironmentStore.getState().environments;
+  const listeners = new Map<string, Set<() => void>>();
+  const stops = mock(() => {});
+  const environmentTarget = {
+    ...target,
+    targetId: "mcp1~claude~env~command-env",
+    context: { ...target.context, kind: "environment" as const, environmentId: "command-env" },
+  };
+  const portal = mock(async (command: string, args?: Record<string, unknown>) => {
+    if (command === "list_mcp_management_targets" && args?.environmentId === "command-env")
+      return { protocolVersion: 1, backendId: "b1", targets: [environmentTarget] };
+    if (command === "get_mcp_management_snapshot" && args?.targetId === environmentTarget.targetId)
+      return snapshot({ target: environmentTarget });
+    const handler = baseHandlers[command as keyof typeof baseHandlers];
+    if (!handler) throw new Error(`Unexpected portal command: ${command}`);
+    return handler();
+  });
+  spyOn(federation, "useFederation").mockReturnValue({
+    portalState: {
+      selfId: "command",
+      nodes: [],
+      self: {
+        environments: [
+          {
+            ref: { environmentId: "command-env" },
+            name: "Command worktree",
+            environmentType: "local",
+            deleting: false,
+          },
+        ],
+      },
+    },
+  } as never);
+  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+  window.orkestratorPortal = {
+    invoke: portal,
+    listen: (event: string, callback: () => void) => {
+      const handlers = listeners.get(event) ?? new Set();
+      handlers.add(callback);
+      listeners.set(event, handlers);
+      return () => {
+        handlers.delete(callback);
+        stops();
+      };
+    },
+  } as never;
+  useEnvironmentStore.setState({
+    environments: [{ id: "leaf-env", name: "Leaf worktree", environmentType: "local" }] as never,
+  });
+  listenMock.mockClear();
+  try {
+    render(
+      <AccountMachineProvider value={{ machine: null, name: "Command" }}>
+        <ProviderMcpSettings />
+      </AccountMachineProvider>,
+    );
+    await screen.findByText("docs");
+    fireEvent.keyDown(screen.getByLabelText("Configuration for"), { key: "Enter" });
+    const commandEnvironment = await screen.findByRole("option", {
+      name: "Command worktree (worktree)",
+    });
+    expect(screen.queryByRole("option", { name: "Leaf worktree (worktree)" }) === null).toBe(true);
+    fireEvent.click(commandEnvironment);
+    await waitFor(() =>
+      expect(portal).toHaveBeenCalledWith("list_mcp_management_targets", {
+        environmentId: "command-env",
+      }),
+    );
+    for (const event of [MCP_MANAGEMENT_CHANGED_EVENT, NATIVE_EVENT_STREAM_CONNECTED_EVENT]) {
+      const before = portal.mock.calls.filter(
+        ([command]) => command === "get_mcp_management_snapshot",
+      ).length;
+      await act(async () => {
+        for (const callback of listeners.get(event) ?? []) callback();
+      });
+      await waitFor(() =>
+        expect(
+          portal.mock.calls.filter(([command]) => command === "get_mcp_management_snapshot").length,
+        ).toBeGreaterThan(before),
+      );
+      expect(listenMock.mock.calls.some((call: unknown[]) => call[0] === event)).toBe(false);
+    }
+    cleanup();
+    expect(stops.mock.calls.length).toBeGreaterThan(0);
+    expect(listeners.get(MCP_MANAGEMENT_CHANGED_EVENT)?.size).toBe(0);
+  } finally {
+    cleanup();
+    mock.restore();
+    useEnvironmentStore.setState({ environments: originalEnvironments });
+    delete window.orkestratorPortal;
+    delete window.orkestratorWorkspaceTarget;
+  }
+});
+
+test("the bound leaf uses its window environments and event stream", async () => {
+  const originalEnvironments = useEnvironmentStore.getState().environments;
+  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+  const portal = mock(async (command: string, args?: Record<string, unknown>) => {
+    if (command !== "invoke_on_node") throw new Error(`Unexpected command: ${command}`);
+    const handler = baseHandlers[String(args?.command) as keyof typeof baseHandlers];
+    return { outcome: "ok", result: handler() };
+  });
+  window.orkestratorPortal = { invoke: portal, listen: () => () => {} } as never;
+  useEnvironmentStore.setState({
+    environments: [{ id: "leaf-env", name: "Bound leaf", environmentType: "local" }] as never,
+  });
+  listenMock.mockClear();
+  try {
+    render(
+      <AccountMachineProvider value={{ machine: "leaf", name: "Leaf" }}>
+        <ProviderMcpSettings />
+      </AccountMachineProvider>,
+    );
+    await screen.findByText("docs");
+    fireEvent.keyDown(screen.getByLabelText("Configuration for"), { key: "Enter" });
+    await screen.findByRole("option", { name: "Bound leaf (worktree)" });
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+    for (const event of [MCP_MANAGEMENT_CHANGED_EVENT, NATIVE_EVENT_STREAM_CONNECTED_EVENT]) {
+      const registrations = listenMock.mock.calls.filter((call: unknown[]) => call[0] === event);
+      expect(registrations.length).toBeGreaterThan(0);
+      const before = portal.mock.calls.length;
+      await act(async () => {
+        for (const [, callback] of registrations) (callback as () => void)();
+      });
+      await waitFor(() => expect(portal.mock.calls.length).toBeGreaterThan(before));
+    }
+    expect(portal.mock.calls.every(([command]) => command === "invoke_on_node")).toBe(true);
+  } finally {
+    cleanup();
+    useEnvironmentStore.setState({ environments: originalEnvironments });
+    delete window.orkestratorPortal;
+    delete window.orkestratorWorkspaceTarget;
+  }
 });

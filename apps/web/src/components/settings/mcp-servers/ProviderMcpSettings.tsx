@@ -7,7 +7,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import { useFederation } from "@/components/federation/FederationProvider";
-import { useAccountMachine } from "@/components/settings/account-machine";
+import { isWindowMachine, useAccountMachine } from "@/components/settings/account-machine";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -57,11 +57,15 @@ export function ProviderMcpSettings() {
   const { machine } = useAccountMachine();
   const { portalState } = useFederation();
   const ownEnvironments = useEnvironmentStore((state) => state.environments);
-  // This window's environment store holds the command node's environments;
-  // another machine's come from its node summary.
+  // Only the bound backend uses the window store; other backends, including
+  // the command node in a leaf window, use their portal summaries.
   const environments = useMemo(() => {
-    if (typeof machine === "string" && machine !== portalState.selfId) {
-      const node = portalState.nodes.find((candidate) => candidate.nodeId === machine);
+    if (!isWindowMachine(machine)) {
+      const nodeId = machine ?? portalState.selfId;
+      const node =
+        nodeId === portalState.selfId
+          ? portalState.self
+          : portalState.nodes.find((candidate) => candidate.nodeId === nodeId);
       return (node?.environments ?? [])
         .filter((environment) => !environment.deleting)
         .map((environment) => ({
@@ -77,7 +81,7 @@ export function ProviderMcpSettings() {
         name: environment.name,
         local: environment.environmentType === "local",
       }));
-  }, [machine, ownEnvironments, portalState.nodes, portalState.selfId]);
+  }, [machine, ownEnvironments, portalState.nodes, portalState.self, portalState.selfId]);
   // Whether the open editor/dialog holds unsaved input. A draft belongs to
   // one exact target, so switching target must discard it — explicitly.
   const dirtyRef = useRef(false);

@@ -1,8 +1,11 @@
+import { machineInvoke, type AccountMachine } from "./agent-accounts";
 import { invoke } from "@/lib/native/backend";
 
 /** Running Orkestrator version reported by the connected backend. */
-export async function getAppVersion(): Promise<string> {
-  return invoke<string>("get_app_version");
+export async function getAppVersion(machine?: AccountMachine): Promise<string> {
+  return machine === undefined
+    ? invoke<string>("get_app_version")
+    : machineInvoke<string>(machine, "get_app_version");
 }
 
 /** Current resource use on the host running the Orkestrator backend. */

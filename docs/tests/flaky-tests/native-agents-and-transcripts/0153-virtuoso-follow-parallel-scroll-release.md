@@ -54,3 +54,20 @@ The desktop follow-release case failed in the aggregate.
 - **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=52522 mise run test:logged -- --name merge-follow-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1 --output output/playwright/merge-follow-owner` passed both desktop cases with two mobile skips (5.2 s logged).
 - **Evidence:** `orkestrator-test-run.l09gNo/merge-browser.log.gz` under the host temporary directory; passing owner summary in `orkestrator-test-run.4PLw6Z/summary.json`.
 - **Assessment:** confirms an intermittent recurrence of follow re-engagement on the merged tree. Host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+## Selected-machine settings validation — 2026-10-24
+
+The nine-worker command
+`ORKESTRATOR_E2E_PORT=15374 ORKESTRATOR_PUBLIC_E2E_PORT=15375 mise run test:logged -- --name settings-browser-components -- mise run test:browser`
+repeated the desktop follow-release failure at line 43: the decision remained
+`false` rather than `auto` after five seconds. The aggregate reported 584 passed,
+102 skipped and six failed in 546.9 s logged; other repository/browser checks
+were active on the host.
+
+The complete unchanged owner passed both desktop cases, with both mobile cases
+skipped as already configured, in 4.2 s:
+`ORKESTRATOR_E2E_PORT=15377 mise run test:logged -- --name settings-follow-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1 --output output/playwright/settings-follow-owner`.
+Original evidence: host temporary directory
+`orkestrator-test-run.xfA2Oh/settings-browser-components.log.gz` and
+`output/playwright/test-results/VirtuosoFollow-live-transc-300c0-up-and-re-engages-at-bottom-desktop-chromium/`.
+No follow implementation, assertion, timeout or skip changed.

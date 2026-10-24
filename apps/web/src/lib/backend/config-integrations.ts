@@ -79,8 +79,12 @@ export interface AgentModelCatalogCache {
 }
 
 /** Load the host-wide last-known-good catalogues, seeding Pi on first use. */
-export async function getAgentModelCatalogCache(): Promise<AgentModelCatalogCache> {
-  return invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache");
+export async function getAgentModelCatalogCache(
+  machine?: AccountMachine,
+): Promise<AgentModelCatalogCache> {
+  return machine === undefined
+    ? invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache")
+    : machineInvoke<AgentModelCatalogCache>(machine, "get_agent_model_catalog_cache");
 }
 
 /** Discover Pi models without requiring an environment or persistent bridge. */
@@ -103,16 +107,19 @@ type HostModelCatalogRefreshResult = {
 export function refreshHostAgentModelCatalog(
   agent: "opencode",
   projectId: string,
+  machine?: AccountMachine,
 ): Promise<HostModelCatalogRefreshResult>;
 export function refreshHostAgentModelCatalog(
   agent: NonOpenCodeAgent,
   projectId?: never,
+  machine?: AccountMachine,
 ): Promise<HostModelCatalogRefreshResult>;
 export async function refreshHostAgentModelCatalog(
   agent: import("@orkestrator/protocol/agent-platforms").AgentPlatform,
   projectId?: string,
+  machine?: AccountMachine,
 ): Promise<HostModelCatalogRefreshResult> {
-  return invoke("refresh_host_agent_model_catalog", {
+  return machineInvoke(machine, "refresh_host_agent_model_catalog", {
     agent,
     ...(projectId ? { projectId } : {}),
   });

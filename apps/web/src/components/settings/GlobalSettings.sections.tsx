@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettings";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
@@ -102,12 +102,7 @@ import { AgentAccountsSection } from "./AgentAccountsSection";
 import { AgentSignInCard } from "./AgentSignInCard";
 import { OpenCodeProvidersSection } from "./OpenCodeProvidersSection";
 import { isAgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
-import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
-import { useProjectStore, useUIStore } from "@/stores";
-import {
-  refreshSettingsModelCatalog,
-  resolveSettingsCatalogProjectId,
-} from "./agent/refresh-model-catalog";
+import { useSettingsModelCatalog } from "./agent/useSettingsModelCatalog";
 import {
   MAX_DEBUG_LOG_RETENTION_DAYS,
   MIN_DEBUG_LOG_RETENTION_DAYS,
@@ -253,7 +248,8 @@ function CredentialClearButton({
 
 export function GlobalSettingsSections({ activeSection, settings }: GlobalSettingsSectionsProps) {
   // Another machine's files are not on this one, so there is nothing to reveal.
-  const canRevealFiles = isWindowMachine(useAccountMachine().machine);
+  const { machine } = useAccountMachine();
+  const canRevealFiles = isWindowMachine(machine);
   const {
     global,
     envPatterns,
@@ -380,7 +376,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     let cancelled = false;
     setBackendVersion({ state: "loading" });
     backend
-      .getAppVersion()
+      .getAppVersion(machine)
       .then((reported) => {
         if (cancelled) return;
         const version = normalizeBackendVersion(reported);
@@ -395,7 +391,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     return () => {
       cancelled = true;
     };
-  }, [activeSection]);
+  }, [activeSection, machine]);
 
   const versionReminder =
     backendVersion.state === "reported"
@@ -542,12 +538,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     </div>
   );
 
-  const selectedProjectId = useUIStore((state) => state.selectedProjectId);
-  const projects = useProjectStore((state) => state.projects);
-  const projectIds = useMemo(() => projects.map((project) => project.id), [projects]);
-  const catalogProjectId = resolveSettingsCatalogProjectId(selectedProjectId, projectIds);
-  const catalogProject = projects.find((project) => project.id === catalogProjectId);
-  const catalogProjectLabel = catalogProject?.name ?? catalogProjectId;
+  const { catalog, catalogProjectId, catalogProjectLabel, selectedProjectId, refresh } =
+    useSettingsModelCatalog();
   const openCodeCatalogScopeDescription = !catalogProjectId
     ? "Add a repository to load and refresh OpenCode models."
     : catalogProjectId === selectedProjectId
@@ -557,11 +549,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         : `No repository is selected; models are loaded from ${catalogProjectLabel}.`;
   const [refreshingModelCatalog, setRefreshingModelCatalog] = useState<AgentPlatform | null>(null);
   const refreshingModelCatalogRef = useRef<AgentPlatform | null>(null);
-  // Repository-scoped so an OpenCode catalogue cached for the open project is
-  // offered here too. Global Settings can open before the user selects one, so
-  // fall back to the first repository rather than presenting a refresh action
-  // that can only fail. The Claude/Codex/Cursor/Grok catalogues are global.
-  const catalog = useProjectModelCatalog(catalogProjectId ?? "", true);
   const agentTiers = { global: agentSettings };
 
   const refreshModelCatalog = useCallback(
@@ -570,7 +557,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       refreshingModelCatalogRef.current = platform;
       setRefreshingModelCatalog(platform);
       try {
-        const result = await refreshSettingsModelCatalog(platform, catalogProjectId);
+        const result = await refresh(platform);
         const scope =
           platform === "opencode" && catalogProjectLabel ? ` for ${catalogProjectLabel}` : "";
         toast.success(
@@ -587,7 +574,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         setRefreshingModelCatalog(null);
       }
     },
-    [catalogProjectId, catalogProjectLabel],
+    [catalogProjectLabel, refresh],
   );
 
   const renderDefaults = () => (
@@ -847,6 +834,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               variant="outline"
               size="icon"
               aria-label="Browse for the default projects folder"
+              disabled={!canRevealFiles}
               onClick={() => {
                 void pickHostPath({
                   mode: "directory",
@@ -892,6 +880,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               variant="outline"
               size="icon"
               aria-label="Browse for SSH agent socket"
+              disabled={!canRevealFiles}
               onClick={() => {
                 void pickHostPath({
                   mode: "file",

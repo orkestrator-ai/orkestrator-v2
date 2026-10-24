@@ -25,7 +25,7 @@ import { Switch } from "@/components/ui/switch";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
-import { useAccountMachine } from "./account-machine";
+import { isWindowMachine, useAccountMachine } from "./account-machine";
 
 type Publication = backend.PreviewSettingsShape["publication"];
 
@@ -85,7 +85,9 @@ async function loadWindowCapabilities(): Promise<CapabilitiesLoad> {
  * Another machine, read directly: the preview store caches this window's
  * backend only, and another machine's answer must never replace it.
  */
-async function loadMachineCapabilities(machine: string): Promise<CapabilitiesLoad> {
+async function loadMachineCapabilities(
+  machine: string | null | undefined,
+): Promise<CapabilitiesLoad> {
   try {
     const capabilities = await backend.getPreviewCapabilities(machine);
     if (!capabilities || typeof capabilities.backendInstanceId !== "string") {
@@ -128,10 +130,9 @@ export function PreviewSettings() {
   // null rather than throwing, so it is read back from the store.
   const load = useCallback(async () => {
     setLoadError(null);
-    // A node ID is another machine; null and undefined are this window's backend.
-    const loaded = machine
-      ? await loadMachineCapabilities(machine)
-      : await loadWindowCapabilities();
+    const loaded = isWindowMachine(machine)
+      ? await loadWindowCapabilities()
+      : await loadMachineCapabilities(machine);
     if (!loaded.capabilities) {
       setUnsupported(loaded.unsupported);
       if (loaded.error) setLoadError(loaded.error);

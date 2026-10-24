@@ -279,10 +279,15 @@ export async function getOpencodeModelPreferences(): Promise<OpenCodeModelPrefer
 /** Load the durable project-scoped catalogue before an OpenCode server is ready. */
 export async function getCachedOpenCodeModelCatalog(
   projectId: string,
+  machine?: AccountMachine,
 ): Promise<OpenCodeModelCatalogSnapshot | null> {
-  return invoke<OpenCodeModelCatalogSnapshot | null>("get_opencode_model_catalog_cache", {
-    projectId,
-  });
+  return machineInvoke<OpenCodeModelCatalogSnapshot | null>(
+    machine,
+    "get_opencode_model_catalog_cache",
+    {
+      projectId,
+    },
+  );
 }
 
 const finiteNumber = (value: unknown): number | undefined =>

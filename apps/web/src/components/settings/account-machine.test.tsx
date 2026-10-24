@@ -14,6 +14,7 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import {
+  isWindowMachine,
   useAccountMachine,
   useAccountMachineStore,
   useResolvedAccountMachine,
@@ -118,7 +119,7 @@ test("defaults to the machine on screen and preserves an explicit command-node s
   mount();
   await waitFor(() => expect(target()).toEqual({ machine: "leaf", name: "Leaf" }));
   act(() => useAccountMachineStore.getState().choose(null));
-  expect(target()).toEqual({ machine: null, name: "Command" });
+  await waitFor(() => expect(target()).toEqual({ machine: null, name: "Command" }));
 });
 
 test("the strip leads with the command node and picks a machine by its chip", async () => {
@@ -132,7 +133,7 @@ test("the strip leads with the command node and picks a machine by its chip", as
   expect(chip(/^Leaf/).getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(chip(/^Command/));
   expect(useAccountMachineStore.getState().chosen).toBeNull();
-  expect(target()).toEqual({ machine: null, name: "Command" });
+  await waitFor(() => expect(target()).toEqual({ machine: null, name: "Command" }));
   expect(chip(/^Command/).getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(chip(/^Leaf/));
   await waitFor(() => expect(target()).toEqual({ machine: "leaf", name: "Leaf" }));
@@ -152,7 +153,7 @@ test("unknown choices fall back to command; offline choices stay scoped and cann
 test("a command-node section keeps the command node and leaves the choice for the next section", async () => {
   mount(true);
   await screen.findByRole("group", { name: "Machine" });
-  expect(target()).toEqual({ machine: null, name: "Command" });
+  await waitFor(() => expect(target()).toEqual({ machine: null, name: "Command" }));
   expect(chip(/^Command/).getAttribute("aria-pressed")).toBe("true");
   expect(chip(/^Leaf/).disabled).toBe(true);
   expect(useAccountMachineStore.getState().chosen).toBeUndefined();
@@ -164,7 +165,7 @@ test("changing machines discards pending local sign-in UI and restores no stale 
   fireEvent.click(screen.getByRole("button", { name: "Start fixture sign-in" }));
   expect(screen.getByRole("button", { name: "Pending sign-in" })).toBeTruthy();
   act(() => useAccountMachineStore.getState().choose(null));
-  expect(screen.getByRole("button", { name: "Start fixture sign-in" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Start fixture sign-in" })).toBeTruthy();
   act(() => useAccountMachineStore.getState().choose("leaf"));
   expect(await screen.findByRole("button", { name: "Start fixture sign-in" })).toBeTruthy();
 });
@@ -188,4 +189,19 @@ test("closing Settings resets its selection so the next visit follows the on-scr
   expect(useAccountMachineStore.getState().chosen).toBeNull();
   act(() => result.current.setGlobalSettingsOpen(false));
   expect(useAccountMachineStore.getState().chosen).toBeUndefined();
+});
+
+test("window ownership follows the bound leaf, while undefined always follows the workspace", () => {
+  expect(isWindowMachine(null)).toBe(true);
+  expect(isWindowMachine("leaf")).toBe(false);
+  expect(isWindowMachine("command")).toBe(true);
+  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+  try {
+    expect(isWindowMachine(undefined)).toBe(true);
+    expect(isWindowMachine(null)).toBe(false);
+    expect(isWindowMachine("leaf")).toBe(true);
+    expect(isWindowMachine("other")).toBe(false);
+  } finally {
+    delete window.orkestratorWorkspaceTarget;
+  }
 });

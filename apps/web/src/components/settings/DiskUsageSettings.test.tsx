@@ -9,6 +9,7 @@ import type {
 } from "@/lib/backend";
 import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
+import { AccountMachineProvider } from "./account-machine";
 import { DiskUsageSettings } from "./DiskUsageSettings";
 
 const GB = 1024 ** 3;
@@ -204,3 +205,40 @@ test("unmounting a pending measure generation stops its remaining queue", async 
   await act(async () => pending.resolve(usage("1")));
   expect(get).toHaveBeenCalledTimes(3);
 });
+
+for (const machine of [null, "leaf", "other"]) {
+  test(`leaf-window worktree browsing and disk measurements respect ${machine ?? "command node"}`, async () => {
+    window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+    const locations = snapshot();
+    locations.environments.configured = "/selected/trees";
+    const read = spyOn(backend, "getWorktreeLocations").mockResolvedValue(locations);
+    const list = spyOn(backend, "listDiskUsageEnvironments").mockResolvedValue([
+      row("selected-env"),
+    ]);
+    const update = spyOn(backend, "updateWorktreeLocations").mockResolvedValue(snapshot());
+    const measure = spyOn(backend, "getEnvironmentDiskUsage").mockResolvedValue(
+      usage("selected-env"),
+    );
+    try {
+      render(
+        <AccountMachineProvider value={{ machine, name: "Selected" }}>
+          <DiskUsageSettings />
+        </AccountMachineProvider>,
+      );
+      const pick = await screen.findByRole("button", { name: "Choose new environment worktrees" });
+      expect((pick as HTMLButtonElement).disabled).toBe(machine !== "leaf");
+      expect(read).toHaveBeenCalledWith(machine);
+      expect(list).toHaveBeenCalledWith(machine);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Reset new environment worktrees to default" }),
+      );
+      await waitFor(() =>
+        expect(update).toHaveBeenCalledWith({ environments: null, dev: null }, machine),
+      );
+      await waitFor(() => expect(measure).toHaveBeenCalledWith("selected-env", false, machine));
+    } finally {
+      cleanup();
+      delete window.orkestratorWorkspaceTarget;
+    }
+  });
+}

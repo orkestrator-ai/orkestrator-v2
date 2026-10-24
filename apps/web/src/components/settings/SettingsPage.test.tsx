@@ -44,7 +44,16 @@ test("scope banners name the owner of each section in a leaf window", () => {
     expect(screen.getByTestId("settings-scope").textContent).toContain("Preferences for Desk");
     view.unmount();
   }
-  for (const section of ["defaults", "terminal", "claude", "codex", "opencode"] as const) {
+  for (const section of [
+    "defaults",
+    "terminal",
+    "claude",
+    "codex",
+    "cursor",
+    "grok",
+    "opencode",
+    "pi",
+  ] as const) {
     const view = render(<SettingsScopeBanner section={section} />);
     expect(screen.getByTestId("settings-scope").textContent).toContain(
       "Preferences come from Desk",

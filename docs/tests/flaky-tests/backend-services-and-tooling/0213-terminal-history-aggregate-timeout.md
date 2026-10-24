@@ -84,3 +84,22 @@ The aggregate repeated this case during coordinator adapter validation. Exact
 commands, timing, owner rerun results and evidence are recorded in
 [0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
 The owning implementation, assertions, timeouts and skips were unchanged.
+
+## Selected-machine settings validation — 2026-10-24
+
+`mise run test:logged -- --name settings-repository-tests -- mise run test`
+reserved workspace/root/bridge/protocol workers 4/1/2/1 alongside other host
+checks. The normalization case exceeded five seconds (5001.94 ms), followed by
+the known late `recent.previousCursor` null dereference at line 297.
+
+The complete unchanged owner passed alone in 10.3 s, exit 0:
+`mise run test:logged -- --name settings-terminal-history-owner -- bun test --cwd apps/backend ./src/core/terminal-history.test.ts --parallel=1 --only-failures`.
+Evidence: host temporary directory
+`orkestrator-test-run.GSCek7/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`, outer run
+`orkestrator-test-run.iCAyRT`. No terminal-history implementation, assertion,
+timeout or skip changed. Shared-host contention remains a hypothesis.
+
+The completed backend aggregate reported 10458 passed, 79 skipped, one failed
+and one between-tests error across 615 files (491.53 s). The overall logged
+repository run took 770.6 s and retained the bridge flake and root regressions
+corrected and revalidated by the settings change.

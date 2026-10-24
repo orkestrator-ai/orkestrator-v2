@@ -143,3 +143,37 @@ describe("preview settings loading", () => {
     }
   });
 });
+
+test("a command node selected in a leaf window loads its capabilities without changing the leaf store", async () => {
+  resetPreviewServiceSyncForTests();
+  const leafCapabilities = fixturePreviewCapabilities({ backendInstanceId: "leaf-instance" });
+  usePreviewServiceStore.setState({ capabilities: leafCapabilities, status: "unsupported" });
+  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+  const portal = mock(async (command: string) => {
+    if (command === "get_preview_capabilities")
+      return fixturePreviewCapabilities({ backendInstanceId: "command-instance" });
+    if (command === "get_preview_settings")
+      return { stored: storedSettings, effective: storedSettings };
+    if (command === "get_preview_diagnostics") return diagnostics;
+    throw new Error(`Unexpected portal command: ${command}`);
+  });
+  window.orkestratorPortal = { invoke: portal, listen: () => () => {} } as never;
+  invokeMock.mockClear();
+  try {
+    render(
+      <AccountMachineProvider value={{ machine: null, name: "Command" }}>
+        <PreviewSettings />
+      </AccountMachineProvider>,
+    );
+    await screen.findByRole("switch", { name: "Issue new preview access" });
+    expect(portal).toHaveBeenCalledWith("get_preview_capabilities", {});
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(usePreviewServiceStore.getState().capabilities).toBe(leafCapabilities);
+    expect(usePreviewServiceStore.getState().status).toBe("unsupported");
+  } finally {
+    cleanup();
+    delete window.orkestratorPortal;
+    delete window.orkestratorWorkspaceTarget;
+    resetPreviewServiceSyncForTests();
+  }
+});

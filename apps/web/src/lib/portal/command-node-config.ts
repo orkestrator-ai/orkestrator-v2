@@ -9,9 +9,13 @@ import {
 } from "@orkestrator/protocol/agent-platforms";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { deepEqualJson } from "@/lib/chat/message-identity";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { invoke } from "@/lib/native/backend";
 import type { AppConfig, GlobalConfig } from "@/types";
+import { portalStore } from "./portal-store";
 import { portalInvoke, workspaceTarget } from "./portal-transport";
+
+type ConfigInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 function workspaceInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   return args === undefined ? invoke<T>(command) : invoke<T>(command, args);
@@ -37,12 +41,37 @@ function workspaceConfig(workspace: AppConfig, commandNode: AppConfig): AppConfi
   return { ...workspace, global };
 }
 
-/** Read the effective workspace view, or save each setting on its owning node. */
+/**
+ * Read the effective workspace view, or save each setting on its owning node.
+ *
+ * `machine` names the node whose machine settings are shown, as Settings
+ * does for the machine picked in its header: `null` is the command node
+ * itself, a node ID another machine reached through it, and `undefined` this
+ * view's own backend.
+ */
 export async function invokeGlobalConfigCommand(
   command: string,
   args?: Record<string, unknown>,
+  machine?: string | null,
 ): Promise<AppConfig> {
+  if (machine === null || machine === portalStore.getState().selfId) {
+    return portalInvoke<AppConfig>(command, args);
+  }
+  if (machine !== undefined) {
+    const node = machine as BackendId;
+    return splitConfigCommand(command, args, (nodeCommand, nodeArgs) =>
+      portalStore.invokeOnNode(node, nodeCommand, nodeArgs ?? {}),
+    );
+  }
   if (!settingsOnCommandNode()) return workspaceInvoke<AppConfig>(command, args);
+  return splitConfigCommand(command, args, workspaceInvoke);
+}
+
+async function splitConfigCommand(
+  command: string,
+  args: Record<string, unknown> | undefined,
+  workspaceInvoke: ConfigInvoke,
+): Promise<AppConfig> {
   if (command === "update_global_config") {
     // Read before writing: a failed paired read must not leave a partial save.
     const [commandNode, workspace] = await Promise.all([

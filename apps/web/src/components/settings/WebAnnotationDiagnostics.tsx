@@ -10,6 +10,7 @@ import { writeText } from "@/lib/native/clipboard";
 import { getBrowserPreviewCaptureApi } from "@/lib/native/browser-preview";
 import { describeWebAnnotationError, webAnnotationCommand } from "@/lib/web-annotations/client";
 import { formatBytes } from "@/components/browser/annotations/format";
+import { isWindowMachine, useAccountMachine } from "./account-machine";
 
 /** Everything the panel shows and copies. Content-free by construction. */
 export interface WebAnnotationDiagnosticsExport {
@@ -78,17 +79,20 @@ export function WebAnnotationDiagnostics() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const { machine } = useAccountMachine();
 
   const load = async () => {
     setLoading(true);
     setError(null);
     setCopied(false);
     try {
-      const backend = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.metrics, {});
-      const desktop =
-        (await getBrowserPreviewCaptureApi()
-          ?.getCaptureDiagnostics?.()
-          .catch(() => null)) ?? null;
+      const backend = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.metrics, {}, machine);
+      // The desktop counters are this app's, so they go only with its own backend's.
+      const desktop = isWindowMachine(machine)
+        ? ((await getBrowserPreviewCaptureApi()
+            ?.getCaptureDiagnostics?.()
+            .catch(() => null)) ?? null)
+        : null;
       setData({ backend, desktop });
     } catch (loadError) {
       setError(describeWebAnnotationError(loadError));

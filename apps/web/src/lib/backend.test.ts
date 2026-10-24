@@ -1291,7 +1291,7 @@ describe("backend setup wrappers", () => {
     invokeMock.mockResolvedValueOnce(result);
 
     await expect(propagateGithubCredentialsToContainers()).resolves.toBe(result);
-    expect(invokeMock.mock.calls).toEqual([["propagate_github_token_to_containers"]]);
+    expect(invokeMock.mock.calls).toEqual([["propagate_github_token_to_containers", {}]]);
   });
 
   test("reports the backend-selected GitHub credential source and availability", async () => {

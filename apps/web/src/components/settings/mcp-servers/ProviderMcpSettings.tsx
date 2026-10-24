@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Plus, RefreshCw } from "lucide-react";
 
 import {
@@ -6,6 +6,8 @@ import {
   AGENT_PLATFORM_LABELS,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
+import { useFederation } from "@/components/federation/FederationProvider";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -52,7 +54,30 @@ export function ProviderMcpSettings() {
   const [highlight, setHighlight] = useState<string | undefined>(initialIntent.serverName);
   const [editor, setEditor] = useState<McpEditorMode | null>(null);
   const [entryAction, setEntryAction] = useState<McpEntryAction | null>(null);
-  const environments = useEnvironmentStore((state) => state.environments);
+  const { machine } = useAccountMachine();
+  const { portalState } = useFederation();
+  const ownEnvironments = useEnvironmentStore((state) => state.environments);
+  // This window's environment store holds the command node's environments;
+  // another machine's come from its node summary.
+  const environments = useMemo(() => {
+    if (typeof machine === "string" && machine !== portalState.selfId) {
+      const node = portalState.nodes.find((candidate) => candidate.nodeId === machine);
+      return (node?.environments ?? [])
+        .filter((environment) => !environment.deleting)
+        .map((environment) => ({
+          id: environment.ref.environmentId,
+          name: environment.name,
+          local: environment.environmentType === "local",
+        }));
+    }
+    return ownEnvironments
+      .filter((environment) => !environment.deletionRequestedAt)
+      .map((environment) => ({
+        id: environment.id,
+        name: environment.name,
+        local: environment.environmentType === "local",
+      }));
+  }, [machine, ownEnvironments, portalState.nodes, portalState.selfId]);
   // Whether the open editor/dialog holds unsaved input. A draft belongs to
   // one exact target, so switching target must discard it — explicitly.
   const dirtyRef = useRef(false);
@@ -198,14 +223,11 @@ export function ProviderMcpSettings() {
               <SelectItem value={BACKEND_CONTEXT}>
                 Backend user (shared by every environment)
               </SelectItem>
-              {environments
-                .filter((environment) => !environment.deletionRequestedAt)
-                .map((environment) => (
-                  <SelectItem key={environment.id} value={environment.id}>
-                    {environment.name}{" "}
-                    {environment.environmentType === "local" ? "(worktree)" : "(container)"}
-                  </SelectItem>
-                ))}
+              {environments.map((environment) => (
+                <SelectItem key={environment.id} value={environment.id}>
+                  {environment.name} {environment.local ? "(worktree)" : "(container)"}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>

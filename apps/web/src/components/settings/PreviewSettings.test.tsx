@@ -3,7 +3,12 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { fixturePreviewCapabilities } from "@orkestrator/protocol/testing/preview-contract-fixtures";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { resetPreviewServiceSyncForTests } from "@/stores/previewServiceStore";
+import { portalStore } from "@/lib/portal/portal-store";
+import {
+  resetPreviewServiceSyncForTests,
+  usePreviewServiceStore,
+} from "@/stores/previewServiceStore";
+import { AccountMachineProvider } from "./account-machine";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { PreviewSettings } from "./PreviewSettings";
 
@@ -98,5 +103,43 @@ describe("preview settings loading", () => {
     failing = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("switch", { name: "Issue new preview access" })).toBeTruthy();
+  });
+
+  test("another machine is read through the command node and kept out of the window's store", async () => {
+    const initialPortal = portalStore.getState();
+    portalStore.store.setState({ ...initialPortal, selfId: "command" as never });
+    const answers: Record<string, unknown> = {
+      get_preview_capabilities: fixturePreviewCapabilities(),
+      get_preview_settings: { stored: storedSettings, effective: storedSettings },
+      get_preview_diagnostics: diagnostics,
+    };
+    install({
+      invoke_on_node: (args) => ({ outcome: "ok", result: answers[args.command as string] }),
+    });
+    try {
+      render(
+        <AccountMachineProvider value={{ machine: "leaf", name: "Leaf" }}>
+          <PreviewSettings />
+        </AccountMachineProvider>,
+      );
+      expect(await screen.findByRole("switch", { name: "Issue new preview access" })).toBeTruthy();
+      const routed = invokeMock.mock.calls
+        .filter(([command]) => command === "invoke_on_node")
+        .map(([, args]) => [
+          (args as { nodeId: string }).nodeId,
+          (args as { command: string }).command,
+        ]);
+      expect(routed).toEqual([
+        ["leaf", "get_preview_capabilities"],
+        ["leaf", "get_preview_settings"],
+        ["leaf", "get_preview_diagnostics"],
+      ]);
+      expect(
+        invokeMock.mock.calls.some(([command]) => command === "get_preview_capabilities"),
+      ).toBe(false);
+      expect(usePreviewServiceStore.getState().capabilities).toBeNull();
+    } finally {
+      portalStore.store.setState(initialPortal);
+    }
   });
 });

@@ -157,6 +157,29 @@ describe("FullscreenSettingsLayout", () => {
     expect(onOpenChange).toHaveBeenCalledTimes(2);
   });
 
+  test("a header lead takes the left and moves the section title beside the actions", () => {
+    render(
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+        headerStart={(section) => <span>machines for {section}</span>}
+      >
+        {(section) => <div>section:{section}</div>}
+      </FullscreenSettingsLayout>,
+    );
+
+    const title = screen.getByRole("heading", { name: "General" });
+    expect(title.closest('[data-slot="settings-header-actions"]') === null).toBe(true);
+    expect(title.nextElementSibling?.getAttribute("data-slot")).toBe("settings-header-actions");
+    // Once in the desktop header and once in its own row on a narrow screen.
+    expect(screen.getAllByText("machines for general")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: /Network/ }));
+    expect(screen.getAllByText("machines for network")).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "Network" })).toBeTruthy();
+  });
+
   test("renders section-owned actions in the header", () => {
     render(
       <FullscreenSettingsLayout

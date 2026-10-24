@@ -23,15 +23,21 @@ import {
   type WebAnnotationErrorDetail,
   type WebAnnotationRolloutMode,
 } from "@orkestrator/protocol/web-annotations";
-import { invoke } from "@/lib/native/backend";
+import { machineInvoke, type AccountMachine } from "@/lib/backend/agent-accounts";
 
 export type WebAnnotationCommandName = keyof WebAnnotationCommandArgs;
 
+/** `machine` asks another machine through the command node, as Settings does. */
 export function webAnnotationCommand<K extends WebAnnotationCommandName>(
   command: K,
   args: WebAnnotationCommandArgs[K],
+  machine?: AccountMachine,
 ): Promise<WebAnnotationCommandResults[K]> {
-  return invoke<WebAnnotationCommandResults[K]>(command, args as Record<string, unknown>);
+  return machineInvoke<WebAnnotationCommandResults[K]>(
+    machine,
+    command,
+    args as Record<string, unknown>,
+  );
 }
 
 export function errorMessage(error: unknown): string {

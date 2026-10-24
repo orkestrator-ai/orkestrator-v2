@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
-import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
+import { isWindowMachine, useAccountMachine } from "./account-machine";
+import { useSettingsConfig } from "./settings-config";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
 import { getReviewInstructionValidationError } from "@orkestrator/protocol/review-instruction";
 import { DEFAULT_COORDINATOR_PROVIDER_TIER } from "@orkestrator/protocol/coordinator";
@@ -266,8 +267,8 @@ interface GlobalSettingsProps {
 }
 
 export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
-  const config = useConfigStore((state) => state.config);
-  const setConfig = useConfigStore((state) => state.setConfig);
+  const { config, setConfig } = useSettingsConfig();
+  const { machine } = useAccountMachine();
   const global = config.global;
 
   const [cpuCores, setCpuCores] = useState(global.containerResources.cpuCores);
@@ -519,21 +520,21 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     const requestId = ++logStorageRequestRef.current;
     setIsLoadingLogStorage(true);
     const [directory, stats] = await Promise.allSettled([
-      backend.getLogDirectory(),
-      backend.getLogStorageStats(),
+      backend.getLogDirectory(machine),
+      backend.getLogStorageStats(machine),
     ]);
     if (requestId !== logStorageRequestRef.current) return;
     if (directory.status === "fulfilled") setLogDirectory(directory.value);
     setLogStorageStats(stats.status === "fulfilled" ? stats.value : null);
     setIsLoadingLogStorage(false);
-  }, []);
+  }, [machine]);
 
   useEffect(() => {
     backend
-      .getLogDirectory()
+      .getLogDirectory(machine)
       .then(setLogDirectory)
       .catch(() => {});
-  }, []);
+  }, [machine]);
 
   useEffect(() => {
     if (activeSection === "debug") void refreshLogStorage();
@@ -547,7 +548,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setIsCleaningLogs(true);
     setIsLoadingLogStorage(false);
     try {
-      const stats = await backend.cleanupLogs();
+      const stats = await backend.cleanupLogs(machine);
       if (requestId !== logStorageRequestRef.current) return;
       setLogStorageStats(stats);
       toast.success("Logs cleaned up");
@@ -559,7 +560,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     } finally {
       setIsCleaningLogs(false);
     }
-  }, []);
+  }, [machine]);
 
   // What the shared auto-save would persist for the current edit. Kept in a
   // ref so the debounce effect can tell a fresh edit from one that already
@@ -702,7 +703,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setIsTesting(true);
     setTestResults(null);
     try {
-      const results = await backend.testDomainResolution(domains);
+      const results = await backend.testDomainResolution(domains, machine);
       setTestResults(results);
     } catch (err) {
       console.error("[settings] Failed to test domains:", err);
@@ -723,7 +724,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     let failureMessage = "Settings saved, but containers were not updated";
     let failureDescription: string | undefined;
     try {
-      const propagateResult = await backend.propagateGithubCredentialsToContainers();
+      const propagateResult = await backend.propagateGithubCredentialsToContainers(machine);
       if (propagateResult.failed.length === 0) {
         githubPropagationRetryCountRef.current = 0;
         githubPropagationFailureToastShownRef.current = false;
@@ -868,7 +869,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         githubPropagationFailureToastShownRef.current = false;
       }
 
-      const newConfig = await backend.updateGlobalConfig(newGlobal);
+      const newConfig = await backend.updateGlobalConfig(newGlobal, machine);
       if (coreSignatureRef.current !== signature) {
         // An edit landed while this write was in flight. Mark the returned store
         // state as already accounted for so the sync effect does not reset the
@@ -883,7 +884,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         setPlanUsageRefreshToken((token) => token + 1);
       }
 
+      // The web client is this desktop's own; another machine's is not shown.
       if (
+        isWindowMachine(machine) &&
         !window.orkestratorGateway?.enabled &&
         webClientEnabled !== (global.webClientEnabled ?? true)
       ) {
@@ -929,10 +932,11 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
 
   const writeCredential = async (field: CredentialField, value: string | null) => {
     let nextConfig;
-    if (field === "anthropic") nextConfig = await backend.setAnthropicApiKey(value);
-    else if (field === "cursor") nextConfig = await backend.setCursorApiKey(value);
-    else if (field === "opencode-zen") nextConfig = await backend.setOpenCodeZenApiKey(value);
-    else nextConfig = await backend.setGitHubToken(value);
+    if (field === "anthropic") nextConfig = await backend.setAnthropicApiKey(value, machine);
+    else if (field === "cursor") nextConfig = await backend.setCursorApiKey(value, machine);
+    else if (field === "opencode-zen") {
+      nextConfig = await backend.setOpenCodeZenApiKey(value, machine);
+    } else nextConfig = await backend.setGitHubToken(value, machine);
     setConfig(nextConfig);
     if (field !== "github") setPlanUsageRefreshToken((token) => token + 1);
   };

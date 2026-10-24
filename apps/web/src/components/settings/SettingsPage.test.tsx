@@ -64,3 +64,18 @@ test("single-machine windows only show scope for the Machines section", () => {
   view.rerender(<SettingsScopeBanner section="machines" />);
   expect(screen.getByTestId("settings-scope")).toBeTruthy();
 });
+
+test("the machine picked in the header owns its machine settings", () => {
+  installScope();
+  render(
+    <SettingsScopeBanner section="network" machine={{ name: "Build box", colorToken: "amber" }} />,
+  );
+  expect(screen.getByTestId("settings-scope").textContent).toBe(
+    "Machine settings for Build box. Changes apply to this machine.",
+  );
+  cleanup();
+  render(
+    <SettingsScopeBanner section="claude" machine={{ name: "Build box", colorToken: "amber" }} />,
+  );
+  expect(screen.getByTestId("settings-scope").textContent).toContain("belong to Build box");
+});

@@ -143,6 +143,17 @@ to everything it runs, on every machine it controls.
   changes to the command node and machine-specific changes to the workspace
   backend, preserving the other node's values. Each settings section names
   the owner of its preferences and machine-specific controls.
+- **Editing each machine.** With machines attached, the Settings header
+  lists them (`SettingsMachineStrip`): the command node first, then each
+  machine it controls, defaulting to the machine on screen. The choice is
+  the sections' `useAccountMachine()` context; every call they make names it
+  (`machineInvoke`, `invoke_on_node` for another machine, relayed node events
+  for live updates), and the general form reads and saves that machine's
+  config through the same split as a leaf window (`invokeGlobalConfigCommand`
+  with a `machine`), held apart from the window's own config store
+  (`settings-config.tsx`). Sections only the command node has — Machines,
+  Review, Messaging, the web client and Control MCP (its credentials are
+  excluded from `invoke_on_node`) — keep the command node chosen.
 - **Handed down to leaves.** The command node sends the inherited subset
   of its settings (`@orkestrator/protocol/controller-settings`: agent
   defaults and models, review instruction, terminal, messaging and similar

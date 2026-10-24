@@ -33,6 +33,12 @@ interface FullscreenSettingsLayoutProps<TSection extends string = string> {
   children: (activeSection: TSection | "") => React.ReactNode;
   footer?: React.ReactNode;
   headerActions?: React.ReactNode;
+  /**
+   * Leads the content header, e.g. the machine the section edits. The
+   * section's title moves to the right beside the actions; on a narrow
+   * screen this takes its own row under the header.
+   */
+  headerStart?: (activeSection: TSection | "") => React.ReactNode;
 }
 
 /**
@@ -63,6 +69,7 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
   children,
   footer,
   headerActions,
+  headerStart,
 }: FullscreenSettingsLayoutProps<TSection>) {
   const defaultId: TSection | "" = menuItems.some((item) => item.id === defaultSection)
     ? (defaultSection ?? "")
@@ -122,6 +129,7 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
   if (!open) return null;
 
   const activeMenuItem = menuItems.find((item) => item.id === activeSection);
+  const headerStartContent = headerStart?.(activeSection);
 
   const settingsLayout = (
     <OverlayPortalLayer className={Z_FULLSCREEN_POPOVER}>
@@ -173,7 +181,7 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
           {/* Content area */}
           <div className="flex flex-1 flex-col overflow-hidden">
             {/* Content header */}
-            <div className="flex h-12 items-center justify-between bg-zinc-900/80 px-4 md:px-8">
+            <div className="flex h-12 shrink-0 items-center justify-between gap-4 bg-zinc-900/80 px-4 md:px-8">
               <Select
                 value={activeSection}
                 onValueChange={(value) => setActiveSection(value as TSection)}
@@ -209,10 +217,19 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
                   ))}
                 </SelectContent>
               </Select>
-              <h2 className="hidden text-sm font-medium text-foreground md:block">
-                {activeMenuItem?.label}
-              </h2>
+              {headerStartContent ? (
+                <div className="hidden min-w-0 flex-1 md:flex">{headerStartContent}</div>
+              ) : (
+                <h2 className="hidden text-sm font-medium text-foreground md:block">
+                  {activeMenuItem?.label}
+                </h2>
+              )}
               <div className="flex min-w-0 shrink-0 items-center gap-2">
+                {headerStartContent ? (
+                  <h2 className="mr-2 hidden whitespace-nowrap text-sm font-medium text-foreground md:block">
+                    {activeMenuItem?.label}
+                  </h2>
+                ) : null}
                 <div
                   data-slot="settings-header-actions"
                   className="flex min-w-0 items-center gap-2"
@@ -231,6 +248,12 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
                 </Button>
               </div>
             </div>
+
+            {headerStartContent ? (
+              <div className="flex shrink-0 border-b border-white/5 px-4 py-2 md:hidden">
+                {headerStartContent}
+              </div>
+            ) : null}
 
             {/* Content body */}
             <div

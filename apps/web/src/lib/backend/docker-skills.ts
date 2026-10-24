@@ -224,8 +224,10 @@ export interface PropagateTokenResult {
 }
 
 /** Apply the selected GitHub credential source to all running containers. */
-export async function propagateGithubCredentialsToContainers(): Promise<PropagateTokenResult> {
-  return invoke<PropagateTokenResult>("propagate_github_token_to_containers");
+export async function propagateGithubCredentialsToContainers(
+  machine?: AccountMachine,
+): Promise<PropagateTokenResult> {
+  return machineInvoke<PropagateTokenResult>(machine, "propagate_github_token_to_containers");
 }
 
 // --- OpenCode Server Commands ---
@@ -447,16 +449,20 @@ export interface AgentSkillFile {
 }
 
 /** List every skill the given agent can load from its user-level skill roots */
-export async function listAgentSkills(provider: AgentSkillProvider): Promise<AgentSkillScan> {
-  return invoke<AgentSkillScan>("list_agent_skills", { provider });
+export async function listAgentSkills(
+  provider: AgentSkillProvider,
+  machine?: AccountMachine,
+): Promise<AgentSkillScan> {
+  return machineInvoke<AgentSkillScan>(machine, "list_agent_skills", { provider });
 }
 
 /** Read one SKILL.md; the backend rejects paths outside the agent's skill roots */
 export async function readAgentSkill(
   provider: AgentSkillProvider,
   filePath: string,
+  machine?: AccountMachine,
 ): Promise<AgentSkillFile> {
-  return invoke<AgentSkillFile>("read_agent_skill", { provider, filePath });
+  return machineInvoke<AgentSkillFile>(machine, "read_agent_skill", { provider, filePath });
 }
 
 /** List the skills the selected agent can load inside one environment. */
@@ -566,8 +572,11 @@ export async function getGitRemoteUrl(path: string): Promise<string | null> {
 
 // --- Network Commands ---
 
-export async function testDomainResolution(domains: string[]): Promise<DomainTestResult[]> {
-  return invoke<DomainTestResult[]>("test_domain_resolution", { domains });
+export async function testDomainResolution(
+  domains: string[],
+  machine?: AccountMachine,
+): Promise<DomainTestResult[]> {
+  return machineInvoke<DomainTestResult[]>(machine, "test_domain_resolution", { domains });
 }
 
 export async function validateDomains(domains: string[]): Promise<DomainTestResult[]> {
@@ -640,8 +649,11 @@ export async function executeDockerCleanup(selection: {
 }
 
 /** The Docker daemon's capacity (on Docker Desktop, its VM) and disk use. */
-export async function getDockerCapacity(refresh = false): Promise<DockerCapacity> {
-  return invoke<DockerCapacity>("get_docker_capacity", { refresh });
+export async function getDockerCapacity(
+  refresh = false,
+  machine?: AccountMachine,
+): Promise<DockerCapacity> {
+  return machineInvoke<DockerCapacity>(machine, "get_docker_capacity", { refresh });
 }
 
 /** One shared, bounded usage sample of this installation's containers. */
@@ -652,6 +664,7 @@ export async function getContainerUsage(): Promise<ContainerUsageSnapshot> {
 /** Default budget for new containers; `null` means unrestricted. */
 export async function setContainerResourceLimits(
   limits: ContainerResourceLimits | null,
+  machine?: AccountMachine,
 ): Promise<{ limits: ContainerResourceLimits | null }> {
-  return invoke("set_container_resource_limits", { limits });
+  return machineInvoke(machine, "set_container_resource_limits", { limits });
 }

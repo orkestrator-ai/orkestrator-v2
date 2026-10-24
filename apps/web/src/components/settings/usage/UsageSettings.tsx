@@ -17,7 +17,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useConfigStore } from "@/stores";
+import { useAccountMachine } from "../account-machine";
+import { useSettingsConfig } from "../settings-config";
 import { PlanUsageSection } from "../PlanUsageSection";
 import { UsageBreakdownTable } from "./UsageBreakdownTable";
 import {
@@ -94,7 +95,8 @@ export function UsageSettings() {
   const [environmentOptions, setEnvironmentOptions] = useState<
     Array<{ id: string; label: string }>
   >([]);
-  const config = useConfigStore((state) => state.config);
+  const { config } = useSettingsConfig();
+  const { machine } = useAccountMachine();
   const enabledPlatforms = useMemo(
     () => normalizeAgentPlatforms(config.global.enabledAgentPlatforms),
     [config.global.enabledAgentPlatforms],
@@ -108,15 +110,18 @@ export function UsageSettings() {
   useEffect(() => {
     let cancelled = false;
     const [days, selectedPlatform, selectedEnvironment] = queryKey.split("|");
-    getUsageHistory({
-      days: Number.parseInt(days ?? "30", 10),
-      ...(selectedPlatform === ALL_PLATFORMS
-        ? {}
-        : { platform: selectedPlatform as AgentPlatform }),
-      ...(selectedEnvironment === ALL_ENVIRONMENTS
-        ? {}
-        : { environmentId: selectedEnvironment as string }),
-    })
+    getUsageHistory(
+      {
+        days: Number.parseInt(days ?? "30", 10),
+        ...(selectedPlatform === ALL_PLATFORMS
+          ? {}
+          : { platform: selectedPlatform as AgentPlatform }),
+        ...(selectedEnvironment === ALL_ENVIRONMENTS
+          ? {}
+          : { environmentId: selectedEnvironment as string }),
+      },
+      machine,
+    )
       .then((next) => {
         if (cancelled) return;
         setLoaded({ key: queryKey, report: next });
@@ -148,7 +153,7 @@ export function UsageSettings() {
     return () => {
       cancelled = true;
     };
-  }, [queryKey]);
+  }, [machine, queryKey]);
 
   const loading = loaded?.key !== queryKey;
   const report = loaded?.report ?? null;

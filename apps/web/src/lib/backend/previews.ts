@@ -10,6 +10,7 @@ import type {
 } from "@orkestrator/protocol/preview-services";
 
 import { invoke } from "@/lib/native/backend";
+import { machineInvoke, type AccountMachine } from "./agent-accounts";
 
 export type PreviewMutationResult =
   | { kind: "definition"; definition: PreviewServiceDefinition; replayed: boolean }
@@ -76,8 +77,8 @@ function operationId(): string {
   return `op-${crypto.randomUUID()}`;
 }
 
-export function getPreviewCapabilities(): Promise<PreviewCapabilities> {
-  return invoke("get_preview_capabilities");
+export function getPreviewCapabilities(machine?: AccountMachine): Promise<PreviewCapabilities> {
+  return machineInvoke(machine, "get_preview_capabilities");
 }
 
 export function getPreviewServices(
@@ -152,24 +153,30 @@ export function releasePreviewAttachment(attachmentId: string): Promise<{ releas
   return invoke("release_preview_attachment", { attachmentId });
 }
 
-export function getPreviewSettings(): Promise<PreviewSettingsResponse> {
-  return invoke("get_preview_settings");
+export function getPreviewSettings(machine?: AccountMachine): Promise<PreviewSettingsResponse> {
+  return machineInvoke(machine, "get_preview_settings");
 }
 
 export function updatePreviewSettings(
   settings: Partial<Omit<PreviewSettingsShape, "publication">> & {
     publication?: Partial<PreviewSettingsShape["publication"]>;
   },
+  machine?: AccountMachine,
 ): Promise<PreviewSettingsResponse> {
-  return invoke("update_preview_settings", { settings });
+  return machineInvoke(machine, "update_preview_settings", { settings });
 }
 
-export function revokePreviewAccess(serviceId?: string): Promise<{ revoked: number }> {
-  return invoke("revoke_preview_access", serviceId ? { serviceId } : {});
+export function revokePreviewAccess(
+  serviceId?: string,
+  machine?: AccountMachine,
+): Promise<{ revoked: number }> {
+  return machineInvoke(machine, "revoke_preview_access", serviceId ? { serviceId } : {});
 }
 
-export function getPreviewDiagnostics(): Promise<PreviewDiagnosticsSnapshot> {
-  return invoke("get_preview_diagnostics");
+export function getPreviewDiagnostics(
+  machine?: AccountMachine,
+): Promise<PreviewDiagnosticsSnapshot> {
+  return machineInvoke(machine, "get_preview_diagnostics");
 }
 
 /** iOS handoff: the backend consumes the grant and returns a one-use session URL. */

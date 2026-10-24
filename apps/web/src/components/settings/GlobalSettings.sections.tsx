@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettings";
+import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
 import type {
   CoordinatorResearchMcpServer,
@@ -97,7 +98,6 @@ import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { PlanUsageSection } from "./PlanUsageSection";
-import { AccountMachineScope } from "./account-machine";
 import { AgentAccountsSection } from "./AgentAccountsSection";
 import { AgentSignInCard } from "./AgentSignInCard";
 import { OpenCodeProvidersSection } from "./OpenCodeProvidersSection";
@@ -252,6 +252,8 @@ function CredentialClearButton({
 }
 
 export function GlobalSettingsSections({ activeSection, settings }: GlobalSettingsSectionsProps) {
+  // Another machine's files are not on this one, so there is nothing to reveal.
+  const canRevealFiles = isWindowMachine(useAccountMachine().machine);
   const {
     global,
     envPatterns,
@@ -612,7 +614,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     signInControls?: React.ReactNode,
   ) => (
     <div className="max-w-2xl space-y-5">
-      <AccountMachineScope>
+      <>
         {/* Read without a session, so it is there before any environment runs it. */}
         {enabledAgentPlatforms.includes(platform) ? (
           <AgentSignInCard
@@ -641,7 +643,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           />
         ) : null}
         {platform === "opencode" ? <OpenCodeProvidersSection /> : null}
-      </AccountMachineScope>
+      </>
       <AgentPlatformPane
         platform={platform}
         tier={agentSettings}
@@ -754,9 +756,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                   ? " Your stored PAT remains available if you turn this off."
                   : ""}
               </p>
-              <AccountMachineScope>
-                <GitHubCliSetup />
-              </AccountMachineScope>
+              <GitHubCliSetup />
             </div>
           ) : (
             <div className="space-y-3 border-t border-zinc-800 p-4">
@@ -2214,10 +2214,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         {logDirectory && (
           <button
             type="button"
+            disabled={!canRevealFiles}
             onClick={() => {
               if (logDirectory) backend.revealInFileManager(logDirectory).catch(() => {});
             }}
-            className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full"
+            className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full disabled:text-muted-foreground disabled:no-underline"
             title={logDirectory}
           >
             <FolderOpen className="h-3 w-3 shrink-0" />
@@ -2315,10 +2316,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </p>
           <button
             type="button"
+            disabled={!canRevealFiles}
             onClick={() => {
               if (logDirectory) backend.revealInFileManager(logDirectory).catch(() => {});
             }}
-            className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full"
+            className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full disabled:text-muted-foreground disabled:no-underline"
             title={`${logDirectory}/codex-raw`}
           >
             <FolderOpen className="h-3 w-3 shrink-0" />

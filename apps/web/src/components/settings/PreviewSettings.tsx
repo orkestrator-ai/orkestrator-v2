@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AlertTriangle, Loader2, RefreshCw, ShieldOff } from "lucide-react";
 import {
+  isUnknownPreviewCommandError,
   previewErrorFromUnknown,
   type PreviewCapabilities,
 } from "@orkestrator/protocol/preview-services";
@@ -24,6 +25,7 @@ import { Switch } from "@/components/ui/switch";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { useAccountMachine } from "./account-machine";
 
 type Publication = backend.PreviewSettingsShape["publication"];
 
@@ -60,6 +62,52 @@ function Availability({
   );
 }
 
+interface CapabilitiesLoad {
+  capabilities: PreviewCapabilities | null;
+  unsupported: boolean;
+  error: string | null;
+}
+
+/** This window's backend, through the store its previews already use. */
+async function loadWindowCapabilities(): Promise<CapabilitiesLoad> {
+  ensurePreviewServiceSync();
+  const capabilities = await usePreviewServiceStore.getState().loadCapabilities({ force: true });
+  if (capabilities) return { capabilities, unsupported: false, error: null };
+  const { status, error } = usePreviewServiceStore.getState();
+  return {
+    capabilities: null,
+    unsupported: status === "unsupported",
+    error: status === "error" ? (error ?? "Preview services are unavailable.") : null,
+  };
+}
+
+/**
+ * Another machine, read directly: the preview store caches this window's
+ * backend only, and another machine's answer must never replace it.
+ */
+async function loadMachineCapabilities(machine: string): Promise<CapabilitiesLoad> {
+  try {
+    const capabilities = await backend.getPreviewCapabilities(machine);
+    if (!capabilities || typeof capabilities.backendInstanceId !== "string") {
+      return {
+        capabilities: null,
+        unsupported: false,
+        error: "The backend returned malformed preview capabilities.",
+      };
+    }
+    return { capabilities, unsupported: false, error: null };
+  } catch (error) {
+    if (isUnknownPreviewCommandError(error)) {
+      return { capabilities: null, unsupported: true, error: null };
+    }
+    return {
+      capabilities: null,
+      unsupported: false,
+      error: previewErrorFromUnknown(error)?.message ?? "Preview services are unavailable.",
+    };
+  }
+}
+
 /**
  * Operator controls for browser previews. Everything here is backend state for
  * the connected backend: new-access issuance (the kill switch), private
@@ -74,24 +122,26 @@ export function PreviewSettings() {
   const [unsupported, setUnsupported] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const { machine } = useAccountMachine();
 
   // Failures become visible, retryable state; a capabilities failure resolves
   // null rather than throwing, so it is read back from the store.
   const load = useCallback(async () => {
-    ensurePreviewServiceSync();
     setLoadError(null);
-    const loaded = await usePreviewServiceStore.getState().loadCapabilities({ force: true });
-    if (!loaded) {
-      const { status, error } = usePreviewServiceStore.getState();
-      setUnsupported(status === "unsupported");
-      if (status === "error") setLoadError(error ?? "Preview services are unavailable.");
+    // A node ID is another machine; null and undefined are this window's backend.
+    const loaded = machine
+      ? await loadMachineCapabilities(machine)
+      : await loadWindowCapabilities();
+    if (!loaded.capabilities) {
+      setUnsupported(loaded.unsupported);
+      if (loaded.error) setLoadError(loaded.error);
       return;
     }
-    setCapabilities(loaded);
+    setCapabilities(loaded.capabilities);
     try {
       const [nextSettings, nextDiagnostics] = await Promise.all([
-        backend.getPreviewSettings(),
-        backend.getPreviewDiagnostics(),
+        backend.getPreviewSettings(machine),
+        backend.getPreviewDiagnostics(machine),
       ]);
       setSettings(nextSettings);
       setPublication(nextSettings.stored.publication);
@@ -99,7 +149,7 @@ export function PreviewSettings() {
     } catch (error) {
       setLoadError(message(error));
     }
-  }, []);
+  }, [machine]);
 
   useEffect(() => {
     void load();
@@ -108,7 +158,7 @@ export function PreviewSettings() {
   const save = async (update: Parameters<typeof backend.updatePreviewSettings>[0]) => {
     setSaving(true);
     try {
-      await backend.updatePreviewSettings(update);
+      await backend.updatePreviewSettings(update, machine);
       await load();
     } catch (error) {
       toast.error("Could not save preview settings", { description: message(error) });
@@ -229,7 +279,7 @@ export function PreviewSettings() {
               <AlertDialogAction
                 onClick={() =>
                   void backend
-                    .revokePreviewAccess()
+                    .revokePreviewAccess(undefined, machine)
                     .then(({ revoked }) =>
                       toast.success(
                         `Revoked ${revoked} preview attachment${revoked === 1 ? "" : "s"}`,

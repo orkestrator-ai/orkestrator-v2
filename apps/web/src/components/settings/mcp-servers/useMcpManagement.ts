@@ -8,7 +8,10 @@ import {
   type McpManagementTarget,
 } from "@orkestrator/protocol/mcp-management";
 
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import * as backend from "@/lib/backend";
+import { subscribeNodeEvents } from "@/lib/federation/node-events";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, listen } from "@/lib/native/events";
 
 import { mcpErrorReference } from "./McpErrorNotice";
@@ -33,8 +36,11 @@ export function describeMcpError(error: unknown): string {
  * Also when the browser comes back online: an event can arrive on a stream
  * that survived the outage while the re-read it triggers fails, and nothing
  * else would ever repeat that read.
+ *
+ * Another machine's events are relayed by the command node; its resync (once
+ * the watch is in place, and after any gap) is the re-read.
  */
-function useBackendInvalidation(refresh: () => void): void {
+function useBackendInvalidation(refresh: () => void, machine: string | null | undefined): void {
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
   useEffect(() => {
@@ -43,6 +49,13 @@ function useBackendInvalidation(refresh: () => void): void {
     return () => window.removeEventListener("online", online);
   }, []);
   useEffect(() => {
+    if (typeof machine === "string") {
+      return subscribeNodeEvents(machine as BackendId, {
+        events: [MCP_MANAGEMENT_CHANGED_EVENT],
+        onEvent: () => refreshRef.current(),
+        onResync: () => refreshRef.current(),
+      });
+    }
     let disposed = false;
     const unlisteners: Array<() => void> = [];
     for (const event of [MCP_MANAGEMENT_CHANGED_EVENT, NATIVE_EVENT_STREAM_CONNECTED_EVENT]) {
@@ -57,7 +70,7 @@ function useBackendInvalidation(refresh: () => void): void {
       disposed = true;
       for (const unlisten of unlisteners) unlisten();
     };
-  }, []);
+  }, [machine]);
 }
 
 const LOADING = { status: "loading", data: null } as const;
@@ -71,6 +84,7 @@ export function useMcpTargets(environmentId: string | null): {
   state: LoadState<McpManagementTarget[]>;
   reload: () => void;
 } {
+  const { machine } = useAccountMachine();
   const [keyed, setKeyed] = useState<{
     environmentId: string | null;
     state: LoadState<McpManagementTarget[]>;
@@ -86,7 +100,7 @@ export function useMcpTargets(environmentId: string | null): {
       },
     }));
     backend
-      .listMcpManagementTargets(environmentId ?? undefined)
+      .listMcpManagementTargets(environmentId ?? undefined, machine)
       .then((list) => {
         if (request === generation.current)
           setKeyed({ environmentId, state: { status: "ready", data: list.targets } });
@@ -105,9 +119,9 @@ export function useMcpTargets(environmentId: string | null): {
               },
         }));
       });
-  }, [environmentId]);
+  }, [environmentId, machine]);
   useEffect(load, [load]);
-  useBackendInvalidation(load);
+  useBackendInvalidation(load, machine);
   return { state: keyed.environmentId === environmentId ? keyed.state : LOADING, reload: load };
 }
 
@@ -126,6 +140,7 @@ export function useMcpSnapshot(targetId: string | null): {
   state: LoadState<McpManagementSnapshot>;
   reload: () => void;
 } {
+  const { machine } = useAccountMachine();
   const [state, setState] = useState<LoadState<McpManagementSnapshot>>(LOADING);
   const generation = useRef(0);
   const currentTarget = useRef(targetId);
@@ -142,7 +157,7 @@ export function useMcpSnapshot(targetId: string | null): {
     };
     setState((current) => ({ status: "loading", data: sameTarget(current) }));
     backend
-      .getMcpManagementSnapshot(targetId)
+      .getMcpManagementSnapshot(targetId, machine)
       .then((snapshot) => {
         if (request === generation.current && currentTarget.current === targetId)
           setState({ status: "ready", data: snapshot });
@@ -159,9 +174,9 @@ export function useMcpSnapshot(targetId: string | null): {
             data: sameTarget(current),
           }));
       });
-  }, [targetId]);
+  }, [targetId, machine]);
   useEffect(load, [load]);
-  useBackendInvalidation(load);
+  useBackendInvalidation(load, machine);
   return { state, reload: load };
 }
 

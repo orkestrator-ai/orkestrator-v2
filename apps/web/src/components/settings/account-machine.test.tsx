@@ -13,7 +13,13 @@ import { invoke } from "@/lib/native/backend";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { AccountMachineScope, useAccountMachine, useAccountMachineStore } from "./account-machine";
+import {
+  useAccountMachine,
+  useAccountMachineStore,
+  useResolvedAccountMachine,
+} from "./account-machine";
+import { MachineSettings } from "./SettingsPage";
+import { SettingsMachineStrip } from "./SettingsMachineStrip";
 import { TerminalProvider } from "@/contexts/TerminalContext";
 import { useActionBarController } from "@/components/layout/useActionBarController";
 
@@ -33,14 +39,37 @@ function Child() {
     </div>
   );
 }
-function mount() {
+/** Settings' header strip and a section, as the Settings page wires them. */
+function Harness({ locked = false }: { locked?: boolean }) {
+  const resolved = useResolvedAccountMachine();
+  const choose = useAccountMachineStore((state) => state.choose);
+  const machine = locked ? null : resolved.machine;
+  const option = resolved.options.find((candidate) => candidate.nodeId === machine);
+  return (
+    <>
+      {resolved.options.length > 1 ? (
+        <SettingsMachineStrip
+          options={resolved.options}
+          selected={resolved.machine}
+          locked={locked}
+          onSelect={choose}
+        />
+      ) : null}
+      <MachineSettings key={machine ?? "command-node"} machine={machine} option={option}>
+        <Child />
+      </MachineSettings>
+    </>
+  );
+}
+function mount(locked = false) {
   return render(
     <FederationProvider>
-      <AccountMachineScope>
-        <Child />
-      </AccountMachineScope>
+      <Harness locked={locked} />
     </FederationProvider>,
   );
+}
+function chip(name: RegExp) {
+  return screen.getByRole("button", { name }) as HTMLButtonElement;
 }
 function target() {
   return JSON.parse(screen.getByTestId("target").textContent!) as {
@@ -69,6 +98,11 @@ beforeEach(() => {
       return { revision: 1, displayName: "Command", colorToken: "blue", updatedAt: "" };
     if (command === "get_node_summaries") return { selfId: "command", nodes };
     if (command === "get_node_status") return { nodeId: "command" };
+    // Settings reads the machine it edits.
+    if (command === "get_config") return { version: "1", global: {}, repositories: {} };
+    if (command === "invoke_on_node") {
+      return { outcome: "ok", result: { version: "1", global: {}, repositories: {} } };
+    }
     return undefined;
   });
 });
@@ -87,17 +121,41 @@ test("defaults to the machine on screen and preserves an explicit command-node s
   expect(target()).toEqual({ machine: null, name: "Command" });
 });
 
+test("the strip leads with the command node and picks a machine by its chip", async () => {
+  mount();
+  await waitFor(() => expect(target().machine).toBe("leaf"));
+  const names = screen
+    .getAllByRole("button")
+    .filter((button) => button.hasAttribute("aria-pressed"))
+    .map((button) => button.textContent);
+  expect(names).toEqual(["Command(command node)", "Leaf", "Offline"]);
+  expect(chip(/^Leaf/).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(chip(/^Command/));
+  expect(useAccountMachineStore.getState().chosen).toBeNull();
+  expect(target()).toEqual({ machine: null, name: "Command" });
+  expect(chip(/^Command/).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(chip(/^Leaf/));
+  await waitFor(() => expect(target()).toEqual({ machine: "leaf", name: "Leaf" }));
+});
+
 test("unknown choices fall back to command; offline choices stay scoped and cannot be newly selected", async () => {
   mount();
-  await screen.findByRole("combobox", { name: "Machine" });
+  await screen.findByRole("group", { name: "Machine" });
   act(() => useAccountMachineStore.getState().choose("missing"));
   await waitFor(() => expect(target().machine).toBeNull());
+  expect(chip(/^Offline/).disabled).toBe(true);
   act(() => useAccountMachineStore.getState().choose("offline"));
-  expect(target()).toEqual({ machine: "offline", name: "Offline" });
-  fireEvent.keyDown(screen.getByRole("combobox", { name: "Machine" }), { key: "Enter" });
-  expect(screen.getByRole("option", { name: /Offline/ }).getAttribute("aria-disabled")).toBe(
-    "true",
-  );
+  await waitFor(() => expect(target()).toEqual({ machine: "offline", name: "Offline" }));
+  expect(chip(/^Offline/).disabled).toBe(false);
+});
+
+test("a command-node section keeps the command node and leaves the choice for the next section", async () => {
+  mount(true);
+  await screen.findByRole("group", { name: "Machine" });
+  expect(target()).toEqual({ machine: null, name: "Command" });
+  expect(chip(/^Command/).getAttribute("aria-pressed")).toBe("true");
+  expect(chip(/^Leaf/).disabled).toBe(true);
+  expect(useAccountMachineStore.getState().chosen).toBeUndefined();
 });
 
 test("changing machines discards pending local sign-in UI and restores no stale child state", async () => {
@@ -108,7 +166,7 @@ test("changing machines discards pending local sign-in UI and restores no stale 
   act(() => useAccountMachineStore.getState().choose(null));
   expect(screen.getByRole("button", { name: "Start fixture sign-in" })).toBeTruthy();
   act(() => useAccountMachineStore.getState().choose("leaf"));
-  expect(screen.getByRole("button", { name: "Start fixture sign-in" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Start fixture sign-in" })).toBeTruthy();
 });
 
 test("single-machine settings hide the picker", async () => {
@@ -116,7 +174,7 @@ test("single-machine settings hide the picker", async () => {
   portalStore.store.setState({ nodes });
   mount();
   await waitFor(() => expect(target()).toEqual({ machine: null, name: null }));
-  expect(screen.queryByRole("combobox", { name: "Machine" }) === null).toBe(true);
+  expect(screen.queryByRole("group", { name: "Machine" }) === null).toBe(true);
 });
 
 test("closing Settings resets its selection so the next visit follows the on-screen machine", async () => {

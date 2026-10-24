@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import { getConfig, updateGlobalConfig, updateRepositoryConfig } from "@/lib/backend";
+import { portalStore } from "@/lib/portal/portal-store";
 import type { AppConfig, GlobalConfig, RepositoryConfig } from "@/types";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -38,7 +39,31 @@ function installLeafWindow() {
   return portal;
 }
 
+const initialPortal = portalStore.getState();
+
+/** The command node's own window, editing another machine's settings through it. */
+function installCommandWindow() {
+  portalStore.store.setState({ ...initialPortal, selfId: "bk_command" as never });
+  invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+    if (command === "invoke_on_node") {
+      const routed = args as { command: string; args: Record<string, unknown> };
+      return {
+        outcome: "ok",
+        result: {
+          ...config("leaf"),
+          ...(routed.args?.global ? { global: routed.args.global as GlobalConfig } : {}),
+        },
+      };
+    }
+    return {
+      ...config("command"),
+      ...(args?.global ? { global: args.global as GlobalConfig } : {}),
+    };
+  });
+}
+
 afterEach(() => {
+  portalStore.store.setState(initialPortal);
   delete window.orkestratorPortal;
   delete window.orkestratorWorkspaceTarget;
   invokeMock.mockReset();
@@ -143,5 +168,52 @@ describe("settings belong to the command node", () => {
         }),
       }),
     });
+  });
+});
+
+describe("Settings edits a machine picked in its header", () => {
+  test("another machine is read through the command node with its preferences inherited", async () => {
+    installCommandWindow();
+    const loaded = await getConfig("bk_leaf");
+    expect(invokeMock).toHaveBeenCalledWith("invoke_on_node", {
+      nodeId: "bk_leaf",
+      command: "get_config",
+      args: {},
+      requestKey: expect.any(String),
+    });
+    expect(loaded.global.terminalScrollback).toBe(5_000);
+    expect(loaded.global.allowedDomains).toEqual(["leaf.test"]);
+    expect(Object.keys(loaded.repositories)).toEqual(["leaf-project"]);
+  });
+
+  test("its machine settings are saved on it and preferences on the command node", async () => {
+    installCommandWindow();
+    const loaded = await getConfig("bk_leaf");
+    await updateGlobalConfig(
+      { ...loaded.global, terminalScrollback: 7_000, allowedDomains: ["edited.test"] },
+      "bk_leaf",
+    );
+    expect(invokeMock).toHaveBeenCalledWith("update_global_config", {
+      global: expect.objectContaining({
+        terminalScrollback: 7_000,
+        allowedDomains: ["command.test"],
+      }),
+    });
+    expect(invokeMock).toHaveBeenCalledWith("invoke_on_node", {
+      nodeId: "bk_leaf",
+      command: "update_global_config",
+      args: {
+        global: expect.objectContaining({ allowedDomains: ["edited.test"] }),
+        preserveInheritedSettings: true,
+      },
+      requestKey: expect.any(String),
+    });
+  });
+
+  test("the command node, by null or by its own ID, is its own config without a split", async () => {
+    installCommandWindow();
+    expect((await getConfig(null)).global.allowedDomains).toEqual(["command.test"]);
+    expect((await getConfig("bk_command")).global.allowedDomains).toEqual(["command.test"]);
+    expect(invokeMock).not.toHaveBeenCalledWith("invoke_on_node", expect.anything());
   });
 });

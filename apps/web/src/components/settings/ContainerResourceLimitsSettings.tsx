@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import * as backend from "@/lib/backend";
+import { useAccountMachine } from "./account-machine";
 
 export interface ResourceLimitDraft {
   cpus: string;
@@ -102,12 +103,13 @@ export function ContainerResourceLimitsSettings({
   const [draft, setDraft] = useState(limitsToDraft(initial));
   const [capacity, setCapacity] = useState<DockerCapacity | null>(null);
   const [saving, setSaving] = useState(false);
+  const { machine } = useAccountMachine();
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const next = await backend.getDockerCapacity();
+        const next = await backend.getDockerCapacity(false, machine);
         if (!cancelled) setCapacity(next);
       } catch {
         if (!cancelled) setCapacity(null);
@@ -117,12 +119,12 @@ export function ContainerResourceLimitsSettings({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [machine]);
 
   const save = async () => {
     setSaving(true);
     try {
-      await backend.setContainerResourceLimits(enabled ? draftToLimits(draft) : null);
+      await backend.setContainerResourceLimits(enabled ? draftToLimits(draft) : null, machine);
       toast.success("Resource limits saved", {
         description: "They apply to containers created or rebuilt from now on.",
       });

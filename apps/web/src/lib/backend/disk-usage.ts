@@ -4,7 +4,7 @@ import type {
   WorktreeLocationsSnapshot,
 } from "@orkestrator/protocol/disk-usage";
 
-import { invoke } from "@/lib/native/backend";
+import { machineInvoke, type AccountMachine } from "./agent-accounts";
 
 export type {
   DevProfileDiskUsage,
@@ -14,26 +14,37 @@ export type {
   WorktreeLocationsSnapshot,
 } from "@orkestrator/protocol/disk-usage";
 
-export async function listDiskUsageEnvironments(): Promise<DiskUsageEnvironmentSummary[]> {
-  return invoke<DiskUsageEnvironmentSummary[]>("list_disk_usage_environments");
+export async function listDiskUsageEnvironments(
+  machine?: AccountMachine,
+): Promise<DiskUsageEnvironmentSummary[]> {
+  return machineInvoke<DiskUsageEnvironmentSummary[]>(machine, "list_disk_usage_environments");
 }
 
 /** Sizes of an environment's worktree or container and its dev profiles; cached for minutes unless `refresh`. */
 export async function getEnvironmentDiskUsage(
   environmentId: string,
   refresh = false,
+  machine?: AccountMachine,
 ): Promise<EnvironmentDiskUsage> {
-  return invoke<EnvironmentDiskUsage>("get_environment_disk_usage", { environmentId, refresh });
+  return machineInvoke<EnvironmentDiskUsage>(machine, "get_environment_disk_usage", {
+    environmentId,
+    refresh,
+  });
 }
 
-export async function getWorktreeLocations(): Promise<WorktreeLocationsSnapshot> {
-  return invoke<WorktreeLocationsSnapshot>("get_worktree_locations");
+export async function getWorktreeLocations(
+  machine?: AccountMachine,
+): Promise<WorktreeLocationsSnapshot> {
+  return machineInvoke<WorktreeLocationsSnapshot>(machine, "get_worktree_locations");
 }
 
 /** Replaces both settings; null clears one back to its default. */
-export async function updateWorktreeLocations(locations: {
-  environments: string | null;
-  dev: string | null;
-}): Promise<WorktreeLocationsSnapshot> {
-  return invoke<WorktreeLocationsSnapshot>("update_worktree_locations", locations);
+export async function updateWorktreeLocations(
+  locations: {
+    environments: string | null;
+    dev: string | null;
+  },
+  machine?: AccountMachine,
+): Promise<WorktreeLocationsSnapshot> {
+  return machineInvoke<WorktreeLocationsSnapshot>(machine, "update_worktree_locations", locations);
 }

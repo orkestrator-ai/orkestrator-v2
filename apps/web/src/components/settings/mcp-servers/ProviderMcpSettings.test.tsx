@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { StrictMode, Suspense } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
@@ -11,6 +11,9 @@ import {
   type McpTargetCapabilities,
 } from "@orkestrator/protocol/mcp-management";
 
+import * as federation from "@/components/federation/FederationProvider";
+import { AccountMachineProvider } from "@/components/settings/account-machine";
+import { resetNodeEventsForTests } from "@/lib/federation/node-events";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { listen as nativeListen } from "@/lib/native/events";
 import { requestMcpServerSettings } from "@/lib/mcp-settings-navigation";
@@ -895,5 +898,72 @@ describe("ProviderMcpSettings", () => {
       expectedRevision: "r1.two",
       patch: { env: [{ key: "API_KEY", edit: { kind: "set", value: "typed" } }] },
     });
+  });
+});
+
+describe("ProviderMcpSettings on another machine", () => {
+  afterEach(() => {
+    resetNodeEventsForTests();
+    mock.restore();
+  });
+
+  test("reads, watches and lists environments of the machine Settings edits", async () => {
+    spyOn(federation, "useFederation").mockReturnValue({
+      portalState: {
+        selfId: "command",
+        nodes: [
+          {
+            nodeId: "leaf",
+            environments: [
+              {
+                ref: { backendId: "leaf", environmentId: "leaf-env" },
+                name: "Leaf worktree",
+                environmentType: "local",
+                deleting: false,
+              },
+            ],
+          },
+        ],
+      },
+    } as never);
+    const routed: string[] = [];
+    listenMock.mockClear();
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
+      if (command === "invoke_on_node") {
+        expect(args.nodeId).toBe("leaf");
+        const inner = args.command as string;
+        routed.push(inner);
+        const handler = baseHandlers[inner as keyof typeof baseHandlers];
+        if (!handler) throw new Error(`Unexpected node command ${inner}`);
+        return { outcome: "ok", result: handler() };
+      }
+      if (command === "watch_node_events") {
+        expect(args).toMatchObject({ nodeId: "leaf", prefixes: [MCP_MANAGEMENT_CHANGED_EVENT] });
+        return { watchId: args.watchId, expiresAt: Date.now() + 90_000, renewed: true };
+      }
+      if (command === "unwatch_node_events") return {};
+      throw new Error(`Unexpected command ${command}`);
+    });
+
+    render(
+      <AccountMachineProvider value={{ machine: "leaf", name: "Leaf" }}>
+        <ProviderMcpSettings />
+      </AccountMachineProvider>,
+    );
+
+    await screen.findByText("docs");
+    expect(routed).toContain("list_mcp_management_targets");
+    expect(routed).toContain("get_mcp_management_snapshot");
+    // Its changes arrive relayed by the command node, not on this window's stream.
+    expect(
+      listenMock.mock.calls.some((call: unknown[]) => call[0] === MCP_MANAGEMENT_CHANGED_EVENT),
+    ).toBe(false);
+    expect(invokeMock.mock.calls.some((call: unknown[]) => call[0] === "watch_node_events")).toBe(
+      true,
+    );
+
+    fireEvent.keyDown(screen.getByLabelText("Configuration for"), { key: "Enter" });
+    expect(await screen.findByRole("option", { name: "Leaf worktree (worktree)" })).toBeTruthy();
   });
 });

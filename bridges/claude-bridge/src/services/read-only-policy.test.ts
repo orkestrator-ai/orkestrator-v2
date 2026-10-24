@@ -67,6 +67,27 @@ describe("Claude coordinator read-only policy", () => {
     expect(sandbox.excludedCommands).toEqual([]);
     expect(sandbox.network).toMatchObject({ strictAllowlist: true, allowedDomains: [] });
     expect(sandbox.network.allowLocalBinding).toBe(false);
+    // Without a named checkout there is nothing to deny; the bridge always names one.
+    expect(sandbox.filesystem.denyWrite).toEqual([]);
+  });
+
+  test("the sandbox denies writes to the checkout, which its default would allow", () => {
+    const sandbox = claudeReadOnlySandbox(coordinatorPolicy, {
+      workspaces: ["/work/repo", "/private/work/repo", "/work/repo"],
+    });
+    expect(sandbox.filesystem.denyWrite).toEqual(["/work/repo", "/private/work/repo"]);
+    expect(sandbox.failIfUnavailable).toBe(true);
+  });
+
+  test("a host the launcher found without a sandbox asks for one without requiring it", () => {
+    const sandbox = claudeReadOnlySandbox(coordinatorPolicy, { commandSandbox: "unavailable" });
+    expect(sandbox.enabled).toBe(true);
+    expect(sandbox.failIfUnavailable).toBe(false);
+    // The escape hatch stays closed whether or not the sandbox starts.
+    expect(sandbox.allowUnsandboxedCommands).toBe(false);
+    expect(claudeReadOnlySandbox(coordinatorPolicy, { commandSandbox: "required" })).toMatchObject({
+      failIfUnavailable: true,
+    });
   });
 
   test("write and network tools are denied by the hook", async () => {
@@ -135,8 +156,7 @@ describe("Claude coordinator read-only policy", () => {
       "rg TODO src",
       "git status",
       "git log --oneline -5",
-      "/usr/bin/cat README.md",
-      "gh api repos/foo/bar",
+      "cat README.md",
     ]) {
       expect(isReadOnlyShellCommand(command).allowed).toBe(true);
       expect(await decide("Bash", { command })).toBeUndefined();
@@ -152,6 +172,88 @@ describe("Claude coordinator read-only policy", () => {
     ]) {
       expect(isReadOnlyShellCommand(command).allowed).toBe(false);
       expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
+    }
+  });
+
+  // Where the OS sandbox cannot start (Claude on Windows, Linux without
+  // bubblewrap) the hook is the whole boundary, so every one of these would be
+  // a write or a network call that nothing else stops.
+  test("reading programs with a writing argument are refused without any metacharacter", () => {
+    for (const command of [
+      // A second positional is an output file.
+      "uniq in.txt out.txt",
+      "uniq -c in.txt out.txt",
+      "xxd in.bin out.txt",
+      "xxd -r -c 16 dump.txt out.bin",
+      // Clustered or attached one-letter flags are the same flag.
+      "sort -no out.txt in.txt",
+      "sort -oout.txt in.txt",
+      "sort -T . big.txt",
+      "sort --compress-program=gzip big.txt",
+      "yq -iP .a=1 file.yaml",
+      "yq -s .name file.yaml",
+      "file -C -m magic",
+      "hostname evil",
+      // gawk writes and loads programs through options; only -F and -v pass.
+      "awk -i inplace NR==1 file",
+      "awk -iinplace NR==1 file",
+      "awk -f prog.awk file",
+      "awk -o file",
+      "awk --profile=prof.out NR==1 file",
+      // Git output files and programs chosen by argument.
+      "git diff --output=patch.diff",
+      "git log -p --output patch.diff",
+      "git show --ext-diff HEAD",
+      "git cat-file --filters HEAD:file",
+      "git --config-env=core.pager=HOME log",
+      "git grep -O TODO",
+      "git grep --open-files-in-pager=vim TODO",
+      // A path names whatever the checkout put there.
+      "bin/cat README.md",
+      "./ls",
+      "/usr/bin/cat README.md",
+    ]) {
+      const verdict = isReadOnlyShellCommand(command);
+      expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: false });
+    }
+  });
+
+  test("network commands are refused because coordinator commands have no network", () => {
+    for (const command of [
+      "gh api repos/foo/bar",
+      "gh api -f title=x repos/foo/bar/issues",
+      "gh status",
+      "git ls-remote https://example.com/repo",
+      "git ls-remote --upload-pack=touch .",
+      "git fetch origin",
+      "curl https://example.com",
+    ]) {
+      const verdict = isReadOnlyShellCommand(command);
+      expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: false });
+      expect(verdict.reason).toContain("no network access");
+    }
+  });
+
+  test("the reading forms of hardened programs stay available", () => {
+    for (const command of [
+      "uniq in.txt",
+      "uniq -c -f 2 in.txt",
+      "xxd in.bin",
+      "xxd -c 16 -l 64 in.bin",
+      "sort -n in.txt",
+      "sort -t : -k 2 in.txt",
+      "yq .name file.yaml",
+      "awk NR==1 file",
+      "awk -F, NR==1 file",
+      "awk -F : -v n=1 NR==n file",
+      "hostname",
+      "git diff --stat",
+      "git log --output-indicator-new=+ -p",
+      "git grep -n TODO",
+      "file README.md",
+    ]) {
+      const verdict = isReadOnlyShellCommand(command);
+      expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: true });
     }
   });
 

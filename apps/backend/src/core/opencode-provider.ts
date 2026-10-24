@@ -185,6 +185,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly blockedSessions = new Set<string>();
   private readonly failedQuestionSessions = new Set<string>();
   private readonly sessionPolicies = new Map<string, NativeAgentExecutionPolicy>();
+  /** A coordinator's research tool ids; empty everywhere else. */
+  private readonly researchTools: () => readonly string[];
   private readonly workflowResults: OpenCodeWorkflowResultBroker;
   private readonly reviewPermissions: OpenCodeReviewSessionPermissions;
   private readonly monitorController = new AbortController();
@@ -242,11 +244,13 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         },
       });
     this.messageIds = dependencies.openCodeMessageIdCoordinator ?? defaultOpenCodeMessageIds;
+    this.researchTools = dependencies.coordinatorResearchToolIds ?? (() => []);
     this.reviewPermissions = new OpenCodeReviewSessionPermissions(
       this.client,
       connection.directory,
       () => this.requestOptions(),
       (sessionId, policy) => this.sessionPolicies.set(sessionId, policy),
+      this.researchTools,
     );
     this.workflowResults = new OpenCodeWorkflowResultBroker(
       this.client,
@@ -1335,7 +1339,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     effectivePolicy: NativeAgentExecutionPolicy,
   ): Promise<void> {
     const response = await this.client.session.update(
-      { sessionID: sessionId, permission: openCodePermissionRules(effectivePolicy) },
+      {
+        sessionID: sessionId,
+        permission: openCodePermissionRules(effectivePolicy, {
+          researchTools: this.researchTools(),
+        }),
+      },
       this.requestOptions(),
     );
     assertSdkResponse(response, "OpenCode resumed session policy update");

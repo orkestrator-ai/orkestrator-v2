@@ -83,7 +83,10 @@ export function loadAcpProviderConfig(
  * Grok's web search and web fetch run through xAI rather than as a command on
  * this machine, and Grok does not ask permission before a search, so denying
  * permission requests cannot stop them. `--disable-web-search` removes both
- * tools from the toolset ("web fetch is off (disable_web_search)" in 1.0.52).
+ * tools from the toolset ("web fetch is off (disable_web_search)" in 1.0.52),
+ * and on 1.0.67 also the hosted search's `open_page` actions, which no other
+ * switch removes. xAI's hosted X search tools (`x_keyword_search` and
+ * friends) survive every switch.
  * It is a top-level flag, and a shared leader process ignores it, so the agent
  * subcommand also gets `--no-leader`: a user config with `[cli] use_leader`
  * would otherwise hand the session to a leader that still has the tools.

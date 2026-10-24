@@ -3,6 +3,7 @@ import { runCommand } from "./shell.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Environment } from "./models.js";
 import { dockerExec, isContainerRunning } from "./commands-container-exec.js";
+import { forgetOpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
 import type { CoordinatorConversation } from "@orkestrator/protocol/coordinator";
 import {
   CONTAINER_WORKSPACE_PREPARE_COMMAND,
@@ -254,6 +255,7 @@ export function cancelOpenCodeAgentToolsConfiguration(key: string): void {
   openCodeAgentToolsConfigurations.delete(key);
   configuredOpenCodeAgentTools.delete(key);
   openCodeLaunchAgentToolConnections.delete(key);
+  forgetOpenCodeCoordinatorResearch(key);
 }
 
 export function aggregateRejectedResults(

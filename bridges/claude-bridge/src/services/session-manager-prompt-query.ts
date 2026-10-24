@@ -358,7 +358,9 @@ export function claudeQueryOptions(
     allowedTools,
     ...(disallowedTools?.length ? { disallowedTools } : {}),
     ...(policy?.sandbox === "provider" || coordinatorReadOnly
-      ? { sandbox: claudeExecutionSandbox(policy, claudeAsksForApproval(policy, options)) }
+      ? {
+          sandbox: claudeExecutionSandbox(policy, claudeAsksForApproval(policy, options), { cwd }),
+        }
       : {}),
     abortController,
     // A deterministic UUID makes the bridge id recoverable from the SDK's

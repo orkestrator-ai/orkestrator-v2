@@ -1,6 +1,7 @@
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
   COORDINATOR_WEB_RESEARCH_ENV,
+  coordinatorResearchMcpServersFromEnv,
   coordinatorWebResearchEnv,
   coordinatorWebResearchSetting,
   normalizeCoordinatorResearchMcpServers,
@@ -149,9 +150,16 @@ import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import type { OpenCodeAgentToolsOutcome, LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import {
+  COORDINATOR_COMMAND_SANDBOX_ENV,
   COORDINATOR_EXECUTION_POLICY,
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
+import { configureOpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
+import {
+  MAX_OPENCODE_MCP_STATUS_BYTES,
+  readBoundedOpenCodeResponse,
+} from "./opencode-bounded-response.js";
 
 /** Provider-neutral process authority every coordinator bridge honours. */
 export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";
@@ -723,46 +731,7 @@ export function readOpenCodeAgentToolsStatus(payload: unknown): string | null {
   return typeof status === "string" ? status : null;
 }
 
-export const MAX_OPENCODE_MCP_STATUS_BYTES = 64 * 1024;
-
-export async function readBoundedOpenCodeResponse(response: Response): Promise<unknown> {
-  if (!response.body) {
-    throw new Error("OpenCode returned an empty MCP status response");
-  }
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_OPENCODE_MCP_STATUS_BYTES) {
-    await response.body.cancel().catch(() => undefined);
-    throw new Error("OpenCode MCP status response is too large");
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let bytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > MAX_OPENCODE_MCP_STATUS_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error("OpenCode MCP status response is too large");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = Buffer.concat(
-    chunks.map((chunk) => Buffer.from(chunk)),
-    bytes,
-  ).toString("utf8");
-  try {
-    return JSON.parse(body);
-  } catch {
-    throw new Error("OpenCode returned an invalid MCP status response");
-  }
-}
+export { MAX_OPENCODE_MCP_STATUS_BYTES, readBoundedOpenCodeResponse };
 
 export const OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS: readonly number[] = [
   250, 500, 1_000, 2_000, 4_000,
@@ -1183,6 +1152,7 @@ async function startLocalServerAttempt(
   // bridge consult these too, so only the coordinator branch may set them.
   delete env[COORDINATOR_WEB_RESEARCH_ENV];
   delete env[COORDINATOR_RESEARCH_MCP_ENV];
+  delete env[COORDINATOR_COMMAND_SANDBOX_ENV];
   if (coordinatorId) {
     // Coordinator authority is always freshly issued for this exact
     // conversation. Never inherit a token from the backend's own environment
@@ -1205,6 +1175,11 @@ async function startLocalServerAttempt(
     // Process authority like the execution policy: read once at launch, so a
     // changed setting replaces an idle bridge before the next turn.
     Object.assign(env, researchEnv);
+    // The same probe the qualification table used, so a bridge requires the
+    // OS sandbox exactly where the platform was offered on the strength of it.
+    env[COORDINATOR_COMMAND_SANDBOX_ENV] = defaultCoordinatorHostCapabilities().claudeSandbox
+      ? "required"
+      : "unavailable";
   }
 
   if (kind === "opencode") {
@@ -1547,6 +1522,24 @@ async function startLocalServerAttempt(
         throw retryableBridgeStartupError(
           "The OpenCode coordinator could not connect its Orkestrator tools",
         );
+      }
+      // Research servers before the first turn too, so the permission rules
+      // a new session is created with already allow their tools. Optional:
+      // a server that does not connect leaves the coordinator without it.
+      if (coordinatorId) {
+        await configureOpenCodeCoordinatorResearch({
+          serverKey: `local:${environmentId}`,
+          port,
+          password: authToken,
+          directory: environment.worktreePath,
+          servers: coordinatorResearchMcpServersFromEnv(env),
+          signal: AbortSignal.timeout(15_000),
+        }).catch((error: unknown) => {
+          console.warn(
+            `[backend] OpenCode coordinator research servers are unavailable for ${environmentId}:`,
+            conciseError(error),
+          );
+        });
       }
     }
     if (coordinatorId) {

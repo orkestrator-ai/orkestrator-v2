@@ -94,6 +94,20 @@ describe("renderToolCall", () => {
     expect(rendered.toolOutput).toBe("created");
   });
 
+  test("names an in-process research call after its own server", () => {
+    const rendered = renderToolCall({
+      type: "mcp",
+      args: {
+        providerIdentifier: "custom-user-tools",
+        toolName: "context7__query-docs",
+        args: { q: "zod" },
+      },
+      result: { status: "success", value: { content: [{ text: "docs" }], isError: false } },
+    });
+    expect(rendered.toolName).toBe("mcp__context7__query-docs");
+    expect(rendered.toolTitle).toBe("context7: query-docs");
+  });
+
   test("names an MCP card after its tool so servers stay distinguishable", () => {
     const rendered = renderToolCall({
       type: "mcp",

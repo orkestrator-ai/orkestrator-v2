@@ -13,6 +13,7 @@ import {
 } from "./commands-servers.js";
 import { __testing as commandTesting } from "./commands-testing.js";
 import { CoordinatorService } from "./coordinator-service.js";
+import { openCodeCoordinatorResearchToolIds } from "./opencode-coordinator-research.js";
 import { runCommand } from "./shell.js";
 import { createOpenCodeProviderLogin } from "./opencode-provider-login.js";
 import { staleLoginLocalBridges } from "./agent-account-bridge-state.js";
@@ -105,7 +106,19 @@ process.on("SIGTERM", () => process.exit(0));
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function coordinatorContext() {
+  async function coordinatorContext(
+    research: { mode: "off" | "search-and-mcp"; servers?: { name: string; url: string }[] } = {
+      mode: "off",
+    },
+  ) {
+    // Research off unless a test asks: a research server is contacted to list
+    // its tools, and these tests never leave the machine.
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({
+      ...config.global,
+      coordinatorWebResearch: research.mode,
+      ...(research.servers ? { coordinatorResearchMcpServers: research.servers } : {}),
+    });
     const project = await storage.addProject(createProject("remote", path.join(root, "checkout")));
     const coordinator = new CoordinatorService(storage, () => ({
       enabled: true,
@@ -147,6 +160,19 @@ process.on("SIGTERM", () => process.exit(0));
       .filter(Boolean)
       .map((line) => (JSON.parse(line) as { url: string }).url);
   }
+
+  test("registers the research servers after its Control MCP, and a dead one leaves no allowance", async () => {
+    // Nothing listens on port 1, so listing the server's tools fails at once.
+    const researchUrl = "https://127.0.0.1:1/mcp";
+    const { context, runtimeId } = await coordinatorContext({
+      mode: "search-and-mcp",
+      servers: [{ name: "docs", url: researchUrl }],
+    });
+
+    await startLocalServerUnlocked(runtimeId, context, "opencode");
+    expect(await posted()).toEqual([SCOPED_URL, researchUrl]);
+    expect(openCodeCoordinatorResearchToolIds(`local:${runtimeId}`)).toEqual([]);
+  });
 
   test("starts only once its Control MCP is connected, and keeps it on every later reconcile", async () => {
     const { context, runtimeId, tabConnection } = await coordinatorContext();

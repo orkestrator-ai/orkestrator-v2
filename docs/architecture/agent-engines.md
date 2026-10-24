@@ -382,11 +382,12 @@ restored sessions and every turn: filesystem denied except the project and
 managed Codex runtime, shell network off, hosted web search off or `cached`
 per the research setting (read back through `config/read` before every
 thread), isolated `CODEX_HOME` holding only the credential, project hooks and
-plugin/browser paths disabled. Claude uses the SDK command sandbox plus a
-read-only shell allowlist, with WebFetch denied (and WebSearch unless research
-is on). Pi's gate runs inside the bridge on every tool call. The injected MCP
-servers are the scoped Orkestrator endpoint and, on Claude and Codex, the
-remote research servers the user listed. The renderer stores pasted attachments outside
+plugin/browser paths disabled. Claude uses the SDK command sandbox, with
+writes to the checkout denied, plus a read-only shell allowlist, with WebFetch
+denied (and WebSearch unless research is on). Pi's gate runs inside the bridge
+on every tool call. The injected MCP servers are the scoped Orkestrator
+endpoint and, on every platform but Grok, the remote research servers the user
+listed. The renderer stores pasted attachments outside
 the checkout and hides mode/permission controls, resume/fork, and
 file-rewinding actions; the backend independently rejects write-capable
 history actions.

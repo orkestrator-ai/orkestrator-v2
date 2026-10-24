@@ -127,6 +127,8 @@ const ERROR_MESSAGES: Record<NativeAgentCommandCatalogueErrorCode, string> = {
   malformed: "The agent returned an unreadable command list.",
   "too-large": "The agent's command list exceeded the size limit.",
   "provider-error": "The agent could not list its commands.",
+  "outdated-bridge":
+    "The environment's agent bridge is older than this app and did not list this session's commands. Restart the environment, or rebuild a container, to update it.",
 };
 
 type CommandRefreshResult = { outcome: NativeAgentCommandRefreshOutcome; message?: string };

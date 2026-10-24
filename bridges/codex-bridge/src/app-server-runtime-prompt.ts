@@ -38,10 +38,7 @@ import {
   type BridgeCommandCatalogueResponse,
   type NativeAgentBridgeCommandInvocation,
 } from "@orkestrator/protocol/agent-command-catalogue";
-import type {
-  NativeAgentCommandRefreshOutcome,
-  NativeAgentSlashCommand,
-} from "@orkestrator/protocol/native-agent";
+import type { NativeAgentCommandRefreshOutcome } from "@orkestrator/protocol/native-agent";
 import { invalidateTranscriptCatalogCache } from "./history/rollout.js";
 import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import { buildFallbackSessionTitle, persistSessionTitle } from "./session-titles.js";
@@ -1405,11 +1402,6 @@ export class CodexRuntimePrompt {
       return { outcome: "failed", message: "Session not found" };
     }
     return this.ctx.commandCatalogue.refresh();
-  }
-
-  /** Legacy global rows: built-ins and templates, without starting Codex. */
-  async listGlobalCommandRows(): Promise<NativeAgentSlashCommand[]> {
-    return this.ctx.commandCatalogue.listTemplateAndBuiltinRows();
   }
 
   /** `/models`: the catalogue the model picker uses, with the current selection. */

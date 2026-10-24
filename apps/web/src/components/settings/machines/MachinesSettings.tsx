@@ -22,6 +22,7 @@ import { maintenanceIssues, type MachineEntry } from "./machine-list";
 import { MachineStatusDot, errorText, formatMachineTime } from "./machine-ui";
 import { useMachines, type ConnectionsApi } from "./useMachines";
 import { useMaintenanceSummaries, type MaintenanceSummary } from "./useMaintenanceSummaries";
+import { MachineAgentAccountsSection } from "./MachineAgentAccountsSection";
 
 /**
  * Every machine this client works with, in one list: the machine it is
@@ -202,6 +203,8 @@ export function MachinesSettings() {
           </table>
         </div>
       )}
+
+      {!leaf ? <MachineAgentAccountsSection /> : null}
 
       {nodes && nodes.pendingDetaches.length > 0 ? (
         <PendingDetaches entries={nodes.pendingDetaches} onChanged={changed} />

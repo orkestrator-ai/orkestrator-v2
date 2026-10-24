@@ -49,6 +49,51 @@ export interface AgentAccountsSnapshot {
   active: Record<AgentAccountPlatform, string>;
 }
 
+/**
+ * Which of the machine's logins one session's bridge uses, for the agent
+ * information panel. The backend builds it from what it launched; it is never
+ * taken from a bridge answer.
+ */
+export interface AgentSessionAccount {
+  platform: AgentAccountPlatform;
+  /**
+   * `account`: one of the machine's accounts, in `account`. `container`: an
+   * isolated container that keeps its own login. `unknown`: the container's
+   * login could not be read.
+   */
+  source: "account" | "container" | "unknown";
+  account?: AgentAccountSummary;
+  /** Whether the bridge is running. When it is not, its next start uses `account`. */
+  running: boolean;
+  /**
+   * The machine's active account, when the running bridge is still on another
+   * one. The bridge moves to it the next time it is used while idle.
+   */
+  pendingActive?: AgentAccountSummary;
+}
+
+/**
+ * One machine's accounts, as a command node collects them for the accounts
+ * overview (`list_machine_agent_accounts`). Every machine keeps its own logins;
+ * nothing here is a credential.
+ */
+export interface MachineAgentAccounts {
+  /** The machine's node identity. */
+  nodeId: string;
+  name: string;
+  colorToken?: string;
+  /** The command node answering, rather than one of its machines. */
+  self: boolean;
+  /** `unavailable`: not connected. `error`: it answered with a failure. */
+  state: "ok" | "unavailable" | "error";
+  error?: string;
+  snapshot?: AgentAccountsSnapshot;
+}
+
+export interface MachineAgentAccountsResult {
+  machines: MachineAgentAccounts[];
+}
+
 export type AgentAccountLoginState = "idle" | "pending" | "succeeded" | "failed";
 
 /**

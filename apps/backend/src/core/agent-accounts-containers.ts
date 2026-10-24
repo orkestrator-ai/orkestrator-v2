@@ -820,6 +820,20 @@ async function writeMarker(
   );
 }
 
+/**
+ * The account a running container's login belongs to, from its marker: an
+ * account id, or `default` for the host login.
+ */
+export async function readContainerAgentAccountId(
+  containerId: string,
+  platform: AgentAccountPlatform,
+  runners: ContainerRunners = defaultRunners,
+): Promise<string> {
+  return (
+    (await readMarker(runners, containerId, platform)).split(":")[0] || DEFAULT_AGENT_ACCOUNT_ID
+  );
+}
+
 async function readMarker(
   runners: ContainerRunners,
   containerId: string,

@@ -72,6 +72,7 @@ import {
 } from "@/lib/settings-navigation";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import type { ResolveLaunchResult } from "./ActionBar.types";
+import { useAccountMachineStore } from "@/components/settings/account-machine";
 
 /**
  * A Create PR launch that has not yet produced a pull request.
@@ -216,7 +217,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       return;
     }
     setGlobalSettingsOpen(open);
-    if (!open) setGlobalSettingsDefaultSection(undefined);
+    if (!open) {
+      setGlobalSettingsDefaultSection(undefined);
+      // The next visit follows the machine on screen again.
+      useAccountMachineStore.getState().choose(undefined);
+    }
   }, []);
   const resolveLaunchEnvironmentIdRef = useRef<string | null>(null);
   const selectedEnvironmentIdRef = useRef(selectedEnvironmentId);

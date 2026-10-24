@@ -1,3 +1,4 @@
+import { restrictCodexAuthSnapshot } from "@orkestrator/protocol/login-snapshots";
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
   COORDINATOR_WEB_RESEARCH_ENV,
@@ -167,7 +168,7 @@ export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECU
  */
 export const ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV = "ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT";
 import { realpath } from "node:fs/promises";
-import { chmod, copyFile, lstat, mkdir, rename, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { sanitizeCoordinatorError } from "./coordinator-service.js";
 import {
@@ -189,36 +190,18 @@ import {
 const DELETION_DRAIN_GRACE_SECONDS = 5;
 
 /**
- * A private Claude configuration directory holding only the credential.
+ * A coordinator's private Claude configuration directory, empty of anything
+ * the user authored.
  *
- * Mirrors `prepareCoordinatorCodexHome`. Claude's own config directory holds
- * `settings.json` (which can declare hooks), `plugins/` and MCP server
- * definitions; copying any of them would let a user's own configuration run
- * code inside a session whose whole purpose is not to change the checkout.
+ * Claude's own config directory holds `settings.json` (which can declare
+ * hooks), `plugins/` and MCP server definitions; copying any of them would let
+ * a user's own configuration run code inside a session whose whole purpose is
+ * not to change the checkout. No login is copied either: the active account's
+ * access token is handed over instead (`applyCoordinatorClaudeAccount`).
  */
-export async function prepareCoordinatorClaudeHome(
-  destination: string,
-  source = process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(homedir(), ".claude"),
-): Promise<void> {
+export async function prepareCoordinatorClaudeHome(destination: string): Promise<void> {
   await mkdir(destination, { recursive: true, mode: 0o700 });
   await chmod(destination, 0o700);
-  for (const filename of [".credentials.json", "credentials.json"]) {
-    const sourceFile = path.join(source, filename);
-    const sourceStat = await lstat(sourceFile).catch(() => null);
-    if (!sourceStat) continue;
-    if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
-      throw new Error("Claude credential file must be a regular file, not a symbolic link");
-    }
-    const destinationFile = path.join(destination, filename);
-    const temporary = `${destinationFile}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-    try {
-      await copyFile(sourceFile, temporary);
-      await chmod(temporary, 0o600);
-      await rename(temporary, destinationFile);
-    } finally {
-      await rm(temporary, { force: true }).catch(() => undefined);
-    }
-  }
 }
 
 export async function prepareCoordinatorCodexHome(
@@ -236,7 +219,12 @@ export async function prepareCoordinatorCodexHome(
   const destinationAuth = path.join(destination, "auth.json");
   const temporary = `${destinationAuth}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   try {
-    await copyFile(sourceAuth, temporary);
+    const login = restrictCodexAuthSnapshot(await readFile(sourceAuth, "utf8"));
+    if (!("text" in login)) {
+      await rm(destinationAuth, { force: true });
+      return;
+    }
+    await writeFile(temporary, login.text, { mode: 0o600 });
     await chmod(temporary, 0o600);
     await rename(temporary, destinationAuth);
   } finally {
@@ -1285,8 +1273,8 @@ async function startLocalServerAttempt(
         coordinatorConversationId!,
         "codex-home",
       );
-      // Only the login is copied: from the active account's directory, or
-      // the host's when no account was added.
+      // Hand over access-only credentials from the active account or host.
+      // The private home must never rotate the account's refresh token.
       const account = await resolveActiveAgentAccount(context, "codex");
       if (account.home) stripInheritedAgentCredentials(env);
       // The directory outlives a launch: drop an earlier account's login.

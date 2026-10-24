@@ -160,6 +160,13 @@ function installBackend() {
         case "get_local_file_tree":
           result = [];
           break;
+        // The agent information panel names the session's account.
+        case "get_native_agent_session_account":
+          result = null;
+          break;
+        case "list_agent_accounts":
+          result = { accounts: [], active: { claude: "default", codex: "default" } };
+          break;
         case "get_native_agent_auth_status":
           result = { state: "ready" };
           break;

@@ -362,33 +362,41 @@ async function fixtureTranscript(
   reviewerId: string,
 ): Promise<MultiReviewReviewerTranscript> {
   const createdAt = new Date().toISOString();
+  const longTranscript = new URLSearchParams(window.location.search).has("longTranscript");
   return {
     workflowId,
     reviewerId,
     workflowPhase: "reviewing",
     agent: "codex",
     model: "gpt-6.1-sol",
-    status: "running",
+    status: longTranscript ? "completed" : "running",
     transcript: "snapshot",
     sourceToken: "fixture",
-    messages: TRANSCRIPT_LINES.map((line, index) => ({
-      id: `line-${index}`,
-      role: "assistant",
-      content: typeof line === "string" ? line : line[0],
-      createdAt,
-      parts: [
-        typeof line === "string"
-          ? { type: "thinking", content: line }
-          : {
-              type: "tool-invocation",
-              content: line[0],
-              toolName: line[0],
-              toolArgs: line[1],
-              toolState: "success",
-              toolUseId: `tool-${index}`,
-            },
-      ],
-    })),
+    messages: longTranscript
+      ? Array.from({ length: 40 }, (_, index) => ({
+          id: `long-line-${index}`,
+          role: "assistant",
+          content: `Transcript entry ${index + 1}. ${"Checked the review implementation and recorded the validation result. ".repeat(8)}`,
+          createdAt,
+        }))
+      : TRANSCRIPT_LINES.map((line, index) => ({
+          id: `line-${index}`,
+          role: "assistant",
+          content: typeof line === "string" ? line : line[0],
+          createdAt,
+          parts: [
+            typeof line === "string"
+              ? { type: "thinking", content: line }
+              : {
+                  type: "tool-invocation",
+                  content: line[0],
+                  toolName: line[0],
+                  toolArgs: line[1],
+                  toolState: "success",
+                  toolUseId: `tool-${index}`,
+                },
+          ],
+        })),
   };
 }
 

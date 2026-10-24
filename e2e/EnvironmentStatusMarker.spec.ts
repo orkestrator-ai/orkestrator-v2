@@ -56,7 +56,7 @@ test("forced colors keep inactive rings and machine or neutral centers visible i
       });
       expect(styles.active).toBe(true);
       expect(styles.border).toBe(styles.canvasText);
-      expect(styles.width).toBe("3px");
+      expect(styles.width).toBe("2px");
       expect(styles.fill).toBe(styles.canvasText);
     }
   }

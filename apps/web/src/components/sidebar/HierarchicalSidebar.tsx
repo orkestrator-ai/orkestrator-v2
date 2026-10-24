@@ -73,6 +73,7 @@ import type { Environment, EnvironmentType, Project } from "@/types";
 import { ProjectSearchBar } from "./ProjectSearchBar";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import { useFederation } from "@/components/federation/FederationProvider";
+import { useProjectCopyStore } from "@/stores/projectCopyStore";
 import { MachinesFilter } from "@/components/federation/MachinesFilter";
 import { MachineDot, MachineHomeIcon } from "@/components/federation/MachineDot";
 import {
@@ -519,6 +520,11 @@ export function HierarchicalSidebar() {
     [federation.enabled, machineFilter, machineViews],
   );
   const boundMachineView = machineViews.find((machine) => machine.bound) ?? null;
+  // This sidebar's own projects can be copied to the machines it commands.
+  const copySourceNodeId = federation.enabled
+    ? (boundMachineView?.backendId ?? federation.portalState.selfId)
+    : null;
+  const openProjectCopy = useProjectCopyStore((state) => state.open);
   const remoteMachinesVisible = visibleMachines.filter((machine) => !machine.bound);
   // Machines are listed in the command node's order, whichever one this window
   // works on. Merged lists hide a machine that is not connected; its projects
@@ -1013,7 +1019,6 @@ export function HierarchicalSidebar() {
     project: Project,
     mixed?: {
       sortableId: string;
-      machineBadge?: ReactNode;
       machineIcon?: ReactNode;
       label?: string;
     },
@@ -1021,7 +1026,6 @@ export function HierarchicalSidebar() {
     <SortableProjectGroup
       key={project.id}
       sortableId={mixed?.sortableId}
-      machineBadge={mixed?.machineBadge}
       machineIcon={mixed?.machineIcon}
       label={mixed?.label}
       project={project}
@@ -1049,6 +1053,11 @@ export function HierarchicalSidebar() {
       onRestartEnvironment={restartEnvironment}
       onForkEnvironment={handleForkEnvironment}
       onCreateEnvironment={() => handleOpenCreateEnvDialog(project.id)}
+      onCopyToMachine={
+        copySourceNodeId
+          ? () => openProjectCopy({ source: { nodeId: copySourceNodeId, projectId: project.id } })
+          : undefined
+      }
       onAddToFolder={mixed ? undefined : () => setFolderDialogProjectId(project.id)}
       onRemoveFromFolder={
         !mixed && project.folder ? () => handleRemoveFromFolder(project.id) : undefined
@@ -1285,35 +1294,21 @@ export function HierarchicalSidebar() {
     projectId: string,
     sortableId: string,
     label: string | undefined,
-    machineMark: "dot" | "home",
   ) => {
     const project = projectsById.get(projectId);
     if (!project) return null;
-    if (machineMark === "home") {
-      // Drawn even before this window's machine is identified, as it also
-      // decides where the row's chevron sits.
-      return renderProjectGroup(project, {
-        sortableId,
-        label,
-        machineIcon: (
-          <MachineHomeIcon
-            colorToken={boundMachineView?.colorToken}
-            machineName={boundMachineView?.name ?? "This machine"}
-            status="This window"
-          />
-        ),
-      });
-    }
+    // Show that this is the bound project even before this window's machine
+    // is identified; its colour and name become available once identified.
     return renderProjectGroup(project, {
       sortableId,
       label,
-      machineBadge: boundMachineView ? (
-        <MachineDot
-          colorToken={boundMachineView.colorToken}
-          machineName={boundMachineView.name}
+      machineIcon: (
+        <MachineHomeIcon
+          colorToken={boundMachineView?.colorToken}
+          machineName={boundMachineView?.name ?? "This machine"}
           status="This window"
         />
-      ) : null,
+      ),
     });
   };
 

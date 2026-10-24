@@ -75,6 +75,8 @@ interface UIState {
   environmentSortMode: EnvironmentSortMode;
   /** Zoom level as a percentage (50-200, default 100) */
   zoomLevel: number;
+  /** Multi Review graph height set by dragging its divider; null sizes it to the graph. */
+  multiReviewGraphHeight: number | null;
 
   // Actions
   selectProject: (projectId: string | null) => void;
@@ -86,6 +88,7 @@ interface UIState {
   /** Select both project and environment at once (for hierarchical sidebar) */
   selectProjectAndEnvironment: (projectId: string, environmentId: string) => void;
   setSidebarWidth: (width: number) => void;
+  setMultiReviewGraphHeight: (height: number | null) => void;
   /** Toggle the collapsed state of a project */
   toggleProjectCollapse: (projectId: string) => void;
   /** Set the collapsed state of a project */
@@ -137,6 +140,7 @@ export const createUIStore = () =>
         expandedSessionsEnvironments: [],
         environmentSortMode: "project",
         zoomLevel: ZOOM_DEFAULT,
+        multiReviewGraphHeight: null,
 
         // Actions
         selectProject: (projectId) =>
@@ -169,6 +173,8 @@ export const createUIStore = () =>
           })),
 
         setSidebarWidth: (width) => set({ sidebarWidth: width }),
+
+        setMultiReviewGraphHeight: (height) => set({ multiReviewGraphHeight: height }),
 
         toggleProjectCollapse: (projectId) =>
           set((state) => ({
@@ -273,6 +279,7 @@ export const createUIStore = () =>
           recentProjectIds: state.recentProjectIds,
           environmentSortMode: state.environmentSortMode,
           zoomLevel: state.zoomLevel,
+          multiReviewGraphHeight: state.multiReviewGraphHeight,
         }),
       },
     ),

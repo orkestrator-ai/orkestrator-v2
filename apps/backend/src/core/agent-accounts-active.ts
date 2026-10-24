@@ -28,6 +28,7 @@ import {
 } from "./agent-accounts-homes.js";
 import { INHERITED_CREDENTIAL_ENV } from "./agent-accounts-login.js";
 import { initializeActivePlanUsageAccount } from "./plan-usage-cache.js";
+import { runCommand } from "./shell.js";
 
 /** The account a platform's launches use: the host login, or an added account's directory. */
 export interface ResolvedAgentAccount {
@@ -122,10 +123,8 @@ export async function localBridgeIsOnActiveAccount(
     if (kind === "claude" && loginlessLocalBridges.has(key)) {
       // It answers "Not logged in" to everything; relaunching only helps once
       // the account has a token to hand over.
-      const credentials = await readActiveClaudeCredentials(context, active);
-      if (!getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS)) {
-        return true;
-      }
+      const { token } = await readUsableClaudeLogin(context, active, readAddedClaudeCredentials);
+      if (!token) return true;
       return (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
     }
     if (tokenExpiresAt === undefined || !tokenLapsed) return true;
@@ -145,7 +144,7 @@ export async function localBridgeIsOnActiveAccount(
 }
 
 /** How long before a handed-over token expires its idle bridge is replaced. */
-const TOKEN_REPLACEMENT_LEAD_MS = 5 * 60_000;
+export const TOKEN_REPLACEMENT_LEAD_MS = 5 * 60_000;
 
 /**
  * The platform's login was renewed (for OpenCode, any provider login changed).
@@ -208,11 +207,18 @@ async function readActiveClaudeCredentials(
   context: CommandContext,
   active: ResolvedAgentAccount,
   readCredentials: (home: string) => Promise<string | undefined> = readAddedClaudeCredentials,
+  profileConfigDir?: string,
 ): Promise<string | undefined> {
   if (active.home) return readCredentials(active.home);
   // An agent-test profile reads the host login only through its own grant,
-  // which `applyClaudeHostCredentialEnvironment` has already applied.
-  return context.runtimeFlavor === "agent-test" ? undefined : readRuntimeHostClaudeCredentials();
+  // which `applyClaudeHostCredentialEnvironment` has already applied. Its own
+  // isolated directory's file login is its own, and never the Keychain's.
+  if (context.runtimeFlavor === "agent-test") {
+    return profileConfigDir
+      ? getHostClaudeCredentials("linux", os.homedir(), profileConfigDir, { configDirOnly: true })
+      : undefined;
+  }
+  return readRuntimeHostClaudeCredentials();
 }
 
 export async function readAddedCodexAuth(home: string): Promise<string | undefined> {
@@ -235,14 +241,6 @@ function claudeCredentialExpiry(credentials: string | undefined): number | undef
   }
 }
 
-async function hasFileCredential(configDir: string): Promise<boolean> {
-  for (const name of [".credentials.json", "credentials.json"]) {
-    const stat = await fs.lstat(path.join(configDir, name)).catch(() => null);
-    if (stat?.isFile() && stat.size > 0) return true;
-  }
-  return false;
-}
-
 export interface CoordinatorAgentAccount {
   accountId: string;
   /** Set when the bridge runs on a short-lived access token rather than a login. */
@@ -252,49 +250,130 @@ export interface CoordinatorAgentAccount {
 }
 
 /**
- * Seed a coordinator conversation's private Claude directory from the active
- * account and point the bridge at it.
+ * Asks the backend's login keeper to have Claude refresh the active login when
+ * it is due (`ContainerClaudeLoginKeeper.refreshLocalLoginIfDue`). Registered
+ * by the backend; absent in tests and tools that never refresh.
+ */
+let localClaudeLoginRefresher: (() => Promise<unknown>) | undefined;
+
+export function setLocalClaudeLoginRefresher(
+  refresher: (() => Promise<unknown>) | undefined,
+): void {
+  localClaudeLoginRefresher = refresher;
+}
+
+function isRefreshableClaudeLogin(credentials: string | undefined): boolean {
+  try {
+    const refreshToken = (
+      JSON.parse(credentials ?? "") as { claudeAiOauth?: { refreshToken?: unknown } }
+    ).claudeAiOauth?.refreshToken;
+    return typeof refreshToken === "string" && refreshToken.trim() !== "";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The active login and an access token from it that will outlive a bridge
+ * start. A login whose token lapsed while nothing used it is refreshed first,
+ * through Claude's own CLI, so a coordinator does not start signed out just
+ * because the host's `claude` was idle.
+ */
+async function readUsableClaudeLogin(
+  context: CommandContext,
+  active: ResolvedAgentAccount,
+  readCredentials: (home: string) => Promise<string | undefined>,
+  profileConfigDir?: string,
+): Promise<{ credentials: string | undefined; token: string | undefined }> {
+  const read = () =>
+    readActiveClaudeCredentials(context, active, readCredentials, profileConfigDir);
+  let credentials = await read();
+  let token = getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS);
+  if (
+    !token &&
+    localClaudeLoginRefresher &&
+    context.runtimeFlavor !== "agent-test" &&
+    isRefreshableClaudeLogin(credentials)
+  ) {
+    await localClaudeLoginRefresher().catch(() => undefined);
+    credentials = await read();
+    token = getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS);
+  }
+  return { credentials, token };
+}
+
+/** Coordinator homes whose own Keychain entry was already removed by this process. */
+const clearedCoordinatorKeychainEntries = new Set<string>();
+
+/**
+ * Remove a Keychain login Claude may have saved under the coordinator home.
  *
- * The directory receives a copied credential file when the account keeps one.
- * A login held only in the macOS Keychain cannot follow: Claude names that
- * entry after the directory it belongs to, so the private directory has none
- * of its own. The account's current access token is handed over instead, and
- * never its refresh token — a copied refresh token would rotate away from the
- * account's own login. The token cannot be renewed, so the returned expiry
- * lets an idle bridge be replaced before it lapses.
+ * Builds before access-only coordinators copied the account's credential file
+ * in, refresh token included. When that refresh failed, Claude saved the
+ * blanked login under the directory's own Keychain entry, and it then answers
+ * "OAuth session expired" instead of "Not logged in" whenever no token is
+ * handed over. Once per home per process is enough: nothing writes it now.
+ */
+async function clearCoordinatorKeychainLogin(
+  coordinatorHome: string,
+  removeKeychainEntry: (service: string) => Promise<void>,
+): Promise<void> {
+  if (process.platform !== "darwin" || clearedCoordinatorKeychainEntries.has(coordinatorHome)) {
+    return;
+  }
+  clearedCoordinatorKeychainEntries.add(coordinatorHome);
+  await removeKeychainEntry(claudeKeychainService(coordinatorHome)).catch(() => undefined);
+}
+
+async function deleteKeychainEntry(service: string): Promise<void> {
+  await runCommand("security", ["delete-generic-password", "-s", service], {
+    timeoutMs: 10_000,
+  });
+}
+
+/**
+ * Point a coordinator conversation's Claude bridge at the active account.
+ *
+ * The coordinator's private directory never holds a login. The account's
+ * current access token is handed over as `CLAUDE_CODE_OAUTH_TOKEN`, and never
+ * its refresh token: a copied refresh token rotates away from the account's
+ * own login, and a copy of a stale file (macOS keeps the live login in the
+ * Keychain) fails to refresh at all. The token cannot be renewed by the
+ * bridge, so the returned expiry lets an idle bridge be replaced before it
+ * lapses.
  */
 export async function applyCoordinatorClaudeAccount(
   context: CommandContext,
   coordinatorHome: string,
   env: NodeJS.ProcessEnv,
-  prepareHome: (destination: string, source?: string) => Promise<void>,
+  prepareHome: (destination: string) => Promise<void>,
   readCredentials: (home: string) => Promise<string | undefined> = readAddedClaudeCredentials,
+  removeKeychainEntry: (service: string) => Promise<void> = deleteKeychainEntry,
 ): Promise<CoordinatorAgentAccount> {
   const active = await resolveActiveAgentAccount(context, "claude");
   if (active.home) {
     stripInheritedAgentCredentials(env);
   }
-  // The directory outlives a launch; a login copied for an earlier account
-  // must not outrank the active one.
+  // An agent-test profile may have pointed the run at its own isolated home,
+  // whose login stands in for the host's.
+  const profileConfigDir = active.home ? undefined : env.CLAUDE_CONFIG_DIR?.trim() || undefined;
+  // The directory outlives a launch, and earlier builds copied logins into it.
   for (const name of [".credentials.json", "credentials.json"]) {
     await fs.rm(path.join(coordinatorHome, name), { force: true });
   }
-  // Without an added account this is whatever directory the run would
-  // otherwise have used, which an agent-test profile may have pointed at an
-  // isolated home.
-  await prepareHome(coordinatorHome, active.home ?? (env.CLAUDE_CONFIG_DIR?.trim() || undefined));
+  await prepareHome(coordinatorHome);
+  await clearCoordinatorKeychainLogin(coordinatorHome, removeKeychainEntry);
   env.CLAUDE_CONFIG_DIR = coordinatorHome;
-  if (
-    (await hasFileCredential(coordinatorHome)) ||
-    env.ANTHROPIC_AUTH_TOKEN ||
-    env.CLAUDE_CODE_OAUTH_TOKEN ||
-    env.ANTHROPIC_API_KEY
-  ) {
+  if (env.ANTHROPIC_AUTH_TOKEN || env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_API_KEY) {
     return { accountId: active.accountId };
   }
-  const credentials = await readActiveClaudeCredentials(context, active, readCredentials);
-  const token = getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS);
-  // Signed out, or an access token that lapsed while nothing used the account.
+  const { credentials, token } = await readUsableClaudeLogin(
+    context,
+    active,
+    readCredentials,
+    profileConfigDir,
+  );
+  // Signed out, or an access token that lapsed and could not be refreshed.
   if (!token) return { accountId: active.accountId, loginless: true };
   env.CLAUDE_CODE_OAUTH_TOKEN = token;
   const tokenExpiresAt = claudeCredentialExpiry(credentials);

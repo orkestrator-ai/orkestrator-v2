@@ -8,6 +8,7 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { realmSearchParams, type RealmSelectRequest } from "@/lib/federation/workspace-realm";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { useRealmShellStore } from "@/stores/realmShellStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import type { Environment, Project } from "@/types";
 import { RemoteProjectGroup } from "./RemoteMachineTree";
@@ -217,4 +218,8 @@ test("panel messages leave sidebar and selection untouched; only sidebar message
   act(() => deliver({ type: "panel", panel: "usage", open: true, inset: 6, seq: 2 }));
   expect(useUIStore.getState().sidebarOpen).toBe(false);
   expect(useUIStore.getState().projectSelectionRevision).toBe(selection);
+  // The window's grouping is kept for the coordinator gate.
+  act(() => deliver({ type: "grouping", grouping: "project" }));
+  expect(useRealmShellStore.getState().grouping).toBe("project");
+  useRealmShellStore.setState({ grouping: null });
 });

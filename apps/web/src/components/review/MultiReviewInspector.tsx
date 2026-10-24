@@ -226,7 +226,10 @@ const FOLLOW_THRESHOLD_PX = 24;
 /**
  * The tail's scrolling log: the session's latest messages and tool calls,
  * rendered as a chat transcript is, following new output unless the reader
- * scrolled up.
+ * scrolled up. It fills the inspector's remaining height, never under 28rem;
+ * its explicit zero-length basis keeps a long transcript scrolling here rather
+ * than growing the inspector (a percentage basis becomes content-sized while
+ * the grid measures its intrinsic height).
  */
 function TranscriptTailLog({
   label,
@@ -268,6 +271,18 @@ function TranscriptTailLog({
     if (element && following.current) element.scrollTop = element.scrollHeight;
   }, [messages]);
 
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    // A completed transcript receives no new messages when its pane shrinks.
+    // Keep its latest entry visible, unless the reader has scrolled up.
+    const observer = new ResizeObserver(() => {
+      if (following.current) element.scrollTop = element.scrollHeight;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div
       ref={scrollRef}
@@ -281,7 +296,7 @@ function TranscriptTailLog({
         following.current =
           element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_THRESHOLD_PX;
       }}
-      className="@container h-[28rem] overflow-y-auto overscroll-contain rounded-lg border border-divider bg-background py-2"
+      className="@container h-0 min-h-[28rem] flex-[1_1_0px] overflow-y-auto overscroll-contain rounded-lg border border-divider bg-background py-2"
     >
       {messages.length === 0 ? (
         <p className={cn("px-3 text-xs", error ? "text-failure" : "text-muted-foreground")}>
@@ -307,8 +322,11 @@ function TranscriptTailLog({
         </ToolDetailLoaderContext.Provider>
       )}
       {live && messages.length > 0 ? (
-        <div aria-hidden="true" className="px-4 pt-1">
-          <span className="agent-thinking-shimmer text-xs">Working…</span>
+        // Same column as the messages above, so it sits under the text it follows.
+        <div aria-hidden="true" className="px-2 @sm:px-4">
+          <div className="chat-status-row mx-auto max-w-3xl min-w-0">
+            <span className="agent-thinking-shimmer text-xs">Working…</span>
+          </div>
         </div>
       ) : null}
     </div>

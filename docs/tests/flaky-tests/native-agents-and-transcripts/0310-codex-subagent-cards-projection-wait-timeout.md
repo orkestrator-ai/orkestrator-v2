@@ -32,3 +32,12 @@
 - **Owning-file rerun:** `mise run test:logged -- --name codex-subagent-cards-isolated -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.9 seconds logged).
 - **Evidence:** `orkestrator-test-run.MSqERJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. The passing owner output was deleted by the logged runner.
 - **Assessment:** confirms an intermittent projection snapshot mismatch in the existing owner. Asynchronous hydration under contention is a hypothesis; no backend/bridge implementation, test assertion, timeout or skip changed.
+
+## Live image preview validation recurrence — 2026-10-24
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`, started on 2026-10-23 and completed on 2026-10-24 (Europe/London), while validating `0b41b3d9c`. The aggregate reserved workspace/root/bridges/protocol workers 4/1/2/1; the backend used two Bun workers. Other worktrees were also running suites.
+- **Failure:** the same test failed at line 170 after 656.97 ms: the cold-restart projection's `turn.phase` was `recovering`, where the assertion expected `idle`.
+- **Suite counts:** backend 10,569 passed, 77 skipped and 15 failed across 10,661 tests in 618 files (595.32 seconds). The other 14 failures expected OpenCode version `1.19.0` while the installed binary reported `1.19.4`. Root, bridges and protocol groups passed; the complete aggregate took 649.2 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name codex-cold-restart-recheck -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures` passed unchanged (one test, exit 0, 1.8 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.SfITWq/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer aggregate log in `orkestrator-test-run.uF2Bqh/repository-tests.log.gz` under the same temporary root. Passing rerun output was deleted by the logged runner.
+- **Assessment:** another observation of the cold projection before recovery settles. Host contention remains a hypothesis; the backend, bridge and owning test were unchanged by the image preview fix.

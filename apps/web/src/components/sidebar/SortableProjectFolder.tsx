@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useDndContext } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -9,7 +9,6 @@ import {
   FolderGit2,
   FolderOpen,
   FolderMinus,
-  GripVertical,
   Pencil,
 } from "lucide-react";
 import {
@@ -83,6 +82,7 @@ export function SortableProjectFolder({
   const [isRenaming, setIsRenaming] = useState(false);
   const [draftName, setDraftName] = useState(name);
   const renameInputId = useId();
+  const suppressClick = useRef(false);
 
   const { active } = useDndContext();
   const {
@@ -98,6 +98,20 @@ export function SortableProjectFolder({
     id: sortableId ?? projectFolderDragId(name),
     data: { sidebarGroup: true },
   });
+  useEffect(() => {
+    if (isDragging) {
+      suppressClick.current = true;
+      return;
+    }
+    if (!suppressClick.current) return;
+    // Keep the guard through the mouseup click, including when the heading
+    // moves with the pointer and remains under it at the drop destination.
+    const timer = setTimeout(() => {
+      suppressClick.current = false;
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [isDragging]);
+
   const canHighlightDrop =
     !repository || (active && parseProjectFolderDragId(String(active.id)) !== null);
   const destination = openMachineName ? ` on ${openMachineName}` : "";
@@ -121,12 +135,23 @@ export function SortableProjectFolder({
   const FolderIcon = repository ? FolderGit2 : isCollapsed ? Folder : FolderOpen;
   const hasMenu = Boolean(onRename || onSort || onUngroup);
 
-  // Navigation keeps native Enter/Space activation; only the grip starts a drag.
+  // The whole heading is the drag handle. A repository heading also opens on
+  // click, so its keyboard drag starts on Space only and Enter keeps the
+  // native activation that opens it.
+  const headingListeners =
+    onOpen && listeners
+      ? {
+          ...listeners,
+          onKeyDown: (event: KeyboardEvent) => {
+            if (event.code === "Space") listeners.onKeyDown?.(event);
+          },
+        }
+      : listeners;
   const heading = (
     <button
-      {...(onOpen ? {} : attributes)}
-      {...(onOpen ? {} : listeners)}
-      ref={onOpen ? undefined : setActivatorNodeRef}
+      {...attributes}
+      {...headingListeners}
+      ref={setActivatorNodeRef}
       type="button"
       aria-expanded={onOpen ? undefined : !isCollapsed}
       aria-label={onOpen ? `Open ${label}${destination}` : undefined}
@@ -137,12 +162,10 @@ export function SortableProjectFolder({
             ? `Expand folder ${label}`
             : `Collapse folder ${label}`
       }
-      className={cn(
-        "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground",
-        !onOpen && "cursor-grab active:cursor-grabbing",
-      )}
+      className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing"
       onClick={(event) => {
         event.stopPropagation();
+        if (suppressClick.current) return;
         if (onOpen) onOpen();
         else onToggleCollapse();
       }}
@@ -214,20 +237,6 @@ export function SortableProjectFolder({
           </ContextMenu>
         ) : (
           heading
-        )}
-
-        {onOpen && (
-          <button
-            {...attributes}
-            {...listeners}
-            ref={setActivatorNodeRef}
-            type="button"
-            aria-label={`Move repository ${label}`}
-            className="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground hover:bg-white/[0.07] active:cursor-grabbing"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <GripVertical aria-hidden="true" className="h-4 w-4" />
-          </button>
         )}
 
         {/* The chevron collapses independently of navigation and dragging. */}

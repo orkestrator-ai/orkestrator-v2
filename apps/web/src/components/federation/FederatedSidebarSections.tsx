@@ -16,7 +16,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, ChevronRight, GripVertical, WifiOff } from "lucide-react";
+import { ChevronDown, ChevronRight, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
@@ -48,6 +48,7 @@ import {
   resolveUngroupProjectFolder,
   type ProjectArrangement,
 } from "@/lib/project-folders";
+import { machineTextClass } from "@/lib/federation/machine-colors";
 import { cn } from "@/lib/utils";
 import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
@@ -80,7 +81,11 @@ function useDragSensors() {
   );
 }
 
-/** A machine heading: colour, name and its connection state, never activity. */
+/**
+ * A machine heading: its name in the machine's colour and, while it is
+ * unreachable or catching up, its status, never activity. The name moves the whole
+ * section; the chevron last collapses it.
+ */
 export function MachineSectionHeader({
   machine,
   collapsed,
@@ -90,7 +95,7 @@ export function MachineSectionHeader({
   machine: MachineView;
   collapsed?: boolean;
   onToggle?: () => void;
-  /** Drag listeners for the grip that moves the whole section. */
+  /** Drag attributes and listeners for the name, which moves the whole section. */
   dragHandle?: Record<string, unknown>;
 }) {
   const status = machine.bound
@@ -101,50 +106,53 @@ export function MachineSectionHeader({
         loadedAt: machine.loadedAt,
       });
   const live = machine.bound || machine.transport === "connected";
+  const catchingUp = !machine.bound && live && machine.freshness === "catching-up";
   const Chevron = collapsed ? ChevronRight : ChevronDown;
   return (
     <div
-      className="group/machine sticky top-0 z-[5] flex h-8 items-center gap-2 border-b border-border/50 bg-sidebar/95 pr-3 pl-1 backdrop-blur-sm"
+      className="sticky top-0 z-[5] flex h-8 items-center gap-2 border-b border-border/50 bg-sidebar/95 pr-3 pl-1 backdrop-blur-sm"
       data-testid="machine-section-header"
       data-machine={machine.connectionId}
     >
-      {dragHandle ? (
-        <button
-          type="button"
-          {...dragHandle}
-          aria-label={`Move ${machine.name}`}
-          className="flex h-6 w-4 shrink-0 cursor-grab items-center justify-center text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 active:cursor-grabbing group-hover/machine:opacity-100 pointer-coarse:opacity-100"
+      <div
+        {...dragHandle}
+        {...(dragHandle ? { "aria-label": `Move ${machine.name}` } : {})}
+        className={cn(
+          "flex h-6 min-w-0 flex-1 items-center gap-2 rounded-md px-2",
+          dragHandle && "cursor-grab active:cursor-grabbing",
+        )}
+      >
+        <span
+          data-machine-color={machine.colorToken ?? "neutral"}
+          title={`${machine.name} · ${status}`}
+          className={cn(
+            "min-w-0 truncate text-xs font-semibold uppercase tracking-wide",
+            machineTextClass(machine.colorToken),
+          )}
         >
-          <GripVertical className="h-3 w-3" aria-hidden="true" />
-        </button>
-      ) : (
-        <span aria-hidden="true" className="h-6 w-4 shrink-0" />
-      )}
+          {machine.name}
+        </span>
+      </div>
+      {!live || catchingUp ? (
+        <span
+          className="flex shrink-0 items-center gap-1 text-[11px] text-amber-400"
+          title={machine.transportDetail}
+        >
+          {!live ? <WifiOff className="h-3 w-3" aria-hidden="true" /> : null}
+          {status}
+        </span>
+      ) : null}
       {onToggle ? (
         <button
           type="button"
           onClick={onToggle}
-          className="text-muted-foreground hover:text-foreground"
+          className="shrink-0 text-muted-foreground hover:text-foreground"
           aria-label={`${collapsed ? "Expand" : "Collapse"} ${machine.name}`}
           aria-expanded={!collapsed}
         >
           <Chevron className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       ) : null}
-      <MachineDot colorToken={machine.colorToken} machineName={machine.name} status={status} />
-      <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {machine.name}
-      </span>
-      <span
-        className={cn(
-          "flex shrink-0 items-center gap-1 text-[11px]",
-          live ? "text-muted-foreground" : "text-amber-400",
-        )}
-        title={machine.transportDetail}
-      >
-        {!live ? <WifiOff className="h-3 w-3" aria-hidden="true" /> : null}
-        {status}
-      </span>
     </div>
   );
 }
@@ -212,7 +220,15 @@ function MachineSection({
     state.collapsedMachines.includes(machine.connectionId),
   );
   const setMachineCollapsed = useMachineViewStore((state) => state.setMachineCollapsed);
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
     id: `${MACHINE_DRAG_PREFIX}${machine.connectionId}`,
     disabled: !sortable,
   });
@@ -228,7 +244,9 @@ function MachineSection({
         machine={machine}
         collapsed={collapsed}
         onToggle={() => setMachineCollapsed(machine.connectionId)}
-        dragHandle={sortable ? { ...attributes, ...listeners } : undefined}
+        dragHandle={
+          sortable ? { ...attributes, ...listeners, ref: setActivatorNodeRef } : undefined
+        }
       />
       {!collapsed ? children : null}
     </section>
@@ -318,15 +336,11 @@ export function MergedProjectList({
   /** Machines whose projects are shown (connected, and not filtered out). */
   shownIds: ReadonlySet<string>;
   mode: "project" | "repository";
-  /**
-   * A project of this window's own machine, with its drag id, the label to
-   * show and how its row marks the machine.
-   */
+  /** A project of this window's own machine, with its drag id and the label to show. */
   renderBoundProject: (
     projectId: string,
     sortableId: string,
     label: string | undefined,
-    machineMark: "dot" | "home",
   ) => ReactNode;
   /** An environment of this window's own machine was dropped. */
   onBoundEnvironmentDragEnd: (activeId: string, overId: string) => void;
@@ -406,12 +420,9 @@ export function MergedProjectList({
     onBoundEnvironmentDragEnd(activeId, overId);
   };
 
-  const machineMark = mode === "repository" ? "home" : "dot";
   const renderProject = (item: MergedProject, label?: string) =>
     item.machine.bound ? (
-      <div key={item.id}>
-        {renderBoundProject(item.project.ref.projectId, item.id, label, machineMark)}
-      </div>
+      <div key={item.id}>{renderBoundProject(item.project.ref.projectId, item.id, label)}</div>
     ) : (
       <RemoteProjectGroup
         key={item.id}
@@ -421,7 +432,7 @@ export function MergedProjectList({
         isCollapsed={collapsedProjectKeys.includes(item.id)}
         onToggleCollapse={() => setProjectKeyCollapsed(item.id)}
         sortable={isMachineWritable(item.machine) && !item.machine.truncated}
-        showMachine={machineMark}
+        showMachine
         label={label}
       />
     );

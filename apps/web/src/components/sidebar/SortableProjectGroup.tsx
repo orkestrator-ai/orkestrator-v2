@@ -25,6 +25,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+  Copy,
   FolderInput,
   FolderMinus,
   Trash2,
@@ -63,6 +64,8 @@ interface SortableProjectGroupProps {
   onRestartEnvironment: (environmentId: string) => void;
   onForkEnvironment?: (environmentId: string, environmentType: EnvironmentType) => void;
   onCreateEnvironment: () => void;
+  /** Copies the project to another machine; shown only when there are other machines. */
+  onCopyToMachine?: () => void;
   /** Opens the folder composer for this project. */
   onAddToFolder?: () => void;
   /** Lifts this project back out to the root level; omitted when it has no folder. */
@@ -71,11 +74,9 @@ interface SortableProjectGroupProps {
   selectedEnvironmentIds?: string[];
   /** Drag id in a list that mixes machines (the project key); the project ID otherwise. */
   sortableId?: string;
-  /** Shown after the name, in lists that mix machines. */
-  machineBadge?: ReactNode;
   /**
-   * Shown before the name in a repository group, whose member rows put the
-   * chevron last, as the group's own heading does.
+   * Shown before the name, in lists that mix machines. Such rows put the
+   * chevron last, as the list's folder headings do.
    */
   machineIcon?: ReactNode;
   /** Shown instead of the project name (a repository group names the machine). */
@@ -100,12 +101,12 @@ export function SortableProjectGroup({
   onRestartEnvironment,
   onForkEnvironment,
   onCreateEnvironment,
+  onCopyToMachine,
   onAddToFolder,
   onRemoveFromFolder,
   isMultiSelectMode = false,
   selectedEnvironmentIds = [],
   sortableId,
-  machineBadge,
   machineIcon,
   label = project.name,
 }: SortableProjectGroupProps) {
@@ -167,8 +168,8 @@ export function SortableProjectGroup({
   // The name is also the drag handle, and dnd-kit's keyboard sensor owns Enter
   // and Space there. This chevron carries no drag listeners, so it is the
   // control a keyboard user can actually expand the project with — and it
-  // needs its own label, because nothing inside it is text. Folder rows are
-  // built the same way.
+  // needs its own label, because nothing inside it is text. It sits last, as
+  // on folder and repository headings.
   const chevron = (
     <CollapsibleTrigger
       className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
@@ -202,7 +203,6 @@ export function SortableProjectGroup({
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
           >
-            {!machineIcon && chevron}
             <ContextMenu>
               <ContextMenuTrigger className="contents">
                 <button
@@ -223,7 +223,6 @@ export function SortableProjectGroup({
                 >
                   {machineIcon}
                   <span className="truncate font-medium">{label}</span>
-                  {machineBadge}
                   {environments.length > 0 && (
                     <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
                       {environments.length}
@@ -291,6 +290,12 @@ export function SortableProjectGroup({
                   <Plus className="h-4 w-4 mr-2" />
                   New Environment
                 </ContextMenuItem>
+                {onCopyToMachine && (
+                  <ContextMenuItem onClick={onCopyToMachine}>
+                    <Copy className="h-4 w-4 mr-2" />
+                    Copy to Machine…
+                  </ContextMenuItem>
+                )}
                 {onAddToFolder && (
                   <>
                     <ContextMenuSeparator />
@@ -330,7 +335,7 @@ export function SortableProjectGroup({
             >
               <Plus className="h-3.5 w-3.5" />
             </Button>
-            {machineIcon && chevron}
+            {chevron}
           </div>
 
           {/* Environments List */}

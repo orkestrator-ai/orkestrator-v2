@@ -71,8 +71,20 @@ describe("media dimensions", () => {
 
 describe("mediaLoadFailure", () => {
   test.each([
-    [new Error("Invalid file path: file is outside Orkestrator workspace storage"), "denied"],
-    [new Error("Unsafe container media path"), "denied"],
+    [
+      new Error("Invalid file path: file is outside Orkestrator workspace storage"),
+      "outside-workspace",
+    ],
+    [new Error("Unsafe container media path"), "outside-workspace"],
+    [
+      new Error(
+        JSON.stringify({
+          code: "policy_denied",
+          message: "The file is outside the environment's workspace",
+        }),
+      ),
+      "outside-workspace",
+    ],
     [new Error(JSON.stringify({ code: "policy_denied", message: "No" })), "denied"],
     [Object.assign(new Error("open failed"), { code: "EACCES" }), "denied"],
     [new Error("EPERM: operation not permitted, open '/x'"), "denied"],

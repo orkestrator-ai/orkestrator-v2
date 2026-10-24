@@ -82,3 +82,22 @@ After the aggregate finished, `mise run test:logged -- --name mermaid-watchdog-p
 - `mise run test:logged -- --name final-repository -- mise run test`, alongside focused Playwright and unit runs in the same worktree. The unchanged watchdog owner measured 5375 ms against `< 5000 ms` (5698.97 ms test duration).
 - `mise run test:logged -- --name backend-mermaid -- bun --cwd=apps/backend test src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (13.6 s logged, exit 0).
 - Evidence: `orkestrator-test-run.4LYtCC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory. No implementation, assertion, deadline, or skip in this owner changed.
+
+## Media preview review validation — 2026-10-24
+
+- **Original command:** `mise run test:logged -- --name media-preview-suite -- mise run test` on `image-access-error-3ee36b3f7d06-r1`; workspace/root/bridges/protocol reserved 4/1/2/1 slots, with two backend workers. Other worktree validation and an isolated browser suite shared the host.
+- **Failure:** the unchanged watchdog owner measured 5410 ms against `< 5000 ms` (5693.79 ms test duration). Its expected render-timeout result assertion passed.
+- **Owning-file rerun:** `mise run test:logged -- --name media-preview-mermaid-owner -- bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` passed the complete unchanged 13-test owner, exit 0, in 36.9 seconds.
+- **Evidence:** `orkestrator-test-run.RsxwH7/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
+- **Assessment:** recurrence of the existing elapsed-time flake. Host scheduling or Chromium startup contention remains a hypothesis. No assertion, deadline, skip or implementation in this owner changed. The initial root group also caught bounded-diagnostics violations in the new preview tests; those assertions were corrected and the diagnostics owner passed separately.
+
+The aggregate exited 1 after 786.0 seconds. Backend totals were 10,569 passed, 77 skipped and 15 failed across 618 files (708.97 seconds): this watchdog and 14 unchanged OpenCode conformance cases, whose installed CLI reported 1.19.4 while the tests required 1.19.0. The complete conformance owner reproduced that mismatch alone (56 passed, 14 failed, 17.0 seconds). Web passed 9,140 tests with 10 skips; bridges, protocol regeneration and every other workspace package passed. The isolated browser suite passed 29 tests with 53 opt-in skips and reset its profile; targeted project-home/container preview checks passed at desktop and narrow widths and after reload.
+
+After correcting the preview tests' diagnostics assertions, `mise run test:logged -- --name media-preview-root-isolated -- bun test ./tests/unit --parallel=1 --only-failures` passed the complete root unit suite (exit 0, 308.1 seconds). An extra `mise run test:unit` attempt, which omits module isolation, produced 41 failures and one between-test error; the unchanged Create Environment owner passed alone (37.6 seconds), and the complete isolated root run above passed. Those non-isolated results remain in `orkestrator-test-run.BMXKsO/media-preview-root-final.log.gz`; no unrelated test was weakened or skipped.
+
+## Transcript scroll main merge — 2026-10-24
+
+- **Original command:** `ORKESTRATOR_TEST_AREA_BASE=f12cc5a5382417bf1bfbda2a7fd93e0d6013aa95 mise run test:logged -- --name merge-repository -- mise run test`, workspace/root/bridges/protocol 4/1/2/1 slots with two backend workers, alongside component and isolated-stack browser validation.
+- **Failure:** elapsed 5778 ms against `< 5000 ms` (6018.47 ms test duration).
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-mermaid-owner -- bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` passed, exit 0 (25.2 s logged).
+- **Evidence:** host temporary artifact `orkestrator-test-run.k5J28D/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after aggregate finalization. No implementation, assertion, deadline or skip changed.

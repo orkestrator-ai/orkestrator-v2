@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { multiReviewFlowLayout } from "./multi-review-flow";
 import {
   FLOW_VIEWPORT_MAX_HEIGHT,
+  FLOW_VIEWPORT_RESIZE_MIN_HEIGHT,
+  resizedFlowViewportHeight,
   FLOW_ZOOM_MAX,
   FLOW_ZOOM_MIN,
   centerFlowRect,
@@ -182,5 +184,19 @@ describe("centering a stage", () => {
         { width: 1200, height: 800 },
       ),
     ).toEqual({ zoom: 0.5, scrollLeft: 0, scrollTop: 0 });
+  });
+});
+
+describe("resized viewport height", () => {
+  test("clamps to the minimum and the content-dependent maximum", () => {
+    expect(resizedFlowViewportHeight(-100, 200)).toBe(FLOW_VIEWPORT_RESIZE_MIN_HEIGHT);
+    expect(resizedFlowViewportHeight(Infinity, 200)).toBe(FLOW_VIEWPORT_MAX_HEIGHT);
+    expect(resizedFlowViewportHeight(Infinity, 800.2)).toBe(1601);
+    expect(resizedFlowViewportHeight(900, 800)).toBe(900);
+  });
+
+  test("rounds requested heights to whole layout pixels", () => {
+    expect(resizedFlowViewportHeight(300.49, 800)).toBe(300);
+    expect(resizedFlowViewportHeight(300.5, 800)).toBe(301);
   });
 });

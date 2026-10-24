@@ -76,11 +76,12 @@ export class LeafModeError extends Error {
   }
 }
 
-export function registerNodeTools(
-  server: McpServer,
-  invoke: ControlMcpInvoker,
-  scope: NodeToolScope,
-): void {
+/**
+ * Resolves the nodes a coordinator acts on: its own node's status, its
+ * project's repository identity, one node's copy of the project with a routed
+ * invoker, and the conversation's mailbox where that node's reports go.
+ */
+export function createNodeTargets(invoke: ControlMcpInvoker, scope: NodeToolScope) {
   const status = async (): Promise<NodeStatus> => {
     const value = await invoke<NodeStatus>("get_node_status");
     if (value.mode === "leaf") {
@@ -97,14 +98,13 @@ export function registerNodeTools(
     return repositoryHint(project?.gitUrl);
   };
 
-  /** One node's copy of this coordinator's project, and a routed invoker for it. */
-  const nodeTarget = async (nodeId: string) => {
+  /**
+   * One node's copy of this coordinator's project, and a routed invoker for
+   * it; `null` when `nodeId` is this node.
+   */
+  const targetOrSelf = async (nodeId: string) => {
     const self = await status();
-    if (nodeId === self.nodeId) {
-      throw new Error(
-        "That is this node; use the ordinary tools (list_environments, launch_environment…).",
-      );
-    }
+    if (nodeId === self.nodeId) return null;
     const summaries = await invoke<NodeSummariesResult>("get_node_summaries", {
       nodeIds: [nodeId],
     });
@@ -154,11 +154,25 @@ export function registerNodeTools(
     return {
       self,
       node,
+      nodeId,
       nodeName: node.view.displayName,
       projectId: project.ref.projectId,
       call,
+      /** The same routed calls, shaped as the local invoker. */
+      invoke: (<T>(command: string, args?: JsonRecord) =>
+        call<T>(command, args)) as ControlMcpInvoker,
       environment,
     };
+  };
+
+  const nodeTarget = async (nodeId: string) => {
+    const target = await targetOrSelf(nodeId);
+    if (!target) {
+      throw new Error(
+        "That is this node; use the ordinary tools (list_environments, launch_environment…).",
+      );
+    }
+    return target;
   };
 
   /** This conversation's mailbox on the command node, where leaf replies go. */
@@ -181,6 +195,20 @@ export function registerNodeTools(
       coordinatorTabId: conversation.tabId,
     };
   };
+
+  return { status, ownRepository, targetOrSelf, nodeTarget, mailbox };
+}
+
+export type NodeTarget = NonNullable<
+  Awaited<ReturnType<ReturnType<typeof createNodeTargets>["targetOrSelf"]>>
+>;
+
+export function registerNodeTools(
+  server: McpServer,
+  invoke: ControlMcpInvoker,
+  scope: NodeToolScope,
+): void {
+  const { status, ownRepository, nodeTarget, mailbox } = createNodeTargets(invoke, scope);
 
   server.registerTool(
     "list_nodes",
@@ -216,7 +244,7 @@ export function registerNodeTools(
     {
       title: "List environments on connected nodes",
       description:
-        "Environments of this project on one connected node, or on every connected node when nodeId is omitted. Names, status and agent activity only.",
+        "Environments of this project on one connected node, or on every connected node when nodeId is omitted. Names, status and agent activity only. list_environments reports the same.",
       inputSchema: z.object({ nodeId: nodeIdSchema.optional() }),
       annotations: READ,
     },
@@ -261,7 +289,7 @@ export function registerNodeTools(
     {
       title: "Read an environment on a connected node",
       description:
-        "Read one environment on another node directly: its state and tabs; with tabId a bounded transcript of that tab; with include its Git status and diff, a text file (path) and its build pipeline (test) results. Read-only.",
+        "Read one environment on another node directly: its state and tabs; with tabId a bounded transcript of that tab; with include its Git status and diff, a text file (path) and its build pipeline (test) results. Read-only. For state and transcripts, get_environment, list_tabs, get_tab_state and get_tab_transcript take nodeId as well.",
       inputSchema: z.object({
         nodeId: nodeIdSchema,
         environmentId: z.string().trim().min(1).max(200),
@@ -321,7 +349,7 @@ export function registerNodeTools(
     {
       title: "Launch an environment on a connected node",
       description:
-        "Create and start an agent environment on another node, for this project. Use only when the user asks for another node; launch_environment (this node) is the default. The worker reports back to you by mail.",
+        "Older form of launch_environment with nodeId, which is preferred: it also validates the agent and model on that node and reports the selection. Use only when the user asks for another node. The worker reports back to you by mail.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         nodeId: nodeIdSchema,
@@ -339,35 +367,23 @@ export function registerNodeTools(
     },
     async (input) => {
       const target = await nodeTarget(input.nodeId);
-      const createInput = launchEnvironmentCreateInput({
-        ...input,
-        projectId: target.projectId,
-        prompt:
-          `${input.prompt}\n\n` +
-          `You were started by this project's coordinator on the command node that controls this machine. ` +
-          `When your work is done, send exactly one report with send_message to toEnvironmentId "coordinator" (no toTabId needed), then end your turn.`,
-      } as never);
-      const environment = await target.call<unknown>(
-        "create_environment",
-        { ...createInput, controlRequestId: `node:${input.requestId}` },
-        `launch:${input.requestId}`,
-      );
+      const { nodeId: _nodeId, ...launch } = input;
+      // The same launch as launch_environment with nodeId: a delegation this
+      // conversation is woken for once, when the worker's turn ends.
+      const launched = await invoke<unknown>("launch_coordinator_node_environment", {
+        scope,
+        requestId: input.requestId,
+        nodeId: target.nodeId,
+        input: launchEnvironmentCreateInput({ ...launch, projectId: scope.projectId } as never),
+      });
+      const environment = isRecord(launched) ? launched.environment : null;
       if (!isRecord(environment) || typeof environment.id !== "string") {
         throw new Error("Environment creation on that node returned no environment.");
       }
-      await target.call("record_node_environment_origin", {
-        environmentId: environment.id,
-        controllerId: target.self.nodeId,
-        ...(await mailbox()),
-      });
-      let startError: string | undefined;
-      if (environment.status !== "running" && environment.status !== "creating") {
-        try {
-          await target.call("start_environment_background", { environmentId: environment.id });
-        } catch (error) {
-          startError = error instanceof Error ? error.message : "Environment start failed";
-        }
-      }
+      const startError =
+        isRecord(launched) && typeof launched.startError === "string"
+          ? launched.startError
+          : undefined;
       return result({
         nodeId: input.nodeId,
         node: target.nodeName,
@@ -411,7 +427,8 @@ export function registerNodeTools(
     "send_prompt_to_node_tab",
     {
       title: "Prompt an agent tab on a connected node",
-      description: "Send a prompt to an existing agent tab of an environment on another node.",
+      description:
+        "Older form of send_prompt_to_tab with nodeId, which is preferred: it also makes you wait for that worker's answer like a local delegation.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         nodeId: nodeIdSchema,
@@ -438,7 +455,21 @@ export function registerNodeTools(
         },
         `prompt:${requestId}`,
       );
-      return result({ nodeId, environmentId, tabId, ...(isRecord(outcome) ? outcome : {}) });
+      // Asking a worker something is a delegation, as with send_prompt_to_tab.
+      const opened = await invoke<unknown>("open_coordinator_node_delegation", {
+        scope,
+        nodeId,
+        environmentId,
+        tabId,
+        requestId,
+      }).catch(() => null);
+      return result({
+        nodeId,
+        environmentId,
+        tabId,
+        ...(isRecord(outcome) ? outcome : {}),
+        ...(isRecord(opened) && opened.opened === true ? { delivery: "async" } : {}),
+      });
     },
   );
 
@@ -447,7 +478,7 @@ export function registerNodeTools(
     {
       title: "Message an agent on a connected node",
       description:
-        "Send mail to an agent tab of an environment on another node. It arrives as an ordinary incoming message; the agent may change what it is doing and reply to you.",
+        "Older form of send_message with nodeId, which is preferred. Mail to an agent tab of an environment on another node; it wakes that agent, which may reply to you.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         nodeId: nodeIdSchema,
@@ -467,19 +498,16 @@ export function registerNodeTools(
     async ({ requestId, nodeId, environmentId, tabId, subject, body }) => {
       const target = await nodeTarget(nodeId);
       await target.environment(environmentId);
-      const delivered = await target.call<unknown>(
-        "deliver_node_mail",
-        {
-          controllerId: target.self.nodeId,
-          ...(await mailbox()),
-          requestId,
-          toEnvironmentId: environmentId,
-          ...(tabId ? { toTabId: tabId } : {}),
-          ...(subject ? { subject } : {}),
-          body,
-        },
-        `mail:${requestId}`,
-      );
+      // The same delivery as send_message with nodeId.
+      const delivered = await invoke<unknown>("send_coordinator_node_mail", {
+        scope,
+        nodeId: target.nodeId,
+        requestId,
+        toEnvironmentId: environmentId,
+        ...(tabId ? { toTabId: tabId } : {}),
+        ...(subject ? { subject } : {}),
+        body,
+      });
       return result({ nodeId, environmentId, delivered: isRecord(delivered) ? delivered : true });
     },
   );

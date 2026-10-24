@@ -98,6 +98,15 @@ function actorParticipant(actor: MailActor): AgentMailParticipant {
         projectId: actor.projectId,
         canReceive: false,
       };
+    case "node":
+      return {
+        key,
+        kind: actor.role === "coordinator" ? "coordinator" : "agent",
+        displayName: `${actor.title || (actor.role === "coordinator" ? "Project coordinator" : actor.tabId)} on ${actor.nodeName}`,
+        agent: null,
+        projectId: actor.projectId,
+        canReceive: false,
+      };
   }
 }
 

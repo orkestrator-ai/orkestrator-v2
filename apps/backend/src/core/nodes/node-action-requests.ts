@@ -7,7 +7,8 @@ import { randomUUID } from "node:crypto";
  * - `delete-environment`: a coordinator never deletes on its own initiative.
  *   The user may ask for a deletion in the coordinator chat; the request
  *   then names the node and the environment for an explicit confirmation.
- * - `create-project`: a project on a leaf, at a location the user approves.
+ * - `create-project`: a copy of the coordinator's project on another node
+ *   (clone plus the files the user picks), at a location the user approves.
  * - `update-project-files`: push the command node's `.env` and selected
  *   files (or keys) to nodes.
  * - `reveal-env-value`: show one `.env` value in plain text.
@@ -63,9 +64,46 @@ export interface NodeActionRequest {
   result?: { code: string; message: string };
 }
 
+/**
+ * The user's final choices for an approval, where the request kind lets the
+ * user adjust it while approving (a project copy's location and files).
+ */
+export interface NodeActionApproval {
+  location?: string;
+  paths?: string[];
+  rememberFiles?: boolean;
+}
+
 export type NodeActionExecutor = (
   request: NodeActionRequest,
+  approval: NodeActionApproval,
 ) => Promise<{ code: string; message: string; outcomeUnknown?: boolean }>;
+
+/** Bounded, validated approval choices; unknown fields are dropped. */
+export function parseNodeActionApproval(value: unknown): NodeActionApproval {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("Expected approval.");
+  const raw = value as Record<string, unknown>;
+  const approval: NodeActionApproval = {};
+  if (raw.location !== undefined) {
+    if (typeof raw.location !== "string" || raw.location.length > 1024) {
+      throw new Error("Expected an absolute location.");
+    }
+    approval.location = raw.location.trim();
+  }
+  if (raw.paths !== undefined) {
+    if (
+      !Array.isArray(raw.paths) ||
+      raw.paths.length > 2_000 ||
+      !raw.paths.every((entry) => typeof entry === "string" && entry.length <= 1024)
+    ) {
+      throw new Error("Expected paths.");
+    }
+    approval.paths = raw.paths as string[];
+  }
+  if (raw.rememberFiles !== undefined) approval.rememberFiles = raw.rememberFiles === true;
+  return approval;
+}
 
 export class NodeActionRequests {
   private requests: NodeActionRequest[] = [];
@@ -163,7 +201,11 @@ export class NodeActionRequests {
    * The user's decision. Only a pending, unexpired request can be resolved,
    * and only once: an approval executes it, a rejection never does.
    */
-  async resolve(requestId: string, decision: "approve" | "reject"): Promise<NodeActionRequest> {
+  async resolve(
+    requestId: string,
+    decision: "approve" | "reject",
+    approval: NodeActionApproval = {},
+  ): Promise<NodeActionRequest> {
     await this.ensureLoaded();
     this.expire();
     const request = this.requests.find((entry) => entry.requestId === requestId);
@@ -187,7 +229,7 @@ export class NodeActionRequests {
       request.result = { code: "unsupported", message: "This kind of request cannot run here." };
     } else {
       try {
-        const outcome = await executor(structuredClone(request));
+        const outcome = await executor(structuredClone(request), approval);
         request.state = outcome.outcomeUnknown ? "outcome-unknown" : "executed";
         request.result = { code: outcome.code, message: outcome.message };
       } catch (error) {
@@ -228,10 +270,10 @@ export function describeNodeAction(request: Pick<NodeActionRequest, "kind" | "ta
         .map((target) => `“${names(target)}” on ${target.nodeName}`)
         .join(", ")}`;
     case "create-project":
-      return `Create ${request.targets
+      return `Copy ${request.targets
         .map(
           (target) =>
-            `${target.projectName ?? target.gitRemote ?? "a project"} on ${target.nodeName} at ${target.location}`,
+            `${target.projectName ?? target.gitRemote ?? "a project"} to ${target.nodeName}${target.location ? ` at ${target.location}` : ""}`,
         )
         .join(", ")}`;
     case "update-project-files":

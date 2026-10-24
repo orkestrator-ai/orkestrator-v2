@@ -34,7 +34,7 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("session system prompt", () => {
-  test("tells Claude about background command timeouts and local Markdown docs", async () => {
+  test("tells Claude about background command timeouts, local Markdown docs and image previews", async () => {
     const session = createSession("system-prompt");
     track(session.id);
     const promptPromise = sendPrompt(session.id, "hello");
@@ -44,6 +44,13 @@ describe("session system prompt", () => {
     expect(systemPrompt.append).toContain("Orkestrator terminal tab");
     expect(systemPrompt.append).toContain("Markdown file in a `docs/` folder");
     expect(systemPrompt.append).toContain("local skills, and the user's own request take priority");
+    expect(systemPrompt.append).toContain("save the file inside the working directory");
+    expect(systemPrompt.append).toContain("Orkestrator-managed workspace storage");
+    expect(systemPrompt.append).toContain("container's /workspace");
+    expect(systemPrompt.append).toContain(
+      "Project-home checkouts are excluded from host preview reads, even when they are the working directory",
+    );
+    expect(systemPrompt.append).toContain("cannot be previewed from a local Markdown path");
     call.push({ type: "result", subtype: "success", is_error: false, result: "" });
     call.finish();
     await promptPromise.catch(() => undefined);

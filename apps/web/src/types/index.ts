@@ -563,6 +563,8 @@ export interface GlobalConfig {
   githubCliReminderDismissed?: boolean;
   /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
   sshAgentSocketPath?: string;
+  /** Absolute folder new projects are cloned into on this machine (copies from other machines). */
+  defaultProjectsDirectory?: string;
   /** Deliver the host's Claude Code OAuth credential into containers. */
   useHostClaudeCredentials?: boolean;
   /** Domains allowed when environments are in restricted network mode */

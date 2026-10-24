@@ -462,9 +462,12 @@ with `MachinesFilter`:
   backend-reported timestamp. The final tie-breakers are backend ID and
   environment ID. Timestamps come from different clocks, so this is a
   presentation sort only.
-- `MachineDot` sits immediately before every environment name: federated rows
-  and the bound machine's `EnvironmentItem`. It is 8 px with an outline and
-  never shows activity or health. An unavailable machine's rows are dimmed
+- `EnvironmentStatusMarker` sits immediately before every environment name:
+  federated rows and the bound machine's `EnvironmentItem`. Its 12 px
+  `MachineDot` center has no separate outline and fills the interior of a 2 px
+  state ring (16 px overall). Only the ring shows activity or health; the
+  machine colour stays steady. Local environments use a circle and containers
+  a square. An unavailable machine's rows are dimmed
   and read "Connection lost; last observed …", never "stopped". The dot is
   decorative when the label names the machine, and an image otherwise. In
   forced-colours mode it keeps an outline and compact badges show the name.

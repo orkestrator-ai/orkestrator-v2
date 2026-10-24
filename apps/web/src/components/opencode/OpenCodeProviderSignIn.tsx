@@ -14,6 +14,7 @@ import { useOpenCodeProviderLogin } from "@/hooks/useOpenCodeProviderLogin";
 import { isRemoteGatewayConnection } from "@/lib/gateway-url";
 import { writeText } from "@/lib/native/clipboard";
 import { openInBrowser, setOpenCodeProviderApiKey } from "@/lib/backend";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import type {
   OpenCodeProviderAuthEntry,
   OpenCodeProviderAuthMethod,
@@ -104,6 +105,7 @@ export function OpenCodeProviderSignIn({
   const [copied, setCopied] = useState<"code" | "link" | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const login = useOpenCodeProviderLogin(provider.id, onSignedIn);
+  const { machine } = useAccountMachine();
   const keyId = useId();
 
   const method: OpenCodeProviderAuthMethod | undefined = provider.methods.find(
@@ -141,7 +143,7 @@ export function OpenCodeProviderSignIn({
     setSaving(true);
     setFormError(null);
     try {
-      await setOpenCodeProviderApiKey(provider.id, apiKey, answers);
+      await setOpenCodeProviderApiKey(provider.id, apiKey, answers, machine);
       setApiKey("");
       onSignedIn();
     } catch (cause) {

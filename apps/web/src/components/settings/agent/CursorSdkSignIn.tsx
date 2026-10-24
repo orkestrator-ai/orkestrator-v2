@@ -13,6 +13,7 @@ import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { Check, Copy, Loader2, LogIn, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { writeText } from "@/lib/native/clipboard";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import {
   cursorSdkLoginCancel,
   cursorSdkLoginStart,
@@ -84,11 +85,12 @@ export function CursorSdkSignIn({ credentialRevision, onCredentialChange }: Curs
   // while the document is hidden. Closing settings removes this observation
   // only; the backend owns the login until its deadline or a cancel.
   const loginPending = progress?.state === "pending";
+  const { machine } = useAccountMachine();
   const status = useCoordinatedRead<CursorSdkLoginProgress | null>({
-    key: { resource: "cursor-sdk-login", target: "backend" },
+    key: { resource: "cursor-sdk-login", target: machine ?? "backend" },
     readOnSubscribe: false,
     demand: { intervalMs: loginPending ? POLL_INTERVAL_MS : null, priority: "standard" },
-    read: () => cursorSdkLoginStatus(),
+    read: () => cursorSdkLoginStatus(machine),
     onState: (state) => {
       if (state.status === "current") apply(state.value);
       else if (state.status === "error" && mounted.current) {
@@ -116,7 +118,7 @@ export function CursorSdkSignIn({ credentialRevision, onCredentialChange }: Curs
       // This view deliberately does not: the desktop window denies both
       // `window.open` and `target="_blank"`, so anything it tried would
       // silently do nothing.
-      await cursorSdkLoginStart();
+      await cursorSdkLoginStart(machine);
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -140,7 +142,7 @@ export function CursorSdkSignIn({ credentialRevision, onCredentialChange }: Curs
     setBusy(true);
     setError(null);
     try {
-      await cursorSdkLogout();
+      await cursorSdkLogout(machine);
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -150,7 +152,7 @@ export function CursorSdkSignIn({ credentialRevision, onCredentialChange }: Curs
   };
 
   const cancel = async () => {
-    await cursorSdkLoginCancel().catch(() => undefined);
+    await cursorSdkLoginCancel(machine).catch(() => undefined);
     await refresh();
   };
 

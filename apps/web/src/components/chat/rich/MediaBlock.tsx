@@ -47,6 +47,7 @@ type ImageState =
   | { status: "pending" }
   | { status: "ready"; url: string; dimensions: MediaDimensions | null; decoded: boolean }
   | { status: "blocked" }
+  | { status: "outside-workspace" }
   | { status: "denied" }
   | { status: "unavailable"; remoteUrl?: string }
   | { status: "too-large" }
@@ -60,6 +61,11 @@ function failureCopy(state: FailedImageState): { text: string; name: string } {
   switch (state.status) {
     case "blocked":
       return { text: "image source not allowed", name: "image blocked" };
+    case "outside-workspace":
+      return {
+        text: "image outside previewable workspace storage",
+        name: "image outside previewable workspace storage",
+      };
     case "denied":
       return { text: "access to this image was denied", name: "image access denied" };
     case "unavailable":
@@ -177,7 +183,10 @@ function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; 
       : resolvable
         ? { status: "pending" }
         : reference
-          ? { status: "unavailable" }
+          ? // A container path only fails the pre-check by escaping /workspace.
+            reference.containerId
+            ? { status: "outside-workspace" }
+            : { status: "unavailable" }
           : { status: "blocked" },
   );
   const near = useNearViewport(buttonRef, state.status === "pending");
@@ -195,11 +204,13 @@ function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; 
         if (cancelled) return;
         const failure = mediaLoadFailure(error);
         setState(
-          failure === "denied"
-            ? { status: "denied" }
-            : failure === "too-large"
-              ? { status: "too-large" }
-              : { status: "unavailable" },
+          failure === "outside-workspace"
+            ? { status: "outside-workspace" }
+            : failure === "denied"
+              ? { status: "denied" }
+              : failure === "too-large"
+                ? { status: "too-large" }
+                : { status: "unavailable" },
         );
       },
     );

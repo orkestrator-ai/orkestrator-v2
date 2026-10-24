@@ -1,6 +1,16 @@
 import type { CommandContext } from "./commands-context.js";
 import { activeClaudeCredentials, syncContainerClaudeLogin } from "./agent-accounts-containers.js";
-import { resolveActiveAgentAccount, type ResolvedAgentAccount } from "./agent-accounts-active.js";
+import {
+  TOKEN_REPLACEMENT_LEAD_MS,
+  readAddedClaudeCredentials,
+  resolveActiveAgentAccount,
+  type ResolvedAgentAccount,
+} from "./agent-accounts-active.js";
+import {
+  localAgentAccountTokenExpiry,
+  loginlessLocalBridges,
+} from "./agent-account-bridge-state.js";
+import { readRuntimeHostClaudeCredentials } from "./commands-files.js";
 import { providerCredentialsAllowed } from "./portable-input-status.js";
 
 /**
@@ -21,6 +31,12 @@ import { providerCredentialsAllowed } from "./portable-input-status.js";
  * and compare-and-swap save, so it cannot race the user's `claude` into
  * spending one refresh token twice. An agent-test profile never does this: it
  * must not rotate the login of the host it borrows.
+ *
+ * Local coordinator bridges are handed the same access-only token
+ * (`applyCoordinatorClaudeAccount`), so while any is running on one, or is
+ * waiting for a login, the keeper renews the active account's login on the
+ * same schedule. That does not depend on the container opt-out
+ * (`useHostClaudeCredentials`), which only governs what containers receive.
  */
 
 /** How often the host login is re-read while any container could use it. */
@@ -29,7 +45,7 @@ export const CLAUDE_LOGIN_KEEPER_INTERVAL_MS = 5 * 60_000;
  * How long before expiry the host CLI is asked to refresh. Claude Code only
  * refreshes inside the last five minutes, so earlier would be a no-op.
  */
-export const CLAUDE_HOST_REFRESH_LEAD_MS = 4 * 60_000;
+export const CLAUDE_HOST_REFRESH_LEAD_MS = TOKEN_REPLACEMENT_LEAD_MS;
 /**
  * After a failed or ineffective host refresh, wait this long before trying
  * again, doubling each time up to the normal interval.
@@ -41,6 +57,10 @@ export interface ClaudeLoginKeeperOptions {
   refreshHostLogin?: (account: ResolvedAgentAccount) => Promise<void>;
   syncContainer?: (containerId: string) => Promise<unknown>;
   readCredentials?: () => Promise<string | undefined>;
+  /** The active login as local bridges read it, regardless of the container opt-out. */
+  readLocalCredentials?: () => Promise<string | undefined>;
+  /** Whether a local bridge runs on a handed-over token or is waiting for one. */
+  hasLocalTokenBridges?: () => boolean;
   now?: () => number;
   intervalMs?: number;
   timers?: {
@@ -86,6 +106,7 @@ export class ContainerClaudeLoginKeeper {
   private handle: unknown = null;
   private running: Promise<void> | null = null;
   private refreshing: Promise<ClaudeOAuthSummary | undefined> | null = null;
+  private refreshingConsumer?: "containers" | "local";
   private stopped = true;
   /** Expiry the host refresh was last attempted for, when, and how often. */
   private refreshAttempt: { expiresAt: number; at: number; count: number } | null = null;
@@ -145,21 +166,25 @@ export class ContainerClaudeLoginKeeper {
     // A second backend on this data directory leaves containers to the writer.
     if (this.context.registryWriterLease?.isHeld() === false) return this.intervalMs;
     const { global } = await this.context.storage.loadConfig();
-    if (global.useHostClaudeCredentials === false) return this.intervalMs;
-    const containers = (await this.context.storage.loadEnvironments()).filter(
-      (environment) =>
-        environment.containerId &&
-        environment.status === "running" &&
-        providerCredentialsAllowed(
-          this.context,
-          global.enabledAgentPlatforms,
-          environment,
-          "claude",
-        ),
-    );
-    if (containers.length === 0) return this.intervalMs;
+    const containers =
+      global.useHostClaudeCredentials === false
+        ? []
+        : (await this.context.storage.loadEnvironments()).filter(
+            (environment) =>
+              environment.containerId &&
+              environment.status === "running" &&
+              providerCredentialsAllowed(
+                this.context,
+                global.enabledAgentPlatforms,
+                environment,
+                "claude",
+              ),
+          );
+    const localBridges = (this.options.hasLocalTokenBridges ?? hasLocalClaudeTokenBridges)();
+    if (containers.length === 0 && !localBridges) return this.intervalMs;
 
-    const login = await this.refreshHostIfDue();
+    const login =
+      containers.length > 0 ? await this.refreshHostIfDue() : await this.refreshLocalLoginIfDue();
     const sync =
       this.options.syncContainer ??
       ((containerId: string) => syncContainerClaudeLogin(this.context, containerId));
@@ -177,18 +202,46 @@ export class ContainerClaudeLoginKeeper {
    * afterwards; never throws.
    */
   refreshHostIfDue(): Promise<ClaudeOAuthSummary | undefined> {
-    this.refreshing ??= this.refreshHostOnce().finally(() => {
-      this.refreshing = null;
-    });
+    return this.refreshFor("containers");
+  }
+
+  /**
+   * The same refresh for local bridges: a coordinator launch that found the
+   * active login's token lapsed, or a pass while one runs on a handed-over
+   * token. Reads the login as local launches do, so the container opt-out does
+   * not stop it. Returns the login as it is afterwards; never throws.
+   */
+  refreshLocalLoginIfDue(): Promise<ClaudeOAuthSummary | undefined> {
+    return this.refreshFor("local");
+  }
+
+  private refreshFor(consumer: "containers" | "local"): Promise<ClaudeOAuthSummary | undefined> {
+    if (this.refreshing && this.refreshingConsumer !== consumer) {
+      // A container read can be opted out while local launches still need a
+      // login. Serialize the refresh, but re-read for each consumer's scope.
+      return this.refreshing.then(() => this.refreshFor(consumer));
+    }
+    if (!this.refreshing) {
+      this.refreshingConsumer = consumer;
+      this.refreshing = this.refreshHostOnce(consumer).finally(() => {
+        this.refreshing = null;
+        this.refreshingConsumer = undefined;
+      });
+    }
     return this.refreshing;
   }
 
-  private async refreshHostOnce(): Promise<ClaudeOAuthSummary | undefined> {
+  private async refreshHostOnce(
+    consumer: "containers" | "local",
+  ): Promise<ClaudeOAuthSummary | undefined> {
     try {
       const { global } = await this.context.storage.loadConfig();
-      if (global.useHostClaudeCredentials === false) return undefined;
+      if (consumer === "containers" && global.useHostClaudeCredentials === false) return undefined;
       const read =
-        this.options.readCredentials ?? (() => activeClaudeCredentials(this.context, global));
+        consumer === "local"
+          ? (this.options.readLocalCredentials ??
+            (() => localActiveClaudeCredentials(this.context)))
+          : (this.options.readCredentials ?? (() => activeClaudeCredentials(this.context, global)));
       const login = summarize(await read());
       if (
         login?.expiresAt === undefined ||
@@ -254,4 +307,24 @@ export class ContainerClaudeLoginKeeper {
     }
     return Math.min(this.intervalMs, untilWindow);
   }
+}
+
+/** Whether any local Claude bridge runs on a handed-over token or waits for one. */
+function hasLocalClaudeTokenBridges(): boolean {
+  for (const key of localAgentAccountTokenExpiry.keys()) {
+    if (key.startsWith("claude:")) return true;
+  }
+  for (const key of loginlessLocalBridges) {
+    if (key.startsWith("claude:")) return true;
+  }
+  return false;
+}
+
+/** The active Claude login as a local launch reads it. Never in an agent-test profile. */
+async function localActiveClaudeCredentials(context: CommandContext): Promise<string | undefined> {
+  if (context.runtimeFlavor === "agent-test") return undefined;
+  const active = await resolveActiveAgentAccount(context, "claude");
+  return active.home
+    ? await readAddedClaudeCredentials(active.home)
+    : await readRuntimeHostClaudeCredentials();
 }

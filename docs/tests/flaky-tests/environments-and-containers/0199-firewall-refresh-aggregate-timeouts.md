@@ -36,3 +36,11 @@ aggregate-load timeouts.
 - **Failure:** `firewall allowlist refresh and edits > policy 3 refreshes the stored tuples and add/remove edit them` hit the five-second timeout (5003.39 ms). It was the only failure in the root group.
 - **Owning-file rerun:** `mise run test:logged -- --name firewall-owner -- bun test ./tests/unit/firewall-refresh.test.ts --parallel=1 --only-failures` passed the complete unchanged file, exit 0 in 5.0 seconds.
 - **Evidence:** `orkestrator-test-run.IoyN8C/full-test.log.gz` under the host temporary directory. No assertion, timeout or skip changed.
+
+
+## Container state observation (0020) recurrence — 2026-10-24
+
+- **Original command:** `mise run test` on `todo-0020-container-state-observation-5c2ca9cd8360` after rebasing onto `origin/main` `a5d78cfcd`, default worker plan, host load average 15–22 from other work on the node.
+- **Failure:** the root group timed out twelve firewall shell-fixture cases across `tests/unit/firewall-policy.test.ts` and `tests/unit/firewall-refresh.test.ts` at about 5003–5010 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name firewall-alone -- bun test ./tests/unit/firewall-policy.test.ts ./tests/unit/firewall-refresh.test.ts --parallel=2 --only-failures` still failed the same twelve cases under the same load (27 pass, 12 fail). The same command on a clean `origin/main` worktree failed the identical twelve cases, so the change under test does not cause them. Not rerun at lower load.
+- **Evidence:** `orkestrator-test-run.lPZA8F/firewall-alone.log.gz` under the host temporary directory. No firewall implementation, assertion, timeout or skip changed.

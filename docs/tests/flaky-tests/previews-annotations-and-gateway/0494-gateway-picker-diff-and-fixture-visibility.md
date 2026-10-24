@@ -76,3 +76,5 @@ Both disposable profiles were stopped and reset; no owning source or test change
 - **Assessment:** confirms intermittence in the capped-tree observation on this combined tree. No gateway implementation, assertion, timeout or skip changed during conflict resolution.
 
 - **Full-suite outcome:** 28 passed, 53 opt-in skips and only the capped-tree failure (534.6 s logged including lifecycle). Teardown also rejected an oversized artifact at its sanitization byte limit; this is a separate artifact failure. The one-shot runner stopped/reset `qa-browser-bcd7c9c1-ad3`, and its profile directory was confirmed absent. Manual owner profile `update-gateway-cb5bcc4a` was also stopped and reset; no live profile or disposable state was retained.
+
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3): `real browser gateway exercises an authoritative local environment` missed the fixture project (`getByText(origin)`, 30 s) in the isolated suite; the same test passed in the owning-file rerun on a fresh profile.

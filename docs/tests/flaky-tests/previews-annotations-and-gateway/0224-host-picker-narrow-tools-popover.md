@@ -588,3 +588,5 @@ assertion, timeout or skip changed.
 - The change under validation does not touch settings, the gateway or the
   host picker (web transcript scrolling, tool groups, Markdown streaming,
   the Virtuoso patch). No assertion, timeout or skip changed.
+
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3): the narrow host-picker case failed in `mise run test:agent:browser:isolated` (27 passed, 55 skipped, two failed) and again in an unchanged owning-file run on a fresh profile `qa-0043-gw` (12 passed, ten skipped, two failed); still unresolved.

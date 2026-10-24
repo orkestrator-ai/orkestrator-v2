@@ -7,6 +7,7 @@ import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,
   applyCoordinatorClaudeAccount,
+  coordinatorCodexLogin,
   localBridgeIsOnActiveAccount,
   markLocalBridgesForLoginRefresh,
   setLocalClaudeLoginRefresher,
@@ -20,7 +21,7 @@ import {
   staleLoginLocalBridges,
 } from "./agent-account-bridge-state.js";
 import { localServerProcesses } from "./commands-runtime-state.js";
-import { prepareCoordinatorClaudeHome } from "./commands-servers.js";
+import { prepareCoordinatorClaudeHome, prepareCoordinatorCodexHome } from "./commands-servers.js";
 import { StorageService } from "./storage.js";
 
 const ACCOUNT_IDS = {
@@ -38,6 +39,26 @@ let liveWork = false;
 let context: CommandContext;
 let restoreHostCredentialRead: (() => void) | undefined;
 const noKeychain = async (): Promise<void> => undefined;
+
+/** A JWT-shaped token whose `exp` claim is `expiresAt`. Never a real credential. */
+function fakeJwt(expiresAt: number, marker: string): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${encode({ alg: "none" })}.${encode({ exp: Math.floor(expiresAt / 1000), marker })}.sig`;
+}
+
+/** A Codex ChatGPT login whose access token expires at `expiresAt`. */
+function codexAuth(expiresAt: number, marker = "login"): string {
+  return JSON.stringify({
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: fakeJwt(expiresAt, `${marker}-id`),
+      access_token: fakeJwt(expiresAt, marker),
+      refresh_token: `refresh-${marker}`,
+      account_id: `account-${marker}`,
+    },
+    last_refresh: "2026-10-01T00:00:00.000Z",
+  });
+}
 
 function accountHome(platform: "claude" | "codex"): string {
   return path.join(root, "data", "agent-accounts", platform, ACCOUNT_IDS[platform]);
@@ -447,5 +468,81 @@ describe("localBridgeIsOnActiveAccount", () => {
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(true);
     liveWork = false;
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(false);
+  });
+
+  test("replaces an idle Codex coordinator once its token nears expiry and a fresher one exists", async () => {
+    await activate("codex");
+    const key = "codex:coordinator-1";
+    localAgentAccountIds.set(key, ACCOUNT_IDS.codex);
+    const handedOver = Date.now() + 60_000;
+    localAgentAccountTokenExpiry.set(key, handedOver);
+    await fs.mkdir(accountHome("codex"), { recursive: true });
+    // The account's own login has not been refreshed: nothing better to hand over.
+    await fs.writeFile(path.join(accountHome("codex"), "auth.json"), codexAuth(handedOver));
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(true);
+
+    await fs.writeFile(
+      path.join(accountHome("codex"), "auth.json"),
+      codexAuth(Date.now() + 10 * 24 * 60 * 60_000, "fresh"),
+    );
+    liveWork = true;
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(true);
+    liveWork = false;
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(false);
+  });
+
+  test("replaces an idle Codex coordinator launched without a login once one appears", async () => {
+    await activate("codex");
+    const key = "codex:coordinator-1";
+    localAgentAccountIds.set(key, ACCOUNT_IDS.codex);
+    loginlessLocalBridges.add(key);
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(true);
+
+    await fs.mkdir(accountHome("codex"), { recursive: true });
+    await fs.writeFile(
+      path.join(accountHome("codex"), "auth.json"),
+      codexAuth(Date.now() + 60 * 60_000),
+    );
+    expect(await localBridgeIsOnActiveAccount(key, "codex", "coordinator-1", context)).toBe(false);
+  });
+});
+
+describe("prepareCoordinatorCodexHome", () => {
+  test("hands over the access token without the refresh token and records its expiry", async () => {
+    const expiresAt = Date.now() + 60 * 60_000;
+    const source = path.join(root, "codex-source");
+    const destination = path.join(root, "codex-coordinator");
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(path.join(source, "auth.json"), codexAuth(expiresAt));
+
+    const login = await prepareCoordinatorCodexHome(destination, source);
+    expect(login).toEqual({ tokenExpiresAt: Math.floor(expiresAt / 1000) * 1000 });
+    const copied = JSON.parse(await fs.readFile(path.join(destination, "auth.json"), "utf8"));
+    expect(copied.tokens.access_token).toBe(JSON.parse(codexAuth(expiresAt)).tokens.access_token);
+    expect(copied.tokens.refresh_token).toBe("");
+    expect(JSON.stringify(copied)).not.toContain("refresh-login");
+    expect((await fs.stat(path.join(destination, "auth.json"))).mode & 0o777).toBe(0o600);
+    // The account's own login is untouched.
+    expect(await fs.readFile(path.join(source, "auth.json"), "utf8")).toBe(codexAuth(expiresAt));
+  });
+
+  test("starts signed out rather than hand over a token about to lapse", async () => {
+    const source = path.join(root, "codex-source");
+    const destination = path.join(root, "codex-coordinator");
+    await fs.mkdir(destination, { recursive: true });
+    await fs.writeFile(path.join(destination, "auth.json"), "earlier login");
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(path.join(source, "auth.json"), codexAuth(Date.now() + 60_000));
+
+    expect(await prepareCoordinatorCodexHome(destination, source)).toEqual({ loginless: true });
+    await expect(fs.access(path.join(destination, "auth.json"))).rejects.toThrow();
+    expect(await prepareCoordinatorCodexHome(destination, path.join(root, "absent"))).toEqual({
+      loginless: true,
+    });
+  });
+
+  test("keeps an API key login, which never expires", () => {
+    const raw = JSON.stringify({ OPENAI_API_KEY: "sk-test-key" });
+    expect(coordinatorCodexLogin(raw)).toEqual({ text: raw });
   });
 });

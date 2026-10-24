@@ -209,11 +209,15 @@ export async function setOpenCodeZenApiKey(apiKey: string | null): Promise<AppCo
  *
  * Start returns the URL to open; the flow itself runs in the backend, which
  * spawns the bridge, parses its output and stores the credential. Callers open
- * the URL and poll `cursorSdkLoginStatus` until it leaves `pending`.
- * `machine` names another node to sign in, through the command node.
+ * the URL in this client's browser (`openInBrowser`) and poll
+ * `cursorSdkLoginStatus` until it leaves `pending`; the backend's login child
+ * opens no browser of its own. `machine` names another node to sign in,
+ * through the command node.
  */
 export async function cursorSdkLoginStart(machine?: AccountMachine): Promise<{ loginUrl: string }> {
-  return machineInvoke<{ loginUrl: string }>(machine, "cursor_sdk_login_start");
+  return machineInvoke<{ loginUrl: string }>(machine, "cursor_sdk_login_start", {
+    openBrowser: false,
+  });
 }
 
 export async function cursorSdkLoginStatus(

@@ -1704,7 +1704,8 @@ describe("project coordinator", () => {
     const source = path.join(root, "source-codex-home");
     const destination = path.join(root, "isolated-codex-home");
     await fs.mkdir(source);
-    await fs.writeFile(path.join(source, "auth.json"), '{"token":"secret"}\n');
+    // An API key login: the access-only copy keeps it as is.
+    await fs.writeFile(path.join(source, "auth.json"), '{"OPENAI_API_KEY":"secret"}\n');
     await fs.writeFile(path.join(source, "config.toml"), "developer_instructions='unsafe'\n");
     await prepareCoordinatorCodexHome(destination, source);
     expect(await fs.readFile(path.join(destination, "auth.json"), "utf8")).toContain("secret");

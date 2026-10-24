@@ -31,14 +31,18 @@ function context(overrides: Partial<CommandContext>): CommandContext {
   } as unknown as CommandContext;
 }
 
+/** Never the real machine's: a test must not read the host's Grok or Pi login. */
+const readSignIns = async () => ({ grok: { state: "signed-out" as const } });
+
 const LEAF_SNAPSHOT = {
   accounts: [],
   active: { claude: "default", codex: "default" },
 };
 
 test("lists only this machine without command nodes", async () => {
-  const result = await listMachineAgentAccounts(context({}));
+  const result = await listMachineAgentAccounts(context({}), { readSignIns });
   expect(result.machines).toHaveLength(1);
+  expect(result.machines[0]?.signIns).toEqual({ grok: { state: "signed-out" } });
   expect(result.machines[0]).toMatchObject({ self: true, state: "ok", nodeId: "self" });
 });
 
@@ -68,17 +72,33 @@ test("asks each enabled machine and keeps going when one cannot answer", async (
           asked.push(`${args.nodeId}:${args.command}`);
           if (args.nodeId === "node-b") throw new NodeUnavailableError("offline");
           if (args.nodeId === "node-slow") return new Promise(() => undefined);
+          if (args.command === "read_host_agent_sign_ins") {
+            return {
+              outcome: "ok",
+              result: {
+                grok: { state: "signed-in", source: "Stored login", token: "leaked" },
+                pi: { state: "bogus" },
+              },
+            };
+          }
           return { outcome: "ok", result: LEAF_SNAPSHOT };
         },
       } as never,
     }),
-    { timeoutMs: 20 },
+    { timeoutMs: 20, readSignIns },
   );
   expect(asked.sort()).toEqual([
     "node-a:list_agent_accounts",
+    "node-a:read_host_agent_sign_ins",
     "node-b:list_agent_accounts",
+    "node-b:read_host_agent_sign_ins",
     "node-slow:list_agent_accounts",
+    "node-slow:read_host_agent_sign_ins",
   ]);
+  // Rebuilt field by field: nothing else another machine sends passes through.
+  expect(result.machines[1]?.signIns).toEqual({
+    grok: { state: "signed-in", source: "Stored login" },
+  });
   expect(result.machines.map((machine) => [machine.name, machine.state])).toEqual([
     [(await storage.getBackendProfile()).displayName, "ok"],
     ["MBP3", "ok"],

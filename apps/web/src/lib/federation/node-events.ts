@@ -207,6 +207,11 @@ function subscribeSelf(subscriber: NodeEventSubscriber): () => void {
   };
 }
 
+/** Subscribe a view to the command node's own events, on the portal channel. */
+export function subscribeCommandNodeEvents(subscriber: NodeEventSubscriber): () => void {
+  return subscribeSelf(subscriber);
+}
+
 /** Subscribe a view to another node's events; returns the release function. */
 export function subscribeNodeEvents(
   nodeId: BackendId,

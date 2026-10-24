@@ -77,7 +77,7 @@ describe("AgentInfoAccountSection", () => {
     await act(async () => {
       render(<AgentInfoAccountSection environmentId="env-1" provider="pi" />);
     });
-    expect(screen.queryByTestId("agent-info-account")).toBeNull();
+    expect(screen.queryByTestId("agent-info-account") === null).toBe(true);
     expect(calls).toEqual([]);
   });
 
@@ -112,7 +112,7 @@ describe("AgentInfoAccountSection", () => {
       expect(screen.getByText("Moves to Work the next time this session is idle.")).toBeTruthy(),
     );
     // Renewing the active login would not renew the one this session still runs on.
-    expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in again" }) === null).toBe(true);
   });
 
   test("an isolated container offers no switch", async () => {
@@ -121,6 +121,6 @@ describe("AgentInfoAccountSection", () => {
       render(<AgentInfoAccountSection environmentId="env-1" provider="claude" />);
     });
     expect(await screen.findByText(/keeps its own Claude Code login/)).toBeTruthy();
-    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("combobox") === null).toBe(true);
   });
 });

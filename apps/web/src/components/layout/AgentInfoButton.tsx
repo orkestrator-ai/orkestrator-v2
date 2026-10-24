@@ -77,6 +77,7 @@ import { agentMailCapabilities } from "@orkestrator/protocol/agent-mail";
 import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
 import { AgentInfoAccountSection } from "./AgentInfoAccountSection";
+import { onAgentInformationRequest } from "@/lib/agent-information";
 
 interface AgentInfoButtonProps {
   activeTab: TabInfo | null;
@@ -227,6 +228,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   }
   const reportOpen = useEffectEvent((next: boolean) => remote?.onOpenChange(next));
   useEffect(() => reportOpen(open), [open, remoteRequest?.seq]);
+  useEffect(() => onAgentInformationRequest(() => setOpen(true)), []);
   const federation = useFederation();
   // How this window reaches the node its workspace is on, when that is not
   // the command node it connected to.

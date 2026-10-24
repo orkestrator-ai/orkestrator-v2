@@ -1,7 +1,7 @@
 # Agent accounts across machines
 
-Checked against `main` at `8454d18b` (2026-10-24), with the first round of
-this work applied on top.
+Checked against `main` at `71227437` (2026-10-24), with both rounds of this
+work applied on top.
 
 The goal is to see and change which agent login each machine uses, from
 wherever the user is working. How it works now is in
@@ -10,7 +10,7 @@ keeps only what is left.
 
 ## Current state
 
-Done on 2026-10-24:
+Done on 2026-10-24, first round:
 
 - Claude coordinators never receive a credential file or a refresh token:
   `applyCoordinatorClaudeAccount` hands over the active login's access token
@@ -34,39 +34,34 @@ Done on 2026-10-24:
   machine against Claude and Codex, with a switch per cell; the same row in
   each machine's settings dialog.
 
+Done on 2026-10-24, second round (every code item this file listed):
+
+- Codex coordinators receive an access-only `auth.json`
+  (`coordinatorCodexLogin`, the container form), with the access token's
+  expiry recorded and loginless launches retried, as for Claude. The
+  `chatgptAuthTokens` handoff was not used because it needs `experimentalApi`;
+  writing a refreshed login back was not used because two refreshers of one
+  rotating token can still race.
+- `agent-accounts-changed` on every account change; the overview re-reads
+  only the machine that announced it, and the panel and composer chip re-read
+  their own machine.
+- A "By account" toggle groups the overview by email, with a switch where a
+  machine has the login and a sign-in where it does not.
+- The composer chip (`SessionAccountChip`) beside the model picker.
+- Grok and Pi columns in the overview (`read_host_agent_sign_ins`) with "Sign
+  in on <machine>" (`open_agent_sign_in_terminal`). This is a file and
+  variable-name read on the backend, not the settings auth card of
+  [0003](0003-agent-accounts-and-sign-in.md) item 3, which stays open.
+- Cursor's sign-in opens its link in the client (`openBrowser: false`,
+  `NO_OPEN_BROWSER`), from any machine.
+
+How all of it works is in
+[agent-accounts.md](../../architecture/agent-accounts.md#machines).
+
 ## Outstanding work
 
-### Code
-
-1. **Codex coordinators still copy a refresh token.**
-   `prepareCoordinatorCodexHome` (`commands-servers.ts`) copies the account's
-   `auth.json` whole into the coordinator's private `CODEX_HOME`. When the
-   coordinator's Codex refreshes, it rotates the refresh token away from the
-   account's own login, which then fails on its next refresh. Decide between
-   an access-only handoff (only if app-server accepts one without
-   `experimentalApi`), writing a refreshed coordinator login back to the
-   account under a lock, or refreshing on the account's side and replacing an
-   idle coordinator, as Claude does.
-2. **Live updates for the overview.** The overview and the panel re-read on
-   open and on refresh. Have each node emit an `agent-accounts.changed` event
-   (switch, renewal, add, remove), and have the overview watch it through
-   `watch_node_events`. The event triggers a re-read; it never carries the
-   state.
-3. **Group the overview by identity.** Add a toggle that groups the overview
-   by email ("work@x.com: MBP3, Studio; VPS not signed in"), with a sign-in on
-   each machine missing it.
-4. **Composer chip.** Beside the model picker, show the session's account
-   (for example `work@…`) when its machine has more than one account for the
-   platform, or when the session is not on the active account. It opens the
-   information panel.
-5. **Grok and Pi in the overview.** Show their sign-in state read-only, with
-   "Sign in on <machine>" opening a terminal tab on that machine with the
-   fixed login command. This needs the session-free auth read from
-   [0003](0003-agent-accounts-and-sign-in.md) item 3.
-6. **Cursor's sign-in on another machine.** The Cursor SDK login opens a
-   browser on the backend's own desktop. From another machine the panel's
-   copy-link button is the only way in. Open the link in the client instead,
-   as the Claude and Codex sign-ins do.
+No code items remain. What is left is qualification and the open questions
+below.
 
 ### Qualification
 
@@ -81,7 +76,15 @@ Batched with the two-machine runs in
   Settings with the leaf chosen, and in a leaf tab's information panel. The
   next idle prompt runs on the new account, and the panel shows it.
 - Add an account on the leaf from the command node's Settings, with the
-  browser on the client machine.
+  browser on the client machine. The same for Cursor's sign-in: no browser
+  opens on the leaf's desktop.
+- A Codex coordinator on an added account answers, its `auth.json` has an
+  empty `refresh_token`, and the account's own Codex sessions keep working
+  across the coordinator's lifetime.
+- Switching an account on the leaf from its own Settings updates the command
+  node's open overview within a second, and the leaf tab's composer chip.
+- "Sign in on <leaf>" for Grok opens `grok login` in a local environment's
+  terminal on the leaf, and the window shows that environment.
 - A sign-in on a leaf whose login keychain is locked names the keychain.
 
 ## Constraints and rationale
@@ -113,6 +116,13 @@ Batched with the two-machine runs in
   under a LaunchAgent started from SSH is the likely one.
 - Whether `accountInfo()` in the pinned Claude Agent SDK returns an email.
   Today the panel takes the email from the account registry.
+- That the pinned Cursor SDK still skips its browser launch under
+  `NO_OPEN_BROWSER` (`bridges/cursor-bridge/src/login-cli.ts` says it does;
+  the backend test only checks that the variable is set).
+- That the pinned Codex accepts an access-only `auth.json` in a local
+  coordinator home as it does in containers (checked live there on
+  2026-10-21 with 0.162), and reads its blanked `refresh_token` without
+  attempting a refresh before the access token expires.
 
 ## Related
 

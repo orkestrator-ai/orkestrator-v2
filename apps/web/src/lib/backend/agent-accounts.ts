@@ -7,6 +7,9 @@ import type {
   AgentAccountPlatform,
   AgentAccountsSnapshot,
   AgentSessionAccount,
+  AgentSignInTerminal,
+  HostAgentSignIns,
+  HostSignInPlatform,
   MachineAgentAccountsResult,
 } from "@orkestrator/protocol/agent-accounts";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
@@ -141,4 +144,24 @@ export async function getNativeAgentSessionAccount(
 /** Every machine's accounts, collected by the command node. */
 export async function listMachineAgentAccounts(): Promise<MachineAgentAccountsResult> {
   return invokeCommandNodeSetting<MachineAgentAccountsResult>("list_machine_agent_accounts");
+}
+
+/** Grok's and Pi's login on `machine`, read without a session. Older machines reject it. */
+export async function readHostAgentSignIns(machine?: AccountMachine): Promise<HostAgentSignIns> {
+  return machineInvoke<HostAgentSignIns>(machine, "read_host_agent_sign_ins");
+}
+
+/**
+ * Open a terminal tab on `machine` running the platform's fixed login command,
+ * in one of its running local environments (`environmentId` when it is one).
+ */
+export async function openAgentSignInTerminal(
+  platform: HostSignInPlatform,
+  machine?: AccountMachine,
+  environmentId?: string,
+): Promise<AgentSignInTerminal> {
+  return machineInvoke<AgentSignInTerminal>(machine, "open_agent_sign_in_terminal", {
+    platform,
+    ...(environmentId ? { environmentId } : {}),
+  });
 }

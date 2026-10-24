@@ -21,6 +21,7 @@ import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginP
 import { accountOptionLabel } from "@/components/settings/machines/MachineAgentAccountsSection";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useAgentAccountReauth } from "@/hooks/useAgentAccountReauth";
+import { useAgentAccountsChanged } from "@/hooks/useAgentAccountsChanged";
 import {
   getNativeAgentSessionAccount,
   listAgentAccounts,
@@ -105,6 +106,8 @@ function AccountSection({
   useEffect(() => {
     void load();
   }, [load]);
+  // A switch or sign-in elsewhere (Settings, another window) moves this too.
+  useAgentAccountsChanged(platform, () => void load());
 
   // A finished sign-in changes what the account reports.
   const reauthState = reauth.progress.state;

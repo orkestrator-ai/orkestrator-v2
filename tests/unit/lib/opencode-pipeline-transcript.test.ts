@@ -12,7 +12,6 @@ import { toMultiReviewReviewerMessages } from "@/components/review/MultiReviewRe
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import { classifyTranscriptEntry } from "@/lib/chat/transcript-skew";
 import {
-  isOpenCodeTranscriptEnvelope,
   normalizeOpenCodeDisplayEntries,
   normalizeOpenCodeDisplayEntry,
 } from "../../../apps/backend/src/core/opencode-display-transcript";
@@ -408,11 +407,10 @@ describe("normalizeOpenCodeDisplayEntry", () => {
 });
 
 /*
- * The renderer's skew guard against the backend's own normalizer. A backend
- * older than 2.19.17 serves these transcripts as stored, in OpenCode's raw
- * `{ info, parts }` envelope; a current one normalizes each entry on the way
- * out. The renderer must flag every entry of the first kind and none of the
- * second, or a current backend would show "update the backend" notices.
+ * Current backends normalize stored OpenCode envelopes before serving them.
+ * The renderer accepts display-row fields and retains a permanent generic
+ * notice for entries with no recognized display fields. The named legacy
+ * raw-envelope guard has been retired.
  */
 
 /** Stored OpenCode entries, including the awkward ones the normalizer must survive. */
@@ -470,11 +468,13 @@ function reviewerSnapshot(messages: unknown[]): MultiReviewReviewerTranscript {
 }
 
 describe("OpenCode transcripts across the renderer–backend version boundary", () => {
-  test("flags exactly what the backend normalizer treats as an envelope", () => {
-    for (const entry of STORED) {
-      expect(isOpenCodeTranscriptEnvelope(entry)).toBe(true);
-      expect(classifyTranscriptEntry(entry)).toBe("opencode-envelope");
-    }
+  test("raw OpenCode envelopes use the ordinary parts-array display path", () => {
+    const raw = STORED[0]!;
+    expect(classifyTranscriptEntry(raw)).toBe("display");
+    const transcript = toPipelineTranscript([raw], "opencode", FALLBACK);
+    // Raw `text` parts are not normalized display content. The empty display
+    // row is filtered without reviving the retired legacy-envelope notice.
+    expect(transcript).toEqual([]);
   });
 
   test("flags nothing a current backend serves", () => {
@@ -487,24 +487,14 @@ describe("OpenCode transcripts across the renderer–backend version boundary", 
     expect(transcript.map((message) => message.content).join("\n")).toContain("Looks correct.");
   });
 
-  test("shows one notice for a build stage served by an older backend", () => {
-    expect(toPipelineTranscript(STORED, "opencode", FALLBACK)).toEqual([
-      expect.objectContaining({
-        id: "transcript-skew:opencode-envelope:user-1",
-        role: "system",
-        content: expect.stringContaining(`${STORED.length} OpenCode messages not shown.`),
-      }),
-    ]);
-  });
-
   test("keeps the notice through the Multi Review reviewer filters", () => {
-    const messages = toMultiReviewReviewerMessages(reviewerSnapshot(STORED));
-    expect(messages.map((message) => message.id)).toEqual([
-      "transcript-skew:opencode-envelope:user-1",
-    ]);
-    expect(messages[0]!.content).toContain(
-      "Update Orkestrator on the computer running the backend",
-    );
+    const unknown = [
+      { kind: "display-row-v3", row: { text: "Something newer" } },
+      { kind: "display-row-v3", row: { text: "Something newer still" } },
+    ];
+    const messages = toMultiReviewReviewerMessages(reviewerSnapshot(unknown));
+    expect(messages.map((message) => message.id)).toEqual(["transcript-skew:unrecognized:0"]);
+    expect(messages[0]!.content).toContain("update the older one");
 
     const current = toMultiReviewReviewerMessages(
       reviewerSnapshot(normalizeOpenCodeDisplayEntries(STORED)),

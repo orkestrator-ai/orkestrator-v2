@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { StorageService } from "./storage.js";
+import { seedLegacyPromptQueueClaim } from "./storage-test-support.js";
 import {
   PROMPT_QUEUE_MESSAGE_CONFLICT,
-  PROMPT_QUEUE_MESSAGE_FROZEN,
   canonicalPromptQueueMessageFingerprint,
 } from "./storage-prompts.js";
 
@@ -222,17 +222,30 @@ describe("backend-authored queue items", () => {
     });
   });
 
-  test("claims and dispatch reservations are never tombstoned", async () => {
+  test("legacy claims, their recovery and dispatch reservations are never tombstoned", async () => {
     await withStorage(async (storage) => {
       await createSession(storage);
       await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"));
       await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r2"));
-      const claim = await storage.claimPromptQueueHead(KEY, "e1", "r1");
-      await storage.acknowledgePromptQueueClaim(KEY, "e1", claim.claimToken!);
-      await storage.reservePromptQueueHeadForDispatch(KEY);
-      await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, "r2", async () => undefined);
-      await storage.acknowledgePromptQueueDispatch(KEY, "r2");
+      // An older backend sharing the data directory claimed r1; queue edits
+      // here carry the claim and must not treat r1 as removed.
+      seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "r1", { expiresAt: 1 });
+      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "user-1", text: "mine" });
+      expect((await storage.getPromptQueue(KEY))?.outstandingClaim?.message).toMatchObject({
+        id: "r1",
+      });
       expect((await storage.getPromptQueue(KEY))?.removedOrigins ?? []).toEqual([]);
+
+      // Restart recovers the expired claim to the head; dispatch it from there.
+      const restarted = new StorageService(storage.getDataDir());
+      await restarted.init();
+      expect(
+        (await restarted.getPromptQueue(KEY))?.messages.map((item) => (item as { id: string }).id),
+      ).toEqual(["r1", "r2", "user-1"]);
+      await restarted.reservePromptQueueHeadForDispatch(KEY);
+      await restarted.dispatchNativeAgentPromptOnce(SESSION_KEY, "r1", async () => undefined);
+      await restarted.acknowledgePromptQueueDispatch(KEY, "r1");
+      expect((await restarted.getPromptQueue(KEY))?.removedOrigins ?? []).toEqual([]);
     });
   });
 
@@ -245,22 +258,16 @@ describe("backend-authored queue items", () => {
     });
   });
 
-  test("frozen items cannot be changed on requeue", async () => {
+  test("frozen items can still be reordered", async () => {
     await withStorage(async (storage) => {
       await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"));
-
-      await storage.claimPromptQueueHead(KEY, "e1", "r1");
-      await expect(
-        storage.requeuePromptQueueMessage(KEY, "e1", { ...message("r1"), text: "edited" }),
-      ).rejects.toThrow(PROMPT_QUEUE_MESSAGE_FROZEN);
-      await storage.requeuePromptQueueMessage(KEY, "e1", message("r1"));
-      expect((await storage.getPromptQueue(KEY))?.messages).toEqual([message("r1")]);
-      // Reordering stays allowed; it does not change the frozen body.
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "user-1", text: "mine" });
+      // Reordering does not change the frozen body.
       await storage.movePromptQueueMessage(KEY, "e1", "r1", "down");
-      expect(
-        (await storage.getPromptQueue(KEY))?.messages.map((item) => (item as { id: string }).id),
-      ).toEqual(["user-1", "r1"]);
+      expect((await storage.getPromptQueue(KEY))?.messages).toEqual([
+        { id: "user-1", text: "mine" },
+        message("r1"),
+      ]);
     });
   });
 

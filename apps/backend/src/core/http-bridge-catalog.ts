@@ -22,6 +22,7 @@ import {
   boundedJson,
   bridgeFetch,
 } from "./http-bridge-transport.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 export type HttpBridgeAgent = "claude" | "codex" | "cursor" | "grok" | "pi";
 
@@ -54,6 +55,7 @@ export class HttpBridgeCatalogAdapter {
   private noteOutdatedBridge(): void {
     const count = (outdatedBridgeCatalogueReads.get(this.agent) ?? 0) + 1;
     outdatedBridgeCatalogueReads.set(this.agent, count);
+    compatibilityPathUsage.record("slash-catalogue.outdated-bridge");
     if (this.warnedOutdatedBridge) return;
     this.warnedOutdatedBridge = true;
     console.warn(

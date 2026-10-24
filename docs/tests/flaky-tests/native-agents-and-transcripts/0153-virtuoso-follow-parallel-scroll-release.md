@@ -21,6 +21,10 @@
 - **Assessment:** confirms an intermittent recurrence in follow re-engagement, rather than the original scroll-release symptom. The cause is not established. No owning implementation, assertion, timeout or skip changed during resolution.
 
 
+## Mixed-version compatibility main merge — 2026-10-24
+
+Both desktop follow cases retained false instead of auto in the aggregate and the first one-worker owner. The exact main-parent baseline passed both follow cases, and the final unchanged merged owner passed in 4.0 s on port 61245. This confirms intermittent behavior; the first isolated failure is retained in the evidence. Full commands, worker configuration, original failures and artifacts are recorded in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#mixed-version-compatibility-main-merge--2026-10-24). No assertion, timeout or skip changed.
+
 ## Runtime-state ownership main merge — 2026-10-24
 
 `ORKESTRATOR_E2E_PORT=61933 mise run test:logged -- --name merge-components-bounded -- bunx playwright test --config e2e/playwright.config.ts --workers=2` reported 575 passed, 102 skipped and five failed across 682 cases (1188.3 s logged). The desktop small-wheel case retained `false` rather than `auto` after returning to bottom and appending (`:86`, five seconds). Evidence: host temporary artifact `orkestrator-test-run.Qvr7ev/merge-components-bounded.log.gz`.

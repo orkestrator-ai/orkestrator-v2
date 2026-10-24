@@ -1,10 +1,4 @@
-import {
-  PROMPT_QUEUE_CLAIM_LEASE_MS,
-  createHash,
-  isCanonicalUuid,
-  isRecord,
-  path,
-} from "./storage-shared.js";
+import { createHash, isCanonicalUuid, isRecord, path } from "./storage-shared.js";
 import type {
   ConditionalResourceSnapshot,
   ResourceChangeListener,
@@ -34,17 +28,9 @@ export abstract class StorageBase {
   protected abstract promptQueueMessageFingerprint(message: unknown): string;
   protected abstract deleteComposeDraftsByProject(projectId: string): Promise<void>;
   protected abstract deleteSessionBuffer(sessionId: string): Promise<void>;
-  protected readonly promptQueueClaimLeaseMs: number;
 
-  constructor(
-    dataDir: string,
-    options: { promptQueueClaimLeaseMs?: number; snapshots?: boolean } = {},
-  ) {
+  constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.dataDir = dataDir;
-    this.promptQueueClaimLeaseMs = options.promptQueueClaimLeaseMs ?? PROMPT_QUEUE_CLAIM_LEASE_MS;
-    if (!Number.isFinite(this.promptQueueClaimLeaseMs) || this.promptQueueClaimLeaseMs <= 0) {
-      throw new Error("Prompt queue claim lease must be positive");
-    }
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
   }
 

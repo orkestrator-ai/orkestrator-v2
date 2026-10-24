@@ -195,6 +195,10 @@ Branch `todo-0036-design-canvas-qualification-1477f37ca3cf` from `b83ae534`, on 
 - Evidence: host temporary artifact `orkestrator-test-run.EtTM9R/merge-browser.log.gz`; original traces under `output/playwright/test-results/`. No implementation, assertion, timeout or skip changed. The original aggregate remains failed; see [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md) for the other owners.
 
 
+## Mixed-version compatibility main merge — 2026-10-24
+
+Both viewport cases exceeded the 30-second deadline in the nine-worker component aggregate (565 passed, 102 skipped, 15 failed). The complete unchanged owner passed with one worker on port 55723 in 45.7 s. Full commands, worker configuration, original failures and artifacts are recorded in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#mixed-version-compatibility-main-merge--2026-10-24). No assertion, timeout or skip changed.
+
 ## Agent accounts main merge — 2026-10-24
 
 `mise run test:logged -- --name merge-browser-fixed -- mise run test:browser`

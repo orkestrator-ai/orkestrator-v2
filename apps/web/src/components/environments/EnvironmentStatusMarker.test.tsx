@@ -18,7 +18,9 @@ for (const local of [true, false]) {
       expect(center.classList).toContain(local ? "rounded-full" : "rounded-[1px]");
       expect(ring.classList).toContain(local ? "rounded-full" : "rounded-[4px]");
       expect(ring.classList).toContain("pointer-events-none");
-      expect(ring.classList).toContain("forced-colors:hidden");
+      expect(marker.classList).toContain("isolate");
+      expect(center.classList).toContain("relative");
+      expect(center.classList).toContain("z-10");
       expect(center.classList).toContain("forced-colors:bg-[CanvasText]");
       expect(center.classList).toContain(machine ? "bg-teal-500" : "bg-muted-foreground");
       if (machine) {
@@ -30,7 +32,7 @@ for (const local of [true, false]) {
       }
       const centerClasses = center.className;
       const states: Array<[EnvironmentMarkerState, string, boolean]> = [
-        ["inactive", "opacity-0", false],
+        ["inactive", "border-muted-foreground/40", false],
         ["idle", "opacity-0", false],
         ["working", "bg-red-500/50", true],
         ["waiting", "bg-yellow-400/50", true],
@@ -40,6 +42,13 @@ for (const local of [true, false]) {
         expect(marker.getAttribute("data-state")).toBe(state);
         expect(ring.classList).toContain(color);
         expect(ring.classList.contains("animate-pulse")).toBe(pulsing);
+        expect(ring.classList.contains("forced-colors:hidden")).toBe(!pulsing);
+        if (pulsing) {
+          expect(ring.classList).toContain("forced-colors:border-[CanvasText]");
+          expect(ring.classList).toContain(
+            state === "working" ? "forced-colors:border-solid" : "forced-colors:border-dashed",
+          );
+        }
         expect(marker.classList.contains("animate-pulse")).toBe(false);
         expect(marker.lastElementChild).toBe(center);
         expect(center.className).toBe(centerClasses);

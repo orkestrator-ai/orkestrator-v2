@@ -274,12 +274,19 @@ describe("HierarchicalSidebar", () => {
     }
   });
 
-  test("bound repository members keep their home icon, trailing collapse control, and selection", async () => {
+  test("bound repository members keep their machine-colored label, trailing collapse control, and selection", async () => {
     const previousView = useMachineViewStore.getState();
     const previousNative = window.orkestrator;
     installDesktopFake({
       list: connectionList([remoteConnection("a", "Machine A", "teal")]),
-      datasets: { a: { projects: [], environments: {} } },
+      datasets: {
+        a: {
+          projects: [{ ...project, name: "Remote checkout" }],
+          environments: {
+            [project.id]: [{ ...createdEnvironment, id: "remote-worker", name: "Remote worker" }],
+          },
+        },
+      },
     });
     const sameRepository = { ...project, id: "project-2", name: "Second checkout", order: 1 };
     projectsValue = [project, sameRepository];
@@ -293,6 +300,7 @@ describe("HierarchicalSidebar", () => {
       },
     ];
     useProjectStore.getState().setProjects(projectsValue);
+    useEnvironmentStore.getState().setEnvironments(environmentsValue);
     useMachineViewStore.getState().setGrouping("repository");
     let view: ReturnType<typeof render> | undefined;
     try {
@@ -304,6 +312,8 @@ describe("HierarchicalSidebar", () => {
       const list = await screen.findByTestId("federated-repository-list");
       expect(await within(list).findByText("This computer · Project One")).toBeTruthy();
       expect(within(list).getByText("This computer · Second checkout")).toBeTruthy();
+      // Both bound checkouts contribute, but count as only one machine.
+      expect(await within(list).findByText("2 machines · 3 environments")).toBeTruthy();
       expect(
         within(list).getByRole("button", { name: "Open acme/project-one on This computer" }),
       ).toBeTruthy();
@@ -312,9 +322,10 @@ describe("HierarchicalSidebar", () => {
         .getByText("This computer · Second checkout")
         .closest("button")!;
       for (const button of [member, otherMember]) {
-        const icon = within(button).getByTestId("machine-home-icon");
-        await waitFor(() => expect(icon.getAttribute("data-machine-color")).toBe("violet"));
-        expect(button.firstElementChild === icon).toBe(true);
+        const label = within(button).getByText(/^This computer · /);
+        await waitFor(() => expect(label.classList).toContain("text-violet-500"));
+        expect(button.firstElementChild === label).toBe(true);
+        expect(within(button).queryByTestId("machine-home-icon") === null).toBe(true);
         expect(within(button).queryByTestId("machine-dot") === null).toBe(true);
         expect(
           button.parentElement!.parentElement!.lastElementChild!.getAttribute("aria-label"),

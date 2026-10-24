@@ -644,7 +644,7 @@ describe("EnvironmentItem activity marker", () => {
     expect(icon?.getAttribute("class")).not.toContain("animate-pulse");
   });
 
-  test("shows no activity colour at all while the environment is not running", () => {
+  test("shows a stopped outline without activity colour while the environment is not running", () => {
     const { container } = renderItem(
       makeEnvironment({
         status: "stopped",
@@ -654,7 +654,9 @@ describe("EnvironmentItem activity marker", () => {
     );
 
     const icon = getRowRing(container);
-    expect(icon.getAttribute("class")).toContain("opacity-0");
+    expect(icon.getAttribute("class")).toContain("border-muted-foreground/40");
+    expect(icon.getAttribute("class")).not.toContain("opacity-0");
+    expect(icon.getAttribute("class")).not.toContain("animate-pulse");
     expect(icon.getAttribute("class")).not.toContain("bg-red-500/50");
     expect(getRowMarker(container).getAttribute("data-state")).toBe("inactive");
   });

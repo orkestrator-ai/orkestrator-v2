@@ -334,7 +334,7 @@ test("merged lists draw this window's own projects and rows with its full contro
   }
 });
 
-test("a repository group names each member by its machine in its colour and shows a machine dot, not a count", async () => {
+test("a repository group names each member by its machine in its colour and summarizes machines and environments", async () => {
   const hint = "github.com/acme/app";
   const first = machineView();
   first.projects[0]!.repositoryHint = hint;
@@ -401,6 +401,69 @@ test("a repository group names each member by its machine in its colour and show
   expect(screen.queryByRole("button", { name: /^Move repository/ }) === null).toBe(true);
 });
 
+test("a repository heading uses the command node's colour even when that machine is filtered out", async () => {
+  installTwoMachines();
+  // The workspace is on a different machine from the command node.
+  const remote = machineView({ bound: true });
+  remote.projects[0]!.repositoryHint = "github.com/acme/app";
+  const commandNode = machineView({
+    connectionId: "bk_self",
+    backendId: "bk_self" as BackendId,
+    name: "Command node",
+    colorToken: "violet",
+    projects: [],
+    environmentsByProject: new Map(),
+  });
+  renderWithFederation(
+    <MergedProjectList
+      machines={[remote, commandNode]}
+      shownIds={new Set([remote.connectionId])}
+      mode="repository"
+      renderBoundProject={() => null}
+      onBoundEnvironmentDragEnd={() => undefined}
+    />,
+  );
+  const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
+  const home = within(heading).getByTestId("command-node-home-icon");
+  await waitFor(() => expect(home.getAttribute("data-machine-color")).toBe("violet"));
+  expect(home.querySelector("svg")!.classList).toContain("text-violet-500");
+  expect(within(heading).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
+    "teal",
+  );
+});
+
+test("a repository with one visible environment uses singular summary labels and excludes project homes", async () => {
+  const machine = machineView();
+  machine.projects[0]!.repositoryHint = "github.com/acme/app";
+  machine.environmentsByProject = new Map([
+    [
+      "project-1",
+      [
+        firstEnvironment(machine),
+        {
+          ...firstEnvironment(machine),
+          ref: environmentRef(machine.backendId!, "home"),
+          key: environmentKey(environmentRef(machine.backendId!, "home")),
+          isProjectHome: true,
+        },
+      ],
+    ],
+  ]);
+  await act(async () => {
+    render(
+      <MergedProjectList
+        machines={[machine]}
+        shownIds={new Set([machine.connectionId])}
+        mode="repository"
+        renderBoundProject={() => null}
+        onBoundEnvironmentDragEnd={() => undefined}
+      />,
+    );
+  });
+  const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
+  expect(within(heading).getByText("1 machine · 1 environment")).toBeTruthy();
+});
+
 describe("CL-05: machine identity visual rules", () => {
   test("CL-05: a decorative MachineDot is hidden from assistive technology", () => {
     render(<MachineDot colorToken="teal" machineName="Machine A" />);
@@ -462,8 +525,9 @@ describe("CL-05: machine identity visual rules", () => {
               environmentType === "local" ? "circle" : "square",
             );
             const ring = within(marker).getByTestId("environment-status-ring");
-            const color =
-              !active || activity === "idle"
+            const color = !active
+              ? "border-muted-foreground/40"
+              : activity === "idle"
                 ? "opacity-0"
                 : activity === "working"
                   ? "bg-red-500/50"

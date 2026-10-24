@@ -42,3 +42,12 @@ The combined merge repeated a failure in this owner during `mise run test:logged
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-native-commands-owner -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` failed: 18 passed and one failed in 21.11 s; the same case observed three reads instead of one (3781.20 ms).
 - **Evidence:** `orkestrator-test-run.bFHIz7/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.4FzbbZ/merge-native-commands-owner.log.gz` below the host temporary directory.
 - **Assessment:** this observation does not establish a new isolated pass or root cause. The command controller and this owner match the main parent; no implementation, assertion, timeout or skip changed.
+
+## Environment marker review fixes — 2026-10-24
+
+- **Checkout:** `environment-list-ui-748a3b304f7f-r1`, based on `a6ee3d224`.
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`; workspace/root/bridge/protocol reservations 4/1/2/1 with two web workers, alongside component browser validation and other worktrees.
+- **Failure:** expected one projection read and received two after 1708.00 ms. The web package reported 9461 passed, ten skipped and one failed across 9472 tests in 595 files (274.92 s).
+- **Complete unchanged owner:** `mise run test:logged -- --name native-command-isolated -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit 0 in 6.8 s logged.
+- **Evidence:** `orkestrator-test-run.bSoN4E/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate completion.
+- **Assessment:** recurrence of the existing intermittent extra projection read; shared-host contention remains a hypothesis. No native-command implementation, assertion, timeout or skip changed.

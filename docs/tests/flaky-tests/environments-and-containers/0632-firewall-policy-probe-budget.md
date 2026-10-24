@@ -25,6 +25,8 @@
   tab); nothing in `tests/unit/firewall-policy.test.ts`,
   `docker/firewall-domains.sh` or the network allowlist changed there. The
   likely fix is an explicit outer budget for these cases, as 0159 took.
+- **Recurrence (2026-10-24, node mbp3):** the todo-0050 branch's aggregate failed seven firewall cases at the five-second budget. Rerun alone at load average 16 to 35, the owner still failed (10 of 24 failed, then 10 of 24 again). A worktree of `main` at `71227437`, run straight afterwards under the same load, failed the same way (8 of 24). `example.com`, `.net` and `.org` resolved promptly through `dscacheutil`. So host contention alone reproduces it here; the branch touches neither `docker/` nor the test.
+
 - **2026-10-24 (node mbp3, macOS, Apple Silicon):** `mise run test` on the
   0011 runtime-state branch failed five of these cases at 5.0 s. Unlike the
   original observation, the owner also failed alone here:

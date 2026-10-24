@@ -39,8 +39,20 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 A turn renders as one assistant row per model response, plus a row after each
 steer (`TurnAccumulator.opensModelStep`, `app-server-runtime-rows.ts`). Live
 items name no response, so the boundary is inferred: a new reasoning or agent
-message item after a tool call in the live row opens the next row. A reload
-splits at the same place (`history/rollout.ts`). Never fold a whole turn back
+message item after a tool call in the live row opens the next row, and so does
+a new tool call after app-server reported a finished response. That report is
+`thread/tokenUsage/updated`, sent once per Responses API completion, tool-only
+responses included (`model.response.completed`; `rawResponse/completed` names
+the response but needs the experimental API). Without it a model reading files
+one call at a time with no reasoning item grew one row for the whole run. A
+code-mode cell's own calls stream after its response's report, so a cell making
+several calls can split once inside itself; rows stay bounded by responses. A
+reload splits at the same places, using the rollout's `token_usage_record` (or
+the older `token_count` event) after each response (`history/rollout.ts`).
+Replayed rows are named by their place in the rollout (`replayedRowId`), so
+every replay — an idle re-attach or a bridge restart — gives each row the same
+id; only the first replay after live streaming re-keys them, because live rows
+are minted before app-server names their turn. Never fold a whole turn back
 into one row: a turn can run for hours, and a single multi-megabyte row fits no
 transcript window, so readers can only show a trimmed copy and lose it once a
 newer row pushes it out of the live tail. A late change to an item (a command

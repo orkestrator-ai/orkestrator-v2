@@ -349,6 +349,10 @@ export async function readPersistedSessionMessages(session: SessionState): Promi
   const sdk = await claudeSdk();
   if (typeof sdk.getSessionMessages !== "function") return undefined;
   const [persisted, commandChanges, preferences] = await Promise.all([
+    // No `limit`/`offset`: the SDK parses the whole JSONL and rebuilds the
+    // message chain before it slices (offset counts from the start), and the
+    // task registry needs every launch the tail's reports fold onto. Its own
+    // bound is skipping pre-compaction bytes once a file passes 5 MiB.
     sdk.getSessionMessages(session.sdkSessionId, {
       dir: currentWorkingDirectory(),
       includeSystemMessages: true,

@@ -3012,6 +3012,82 @@ describe("interrupt lifecycle", () => {
     });
   });
 
+  test("a dead backend's running turn stops as a restart mid-turn, never a cancel", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+    await h.drain();
+
+    const stopping = h.runtime.interruptForParentExit(1_000);
+    await h.drain();
+    expect(h.child().requests.some((r) => r.method === "turn/interrupt")).toBe(true);
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "interrupted" },
+    });
+    expect(await stopping).toBe(1);
+    await h.drain();
+
+    // A build stage continues a turn its restart stopped; it would stop on a cancel.
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      phase: "failed",
+      interruption: "restart",
+    });
+    expect(h.runtime.getJournal().get("req-1")).toMatchObject({
+      state: "terminal",
+      terminalStatus: "failed",
+    });
+  });
+
+  test.each(["failed", "completed"] as const)(
+    "a shutdown-marked turn completing as %s keeps its real outcome",
+    async (status) => {
+      const h = await harness();
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+      const stopping = h.runtime.interruptForParentExit(1000);
+      await h.child().waitForRequest("turn/interrupt");
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status,
+          ...(status === "failed"
+            ? {
+                error: { message: "model failed during shutdown", codexErrorInfo: "other" },
+              }
+            : {}),
+        },
+      });
+      expect(await stopping).toBe(1);
+      await h.drain();
+      expect(h.runtime.getJournal().get("req-1")).toMatchObject({
+        state: "terminal",
+        terminalStatus: status,
+      });
+      expect(h.runtime.getRegistry().getThreadForSession(sessionId)?.activeTurn).toBeNull();
+      expect(h.runtime.getStatus(sessionId)).toMatchObject({
+        phase: status === "failed" ? "failed" : "idle",
+      });
+      expect(h.runtime.getStatus(sessionId)?.interruption).toBeUndefined();
+      if (status === "failed") {
+        expect(h.runtime.getStatus(sessionId)?.error).toBe("model failed during shutdown");
+        expect(h.events).toContainEqual({
+          type: "session.error",
+          sessionId,
+          data: { error: "model failed during shutdown" },
+        });
+      }
+    },
+  );
+
+  test("a dead backend with nothing running asks app-server for nothing", async () => {
+    const h = await harness();
+    h.runtime.createSession({ mode: "build" });
+    expect(await h.runtime.interruptForParentExit(1_000)).toBe(0);
+    expect(h.child().requests.some((r) => r.method === "turn/interrupt")).toBe(false);
+  });
+
   test("aborting an idle session is harmless", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

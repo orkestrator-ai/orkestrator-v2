@@ -394,6 +394,12 @@ export class AppServerRuntime {
     this.tail.closeStopBudgetMs = value;
   }
 
+  interruptForParentExit(
+    ...args: Parameters<CodexRuntimeTail["interruptForParentExit"]>
+  ): ReturnType<CodexRuntimeTail["interruptForParentExit"]> {
+    return this.tail.interruptForParentExit(...args);
+  }
+
   abort(...args: Parameters<CodexRuntimeTail["abort"]>): ReturnType<CodexRuntimeTail["abort"]> {
     return this.tail.abort(...args);
   }

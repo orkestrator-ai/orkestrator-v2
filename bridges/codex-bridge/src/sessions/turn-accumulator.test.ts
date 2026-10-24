@@ -747,6 +747,75 @@ describe("one row per model response", () => {
     expect(turn.opensModelStep(event("item.started", agentMessage("m3", "")))).toBe(false);
   });
 
+  test("a tool call after a finished response opens the next response", () => {
+    const turn = accumulator();
+    turn.onItemStarted(command("c1"));
+    // Same response: no usage report yet.
+    expect(turn.opensModelStep(event("item.started", command("c2")))).toBe(false);
+    turn.noteModelResponseCompleted();
+    expect(turn.opensModelStep(event("item.started", command("c2")))).toBe(true);
+    turn.startModelStep("assistant-2", "2026-10-14T10:00:01.000Z");
+    turn.onItemStarted(command("c2"));
+    // The report was consumed by the row it opened.
+    expect(turn.opensModelStep(event("item.started", command("c3")))).toBe(false);
+  });
+
+  test("a usage report that overtakes its own call still splits the next response", () => {
+    const turn = accumulator();
+    // Response 1's report arrives before its call's item.
+    turn.noteModelResponseCompleted();
+    expect(turn.opensModelStep(event("item.started", command("c1")))).toBe(false);
+    turn.onItemStarted(command("c1"));
+    // Response 2's call, and its report overtaking it as well.
+    turn.noteModelResponseCompleted();
+    expect(turn.opensModelStep(event("item.started", command("c2")))).toBe(true);
+    turn.startModelStep("assistant-2", "2026-10-14T10:00:01.000Z");
+    turn.onItemStarted(command("c2"));
+    // Response 3 is a new response too: one report is still unconsumed.
+    expect(turn.opensModelStep(event("item.started", command("c3")))).toBe(true);
+  });
+
+  test("opening a steer's row consumes the pending response boundary once", () => {
+    const turn = accumulator();
+    turn.onItemStarted(command("c1"));
+    turn.noteModelResponseCompleted();
+    const boundary = turn.freezeAssistantSegment();
+    turn.startAssistantSegment("assistant-2", boundary);
+    turn.onItemStarted(command("c2"));
+    expect(turn.opensModelStep(event("item.started", command("c3")))).toBe(false);
+    turn.noteModelResponseCompleted();
+    expect(turn.opensModelStep(event("item.started", command("c3")))).toBe(true);
+    expect(turn.orderedForAssistantSegment("assistant-1").map((item) => item.id)).toEqual(["c1"]);
+    expect(turn.orderedForAssistantSegment("assistant-2").map((item) => item.id)).toEqual(["c2"]);
+  });
+
+  test("a usage report never splits a steer, a code-mode cell, or an ended turn", () => {
+    const steered = accumulator();
+    steered.onItemStarted(command("c1"));
+    steered.noteModelResponseCompleted();
+    steered.freezeAssistantSegment();
+    expect(steered.opensModelStep(event("item.started", command("c2")))).toBe(false);
+
+    const cell = accumulator();
+    cell.onItemStarted(command("c1"));
+    cell.noteModelResponseCompleted();
+    const recoveredCell: EngineItem = {
+      id: "cell-1",
+      type: "dynamic_tool_call",
+      tool: "exec",
+      arguments: "",
+      content_items: [],
+      status: "in_progress",
+    } as EngineItem;
+    expect(cell.opensModelStep(event("item.started", recoveredCell))).toBe(false);
+
+    const ended = accumulator();
+    ended.onItemStarted(command("c1"));
+    ended.complete("completed");
+    ended.noteModelResponseCompleted();
+    expect(ended.opensModelStep(event("item.started", command("c2")))).toBe(false);
+  });
+
   test("never splits while a steer is splitting the row, or after the turn ended", () => {
     const steered = accumulator();
     steered.onItemStarted(command("c1"));

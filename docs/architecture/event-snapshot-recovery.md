@@ -64,7 +64,8 @@ landed. Resume never reopens a closed terminal or replays discarded input.
 
 Terminal output (generation/revision snapshot protocol with explicit desync)
 and native-agent transcript windows keep their own existing contracts and are
-out of scope here.
+out of scope here. The transcript window contract is in
+[native-transcripts.md](native-transcripts.md).
 
 A domain revision gap is evidence of a missed event only because the owner
 emits every revision to every subscriber of that event name on the main

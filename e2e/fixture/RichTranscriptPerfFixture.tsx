@@ -503,7 +503,43 @@ function buildTranscript(): Message[] {
       messages.push(textMessage(id, "assistant", body, at));
     }
   }
+  padToRetainedBytes(messages, random);
   return messages;
+}
+
+/**
+ * `?retainedMiB=N` grows the same 3,000 messages to about N MiB of encoded
+ * JSON by appending paragraphs to plain assistant replies, so a large retained
+ * history stays under the client's 4,096-message cap (`CLIENT_HISTORY_*` in
+ * `useNativeAgentSession.ts`). Without it the transcript is unchanged.
+ */
+const RETAINED_TARGET_BYTES =
+  Number(new URLSearchParams(window.location.search).get("retainedMiB") ?? 0) * 1024 * 1024;
+
+function encodedBytes(message: Message): number {
+  return new TextEncoder().encode(JSON.stringify(message)).length;
+}
+
+function padToRetainedBytes(messages: Message[], random: () => number): void {
+  if (!(RETAINED_TARGET_BYTES > 0)) return;
+  const plain = messages.filter(
+    (message) =>
+      message.role === "assistant" &&
+      message.parts.length === 1 &&
+      !message.content.includes("```"),
+  );
+  if (plain.length === 0) return;
+  let total = messages.reduce((sum, message) => sum + encodedBytes(message), 0);
+  for (let round = 0; total < RETAINED_TARGET_BYTES && round < 64; round += 1) {
+    for (const message of plain) {
+      if (total >= RETAINED_TARGET_BYTES) break;
+      const before = encodedBytes(message);
+      const content = `${message.content}\n\n${paragraph(random)}`;
+      message.content = content;
+      message.parts = [{ type: "text", content }];
+      total += encodedBytes(message) - before;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -680,6 +716,7 @@ export function RichTranscriptPerfFixture() {
 }
 
 const transcript = buildTranscript();
+const transcriptBytes = transcript.reduce((sum, message) => sum + encodedBytes(message), 0);
 const richMessageIndices = transcript
   .map((message, index) =>
     message.content.includes("```") || message.parts.length > 1 ? index : -1,
@@ -754,6 +791,8 @@ function PerfConversation({ onRemount }: { onRemount: () => void }) {
           domNodes: document.getElementsByTagName("*").length,
           mountedRows: document.querySelectorAll("[data-item-index]").length,
           mountedRichBlocks: document.querySelectorAll("[data-rich-block]").length,
+          transcriptBytes,
+          visibilityState: document.visibilityState,
         };
         if (schedulerModule) {
           result.scheduler = schedulerModule.richRenderScheduler.stats();

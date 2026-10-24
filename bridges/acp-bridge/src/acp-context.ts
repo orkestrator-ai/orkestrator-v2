@@ -24,6 +24,7 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { WorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import type { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import { PARENT_WATCH_INTERVAL_MS } from "@orkestrator/protocol/parent-watchdog";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
   ORKESTRATOR_ARTIFACT_MCP_PATH,
@@ -986,7 +987,7 @@ export const RETRIABLE_PROVIDER_RETRY_BASE_MS = parseDuration(
 );
 export const PARENT_WATCHDOG_INTERVAL_MS = parseDuration(
   process.env.ACP_PARENT_WATCHDOG_INTERVAL_MS,
-  15_000,
+  PARENT_WATCH_INTERVAL_MS,
 );
 export const ACP_TOKEN_HEADER = "x-orkestrator-acp-token";
 

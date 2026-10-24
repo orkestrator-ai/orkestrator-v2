@@ -56,6 +56,7 @@ async function workloadFactories(): Promise<Record<string, WorkloadFactory>> {
   const storage = await import("./workloads-storage.js");
   const projection = await import("./workloads-projection.js");
   const frontend = await import("./workloads-frontend.js");
+  const supervision = await import("./workloads-supervision.js");
   return {
     a: transcripts.unchangedReadWorkload,
     b: transcripts.trimmingWorkload,
@@ -67,6 +68,10 @@ async function workloadFactories(): Promise<Record<string, WorkloadFactory>> {
     h: storage.codexRolloutWorkload,
     i: projection.historyPagingWorkload,
     j: projection.step14Workload,
+    k: supervision.activitySweepWorkload,
+    l: supervision.fileTreeCacheWorkload,
+    m: supervision.probeWorkload,
+    n: supervision.pipelineCheckpointWorkload,
   };
 }
 
@@ -102,7 +107,8 @@ async function main(): Promise<number> {
       ioCounters: ioAvailable()
         ? "/proc/self/io rchar/wchar deltas"
         : "unavailable on this platform",
-      heap: "not measured: counts and retained-size estimates only",
+      resources:
+        "per case: heap and RSS of the harness process (forced GC before each repetition, peak sampled every 5 ms) and event-loop lag from late timer ticks; machine-specific, never compared",
     },
     startedAt,
     finishedAt: startedAt,

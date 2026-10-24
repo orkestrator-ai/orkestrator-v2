@@ -315,6 +315,8 @@ export function reduceNotification(
             },
             ...base,
           },
+          // Usage is reported once per model response, so it also closes one.
+          { kind: "model.response.completed", threadId, turnId, ...base },
         ],
       };
     }

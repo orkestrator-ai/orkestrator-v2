@@ -1119,11 +1119,14 @@ export class TranscriptScrollController {
     if (armed || this.touchActive) {
       this.userScrollUntil = Math.max(this.userScrollUntil, t + MOMENTUM_CHAIN_MS);
     }
-    if (op && metrics.scrollTop !== previous) {
-      this.counters.userInterruptions += 1;
+    if ((op || this.pointerHeld) && metrics.scrollTop !== previous) {
+      if (op) this.counters.userInterruptions += 1;
       this.dispatch({ type: "user-navigation" }, "cancelled");
     }
     this.evaluateMovement(metrics.scrollTop, previous, metrics.distanceFromEnd, armed);
+    // The first departure changes follow intent inside evaluateMovement.
+    // Capture only after that transition so a single scroll establishes a place.
+    this.scheduleAnchorCapture();
   }
 
   private evaluateMovement(top: number, previous: number, distance: number, armed: boolean): void {

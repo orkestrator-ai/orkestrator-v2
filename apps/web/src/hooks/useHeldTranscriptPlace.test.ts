@@ -34,15 +34,20 @@ const read = (id: string, createdAt: string): NativeMessage => ({
   ],
 });
 
-function setup(initial: NativeMessage[]) {
+function setup(initial: NativeMessage[], loading?: boolean) {
   const scrollToIndex = mock((_index: number, _anchor?: unknown, _owner?: string) => true);
   const hook = renderHook(
-    ({ messages }) => {
+    ({ messages, loading }) => {
       const place = useHeldTranscriptPlace();
-      useRestoreHeldPlace(place, messages, scrollToIndex);
+      useRestoreHeldPlace(place, messages, scrollToIndex, loading);
       return place;
     },
-    { initialProps: { messages: initial } },
+    {
+      initialProps: { messages: initial, loading } as {
+        messages: NativeMessage[];
+        loading?: boolean;
+      },
+    },
   );
   return { hook, scrollToIndex };
 }
@@ -228,11 +233,11 @@ describe("held place with the scroll controller", () => {
       readerMovedTo(anchor: (typeof anchors)[number]) {
         preCommit = anchor;
       },
-      takePreCommitAnchor: () => {
+      takePreCommitAnchor: mock(() => {
         const anchor = preCommit;
         preCommit = null;
         return anchor;
-      },
+      }),
     };
   }
 
@@ -263,6 +268,42 @@ describe("held place with the scroll controller", () => {
     expect(scrollToIndex.mock.calls).toEqual([
       [2, { rowKey: "m53", offset: 30, partId: undefined }, "history"],
     ]);
+  });
+
+  test.each(["failed", "empty"])(
+    "a %s history request releases its hold before further streaming",
+    async (outcome) => {
+      const messages = [text("m52"), text("m53")];
+      const { hook, scrollToIndex } = setup(messages, true);
+      const controller = fakeController([{ rowKey: "m52", index: 0, offsetPx: 0 }]);
+      hook.result.current.hold(null, controller as never);
+      controller.readerMovedTo({ rowKey: "m53", index: 1, offsetPx: 30 });
+      hook.rerender({ messages: [...messages, text("m54")], loading: true });
+      expect(controller.holdingStructure).toBe(true);
+      const request =
+        outcome === "failed" ? Promise.reject(new Error("history unavailable")) : Promise.resolve();
+      await request.catch(() => {}).finally(() => hook.rerender({ messages, loading: false }));
+      expect(controller.holdingStructure).toBe(false);
+      expect(hook.result.current.scrollAnchor).toBeUndefined();
+      const captures = controller.takePreCommitAnchor.mock.calls.length;
+      const holds = controller.beginStructuralHold.mock.calls.length;
+      hook.rerender({ messages: [...messages, text("m55")], loading: false });
+      hook.rerender({ messages: [...messages, text("m56")], loading: false });
+      expect(controller.takePreCommitAnchor).toHaveBeenCalledTimes(captures);
+      expect(controller.beginStructuralHold).toHaveBeenCalledTimes(holds);
+      expect(scrollToIndex).not.toHaveBeenCalled();
+    },
+  );
+
+  test("completion restores a landed page before releasing the hold", () => {
+    const { hook, scrollToIndex } = setup([text("m52"), text("m53")], true);
+    const controller = fakeController([{ rowKey: "m52", index: 0, offsetPx: 4 }]);
+    hook.result.current.hold(null, controller as never);
+    hook.rerender({ messages: [text("m51"), text("m52"), text("m53")], loading: false });
+    expect(scrollToIndex.mock.calls).toEqual([
+      [1, { rowKey: "m52", offset: 4, partId: undefined }, "history"],
+    ]);
+    expect(controller.holdingStructure).toBe(false);
   });
 
   test("release ends the structural hold; a removed anchor restores nothing rather than jumping", () => {

@@ -241,3 +241,69 @@ test("focus inside a long group's viewport survives nearby inner scrolling", asy
   await expect.poll(() => held!.evaluate((element) => element.isConnected)).toBe(false);
   expect(await viewport.locator("[data-tool-group-entry-index]").count()).toBeLessThan(60);
 });
+
+test("a waiting group that fits its cap follows appended calls as it starts overflowing", async ({
+  page,
+}) => {
+  await page.goto("/streaming-transcript?long=1&bigGroup=12&liveGroup=1");
+  await page.getByRole("button", { name: /^Show 12 tool calls:/ }).click();
+  const viewport = page.locator("[data-transcript-inner-viewport]");
+  const inner = viewport.locator("[data-virtuoso-scroller]");
+  const gap = () =>
+    inner.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
+  await expect(viewport.locator('[data-transcript-part-id="tool-5011"]')).toBeVisible();
+  await expect
+    .poll(() => inner.evaluate((element) => element.scrollHeight - element.clientHeight))
+    .toBe(0);
+  await page.getByRole("button", { name: "Append group calls" }).click();
+  await expect
+    .poll(() => inner.evaluate((element) => element.scrollHeight - element.clientHeight))
+    .toBeGreaterThan(0);
+  await expect.poll(gap).toBeLessThanOrEqual(2);
+  await expect(viewport.locator('[data-transcript-part-id="tool-5019"]')).toBeVisible();
+  await page.getByRole("button", { name: "Append group calls" }).click();
+  await expect(viewport.locator('[data-transcript-part-id="tool-5027"]')).toBeVisible();
+  await expect.poll(gap).toBeLessThanOrEqual(2);
+  // Once the reader leaves the inner end, later calls respect their place.
+  await inner.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect.poll(gap).toBeGreaterThan(100);
+  await page.getByRole("button", { name: "Append group calls" }).click();
+  await expect(page.getByRole("button", { name: /^Fold 36 tool calls:/ })).toBeVisible();
+  await expect.poll(() => inner.evaluate((element) => element.scrollTop)).toBe(0);
+});
+
+test("history prepended inside an open virtualized group preserves the visible call and its offset", async ({
+  page,
+}) => {
+  await page.goto("/streaming-transcript?long=1&bigGroup=80");
+  await page.getByRole("button", { name: /^Show 80 tool calls:/ }).click();
+  const viewport = page.locator("[data-transcript-inner-viewport]");
+  const inner = viewport.locator("[data-virtuoso-scroller]");
+  await expect(viewport.locator('[data-transcript-part-id="tool-5000"]')).toBeVisible();
+  await inner.evaluate((element) => {
+    element.scrollTop = 900;
+  });
+  const visibleCall = () =>
+    inner.evaluate((element) => {
+      const top = element.getBoundingClientRect().top;
+      const part = Array.from(
+        element.querySelectorAll<HTMLElement>("[data-transcript-part-id]"),
+      ).find((part) => part.getBoundingClientRect().bottom > top);
+      return part
+        ? { id: part.dataset.transcriptPartId!, offset: part.getBoundingClientRect().top - top }
+        : null;
+    });
+  await expect
+    .poll(async () => {
+      const call = await visibleCall();
+      return call !== null && call.id !== "tool-5000";
+    })
+    .toBe(true);
+  const before = await visibleCall();
+  await page.getByRole("button", { name: "Prepend group calls" }).click();
+  await expect(page.getByRole("button", { name: /^Fold 90 tool calls:/ })).toBeVisible();
+  await expect.poll(visibleCall).toEqual(before);
+  expect(await viewport.locator("[data-tool-group-entry-index]").count()).toBeLessThan(60);
+});

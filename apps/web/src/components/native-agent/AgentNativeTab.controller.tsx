@@ -905,7 +905,7 @@ export function SharedNativeAgentController({
   });
   // Load earlier messages keeps the reader on the row they were reading.
   const loadEarlierPlace = useHeldTranscriptPlace();
-  useRestoreHeldPlace(loadEarlierPlace, messages, scrollToIndex);
+  useRestoreHeldPlace(loadEarlierPlace, messages, scrollToIndex, loadingEarlier);
   const latestAssistantMessage = [...normalizedMessages]
     .reverse()
     .find((message) => message.role === "assistant");

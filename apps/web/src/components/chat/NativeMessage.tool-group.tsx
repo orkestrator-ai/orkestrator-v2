@@ -306,14 +306,14 @@ function VirtualizedToolGroupBody({
         // size paths test `followOutput !== false`, and would otherwise pull
         // this list to its end as its own height settles.
         followOutput={following ? INNER_FOLLOW : false}
-        // Trusted only when the scroller's geometry agrees: an empty list at
-        // mount reports at-bottom before any entry has rendered.
+        // Trust measured geometry, including a body that fits its viewport.
+        // Ignore the empty pre-measurement report at mount.
         atBottomStateChange={(atBottom) => {
           const element = innerScrollerRef.current;
           const atEnd =
             atBottom &&
             element !== null &&
-            element.scrollHeight > element.clientHeight &&
+            element.clientHeight > 0 &&
             element.scrollHeight - element.clientHeight - element.scrollTop <=
               INNER_END_TOLERANCE_PX;
           writePlace({ ...readPlace(), atEnd });

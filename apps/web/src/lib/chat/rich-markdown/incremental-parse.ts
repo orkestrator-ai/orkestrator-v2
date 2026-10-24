@@ -50,7 +50,9 @@ interface Root extends MdNode {
 }
 
 /** Reuse is disabled for text containing any of these (document-wide or ambiguous). */
-const DOCUMENT_WIDE = /^ {0,3}\[[^\]\n]+\]:|\[\^|^ {0,3}<|\r/m;
+// Definitions can live inside any number of quote/list containers. A broad
+// match is intentional: false positives only disable this optimisation.
+const DOCUMENT_WIDE = /\[[^\]\n]+\]:|\[\^|^ {0,3}<|\r/m;
 
 /** First characters a boundary line may not start with. */
 const NON_BOUNDARY_START = /^(?:[ \t>|<[]|[-+*](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$)|$)/;

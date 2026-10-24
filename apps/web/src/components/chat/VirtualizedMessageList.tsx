@@ -390,9 +390,16 @@ export function VirtualizedMessageList<TMessage>({
    */
   const lastFindMatchRef = useRef<string | null>(null);
   const handleFindNavigate = useCallback(
-    (match: AgentChatFindMatch) => {
+    (match: AgentChatFindMatch, query: string) => {
       const message = messagesRef.current[match.itemIndex];
-      const identity = `${message === undefined ? match.itemIndex : computeItemKeyRef.current(match.itemIndex, message)}:${match.characterIndex}:${match.occurrenceIndex}`;
+      const identity = JSON.stringify([
+        query,
+        message === undefined
+          ? match.itemIndex
+          : computeItemKeyRef.current(match.itemIndex, message),
+        match.characterIndex,
+        match.occurrenceIndex,
+      ]);
       if (identity === lastFindMatchRef.current) return;
       lastFindMatchRef.current = identity;
       if (controller) {
@@ -444,10 +451,14 @@ export function VirtualizedMessageList<TMessage>({
     );
     return () => controller.setRowIndexResolver(null);
   }, [controller]);
-  // A new find session navigates to its first match again.
-  useEffect(() => {
-    if (!findOpen) lastFindMatchRef.current = null;
-  }, [findOpen]);
+  // Clearing the query starts a new search even if it returns to the same
+  // occurrence. Reset before the hook's passive navigation effect runs.
+  useLayoutEffect(() => {
+    if (!findOpen || !chatFind.query.trim()) {
+      lastFindMatchRef.current = null;
+      findNavigationRef.current = null;
+    }
+  }, [chatFind.query, findOpen]);
   const getSearchProjection =
     find?.getSearchProjection ??
     (find?.getSearchText as SearchTextGetter<TMessage> | undefined)?.projection;

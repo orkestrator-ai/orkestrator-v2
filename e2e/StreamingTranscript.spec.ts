@@ -357,3 +357,32 @@ test("a follower stays at the latest row through a reflow", async ({ page }) => 
   await waitForFrames(page, 12);
   await expect.poll(() => distanceFromBottom(page)).toBeLessThan(2);
 });
+
+test("scrollbar departure after find stays put when streaming reapplies highlights", async ({
+  page,
+}) => {
+  await page.goto("/streaming-transcript?long=1");
+  const scroller = page.locator('[data-transcript-scroller="true"]');
+  await page.keyboard.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in chat" }).fill("History message 75:");
+  const match = page.locator('[data-chat-message-key="history-75"]');
+  await expect(match).toBeVisible();
+  // Wait for the bounded find operation to converge before dragging away.
+  await expect.poll(async () => (await scrollDiagnostics(scroller)).lastOutcome).toBe("converged");
+  await scroller.evaluate((element) => {
+    element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    element.scrollTop -= 500;
+    element.dispatchEvent(new Event("scroll"));
+    window.dispatchEvent(new PointerEvent("pointerup"));
+  });
+  await waitForFrames(page, 8);
+  const before = await scroller.evaluate((element) => element.scrollTop);
+  const writes = (await scrollDiagnostics(scroller)).writes;
+  const rowCount = Number(await page.getByTestId("transcript-row-count").textContent());
+  await page.getByRole("button", { name: "Append turn" }).click();
+  await expect(page.getByTestId("transcript-row-count")).toHaveText(String(rowCount + 1));
+  // Flush highlight application and operation reconciliation frames.
+  await waitForFrames(page, 12);
+  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(before, 0);
+  expect((await scrollDiagnostics(scroller)).writes).toBe(writes);
+});

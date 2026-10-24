@@ -160,4 +160,38 @@ describe("VirtualizedMessageList navigation and index spaces", () => {
     }
     expect(navigateTo.mock.calls.length).toBe(navigations);
   });
+
+  test("clearing and re-entering a query navigates to the same occurrence again", async () => {
+    const { controller, navigateTo } = fakeController();
+    render(<List messages={[{ id: "target", text: "needle here" }]} controller={controller} />);
+    fireEvent.keyDown(document, { key: "f", metaKey: true });
+    const input = await screen.findByRole("textbox", { name: "Find in chat" });
+    fireEvent.change(input, { target: { value: "needle" } });
+    expect(navigateTo).toHaveBeenCalledTimes(1);
+    // A reader departs while find remains open.
+    Object.assign(controller, { generation: controller.generation + 1 });
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.change(input, { target: { value: "needle" } });
+    expect(navigateTo).toHaveBeenCalledTimes(2);
+  });
+
+  test("refining a query at the same offset navigates again, while streaming does not", async () => {
+    const { controller, navigateTo } = fakeController();
+    const messages = [{ id: "target", text: "needle here" }];
+    const view = render(<List messages={messages} controller={controller} />);
+    fireEvent.keyDown(document, { key: "f", metaKey: true });
+    const input = await screen.findByRole("textbox", { name: "Find in chat" });
+    fireEvent.change(input, { target: { value: "need" } });
+    expect(navigateTo).toHaveBeenCalledTimes(1);
+    Object.assign(controller, { generation: controller.generation + 1 });
+    fireEvent.change(input, { target: { value: "needle" } });
+    expect(navigateTo).toHaveBeenCalledTimes(2);
+    view.rerender(
+      <List
+        messages={[{ ...messages[0]!, text: "needle here streamed" }]}
+        controller={controller}
+      />,
+    );
+    expect(navigateTo).toHaveBeenCalledTimes(2);
+  });
 });

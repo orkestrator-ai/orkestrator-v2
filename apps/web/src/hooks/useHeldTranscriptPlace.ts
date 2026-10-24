@@ -208,6 +208,7 @@ export function useRestoreHeldPlace(
     anchor?: TranscriptScrollAnchor,
     owner?: NavigationOwner,
   ) => unknown,
+  loading?: boolean,
 ): void {
   useLayoutEffect(() => {
     const index = place.resolve(messages);
@@ -215,5 +216,8 @@ export function useRestoreHeldPlace(
       if (place.scrollAnchor) scrollToIndex(index, place.scrollAnchor, "history");
       else scrollToIndex(index);
     }
-  }, [messages, place, scrollToIndex]);
+    // Resolve the final committed page first. Failed, empty, or superseded
+    // requests must stop pre-commit capture even when the head never changed.
+    if (loading === false) place.release();
+  }, [loading, messages, place, scrollToIndex]);
 }

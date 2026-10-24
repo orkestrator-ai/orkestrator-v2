@@ -100,6 +100,11 @@ const FIXTURES: Record<string, string> = {
   breaks: "Line one\nLine two\n\nLine three  \nLine four\n\n**bold\nacross lines**\n\nEnd.\n",
   definitions:
     "See [the docs][docs].\n\nMore text.\n\n[docs]: https://example.com/docs\n\nAfter.\n",
+  quotedDefinitionsAfter:
+    "Intro.\n\nAnother paragraph.\n\n> [x]: https://example.com\n\nSee [x].\n\nEnd.\n",
+  quotedDefinitionsBefore: "See [x].\n\nMore.\n\n> > [x]: https://example.com\n\nEnd.\n",
+  listDefinitionsAfter: "Intro.\n\nMore.\n\n- [x]: https://example.com\n\nSee [x].\n\nEnd.\n",
+  listDefinitionsBefore: "See [x].\n\nMore.\n\n1. item\n\n   [x]: https://example.com\n\nEnd.\n",
   footnotes: "A claim.[^1]\n\nMore.\n\n[^1]: The source.\n\nAfter.\n",
   html: "Intro.\n\n<details>\n<summary>More</summary>\n\nHidden **text**.\n\n</details>\n\nAfter.\n",
   crlf: "One.\r\n\r\nTwo.\r\n\r\nThree.\r\n",
@@ -167,6 +172,10 @@ describe("incremental parse reuse", () => {
     expect(lastSafeBoundary("> a\n\n> b\n")).toBe(0);
     expect(lastSafeBoundary("a\n\n    code\n")).toBe(0);
     expect(lastSafeBoundary("a\n\nb\n\nc")).toBe("a\n\n".length);
-    expect(lastSafeBoundary("[x]: https://e.com\n\nb\n\nc\n")).toBe(0);
+    for (const definition of ["[x]:", "> [x]:", "> > [x]:", "- [x]:", "1. [x]:", "   [x]:"]) {
+      expect(lastSafeBoundary(`Intro.\n\nMore.\n\n${definition} https://e.com\n\nSee [x].\n`)).toBe(
+        0,
+      );
+    }
   });
 });

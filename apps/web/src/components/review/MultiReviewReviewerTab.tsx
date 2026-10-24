@@ -797,7 +797,7 @@ export function MultiReviewReviewerTab({
 
   // Hold the reader on the message they were reading when a page lands above
   // it; the list otherwise keeps its offset and the new rows push it away.
-  useRestoreHeldPlace(heldPlace, displayedMessages, scrollToIndex);
+  useRestoreHeldPlace(heldPlace, displayedMessages, scrollToIndex, loadingEarlier);
 
   const running = snapshot?.status === "running";
   const stalled = Boolean(snapshot?.stalledSince && running);

@@ -315,9 +315,17 @@ A command node attached to another command node operates in leaf mode:
   information, but they are mostly hidden: the portal and the node's own UI
   do not show them by default. They can be opened behind a warning that the
   node is in leaf mode and that coordination happens on the named command
-  node. A window whose workspace is on a leaf shows the same warning in
-  place of the leaf's coordinator, with a link to the command node's
-  coordinator for the same repository.
+  node.
+- A window whose workspace is on a leaf follows its sidebar grouping.
+  Grouped by repository, the window links each repository's projects
+  across machines, so the leaf's coordinator is replaced by the same
+  warning, with a link to the command node's coordinator for that
+  repository; if the command node has no copy of it, the leaf's
+  coordinator opens directly. Grouped by machine or project, the machines
+  are not linked and the leaf's coordinator opens directly. The window
+  sends its grouping to the realm (`grouping` message,
+  `realmCoordinatorDefers`), since a realm cannot read the window's
+  storage.
 - When the node is no longer attached anywhere, it returns to being a
   command node and its coordinators regain their cross-node tools.
 

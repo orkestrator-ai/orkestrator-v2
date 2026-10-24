@@ -1,6 +1,7 @@
 # Held place drifts 124 px after Load earlier messages
 
-Checked against `main` at `71227437` (2026-10-24).
+Checked against `main` at `71227437` and again at `a5d78cfc`, after the
+#1212 scroll rework (2026-10-24).
 
 "Load earlier messages" must keep the reader's row where it was: the row
 first on screen before the click stays at the same offset after older rows
@@ -15,16 +16,16 @@ account was rate-limited.
 
 ## Current state
 
-- `HeldTranscriptPlace` (`apps/web/src/hooks/useHeldTranscriptPlace.ts`)
-  holds the first visible `[data-transcript-part-id]` element and its offset,
-  and after a prepend resolves its display index through `containsTool`, the
-  row id, then the last source id. `useRestoreHeldPlace` then calls
-  `scrollToIndex(index, anchor)` (`useVirtuosoScrollState.ts`).
-- Since #1108, a tool group of three or more calls renders folded: one line
-  shows the newest call and carries that call's transcript part id. The open
-  state is keyed by the first and last call ids. A page that coalesces older
-  calls in front of the first group grows that group without adding a display
-  row.
+- Since #1212 one transcript scroll controller owns every viewport write
+  ([transcript-scroll.md](../../architecture/transcript-scroll.md)).
+  `HeldTranscriptPlace` (`apps/web/src/hooks/useHeldTranscriptPlace.ts`)
+  resolves a held place through source indexes (part, row, boundary), and
+  re-captures it before the page commits. History restores then converge on
+  measured geometry; the TranscriptPaging browser fixture records a peak
+  displacement of 1 px.
+- Tool groups of three or more calls render folded (#1108; the "Tool groups"
+  section of transcript-scroll.md). A page that coalesces older calls in front
+  of the first group grows that group without adding a display row.
 - The spec measures before and after with `firstVisibleRow` and
   `rowPosition`: the first `[data-transcript-part-id]` element in view, then
   the first element whose text names the anchor stop.
@@ -68,9 +69,13 @@ macOS arm64, under a host load average of 20 to 30. Annotations are in
 | --- | --- | --- |
 | Claude Haiku, 150 stops | 152 rows; a 100-row truncated tail with a cursor; pages 12 + 40 to the prompt, `complete`; all 150 stops in order; stop 2's deferred detail resolved (13,267 bytes) | First click: anchor moved 124 px (limit 8) |
 | Codex GPT-6-Luna, tool-only (`..._CODEX_NOTES=0`) | The same: 152 rows, pages 12 + 40, all 150 stops, deferred detail resolved (13,261 bytes) | First click: anchor moved 124 px (limit 8) |
+| Claude Haiku again, on `main` at `a5d78cfc` (after #1212), profile `qa-0050-paging2` | The same: 152 rows, pages 12 + 40, all 150 stops, detail resolved (13,267 bytes) | First click: anchor moved 124 px (limit 8) |
 
-The same offset in both cases, with different providers and row shapes,
-points at the shared renderer or the spec rather than either bridge.
+The same offset in every case, with different providers and row shapes and
+before and after #1212, points at the shared renderer or the spec rather than
+either bridge. The synthetic TranscriptPaging fixture holds within 1 px, so
+the real transcript's shape (tall coalesced or folded tool runs from live
+history) is the difference to reproduce.
 
 ## Constraints and rationale
 
@@ -81,7 +86,8 @@ points at the shared renderer or the spec rather than either bridge.
 
 ## Open questions
 
-- Did #1108 cause this? The 8 px check arrived with #1094, and on 2026-10-18
+- Did #1108 cause this? #1212 did not fix it. The 8 px check arrived with
+  #1094, and on 2026-10-18
   the Codex native and reviewer-tab cases passed it, before #1108 folded tool
   runs. That makes folding the leading suspect, but no run between the two
   merges exists to confirm it. A bisect run of the spec on #1094's merge

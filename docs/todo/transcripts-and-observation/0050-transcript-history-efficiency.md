@@ -455,7 +455,10 @@ The Claude case is the re-run this file asked for. Its backend half now
 passes. The browser half stopped at the same 124 px offset as Codex. That
 offset is the same across two providers, and tool-run folding (#1108) landed
 after the 2026-10-18 fixes, so it points at the shared renderer or the spec.
-It is tracked as new work in 0090, not here.
+It is tracked as new work in 0090, not here. After rebasing onto `main` at
+`a5d78cfc` (the #1212 scroll rework), the Claude case was run once more in a
+fresh profile (`qa-0050-paging2`, bridges rebuilt). The backend checks were
+identical, and the browser drift was the same 124 px.
 
 ### Validation (2026-10-24)
 

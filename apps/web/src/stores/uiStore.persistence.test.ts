@@ -103,3 +103,14 @@ test("directly connected leaf nodes default to Home when a project is selected",
   direct.getState().selectProject("another-project");
   expect(direct.getState().projectBoardTab).toBe("home");
 });
+
+test("graph height survives fresh-store hydration and resetting restores automatic sizing", () => {
+  localStorage.clear();
+  const initial = createUIStore();
+  expect(initial.getState().multiReviewGraphHeight).toBeNull();
+  initial.getState().setMultiReviewGraphHeight(420);
+  const reloaded = createUIStore();
+  expect(reloaded.getState().multiReviewGraphHeight).toBe(420);
+  reloaded.getState().setMultiReviewGraphHeight(null);
+  expect(createUIStore().getState().multiReviewGraphHeight).toBeNull();
+});

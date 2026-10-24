@@ -45,7 +45,12 @@ import {
   type MultiReviewFlowState,
 } from "./multi-review-flow";
 import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
-import { FlowZoomControls, useFlowViewport } from "./MultiReviewFlowViewport";
+import { useUIStore } from "@/stores/uiStore";
+import { FlowHeightDivider, FlowZoomControls, useFlowViewport } from "./MultiReviewFlowViewport";
+import {
+  FLOW_VIEWPORT_RESIZE_MIN_HEIGHT,
+  resizedFlowViewportHeight,
+} from "./multi-review-flow-viewport";
 
 export type MultiReviewFlowNodeKind = "package" | "reviewer" | "consolidation" | "fix" | "pr";
 
@@ -656,11 +661,19 @@ export function MultiReviewFlowGraph({
     reviewerCount: reviewerNodes.length,
     packageHasChips: Boolean(packageNode.validation?.length),
   });
+  // The height dragged with the divider, shared by every Multi Review; while
+  // it drags, the height under the pointer.
+  const storedHeight = useUIStore((state) => state.multiReviewGraphHeight);
+  const setStoredHeight = useUIStore((state) => state.setMultiReviewGraphHeight);
+  const [dragHeight, setDragHeight] = useState<number | null>(null);
+  const requestedHeight = dragHeight ?? storedHeight;
+  const chosenHeight =
+    requestedHeight === null ? null : resizedFlowViewportHeight(requestedHeight, geometry.height);
   const flowViewport = useFlowViewport({
     viewKey,
     measuredWidth: viewportWidth,
     content: { width: geometry.width, height: geometry.height },
-    fillHeight: fullscreen ? viewportHeight : null,
+    fillHeight: fullscreen ? viewportHeight : chosenHeight,
   });
   const { attachViewport } = flowViewport;
   const viewportRef = useCallback(
@@ -1062,6 +1075,18 @@ export function MultiReviewFlowGraph({
         fullscreen={fullscreen}
         onToggleFullscreen={toggleFullscreen}
       />
+      {fullscreen ? null : (
+        <FlowHeightDivider
+          height={viewport.height}
+          min={FLOW_VIEWPORT_RESIZE_MIN_HEIGHT}
+          max={resizedFlowViewportHeight(Number.POSITIVE_INFINITY, geometry.height)}
+          onResize={setDragHeight}
+          onCommit={(height) => {
+            setDragHeight(null);
+            setStoredHeight(height);
+          }}
+        />
+      )}
     </div>,
   );
 }

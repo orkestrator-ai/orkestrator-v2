@@ -16,7 +16,10 @@ const identity: NativeAgentViewIdentity = {
   providerSessionId: "paging-session",
   sourceGeneration: "generation-1",
 };
-const mixed = new URLSearchParams(window.location.search).has("mixed");
+const query = new URLSearchParams(window.location.search);
+const mixed = query.has("mixed");
+const short = query.has("short");
+const tailStart = short ? 58 : 40;
 const tools = Array.from({ length: 60 }, (_, index) => ({
   id: `row-${index}`,
   role: "assistant" as const,
@@ -33,10 +36,23 @@ const tools = Array.from({ length: 60 }, (_, index) => ({
       toolState: "success" as const,
       toolOutput: `Body at stop ${index}`,
     },
+    ...(mixed
+      ? [
+          {
+            type: "tool-invocation" as const,
+            content: "Read",
+            toolName: "Read",
+            toolUseId: `extra-${index}`,
+            toolArgs: { file_path: `trail/extra-${index}.txt` },
+            toolState: "success" as const,
+            toolOutput: `Extra body at stop ${index}`,
+          },
+        ]
+      : []),
   ],
 }));
 const tail = [
-  ...tools.slice(40),
+  ...tools.slice(tailStart),
   {
     id: "answer",
     role: "assistant" as const,
@@ -44,6 +60,29 @@ const tail = [
     createdAt: "2026-10-18T01:34:00.000Z",
     parts: [{ type: "text" as const, content: "Trail complete" }],
   },
+  ...(short
+    ? Array.from({ length: 20 }, (_, index) => ({
+        id: `after-${index}`,
+        role: "assistant" as const,
+        content: `Later message ${index}`,
+        createdAt: "2026-10-18T01:35:00.000Z",
+        parts: [{ type: "text" as const, content: `Later message ${index}` }],
+      }))
+    : []),
+];
+// Earlier prose leaves enough scroll range to hold the boundary group when
+// the load-earlier header disappears; a row at scrollTop zero would clamp.
+const earlier = [
+  ...(short
+    ? Array.from({ length: 4 }, (_, index) => ({
+        id: `before-${index}`,
+        role: "assistant" as const,
+        content: `Earlier message ${index}`,
+        createdAt: "2026-10-18T01:32:00.000Z",
+        parts: [{ type: "text" as const, content: `Earlier message ${index}` }],
+      }))
+    : []),
+  ...tools.slice(0, tailStart),
 ];
 const reviewer: MultiReviewReviewerTranscript = {
   workflowId: "paging-review",
@@ -66,7 +105,7 @@ const loadHistoryPage = async () => {
   await pause();
   return {
     status: "page" as const,
-    messages: tools.slice(0, 40),
+    messages: earlier,
     historyEpoch: "epoch-1",
     complete: true,
     truncated: false,
@@ -137,7 +176,7 @@ function installBackend() {
           await pause();
           result = {
             syncVersion: 1,
-            messages: tools.slice(0, 40),
+            messages: earlier,
             historyEpoch: "epoch-1",
             complete: true,
             truncated: false,

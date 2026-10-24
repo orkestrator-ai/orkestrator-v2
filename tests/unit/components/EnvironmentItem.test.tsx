@@ -429,7 +429,7 @@ describe("EnvironmentItem activity marker", () => {
 
     const icon = getRowRing(container);
     expect(getRowMarker(container).getAttribute("data-shape")).toBe("square");
-    expect(icon.getAttribute("class")).toContain("border-blue-500");
+    expect(icon.getAttribute("class")).toContain("bg-red-500/50");
     expect(icon?.getAttribute("class")).toContain("animate-pulse");
   });
 
@@ -443,7 +443,7 @@ describe("EnvironmentItem activity marker", () => {
 
     const icon = getRowRing(container);
     expect(getRowMarker(container).getAttribute("data-shape")).toBe("square");
-    expect(icon.getAttribute("class")).toContain("border-blue-500");
+    expect(icon.getAttribute("class")).toContain("bg-red-500/50");
   });
 
   test("keeps a newer runtime observation over an older backend snapshot", () => {
@@ -462,7 +462,7 @@ describe("EnvironmentItem activity marker", () => {
     );
 
     const icon = getRowRing(container);
-    expect(icon.getAttribute("class")).toContain("border-amber-500");
+    expect(icon.getAttribute("class")).toContain("bg-yellow-400/50");
   });
 
   test("prefers a persisted observation when it is newer or equally recent", () => {
@@ -639,11 +639,12 @@ describe("EnvironmentItem activity marker", () => {
     );
 
     const icon = getRowRing(container);
-    expect(icon.getAttribute("class")).toContain("border-success");
+    expect(getRowMarker(container).getAttribute("data-state")).toBe("idle");
+    expect(icon.getAttribute("class")).toContain("opacity-0");
     expect(icon?.getAttribute("class")).not.toContain("animate-pulse");
   });
 
-  test("shows no activity colour at all while the environment is not running", () => {
+  test("shows a stopped outline without activity colour while the environment is not running", () => {
     const { container } = renderItem(
       makeEnvironment({
         status: "stopped",
@@ -653,8 +654,10 @@ describe("EnvironmentItem activity marker", () => {
     );
 
     const icon = getRowRing(container);
-    expect(icon.getAttribute("class")).toContain("border-muted-foreground/60");
-    expect(icon.getAttribute("class")).not.toContain("border-blue-500");
+    expect(icon.getAttribute("class")).toContain("border-muted-foreground/40");
+    expect(icon.getAttribute("class")).not.toContain("opacity-0");
+    expect(icon.getAttribute("class")).not.toContain("animate-pulse");
+    expect(icon.getAttribute("class")).not.toContain("bg-red-500/50");
     expect(getRowMarker(container).getAttribute("data-state")).toBe("inactive");
   });
 });
@@ -1499,7 +1502,7 @@ describe("EnvironmentItem transitioning state", () => {
 
     expect(getRowMarker(container).getAttribute("data-shape")).toBe("square");
     expect(getRowMarker(container).getAttribute("data-state")).toBe("idle");
-    expect(getRowRing(container).classList).toContain("border-success");
+    expect(getRowRing(container).classList).toContain("opacity-0");
     expect(getRowButton(container).querySelector("svg.animate-spin") === null).toBe(true);
   });
 });

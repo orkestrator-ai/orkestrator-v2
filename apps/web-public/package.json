@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bunx tsc && bunx vite build",
+    "build": "bun check && bunx vite build",
     "dev": "bunx vite --host 127.0.0.1 --port 1422",
     "preview": "bunx vite preview --port 4422",
     "test": "bun test src --parallel",
     "test:workspace": "bun test src --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/web-public.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
-    "typecheck": "bunx tsc --noEmit"
+    "typecheck": "bun check"
   },
   "dependencies": {
     "@orkestrator/protocol": "workspace:*",

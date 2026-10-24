@@ -183,8 +183,9 @@ the changed paths can affect instead of always running every suite:
 
 - Documentation-only changes (prose in files such as `*.md`, `docs/**`, or
   `plans/**`, not content consumed by tests, builds, or tooling) need no test
-  suite: `mise run format:check` is enough. File role takes precedence over
-  location or extension; source under `docs/` still counts as code.
+  suite: `mise run format:check` is enough. This includes merge-conflict
+  resolutions confined to such files (see below). File role takes precedence
+  over location or extension; source under `docs/` still counts as code.
 - Every change to code or configuration runs `mise run format:check`,
   `mise run lint`, and `mise run typecheck`.
 - Code changes under `apps/`, `bridges/`, `packages/`, `scripts/`, or `tests/`
@@ -205,14 +206,15 @@ the changed paths can affect instead of always running every suite:
 
 #### Documentation-only merge-conflict resolution
 
-When the complete original conflicted-path list establishes that every conflict
-was in prose documentation, and the manual resolution changes only that prose,
-use documentation-only validation: confirm no conflict markers remain and run
-`mise run format:check`. Do not rerun tests, lint, typechecking, builds, or
-scenario suites solely for that merge-resolution step, even when code,
-configuration, or tests merge automatically. This exception takes precedence
-over the normal changed-path requirements above and generic merge-validation
-prompts that require checks for auto-merged code.
+Resolving merge conflicts that are only in documentation needs no tests. When
+the complete original conflicted-path list shows that every conflict was in
+prose documentation or other non-code text not consumed by tests, builds, or
+tooling, and the manual resolution changes only those files, confirm no
+conflict markers remain and run `mise run format:check`. That is the whole
+validation for the step: do not run tests, lint, typechecking, builds, or
+scenario suites for it, even when code, configuration, or tests from the target
+branch merged cleanly alongside it. This rule takes precedence over the normal
+changed-path requirements above and over generic merge-validation guidance.
 
 Capture the complete original unmerged path list before staging any resolution
 and retain it with the merge's parent commit IDs in local Git metadata for
@@ -304,13 +306,17 @@ regenerate the lockfile with the base image's own npm (`npm install
 --package-lock-only --ignore-scripts` in a container of the worker image); the
 drift test checks the manifest, lockfile, backend pin and base-image tag agree.
 
-## Formatting and Linting - oxc
+## Formatting, Linting and Typechecking
 
-Formatting is oxfmt and linting is oxlint; run them from the repo root with
+Formatting is `bun fmt` (configured by `.oxfmtrc.json`, oxfmt-compatible output),
+linting is oxlint, and typechecking is `bun check` (TypeScript 7, the same
+version as the `typescript` dev dependency). Run them from the repo root with
 `mise run format`, `mise run format:check`, `mise run lint`, `mise run lint:fix`,
-or `mise run check` (format, lint and typecheck). Markdown and `docs/**` are not
-reformatted. Rationale and exclusions are in
-[`docs/development/linting.md`](docs/development/linting.md).
+`mise run typecheck`, or `mise run check` (format, lint and typecheck). Package
+`typecheck` scripts call `bun check -p <tsconfig>`; do not add a `check` script
+to a `package.json`, because `bun check` runs that script instead of the type
+checker. Markdown and `docs/**` are not reformatted. Rationale and exclusions
+are in [`docs/development/linting.md`](docs/development/linting.md).
 
 - Only `correctness` is enabled, as errors. `no-unused-vars` and the seven
   React Compiler rules (`react/refs`, `react/set-state-in-effect`, …; listed in
@@ -949,7 +955,7 @@ views stay sandboxed.
 
 ## Docker Base Image
 
-The image is built from `oven/bun:1.4.3-debian`, pinned by its multi-architecture
+The image is built from `oven/bun:1.4.4-debian`, pinned by its multi-architecture
 index digest on both stages, matching the Bun version managed in `mise.toml`
 for development and CI. Refresh the digest deliberately (`docker buildx
 imagetools inspect oven/bun:<tag>`) for a Bun bump or a base security update;

@@ -81,6 +81,7 @@ interface SortableProjectGroupProps {
   machineIcon?: ReactNode;
   /** Shown instead of the project name (a repository group names the machine). */
   label?: string;
+  labelClassName?: string;
 }
 
 export function SortableProjectGroup({
@@ -109,6 +110,7 @@ export function SortableProjectGroup({
   sortableId,
   machineIcon,
   label = project.name,
+  labelClassName,
 }: SortableProjectGroupProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
@@ -222,7 +224,7 @@ export function SortableProjectGroup({
                   onBlur={projectTooltip.hide}
                 >
                   {machineIcon}
-                  <span className="truncate font-medium">{label}</span>
+                  <span className={cn("truncate font-medium", labelClassName)}>{label}</span>
                   {environments.length > 0 && (
                     <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
                       {environments.length}

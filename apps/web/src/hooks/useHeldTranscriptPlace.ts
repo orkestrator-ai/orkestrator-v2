@@ -71,6 +71,7 @@ function toScrollAnchor(anchor: SemanticAnchor): TranscriptScrollAnchor {
     rowKey: anchor.rowKey,
     offset: anchor.offsetPx,
     ...(anchor.inner ? { inner: anchor.inner } : {}),
+    ...(anchor.foldedGroup ? { foldedGroup: anchor.foldedGroup } : {}),
   };
 }
 

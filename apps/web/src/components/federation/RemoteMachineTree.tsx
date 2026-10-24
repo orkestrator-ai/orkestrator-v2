@@ -352,6 +352,7 @@ export function RemoteProjectGroup({
   sortable,
   showMachine,
   label = project.name,
+  labelClassName,
 }: {
   machine: MachineView;
   project: FederatedProject;
@@ -363,6 +364,7 @@ export function RemoteProjectGroup({
   showMachine?: boolean;
   /** Shown instead of the project name (a repository group names the machine). */
   label?: string;
+  labelClassName?: string;
 }) {
   const writable = isMachineWritable(machine);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -419,7 +421,7 @@ export function RemoteProjectGroup({
                 {showMachine ? (
                   <MachineHomeIcon colorToken={machine.colorToken} machineName={machine.name} />
                 ) : null}
-                <span className="truncate font-medium">{label}</span>
+                <span className={cn("truncate font-medium", labelClassName)}>{label}</span>
                 {environments.length > 0 && (
                   <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
                     {environments.length}

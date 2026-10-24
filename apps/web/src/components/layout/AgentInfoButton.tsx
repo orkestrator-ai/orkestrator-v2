@@ -79,7 +79,6 @@ import { agentMailCapabilities } from "@orkestrator/protocol/agent-mail";
 import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
 import { AgentInfoAccountSection } from "./AgentInfoAccountSection";
-import { onAgentInformationRequest } from "@/lib/agent-information";
 
 interface AgentInfoButtonProps {
   activeTab: TabInfo | null;
@@ -245,7 +244,6 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   }
   const reportOpen = useEffectEvent((next: boolean) => remote?.onOpenChange(next));
   useEffect(() => reportOpen(open), [open, remoteRequest?.seq]);
-  useEffect(() => onAgentInformationRequest(() => setOpen(true)), []);
   const federation = useFederation();
   // How this window reaches the node its workspace is on, when that is not
   // the command node it connected to.
@@ -976,6 +974,13 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                 />
               </div>
 
+              <AgentInfoAccountSection
+                environmentId={activeSession.environmentId}
+                provider={activeSession.provider}
+                open={open}
+                refreshKey={`${neutralProjection?.generation}:${neutralProjection?.connection}:${neutralProjection?.turn.phase}`}
+              />
+
               {!isBuildStage && neutralProjection?.composer?.executionProfiles?.length ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
@@ -1501,12 +1506,6 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                     ) : null}
                   </div>
                 ) : null}
-                <AgentInfoAccountSection
-                  environmentId={activeSession.environmentId}
-                  provider={activeSession.provider}
-                  open={open}
-                  refreshKey={`${neutralProjection?.generation}:${neutralProjection?.connection}:${neutralProjection?.turn.phase}`}
-                />
                 {accountReadFailed ? (
                   <div className="flex items-center justify-between gap-3 text-xs">
                     <span>Could not read account status.</span>

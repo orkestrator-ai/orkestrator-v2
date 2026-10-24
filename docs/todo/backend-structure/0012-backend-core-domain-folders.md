@@ -58,7 +58,7 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `tests/unit/move-backend-modules.test.ts`. It moves the files, drops the
   prefix, rewrites relative specifiers (including `import()`, `require()` and
   `mock.module()`) and path strings in tracked text files, stages every move in
-  one `git add`, and runs `oxfmt` on what it touched. It does not rewrite bare
+  one `git add`, and runs `bun fmt` on what it touched. It does not rewrite bare
   file names in prose.
 - Lint: each domain has a pattern in two `.oxlintrc.json` overrides. The
   `apps/backend/src/**` override comes before the tests-off override (so

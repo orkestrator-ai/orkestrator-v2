@@ -9,6 +9,7 @@ import { parseDevArguments } from "./arguments.js";
 import {
   assertElectronReadiness,
   compileElectronForDevelopment,
+  electronReadinessTimeoutMs,
   startDevelopment,
   configuredDevWorktreeRoot,
   profileWorktreeLocation,
@@ -82,6 +83,13 @@ describe("Electron readiness", () => {
         expect(() => assertElectronReadiness(complete, { flavor, fixture })).not.toThrow();
       }
     }
+  });
+
+  test("waits on interactive development startup but times out agent-test runs", () => {
+    // A fresh dev profile parks on the first-run platform chooser; killing it
+    // after a fixed timeout meant `mise run dev` never reached the app.
+    expect(electronReadinessTimeoutMs("development")).toBeNull();
+    expect(electronReadinessTimeoutMs("agent-test")).toBe(60_000);
   });
 });
 

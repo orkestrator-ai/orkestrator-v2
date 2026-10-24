@@ -9,7 +9,6 @@ Status: Living — `apps/backend/src/core/agent-accounts*.ts`,
 `apps/web/src/components/settings/account-machine.tsx`,
 `apps/web/src/components/settings/machines/MachineAgentAccountsSection.tsx`,
 `apps/web/src/components/layout/AgentInfoAccountSection.tsx`,
-`apps/web/src/components/native-agent/SessionAccountChip.tsx`,
 `apps/backend/src/core/agent-sign-ins.ts`;
 `apps/backend/src/core/opencode-provider-login.ts`,
 `packages/protocol/src/opencode-provider-auth.ts`,
@@ -573,22 +572,17 @@ itself. Where each surface acts:
     most recently active one. A container's terminal would sign the container
     in, so only local environments qualify. The window then shows that
     environment.
-- **The agent information panel** shows which account the session's bridge
-  runs on (`get_native_agent_session_account`): a local or coordinator bridge
-  from `LocalServerRuntime.launchedAccountId`, a container from its account marker after checking that provider’s bridge health, and a
-  bridge that is not running from the active account. It names a pending move
-  to a newly active account, switches the machine's active account, and for
-  Claude signs the active account in again. It re-reads on its own machine's
+- **The agent information panel** places account controls below usage. It reads
+  `get_native_agent_session_account` for container or unknown-source messages
+  and pending moves to a newly active account. When the machine holds multiple
+  logins, it offers a machine-wide active-account switcher, except for isolated
+  containers. It shows read or switch errors. Outside isolated containers, it
+  offers **Manage accounts** or, with at most one login, **Add an account**,
+  opening the platform's Settings section. Claude reauthentication lives in
+  Settings. The composer shows no account control. The panel re-reads on its own machine's
   `agent-accounts-changed` (`useAgentAccountsChanged`), on event-stream reconnect,
   when opened, and when the turn or bridge changes. Reads are fenced against
   newer requests, and a different environment or provider starts with fresh state.
-- **The composer chip** (`SessionAccountChip`) sits beside the model picker
-  of a Claude or Codex tab whose machine holds more than one login for the
-  platform, naming the session's account (`work@…`). It is amber while the
-  session is on an account other than the machine's active one, and opens the
-  agent information panel (`requestAgentInformation`). With only the host
-  login it reads `list_agent_accounts` and nothing else. It re-reads when a
-  turn starts or ends and on `agent-accounts-changed`.
 
 ## Terminal tabs
 

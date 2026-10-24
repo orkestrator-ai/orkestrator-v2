@@ -17,13 +17,19 @@ const PHASES = [
 
 type Box = { x: number; y: number; width: number; height: number };
 
+function pipeline(page: Page) {
+  return page.getByRole("tablist", { name: "Multi Review pipeline" });
+}
+
 async function nodeBoxes(page: Page): Promise<Box[]> {
-  return page.getByRole("tab").evaluateAll((nodes) =>
-    nodes.map((node) => {
-      const { x, y, width, height } = node.getBoundingClientRect();
-      return { x, y, width, height };
-    }),
-  );
+  return pipeline(page)
+    .getByRole("tab")
+    .evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const { x, y, width, height } = node.getBoundingClientRect();
+        return { x, y, width, height };
+      }),
+    );
 }
 
 function overlapping(boxes: Box[]): Array<[number, number]> {
@@ -159,7 +165,7 @@ test("settles across the graph breakpoint with an 8px scrollbar gutter", async (
 
 test("walks the pipeline from the keyboard", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
-  const selected = page.locator('[role="tab"][aria-selected="true"]');
+  const selected = pipeline(page).getByRole("tab", { selected: true });
   await expect(selected).toHaveAttribute("aria-label", /^Reviewer 2 ·/);
   await selected.focus();
   await page.keyboard.press("ArrowDown");
@@ -257,7 +263,7 @@ test("keeps the node reached from the keyboard in view at the 32-reviewer maximu
     await page.getByRole("button", { name: "Zoom in" }).click();
     await page.getByRole("button", { name: "Zoom in" }).click();
   }
-  const selected = page.locator('[role="tab"][aria-selected="true"]');
+  const selected = pipeline(page).getByRole("tab", { selected: true });
   await selected.focus();
   await page.keyboard.press("Home");
   for (let step = 0; step < 30; step += 1) await page.keyboard.press("ArrowDown");
@@ -469,7 +475,7 @@ test("shows a failed reviewer's error on its node, with the whole text in a tool
 
 test("shows the selected step's transcript tail in the inspector", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=consolidating&reviewers=4");
-  const selected = page.locator('[role="tab"][aria-selected="true"]');
+  const selected = pipeline(page).getByRole("tab", { selected: true });
   await expect(selected).toHaveAttribute("aria-label", /^Consolidation,/);
   const tail = page.getByRole("log", { name: "Latest consolidation activity" });
   await expect(tail).toContainText("Merging four reviewer reports");
@@ -569,8 +575,22 @@ for (const viewport of [
     expect(inside(tailBox, (await inspector.boundingBox())!)).toBe(true);
     expect(tailBox.x).toBeGreaterThanOrEqual(0);
     expect(tailBox.x + tailBox.width).toBeLessThanOrEqual(viewport.width);
-    const report = page.getByRole("heading", { name: "Consolidated Multi Review", exact: true });
-    expect((await report.boundingBox())!.y).toBeGreaterThanOrEqual(tailBox.y + tailBox.height);
+    // The consolidated report belongs to Consolidation's Report view.
+    await pipeline(page)
+      .getByRole("tab", { name: /^Consolidation,/ })
+      .click();
+    await inspector
+      .getByRole("tablist", { name: "Inspector views" })
+      .getByRole("tab", { name: "Report", exact: true })
+      .click();
+    await expect(inspector.getByRole("log")).toHaveCount(0);
+    const article = inspector.getByRole("article", { name: "Consolidated Multi Review" });
+    const report = article.getByRole("heading", { name: "Consolidated Multi Review", exact: true });
+    await expect(report).toBeVisible();
+    const reportBox = (await article.boundingBox())!;
+    expect(inside(reportBox, (await inspector.boundingBox())!)).toBe(true);
+    expect(reportBox.x).toBeGreaterThanOrEqual(0);
+    expect(reportBox.x + reportBox.width).toBeLessThanOrEqual(viewport.width);
     expect(await overview.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
     await report.scrollIntoViewIfNeeded();
     await expect(report).toBeInViewport();
@@ -580,6 +600,121 @@ for (const viewport of [
     });
   });
 }
+
+test("inspector report content and selected views belong to each pipeline node", async ({
+  page,
+}) => {
+  await page.goto("/multi-review-flow?phase=ready");
+  const inspector = page.getByTestId("multi-review-inspector");
+  const views = inspector.getByRole("tablist", { name: "Inspector views" });
+  const transcript = views.getByRole("tab", { name: "Transcript", exact: true });
+  const report = views.getByRole("tab", { name: "Report", exact: true });
+
+  await pipeline(page)
+    .getByRole("tab", { name: /^Reviewer 1 ·/ })
+    .click();
+  await expect(transcript).toHaveAttribute("aria-selected", "true");
+  await expect(inspector.getByRole("article")).toHaveCount(0);
+  await report.click();
+  const reviewerReport = inspector.getByRole("article", { name: "Reviewer report" });
+  await expect(reviewerReport).toBeVisible();
+  await reviewerReport.getByRole("button", { name: "Issues · 3", exact: true }).click();
+  await expect(reviewerReport).toContainText("Restart resets runtime for shared fix session");
+  await expect(reviewerReport).not.toContainText("Consolidation drops coverage gaps");
+
+  await pipeline(page)
+    .getByRole("tab", { name: /^Consolidation,/ })
+    .click();
+  await expect(transcript).toHaveAttribute("aria-selected", "true");
+  await expect(inspector.getByRole("log")).toContainText("Merging four reviewer reports");
+  await report.click();
+  const consolidated = inspector.getByRole("article", { name: "Consolidated Multi Review" });
+  await expect(consolidated).toBeVisible();
+  await consolidated.getByRole("button", { name: /^Issues ·/ }).click();
+  await expect(consolidated).toContainText(
+    "Consolidation drops coverage gaps from stopped reviewers",
+  );
+
+  await pipeline(page)
+    .getByRole("tab", { name: /^Reviewer 1 ·/ })
+    .click();
+  await expect(report).toHaveAttribute("aria-selected", "true");
+  await expect(reviewerReport).toBeVisible();
+  await transcript.click();
+  await pipeline(page)
+    .getByRole("tab", { name: /^Reviewer 2 ·/ })
+    .click();
+  await expect(transcript).toHaveAttribute("aria-selected", "true");
+  await pipeline(page)
+    .getByRole("tab", { name: /^Consolidation,/ })
+    .click();
+  await expect(report).toHaveAttribute("aria-selected", "true");
+  await expect(consolidated).toBeVisible();
+  await pipeline(page)
+    .getByRole("tab", { name: /^Reviewer 1 ·/ })
+    .click();
+  await expect(transcript).toHaveAttribute("aria-selected", "true");
+  await expect(inspector.getByRole("log")).toBeVisible();
+});
+
+test("an overflowing transcript keeps its reading position and follow mode behind Report", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto("/multi-review-flow?phase=ready&longTranscript&transcriptControls");
+  await pipeline(page)
+    .getByRole("tab", { name: /^Reviewer 1 ·/ })
+    .click();
+  const inspector = page.getByTestId("multi-review-inspector");
+  const views = inspector.getByRole("tablist", { name: "Inspector views" });
+  const tail = inspector.getByTestId("multi-review-transcript-tail");
+  const bottomGap = () =>
+    tail.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
+  const scrollTop = () => tail.evaluate((element) => element.scrollTop);
+  const append = page.getByRole("button", { name: "Append transcript entry" });
+  await expect(tail).toContainText("Transcript entry 32.");
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+  expect(await scrollTop()).toBeGreaterThan(300);
+  const mountedTail = await tail.elementHandle();
+
+  // Following survives a hide/show, including an authoritative update while hidden.
+  await views.getByRole("tab", { name: "Report", exact: true }).click();
+  await expect(tail).toBeHidden();
+  await append.click();
+  await expect(tail).toContainText("Transcript entry 33.");
+  await views.getByRole("tab", { name: "Transcript", exact: true }).click();
+  expect(await tail.evaluate((element, original) => element === original, mountedTail)).toBe(true);
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+
+  await tail.scrollIntoViewIfNeeded();
+  await tail.hover();
+  const beforeWheel = await scrollTop();
+  await page.mouse.wheel(0, -300);
+  await expect.poll(scrollTop).toBeLessThan(beforeWheel - 100);
+  const readingTop = await scrollTop();
+  await views.getByRole("tab", { name: "Report", exact: true }).click();
+  await views.getByRole("tab", { name: "Transcript", exact: true }).click();
+  await expect.poll(scrollTop).toBe(readingTop);
+
+  // New output behind Report must not turn following back on for a reader.
+  await views.getByRole("tab", { name: "Report", exact: true }).click();
+  await append.click();
+  await expect(tail).toContainText("Transcript entry 34.");
+  await views.getByRole("tab", { name: "Transcript", exact: true }).click();
+  await expect.poll(scrollTop).toBe(readingTop);
+  expect(await bottomGap()).toBeGreaterThan(100);
+
+  // Returning to the bottom explicitly resumes following new hidden output.
+  await tail.scrollIntoViewIfNeeded();
+  await tail.hover();
+  await page.mouse.wheel(0, 100_000);
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+  await views.getByRole("tab", { name: "Report", exact: true }).click();
+  await append.click();
+  await expect(tail).toContainText("Transcript entry 35.");
+  await views.getByRole("tab", { name: "Transcript", exact: true }).click();
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+});
 
 test("shows each queued reviewer's place in the admission queue", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=8");

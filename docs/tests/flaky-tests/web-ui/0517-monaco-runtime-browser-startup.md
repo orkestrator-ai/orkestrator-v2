@@ -54,3 +54,7 @@ That combined command reported twenty passed, four skipped and two failures
 directory. No assertion, timeout, skip or implementation changed in this owner.
 
 The desktop Monaco fixture missed its startup deadline.
+
+## Environment-list UI main merge — 2026-10-24
+
+The aggregate recurrence passed in the complete unchanged owning-file rerun. Exact commands, durations, merge parents, aggregate results and evidence are retained in [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

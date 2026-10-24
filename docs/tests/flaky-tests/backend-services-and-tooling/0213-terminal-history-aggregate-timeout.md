@@ -103,3 +103,7 @@ The completed backend aggregate reported 10458 passed, 79 skipped, one failed
 and one between-tests error across 615 files (491.53 s). The overall logged
 repository run took 770.6 s and retained the bridge flake and root regressions
 corrected and revalidated by the settings change.
+
+## Environment-list UI main merge — 2026-10-24
+
+The normalization case exceeded 5000 ms in the combined workspace run (5000.99 ms), with a subsequent null-cursor error from the timed-out work. The complete unchanged owner passed alone (7.2 s). See [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md) for commands, parents and retained evidence. No implementation, assertion, timeout or skip changed.

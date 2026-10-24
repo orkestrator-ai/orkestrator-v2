@@ -42,12 +42,14 @@ printf '%s' "$PATH"
       `
       import { mock } from "bun:test";
       import { refreshHostModelCatalog } from ${JSON.stringify(path.join(source, "core/host-model-catalog-refresh.ts"))};
+      import { BackendRuntime } from ${JSON.stringify(path.join(source, "core/backend-runtime.ts"))};
       mock.module(${JSON.stringify(path.join(source, "core/index.ts"))}, () => ({
         OrkestratorBackend: class {
           async init() {
             await refreshHostModelCatalog({
               appRoot: ${JSON.stringify(root)}, resourceRoot: ${JSON.stringify(root)},
               storage: { getDataDir: () => ${JSON.stringify(root)}, loadConfig: async () => ({ global: {} }) },
+              runtime: new BackendRuntime({ emit: () => undefined }),
             }, "codex");
             process.exit(0);
           }

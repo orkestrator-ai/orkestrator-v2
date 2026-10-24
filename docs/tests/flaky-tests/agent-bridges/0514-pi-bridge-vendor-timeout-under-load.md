@@ -127,3 +127,8 @@ The final-source retry, `mise run test:logged -- --name final-complete-tests -- 
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed, exit 0 in 11.6 seconds.
 - **Evidence:** `orkestrator-test-run.Dq33wp/root-and-agent-support-tests.log.gz` and outer `orkestrator-test-run.G461RT/merge-complete-suite.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence; concurrent staging and browser load remain hypotheses. No Pi implementation, assertion, timeout or skip changed.
+
+
+## Runtime-state ownership main merge — 2026-10-24
+
+`mise run test:logged -- --name merge-suite -- mise run test` used the default 4/1/2/1 workspace/root/bridge/protocol plan alongside browser suites and other validating worktrees. Root/support ran with one worker after waiting 953.5 s: 3,369 passed, twelve failed and one error across 3,381 tests in 161 files (609.28 s execution). Evidence: host temporary artifact `orkestrator-test-run.BJKk4l/root-and-agent-support-tests.log` (compressed at aggregate completion). `loads Pi's supported SDK from the staged runtime closure` timed out at 30002.44 ms. `mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (26.0 s logged). This confirms a recurrence; no assertion, deadline or skip changed.

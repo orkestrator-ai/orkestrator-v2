@@ -97,6 +97,7 @@ import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { PlanUsageSection } from "./PlanUsageSection";
+import { AccountMachineScope } from "./account-machine";
 import { AgentAccountsSection } from "./AgentAccountsSection";
 import { AgentSignInCard } from "./AgentSignInCard";
 import { OpenCodeProvidersSection } from "./OpenCodeProvidersSection";
@@ -268,6 +269,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     sshAgentSocketPath,
     setSshAgentSocketPath,
     sshAgentSocketPathValidationError,
+    defaultProjectsDirectory,
+    setDefaultProjectsDirectory,
+    defaultProjectsDirectoryValidationError,
     useHostClaudeCredentials,
     setUseHostClaudeCredentials,
     githubToken,
@@ -608,30 +612,36 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     signInControls?: React.ReactNode,
   ) => (
     <div className="max-w-2xl space-y-5">
-      {/* Read without a session, so it is there before any environment runs it. */}
-      {enabledAgentPlatforms.includes(platform) ? (
-        <AgentSignInCard
-          key={`sign-in-${platform}`}
-          platform={platform}
-          reloadToken={planUsageRefreshToken + accountStatusToken}
-        >
-          {signInControls}
-        </AgentSignInCard>
-      ) : (
-        signInControls
-      )}
-      {/* Platforms with accounts show usage on each account instead. */}
-      {isAgentAccountPlatform(platform) ? (
-        <AgentAccountsSection
-          key={`accounts-${platform}`}
-          platform={platform}
-          onAccountsChanged={accountsChanged}
-          reloadToken={planUsageRefreshToken}
-        />
-      ) : (PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (
-        <PlanUsageSection key={platform} platform={platform} reloadToken={planUsageRefreshToken} />
-      ) : null}
-      {platform === "opencode" ? <OpenCodeProvidersSection /> : null}
+      <AccountMachineScope>
+        {/* Read without a session, so it is there before any environment runs it. */}
+        {enabledAgentPlatforms.includes(platform) ? (
+          <AgentSignInCard
+            key={`sign-in-${platform}`}
+            platform={platform}
+            reloadToken={planUsageRefreshToken + accountStatusToken}
+          >
+            {signInControls}
+          </AgentSignInCard>
+        ) : (
+          signInControls
+        )}
+        {/* Platforms with accounts show usage on each account instead. */}
+        {isAgentAccountPlatform(platform) ? (
+          <AgentAccountsSection
+            key={`accounts-${platform}`}
+            platform={platform}
+            onAccountsChanged={accountsChanged}
+            reloadToken={planUsageRefreshToken}
+          />
+        ) : (PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (
+          <PlanUsageSection
+            key={platform}
+            platform={platform}
+            reloadToken={planUsageRefreshToken}
+          />
+        ) : null}
+        {platform === "opencode" ? <OpenCodeProvidersSection /> : null}
+      </AccountMachineScope>
       <AgentPlatformPane
         platform={platform}
         tier={agentSettings}
@@ -744,7 +754,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                   ? " Your stored PAT remains available if you turn this off."
                   : ""}
               </p>
-              <GitHubCliSetup />
+              <AccountMachineScope>
+                <GitHubCliSetup />
+              </AccountMachineScope>
             </div>
           ) : (
             <div className="space-y-3 border-t border-zinc-800 p-4">
@@ -802,6 +814,55 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 </a>
               </p>
             </div>
+          )}
+        </div>
+
+        <div className="space-y-3 border-t border-zinc-800 pt-4">
+          <div className="space-y-1">
+            <Label htmlFor="default-projects-directory" className="text-sm font-medium">
+              Default projects folder
+            </Label>
+            <p
+              id="default-projects-directory-help"
+              className="text-xs leading-relaxed text-muted-foreground"
+            >
+              Where a project copied to this machine from another one is cloned. Leave blank to use
+              the folder most of this machine's projects are in, or ~/Projects.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Input
+              id="default-projects-directory"
+              aria-label="Default projects folder"
+              aria-invalid={defaultProjectsDirectoryValidationError ? true : undefined}
+              aria-describedby="default-projects-directory-help"
+              value={defaultProjectsDirectory}
+              onChange={(event) => setDefaultProjectsDirectory(event.target.value)}
+              placeholder="Same folder as existing projects"
+              spellCheck={false}
+              className="flex-1 font-mono"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Browse for the default projects folder"
+              onClick={() => {
+                void pickHostPath({
+                  mode: "directory",
+                  title: "Select the default projects folder",
+                  defaultPath: defaultProjectsDirectory.trim() || undefined,
+                }).then((selected) => selected && setDefaultProjectsDirectory(selected));
+              }}
+            >
+              <FolderOpen className="h-4 w-4" />
+            </Button>
+          </div>
+          {defaultProjectsDirectoryValidationError && (
+            <p role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {defaultProjectsDirectoryValidationError}
+            </p>
           )}
         </div>
 

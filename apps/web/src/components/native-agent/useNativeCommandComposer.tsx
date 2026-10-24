@@ -45,6 +45,8 @@ const ERROR_EXPLANATIONS: Record<NativeAgentCommandCatalogueErrorCode, string> =
   malformed: "The agent sent a list that couldn't be read.",
   "too-large": "The agent's command list was too large.",
   "provider-error": "The agent reported an error.",
+  "outdated-bridge":
+    "This environment's agent bridge is too old to list commands. Restart the environment, or rebuild a container, to update it.",
 };
 
 const REFRESH_EXPLANATIONS: Record<NativeAgentCommandRefreshOutcome, string> = {

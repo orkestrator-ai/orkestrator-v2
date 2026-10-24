@@ -7,7 +7,10 @@ import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
-import { MAX_AGENT_ACCOUNTS_PER_PLATFORM } from "@orkestrator/protocol/agent-accounts";
+import {
+  AGENT_ACCOUNTS_CHANGED_EVENT,
+  MAX_AGENT_ACCOUNTS_PER_PLATFORM,
+} from "@orkestrator/protocol/agent-accounts";
 
 import {
   agentAccountLoginProgress,
@@ -21,9 +24,8 @@ import {
   startAgentAccountLogin,
 } from "./agent-accounts.js";
 import { applyActiveAgentAccountEnvironment } from "./agent-accounts-active.js";
-import { staleLoginLocalBridges } from "./agent-account-bridge-state.js";
+import { BackendRuntime } from "./backend-runtime.js";
 import type { SpawnLike } from "./agent-accounts-login.js";
-import { localServerProcesses } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import type { PlanUsageReader } from "./plan-usage.js";
 import {
@@ -157,7 +159,11 @@ function usageReading(platform: "claude" | "codex", usedPercent = 42): PlanUsage
   };
 }
 
+/** Every event the backend announced during a test. */
+let emitted: Array<{ event: string; payload: unknown }> = [];
+
 beforeEach(async () => {
+  emitted = [];
   root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "ork-agent-accounts-")));
   process.env.CODEX_HOME = path.join(root, "host-codex");
   process.env.CLAUDE_CONFIG_DIR = path.join(root, "host-claude");
@@ -171,6 +177,8 @@ beforeEach(async () => {
     storage,
     runtimeFlavor: "agent-test",
     credentialSources: new Set(),
+    runtime: new BackendRuntime({ emit: () => undefined }),
+    emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
   } as unknown as CommandContext;
   resetAgentAccountLoginForTests();
   terminalAccountHomes.clear();
@@ -181,6 +189,7 @@ afterEach(async () => {
   cancelAgentAccountLogin();
   resetAgentAccountLoginForTests();
   terminalAccountHomes.clear();
+  context.runtime.shutdown();
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -379,14 +388,9 @@ describe("agent accounts", () => {
       return progress.accountId!;
     }
 
-    afterEach(() => {
-      staleLoginLocalBridges.clear();
-      localServerProcesses.delete("claude:env-1");
-    });
-
     test("renews the active account in place and flags running bridges", async () => {
       const accountId = await addActiveClaudeAccount("claude-one");
-      localServerProcesses.set("claude:env-1", {} as never);
+      context.runtime.localServers.adoptProcess("claude:env-1", {} as never);
       let command: string[] = [];
       await startAgentAccountLogin(context, "claude", {
         reauthenticate: true,
@@ -408,7 +412,7 @@ describe("agent accounts", () => {
       );
       expect(claude).toHaveLength(2);
       expect(claude.some((a) => a.id === accountId && a.isActive)).toBe(true);
-      expect(staleLoginLocalBridges.has("claude:env-1")).toBe(true);
+      expect(context.runtime.localServers.hasStaleLogin("claude:env-1")).toBe(true);
     });
 
     test.each(["original", "replacement"])(
@@ -498,6 +502,7 @@ describe("agent accounts", () => {
     test("rejects sibling identity without changing the active credential, identity or registry", async () => {
       await addActiveClaudeAccount("sibling");
       const id = await addActiveClaudeAccount("original");
+      context.runtime.localServers.adoptProcess("claude:env-1", {} as never);
       const home = path.join(context.storage.agentAccountsDirectory(), "claude", id);
       const before = await savedLogin(home);
       const registry = await context.storage.loadAgentAccounts();
@@ -512,7 +517,7 @@ describe("agent accounts", () => {
       });
       expect(await savedLogin(home)).toEqual(before);
       expect(await context.storage.loadAgentAccounts()).toEqual(registry);
-      expect(staleLoginLocalBridges.size).toBe(0);
+      expect(context.runtime.localServers.hasStaleLogin("claude:env-1")).toBe(false);
     });
 
     test("rejects renewing an added account as the host identity", async () => {
@@ -859,6 +864,22 @@ describe("agent accounts", () => {
       spy.mockRestore();
     }
     await removeAgentAccount(context, "codex", accountId!);
+  });
+
+  test("announces every change to the accounts, and nothing for a switch to the same one", async () => {
+    const changes = () =>
+      emitted.filter((entry) => entry.event === AGENT_ACCOUNTS_CHANGED_EVENT).map((e) => e.payload);
+    const { accountId } = await addCodexAccount("second@example.com", "acct-2");
+    expect(changes()).toEqual([{ platform: "codex" }]);
+    await setActiveAgentAccount(context, "codex", accountId!);
+    await setActiveAgentAccount(context, "codex", accountId!);
+    expect(changes()).toHaveLength(2);
+    await renameAgentAccount(context, "codex", accountId!, "Work");
+    await setActiveAgentAccount(context, "codex", "default");
+    await removeAgentAccount(context, "codex", accountId!);
+    expect(changes()).toEqual(Array.from({ length: 5 }, () => ({ platform: "codex" })));
+    // The announcement only says that something changed.
+    expect(emitted.every((entry) => !JSON.stringify(entry.payload).includes("@"))).toBe(true);
   });
 
   test("rejects unknown accounts and renames added ones", async () => {

@@ -10,6 +10,8 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveCursorCredential } from "./agent-test-cursor-credential.js";
 import type { CommandContext } from "./commands-context.js";
+import { dockerExec } from "./commands-container-exec.js";
+import { runCommand } from "./shell.js";
 
 /**
  * Where a login minted through Orkestrator is stored.
@@ -153,6 +155,12 @@ export async function beginCursorSdkLogin(
     spawnImpl?: typeof spawn;
     /** Lets the backend cancel a login before the child has emitted its URL. */
     signal?: AbortSignal;
+    /**
+     * False when the client opens the link itself: the child then never opens
+     * a browser on this machine (`NO_OPEN_BROWSER`, honoured by the Cursor SDK).
+     * Cursor's sign-in polls for approval, so it completes from any browser.
+     */
+    openBrowser?: boolean;
     /** Bounds how long to wait for the child's login URL; tests lower this. */
     startupTimeoutMs?: number;
   },
@@ -176,6 +184,7 @@ export async function beginCursorSdkLogin(
         // on an ambient one: a user who asks to sign in is asking for a key
         // this app owns and can revoke.
         CURSOR_API_KEY: "",
+        ...(options.openBrowser === false ? { NO_OPEN_BROWSER: "1" } : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -303,7 +312,12 @@ let activeLoginStartup: CursorSdkLoginStartup | undefined;
 
 export async function startCursorSdkLogin(
   context: CommandContext,
-  options: { bridgeEntrypoint: string; runtime: string; spawnImpl?: typeof spawn },
+  options: {
+    bridgeEntrypoint: string;
+    runtime: string;
+    spawnImpl?: typeof spawn;
+    openBrowser?: boolean;
+  },
 ): Promise<{ loginUrl: string }> {
   if (activeLogin?.state === "pending") return { loginUrl: activeLogin.handle.loginUrl };
   if (activeLoginStartup) {
@@ -413,12 +427,8 @@ export async function syncContainerCursorSdkCredentials(
 }
 
 const defaultRunners = {
-  exec: async (containerId: string, command: string): Promise<string> => {
-    const { dockerExec } = await import("./commands-container-exec.js");
-    return dockerExec(containerId, command);
-  },
+  exec: (containerId: string, command: string): Promise<string> => dockerExec(containerId, command),
   pipe: async (containerId: string, command: string, stdin: string): Promise<void> => {
-    const { runCommand } = await import("./shell.js");
     await runCommand("docker", ["exec", "-i", containerId, "sh", "-c", command], {
       stdin,
       timeoutMs: 30_000,

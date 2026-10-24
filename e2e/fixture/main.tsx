@@ -1,3 +1,4 @@
+import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
 import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
 import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
@@ -1629,7 +1630,14 @@ function VirtuosoFollowFixture() {
         <output data-testid="virtuoso-follow-decision">{lastFollowDecision}</output>
       </div>
       <Virtuoso
-        {...scrollProps}
+        // Only Virtuoso's own props; following may run only while allowed
+        // (literal false otherwise), as the shared transcript list wires it.
+        followOutput={scrollProps.followEnabled ? scrollProps.followOutput : false}
+        atBottomStateChange={scrollProps.atBottomStateChange}
+        atBottomThreshold={scrollProps.atBottomThreshold}
+        totalListHeightChanged={scrollProps.totalListHeightChanged}
+        restoreStateFrom={scrollProps.restoreStateFrom}
+        scrollerRef={scrollProps.scrollerRef}
         ref={virtuosoRef}
         data={messages}
         fixedItemHeight={40}
@@ -1746,6 +1754,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/environment-status-marker")
     return <EnvironmentStatusMarkerFixture />;
   if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
+  if (window.location.pathname === "/agent-account-status") return <AgentAccountStatusFixture />;
   if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;

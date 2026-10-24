@@ -112,7 +112,6 @@ import {
   resolveCoordinatorRuntime,
   coordinatorRuntimeEnvironment,
 } from "./coordinator-runtime.js";
-import { localAgentAccountIds } from "./agent-account-bridge-state.js";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import {
@@ -702,7 +701,10 @@ export class NativeAgentService {
         baseUrl: `http://127.0.0.1:${result.port}`,
         authToken: result.authToken,
         ...(agent === "claude" || agent === "codex"
-          ? { accountId: localAgentAccountIds.get(`${agent}:${environment.id}`) ?? "unknown" }
+          ? {
+              accountId:
+                this.options.localBridgeAccountId?.(`${agent}:${environment.id}`) ?? "unknown",
+            }
           : {}),
         directory: environment.worktreePath,
         model,
@@ -753,7 +755,10 @@ export class NativeAgentService {
         baseUrl: `http://127.0.0.1:${result.port}`,
         authToken: result.authToken,
         ...(agent === "claude" || agent === "codex"
-          ? { accountId: localAgentAccountIds.get(`${agent}:${environment.id}`) ?? "unknown" }
+          ? {
+              accountId:
+                this.options.localBridgeAccountId?.(`${agent}:${environment.id}`) ?? "unknown",
+            }
           : {}),
         directory: environment.worktreePath,
       };
@@ -1368,12 +1373,24 @@ export class NativeAgentService {
     );
     const session = await this.storage.getNativeAgentSession(sessionKey);
     if (session) this.assertSessionIdentity(session, input, sessionKey);
-    const provider = await this.provider(input);
     const capabilities = nativeCapabilities(input.agent);
+    // No stored session means no projection to show a catalogue in (see
+    // `resolveProjectionSession`), so there is nothing to reload and no
+    // provider is started or read.
+    if (!session) {
+      return capabilities.slashCommands
+        ? {
+            outcome: "failed",
+            message: "The agent session has not started yet, so there are no commands to refresh.",
+            projection: null,
+          }
+        : { outcome: "unsupported", projection: null };
+    }
+    const provider = await this.provider(input);
     const supported =
       capabilities.slashCommands && Boolean(provider.slashCommands || provider.commandCatalogue);
     const result = supported
-      ? await this.catalogs.refreshCommands(input, provider, session?.providerSessionId)
+      ? await this.catalogs.refreshCommands(input, provider, session.providerSessionId)
       : { outcome: "unsupported" as const };
     this.projections.invalidateProjection(sessionKey);
     return { ...result, projection: await this.projections.refreshProjection(input, true) };

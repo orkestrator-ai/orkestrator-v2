@@ -31,9 +31,6 @@ import { discoverAgentExtensions } from "./extension-discovery.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import type { Environment } from "./models.js";
 import {
-  terminalProcesses,
-  mergingEnvironments,
-  environmentSetupSessions,
   syncPrMonitorTracking,
   asString,
   assertOnlyKeys,
@@ -52,9 +49,7 @@ import {
   parsePrState,
   toClientEnvironment,
   toClientEnvironmentSetupStartResult,
-  terminalOutputBufferLength,
   logSetupTerminal,
-  environmentStartTasks,
   inspectDockerContainerIdentity,
   isMissingDockerObjectError,
   getOrkestratorContainerStates,
@@ -129,7 +124,7 @@ export function registerEnvironmentCommands(
       environments.map((environment) =>
         syncStoredEnvironmentStatus(
           environment,
-          storage,
+          context,
           knownContainerStates,
           context.strictDockerOwner,
         ),
@@ -139,7 +134,7 @@ export function registerEnvironmentCommands(
       const environment = synced[index]!;
       if (
         environment.lifecycleOperation === "merging" &&
-        !mergingEnvironments.has(environment.id)
+        !context.runtime.environments.isMerging(environment.id)
       ) {
         synced[index] = await storage.updateEnvironment(environment.id, {
           lifecycleOperation: null,
@@ -412,7 +407,7 @@ export function registerEnvironmentCommands(
     return (
       await syncStoredEnvironmentStatus(
         environment,
-        storage,
+        context,
         knownContainerStates,
         context.strictDockerOwner,
       )
@@ -429,7 +424,7 @@ export function registerEnvironmentCommands(
     return toClientEnvironment(
       await syncStoredEnvironmentStatus(
         environment,
-        storage,
+        context,
         knownContainerStates,
         context.strictDockerOwner,
       ),
@@ -449,7 +444,7 @@ export function registerEnvironmentCommands(
     for (const environment of environments) {
       if (knownContainerStates?.has(environment.containerId!)) continue;
       // An admitted start or replacement owns the reference right now.
-      if (environmentStartTasks.has(environment.id)) continue;
+      if (context.runtime.environments.isStarting(environment.id)) continue;
       // Only a definite answer clears a reference. An unreachable daemon, a
       // timeout or a permission failure says nothing about whether the
       // container — possibly the only copy of the workspace — still exists.
@@ -775,7 +770,8 @@ export function registerEnvironmentCommands(
     context: CommandContext,
   ) => {
     const id = environmentId;
-    const session = environmentSetupSessions.get(id);
+    const session = context.runtime.environments.setupSession(id);
+    const terminals = context.runtime.terminals;
     if (!session) {
       const environment = await context.storage.getEnvironment(id);
       if (environment?.setupSessionId && environment.setupStartedAt) {
@@ -791,8 +787,8 @@ export function registerEnvironmentCommands(
               : environment.setupPhase === "failed"
                 ? false
                 : undefined,
-          terminalRunning: terminalProcesses.has(environment.setupSessionId),
-          hasOutput: terminalOutputBufferLength(environment.setupSessionId) > 0,
+          terminalRunning: terminals.hasProcess(environment.setupSessionId),
+          hasOutput: terminals.outputLength(environment.setupSessionId) > 0,
         };
       }
       logSetupTerminal("renderer requested setup session: none", {
@@ -802,8 +798,8 @@ export function registerEnvironmentCommands(
     }
     const payload = {
       ...session,
-      terminalRunning: terminalProcesses.has(session.sessionId),
-      hasOutput: terminalOutputBufferLength(session.sessionId) > 0,
+      terminalRunning: terminals.hasProcess(session.sessionId),
+      hasOutput: terminals.outputLength(session.sessionId) > 0,
     };
     logSetupTerminal("renderer requested setup session", {
       environmentId: id,
@@ -812,7 +808,7 @@ export function registerEnvironmentCommands(
       terminalRunning: payload.terminalRunning,
       hasOutput: payload.hasOutput,
       success: session.success ?? null,
-      bufferChars: terminalOutputBufferLength(session.sessionId),
+      bufferChars: terminals.outputLength(session.sessionId),
     });
     return payload;
   };

@@ -1,16 +1,17 @@
 # Slash-command catalogue
 
-Checked against `main` at `9da80451` (2026-10-17).
+Checked against `main` at `8454d18b` (2026-10-24).
 
 The native composer's `/` menu lists only commands the provider reported and
 that have a tested executor, and a selected command never turns into ordinary
 prompt text. The core shipped in #827 and is described in
-[`native-agent-commands.md`](../../architecture/native-agent-commands.md). What
-remains is the legacy catalogue surface, which still shows guessed Claude rows
-when a bridge answers the session route with a 404 (a bridge older than the
-contract), and a set of command classes that were left unavailable on purpose
-and need a decision. A new tab on a current bridge never sees those rows (see
-"Constraints and rationale").
+[`native-agent-commands.md`](../../architecture/native-agent-commands.md). This
+file held the legacy catalogue surface (guessed Claude rows behind a 404
+fallback) and a set of command classes left unavailable on purpose. On
+2026-10-24 the legacy surface was retired, the deliberately unavailable classes
+were decided, the Codex cold-catalogue gap was fixed, and the picker was
+qualified live on Claude, Pi and Grok. The only item left is blocked upstream
+(item 11).
 
 ## Current state
 
@@ -21,124 +22,155 @@ and need a decision. A new tab on a current bridge never sees those rows (see
 - The backend cache (`NativeAgentCommandCatalogueCache` in
   `apps/backend/src/core/native-agent-command-catalogue.ts`) has a TTL of
   30 s, 256 keys, 16 MiB, 4 concurrent provider reads and 5 s to 5 min retry
-  backoff. Keys come from `commandCatalogueKey`; a session without a
-  `providerSessionId` uses the key `global`.
-- `HttpBridgeCatalogAdapter.commandCatalogue`
-  (`apps/backend/src/core/http-bridge-catalog.ts`) reads the session route
-  when it has a session ID, falls back to a legacy global route on 404, and
-  reads the global route directly when it has no session ID. Only
-  `refreshProjectionCommands` for a tab with no stored session reads without
-  one (`native-agent-service.ts`), and its projection is `null`, so those
-  rows are cached under `global` but never shown. Codex and Cursor
-  map to `/global/slash-commands`; Claude, Pi and Grok map to
-  `/plugins/commands`. Legacy rows are normalised as non-enhanced rows with a
-  `legacyCommandId` and run as typed text, never as an enhanced selection.
-- What each legacy route answers today:
-  - Claude: `GET /plugins/commands` (`bridges/claude-bridge/src/routes/plugins.ts`)
-    calls `discoverSlashCommands` in `services/slash-commands.ts`, a
-    filesystem scan plus the fixed 15-row `BUILTIN_COMMANDS` list. That list
-    includes `/clear`, `/model`, `/permissions`, `/logout`, `/doctor` and
-    `/vim`, which the session catalogue marks unavailable.
-  - Pi: `GET /plugins/commands` (`bridges/pi-bridge/src/http.ts`) answers an
-    empty list.
-  - Codex: `GET /global/slash-commands` (`bridges/codex-bridge/src/index.ts`)
-    answers templates and bridge built-ins from `listGlobalCommandRows`
-    without starting Codex.
-  - Cursor: `GET /global/slash-commands` (`bridges/cursor-bridge/src/http.ts`)
-    answers the unsupported catalogue.
-  - Grok: the ACP bridge (`bridges/acp-bridge/src/acp-http.ts`) serves no
-    legacy route.
-- Disabled by design, listed with a reason and never executed:
+  backoff. Keys come from `commandCatalogueKey`.
+- **No legacy surface.** `HttpBridgeCatalogAdapter.commandCatalogue`
+  (`apps/backend/src/core/http-bridge-catalog.ts`) reads only the session
+  route. Without a session it makes no request and answers `missing`. A 404
+  (a bridge older than the 2.21.0 contract: before #599, or a pre-2.21 Pi,
+  Cursor or Grok bridge that does not hold the session) throws with
+  `catalogueErrorCode: "outdated-bridge"`, a new additive error code
+  (`NATIVE_AGENT_COMMAND_CATALOGUE_ERROR_CODES`), so the catalogue reads
+  `unavailable` with "restart the environment, or rebuild a container". The
+  picker explains it (`useNativeCommandComposer.tsx`).
+- Each such 404 is counted per agent (`outdatedBridgeCatalogueReadCounts`),
+  and each provider instance logs one warning with the running count and no
+  command names or session ids.
+- Deleted: `bridges/claude-bridge/src/services/slash-commands.ts` (the
+  filesystem scan and the 15-row `BUILTIN_COMMANDS` list) and its tests; the
+  `GET /plugins/commands` routes on the Claude and Pi bridges; the
+  `GET /global/slash-commands` routes on Codex (with `listGlobalCommandRows`
+  and `listTemplateAndBuiltinRows`) and Cursor. `GET /plugins` (plugin
+  discovery) is unchanged. All five now answer 404 on the retired paths, as
+  the ACP bridge always did.
+- `refreshProjectionCommands` (`native-agent-service.ts`) returns `failed`
+  ("The agent session has not started yet…") with a `null` projection when no
+  session is stored, without starting or reading the provider.
+- A pre-2.21 bridge that answers the session route with rows and no
+  `catalogueVersion` still works: its rows are non-enhanced `legacy:` rows that
+  run as typed text.
+- **Codex cold plugin skills.** `SkillInventory`
+  (`bridges/codex-bridge/src/commands/skill-inventory.ts`) reports the first
+  `skills/list` answer from each app-server generation unsettled; the
+  catalogue reads `stale`, and one re-read 2 s later (`coldSettleMs`) settles
+  it and bumps `commandRevision`. A generation that dies first never marks its
+  successor settled.
+- Disabled by design, listed with a reason and never executed (now decided,
+  see "Assumptions and decisions"):
   - Claude, in `bridges/claude-bridge/src/services/session-manager-commands.ts`:
     `SESSION_CHANGING_COMMANDS` (`/clear`, `/model`, `/permissions`,
     `/resume`), `INTERACTIVE_COMMANDS` (`/login`, `/logout`) plus the init
-    `terminal_slash_commands`, and `UNQUALIFIED_COMMANDS` (`/config`,
-    `/doctor`, `/exit`, `/ide`, `/quit`, `/statusline`, `/terminal-setup`,
-    `/theme`, `/vim`). The bridge also refuses these as typed text.
+    `terminal_slash_commands`, and `UNQUALIFIED_COMMANDS`. The bridge also
+    refuses these as typed text.
   - Codex templates containing inline shell spans: `requires-shell-execution`
     in `bridges/codex-bridge/src/prompts/template-discovery.ts`.
 - Pi extension commands are listed with `busy: "idle"`
-  (`bridges/pi-bridge/src/commands.ts`). Their behaviour without Pi's terminal
-  UI is unqualified.
+  (`bridges/pi-bridge/src/commands.ts`) and run headless: `ctx.hasUI` is
+  `false` and every dialog answers at once with no answer. That is pinned
+  against the real SDK runner at 1.4.0
+  (`bridges/pi-bridge/src/extension-headless-ui.test.ts`). The turn always ends
+  with an outcome row (`settleCommandRun`).
 - Orkestrator's own shortcuts are `/steer` (reserved) and `/compact` (defers to
   a provider `/compact`), merged by `withSessionActionSlashCommands` in
-  `packages/protocol/src/agent-slash-commands.ts`.
+  `packages/protocol/src/agent-slash-commands.ts`. No others are planned.
 - The picker groups rows by `source` (`groupSlashCommandRuns` in
   `apps/web/src/lib/chat/slash-command-search.ts`, rendered by
-  `SlashCommandMenu.tsx`). This is covered by component tests only.
-- The Cursor (`bridges/cursor-bridge/src/http.ts`, 1.0.37), OpenCode
-  (`opencode-commands.ts`, 1.19.0) and Claude (`session-manager-commands.ts`,
-  0.3.296) owner comments match the pins (re-checked 2026-10-17 and
-  2026-10-23).
+  `SlashCommandMenu.tsx`), now also covered live by
+  `e2e/agent-testing/slash-command-picker.spec.ts`.
+- Owner comments as of 2026-10-24: Claude `session-manager-commands.ts` names
+  Agent SDK 0.3.309 (the pin); Cursor's `http.ts` names 1.0.37, type surface
+  re-checked on 1.0.40 (the pin); `opencode-commands.ts` names 1.19.0 while the
+  pin is 1.19.4 (not re-checked here).
 
 ## Outstanding work
 
 ### Code
 
-1. **Retire the legacy catalogue surface.**
-   - Agree the mixed-version support window (see
-     [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)).
-   - Stop the 404 fallback showing guessed rows: mark legacy rows
-     display-only and unavailable, or drop the fallback, so the Claude picker
-     never shows `BUILTIN_COMMANDS` even against an old bridge. (Pre-session
-     tabs on a current bridge already never see them.)
-   - Make `refreshProjectionCommands` skip the provider read when no session
-     is stored, instead of reading the global route for a projection that is
-     `null` (a wasted filesystem scan on Claude, a 404 on Grok).
-   - Count legacy-route use without logging command names.
-   - After the window, delete `services/slash-commands.ts`, the Claude and Pi
+1. **Retire the legacy catalogue surface.** Done 2026-10-24.
+   - Support window: decided for this path alone (decision 1). The global
+     window in [0034](../cross-cutting/0034-mixed-version-compatibility.md) is
+     still open; its index row for this path was removed.
+   - The 404 fallback is gone: a 404 reads `unavailable` with
+     `outdated-bridge` (`http-bridge-catalog.ts`). Tests:
+     `http-bridge-commands.test.ts` ("a 404 from a bridge older than the
+     contract is outdated-bridge, counted, never a global list", and per
+     bridge "a session-route 404 is outdated-bridge per read, never a global
+     list, never sticky"), `http-bridge-provider.test.ts`,
+     `native-agent-command-catalogue-scale.test.ts`.
+   - `refreshProjectionCommands` skips the provider when no session is stored
+     (`native-agent-service-commands.test.ts`: "a refresh before the session
+     exists reads nothing and says so").
+   - Legacy-route use is counted without command names (above).
+   - Deleted `services/slash-commands.ts`, the Claude and Pi
      `/plugins/commands` routes, the Codex and Cursor `/global/slash-commands`
-     routes, and the global fallback in `HttpBridgeCatalogAdapter.commandCatalogue`.
-   - Keep unrelated plugin discovery (`GET /plugins`).
-2. **Claude session-changing commands.** Either keep them unavailable, or make
-   the bridge adopt the new conversation ID and configuration after `/clear`,
-   `/model`, `/permissions` or `/resume`, and reconcile before the next
-   submission. Never implement `/clear` by deleting history.
-3. **Codex inline-shell templates.** Decide whether to keep them at all. If
-   yes, build a policy-reviewed executor that:
-   - parses executable spans before substituting arguments, and never
-     interpolates arguments into a span;
-   - has an explicit cwd and environment, a deadline, cancellation, and count
-     and byte limits;
-   - persists preparation identity before side effects, never repeats on
-     retry, and never auto-approves.
-
-   Until then, keep `requires-shell-execution` unavailable.
-4. **Pi extension commands.** Label extensions that need a UI as unavailable,
-   or return a bounded "unsupported interaction" result. Never fake `hasUI`.
-5. **Further Orkestrator shortcuts** beyond `/steer` and `/compact`: clear or
-   new session, model and permission changes, review. Each needs its own
-   qualified semantics.
+     routes and the global fallback. Each bridge's route tests now assert the
+     404 (`plugins.test.ts`, `pi-bridge/src/http.test.ts`,
+     `codex-bridge/src/index-routes.test.ts`, `cursor-bridge/src/http.test.ts`).
+   - `GET /plugins` kept.
+2. **Claude session-changing commands.** Decided 2026-10-24: they stay
+   unavailable (decision 5). No code change; the architecture doc says so.
+3. **Codex inline-shell templates.** Decided 2026-10-24: kept disabled for
+   good, no executor will be built (decision 6). `requires-shell-execution`
+   stays.
+4. **Pi extension commands.** Done 2026-10-24 (decision 7): the bounded
+   "unsupported interaction" result is the answer, and it already existed
+   (`settleCommandRun`). Pi 1.4.0 gives a command no "needs UI" marker, so
+   labelling is impossible without guessing; `hasUI` is never faked. Pinned by
+   `extension-headless-ui.test.ts`.
+5. **Further Orkestrator shortcuts.** Decided 2026-10-24: none (decision 8).
 6. **Stale pin comment.** Done 2026-10-23: the Cursor comment names 1.0.37,
    whose declarations were re-checked.
-7. **CLI selection.** `session commands` and `session command` are tracked in
-   [0017-cli-command-surface.md](0017-cli-command-surface.md).
+7. **CLI selection.** Owned by
+   [0017-cli-command-surface.md](0017-cli-command-surface.md); nothing left
+   here.
 8. **Claude terminal-only commands before the first turn.** Done
    2026-10-17; see "Constraints and rationale".
-9. **Codex plugin skills in a cold catalogue.** Found live on 2026-10-17
-   (0.162.1). The first `skills/list` after the app-server child starts
-   answers before plugin skills load: 6 skills, reported `ready`. A forced
-   reload, or the next TTL read, gives 92. Report the first read `stale`
-   until plugin loading settles, or re-read once after a short delay. Today it
-   heals within one 30 s TTL.
+9. **Codex plugin skills in a cold catalogue.** Done 2026-10-24 (decision 9).
+   Measured live on Codex 0.164.0 with the host's plugins: the first reads
+   after `initialize` returned 26 skills (8 from plugins) for 100-300 ms, then
+   114 (96 from plugins), with no `skills/changed`; a first read at 1 s or
+   later was already complete. Fix and tests: `skill-inventory.ts`,
+   `codex-command-catalogue.test.ts` ("a cold app-server child").
 10. **OpenCode command files added while the server runs.** Done
     2026-10-17; see "Constraints and rationale".
-11. **Claude terminal marker (blocked upstream).** If the Agent SDK adds a
-    terminal marker to `SlashCommand`, read it from the probe's rows and
-    delete the remembered list in `claude-terminal-commands.ts`, which closes
-    the first-tab-on-a-new-CLI-version gap described in "Constraints and
-    rationale".
+11. **Claude terminal marker (blocked upstream).** Re-checked 2026-10-24 at
+    Agent SDK 0.3.309: `SlashCommand` is still `{ name, description,
+    argumentHint, aliases?, builtin? }`, with no terminal marker. If the SDK
+    adds one, read it from the probe's rows and delete the remembered list in
+    `claude-terminal-commands.ts`, which closes the first-tab-on-a-new-CLI-
+    version gap described in "Constraints and rationale".
 
 ### Qualification
 
-- Browser, on Claude, Pi and Grok fixtures: open the picker and check the
-  source groups and keyboard order. Edit a fixture command or template file on
-  disk, refresh the catalogue, check the new row appears, then reload and
-  check it persists. Batch this with the inactive-environment scenario in
-  [0015-slash-command-qualification.md](0015-slash-command-qualification.md).
-- Before deleting a legacy route: legacy-route use counts from the support
-  window, and a mixed-version run (new backend with an old bridge, old backend
-  with a new bridge).
+- **Browser, on Claude, Pi and Grok.** Done 2026-10-24 with
+  `e2e/agent-testing/slash-command-picker.spec.ts` (decision 11), profile
+  `qa-picker-0016` (`--fixture --credential-source claude --credential-source
+  pi --credential-source grok`), host worktrees with
+  `projectResources: true`, this branch's code. Final run of all three: 3
+  passed, 0 skipped, 34.2 s, no model turn (an earlier run that attached Pi
+  with one short turn also passed).
+
+  | Provider | Groups shown (rows) | Refresh after adding a file | New row after reload |
+  | --- | --- | --- | --- |
+  | Claude (CLI 2.1.309) | Orkestrator (1), Other (53): the cold probe reports no sources | `reread`; listed | Yes |
+  | Pi (SDK and CLI 1.4.0) | Orkestrator (2), Templates (2), after the menu's "Refresh commands" attached the session | `reloaded`; listed | Yes |
+  | Grok (1.0.67) | Other (14; 34 in an earlier run): Grok reports no sources | `reread`; listed by push within 4 s | Yes |
+
+  Keyboard order passed on all three: arrows followed the rendered order
+  across group boundaries and clamped at both ends. Found on the way: a new Pi
+  tab lists no provider commands until its session attaches (first turn, or
+  the menu's "Refresh commands"); tracked as
+  [0069](0069-pi-commands-before-first-turn.md). Not batched with the
+  inactive-environment scenario in 0015 (decision 11).
+- **Before deleting a legacy route.** Done as far as this machine allows
+  (decisions 1 and 12): no production counts exist (none are collected
+  anywhere; 0034 item 3), so the deletion rests on the window decision and on
+  a real-build mixed-version run. The real ACP and Cursor bridges from
+  `ff4026b4e^` (2.16.3) ran beside the current ones and were read through each
+  side's real adapter. Current backend with old bridge: one request, 404,
+  `unavailable` with `outdated-bridge`, counted, no legacy route read. Old
+  backend with current bridge: an unknown session answered 200 with an empty
+  list (no fallback); a read without a session got 404 from the retired
+  global route, which the old backend shows as an error with no rows.
 
 ## Constraints and rationale
 
@@ -203,8 +235,10 @@ and need a decision. A new tab on a current bridge never sees those rows (see
   the executor; no public payload carries them.
 - Catalogue reads are metadata only: no `lastAccessed` touch, no transcript
   hydration, no reattach.
-- Keep wire changes additive, and never treat a 404 as proof that a bridge is
-  merely old.
+- Keep wire changes additive. A 404 on the session route never selects
+  another route's rows: it means an older bridge, one that predates the route
+  or a pre-2.21 bridge that does not hold the session, so it reads
+  `outdated-bridge` and is re-checked on the next read.
 - Do not promise parity with a provider's terminal or editor menu. Some of its
   entries run prompts; others drive a terminal, open an editor, change
   settings or replace the session.
@@ -235,46 +269,196 @@ and need a decision. A new tab on a current bridge never sees those rows (see
     (`apps/backend/src/core/native-agent-service-commands.test.ts`).
   - Grok follows the same path, so a Grok tab never reads its catalogue
     without a session ID for display. The only read without one is an explicit
-    refresh before the session exists; it fails on the ACP bridge's 404 and
-    reports `failed` with a `null` projection (see Code item 1).
+    refresh before the session exists, which since 2026-10-24 reports
+    `failed` without reading anything (Code item 1).
 - What a pre-session tab shows was therefore not changed: nothing until the
   session exists, `loading` during the first read, then the session's own
   probed rows marked `stale` until a turn reads the live inventory. No rows
-  are cached across sessions, and `BUILTIN_COMMANDS` is left in place only for
-  the legacy route until that route is retired.
+  are cached across sessions. `BUILTIN_COMMANDS` and the legacy route were
+  deleted on 2026-10-24.
 - The Claude Tmux tab's fixed `TMUX_BUILTIN_SLASH_COMMANDS` list is a
   separate surface: it forwards text to the real CLI's terminal UI, where those
   commands work (see `platform-inconsistencies.md`). It is not the native
   picker and is out of scope here.
 
+
 ## Open questions
 
-- How long is the legacy window, and does a remote-backend support policy
-  constrain it?
-- Should inline-shell template compatibility survive at all? The original
-  investigation recommended keeping it disabled.
+- Both earlier questions are answered in "Assumptions and decisions": the
+  legacy window (decision 1) and inline-shell templates (decision 6).
+- None open.
 
 ## Needs verification
 
-- Old-backend/new-bridge and old/new renderer projections are now tested with
-  transport-level fakes (the `mixed-version:` blocks listed in
-  [0015-slash-command-qualification.md](0015-slash-command-qualification.md)).
-  They found that a session-route 404 on Claude does not show the 15
-  `BUILTIN_COMMANDS` rows: the old global shape (`"/name - description"`) keeps
-  only bare names, so every built-in row is dropped and the list is marked
-  truncated. A run against a real pre-#827 build is still open there.
+- A real pre-#827 Claude bridge (its CLI probe on the session route) against
+  this backend, and a real older renderer bundle: still open in
+  [0015](0015-slash-command-qualification.md) item 1. This file's change only
+  affects their 404 path, which the ACP and Cursor run covered.
+- The Codex settle wait (2 s) was measured on a host worktree on Apple
+  Silicon, where plugin skills arrived 200-400 ms after `initialize`. A slower
+  container could take longer; the 30 s TTL read still heals it, as before.
+
+## Assumptions and decisions
+
+Made on 2026-10-24 while completing this file.
+
+1. **Support window for the legacy catalogue path.**
+   - Options: (a) wait for the shared window in 0034; (b) decide a window for
+     this path alone and retire now; (c) keep the fallback but show its rows as
+     display-only and unavailable.
+   - Chosen: (b). The window is "the 2.21.0 contract plus seven minor
+     releases": #827 shipped in 2.21.0 (2026-09-23) and `main` is 2.28.0-beta.
+     The fallback and all four bridge routes were deleted.
+   - Why: the fallback's rows were never the session's. A 404 meant an old
+     bridge either without the route or without the session, so the old
+     fallback showed a global list for a session the bridge did not hold, and
+     0015 showed the Claude global shape survived only as bare names. Every
+     bridge since #599 serves the session route, so the only new-backend
+     pairing that lost anything is a container still running a pre-2.21
+     image, which now gets a clear "restart or rebuild" message instead of
+     guesses.
+   - Pros: no guessed rows anywhere, one read path, less code (a scanner, four
+     routes, two runtime methods). Cons: an old backend (2.20 or older) sharing
+     the `orkestrator-v2:latest` image with a newer one loses its pre-session
+     list (it errors instead); there is no production count behind the date;
+     the global 0034 window is still undecided, so other paths cannot reuse
+     this as precedent without their own decision.
+2. **How a 404 is reported.**
+   - Options: keep falling back; `unsupported`; `unavailable` with
+     `provider-error`; `unavailable` with a new `outdated-bridge` code.
+   - Chosen: `unavailable` with `outdated-bridge`.
+   - Why: `unsupported` says the provider has no commands, and
+     `provider-error` blames the provider; neither tells the user to restart.
+     The code is additive.
+   - Pros: an accurate, actionable message; the cache's per-read retry picks
+     up a bridge upgraded in place. Cons: an older renderer shows the generic
+     "Commands couldn't be loaded." with no detail for the unknown code.
+3. **Counting legacy use.**
+   - Options: production telemetry (none exists); a backend in-memory counter
+     plus a log line; keeping the bridge routes only to count hits.
+   - Chosen: a per-agent in-memory counter
+     (`outdatedBridgeCatalogueReadCounts`) and one warning per provider
+     instance with the running count, no command names, no session ids.
+   - Why: content-free, bounded, and it counts the only pairing that still
+     matters (new backend, old bridge).
+   - Pros: evidence in the backend log of every affected install. Cons: resets
+     on restart, is not exposed through a diagnostics command, and an old
+     backend hitting a new bridge is not counted anywhere.
+4. **Refresh before a session exists.**
+   - Options: keep reading the global route; answer `reread`; answer
+     `unsupported`; answer `failed` with a message and read nothing.
+   - Chosen: `failed`, "The agent session has not started yet, so there are
+     no commands to refresh.", projection `null`, provider not started. Agents
+     without slash commands still answer `unsupported`.
+   - Why: nothing was refreshed, and the projection is `null` anyway.
+   - Pros: no wasted Claude filesystem scan or Grok 404, no provider start.
+     Cons: none found; the renderer already shows a failed refresh's message.
+5. **Claude session-changing commands.**
+   - Options: keep them unavailable; let the bridge adopt the new conversation
+     id and configuration after `/clear`, `/model`, `/permissions` or
+     `/resume` and reconcile before the next submission.
+   - Chosen: keep them unavailable.
+   - Why: each has a native control already (model and permission pickers in
+     the composer, a new tab, session history). Adopting a CLI-side session
+     replacement would change the tab's identity under the transcript,
+     dispatch journal and queue, and no qualified path supports that.
+   - Pros: no new state machine, nothing can lose history. Cons: terminal
+     users' muscle memory (`/model x`) is refused with a reason rather than
+     honoured.
+6. **Codex inline-shell templates.**
+   - Options: build the policy-reviewed executor described in item 3; keep
+     them disabled for good.
+   - Chosen: disabled for good.
+   - Why: templates are an Orkestrator compatibility feature, not a Codex
+     one; an executor adds a shell surface (argument injection, approvals,
+     at-most-once across retries) that skills already cover through Codex's
+     own tool approvals. The original investigation recommended the same.
+   - Pros: no new shell surface. Cons: templates written for the Codex CLI's
+     `` !`cmd` `` stay listed but unusable here.
+7. **Pi extension commands that need a UI.**
+   - Options: label every extension command unavailable; guess from source
+     (scan for `ctx.ui`); bind a recording UI context (fakes `hasUI`); patch
+     Pi's private no-UI context; return a bounded result after the run.
+   - Chosen: the bounded result, which `settleCommandRun` already writes, plus
+     a pin test against the real SDK runner.
+   - Why: Pi 1.4.0's `RegisteredCommand` has no "needs UI" marker (the test
+     asserts its keys), so any label is a guess; binding any UI context flips
+     `hasUI` to `true`.
+   - Pros: headless-safe extension commands keep working (qualified live on
+     1.2.0); a pin bump that changes the contract fails a test. Cons: a
+     command that needed a dialog is only explained after it ran.
+8. **Further Orkestrator shortcuts.**
+   - Options: clear or new session, `/model`, `/permissions`, `/review`;
+     none.
+   - Chosen: none.
+   - Why: each duplicates a composer control or a launcher, and a `/review`
+     alias would run a workflow with a different scope from the provider's
+     own command, which the constraints forbid. Any future shortcut needs its
+     own todo with qualified semantics.
+   - Pros: the menu keeps meaning "what the provider runs". Cons: no slash
+     path to those actions.
+9. **Codex cold plugin skills.**
+   - Options: wait for a notification (none exists); force a disk rescan on
+     the first read; report the first answer `stale` and re-read once after a
+     delay; poll until two reads agree.
+   - Chosen: the first answer per app-server generation is unsettled
+     (`stale`), and one ordinary re-read 2 s later settles it.
+   - Why: measured, the gap is time-based (a single first read at 1 s was
+     complete), so one delayed read fixes it at the cost of one extra
+     `skills/list` per child start. 2 s is five times the slowest arrival
+     measured, and the 30 s TTL still heals anything slower.
+   - Pros: the picker never calls an incomplete list `ready`; the revision
+     bump reaches unmounted tabs. Cons: about 2 s of "may be out of date"
+     after a child starts even when the first list was complete. A typed
+     `$skill` is unaffected (it checks `fresh`, not `settled`).
+10. **Claude terminal marker.** No decision possible: re-checked at 0.3.309,
+    still absent upstream. Item 11 stays open and blocked.
+11. **How to qualify the picker.**
+    - Options: extend `slash-command-inactive.spec.ts`; a new metadata-only
+      spec.
+    - Chosen: a new spec, `slash-command-picker.spec.ts`, sharing the
+      profile, login, sidebar and worktree helpers with the inactive spec
+      through `slash-command-live-support.ts`.
+    - Why: the inactive scenario spends real model turns and supports only
+      Codex and Claude; these checks need no turn, so they run in about 30 s
+      for all three providers. The "batch with the inactive scenario" note is
+      therefore not followed.
+    - Pros: cheap to re-run on every pin bump. Cons: one more opt-in spec; the
+      group check is weak on Claude and Grok, which report no sources.
+12. **Mixed-version evidence before deleting the routes.**
+    - Options: fakes only; a real old build of every bridge; a real old build
+      of the bridges that need no credentials to answer the catalogue.
+    - Chosen: real `ff4026b4e^` ACP and Cursor bridges against this backend's
+      adapter, and the old adapter against the current bridges.
+    - Why: those two exercise exactly the paths this change touches (the 404
+      and the retired route) without provider sign-in; the old ACP bridge
+      could not create a session against today's Grok CLI.
+    - Pros: real processes on both sides. Cons: Claude, Codex and Pi old
+      builds were not run.
+
+Assumptions:
+
+- Bridges reach containers only through the image (`/opt/*-bridge`), and the
+  image tag `orkestrator-v2:latest` is shared by installs on one host; that is
+  the only way an old backend meets a new bridge.
+- No client outside the backend reads `/plugins/commands` or
+  `/global/slash-commands`: a search of the renderer, CLI, `apps/web-public`,
+  desktop and iOS sources found none.
 
 ## Related
 
-- [0015-slash-command-qualification.md](0015-slash-command-qualification.md) for live
-  probes, browser scenarios and performance.
-- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md) for the
-  support-window policy and other compatibility paths awaiting retirement.
-- [0017-cli-command-surface.md](0017-cli-command-surface.md) for selected commands from
-  the CLI.
+- [0015-slash-command-qualification.md](0015-slash-command-qualification.md)
+  for live probes, browser scenarios and performance.
+- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)
+  for the shared support-window policy and other compatibility paths awaiting
+  retirement.
+- [0017-cli-command-surface.md](0017-cli-command-surface.md) for selected
+  commands from the CLI.
+- [0069-pi-commands-before-first-turn.md](0069-pi-commands-before-first-turn.md)
+  for the Pi gap the picker run found.
 - [`native-agent-commands.md`](../../architecture/native-agent-commands.md#provider-support)
   for the per-provider support, unavailable-command and literal-suppression
-  tables, and when the legacy route is read ("Lifecycle").
+  tables, and the catalogue lifecycle.
 
 ## Replaces
 

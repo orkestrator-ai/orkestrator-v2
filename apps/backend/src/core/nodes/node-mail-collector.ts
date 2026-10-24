@@ -31,11 +31,19 @@ export interface CollectorDeps {
     subject?: string;
     body: string;
     requestId: string;
+    /** The agent that sent it, on its node: node mail is authenticated by the link. */
+    from: {
+      nodeId: string;
+      nodeName: string;
+      environmentId: string;
+      tabId: string;
+      environmentName?: string;
+    };
   }): Promise<void>;
 }
 
 export class NodeMailCollector {
-  private readonly running = new Map<BackendId, Promise<void>>();
+  private readonly running = new Map<BackendId, Promise<boolean>>();
   private readonly again = new Set<BackendId>();
   private disposed = false;
 
@@ -85,30 +93,34 @@ export class NodeMailCollector {
       .catch(() => this.retry(nodeId));
   }
 
-  /** Collect everything queued for this command node on one node. Coalesced per node. */
-  collect(nodeId: BackendId): Promise<void> {
-    if (this.disposed) return Promise.resolve();
+  /** Collect and acknowledge all queued mail. False means a failed or bounded partial drain. */
+  collect(nodeId: BackendId): Promise<boolean> {
+    if (this.disposed) return Promise.resolve(false);
     const running = this.running.get(nodeId);
     if (running) {
       this.again.add(nodeId);
       return running;
     }
-    const run = this.collectOnce(nodeId)
-      .catch(() => {
-        // Content-free, and handled here because callers may be fire-and-forget.
-        this.retry(nodeId);
-      })
-      .finally(() => {
-        this.running.delete(nodeId);
-        if (this.again.delete(nodeId)) void this.collect(nodeId);
-      });
+    const run = (async () => {
+      let complete = true;
+      for (let pass = 0; pass < 20; pass++) {
+        this.again.delete(nodeId);
+        complete = (await this.collectOnce(nodeId).catch(() => false)) && complete;
+        if (!this.again.has(nodeId) || this.disposed) break;
+      }
+      if (this.again.delete(nodeId)) complete = false;
+      if (!complete) this.retry(nodeId);
+      return complete && !this.disposed;
+    })().finally(() => {
+      this.running.delete(nodeId);
+    });
     this.running.set(nodeId, run);
     return run;
   }
 
-  private async collectOnce(nodeId: BackendId): Promise<void> {
+  private async collectOnce(nodeId: BackendId): Promise<boolean> {
     const link = this.deps.link(nodeId);
-    if (!link?.connected) return;
+    if (!link?.connected) return false;
     const controllerId = await this.deps.selfId();
     const name = await this.deps.nodeName(nodeId);
     let after = 0;
@@ -119,7 +131,7 @@ export class NodeMailCollector {
         "collect_node_outbox",
         { controllerId, after },
       );
-      if (!batch?.items?.length) return;
+      if (!batch?.items?.length) return !batch?.more && !failed;
       const delivered: number[] = [];
       for (const item of batch.items) {
         try {
@@ -130,6 +142,13 @@ export class NodeMailCollector {
             body: describeLeafMail(item, { nodeId, name }),
             // Stable per item, so a redelivery after a lost ack is deduplicated.
             requestId: `node:${nodeId}:${item.seq}`,
+            from: {
+              nodeId,
+              nodeName: name,
+              environmentId: item.fromEnvironmentId,
+              tabId: item.fromTabId,
+              ...(item.fromEnvironmentName ? { environmentName: item.fromEnvironmentName } : {}),
+            },
           });
           delivered.push(item.seq);
           if (!failed) deliveredPrefix = item.seq;
@@ -154,9 +173,10 @@ export class NodeMailCollector {
       if (failed) this.retry(nodeId);
       if (!batch.more) {
         if (!failed) this.delays.delete(nodeId);
-        return;
+        return !failed;
       }
     }
     this.retry(nodeId);
+    return false;
   }
 }

@@ -58,6 +58,7 @@ import {
   MAX_SSH_AGENT_SOCKET_PATH_CHARS,
   SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES,
 } from "@orkestrator/protocol/ssh-agent-socket";
+import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
 import { parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
 
@@ -105,6 +106,7 @@ interface CoreFieldsSnapshot {
   allowedDomains: string[];
   useHostGitHubCredentials: boolean;
   sshAgentSocketPath: string;
+  defaultProjectsDirectory: string;
   useHostClaudeCredentials: boolean;
   preferredEditor: PreferredEditor;
   enabledAgentPlatforms: AgentPlatform[];
@@ -140,6 +142,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     allowedDomains: normalizeAllowedDomainsInput(global.allowedDomains ?? []),
     useHostGitHubCredentials: global.useHostGitHubCredentials ?? true,
     sshAgentSocketPath: global.sshAgentSocketPath ?? "",
+    defaultProjectsDirectory: global.defaultProjectsDirectory ?? "",
     useHostClaudeCredentials: global.useHostClaudeCredentials ?? true,
     preferredEditor: global.preferredEditor ?? "vscode",
     enabledAgentPlatforms: global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
@@ -195,6 +198,17 @@ export function sshAgentSocketPathForSave(value: string): string | undefined {
   return value.trim() || undefined;
 }
 
+/** Empty means "the most common parent of this machine's projects". */
+export function getDefaultProjectsDirectoryValidationError(value: string): string | null {
+  const candidate = value.trim();
+  if (!candidate) return null;
+  if (candidate.length > MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS || candidate.includes("\0")) {
+    return "The default projects folder is not a valid path.";
+  }
+  if (!candidate.startsWith("/")) return "The default projects folder must be an absolute path.";
+  return null;
+}
+
 function getSavedReviewInstruction(value: unknown): string {
   return typeof value === "string" && getReviewInstructionValidationError(value) === null
     ? value
@@ -218,6 +232,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.envFilePatterns,
     global.useHostGitHubCredentials ?? true,
     global.sshAgentSocketPath ?? "",
+    global.defaultProjectsDirectory ?? "",
     global.useHostClaudeCredentials ?? true,
     global.allowedDomains ?? [],
     global.preferredEditor ?? "vscode",
@@ -268,6 +283,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     global.useHostGitHubCredentials ?? true,
   );
   const [sshAgentSocketPath, setSshAgentSocketPath] = useState(global.sshAgentSocketPath ?? "");
+  const [defaultProjectsDirectory, setDefaultProjectsDirectory] = useState(
+    global.defaultProjectsDirectory ?? "",
+  );
   const [useHostClaudeCredentials, setUseHostClaudeCredentials] = useState(
     global.useHostClaudeCredentials ?? true,
   );
@@ -394,6 +412,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     // typed keeps a rejected secret retryable across an unrelated store write.
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setSshAgentSocketPath(global.sshAgentSocketPath ?? "");
+    setDefaultProjectsDirectory(global.defaultProjectsDirectory ?? "");
     setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
@@ -564,6 +583,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       allowedDomains: normalizeAllowedDomainsInput(allowedDomains),
       useHostGitHubCredentials,
       sshAgentSocketPath: sshAgentSocketPathForSave(sshAgentSocketPath) ?? "",
+      defaultProjectsDirectory: defaultProjectsDirectory.trim(),
       useHostClaudeCredentials,
       preferredEditor,
       enabledAgentPlatforms,
@@ -597,6 +617,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       allowedDomains,
       useHostGitHubCredentials,
       sshAgentSocketPath,
+      defaultProjectsDirectory,
       useHostClaudeCredentials,
       preferredEditor,
       enabledAgentPlatforms,
@@ -761,6 +782,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       const patterns = normalizeEnvPatternsInput(envPatterns);
       const domains = normalizeAllowedDomainsInput(allowedDomains);
       const savedSshAgentSocketPath = sshAgentSocketPathForSave(sshAgentSocketPath);
+      const savedDefaultProjectsDirectory = defaultProjectsDirectory.trim() || undefined;
 
       const newGlobal: {
         containerResources: { cpuCores: number; memoryGb: number };
@@ -768,6 +790,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         allowedDomains: string[];
         useHostGitHubCredentials: boolean;
         sshAgentSocketPath?: string;
+        defaultProjectsDirectory?: string;
         useHostClaudeCredentials: boolean;
         preferredEditor?: PreferredEditor;
         enabledAgentPlatforms: AgentPlatform[];
@@ -797,6 +820,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         allowedDomains: domains,
         useHostGitHubCredentials,
         ...(savedSshAgentSocketPath ? { sshAgentSocketPath: savedSshAgentSocketPath } : {}),
+        ...(savedDefaultProjectsDirectory
+          ? { defaultProjectsDirectory: savedDefaultProjectsDirectory }
+          : {}),
         useHostClaudeCredentials,
         preferredEditor,
         enabledAgentPlatforms,
@@ -997,6 +1023,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const reviewInstructionValidationError = getReviewInstructionValidationError(reviewInstruction);
   const sshAgentSocketPathValidationError =
     getSshAgentSocketPathValidationError(sshAgentSocketPath);
+  const defaultProjectsDirectoryValidationError =
+    getDefaultProjectsDirectoryValidationError(defaultProjectsDirectory);
 
   const sectionSettings = {
     global,
@@ -1017,6 +1045,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     sshAgentSocketPath,
     setSshAgentSocketPath,
     sshAgentSocketPathValidationError,
+    defaultProjectsDirectory,
+    setDefaultProjectsDirectory,
+    defaultProjectsDirectoryValidationError,
     useHostClaudeCredentials,
     setUseHostClaudeCredentials,
     githubToken,
@@ -1170,6 +1201,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     if (sshAgentSocketPathValidationError) {
       blockers.push({ section: "general", message: sshAgentSocketPathValidationError });
     }
+    if (defaultProjectsDirectoryValidationError) {
+      blockers.push({ section: "general", message: defaultProjectsDirectoryValidationError });
+    }
     return blockers[0] ?? null;
   }, [
     domainErrors,
@@ -1181,6 +1215,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     debugLogRetentionDays,
     reviewInstructionValidationError,
     sshAgentSocketPathValidationError,
+    defaultProjectsDirectoryValidationError,
   ]);
   saveBlockerRef.current = saveBlocker;
 

@@ -248,6 +248,8 @@ export interface NodeActionRequestView {
     keys?: string[];
   }>;
   reason?: string;
+  /** The coordinator that asked; its project is the one a copy request copies. */
+  requestedBy?: { projectId: string };
   state: string;
   result?: { code: string; message: string };
 }
@@ -263,10 +265,13 @@ export async function listNodeActionRequests(): Promise<NodeActionRequestView[]>
 export async function resolveNodeActionRequest(
   requestId: string,
   decision: "approve" | "reject",
+  /** A copy request's final location and files, as the user settled them. */
+  approval?: { location?: string; paths?: string[]; rememberFiles?: boolean },
 ): Promise<NodeActionRequestView> {
   return portalInvoke<NodeActionRequestView>("resolve_node_action_request", {
     requestId,
     decision,
+    ...(approval ? { approval } : {}),
   });
 }
 

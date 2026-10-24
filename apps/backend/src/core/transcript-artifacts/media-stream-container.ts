@@ -7,7 +7,7 @@
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
-import { CONTAINER_SAFE_BASE64_READER } from "../commands-runtime-state.js";
+import { CONTAINER_SAFE_BASE64_READER } from "../container-scripts.js";
 import { spawnCommand } from "../shell.js";
 import type { ContainerReaderSpawner } from "./media-stream.js";
 

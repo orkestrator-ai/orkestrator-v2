@@ -24,7 +24,6 @@ import {
   removeCleanupCandidates,
   type ProtectionSnapshot,
 } from "./docker-cleanup-inventory.js";
-import { environmentLifecycleOperations, environmentStartTasks } from "./commands-runtime-state.js";
 import { inspectVolume } from "./container-storage.js";
 import { inspectNetwork } from "./container-network.js";
 
@@ -37,7 +36,7 @@ import { inspectNetwork } from "./container-network.js";
  * preview is needed. Nothing here prunes by owner, age or state alone.
  */
 
-type CleanupContext = Pick<CommandContext, "storage" | "strictDockerOwner">;
+type CleanupContext = Pick<CommandContext, "storage" | "strictDockerOwner" | "runtime">;
 
 const TOKEN_TTL_MS = 10 * 60_000;
 const MAX_TOKENS = 8;
@@ -101,13 +100,6 @@ async function listAppResources(kind: "volume" | "network"): Promise<ListedVolum
   return volumes;
 }
 
-function operationInFlight(environmentId: string | null): boolean {
-  return (
-    !!environmentId &&
-    (environmentLifecycleOperations.has(environmentId) || environmentStartTasks.has(environmentId))
-  );
-}
-
 /**
  * Only a volume this registry labelled for an environment that no longer
  * exists, and that nothing (current storage, recovery copy, unresolved
@@ -128,7 +120,7 @@ export function classifyVolume(
   if (!environmentId) return "identity-uncertain";
   if (protection.deletionEnvironmentIds.has(environmentId)) return "deletion-pending";
   if (protection.environmentIds.has(environmentId)) return "live-environment-label";
-  if (operationInFlight(environmentId)) return "operation-in-flight";
+  if (protection.operationInFlight(environmentId)) return "operation-in-flight";
   return "eligible";
 }
 
@@ -148,7 +140,7 @@ export function classifyNetwork(
   if (!environmentId) return "identity-uncertain";
   if (protection.deletionEnvironmentIds.has(environmentId)) return "deletion-pending";
   if (protection.environmentIds.has(environmentId)) return "assigned";
-  if (operationInFlight(environmentId)) return "operation-in-flight";
+  if (protection.operationInFlight(environmentId)) return "operation-in-flight";
   return "eligible";
 }
 

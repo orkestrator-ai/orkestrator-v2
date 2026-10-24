@@ -2651,6 +2651,8 @@ describe("AgentInfoButton Claude session options", () => {
 
   test("offers Claude's in-app account sign-in instead of a terminal", async () => {
     nativeInvokeMock.mockImplementation(async (command: string, input?: unknown) => {
+      if (command === "list_agent_accounts") return { accounts: [], active: {} };
+      if (command === "get_native_agent_session_account") return null;
       if (command === "get_native_agent_auth_status") {
         return {
           state: "needs-auth",

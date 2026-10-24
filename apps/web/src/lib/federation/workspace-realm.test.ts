@@ -4,6 +4,7 @@ import {
   parseRealmMessage,
   parseShellMessage,
   readFrameEnvelope,
+  realmCoordinatorDefers,
   realmInitialRequest,
   realmSearchParams,
   realmWorkspaceId,
@@ -31,6 +32,15 @@ test("only known messages with bounded IDs cross between a window and its realm"
     type: "select",
   });
   expect(parseShellMessage({ type: "sidebar", open: "yes" })).toBeNull();
+  expect(parseShellMessage({ type: "grouping", grouping: "repository" })).toEqual({
+    type: "grouping",
+    grouping: "repository",
+  });
+  expect(parseShellMessage({ type: "grouping", grouping: "activity" })).toEqual({
+    type: "grouping",
+    grouping: "activity",
+  });
+  expect(parseShellMessage({ type: "grouping", grouping: "unknown" })).toBeNull();
   expect(parseShellMessage({ type: "navigate", url: "https://evil.example" })).toBeNull();
   expect(parseRealmMessage({ type: "selection", projectId: null, environmentId: "e" })).toEqual({
     type: "selection",
@@ -40,6 +50,15 @@ test("only known messages with bounded IDs cross between a window and its realm"
   expect(parseRealmMessage({ type: "settings", section: "../general" })).toBeNull();
   expect(parseRealmMessage({ type: "open", nodeId: "bk_a" })).toBeNull();
   expect(readFrameEnvelope({ kind: "other", workspaceId: "w", message: {} })).toBeNull();
+});
+
+test("a realm's coordinator defers to the command node only when grouped by repository", () => {
+  expect(realmCoordinatorDefers("repository")).toBe(true);
+  // Not yet told by the window: keep deferring rather than flash the conversations.
+  expect(realmCoordinatorDefers(null)).toBe(true);
+  expect(realmCoordinatorDefers("machine")).toBe(false);
+  expect(realmCoordinatorDefers("project")).toBe(false);
+  expect(realmCoordinatorDefers("activity")).toBe(false);
 });
 
 test("explicit board intent survives realm URLs and messages, with only known tabs accepted", () => {

@@ -160,3 +160,30 @@ The unchanged owning file passed alone (48 pass, 2.3 s, after failing twice more
   below the host temporary directory.
 - **Assessment:** confirmed recurrence of the existing intermittent failure;
   no desktop implementation, timeout, assertion or skip changed.
+
+## Transcript scroll smoothness validation — 2026-10-24
+
+- `mise run test:logged -- --name scroll-repository -- mise run test` timed
+  out `fixture tree digest > names every class of change a coordinator could
+  make` at the 5000 ms deadline in the workspace group (desktop). The same
+  aggregate's other workspace failures were the 14 OpenCode execution-policy
+  conformance cases expecting CLI 1.19.0 on a host with 1.19.4, which fail
+  identically on the unchanged base commit `f12cc5a53` and are not flakes.
+  Web 9222/0, root and agent-support, bridges and the Codex protocol
+  lockfile groups passed. Artifact: `orkestrator-test-run.fU06wf` below the
+  host temporary directory.
+- The unchanged owning file passed alone:
+  `mise run test:logged -- --name desktop-digest -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures`
+  (exit 0).
+- The change under validation touches only the web transcript, its tests,
+  the Virtuoso patch and docs; nothing the digest reads.
+
+
+## Latest-main refresh of per-machine accounts — 2026-10-24
+
+- **Parents:** merge `e25b6123` and main `553da7f54`.
+- **Original command:** `mise run test:logged -- --name update-main-tests -- mise run test`; workspace/root/bridge/protocol reservations 4/1/2/1 alongside component/isolated-browser validation, with two web workers.
+- **Failure:** The fixture tree digest timed out after 5026.72 ms while adding its disposable Git worktree.
+- **Complete unchanged owner:** `mise run test:logged -- --name update-coordinator-fixture-owner -- bun test --cwd apps/desktop ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures` passed, exit 0 in 4.9 s logged.
+- **Evidence:** `orkestrator-test-run.fA9A1i/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate completion.
+- **Assessment:** confirmed recurrence of the existing intermittent failure. No implementation, assertion, timeout or skip changed.

@@ -1143,7 +1143,11 @@ describe("AgentNativeTab", () => {
 
     expect(await screen.findByLabelText("Sign-in code")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open sign-in page" })).toBeTruthy();
-    expect(startAgentAccountLoginMock).toHaveBeenCalledWith("claude", { reauthenticate: true });
+    expect(startAgentAccountLoginMock).toHaveBeenCalledWith(
+      "claude",
+      { reauthenticate: true },
+      undefined,
+    );
     expect(createTab).not.toHaveBeenCalled();
   });
 
@@ -1197,7 +1201,11 @@ describe("AgentNativeTab", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
 
     expect(await screen.findByLabelText("Sign-in code")).toBeTruthy();
-    expect(startAgentAccountLoginMock).toHaveBeenCalledWith("claude", { reauthenticate: true });
+    expect(startAgentAccountLoginMock).toHaveBeenCalledWith(
+      "claude",
+      { reauthenticate: true },
+      undefined,
+    );
     expect(screen.queryByRole("button", { name: "Use a terminal instead" }) === null).toBe(true);
     expect(createTab).not.toHaveBeenCalled();
   });

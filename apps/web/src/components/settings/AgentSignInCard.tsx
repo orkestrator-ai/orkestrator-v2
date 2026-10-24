@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { ClaudeAccountSignInAction } from "@/components/claude/ClaudeAccountSignInAction";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { getAgentSignInStatus } from "@/lib/backend";
+import { useAccountMachine } from "./account-machine";
 import { cn } from "@/lib/utils";
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
@@ -78,10 +79,11 @@ export function AgentSignInCard({
   /** The platform's own sign-in controls (Cursor's), shown inside the card. */
   children?: ReactNode;
 }) {
+  const { machine } = useAccountMachine();
   const label = AGENT_PLATFORM_LABELS[platform];
   const signIn = useCoordinatedRead<NativeAgentAuthStatus>({
-    key: { resource: "agent-sign-in-status", target: "backend", options: platform },
-    read: () => getAgentSignInStatus(platform),
+    key: { resource: "agent-sign-in-status", target: machine ?? "backend", options: platform },
+    read: () => getAgentSignInStatus(platform, machine),
     trackState: true,
   });
   const { refresh } = signIn;

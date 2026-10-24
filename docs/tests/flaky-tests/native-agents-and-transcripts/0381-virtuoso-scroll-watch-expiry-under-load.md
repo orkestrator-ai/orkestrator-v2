@@ -1,7 +1,7 @@
 # Virtuoso post-scroll watch expiry under load
 
 - **ID:** 0381
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `useVirtuosoScrollState > scrollToBottom post-scroll watch window > stops watching scrollHeight after the watch window expires` (`tests/unit/hooks/useVirtuosoScrollState.test.ts:2266`).
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU-tool PATH prefix.
@@ -27,3 +27,21 @@
   summary in `orkestrator-test-run.T8dkv2/root-tests.log.gz`.
 - Host contention remains a hypothesis. No scroll code, assertions, deadlines
   or skips changed.
+
+## Resolution — 2026-10-24
+
+- **Root cause:** the post-scroll watch window was a fixed 400 ms
+  `requestAnimationFrame` loop started by every `scrollToBottom`; under load
+  its expiry raced the test's growth step, so a second re-issued scroll could
+  land inside or outside the window depending on scheduling.
+- **Fix:** the mechanism is gone. `scrollToBottom` is now one bounded journey
+  of the transcript scroll controller that converges on measured geometry and
+  ends at a frame/time budget; following then pins growth directly
+  (`docs/architecture/transcript-scroll.md`). The watch-window tests were
+  replaced by `scrollToBottom > pins the journey into the footer from measured
+  geometry, within its budget` and `scrollToBottom after the journey >
+  following pins later growth directly instead of re-issuing smooth scrolls`,
+  which drive the end deterministically instead of racing wall time.
+- **Verification:** `bun test ./tests/unit/hooks/useVirtuosoScrollState.test.ts
+  --parallel=1` passes (88 tests), and the suite runs inside the aggregate
+  `mise run test` recorded with this change.

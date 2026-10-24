@@ -223,6 +223,28 @@ complete unchanged owner in 19.6 s. Original group evidence is
 `orkestrator-test-run.AW4scv/root-and-agent-support-tests.log.gz` under the host
 temporary directory. No firewall implementation, assertion, timeout or skip changed.
 
+## Recurrence during 0016 validation (2026-10-24)
+
+- **Failure:** `GitHub ranges come from a fresh backend seed, else live, else this container's cache` and `policy 2 narrows host access to named ports and records what it applied` timed out at about 5,004 ms.
+- **Original command:** `mise run test:logged -- --name full-test-2 -- mise run test`
+  on branch `todo-0016-slash-command-catalogue` after rebasing onto `712274379`,
+  node mbp3, other worktrees validating on the host.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.CfvSIY/full-test-2.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name firewall-alone -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1` passed (21.1 s).
+- **Disposition:** recurrence confirmed by the isolated pass. No assertion,
+  deadline or skip was changed.
+- **Again after rebasing onto `a5d78cfcd` (full-test-3):** 15 firewall cases hit
+  the five-second budget (evidence
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.xqyQcT/full-test-3.log.gz`).
+  The owning file also failed alone twice while the host load average was 33
+  to 98 (3 and more cases at about 5,008 ms), then passed alone (24 passed,
+  0 failed) once the one-minute load fell to 10. The branch changes no
+  firewall test or `docker/` script.
+
 ## Agent accounts and sign-in (0003) validation — 2026-10-24
 
 Recurred in the non-iOS aggregate on node mbp3 (thirteen `container firewall policy` cases at ~5,003 ms); the unchanged owner passed alone (24 passed). Details in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Agent accounts main merge — 2026-10-24
+
+The broad run and complete unchanged owner both retained five-second failures. This is not newly classified as a flake. Exact commands, counts and artifacts are in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md#merge-through-main-8290f2ca9--2026-10-24). No assertion, deadline or skip changed.

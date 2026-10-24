@@ -26,7 +26,6 @@ import {
 } from "./path-safety.js";
 import { randomUUID } from "node:crypto";
 import { INITIAL_PROMPT_STAGING_DIRECTORY } from "./prompt-attachments.js";
-import { WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS } from "./commands-runtime-state.js";
 import type { Environment, AppConfig } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
@@ -36,8 +35,8 @@ import {
   CONTAINER_CLAUDE_CREDENTIAL_FILE,
   CONTAINER_CURSOR_API_KEY_FILE,
   CONTAINER_CURSOR_CREDENTIAL_DIR,
-  CONTAINER_UNTRACKED_STATS_SCANNER,
-} from "./commands-runtime-state.js";
+} from "./agent-credential-files.js";
+import { CONTAINER_UNTRACKED_STATS_SCANNER } from "./container-scripts.js";
 import type { GitFetchScheduler } from "./git-fetch-scheduler.js";
 import {
   CONTAINER_FETCH_STDERR_BYTES,
@@ -55,6 +54,11 @@ import {
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+
+export const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [
+  ".orkestrator",
+  ".claude/settings.local.json",
+] as const;
 
 export const MAX_FILE_TREE_NODES = 5_000;
 

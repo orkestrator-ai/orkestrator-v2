@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { useOpenCodeProviderLogin } from "@/hooks/useOpenCodeProviderLogin";
 import { OpenCodeProviderSignIn } from "@/components/opencode/OpenCodeProviderSignIn";
 import { listOpenCodeProviderAuth, removeOpenCodeProviderLogin } from "@/lib/backend";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import type {
   OpenCodeProviderAuthEntry,
   OpenCodeProviderAuthSnapshot,
@@ -144,12 +145,13 @@ export function OpenCodeProvidersSection() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  const { machine } = useAccountMachine();
 
   // State changes only once the read settles, so the mount effect never sets
   // state synchronously; `load` marks a refresh first.
   const read = useCallback(
     () =>
-      listOpenCodeProviderAuth().then(
+      listOpenCodeProviderAuth(machine).then(
         (providers) => {
           setSnapshot(providers);
           setError(null);
@@ -160,7 +162,7 @@ export function OpenCodeProvidersSection() {
           setLoading(false);
         },
       ),
-    [],
+    [machine],
   );
   const load = useCallback(async () => {
     setLoading(true);
@@ -213,7 +215,7 @@ export function OpenCodeProvidersSection() {
     setBusy(true);
     setNotice(null);
     try {
-      await removeOpenCodeProviderLogin(provider.id);
+      await removeOpenCodeProviderLogin(provider.id, machine);
       setNotice(
         provider.canRemoveStoredLogin
           ? `Removed any stored login for ${provider.label}. Environment or configuration credentials may keep it connected.`

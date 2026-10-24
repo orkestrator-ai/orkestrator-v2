@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AccountQuotaList } from "@/components/layout/AgentInfoButton.panels";
 import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginPanel";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import { StalePlanUsageNote } from "@/components/settings/PlanUsageSection";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import {
@@ -71,6 +72,7 @@ function AccountUsage({
   // A credential can change while the general settings pane is visible. A
   // newly mounted account row must also bypass the pre-change cache then.
   const seenReloadTokenRef = useRef("0:0");
+  const { machine } = useAccountMachine();
 
   useEffect(() => {
     let current = true;
@@ -78,7 +80,7 @@ function AccountUsage({
     seenReloadTokenRef.current = reloadToken;
     const load = async () => {
       try {
-        const next = await getAgentAccountUsage(platform, accountId, { force: forced });
+        const next = await getAgentAccountUsage(platform, accountId, { force: forced }, machine);
         if (!current) return;
         setSnapshot(next);
         setError(null);
@@ -90,7 +92,7 @@ function AccountUsage({
     return () => {
       current = false;
     };
-  }, [platform, accountId, reloadToken]);
+  }, [platform, accountId, reloadToken, machine]);
 
   if (error) return <p className="text-xs text-destructive">{error}</p>;
   if (!snapshot) {
@@ -255,6 +257,7 @@ export function AgentAccountsSection({
   const [usageReloadToken, setUsageReloadToken] = useState(0);
   const mounted = useRef(true);
   const platformLabel = AGENT_PLATFORM_LABELS[platform];
+  const { machine, name: machineName } = useAccountMachine();
 
   useEffect(() => {
     mounted.current = true;
@@ -265,12 +268,12 @@ export function AgentAccountsSection({
 
   const reload = useCallback(async () => {
     try {
-      const next = await listAgentAccounts();
+      const next = await listAgentAccounts(machine);
       if (mounted.current) setSnapshot(next);
     } catch (cause) {
       if (mounted.current) setError(messageOf(cause));
     }
-  }, []);
+  }, [machine]);
 
   useEffect(() => {
     void reload();
@@ -297,14 +300,14 @@ export function AgentAccountsSection({
   const loginHere = login.platform === platform && login.mode !== "reauthenticate";
   const loginPending = login.state === "pending" && loginHere;
   const loginStatus = useCoordinatedRead<AgentAccountLoginProgress>({
-    key: { resource: "agent-account-login", target: "backend" },
+    key: { resource: "agent-account-login", target: machine ?? "backend" },
     // A sign-in outlives this pane: reopening settings resumes the one running.
     readOnSubscribe: true,
     demand: {
       intervalMs: login.state === "pending" ? POLL_INTERVAL_MS : null,
       priority: "standard",
     },
-    read: () => getAgentAccountLogin(),
+    read: () => getAgentAccountLogin(machine),
     onState: (state) => {
       if (state.status === "current" && state.value) applyLogin(state.value);
     },
@@ -332,8 +335,8 @@ export function AgentAccountsSection({
     try {
       // Dismiss a finished sign-in first so its result does not linger.
       if (login.state !== "idle" && login.state !== "pending")
-        await cancelAgentAccountLogin(login.operationId);
-      applyLogin(await startAgentAccountLogin(platform));
+        await cancelAgentAccountLogin(login.operationId, machine);
+      applyLogin(await startAgentAccountLogin(platform, {}, machine));
       await refreshLogin();
     } catch (cause) {
       setError(messageOf(cause));
@@ -342,7 +345,9 @@ export function AgentAccountsSection({
 
   const cancelLogin = async () => {
     applyLogin(
-      await cancelAgentAccountLogin(login.operationId).catch(() => ({ state: "idle" as const })),
+      await cancelAgentAccountLogin(login.operationId, machine).catch(() => ({
+        state: "idle" as const,
+      })),
     );
     await refreshLogin();
   };
@@ -359,10 +364,13 @@ export function AgentAccountsSection({
     >
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-sm font-medium text-foreground">Accounts</h3>
+          <h3 className="text-sm font-medium text-foreground">
+            {machineName ? `Accounts on ${machineName}` : "Accounts"}
+          </h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            {platformLabel} agents, containers and new terminals use the active account. Switching
-            applies to each agent the next time it starts work while idle; conversations carry over.
+            {platformLabel} agents, containers and new terminals
+            {machineName ? ` on ${machineName}` : ""} use the active account. Switching applies to
+            each agent the next time it starts work while idle; conversations carry over.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -423,9 +431,13 @@ export function AgentAccountsSection({
               account={account}
               busy={busy}
               usageReloadToken={`${reloadToken}:${usageReloadToken}`}
-              onUse={() => void run(() => setActiveAgentAccount(platform, account.id), true)}
-              onRename={(label) => run(() => renameAgentAccount(platform, account.id, label))}
-              onRemove={() => void run(() => removeAgentAccount(platform, account.id))}
+              onUse={() =>
+                void run(() => setActiveAgentAccount(platform, account.id, machine), true)
+              }
+              onRename={(label) =>
+                run(() => renameAgentAccount(platform, account.id, label, machine))
+              }
+              onRemove={() => void run(() => removeAgentAccount(platform, account.id, machine))}
             />
           ))}
         </ul>

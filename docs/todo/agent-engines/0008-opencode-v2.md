@@ -161,10 +161,10 @@ client or normalizer (`apps/web/src/lib/opencode-messages.ts` is gone). In
   read-only `tools` mask (`OPENCODE_READ_ONLY_TURN_TOOLS`);
 - sessions: `opencode-review-session-permissions.ts`,
   `opencode-structured-output.ts`, `opencode-capabilities.ts`;
-- launch and health: `configureOpenCodeAgentTools` (`commands-servers.ts`), the
+- launch and health: `configureOpenCodeAgentTools` (`opencode-agent-tools.ts`), the
   `checkHttpHealth` calls in `commands-containers.ts`, and the GitHub-token
   plugin `buildOpenCodeGitHubEnvironmentPluginSource`
-  (`commands-runtime-state.ts`);
+  (`agent-credential-files.ts`);
 - MCP management, which reads and writes V1 config keys
   (`mcp-management/`).
 

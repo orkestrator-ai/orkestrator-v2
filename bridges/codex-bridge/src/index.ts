@@ -1237,16 +1237,6 @@ app.get("/global/usage", async (c) => {
 });
 
 /**
- * Legacy global list for clients that predate `/session/:id/commands`.
- * Templates and bridge built-ins only: reading it never starts Codex. Rows
- * carry the version-1 descriptor fields, which older clients ignore.
- */
-app.get("/global/slash-commands", async (c) => {
-  const cwd = getWorkingDirectory();
-  return c.json({ commands: await appServerRuntime.listGlobalCommandRows(), cwd });
-});
-
-/**
  * The enhanced (version 1) catalogue for one session. Metadata only: it does
  * not touch liveness, hydrate a transcript or re-attach an idle thread. An
  * unknown session is answered in band as `missing`, never 404 — a 404 here

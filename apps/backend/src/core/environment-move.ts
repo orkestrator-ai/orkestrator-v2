@@ -8,25 +8,10 @@ import {
 } from "@orkestrator/protocol/node/worktree-paths";
 
 import type { CommandContext } from "./commands-context.js";
-import {
-  enqueueLocalServerEnvironmentOperation,
-  stopLocalServersForEnvironmentUnlocked,
-} from "./commands-local-server-lifecycle.js";
+import { stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-lifecycle.js";
 import { syncPrMonitorTracking, invalidatePendingPrMonitorSync } from "./commands-pr-monitor.js";
-import {
-  environmentSetupSessions,
-  isLocalServerShutdownRequested,
-  mergingEnvironments,
-} from "./commands-runtime-state.js";
-import {
-  assertEnvironmentDeletionNotRequested,
-  assertEnvironmentNotDeleting,
-  terminateTerminalSessionsForEnvironment,
-} from "./commands-terminal.js";
-import {
-  enqueueEnvironmentLifecycleOperation,
-  invalidateEnvironmentStartDedupe,
-} from "./commands-environment.js";
+import { assertEnvironmentDeletionNotRequested } from "./commands-terminal.js";
+import { enqueueEnvironmentLifecycleOperation } from "./commands-environment.js";
 import {
   beginEnvironmentMove,
   bindEnvironmentMovePaths,
@@ -92,8 +77,11 @@ function isAgentActive(environment: Environment): boolean {
  * Checked when the move is requested and again once it reaches the front of
  * the environment's lifecycle queue.
  */
-export function assertEnvironmentMovable(environment: Environment): void {
-  assertEnvironmentNotDeleting(environment.id);
+export function assertEnvironmentMovable(
+  environment: Environment,
+  context: Pick<CommandContext, "runtime">,
+): void {
+  context.runtime.environments.assertNotDeleting(environment.id);
   assertEnvironmentDeletionNotRequested(environment, environment.id);
   if (environment.environmentType !== "local") {
     throw new Error("Only a local environment can be moved to another folder");
@@ -109,7 +97,7 @@ export function assertEnvironmentMovable(environment: Environment): void {
       "Move recovery is pending. Restart Orkestrator to retry recovery before moving or editing this environment.",
     );
   }
-  if (environment.lifecycleOperation || mergingEnvironments.has(environment.id)) {
+  if (environment.lifecycleOperation || context.runtime.environments.isMerging(environment.id)) {
     throw new Error("Another operation is running for this environment");
   }
   if (isEnvironmentBeingReplaced(environment.id)) {
@@ -118,7 +106,10 @@ export function assertEnvironmentMovable(environment: Environment): void {
   if (environment.status === "creating" || environment.status === "stopping") {
     throw new Error("Wait for the environment to finish starting or stopping, then move it");
   }
-  if (environment.setupPhase === "running" || environmentSetupSessions.has(environment.id)) {
+  if (
+    environment.setupPhase === "running" ||
+    context.runtime.environments.hasSetupSession(environment.id)
+  ) {
     throw new Error("Environment setup is still running; move the environment when it finishes");
   }
   if (isAgentActive(environment)) throw new Error(AGENT_ACTIVE_MOVE_ERROR);
@@ -136,7 +127,7 @@ export function moveEnvironmentTask(
   context: CommandContext,
   options: MoveEnvironmentOptions = {},
 ): Promise<Environment> {
-  if (isLocalServerShutdownRequested()) {
+  if (context.runtime.localServers.isShuttingDown()) {
     return Promise.reject(new Error("Backend is shutting down; environments cannot be moved"));
   }
   try {
@@ -146,10 +137,10 @@ export function moveEnvironmentTask(
   } catch (error) {
     return Promise.reject(error);
   }
-  invalidateEnvironmentStartDedupe(environmentId);
+  context.runtime.environments.invalidateStartDedupe(environmentId);
   try {
     return enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
-      enqueueLocalServerEnvironmentOperation(environmentId, () =>
+      context.runtime.localServers.enqueueEnvironmentOperation(environmentId, () =>
         moveEnvironmentOnce(environmentId, destinationDir, context, options),
       ),
     ).finally(() => endEnvironmentMove(environmentId));
@@ -173,7 +164,7 @@ async function moveEnvironmentOnce(
   const { storage } = context;
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-  assertEnvironmentMovable(environment);
+  assertEnvironmentMovable(environment, context);
   const sessions = await storage.listNativeAgentSessions();
   if (
     sessions.some((session) => session.environmentId === environmentId && session.pendingDispatch)
@@ -365,7 +356,9 @@ async function quiesceLocalEnvironment(
 ): Promise<void> {
   await stopEnvironmentReviewValidation(environment.id, context);
   await stopEnvironmentExecWorkers(environment.id, context, { requireStopped: true });
-  const survivingTerminals = await terminateTerminalSessionsForEnvironment(environment.id);
+  const survivingTerminals = await context.runtime.terminals.terminateSessionsForEnvironment(
+    environment.id,
+  );
   if (survivingTerminals.length > 0) {
     throw new Error("Terminal processes in the environment are still running; try again");
   }

@@ -55,13 +55,6 @@ import {
   resolveViewSnapshotOutcome,
 } from "@orkestrator/protocol/view-sync";
 import {
-  terminalProcesses,
-  terminalSessionConfigs,
-  terminalOutputBuffers,
-  terminalOutputRevisions,
-  terminalOutputGenerations,
-  terminalOutputDeltas,
-  terminalOutputTruncated,
   CONTAINER_INTERACTIVE_SHELL_COMMAND,
   CONTAINER_SAFE_BASE64_READER,
   asString,
@@ -80,21 +73,9 @@ import {
   createEnvironmentCommandRunner,
   parseGitPorcelainPaths,
   findEnvironmentByContainerId,
-  readTerminalOutputBuffer,
   logSetupTerminal,
   resolveLocalShellPath,
-  rememberTerminalSession,
-  isTerminalBootstrapped,
   stableTerminalKey,
-  rememberStableTerminalSession,
-  existingStableTerminalSession,
-  containerTerminalConfigMatches,
-  localTerminalConfigMatches,
-  recordTerminalInputActivity,
-  trackedTerminalActivityHooks,
-  explicitlyCloseTerminalSession,
-  terminalStableKeyEnvironmentId,
-  assertEnvironmentNotDeleting,
   assertEnvironmentDeletionNotRequested,
   spawnTerminalProcess,
   getWorktreeBaseDir,
@@ -369,11 +350,11 @@ export function registerTerminalCommands(
     "create_terminal_session",
     async (
       { containerId, environmentId, terminalKey, cols, rows, user, trackEnvironmentActivity },
-      { storage },
+      { storage, runtime },
     ) => {
       const resolvedContainerId = asString(containerId, "containerId");
       const requestedEnvironmentId = asOptionalString(environmentId);
-      assertEnvironmentNotDeleting(requestedEnvironmentId);
+      runtime.environments.assertNotDeleting(requestedEnvironmentId);
       // A stop that is draining the container refuses new terminals into it.
       assertContainerNotDraining(resolvedContainerId);
       const requestedTerminalKey = asOptionalString(terminalKey);
@@ -382,7 +363,7 @@ export function registerTerminalCommands(
         shouldTrackActivity || requestedEnvironmentId
           ? findEnvironmentByContainerId(await storage.loadEnvironments(), resolvedContainerId)
           : undefined;
-      assertEnvironmentNotDeleting(requestedEnvironmentId ?? matchedEnvironment?.id);
+      runtime.environments.assertNotDeleting(requestedEnvironmentId ?? matchedEnvironment?.id);
       if (requestedEnvironmentId && matchedEnvironment?.id !== requestedEnvironmentId) {
         throw new Error("Terminal container is not associated with the requested environment");
       }
@@ -411,18 +392,18 @@ export function registerTerminalCommands(
         activityEnvironmentId,
         trackEnvironmentActivity: shouldTrackActivity,
       };
-      const existingId = existingStableTerminalSession(stableKey);
-      if (existingId && containerTerminalConfigMatches(existingId, config)) {
+      const existingId = runtime.terminals.existingStableSession(stableKey);
+      if (existingId && runtime.terminals.containerConfigMatches(existingId, config)) {
         return {
           sessionId: existingId,
           created: false,
-          bootstrapped: isTerminalBootstrapped(existingId),
+          bootstrapped: runtime.terminals.isBootstrapped(existingId),
         };
       }
-      if (existingId) explicitlyCloseTerminalSession(existingId);
+      if (existingId) runtime.terminals.explicitlyCloseSession(existingId);
 
       const id = `${resolvedContainerId}:${randomUUID()}`;
-      rememberStableTerminalSession(id, config, stableKey);
+      runtime.terminals.rememberStableSession(id, config, stableKey);
       configureTerminalHistory({
         sessionId: id,
         dataDir: storage.getDataDir(),
@@ -435,7 +416,8 @@ export function registerTerminalCommands(
       return { sessionId: id, created: true, bootstrapped: false };
     },
   );
-  register("attach_terminal", ({ containerId, cols, rows, user }, { emit, storage }) => {
+  register("attach_terminal", ({ containerId, cols, rows, user }, context) => {
+    const { storage, runtime } = context;
     assertContainerNotDraining(asString(containerId, "containerId"));
     const id = `${asString(containerId, "containerId")}:${randomUUID()}`;
     const config = {
@@ -445,7 +427,7 @@ export function registerTerminalCommands(
       rows: asTerminalDimension(rows, 24),
       user: asOptionalString(user),
     };
-    rememberTerminalSession(id, config);
+    runtime.terminals.rememberSession(id, config);
     configureTerminalHistory({
       sessionId: id,
       dataDir: storage.getDataDir(),
@@ -456,13 +438,13 @@ export function registerTerminalCommands(
     const dockerArgs = ["exec", "-it"];
     if (config.user) dockerArgs.push("--user", config.user);
     dockerArgs.push(config.containerId, "bash", "-lc", CONTAINER_INTERACTIVE_SHELL_COMMAND);
-    spawnTerminalProcess(id, "docker", dockerArgs, config, emit);
+    spawnTerminalProcess(id, "docker", dockerArgs, config, context);
     return id;
   });
   register("start_terminal_session", async ({ sessionId }, context) => {
-    const { emit, storage } = context;
+    const { storage, runtime } = context;
     const id = asString(sessionId, "sessionId");
-    const storedConfig = terminalSessionConfigs.get(id);
+    const storedConfig = runtime.terminals.sessionConfig(id);
     const config =
       storedConfig?.kind === "container"
         ? storedConfig
@@ -475,21 +457,21 @@ export function registerTerminalCommands(
     const environmentId =
       config.environmentId ??
       config.activityEnvironmentId ??
-      terminalStableKeyEnvironmentId(id) ??
+      runtime.terminals.stableKeyEnvironmentId(id) ??
       undefined;
-    assertEnvironmentNotDeleting(environmentId);
+    runtime.environments.assertNotDeleting(environmentId);
     if (environmentId) {
       const environment = await storage.getEnvironment(environmentId);
-      assertEnvironmentNotDeleting(environmentId);
+      runtime.environments.assertNotDeleting(environmentId);
       assertEnvironmentDeletionNotRequested(environment, environmentId);
     }
-    if (storedConfig && terminalSessionConfigs.get(id) !== storedConfig) {
+    if (storedConfig && runtime.terminals.sessionConfig(id) !== storedConfig) {
       throw new Error("Container terminal session is no longer available");
     }
     // A `claude` or `codex` run in this shell should use the active account,
     // not whichever login the container was last handed. Best effort.
     await applyActiveAgentAccountsForContainerTerminal(context, config.containerId);
-    if (storedConfig && terminalSessionConfigs.get(id) !== storedConfig) {
+    if (storedConfig && runtime.terminals.sessionConfig(id) !== storedConfig) {
       throw new Error("Container terminal session is no longer available");
     }
     await resumeTerminalHistory(id);
@@ -501,25 +483,26 @@ export function registerTerminalCommands(
       "docker",
       dockerArgs,
       config,
-      emit,
-      trackedTerminalActivityHooks(id, context),
+      context,
+      runtime.terminals.activityHooks(id, context),
     );
   });
   // `delivered` is additive: HTTP callers ignore the result, while the terminal
   // WebSocket gateway needs it to avoid acknowledging input that never reached a
   // shell. Dropping it silently would tell the user a keystroke landed.
   register("terminal_write", ({ sessionId, data }, context) => {
+    const { runtime } = context;
     const id = asString(sessionId, "sessionId");
     const terminalData = asString(data, "data");
-    const terminalProcess = terminalProcesses.get(id);
+    const terminalProcess = runtime.terminals.process(id);
     if (!terminalProcess) return { delivered: false };
     terminalProcess.write(terminalData);
-    recordTerminalInputActivity(id, terminalData, context);
+    runtime.terminals.recordInputActivity(id, terminalData, context);
     return { delivered: true };
   });
-  register("terminal_resize", ({ sessionId, cols, rows }) => {
+  register("terminal_resize", ({ sessionId, cols, rows }, { runtime }) => {
     const id = asString(sessionId, "sessionId");
-    const terminalProcess = terminalProcesses.get(id);
+    const terminalProcess = runtime.terminals.process(id);
     if (!terminalProcess) return { delivered: false };
     const resolvedCols = asTerminalDimension(cols, 80);
     const resolvedRows = asTerminalDimension(rows, 24);
@@ -527,46 +510,48 @@ export function registerTerminalCommands(
     resizeTerminalHistoryBestEffort(id, resolvedCols, resolvedRows);
     return { delivered: true };
   });
-  register("detach_terminal", ({ sessionId }) => {
-    explicitlyCloseTerminalSession(asString(sessionId, "sessionId"));
+  register("detach_terminal", ({ sessionId }, { runtime }) => {
+    runtime.terminals.explicitlyCloseSession(asString(sessionId, "sessionId"));
   });
-  register("list_terminal_sessions", () => Array.from(terminalProcesses.keys()));
-  register("get_terminal_session", ({ sessionId }) => {
+  register("list_terminal_sessions", (_args, { runtime }) => runtime.terminals.processIds());
+  register("get_terminal_session", ({ sessionId }, { runtime }) => {
     const id = asString(sessionId, "sessionId");
-    const running = isTerminalSessionAttachable(id);
+    const running = isTerminalSessionAttachable({ runtime }, id);
     if (isSetupTerminalSessionId(id)) {
       logSetupTerminal("renderer checked terminal session", {
         sessionId: id,
         running,
-        terminalRunning: terminalProcesses.has(id),
-        bufferChars: terminalOutputBuffers.get(id)?.length ?? 0,
+        terminalRunning: runtime.terminals.hasProcess(id),
+        bufferChars: runtime.terminals.outputLength(id),
       });
     }
-    return { id, running, bootstrapped: isTerminalBootstrapped(id) };
+    return { id, running, bootstrapped: runtime.terminals.isBootstrapped(id) };
   });
   register("bootstrap_terminal_session", ({ sessionId, data }, context) => {
+    const { runtime } = context;
     const id = asString(sessionId, "sessionId");
     const terminalData = asString(data, "data");
     const bootstrapDataHash = createHash("sha256").update(terminalData).digest("hex");
-    if (isTerminalBootstrapped(id)) {
+    if (runtime.terminals.isBootstrapped(id)) {
       return {
         bootstrapped: true,
         delivered: false,
         duplicate: true,
-        matchesExisting: terminalSessionConfigs.get(id)?.bootstrapDataHash === bootstrapDataHash,
+        matchesExisting:
+          runtime.terminals.sessionConfig(id)?.bootstrapDataHash === bootstrapDataHash,
       };
     }
-    const terminalProcess = terminalProcesses.get(id);
+    const terminalProcess = runtime.terminals.process(id);
     if (!terminalProcess) {
       return { bootstrapped: false, delivered: false, duplicate: false };
     }
-    const config = terminalSessionConfigs.get(id);
+    const config = runtime.terminals.sessionConfig(id);
     if (!config) return { bootstrapped: false, delivered: false, duplicate: false };
     config.bootstrapped = true;
     config.bootstrapDataHash = bootstrapDataHash;
     try {
       terminalProcess.write(terminalData);
-      recordTerminalInputActivity(id, terminalData, context);
+      runtime.terminals.recordInputActivity(id, terminalData, context);
       return { bootstrapped: true, delivered: true, duplicate: false };
     } catch (error) {
       config.bootstrapped = false;
@@ -574,67 +559,70 @@ export function registerTerminalCommands(
       throw error;
     }
   });
-  register("get_terminal_output_buffer", ({ sessionId }) => {
+  register("get_terminal_output_buffer", ({ sessionId }, { runtime }) => {
     const id = asString(sessionId, "sessionId");
-    const buffer = readTerminalOutputBuffer(id);
+    const buffer = runtime.terminals.readOutput(id);
     if (isSetupTerminalSessionId(id)) {
       logSetupTerminal("renderer requested output buffer", {
         sessionId: id,
         bufferChars: buffer.length,
-        running: terminalProcesses.has(id),
+        running: runtime.terminals.hasProcess(id),
       });
     }
     return buffer;
   });
-  register("get_terminal_output_snapshot", ({ sessionId, sinceRevision, sinceGeneration }) => {
-    const id = asString(sessionId, "sessionId");
-    const revision = terminalOutputRevisions.get(id) ?? 0;
-    const generation = terminalOutputGenerations.get(id) ?? 0;
-    if (sinceRevision !== undefined || sinceGeneration !== undefined) {
-      const requestedRevision = asNumber(sinceRevision, "sinceRevision");
-      const requestedGeneration = asNumber(sinceGeneration, "sinceGeneration");
-      const deltas = terminalOutputDeltas.get(id) ?? [];
-      const oldestRevision = deltas[0]?.revision ?? revision + 1;
-      if (
-        Number.isSafeInteger(requestedRevision) &&
-        requestedRevision >= 0 &&
-        Number.isSafeInteger(requestedGeneration) &&
-        requestedGeneration === generation &&
-        requestedRevision <= revision &&
-        requestedRevision >= oldestRevision - 1
-      ) {
-        const retainedDeltas = deltas
-          .filter((entry) => entry.revision > requestedRevision)
-          .map((entry) => ({ revision: entry.revision, text: entry.text }));
+  register(
+    "get_terminal_output_snapshot",
+    ({ sessionId, sinceRevision, sinceGeneration }, { runtime }) => {
+      const id = asString(sessionId, "sessionId");
+      const revision = runtime.terminals.outputRevision(id) ?? 0;
+      const generation = runtime.terminals.outputGeneration(id) ?? 0;
+      if (sinceRevision !== undefined || sinceGeneration !== undefined) {
+        const requestedRevision = asNumber(sinceRevision, "sinceRevision");
+        const requestedGeneration = asNumber(sinceGeneration, "sinceGeneration");
+        const deltas = runtime.terminals.retainedOutputDeltas(id);
+        const oldestRevision = deltas[0]?.revision ?? revision + 1;
+        if (
+          Number.isSafeInteger(requestedRevision) &&
+          requestedRevision >= 0 &&
+          Number.isSafeInteger(requestedGeneration) &&
+          requestedGeneration === generation &&
+          requestedRevision <= revision &&
+          requestedRevision >= oldestRevision - 1
+        ) {
+          const retainedDeltas = deltas
+            .filter((entry) => entry.revision > requestedRevision)
+            .map((entry) => ({ revision: entry.revision, text: entry.text }));
+          return {
+            mode: "delta",
+            output: retainedDeltas.map((entry) => entry.text).join(""),
+            // The WebSocket gateway preserves revision boundaries when replaying
+            // raw binary output. Existing HTTP clients ignore this additive field.
+            deltas: retainedDeltas,
+            revision,
+            generation,
+            truncated: false,
+          };
+        }
         return {
-          mode: "delta",
-          output: retainedDeltas.map((entry) => entry.text).join(""),
-          // The WebSocket gateway preserves revision boundaries when replaying
-          // raw binary output. Existing HTTP clients ignore this additive field.
-          deltas: retainedDeltas,
+          mode: "full",
+          reason: requestedGeneration === generation ? "expired" : "generation-changed",
+          output: runtime.terminals.readOutput(id),
           revision,
           generation,
-          truncated: false,
+          truncated: runtime.terminals.isOutputTruncated(id),
         };
       }
       return {
-        mode: "full",
-        reason: requestedGeneration === generation ? "expired" : "generation-changed",
-        output: readTerminalOutputBuffer(id),
+        output: runtime.terminals.readOutput(id),
         revision,
         generation,
-        truncated: terminalOutputTruncated.has(id),
+        truncated: runtime.terminals.isOutputTruncated(id),
       };
-    }
-    return {
-      output: readTerminalOutputBuffer(id),
-      revision,
-      generation,
-      truncated: terminalOutputTruncated.has(id),
-    };
-  });
+    },
+  );
 
-  register("get_terminal_state_snapshot", async ({ sessionId }, { storage }) => {
+  register("get_terminal_state_snapshot", async ({ sessionId }, { storage, runtime }) => {
     const id = asString(sessionId, "sessionId");
     let snapshot = await getTerminalStateSnapshot(id);
     if (!snapshot && isSetupTerminalSessionId(id)) {
@@ -648,7 +636,7 @@ export function registerTerminalCommands(
           rows: 24,
           environmentId,
           tabId: "setup",
-          generation: terminalOutputGenerations.get(id) ?? 1,
+          generation: runtime.terminals.outputGeneration(id) ?? 1,
         });
         snapshot = await getTerminalStateSnapshot(id);
       }
@@ -671,13 +659,16 @@ export function registerTerminalCommands(
 
   register(
     "create_local_terminal_session",
-    async ({ environmentId, terminalKey, cols, rows, trackEnvironmentActivity }, { storage }) => {
+    async (
+      { environmentId, terminalKey, cols, rows, trackEnvironmentActivity },
+      { storage, runtime },
+    ) => {
       const resolvedEnvironmentId = asString(environmentId, "environmentId");
-      assertEnvironmentNotDeleting(resolvedEnvironmentId);
+      runtime.environments.assertNotDeleting(resolvedEnvironmentId);
       // A shell opened in the folder being moved would be left behind in it.
       assertEnvironmentNotMoving(resolvedEnvironmentId);
       const environment = await storage.getEnvironment(resolvedEnvironmentId);
-      assertEnvironmentNotDeleting(resolvedEnvironmentId);
+      runtime.environments.assertNotDeleting(resolvedEnvironmentId);
       assertEnvironmentDeletionNotRequested(environment, resolvedEnvironmentId);
       assertEnvironmentNotMoving(resolvedEnvironmentId);
       const stableKey = stableTerminalKey(
@@ -692,18 +683,18 @@ export function registerTerminalCommands(
         rows: asTerminalDimension(rows, 24),
         trackEnvironmentActivity: asBoolean(trackEnvironmentActivity),
       };
-      const existingId = existingStableTerminalSession(stableKey);
-      if (existingId && localTerminalConfigMatches(existingId, config)) {
+      const existingId = runtime.terminals.existingStableSession(stableKey);
+      if (existingId && runtime.terminals.localConfigMatches(existingId, config)) {
         return {
           sessionId: existingId,
           created: false,
-          bootstrapped: isTerminalBootstrapped(existingId),
+          bootstrapped: runtime.terminals.isBootstrapped(existingId),
         };
       }
-      if (existingId) explicitlyCloseTerminalSession(existingId);
+      if (existingId) runtime.terminals.explicitlyCloseSession(existingId);
 
       const id = `${resolvedEnvironmentId}:${randomUUID()}`;
-      rememberStableTerminalSession(id, config, stableKey);
+      runtime.terminals.rememberStableSession(id, config, stableKey);
       configureTerminalHistory({
         sessionId: id,
         dataDir: storage.getDataDir(),
@@ -717,9 +708,9 @@ export function registerTerminalCommands(
     },
   );
   register("start_local_terminal_session", async ({ sessionId }, context) => {
-    const { storage, emit } = context;
+    const { storage, runtime } = context;
     const id = asString(sessionId, "sessionId");
-    const storedConfig = terminalSessionConfigs.get(id);
+    const storedConfig = runtime.terminals.sessionConfig(id);
     const config =
       storedConfig?.kind === "local"
         ? storedConfig
@@ -730,22 +721,22 @@ export function registerTerminalCommands(
             rows: 24,
           };
     const environmentId = config.environmentId;
-    assertEnvironmentNotDeleting(environmentId);
+    runtime.environments.assertNotDeleting(environmentId);
     const env = await storage.getEnvironment(environmentId);
-    assertEnvironmentNotDeleting(environmentId);
+    runtime.environments.assertNotDeleting(environmentId);
     assertEnvironmentDeletionNotRequested(env, environmentId);
     if (!env?.worktreePath) throw new Error("Local environment worktree is not available");
     if (!(await pathExists(env.worktreePath)))
       throw new Error(`Local environment worktree does not exist: ${env.worktreePath}`);
-    assertEnvironmentNotDeleting(environmentId);
+    runtime.environments.assertNotDeleting(environmentId);
     const currentEnvironment = await storage.getEnvironment(environmentId);
-    assertEnvironmentNotDeleting(environmentId);
+    runtime.environments.assertNotDeleting(environmentId);
     assertEnvironmentNotMoving(environmentId);
     assertEnvironmentDeletionNotRequested(currentEnvironment, environmentId);
     if (!currentEnvironment?.worktreePath || currentEnvironment.worktreePath !== env.worktreePath) {
       throw new Error("Local environment worktree is no longer available");
     }
-    if (storedConfig && terminalSessionConfigs.get(id) !== storedConfig) {
+    if (storedConfig && runtime.terminals.sessionConfig(id) !== storedConfig) {
       throw new Error("Local terminal session is no longer available");
     }
     // A terminal keeps the account that was active when it started; a switch
@@ -757,16 +748,16 @@ export function registerTerminalCommands(
     }
     await resumeTerminalHistory(id);
     const launchTarget = await storage.getEnvironment(environmentId);
-    assertEnvironmentNotDeleting(environmentId);
+    runtime.environments.assertNotDeleting(environmentId);
     assertEnvironmentNotMoving(environmentId);
     assertEnvironmentDeletionNotRequested(launchTarget, environmentId);
     if (
       launchTarget?.worktreePath !== currentEnvironment.worktreePath ||
-      terminalSessionConfigs.get(id) !== storedConfig
+      runtime.terminals.sessionConfig(id) !== storedConfig
     ) {
       throw new Error("Local terminal session or worktree is no longer available");
     }
-    const alreadyRunning = terminalProcesses.has(id);
+    const alreadyRunning = runtime.terminals.hasProcess(id);
     const terminalProcess = spawnTerminalProcess(
       id,
       resolveLocalShellPath(),
@@ -777,27 +768,28 @@ export function registerTerminalCommands(
         rows: config.rows,
         env: launchEnvironment,
       },
-      emit,
-      trackedTerminalActivityHooks(id, context),
+      context,
+      runtime.terminals.activityHooks(id, context),
     );
-    if (!alreadyRunning && terminalProcesses.get(id) === terminalProcess) {
+    if (!alreadyRunning && runtime.terminals.process(id) === terminalProcess) {
       for (const home of [accountEnvironment.CLAUDE_CONFIG_DIR, accountEnvironment.CODEX_HOME]) {
         if (home) terminalAccountHomes.set(`${id}:${home}`, home);
       }
     }
   });
   register("local_terminal_write", ({ sessionId, data }, context) => {
+    const { runtime } = context;
     const id = asString(sessionId, "sessionId");
     const terminalData = asString(data, "data");
-    const terminalProcess = terminalProcesses.get(id);
+    const terminalProcess = runtime.terminals.process(id);
     if (!terminalProcess) return { delivered: false };
     terminalProcess.write(terminalData);
-    recordTerminalInputActivity(id, terminalData, context);
+    runtime.terminals.recordInputActivity(id, terminalData, context);
     return { delivered: true };
   });
-  register("local_terminal_resize", ({ sessionId, cols, rows }) => {
+  register("local_terminal_resize", ({ sessionId, cols, rows }, { runtime }) => {
     const id = asString(sessionId, "sessionId");
-    const terminalProcess = terminalProcesses.get(id);
+    const terminalProcess = runtime.terminals.process(id);
     if (!terminalProcess) return { delivered: false };
     const resolvedCols = asTerminalDimension(cols, 80);
     const resolvedRows = asTerminalDimension(rows, 24);
@@ -805,8 +797,8 @@ export function registerTerminalCommands(
     resizeTerminalHistoryBestEffort(id, resolvedCols, resolvedRows);
     return { delivered: true };
   });
-  register("close_local_terminal_session", ({ sessionId }) => {
-    explicitlyCloseTerminalSession(asString(sessionId, "sessionId"));
+  register("close_local_terminal_session", ({ sessionId }, { runtime }) => {
+    runtime.terminals.explicitlyCloseSession(asString(sessionId, "sessionId"));
   });
 
   register(

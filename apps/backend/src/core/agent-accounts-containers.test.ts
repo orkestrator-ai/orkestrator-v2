@@ -14,7 +14,7 @@ import type { RegistryDependencies } from "./commands-registry-types.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { resetImageManifestCache } from "./docker-image.js";
 import { revokeProviderCredentials } from "./portable-input-status.js";
-import { staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
+import { BackendRuntime } from "./backend-runtime.js";
 import {
   activeAgentAccountInputRoots,
   applyActiveAgentAccountsForContainerTerminal,
@@ -33,7 +33,7 @@ import {
 } from "./agent-accounts-containers.js";
 import { SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND } from "./commands-files.js";
 import type { CommandContext } from "./commands-context.js";
-import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./commands-runtime-state.js";
+import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./agent-credential-files.js";
 import type { Environment } from "./models.js";
 import {
   defaultInputSourceRoots,
@@ -59,6 +59,14 @@ let storage: StorageService;
 let environment: Environment;
 let liveWork = false;
 let context: CommandContext;
+const runtimes: BackendRuntime[] = [];
+
+/** A backend's in-process state; a second one models a restarted backend. */
+function freshRuntime(): BackendRuntime {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  runtimes.push(runtime);
+  return runtime;
+}
 
 async function write(file: string, contents: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -188,11 +196,13 @@ beforeEach(async () => {
     runtimeFlavor: "agent-test",
     credentialSources: new Set(["claude", "codex"]),
     nativeAgents: { hasObservedLiveWork: async () => liveWork },
+    runtime: freshRuntime(),
   } as unknown as CommandContext;
 });
 
 afterEach(async () => {
   setHostClaudeLoginRefresher(undefined);
+  for (const runtime of runtimes.splice(0)) runtime.shutdown();
   for (const key of ENV_KEYS) {
     if (savedEnv[key] === undefined) delete process.env[key];
     else process.env[key] = savedEnv[key];
@@ -542,7 +552,6 @@ describe("syncContainerAgentAccountsOnStart", () => {
         stopped++;
       },
     };
-    staleLoginEnvironmentIds.clear();
     await reconcileContainerAgentAccount(context, "container-1", "claude", control, fake.runners);
     expect(stopped).toBe(1);
   });
@@ -1083,7 +1092,6 @@ describe("reconcileContainerAgentAccount", () => {
   });
 
   test("a renewed host login reaches a container that never saw an account switch", async () => {
-    staleLoginEnvironmentIds.clear();
     await markContainersForClaudeLoginRefresh(context);
     const fake = fakeRunners(null);
     const { state, control } = bridge(true);
@@ -1094,14 +1102,13 @@ describe("reconcileContainerAgentAccount", () => {
       '{"claudeAiOauth":{"accessToken":"claude-host"}}',
     );
     expect(state.stopped).toBe(1);
-    expect(staleLoginEnvironmentIds.has(environment.id)).toBe(false);
+    expect(context.runtime.localServers.hasStaleContainerLogin(environment.id)).toBe(false);
     // Once delivered, the container is left alone again.
     await reconcileContainerAgentAccount(context, "container-1", "claude", control, fake.runners);
     expect(fake.calls.filter(isCredentialPipe)).toHaveLength(1);
   });
 
   test("a busy bridge keeps the old login until it is idle", async () => {
-    staleLoginEnvironmentIds.clear();
     await markContainersForClaudeLoginRefresh(context);
     liveWork = true;
     const fake = fakeRunners(null);
@@ -1111,12 +1118,10 @@ describe("reconcileContainerAgentAccount", () => {
 
     expect(fake.calls.some(isCredentialPipe)).toBe(false);
     expect(state.stopped).toBe(0);
-    expect(staleLoginEnvironmentIds.has(environment.id)).toBe(true);
-    staleLoginEnvironmentIds.clear();
+    expect(context.runtime.localServers.hasStaleContainerLogin(environment.id)).toBe(true);
   });
 
   test("failed bridge stop retains refresh intent and retries before acknowledging", async () => {
-    staleLoginEnvironmentIds.clear();
     await markContainersForClaudeLoginRefresh(context);
     const fake = fakeRunners(null);
     fake.markers.set("/tmp/orkestrator-claude-account", "default");
@@ -1131,18 +1136,17 @@ describe("reconcileContainerAgentAccount", () => {
     await expect(
       reconcileContainerAgentAccount(context, "container-1", "claude", control, fake.runners),
     ).rejects.toThrow("stop unavailable");
-    expect(staleLoginEnvironmentIds.has(environment.id)).toBe(true);
+    expect(context.runtime.localServers.hasStaleContainerLogin(environment.id)).toBe(true);
     expect(fake.markers.get("/tmp/orkestrator-claude-account")).toBe("default");
     await reconcileContainerAgentAccount(context, "container-1", "claude", control, fake.runners);
     expect(attempts).toBe(2);
-    expect(staleLoginEnvironmentIds.has(environment.id)).toBe(false);
+    expect(context.runtime.localServers.hasStaleContainerLogin(environment.id)).toBe(false);
     expect(fake.markers.get("/tmp/orkestrator-claude-account")).toBe(
       `default:${(await storage.loadAgentAccounts()).loginGeneration?.claude}`,
     );
   });
 
   test("deferred refresh survives recreated backend state and a matching account marker", async () => {
-    staleLoginEnvironmentIds.clear();
     await markContainersForClaudeLoginRefresh(context);
     liveWork = true;
     const fake = fakeRunners(null);
@@ -1150,7 +1154,7 @@ describe("reconcileContainerAgentAccount", () => {
     const { state, control } = bridge(true);
     await reconcileContainerAgentAccount(context, "container-1", "claude", control, fake.runners);
     expect(state.stopped).toBe(0);
-    staleLoginEnvironmentIds.clear();
+    context.runtime = freshRuntime();
     await storage.addEnvironment(environment);
     await storage.updateGlobalConfig({
       ...(await storage.loadConfig()).global,
@@ -1171,11 +1175,10 @@ describe("reconcileContainerAgentAccount", () => {
   });
 
   test("an isolated container login is never replaced by the host's", async () => {
-    staleLoginEnvironmentIds.clear();
     context.storage.loadConfig = async () =>
       ({ global: { enabledAgentPlatforms: ["claude"], useHostClaudeCredentials: false } }) as never;
     await markContainersForClaudeLoginRefresh(context);
-    expect(staleLoginEnvironmentIds.size).toBe(0);
+    expect(context.runtime.localServers.hasStaleContainerLogin(environment.id)).toBe(false);
   });
 
   test("a revoked provider is never handed a login", async () => {

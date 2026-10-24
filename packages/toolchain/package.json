@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/toolchain",
-  "version": "2.28.0-beta",
+  "version": "2.29.0-beta",
   "private": true,
   "type": "module",
   "exports": {

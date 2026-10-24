@@ -12,7 +12,7 @@ import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV,
   AGENT_TEST_HOST_PI_AGENT_DIR_ENV,
-} from "./commands-runtime-state.js";
+} from "./agent-credential-files.js";
 import { cursorApiKeyFingerprint, resolveCursorApiKey } from "./commands-validation.js";
 
 export type CursorHostCredentialMaterial = {

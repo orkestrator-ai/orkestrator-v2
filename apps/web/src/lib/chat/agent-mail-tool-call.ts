@@ -93,6 +93,13 @@ function mailActor(value: unknown): MailActor | undefined {
         : undefined;
     case "system":
       return typeof value.projectId === "string" ? (value as MailActor) : undefined;
+    case "node":
+      return typeof value.nodeId === "string" &&
+        typeof value.nodeName === "string" &&
+        typeof value.environmentId === "string" &&
+        typeof value.tabId === "string"
+        ? (value as MailActor)
+        : undefined;
     default:
       return undefined;
   }

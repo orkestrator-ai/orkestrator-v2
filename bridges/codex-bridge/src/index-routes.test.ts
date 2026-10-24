@@ -97,13 +97,10 @@ describe("global route outcomes", () => {
     );
   });
 
-  test("serves serialized slash-command definitions", async () => {
+  test("serves no legacy global slash-command list", async () => {
+    // Retired with the backend's global fallback; commands are per session.
     const response = await app.request("/global/slash-commands");
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
-      commands: expect.any(Array),
-      cwd: expect.any(String),
-    });
+    expect(response.status).toBe(404);
   });
 
   test("reports a soft-empty plan read as a null account, not an unmetered plan", async () => {
@@ -2644,17 +2641,18 @@ describe("mixed-version: old backend, current bridge", () => {
     return sessionId;
   }
 
-  test("the legacy global route still parses under the old reader without dropping a row", async () => {
-    const response = await app.request("/global/slash-commands");
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    const rows = expectLegacyRows(body);
-    const old = oldBackendRows(body);
-    // Names are unique, so the old Map keeps every row.
-    expect(old).toHaveLength(rows.length);
-    expect(old).toContainEqual(expect.objectContaining({ name: "/help", source: "builtin" }));
-    expect(old).toContainEqual(expect.objectContaining({ name: "/models", source: "builtin" }));
-    expect(old).toContainEqual({
+  test("the retired global route is never needed: the old reader reads the session route", async () => {
+    // A pre-2.21 backend read `/global/slash-commands` only after a session
+    // route 404, which this bridge never sends (unknown sessions are answered
+    // in band, below). The route itself is gone.
+    expect((await app.request("/global/slash-commands")).status).toBe(404);
+    const sessionId = await createRealSession();
+    const old = await oldBackendSlashCommands(sessionId);
+    expect(old.usedGlobalRoute).toBe(false);
+    expect(old.commands).toContainEqual(
+      expect.objectContaining({ name: "/help", source: "builtin" }),
+    );
+    expect(old.commands).toContainEqual({
       name: "/mixedreview",
       source: "user",
       description: "Review a target",
@@ -2713,24 +2711,13 @@ describe("mixed-version: old backend, current bridge", () => {
   test("an unknown session is an empty in-band list, so the old reader never falls back", async () => {
     // Pre-#827 Codex answered 404 here and the old backend then read
     // `/global/slash-commands`; this bridge answers 200 `missing` instead.
-    let globalReads = 0;
-    await withRuntimeMethod(
-      "listGlobalCommandRows",
-      async () => {
-        globalReads += 1;
-        return [];
-      },
-      async () => {
-        const raw = await app.request("/session/never-created-mixed/commands");
-        expect(raw.status).toBe(200);
-        expect(await raw.json()).toMatchObject({ status: "missing", commands: [] });
-        expect(await oldBackendSlashCommands("never-created-mixed")).toEqual({
-          usedGlobalRoute: false,
-          commands: [],
-        });
-      },
-    );
-    expect(globalReads).toBe(0);
+    const raw = await app.request("/session/never-created-mixed/commands");
+    expect(raw.status).toBe(200);
+    expect(await raw.json()).toMatchObject({ status: "missing", commands: [] });
+    expect(await oldBackendSlashCommands("never-created-mixed")).toEqual({
+      usedGlobalRoute: false,
+      commands: [],
+    });
   });
 
   test("commandRevision is additive: the old snapshot fields and provider revision do not move", async () => {

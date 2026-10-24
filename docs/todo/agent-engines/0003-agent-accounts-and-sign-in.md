@@ -63,7 +63,7 @@ or Docker (see [What is left](#what-is-left)). How accounts work is in
   shows it as a warning beside the transcript's sign-in card.
 - Accounts (`apps/backend/src/core/agent-accounts*.ts`): registry, per-account
   directories with shared entries, backend-driven CLI login, active-account
-  launch and stale-login flags, container hand-off, Claude reauthentication.
+  launch and stale-login flags in `LocalServerRuntime` (`local-server-runtime.ts`), container hand-off, Claude reauthentication.
   Shared entries a CLI replaced with its own copy are now reported per account
   (`privateEntries`).
 
@@ -436,7 +436,7 @@ Assumptions:
   are folded into the new account's card". The code gates folding on the
   reporting bridge's account: `contextUsageWithPlanUsage`
   (`plan-usage-cache.ts`) folds only when the connection's `accountId`
-  (`localAgentAccountIds`, set at launch) matches the active account. Container
+  (`LocalServerRuntime.launchedAccountId`, set at launch) matches the active account. Container
   bridges report `"unknown"`, so their windows never fold. Confirm with a live
   switch during a running turn, then drop the gap or restate it. Not run on
   mbp3 (2026-10-24): it needs two signed-in Claude accounts in one profile and

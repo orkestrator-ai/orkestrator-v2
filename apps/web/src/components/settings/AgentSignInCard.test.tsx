@@ -5,6 +5,7 @@ import type {
   NativeAgentAuthState,
   NativeAgentAuthStatus,
 } from "@orkestrator/protocol/native-agent";
+import { AccountMachineProvider } from "./account-machine";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 
 const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
@@ -75,12 +76,14 @@ function fixture(platform: AgentPlatform, state: NativeAgentAuthState): NativeAg
 }
 
 beforeEach(() => {
+  delete window.orkestratorPortal;
   calls.length = 0;
   statuses = {};
   failRead = false;
 });
 
 afterEach(() => {
+  delete window.orkestratorPortal;
   cleanup();
   resetReadCoordinatorForTests();
 });
@@ -120,6 +123,43 @@ describe("AgentSignInCard", () => {
         args: { platform: "claude", reauthenticate: true },
       }),
     );
+  });
+
+  test("status and Claude reauthentication use the selected machine", async () => {
+    statuses.claude = fixture("claude", "signed-out");
+    const portal = mock(async (command: string, args: Record<string, unknown> = {}) => {
+      expect(command).toBe("invoke_on_node");
+      expect(args.nodeId).toBe("leaf");
+      const result =
+        args.command === "get_agent_sign_in_status"
+          ? statuses.claude
+          : args.command === "start_agent_account_login"
+            ? {
+                state: "pending",
+                operationId: "remote-reauth",
+                platform: "claude",
+                mode: "reauthenticate",
+              }
+            : { state: "idle" };
+      return { outcome: "ok", result };
+    });
+    window.orkestratorPortal = { invoke: portal } as never;
+    render(
+      <AccountMachineProvider value={{ machine: "leaf", name: "Leaf" }}>
+        <AgentSignInCard platform="claude" />
+      </AccountMachineProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+    await waitFor(() =>
+      expect(
+        portal.mock.calls.some(
+          ([, args]) =>
+            args?.command === "start_agent_account_login" &&
+            (args.args as Record<string, unknown> | undefined)?.reauthenticate === true,
+        ),
+      ).toBe(true),
+    );
+    expect(calls).toEqual([]);
   });
 
   test("names the terminal command for Grok and Pi", async () => {

@@ -1,5 +1,6 @@
 import { ChatFindActiveContext } from "./chat-find-context";
 import {
+  Component,
   type ReactNode,
   type RefObject,
   useCallback,
@@ -9,6 +10,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { Virtuoso, type ListRange, type VirtuosoHandle, type StateSnapshot } from "react-virtuoso";
 import {
@@ -42,11 +44,33 @@ import {
 } from "@/lib/chat/rich-render-priority";
 import { useRichViewPinned } from "@/stores/richContentViewStore";
 import { useArtifactLiveHostStore } from "@/stores/artifactLiveHostStore";
+import type { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
+import { pureprependCount } from "@/lib/transcript-scroll/prepend";
+import { keepMountedOverscan, useRatchetedOverscan } from "@/lib/transcript-scroll/keep-mounted";
 
 interface VirtuosoListContext {
   footer?: ReactNode;
   header?: ReactNode;
   emptyState?: ReactNode;
+}
+
+/** The scroll wiring a transcript list receives (from `useVirtuosoScrollState`). */
+export interface TranscriptListScrollProps {
+  followOutput: (isAtBottom: boolean) => "auto" | false;
+  atBottomStateChange: (atBottom: boolean) => void;
+  atBottomThreshold: number;
+  totalListHeightChanged?: (height: number) => void;
+  restoreStateFrom: StateSnapshot | undefined;
+  scrollerRef?: (el: HTMLElement | Window | null) => void;
+  /** Pause/resume auto-follow for a reason (see `useVirtuosoScrollState`). */
+  setFollowPaused?: (reason: string, paused: boolean) => void;
+  /**
+   * Whether automatic following may run (see `useVirtuosoScrollState`).
+   * When false Virtuoso receives the literal `false`.
+   */
+  followEnabled?: boolean;
+  /** The viewport's positioning owner; find navigates through it when present. */
+  controller?: TranscriptScrollController;
 }
 
 interface VirtualizedMessageListProps<TMessage> {
@@ -64,16 +88,7 @@ interface VirtualizedMessageListProps<TMessage> {
   /** Rendered above the first message, e.g. "load earlier messages". */
   header?: ReactNode;
   emptyState?: ReactNode;
-  scrollProps: {
-    followOutput: (isAtBottom: boolean) => "auto" | false;
-    atBottomStateChange: (atBottom: boolean) => void;
-    atBottomThreshold: number;
-    totalListHeightChanged?: (height: number) => void;
-    restoreStateFrom: StateSnapshot | undefined;
-    scrollerRef?: (el: HTMLElement | Window | null) => void;
-    /** Pause/resume auto-follow for a reason (see `useVirtuosoScrollState`). */
-    setFollowPaused?: (reason: string, paused: boolean) => void;
-  };
+  scrollProps: TranscriptListScrollProps;
   virtuosoRef: RefObject<VirtuosoHandle | null>;
   /**
    * Item key (as returned by `computeItemKey`) of a row to highlight briefly,
@@ -101,39 +116,41 @@ interface VirtualizedMessageListProps<TMessage> {
 const EMPTY_SEARCH_TEXT = () => "";
 const SEARCH_CONTENT_SELECTOR = "[data-agent-chat-search-content]";
 const ROW_SELECTOR = "[data-chat-message-index]";
-const PAUSED_FOLLOW_OUTPUT = () => false as const;
 
 /**
- * Keep-mounted bounds. While a row holds the reader's text selection or
- * focused element, Virtuoso renders at least `KEEP_MOUNTED_MARGIN_ROWS`
- * beyond the visible range on each side, and enough rows toward the protected
- * row to keep it in the render window — at most `KEEP_MOUNTED_MAX_ROWS` rows
- * away. Farther than that, protection is released and the row unmounts like
- * any other (its DOM selection does not survive; view state does). Only one
- * row is protected at a time; virtualization stays on for the rest.
+ * Virtuoso's `firstItemIndex` starts here and decreases by the number of
+ * display rows each pure history prepend adds, so the rows already on screen
+ * keep their absolute indices and the library keeps them in place. Headroom
+ * for far more prepends than any transcript loads.
  */
-export const KEEP_MOUNTED_MAX_ROWS = 8;
-export const KEEP_MOUNTED_MARGIN_ROWS = 2;
+export const FIRST_ITEM_INDEX_BASE = 100_000_000;
 
 /**
- * Virtuoso's `minOverscanItemCount` that keeps `protectedIndex` rendered for
- * the visible `range`, or null when there is nothing to protect or the row is
- * beyond the keep-mounted bound (release).
+ * Tracks `firstItemIndex` across renders: lowered atomically with the data
+ * when the change is a pure prepend of display rows, unchanged otherwise. A
+ * merge into the old first row adds no row and so moves nothing; the semantic
+ * anchor settles that residual.
  */
-export function keepMountedOverscan(
-  protectedIndex: number | null,
-  range: { startIndex: number; endIndex: number } | null,
-): { top: number; bottom: number } | null {
-  if (protectedIndex === null || protectedIndex < 0) return null;
-  if (!range) return { top: KEEP_MOUNTED_MARGIN_ROWS, bottom: KEEP_MOUNTED_MARGIN_ROWS };
-  const above = range.startIndex - protectedIndex;
-  const below = protectedIndex - range.endIndex;
-  if (above > KEEP_MOUNTED_MAX_ROWS || below > KEEP_MOUNTED_MAX_ROWS) return null;
-  return {
-    top: Math.max(0, above) + KEEP_MOUNTED_MARGIN_ROWS,
-    bottom: Math.max(0, below) + KEEP_MOUNTED_MARGIN_ROWS,
-  };
+function useFirstItemIndex<TMessage>(
+  messages: readonly TMessage[],
+  computeItemKey: (index: number, message: TMessage) => string,
+): number {
+  const [tracked, setTracked] = useState({ messages, firstItemIndex: FIRST_ITEM_INDEX_BASE });
+  if (tracked.messages === messages) return tracked.firstItemIndex;
+  const added = pureprependCount(tracked.messages, messages, (list, index) =>
+    computeItemKey(index, list[index]!),
+  );
+  const firstItemIndex = Math.max(0, tracked.firstItemIndex - added);
+  // Derived from the previous render's data; React re-renders before commit.
+  setTracked({ messages, firstItemIndex });
+  return firstItemIndex;
 }
+
+export {
+  KEEP_MOUNTED_MARGIN_ROWS,
+  KEEP_MOUNTED_MAX_ROWS,
+  keepMountedOverscan,
+} from "@/lib/transcript-scroll/keep-mounted";
 
 /** The transcript row key holding `node`, if it is inside a row of `root`. */
 function rowKeyOf(root: HTMLElement | null, node: Node | null): string | null {
@@ -203,6 +220,32 @@ function enclosingRichBlockKeys(node: Node): Set<string> {
   }
   return keys;
 }
+
+/**
+ * Captures the reader's place before a data commit mutates the transcript,
+ * while a structural update (a history page) is held. `getSnapshotBeforeUpdate`
+ * is the one point where the DOM still shows the previous rows.
+ */
+class PreCommitAnchor extends Component<{
+  messages: readonly unknown[];
+  controller: TranscriptScrollController | undefined;
+}> {
+  getSnapshotBeforeUpdate(previous: { messages: readonly unknown[] }) {
+    const { controller, messages } = this.props;
+    if (controller?.holdingStructure && previous.messages !== messages)
+      controller.capturePreCommit();
+    return null;
+  }
+
+  componentDidUpdate() {}
+
+  render() {
+    return null;
+  }
+}
+
+const NO_SCROLL_VIEW = () => () => {};
+const NO_TARGET = () => null;
 
 function FooterWrapper({ children }: { children: ReactNode }) {
   return <div className="min-w-0">{children}</div>;
@@ -314,15 +357,74 @@ export function VirtualizedMessageList<TMessage>({
     [hasFooter, hasHeader, hasEmptyState],
   );
 
+  const controller = scrollProps.controller;
+  const forwardScrollerRef = scrollProps.scrollerRef;
+  // A library-independent name for the transcript's own scroller, distinct
+  // from any nested virtualized viewport (an open long tool group).
+  const transcriptScrollerRef = useCallback(
+    (element: HTMLElement | Window | null) => {
+      if (element instanceof HTMLElement) element.setAttribute("data-transcript-scroller", "true");
+      forwardScrollerRef?.(element);
+    },
+    [forwardScrollerRef],
+  );
+  const messagesRef = useRef(messages);
+  // Callers pass `computeItemKey` inline; read it through a ref so callbacks
+  // built from it (find navigation) keep their identity across renders.
+  const computeItemKeyRef = useRef(computeItemKey);
+  useLayoutEffect(() => {
+    messagesRef.current = messages;
+    computeItemKeyRef.current = computeItemKey;
+  }, [computeItemKey, messages]);
+  // Virtuoso's rendered and reported indices include `firstItemIndex`; its
+  // `scrollToIndex` takes the local data index. Everything in this component
+  // (find matches, DOM index attributes, protected rows) is local.
+  const firstItemIndex = useFirstItemIndex(messages, computeItemKey);
+  /** Generation of find's own navigation; its match refinement may not outlive the reader moving. */
+  const findNavigationRef = useRef<number | null>(null);
+  /**
+   * The match find last navigated to, by identity. Matches are recomputed
+   * whenever the rows change (every streaming update while find is open);
+   * only a different match is a navigation — re-navigating to the same one
+   * would pull a reader who scrolled away back to it on every token.
+   */
+  const lastFindMatchRef = useRef<string | null>(null);
   const handleFindNavigate = useCallback(
-    (match: { itemIndex: number }) => {
+    (match: AgentChatFindMatch, query: string) => {
+      const message = messagesRef.current[match.itemIndex];
+      const identity = JSON.stringify([
+        query,
+        message === undefined
+          ? match.itemIndex
+          : computeItemKeyRef.current(match.itemIndex, message),
+        match.characterIndex,
+        match.occurrenceIndex,
+      ]);
+      if (identity === lastFindMatchRef.current) return;
+      lastFindMatchRef.current = identity;
+      if (controller) {
+        const navigated = controller.navigateTo(
+          {
+            kind: "row",
+            index: match.itemIndex,
+            key:
+              message === undefined
+                ? undefined
+                : computeItemKeyRef.current(match.itemIndex, message),
+            align: "center",
+          },
+          "find",
+        );
+        findNavigationRef.current = navigated ? controller.generation : null;
+        return;
+      }
       virtuosoRef.current?.scrollToIndex({
         index: match.itemIndex,
         align: "center",
         behavior: "auto",
       });
     },
-    [virtuosoRef],
+    [controller, virtuosoRef],
   );
   const chatFind = useAgentChatFind({
     items: messages,
@@ -331,6 +433,32 @@ export function VirtualizedMessageList<TMessage>({
     ownerRef: rootRef,
     onNavigate: handleFindNavigate,
   });
+  // Asking for the latest message ends a find session rather than leaving
+  // find and the latest journey competing for the viewport.
+  const closeFind = chatFind.onClose;
+  const findOpen = chatFind.isOpen;
+  useEffect(() => {
+    if (!controller || !findOpen) return;
+    return controller.onLatestRequested(closeFind);
+  }, [closeFind, controller, findOpen]);
+  // Navigation by row identity resolves the row's current index here.
+  useLayoutEffect(() => {
+    if (!controller) return;
+    controller.setRowIndexResolver((key) =>
+      messagesRef.current.findIndex(
+        (message, index) => computeItemKeyRef.current(index, message) === key,
+      ),
+    );
+    return () => controller.setRowIndexResolver(null);
+  }, [controller]);
+  // Clearing the query starts a new search even if it returns to the same
+  // occurrence. Reset before the hook's passive navigation effect runs.
+  useLayoutEffect(() => {
+    if (!findOpen || !chatFind.query.trim()) {
+      lastFindMatchRef.current = null;
+      findNavigationRef.current = null;
+    }
+  }, [chatFind.query, findOpen]);
   const getSearchProjection =
     find?.getSearchProjection ??
     (find?.getSearchText as SearchTextGetter<TMessage> | undefined)?.projection;
@@ -349,6 +477,8 @@ export function VirtualizedMessageList<TMessage>({
   const latestRangeRef = useRef<ListRange | null>(null);
   const protectedIndexRef = useRef<number | null>(null);
   const [visibleRange, setVisibleRange] = useState<ListRange | null>(null);
+  const [releasedTargetKey, setReleasedTargetKey] = useState<string | null>(null);
+  const navigationProtectedKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -382,7 +512,12 @@ export function VirtualizedMessageList<TMessage>({
 
   const appliedOverscan = useRef({ top: 0, bottom: 0 });
   const handleRangeChanged = useCallback(
-    (reported: ListRange) => {
+    (absolute: ListRange) => {
+      // Virtuoso reports absolute indices (offset by `firstItemIndex`).
+      const reported = {
+        startIndex: absolute.startIndex - firstItemIndex,
+        endIndex: absolute.endIndex - firstItemIndex,
+      };
       // Virtuoso reports the expanded render window. Recover the viewport
       // range before calculating new protection, avoiding an overscan feedback loop.
       let range = {
@@ -426,6 +561,7 @@ export function VirtualizedMessageList<TMessage>({
         // Beyond the bound the row unmounts like any other: release it.
         setSelectionRowKey(null);
         setFocusRowKey(null);
+        setReleasedTargetKey(navigationProtectedKeyRef.current);
         setVisibleRange(null);
         return;
       }
@@ -435,9 +571,25 @@ export function VirtualizedMessageList<TMessage>({
           : range,
       );
     },
-    [appliedOverscan, messages.length],
+    [appliedOverscan, firstItemIndex, messages.length],
   );
-  const protectedRowKey = selectionRowKey ?? focusRowKey;
+  // A bounded navigation's target row stays mounted while it converges,
+  // within the same bound as a selection; beyond it the target is released
+  // (the navigation then re-navigates by index rather than holding it).
+  const navigationTargetKey = useSyncExternalStore(
+    controller?.subscribe ?? NO_SCROLL_VIEW,
+    controller ? () => controller.getSnapshot().targetKey : NO_TARGET,
+  );
+  const navigationProtectedKey =
+    navigationTargetKey !== null && navigationTargetKey !== releasedTargetKey
+      ? navigationTargetKey
+      : null;
+  useLayoutEffect(() => {
+    navigationProtectedKeyRef.current = navigationProtectedKey;
+    // Protection measures from the known viewport range, as a selection does.
+    if (navigationProtectedKey !== null) setVisibleRange(latestRangeRef.current);
+  }, [navigationProtectedKey]);
+  const protectedRowKey = selectionRowKey ?? focusRowKey ?? navigationProtectedKey;
   const protectedIndex = useMemo(() => {
     if (protectedRowKey === null) return null;
     const index = messages.findIndex(
@@ -448,7 +600,14 @@ export function VirtualizedMessageList<TMessage>({
   useLayoutEffect(() => {
     protectedIndexRef.current = protectedIndex;
   }, [protectedIndex]);
-  const keepMounted = keepMountedOverscan(protectedIndex, visibleRange);
+  // A navigation target is only protected against a known range: with none
+  // there is nothing to measure the bound from.
+  const keepMounted = useRatchetedOverscan(
+    protectedIndex === null ? null : protectedRowKey,
+    selectionRowKey === null && focusRowKey === null && visibleRange === null
+      ? null
+      : keepMountedOverscan(protectedIndex, visibleRange),
+  );
   useLayoutEffect(() => {
     appliedOverscan.current.top = keepMounted?.top ?? 0;
     appliedOverscan.current.bottom = keepMounted?.bottom ?? 0;
@@ -633,14 +792,29 @@ export function VirtualizedMessageList<TMessage>({
         const node = anchor ?? activeRange.startContainer;
         const element = node instanceof Element ? node : node.parentElement;
         const scroller = element?.closest<HTMLElement>("[data-virtuoso-scroller]");
-        if (scroller) {
-          const matchRect = anchor
-            ? anchor.getBoundingClientRect()
-            : activeRange.getBoundingClientRect();
+        const range = activeRange;
+        const matchRect = () => {
+          if (!node.isConnected) return null;
+          return anchor ? anchor.getBoundingClientRect() : range.getBoundingClientRect();
+        };
+        const findNavigation = findNavigationRef.current;
+        if (controller && scroller) {
+          // Find owns the viewport only until the reader moves: refine its
+          // navigation onto the match box, never snap a reader back to it.
+          const box = matchRect();
           const viewport = scroller.getBoundingClientRect();
-          if (matchRect.top < viewport.top || matchRect.bottom > viewport.bottom) {
+          const navigating = controller.currentOwner === "find";
+          const outside = box !== null && (box.top < viewport.top || box.bottom > viewport.bottom);
+          if (findNavigation !== null && (navigating || outside)) {
+            controller.retarget("find", { kind: "rect", rect: matchRect }, findNavigation);
+          }
+        } else if (scroller) {
+          // A list without a scroll controller (fixtures) scrolls directly.
+          const box = matchRect()!;
+          const viewport = scroller.getBoundingClientRect();
+          if (box.top < viewport.top || box.bottom > viewport.bottom) {
             scroller.scrollBy({
-              top: matchRect.top - viewport.top - (viewport.height - matchRect.height) / 2,
+              top: box.top - viewport.top - (viewport.height - box.height) / 2,
               behavior: "instant",
             });
           }
@@ -664,6 +838,7 @@ export function VirtualizedMessageList<TMessage>({
     chatFind.isOpen,
     chatFind.matches,
     chatFind.query,
+    controller,
     find?.isActive,
     currentHighlightName,
     findInstanceId,
@@ -677,6 +852,7 @@ export function VirtualizedMessageList<TMessage>({
 
   return (
     <div ref={rootRef} className="relative min-h-0 flex-1">
+      <PreCommitAnchor messages={messages} controller={controller} />
       <AgentChatFindBar
         inputRef={chatFind.inputRef}
         query={chatFind.query}
@@ -704,8 +880,10 @@ export function VirtualizedMessageList<TMessage>({
         ref={virtuosoRef}
         data={messages}
         context={context}
-        computeItemKey={computeItemKey}
-        itemContent={(index, data) => {
+        firstItemIndex={firstItemIndex}
+        computeItemKey={(absolute, data) => computeItemKey(absolute - firstItemIndex, data)}
+        itemContent={(absolute, data) => {
+          const index = absolute - firstItemIndex;
           const rowKey = computeItemKey(index, data);
           return (
             <TranscriptRow
@@ -728,12 +906,17 @@ export function VirtualizedMessageList<TMessage>({
           );
         }}
         components={components}
-        followOutput={pausedLocally ? PAUSED_FOLLOW_OUTPUT : scrollProps.followOutput}
+        // Literal false whenever following may not run: Virtuoso's size and
+        // viewport paths test `followOutput !== false`, so a function that
+        // would return false still lets them scroll.
+        followOutput={
+          pausedLocally || scrollProps.followEnabled === false ? false : scrollProps.followOutput
+        }
         atBottomStateChange={scrollProps.atBottomStateChange}
         atBottomThreshold={scrollProps.atBottomThreshold}
         totalListHeightChanged={scrollProps.totalListHeightChanged}
         restoreStateFrom={scrollProps.restoreStateFrom}
-        scrollerRef={scrollProps.scrollerRef}
+        scrollerRef={transcriptScrollerRef}
         rangeChanged={handleRangeChanged}
         minOverscanItemCount={keepMounted ?? undefined}
         // A tool block can be thousands of pixels tall. Using it as Virtuoso's

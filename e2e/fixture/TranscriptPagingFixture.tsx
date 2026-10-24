@@ -58,7 +58,9 @@ const reviewer: MultiReviewReviewerTranscript = {
   historyCursor: "before-40",
   truncated: true,
 };
-const pause = () => new Promise((resolve) => setTimeout(resolve, 150));
+// `slow` holds the page long enough for the reader to move while it loads.
+const pageDelayMs = new URLSearchParams(window.location.search).has("slow") ? 1_500 : 150;
+const pause = () => new Promise((resolve) => setTimeout(resolve, pageDelayMs));
 const loadTranscript = async () => reviewer;
 const loadHistoryPage = async () => {
   await pause();
@@ -157,6 +159,13 @@ function installBackend() {
         case "get_file_tree":
         case "get_local_file_tree":
           result = [];
+          break;
+        // The agent information panel names the session's account.
+        case "get_native_agent_session_account":
+          result = null;
+          break;
+        case "list_agent_accounts":
+          result = { accounts: [], active: { claude: "default", codex: "default" } };
           break;
         case "get_native_agent_auth_status":
           result = { state: "ready" };

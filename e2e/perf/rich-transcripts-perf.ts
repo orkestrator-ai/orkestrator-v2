@@ -29,7 +29,7 @@
  * per-run medians and fails when composer latency or scroll-frame time regresses
  * by more than 10%.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -204,6 +204,29 @@ function summarizeDurations(values: number[]) {
     median: round(median(values)),
     p95: round(quantile(values, 0.95)),
     max: round(values.length ? Math.max(...values) : Number.NaN),
+  };
+}
+
+/**
+ * Frame intervals against the refresh interval `T` measured on the same page
+ * (≈16.7 ms at 60 Hz, ≈8.3 ms at 120 Hz), so budgets hold at either cadence.
+ */
+function summarizeFrames(intervals: number[], refreshMs: number) {
+  const over = (factor: number) =>
+    round(
+      (100 * intervals.filter((value) => value > factor * refreshMs).length) /
+        Math.max(1, intervals.length),
+      2,
+    );
+  return {
+    n: intervals.length,
+    refreshMs: round(refreshMs),
+    p50: round(median(intervals)),
+    p95: round(quantile(intervals, 0.95)),
+    p99: round(quantile(intervals, 0.99)),
+    max: round(intervals.length ? Math.max(...intervals) : Number.NaN),
+    over1_5TPct: over(1.5),
+    over2TPct: over(2),
   };
 }
 
@@ -395,6 +418,54 @@ async function stopProfile(cdp: CDPSession | null, file: string) {
 // ---------------------------------------------------------------------------
 // One measured run.
 
+/**
+ * Scroll workloads beyond the upward history wheel: each must actually move
+ * the viewport (a wheel at a list boundary measures nothing), so every phase
+ * reports the distance it travelled.
+ */
+const SCROLL_PHASES: Array<{ name: string; deltas: (index: number) => number; events: number }> = [
+  { name: "down", events: 150, deltas: () => 300 },
+  { name: "slowUp", events: 240, deltas: (index) => -(1 + (index % 3)) },
+  {
+    name: "alternating",
+    events: 200,
+    deltas: (index) => (Math.floor(index / 10) % 2 === 0 ? -160 : 160),
+  },
+  { name: "fling", events: 40, deltas: (index) => (index < 20 ? -1200 : 1200) },
+];
+
+/** Median rAF interval at rest: the display's refresh interval for this run. */
+async function calibrateRefresh(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        const times: number[] = [];
+        const tick = (time: number) => {
+          times.push(time);
+          if (times.length < 90) requestAnimationFrame(tick);
+          else {
+            const intervals = times
+              .slice(1)
+              .map((value, index) => value - times[index]!)
+              .sort((a, b) => a - b);
+            resolve(intervals[Math.floor(intervals.length / 2)]!);
+          }
+        };
+        requestAnimationFrame(tick);
+      }),
+  );
+}
+
+/** The candidate's transcript scroll controller counters; null where absent (baseline). */
+async function scrollControllerCounters(page: Page): Promise<Record<string, number> | null> {
+  return page.evaluate(() => {
+    const scroller = document.querySelector("[data-virtuoso-scroller]") as
+      | (Element & { orkTranscriptScrollDiagnostics?: () => Record<string, number> })
+      | null;
+    return scroller?.orkTranscriptScrollDiagnostics?.() ?? null;
+  });
+}
+
 const STREAM_INTERVAL_MS = 50;
 const STREAM_CHARS_PER_TICK = 12;
 const WHEEL_EVENTS = 300;
@@ -429,6 +500,7 @@ async function measureRun(
   const loadCounters = await counters(page);
   const scroller = page.locator("[data-virtuoso-scroller]").first();
   const box = (await scroller.boundingBox())!;
+  const refreshMs = await calibrateRefresh(page);
 
   // --- typing while streaming
   if (options.stream) {
@@ -540,6 +612,7 @@ async function measureRun(
   const scrollWindow = await longTasksBetween(page, scrollStart, scrollEnd);
   const scroll = {
     frameInterval: summarizeDurations(intervals),
+    frames: summarizeFrames(intervals, refreshMs),
     framesOver33Pct: round(
       (100 * intervals.filter((value) => value > 33.4).length) / Math.max(1, intervals.length),
       1,
@@ -555,6 +628,49 @@ async function measureRun(
     },
     counters: counterDelta(scrollCountersBefore, await counters(page)),
   };
+
+  // --- further scroll workloads, still while streaming
+  const scrollPhases: Record<string, unknown> = {};
+  for (const phase of SCROLL_PHASES) {
+    // Total path, not net displacement: alternating and fling phases return.
+    await scroller.evaluate((element) => {
+      const state = { last: element.scrollTop, path: 0 };
+      (window as unknown as { __phasePath: typeof state }).__phasePath = state;
+      element.addEventListener("scroll", () => {
+        state.path += Math.abs(element.scrollTop - state.last);
+        state.last = element.scrollTop;
+      });
+    });
+    const phaseStart = await now(page);
+    await page.evaluate(() => {
+      (
+        window as unknown as { __perfCollect: { startFrames: () => void } }
+      ).__perfCollect.startFrames();
+    });
+    for (let i = 0; i < phase.events; i++) {
+      await page.mouse.wheel(0, phase.deltas(i));
+      await sleep(16);
+    }
+    await sleep(300);
+    const phaseFrames = await page.evaluate(() =>
+      (
+        window as unknown as { __perfCollect: { stopFrames: () => number[] } }
+      ).__perfCollect.stopFrames(),
+    );
+    const phaseEnd = await now(page);
+    const travelled = await page.evaluate(
+      () => (window as unknown as { __phasePath: { path: number } }).__phasePath.path,
+    );
+    const phaseIntervals = phaseFrames.slice(1).map((time, index) => time - phaseFrames[index]!);
+    const phaseWindow = await longTasksBetween(page, phaseStart, phaseEnd);
+    scrollPhases[phase.name] = {
+      travelledPx: round(travelled),
+      frames: summarizeFrames(phaseIntervals, refreshMs),
+      longTasks: phaseWindow.longTasks,
+      longAnimationFrames: phaseWindow.longAnimationFrames,
+    };
+  }
+  const controller = await scrollControllerCounters(page);
   await page.evaluate(() => window.__richPerf!.stopStream());
 
   // --- scroll / expand / reopen cycles
@@ -564,6 +680,10 @@ async function measureRun(
     load: { ...load, counters: counterDelta(ZERO_COUNTERS, loadCounters) },
     typing,
     scroll,
+    scrollPhases,
+    /** Null where the checkout has no transcript scroll controller (baseline). */
+    controller,
+    refreshMs: round(refreshMs),
     cycles,
     unexpectedCommands: (await counters(page)).unexpectedCommands,
   };
@@ -761,6 +881,17 @@ function convergence(
 // ---------------------------------------------------------------------------
 // Main.
 
+/** Commit and dirty state of a measured checkout, so a report names what it measured. */
+function checkoutMetadata(root: string): { commit: string | null; dirty: boolean | null } {
+  const git = (args: string[]) => {
+    const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+    return result.status === 0 ? result.stdout.trim() : null;
+  };
+  const commit = git(["rev-parse", "HEAD"]);
+  const status = git(["status", "--porcelain"]);
+  return { commit, dirty: status === null ? null : status.length > 0 };
+}
+
 type RunResult = Awaited<ReturnType<typeof measureRun>>;
 
 function gateMetrics(result: RunResult) {
@@ -835,6 +966,31 @@ async function main() {
         scrollFrameMedianMs: metric((run) => run.scroll.frameInterval.median),
         scrollFrameP95Ms: metric((run) => run.scroll.frameInterval.p95),
         scrollFramesOver33Pct: metric((run) => run.scroll.framesOver33Pct),
+        refreshMs: metric((run) => run.refreshMs),
+        scrollFrameP99Ms: metric((run) => run.scroll.frames.p99),
+        scrollFramesOver1_5TPct: metric((run) => run.scroll.frames.over1_5TPct),
+        scrollFramesOver2TPct: metric((run) => run.scroll.frames.over2TPct),
+        ...Object.fromEntries(
+          SCROLL_PHASES.flatMap((phase) => {
+            const pick = (run: RunResult) =>
+              run.scrollPhases[phase.name] as {
+                travelledPx: number;
+                frames: ReturnType<typeof summarizeFrames>;
+              };
+            return [
+              [`${phase.name}TravelledPx`, metric((run) => pick(run).travelledPx)],
+              [`${phase.name}FrameP95Ms`, metric((run) => pick(run).frames.p95)],
+              [`${phase.name}FrameP99Ms`, metric((run) => pick(run).frames.p99)],
+              [`${phase.name}FramesOver2TPct`, metric((run) => pick(run).frames.over2TPct)],
+            ];
+          }),
+        ),
+        controllerWrites: runs.every((run) => run.controller)
+          ? metric((run) => run.controller!.writes ?? 0)
+          : "unavailable",
+        controllerStaleCallbacksRefused: runs.every((run) => run.controller)
+          ? metric((run) => run.controller!.staleCallbacksRefused ?? 0)
+          : "unavailable",
         typingLongTasks: metric((run) => run.typing.longTasks.count),
         typingLongTaskMs: metric((run) => run.typing.longTasks.totalMs),
         scrollLongTasks: metric((run) => run.scroll.longTasks.count),
@@ -904,6 +1060,20 @@ async function main() {
     const report = {
       runId,
       browserVersion,
+      roots: options.roots.map((root) => ({ label: root.label, ...checkoutMetadata(root.root) })),
+      environment: {
+        platform: process.platform,
+        arch: process.arch,
+        viewport: { width: 1280, height: 900 },
+        headless: !options.headed,
+        minified: options.minify,
+        cpuThrottle: options.cpuThrottle,
+        stream: options.stream
+          ? { intervalMs: STREAM_INTERVAL_MS, charsPerTick: STREAM_CHARS_PER_TICK }
+          : null,
+        upwardWheel: { events: WHEEL_EVENTS, delta: WHEEL_DELTA },
+        scrollPhases: SCROLL_PHASES.map((phase) => ({ name: phase.name, events: phase.events })),
+      },
       options: { ...options, roots: options.roots.map((root) => root.label) },
       summary,
       gate,

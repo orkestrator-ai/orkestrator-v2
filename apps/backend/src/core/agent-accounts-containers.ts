@@ -21,7 +21,7 @@ import {
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
   CONTAINER_CLAUDE_CREDENTIAL_FILE,
-} from "./commands-runtime-state.js";
+} from "./agent-credential-files.js";
 import { DOCKER_LABEL_INPUTS_REVISION } from "./constants.js";
 import { runCommand } from "./shell.js";
 import {
@@ -37,7 +37,6 @@ import {
   containerBridgeOperationId,
   enqueueContainerBridgeOperation,
 } from "./container-bridge-operations.js";
-import { staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
 import { agentAccountHome, prepareAgentAccountHome } from "./agent-accounts-homes.js";
 import {
   readAddedClaudeCredentials,
@@ -469,7 +468,7 @@ export async function syncContainerLogin(
   runners: ContainerRunners = defaultRunners,
 ): Promise<void> {
   const operationId = await containerBridgeOperationId(context, containerId);
-  return enqueueContainerBridgeOperation(provider, operationId, () =>
+  return enqueueContainerBridgeOperation(context, provider, operationId, () =>
     syncContainerLoginUnlocked(context, provider, containerId, runners),
   );
 }
@@ -781,7 +780,7 @@ export async function syncContainerClaudeLogin(
   options: { restrictWhenUnusable?: boolean; runners?: ContainerRunners } = {},
 ): Promise<boolean> {
   const operationId = await containerBridgeOperationId(context, containerId);
-  return enqueueContainerBridgeOperation("claude", operationId, () =>
+  return enqueueContainerBridgeOperation(context, "claude", operationId, () =>
     syncContainerClaudeLoginUnlocked(context, operationId, options),
   );
 }
@@ -820,6 +819,20 @@ async function writeMarker(
   await runners.exec(
     containerId,
     `umask 077; printf '%s' ${quoteShell(accountId)} > ${ACCOUNT_MARKER[platform]}`,
+  );
+}
+
+/**
+ * The account a running container's login belongs to, from its marker: an
+ * account id, or `default` for the host login.
+ */
+export async function readContainerAgentAccountId(
+  containerId: string,
+  platform: AgentAccountPlatform,
+  runners: ContainerRunners = defaultRunners,
+): Promise<string> {
+  return (
+    (await readMarker(runners, containerId, platform)).split(":")[0] || DEFAULT_AGENT_ACCOUNT_ID
   );
 }
 
@@ -1018,7 +1031,8 @@ export async function reconcileContainerAgentAccount(
   if (!bridge && platform === "claude" && global.useHostClaudeCredentials === false) return;
   // The account was signed in again: the container still holds the login it
   // was given before, whichever account that was.
-  const loginRenewed = platform === "claude" && staleLoginEnvironmentIds.has(environment.id);
+  const loginRenewed =
+    platform === "claude" && context.runtime.localServers.hasStaleContainerLogin(environment.id);
   // An opt-out must revoke a credential already placed in an older container.
   if (
     !loginRenewed &&
@@ -1059,7 +1073,7 @@ export async function reconcileContainerAgentAccount(
   if (running) await bridge.stop();
   // Publish completion only after the old bridge has relinquished its login.
   await writeMarker(runners, containerId, platform, expectedMarker);
-  if (platform === "claude") staleLoginEnvironmentIds.delete(environment.id);
+  if (platform === "claude") context.runtime.localServers.clearStaleContainerLogin(environment.id);
 }
 
 /**
@@ -1086,7 +1100,7 @@ export async function applyActiveAgentAccountsForContainerTerminal(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const work = Promise.all(
     AGENT_ACCOUNT_PLATFORMS.map((platform) =>
-      enqueueContainerBridgeOperation(platform, operationId, () =>
+      enqueueContainerBridgeOperation(context, platform, operationId, () =>
         reconcileContainerAgentAccount(context, operationId, platform, null, runners),
       ).catch((error: unknown) =>
         logFailure(`Failed to hand the active ${platform} login to a terminal`, error),
@@ -1121,6 +1135,7 @@ export async function markContainersForClaudeLoginRefresh(
   const { global } = await context.storage.loadConfig();
   if (global.useHostClaudeCredentials === false) return;
   for (const environment of await context.storage.loadEnvironments()) {
-    if (environment.containerId) staleLoginEnvironmentIds.add(environment.id);
+    if (environment.containerId)
+      context.runtime.localServers.markContainerLoginStale(environment.id);
   }
 }

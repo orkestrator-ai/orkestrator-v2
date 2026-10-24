@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test, type Mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, mock, test, type Mock } from "bun:test";
 import { useEffect, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
@@ -252,10 +252,11 @@ describe("DesignAgentDialog", () => {
         );
         expect(draft.attachments).toHaveLength(1);
         expect(draft.attachments[0]!.path).toBe("/tmp/wt/shot.png");
-        expect(draft.annotations).toHaveLength(0);
-        expect(draft.text).toContain(
-          scope === "implement" ? "static visual reference" : "source=design",
-        );
+        // The context is a removable chip even before the agent is chosen.
+        expect(draft.annotations).toHaveLength(1);
+        expect(draft.annotations[0]).toMatchObject({ source: "design" });
+        expect(draft.text).not.toContain("<orkestrator_transcript_annotations>");
+        if (scope === "implement") expect(draft.text).toContain("static visual reference");
         expect(commandCalls("design_session_link")).toHaveLength(1);
         expect(onOpenChange).toHaveBeenCalledTimes(1);
       } finally {
@@ -372,6 +373,196 @@ describe("DesignAgentDialog", () => {
       linkId: "gone",
     });
     expect(screen.queryByTestId("design-link-gone") === null).toBe(true);
+  });
+
+  /** Answers the link-state check with these per-link sessions. */
+  function backendLinks(
+    sessions: DesignSessionLink[],
+    states: Record<string, "retained" | "missing">,
+    recorded: Record<string, string> = {},
+  ) {
+    let current = sessions.map((entry) =>
+      recorded[entry.id] ? { ...entry, sessionId: recorded[entry.id] } : entry,
+    );
+    invokeMock.mockImplementation((command, args) => {
+      if (command === "design_session_link_states")
+        return Promise.resolve({
+          ok: true,
+          value: {
+            sessions: current,
+            states: Object.entries(states).map(([linkId, session]) => ({ linkId, session })),
+          },
+        });
+      if (command === "design_session_resume") {
+        current = current.map((entry) =>
+          entry.id === args?.linkId ? { ...entry, tabId: String(args?.tabId) } : entry,
+        );
+        return Promise.resolve({
+          ok: true,
+          value: {
+            link: current.find((entry) => entry.id === args?.linkId),
+            providerSessionId: "live-session-1",
+          },
+        });
+      }
+      if (command === "design_session_unlink")
+        return Promise.resolve({ ok: true, value: { unlinked: true } });
+      return Promise.resolve({
+        ok: false,
+        failure: { code: "unsupported", message: "no", retry: "never" },
+      });
+    });
+  }
+
+  test("offers Resume for a closed conversation the backend retains, without resending anything", async () => {
+    seedTabs([]);
+    const sessions = [link("kept", "agent-closed", { label: "Design chat" })];
+    backendLinks(sessions, { kept: "retained" }, { kept: "provider-session-9" });
+    const { onOpenChange } = await renderDialog({ sessions });
+
+    const row = screen.getByTestId("design-link-kept");
+    expect(row.textContent).toContain("Closed — can be resumed");
+    expect(commandCalls("design_session_link_states")).toHaveLength(1);
+    // Resume is the default destination ahead of a new conversation.
+    expect(screen.getByRole("button", { name: "Resume and add to composer" })).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "Resume Design chat" }));
+    });
+
+    const resume = commandCalls("design_session_resume");
+    expect(resume).toHaveLength(1);
+    expect(resume[0]?.[1]).toMatchObject({
+      environmentId: "env-1",
+      canvasId: "canvas-1",
+      linkId: "kept",
+      expectedTabId: "agent-closed",
+    });
+    expect(createTabMock).toHaveBeenCalledTimes(1);
+    const [type, options] = createTabMock.mock.calls[0]!;
+    expect(type).toBe("claude");
+    expect(options).toMatchObject({
+      tabId: resume[0]?.[1]?.tabId,
+      agentLaunchMode: "native",
+      // The live session the backend resumed for this tab.
+      resumeSessionId: "live-session-1",
+      requireExistingResumeSession: true,
+    });
+    expect(options?.initialPrompt).toBeUndefined();
+    // Resuming alone leaves the reopened conversation's composer untouched.
+    expect(
+      nativeComposeDraft(
+        useNativeComposeStore.getState(),
+        createSessionKey("env-1", options!.tabId!),
+      ).annotations,
+    ).toEqual([]);
+    expect(commandCalls("design_session_link")).toHaveLength(0);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("a conversation the agent no longer has is reported, and nothing opens", async () => {
+    seedTabs([]);
+    const sessions = [link("kept", "agent-closed", { label: "Design chat" })];
+    backendLinks(sessions, { kept: "missing" }, { kept: "thread-gone" });
+    const resumeFailure = {
+      ok: false,
+      failure: {
+        code: "not-found",
+        message:
+          "The agent no longer has this conversation: Native agent provider session was not found",
+        retry: "never",
+      },
+    };
+    const answer = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((command, args) =>
+      command === "design_session_resume" ? Promise.resolve(resumeFailure) : answer(command, args),
+    );
+    const { onOpenChange } = await renderDialog({ sessions });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Resume Design chat" }));
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain("no longer has this conversation");
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  test("resumes and adds the design context as a chip when that conversation is chosen", async () => {
+    seedTabs([]);
+    const sessions = [link("kept", "agent-closed")];
+    backendLinks(sessions, { kept: "retained" }, { kept: "provider-session-9" });
+    await renderDialog({ sessions });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Resume and add to composer" }));
+    });
+
+    expect(createTabMock).toHaveBeenCalledTimes(1);
+    const options = createTabMock.mock.calls[0]![1]!;
+    expect(options.initialPrompt).toBeUndefined();
+    const draft = nativeComposeDraft(
+      useNativeComposeStore.getState(),
+      createSessionKey("env-1", options.tabId!),
+    );
+    expect(draft.annotations).toHaveLength(1);
+    expect(draft.annotations[0]).toMatchObject({ source: "design" });
+    expect(commandCalls("design_session_link")).toHaveLength(0);
+  });
+
+  test("a conversation that never started offers removal, not Resume", async () => {
+    seedTabs([]);
+    const sessions = [link("never", "agent-closed", { label: "Unsent chat" })];
+    backendLinks(sessions, { never: "missing" });
+    await renderDialog({ sessions });
+
+    const row = screen.getByTestId("design-link-never");
+    expect(row.textContent).toContain("Closed — no conversation to resume");
+    expect(within(row).queryByRole("button", { name: "Resume Unsent chat" })).toBeNull();
+    expect(within(row).getByRole("button", { name: "Remove link to Unsent chat" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start a new conversation" })).toBeTruthy();
+  });
+
+  test("a disconnected backend shows Retry and never opens a replacement", async () => {
+    seedTabs([]);
+    const sessions = [link("kept", "agent-closed", { label: "Design chat", sessionId: "s-1" })];
+    invokeMock.mockImplementation(() => Promise.reject(new Error("Failed to fetch")));
+    await renderDialog({ sessions });
+
+    const row = screen.getByTestId("design-link-kept");
+    expect(row.textContent).toContain("Closed — could not check the backend");
+    expect(within(row).queryByRole("button", { name: "Resume Design chat" })).toBeNull();
+    expect(createTabMock).not.toHaveBeenCalled();
+
+    backendLinks(sessions, { kept: "retained" });
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "Check Design chat again" }));
+    });
+    // Once on open and once on Retry; never on a timer.
+    expect(commandCalls("design_session_link_states")).toHaveLength(2);
+    expect(screen.getByTestId("design-link-kept").textContent).toContain("Closed — can be resumed");
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("a backend that never answers the check offers Retry instead of checking forever", async () => {
+    seedTabs([]);
+    const sessions = [link("kept", "agent-closed", { label: "Design chat", sessionId: "s-1" })];
+    invokeMock.mockImplementation(() => new Promise(() => undefined));
+    jest.useFakeTimers();
+    try {
+      await renderDialog({ sessions });
+      expect(screen.getByTestId("design-link-kept").textContent).toContain("Checking…");
+      await act(async () => {
+        jest.advanceTimersByTime(8_000);
+        await Promise.resolve();
+      });
+      const row = screen.getByTestId("design-link-kept");
+      expect(row.textContent).toContain("Closed — could not check the backend");
+      expect(within(row).getByRole("button", { name: "Check Design chat again" })).toBeTruthy();
+      expect(createTabMock).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test("adds design context to an existing draft without overwriting it or submitting", async () => {
@@ -495,13 +686,17 @@ describe("DesignAgentDialog", () => {
       canvasId: "canvas-1",
       link: { tabId: options!.tabId, platform: "claude", role: "design" },
     });
-    // The unassigned composer sends text only, so the context is visible text.
+    // The unassigned composer sends annotations, so the context stays a removable chip.
     const draft = nativeComposeDraft(
       useNativeComposeStore.getState(),
       createSessionKey("env-1", options!.tabId!),
     );
-    expect(draft.text).toContain("<orkestrator_transcript_annotations>");
-    expect(draft.text).toContain("source=design");
+    expect(draft.text).toBe(
+      'Let\'s discuss the design frame "Hero" in the attached design context.',
+    );
+    expect(draft.annotations).toHaveLength(1);
+    expect(draft.annotations[0]).toMatchObject({ source: "design", comment: "" });
+    expect(draft.annotations[0]!.text).toContain("observed at canvas revision 12");
   });
 
   test("builds an implementation handoff draft from the selected frames", async () => {
@@ -560,9 +755,12 @@ describe("DesignAgentDialog", () => {
     );
     expect(draft.text).toContain("Build the marketing page");
     expect(draft.text).toContain("static visual reference");
-    expect(draft.text).toContain('\\"Hero\\"');
-    expect(draft.text).toContain('\\"Pricing\\"');
-    expect(draft.text).toContain("checkpoint entry-7 (canvas revision 9)");
-    expect(draft.text).not.toContain("markup");
+    expect(draft.annotations).toHaveLength(1);
+    const reference = draft.annotations[0]!;
+    expect(reference.source).toBe("design");
+    expect(reference.text).toContain('"Hero"');
+    expect(reference.text).toContain('"Pricing"');
+    expect(reference.text).toContain("checkpoint entry-7 (canvas revision 9)");
+    expect(`${draft.text}${reference.text}`).not.toContain("markup");
   });
 });

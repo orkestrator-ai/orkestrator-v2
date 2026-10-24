@@ -62,4 +62,36 @@ describe("native agent service tab close", () => {
       },
     );
   });
+  test("reads the identity a later resume needs, and never guesses one", async () => {
+    const stub = createProviderStub("codex");
+    await withService(
+      { prefix: "orkestrator-native-resumable-", provider: async () => stub.provider },
+      async ({ service }) => {
+        // A provider without a state read cannot say.
+        Object.assign(stub.provider, { sessionStateSnapshot: undefined });
+        await expect(
+          service.resumableSessionIdIfRunning("env-1", "codex", "session-client-1"),
+        ).resolves.toBeUndefined();
+        Object.assign(stub.provider, {
+          sessionStateSnapshot: async () => ({ status: "idle", resumableSessionId: "thread-1" }),
+        });
+        await expect(
+          service.resumableSessionIdIfRunning("env-1", "codex", "session-client-1"),
+        ).resolves.toBe("thread-1");
+        // A provider that reports no separate identity resumes by the live id.
+        Object.assign(stub.provider, { sessionStateSnapshot: async () => ({ status: "idle" }) });
+        await expect(
+          service.resumableSessionIdIfRunning("env-1", "codex", "session-client-1"),
+        ).resolves.toBe("session-client-1");
+        Object.assign(stub.provider, {
+          sessionStateSnapshot: async () => {
+            throw new Error("bridge restarted");
+          },
+        });
+        await expect(
+          service.resumableSessionIdIfRunning("env-1", "codex", "session-client-1"),
+        ).resolves.toBeUndefined();
+      },
+    );
+  });
 });

@@ -19,6 +19,8 @@ import { StorageService } from "./storage.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import type { NativeAgentProvider } from "./models.js";
 import { replacedSessionCloseIntent } from "./provider-session-ownership.js";
+import { DesignService } from "./design/service.js";
+import { createTestRenderer } from "./design/test-support.js";
 
 /**
  * Tab close retains conversation history on every platform. These cover the
@@ -48,6 +50,8 @@ async function withTeardown<T>(
     deleteTimeoutMs?: number;
     closeTimeoutMs?: number;
     closeProvider?: ProviderCloseResponder;
+    design?: Pick<DesignService, "recordTabSession">;
+    resumableSessionId?: (agent: string, providerSessionId: string) => Promise<string | undefined>;
   } = {},
 ): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-tab-close-"));
@@ -97,7 +101,17 @@ async function withTeardown<T>(
     toolchainBinDir: "",
     emit: () => undefined,
     storage,
+    ...(options.design ? { design: options.design } : {}),
     nativeAgents: {
+      ...(options.resumableSessionId
+        ? {
+            resumableSessionIdIfRunning: (
+              _environmentId: string,
+              agent: string,
+              providerSessionId: string,
+            ) => options.resumableSessionId!(agent, providerSessionId),
+          }
+        : {}),
       releaseProviderSession: (environmentId: string, agent: string, sessionId: string) =>
         released.push([environmentId, agent, sessionId]),
       // OpenCode tab close goes through the provider (see the provider's own
@@ -249,6 +263,126 @@ describe("tab close retains conversation history", () => {
         expect(await storage.getNativeAgentSession(key)).toBeNull();
       },
       { deleteTimeoutMs: 20, closeTimeoutMs: 200 },
+    );
+  });
+
+  test("records the closing session on a design link as the tab mapping is retired", async () => {
+    const designDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-tab-close-design-"));
+    const design = new DesignService(designDir, () => undefined, createTestRenderer());
+    try {
+      const canvas = await design.create("e1", "Linked", undefined, "user");
+      const link = await design.linkSession("e1", canvas.id, {
+        tabId: "tab-design",
+        platform: "claude",
+        role: "design",
+      });
+      const other = await design.linkSession("e1", canvas.id, {
+        tabId: "tab-other",
+        platform: "claude",
+        role: "design",
+      });
+      await withTeardown(
+        retained,
+        async ({ invoke, storage }) => {
+          const key = await mapTab(storage, "claude", "tab-design", "claude-kept");
+          await expect(
+            invoke("teardown_tab", {
+              environmentId: "e1",
+              tabId: "tab-design",
+              kind: "claude-native",
+            }),
+          ).resolves.toEqual({ completed: true });
+          // The tab's mapping is retired; the link keeps the conversation.
+          expect(await storage.getNativeAgentSession(key)).toBeNull();
+        },
+        { design },
+      );
+      const snapshot = await design.snapshot("e1", canvas.id);
+      if (snapshot.kind !== "snapshot") throw new Error(snapshot.kind);
+      const sessions = new Map(snapshot.workspace.sessions.map((entry) => [entry.id, entry]));
+      expect(sessions.get(link.id)?.sessionId).toBe("claude-kept");
+      expect(sessions.get(other.id)?.sessionId).toBeUndefined();
+    } finally {
+      await design.close();
+      await fs.rm(designDir, { recursive: true, force: true });
+    }
+  });
+
+  test("records a Codex thread, read before the close, and never guesses one", async () => {
+    const recordTabSession = mock(async () => 1);
+    const design = { recordTabSession } as unknown as Pick<DesignService, "recordTabSession">;
+    const order: string[] = [];
+    await withTeardown(
+      (call) => {
+        order.push(`bridge ${call.method}`);
+        return retained();
+      },
+      async ({ invoke, storage }) => {
+        const key = await mapTab(storage, "codex", "tab-codex", "codex-live");
+        await expect(
+          invoke("teardown_tab", { environmentId: "e1", tabId: "tab-codex", kind: "codex-native" }),
+        ).resolves.toEqual({ completed: true });
+        expect(recordTabSession).toHaveBeenCalledWith({
+          environmentId: "e1",
+          tabId: "tab-codex",
+          platform: "codex",
+          providerSessionId: "thread-1",
+        });
+        // Read while the session was still open.
+        expect(order[0]).toBe("read thread");
+        expect(await storage.getNativeAgentSession(key)).toBeNull();
+      },
+      {
+        design,
+        resumableSessionId: async () => {
+          order.push("read thread");
+          return "thread-1";
+        },
+      },
+    );
+
+    recordTabSession.mockClear();
+    await withTeardown(
+      retained,
+      async ({ invoke, storage }) => {
+        await mapTab(storage, "codex", "tab-codex", "codex-live");
+        await invoke("teardown_tab", {
+          environmentId: "e1",
+          tabId: "tab-codex",
+          kind: "codex-native",
+        });
+        // A bridge session id is not something a Codex resume accepts.
+        expect(recordTabSession).not.toHaveBeenCalled();
+      },
+      { design, resumableSessionId: async () => undefined },
+    );
+  });
+
+  test("a design link that cannot be updated never holds up the close", async () => {
+    const recordTabSession = mock(async () => {
+      throw new Error("design storage unavailable");
+    });
+    await withTeardown(
+      retained,
+      async ({ invoke, storage }) => {
+        const key = await mapTab(storage, "claude", "tab-claude", "claude-kept");
+        await expect(
+          invoke("teardown_tab", {
+            environmentId: "e1",
+            tabId: "tab-claude",
+            kind: "claude-native",
+          }),
+        ).resolves.toEqual({ completed: true });
+        // Claude resumes by the session id itself.
+        expect(recordTabSession).toHaveBeenCalledWith({
+          environmentId: "e1",
+          tabId: "tab-claude",
+          platform: "claude",
+          providerSessionId: "claude-kept",
+        });
+        expect(await storage.getNativeAgentSession(key)).toBeNull();
+      },
+      { design: { recordTabSession } as unknown as Pick<DesignService, "recordTabSession"> },
     );
   });
 

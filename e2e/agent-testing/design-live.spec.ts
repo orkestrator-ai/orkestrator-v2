@@ -25,6 +25,10 @@
  * 4. **Handoff.** Ask agent with the Implement scope starts a new
  *    conversation whose draft holds the handoff. Nothing may be sent, and the
  *    draft survives an environment switch and renderer reload.
+ * 5. **Close and resume.** Closing the design conversation's tab records its
+ *    session on the link; after a reload, Ask agent offers Resume, which
+ *    reopens the same conversation in a new tab without sending anything
+ *    (docs/todo/design-canvas/0038-design-agent-conversation-links.md).
  *
  * Nonces exist only in the prompts, so finding one in the canvas proves the
  * agent wrote it. The MCP call count and response bytes for the cycle are
@@ -72,7 +76,7 @@ type LayoutTab = {
   designCanvasData?: { canvasId: string };
 };
 type LayoutNode = { kind: "leaf"; tabs: LayoutTab[] } | { kind: "split"; children: LayoutNode[] };
-type SessionLink = { tabId: string; platform: string; role: string };
+type SessionLink = { tabId: string; platform: string; role: string; sessionId?: string };
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -691,6 +695,68 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
             `(${JSON.stringify(usage.byTool)}), ${usage.failed.length} failed, ` +
             `${responseBytes} response bytes`,
         );
+
+        await test.step("closing the design conversation keeps it resumable; Resume sends nothing", async () => {
+          const before = await projection();
+          const userTurns = (before?.messages ?? []).filter((message) => message.role === "user");
+          // The handoff tab keeps its display title; the design tab is the other one.
+          await page
+            .getByRole("button", {
+              name: new RegExp(`^Close ${spec.label} \\d+ · (?!Implement design)`),
+            })
+            .first()
+            .click();
+          await expect
+            .poll(
+              async () =>
+                (await sessionLinks()).find((link) => link.role === "design")?.sessionId ?? "",
+              { timeout: 30_000, message: "closing the tab never recorded its session" },
+            )
+            .not.toBe("");
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await openEnvironment(target.name);
+          await page.getByRole("button", { name: "Ask agent about the selection" }).click();
+          const dialog = page.getByRole("dialog", { name: "Ask agent about this design" });
+          const resume = dialog.getByRole("button", {
+            name: `Resume ${spec.label} design conversation`,
+          });
+          await expect(resume).toBeVisible({ timeout: 30_000 });
+          await resume.click();
+          await expect(dialog).toBeHidden({ timeout: 60_000 });
+          await expect
+            .poll(
+              async () =>
+                (await layoutAgentTab()).agentTabs.find((tab) =>
+                  tab.id.startsWith("design-resume-"),
+                )?.id ?? "",
+              { timeout: 30_000 },
+            )
+            .not.toBe("");
+          const resumedTabId = (await layoutAgentTab()).agentTabs.find((tab) =>
+            tab.id.startsWith("design-resume-"),
+          )!.id;
+          expect((await sessionLinks()).find((link) => link.role === "design")?.tabId).toBe(
+            resumedTabId,
+          );
+          await expect
+            .poll(
+              async () =>
+                ((await projection(resumedTabId))?.messages ?? []).filter(
+                  (message) => message.role === "user",
+                ).length,
+              { timeout: 60_000, message: "the resumed tab never showed the conversation" },
+            )
+            .toBe(userTurns.length);
+          // Give a stray dispatch time to appear before asserting there is none.
+          await page.waitForTimeout(5_000);
+          const resumed = await projection(resumedTabId);
+          expect(
+            (resumed?.messages ?? []).filter((message) => message.role === "user"),
+            "resuming sent a prompt",
+          ).toHaveLength(userTurns.length);
+          expect(resumed?.turn.phase).not.toBe("running");
+          await page.screenshot({ path: testInfo.outputPath(`${provider}-5-resume.png`) });
+        });
       } finally {
         for (const environment of environments) {
           await invoke("stop_environment", { environmentId: environment.id }).catch(

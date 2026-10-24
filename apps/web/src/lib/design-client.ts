@@ -21,6 +21,8 @@ import type {
   DesignPrepareResult,
   DesignReadiness,
   DesignSessionLink,
+  DesignSessionLinkStates,
+  DesignSessionResumeResult,
   DesignSnapshotResult,
   DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
@@ -294,6 +296,22 @@ export const designApi = {
       canvasId,
       link,
       replaceId,
+    }),
+  /** One storage read per link on the backend; call on demand, never on a timer. */
+  sessionLinkStates: (environmentId: string, canvasId: string) =>
+    designCommand<DesignSessionLinkStates>("design_session_link_states", {
+      environmentId,
+      canvasId,
+    }),
+  resumeSessionLink: (
+    environmentId: string,
+    canvasId: string,
+    input: { linkId: string; expectedTabId: string; tabId: string },
+  ) =>
+    designCommand<DesignSessionResumeResult>("design_session_resume", {
+      environmentId,
+      canvasId,
+      ...input,
     }),
   unlinkSession: (environmentId: string, canvasId: string, linkId: string) =>
     designCommand<{ unlinked: true }>("design_session_unlink", { environmentId, canvasId, linkId }),

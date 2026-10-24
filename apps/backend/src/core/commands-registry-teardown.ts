@@ -2,7 +2,7 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { registerTmuxBackendCommands } from "./tmux.js";
 import { claudeStateSignalInstaller } from "./claude-state-signal.js";
-import type { Environment } from "./models.js";
+import type { Environment, NativeAgentProvider } from "./models.js";
 import {
   terminalSessionIdsByStableKey,
   terminalStableKeysBySessionId,
@@ -310,6 +310,7 @@ export function registerTeardownCommands(
     // risking closing another tab's conversation.
     const providerSessionId = persistedSession?.providerSessionId;
     if (!providerSessionId) return;
+    let resumable: string | undefined;
     await withProviderSessionTeardownLock(
       context.storage,
       environment.id,
@@ -329,6 +330,9 @@ export function registerTeardownCommands(
           providerSessionId,
           exceptLogicalSessionKey: logicalSessionKey,
         });
+        // Read before the close: Codex resumes its thread, which only the open
+        // session can name.
+        resumable = await resumableSessionId(context, environment.id, agent, providerSessionId);
         if (!heldElsewhere) {
           await closeProviderSession(environment, agent, providerSessionId, context);
           context.nativeAgents?.releaseProviderSession?.(environment.id, agent, providerSessionId);
@@ -339,6 +343,10 @@ export function registerTeardownCommands(
         await context.storage.invalidateNativeAgentSession(storageKey, providerSessionId);
       },
     );
+    // Outside the teardown lock: a design resume holds its canvas lane while it
+    // waits for that lock, so taking a canvas lane under it could deadlock.
+    if (resumable)
+      await recordDesignLinkSession(context, environment.id, intent.tabId, agent, resumable);
   };
 
   const finishTabTeardown = async (
@@ -615,4 +623,40 @@ export function registerTeardownCommands(
       : undefined;
     return { terminals, nativeSessions, tmuxSessions: tmux?.reaped ?? 0 };
   });
+}
+
+/**
+ * The identity a later resume of a closing tab's conversation names: the
+ * provider's own (Codex's thread id) read from the still-open session, or the
+ * session id for providers that resume by it. `undefined` rather than a guess
+ * when a Codex thread cannot be read.
+ */
+async function resumableSessionId(
+  context: CommandContext,
+  environmentId: string,
+  agent: NativeAgentProvider,
+  providerSessionId: string,
+): Promise<string | undefined> {
+  if (!context.design) return undefined;
+  const read = await context.nativeAgents
+    ?.resumableSessionIdIfRunning?.(environmentId, agent, providerSessionId)
+    .catch(() => undefined);
+  return read ?? (agent === "codex" ? undefined : providerSessionId);
+}
+
+/**
+ * A design link names the closing tab. Once the tab's native-session mapping
+ * is retired the tab id no longer leads to the conversation, so the link
+ * keeps the identity a resume needs instead. Never fails the close.
+ */
+async function recordDesignLinkSession(
+  context: CommandContext,
+  environmentId: string,
+  tabId: string,
+  agent: NativeAgentProvider,
+  sessionId: string,
+): Promise<void> {
+  await context.design
+    ?.recordTabSession({ environmentId, tabId, platform: agent, providerSessionId: sessionId })
+    .catch(() => undefined);
 }

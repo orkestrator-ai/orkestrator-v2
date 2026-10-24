@@ -36,3 +36,9 @@ aggregate-load timeouts.
 - **Failure:** `firewall allowlist refresh and edits > policy 3 refreshes the stored tuples and add/remove edit them` hit the five-second timeout (5003.39 ms). It was the only failure in the root group.
 - **Owning-file rerun:** `mise run test:logged -- --name firewall-owner -- bun test ./tests/unit/firewall-refresh.test.ts --parallel=1 --only-failures` passed the complete unchanged file, exit 0 in 5.0 seconds.
 - **Evidence:** `orkestrator-test-run.IoyN8C/full-test.log.gz` under the host temporary directory. No assertion, timeout or skip changed.
+
+## Control MCP voice main merge — 2026-10-24
+
+- The testing guide's GNU-tool PATH with `mise run test:logged -- --name merge-full-tests -- mise run test` (one root worker) timed out `add and remove edit the stored list through the same swap` (5012.53 ms) and `adding to an empty stored list keeps the image defaults` (5006.92 ms). Root result: 3,368 passed, 15 failed across 162 files, 863.15 s execution.
+- The same PATH with `mise run test:logged -- --name merge-0041-firewall-refresh-owner -- bun test ./tests/unit/firewall-refresh.test.ts --parallel=1 --only-failures` passed the complete unchanged owner in 33.6 s.
+- Evidence: host temporary-directory `orkestrator-test-run.LK1I3Y/root-and-agent-support-tests.log`, retained from the interrupted aggregate. No implementation, assertion, deadline or skip changed.

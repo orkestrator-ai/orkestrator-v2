@@ -20,3 +20,10 @@
 - The complete unchanged owner was rerun using `mise run test:logged -- --name design-owner -- mise run test:agent:design:isolated` on fresh profile `qa-browser-7ef96497-b69`: one passed, one failed (103.4 s logged), with the same missing hidden-text tab. This recurrence remains non-green in isolation and is not newly classified as intermittent.
 - Evidence: `orkestrator-test-run.4adnVD/isolated-browser.log.gz` and `orkestrator-test-run.82NO6y/design-owner.log.gz` under the host temporary directory; traces and screenshots in each profile's `output/agent-testing/<profile>/browser/artifacts/`.
 - Both launchers stopped and both profiles were reset by the isolated runners. No design implementation, assertion, timeout, or skip changed.
+
+## Control MCP voice main merge — 2026-10-24
+
+- **Full command:** `mise run test:agent:browser:isolated` on credential-free Codex fixture `qa-browser-a34c7ac6-c9f`, one worker, with other validation on the host. At `design-canvas.spec.ts:184`, the saved pane layout lacked `"filePath":"d1/d2/d3/d4/d5/d6/d7/d8/deep.orkdes"` after five seconds. The run later reached its browser deadline without a complete suite summary and stopped/reset its profile.
+- **Complete unchanged owner:** `ORKESTRATOR_AGENT_TEST_PROFILE=merge-gateway-0041-fc04c130 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-0041-design-owner mise run test:logged -- --name merge-0041-design-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/design-canvas.spec.ts --workers=1` passed both tests (112.9 s, exit 0). This credential-free Codex fixture had completed the gateway owner first; no browser tests ran concurrently against that profile.
+- **Evidence:** `output/agent-testing/qa-browser-a34c7ac6-c9f/browser/artifacts/design-canvas-real-gateway-ef5b9-ates-another-client-s-edits/` and passing results under `output/agent-testing/merge-0041-design-owner/browser/`.
+- **Assessment:** another unchanged-owner pass confirms this observation is intermittent; the cause remains unconfirmed. No design implementation, assertion, deadline or skip changed. The owner profile was stopped/reset after the checks.

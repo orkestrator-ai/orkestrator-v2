@@ -235,16 +235,13 @@ describe("command catalogue under load", () => {
       {
         legacy: true,
         operations: [
-          ["cold read", 1, ["/session/s1/commands", "/plugins/commands"]],
+          // An outdated bridge costs one request per read: no global fallback.
+          ["cold read", 1, ["/session/s1/commands"]],
           ["warm read", 0, []],
           ["warm dispatch", 0, []],
-          ["forced dispatch", 1, ["/session/s1/commands", "/plugins/commands"]],
-          ["expired read", 1, ["/session/s1/commands", "/plugins/commands"]],
-          [
-            "refresh",
-            1,
-            ["/session/s1/commands/refresh", "/session/s1/commands", "/plugins/commands"],
-          ],
+          ["forced dispatch", 1, ["/session/s1/commands"]],
+          ["expired read", 1, ["/session/s1/commands"]],
+          ["refresh", 1, ["/session/s1/commands/refresh", "/session/s1/commands"]],
         ],
       },
     ];

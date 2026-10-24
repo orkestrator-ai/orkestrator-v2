@@ -159,3 +159,11 @@ The refreshed merge of `7e051d955` passed `mise run test:logged -- --name latest
 - **Final complete unchanged owner:** after the component browser aggregate ended, `mise run test:logged -- --name disk-report-final-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed all five tests, exit 0 in 5.0 seconds logged.
 - **Aggregate evidence:** host temporary directories `orkestrator-test-run.jSDfl8/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.EDCav0/full-tests.log.gz`. Sidebar fixes are commit `6d6f9b83f`.
 - **Assessment:** confirmed intermittent recurrence; host process or filesystem contention remains a hypothesis. No disk-report implementation, assertion, timeout or skip changed, and the original aggregate remains failed.
+
+
+## Recurrence — 2026-10-24 (worktree signal review validation)
+
+- **Original command:** `mise run test:logged -- --name watcher-full-suite -- mise run test`; standard aggregate worker leases, with other checkout validation active on the host.
+- **Failure:** the isolated-checkout report exceeded five seconds (5108.36 ms), receiving null process status and a between-test error. Root/support reported 3378 passed, five failed and one error across 3383 tests in 565.21 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name watcher-disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` also timed out at 5033.12 ms (four passed, one failed, one error). The earlier combined one-worker firewall/disk rerun also failed this case (5034.77 ms). These results remain failed; this turn has not established a new isolated pass or root cause.
+- **Evidence:** `orkestrator-test-run.iTzv5K/` under the host temporary directory; the full aggregate remains failed. None of these owning files was changed.

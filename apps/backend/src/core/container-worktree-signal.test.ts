@@ -24,6 +24,7 @@ function harness(
     install?: (credential: StateSignalCredential, isCurrent: () => boolean) => Promise<void>;
     /** No agent tools issuer: the context of a fixture without a server. */
     noIssuer?: boolean;
+    listening?: () => boolean;
   } = {},
 ) {
   const time = new ManualTime(1_000_000);
@@ -33,6 +34,7 @@ function harness(
   const warnings: string[] = [];
   const agentTools = {
     issueWorktreeSignal(ring: (reason: WorktreeSignalReason) => void) {
+      if (options.listening && !options.listening()) return null;
       const entry: Issued = {
         credential: {
           url: "http://host.docker.internal:1/worktree-signal",
@@ -275,6 +277,24 @@ describe("container worktree signal", () => {
     expect(second.qualified).toBe(false);
     h.ring("ready");
     expect(second.qualified).toBe(true);
+  });
+
+  test("a tracked lineage retries when the agent tools server starts listening later", async () => {
+    let listening = false;
+    const h = harness({ listening: () => listening });
+    const watcher = h.start();
+    await flushMicrotasks();
+    expect(h.signals.status().states.unarmed).toBe(1);
+    expect(h.installs).toHaveLength(0);
+    listening = true;
+    await h.time.advance(CONTAINER_WORKTREE_SIGNAL_RETRY_MS);
+    await flushMicrotasks();
+    expect(h.installs).toHaveLength(1);
+    h.ring("ready");
+    expect(watcher.qualified).toBe(true);
+    watcher.close();
+    await h.time.advance(CONTAINER_WORKTREE_SIGNAL_RETRY_MS * 2);
+    expect(h.installs).toHaveLength(1);
   });
 
   test("without an agent tools issuer nothing is armed", async () => {

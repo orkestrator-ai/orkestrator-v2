@@ -247,3 +247,12 @@ temporary directory. No firewall implementation, assertion, timeout or skip chan
   to 98 (3 and more cases at about 5,008 ms), then passed alone (24 passed,
   0 failed) once the one-minute load fell to 10. The branch changes no
   firewall test or `docker/` script.
+
+
+## Recurrence — 2026-10-24 (worktree signal review validation)
+
+- **Original command:** `mise run test:logged -- --name watcher-full-suite -- mise run test`; standard aggregate worker leases, with other checkout validation active on the host.
+- **Failures:** root bootstrap (5003.91 ms), stored domains/bootstrap ranges (5004.00 ms), policy 2 host ports (5007.96 ms), and policy 3 address/protocol/port tuples (5014.03 ms) timed out, receiving null subprocess exit codes.
+- **Follow-up:** a one-worker rerun of the complete firewall and disk-report owners failed a different firewall probe case (`policy 2 allowlist example.org,example.com chooses blocked HTTPS probe example.net`, 5010.36 ms); the four original firewall cases passed. The disk-report case also timed out again. This rerun is retained as a failed result, without attributing a cause to host load.
+- **Evidence:** `orkestrator-test-run.iTzv5K/` under the host temporary directory; the full aggregate remains failed. None of these owning files was changed.
+- **Separate complete-owner rerun:** `mise run test:logged -- --name watcher-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` failed again: policy 3 tuples (5240.73 ms), the policy 2/3 example.org/example.com probes (5002.97/5005.95 ms), and the policy 3 example.com:443/tcp probe (5004.92 ms); 20 passed, four failed in 53.46 seconds. No new complete-owner pass was established. Evidence: `orkestrator-test-run.gFLKmk/watcher-firewall-owner.log.gz`.

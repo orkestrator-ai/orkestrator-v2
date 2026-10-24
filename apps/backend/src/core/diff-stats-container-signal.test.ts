@@ -14,7 +14,8 @@ import {
   type DiffStatsTarget,
 } from "./diff-stats-service.js";
 import { DIFF_CACHE_MAX_AGE_MS } from "./diff-stats-tracking.js";
-import { ManualTime, flushMicrotasks } from "./recurring-test-support.js";
+import { ManualTime, deferred, flushMicrotasks } from "./recurring-test-support.js";
+import { WorkAdmissionPool } from "./work-admission.js";
 import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
 
 /**
@@ -22,13 +23,14 @@ import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
  * `DiffStatsService` and `ContainerWorktreeSignals` on one manual clock, with
  * the Docker side (status exec, tree walk, install) replaced by counters.
  */
-function harness() {
+function harness(admission?: WorkAdmissionPool) {
   const time = new ManualTime(1_000_000);
   const rings: Array<(reason: WorktreeSignalReason) => void> = [];
   const revoked: boolean[] = [];
   const intervals: number[] = [];
   const snapshots: Array<{ watched: boolean }> = [];
   let file = "a.ts";
+  let scanGate: Promise<void> | undefined;
   let scans = 0;
   let walks = 0;
   const signals = new ContainerWorktreeSignals({
@@ -56,11 +58,16 @@ function harness() {
     onWarning: () => undefined,
   });
   const service = new DiffStatsService({
+    admission,
     scan: async () => {
       scans += 1;
+      const scannedFile = file;
+      const gate = scanGate;
+      scanGate = undefined;
+      await gate;
       return {
         stats: { additions: 1, deletions: 0, filesChanged: 1, truncated: false },
-        changes: [{ path: file, status: "M", additions: 1, deletions: 0 }],
+        changes: [{ path: scannedFile, status: "M", additions: 1, deletions: 0 }],
       };
     },
     walkTree: async () => {
@@ -106,6 +113,9 @@ function harness() {
     readTree: () => service.readTree({ lookup }),
     edit: (next: string) => {
       file = next;
+    },
+    gateScan: (gate: Promise<void>) => {
+      scanGate = gate;
     },
     scans: () => scans,
     walks: () => walks,
@@ -194,6 +204,49 @@ describe("container worktree signal in the scan owner", () => {
     await h.readList();
     expect(h.scans()).toBe(scansAfter + 1);
   });
+
+  for (const phase of ["queued", "running"] as const) {
+    test(`a ring while a safety scan is ${phase} does not demote the watcher`, async () => {
+      const pool = new WorkAdmissionPool({ name: "git-docker-scan", diagnostics: null });
+      const h = harness(pool);
+      try {
+        h.service.track(h.target);
+        await settle(h.time);
+        h.ring("ready");
+        await settle(h.time);
+        h.edit("announced-in-flight.ts");
+        const before = h.scans();
+        const gate = deferred();
+        const lease =
+          phase === "queued"
+            ? await pool.acquire({
+                kind: "diff-scan",
+                priority: "interactive",
+                target: "container:container-1",
+              })
+            : undefined;
+        if (phase === "running") h.gateScan(gate.promise);
+        await h.time.advance(CONTAINER_SAFETY_NET_INTERVAL_MS);
+        expect(h.scans()).toBe(before + (phase === "running" ? 1 : 0));
+        h.ring("change");
+        await settle(h.time);
+        lease?.release();
+        gate.resolve();
+        await settle(h.time);
+        await h.time.advance(
+          CONTAINER_WORKTREE_SIGNAL_MISS_GRACE_MS + CONTAINER_WORKTREE_SIGNAL_MIN_HINT_GAP_MS,
+        );
+        await settle(h.time);
+        expect((await h.readList()).changes).toEqual([
+          { path: "announced-in-flight.ts", status: "M", additions: 1, deletions: 0 },
+        ]);
+        expect(h.signals.status().states.confirmed).toBe(1);
+        expect(h.signals.status().demotions).toEqual({});
+      } finally {
+        h.service.shutdown();
+      }
+    });
+  }
 
   test("an announced change never counts as a miss", async () => {
     const h = harness();

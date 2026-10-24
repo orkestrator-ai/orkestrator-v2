@@ -16,10 +16,12 @@ export async function dockerExec(
   command: string,
   timeoutMs = 120_000,
   redactValues?: ReadonlyArray<string | null | undefined>,
+  signal?: AbortSignal,
 ): Promise<string> {
   const { stdout } = await runCommand("docker", ["exec", containerId, "bash", "-lc", command], {
     timeoutMs,
     redactValues,
+    signal,
   });
   return stdout;
 }

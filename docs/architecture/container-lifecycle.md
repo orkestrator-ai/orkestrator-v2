@@ -904,9 +904,11 @@ refresh, and only a 60 s safety scan runs
 `orkestrator-worktree-signal` (`docker/orkestrator-worktree-signal.sh`) runs
 `inotifywait --monitor --recursive` over `/workspace` as `node`, in its own
 session. It ignores `node_modules` (the tree skips it and its watch count is
-unbounded), Git's object store, logs and `*.lock`; `.git/index`, `HEAD`,
-`refs` and `packed-refs` are watched. A burst of events becomes one ring after
-300 ms of quiet or 1 s from its start. Rings carry no paths or content, only
+unbounded), Git's object store, logs and transient `.git/**/*.lock` files;
+project dependency lockfiles, `.git/index`, `HEAD`, `refs` and `packed-refs`
+are watched. Modify events announce writes even while a file descriptor stays
+open. A burst of events becomes one ring after 300 ms of quiet or 1 s from
+its start, with at least 1 s between change rings and a trailing notification. Rings carry no paths or content, only
 a reason header that can add work but never remove it: `ready` once the
 watches are established, `change`, `overflow` (an inotify queue overflow) and
 `lost` when `inotifywait` exits by itself (a watch or instance limit, the root
@@ -917,13 +919,13 @@ numstat.
 
 | Step | What happens | Where |
 | --- | --- | --- |
-| Lineage | `DiffStatsService` starts one watcher per tracking lineage (a container start, a retarget, a resume after a pause, a backend start, a replacement container) through `startContainerWatcher`; a pause, untrack or retarget closes it and revokes its credential | `DiffStatsService.attachContainerWatcher` |
+| Lineage | `DiffStatsService` starts one watcher per tracking lineage (a container start, a retarget, a resume after a pause, a backend start, a replacement container) through `startContainerWatcher`; a pause, untrack or retarget closes it, aborts in-flight host preparation or installation and revokes its credential | `DiffStatsService.attachContainerWatcher` |
 | Arm | If the image declares the capability: issue a credential for `/worktree-signal`, prepare the host alias and service port, then `docker exec -i --user node <id> orkestrator-worktree-signal start` with the curl config on stdin (0600, never argv). The script stops a previous lineage's watcher (pid file plus `/proc/<pid>/cmdline` check, since `/tmp` survives a restart) and starts a new one. Installs are serialized per container | `container-worktree-signal-install.ts` |
 | Confirm | Until the `ready` ring arrives the entry keeps the unwatched bounds. The ring marks it qualified and rescans both views once, because nothing before it was announced | `ContainerWorktreeSignals.ring` |
 | Ring | Each ring hints the file list and the tree, forwarded at most once per 2 s (trailing), so constant writes cost at most one status exec per 2 s | `CONTAINER_WORKTREE_SIGNAL_MIN_HINT_GAP_MS` |
-| Miss | A safety scan whose list changed although nothing advanced the entry's epoch since the previous scan reports `unannouncedChange`; unless a ring arrives within 3 s (one still settling in the container) the lineage is demoted | `CONTAINER_WORKTREE_SIGNAL_MISS_GRACE_MS` |
+| Miss | A safety scan whose list changed although nothing advanced the entry's epoch from the previous scan through this scan's completion reports `unannouncedChange`; unless a ring arrives within 3 s (one still settling in the container) the lineage is demoted | `CONTAINER_WORKTREE_SIGNAL_MISS_GRACE_MS` |
 | Lost, flood | A `lost` ring, or more than 120 rings a minute, demotes at once and rescans | `CONTAINER_WORKTREE_SIGNAL_MAX_RINGS_PER_MINUTE` |
-| Retry | A demoted lineage, a failed install, an install whose `ready` ring never arrived and an uninspectable image re-arm 5 min after the last attempt; an image without the capability is never asked again for that container | `CONTAINER_WORKTREE_SIGNAL_RETRY_MS` |
+| Retry | A demoted lineage, a failed install, an install whose `ready` ring never arrived, an uninspectable image and an unavailable agent-tools issuer re-arm 5 min after the last attempt; an image without the capability is never asked again for that container | `CONTAINER_WORKTREE_SIGNAL_RETRY_MS` |
 
 The credential rings only `/worktree-signal`; a Claude state credential is
 refused there and a worktree credential on `/claude-state-signal`. Neither

@@ -1182,6 +1182,7 @@ export class DiffStatsService {
       previous.qualified &&
       previous.watcherGeneration === attempt.watcherGeneration &&
       previous.epoch === attempt.epoch &&
+      entry.dirtyEpoch === attempt.epoch &&
       entry.watcherGeneration === attempt.watcherGeneration
     ) {
       entry.watcher?.unannouncedChange?.();

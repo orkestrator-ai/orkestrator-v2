@@ -14,8 +14,8 @@
 # do more work (`ready` confirms the watches, `lost` drops back to timers).
 #
 # Excluded from the watches: node_modules (the tree skips it and its watch
-# count is unbounded), Git's object store, logs and lock files. A Git-visible
-# change there is caught by the backend's safety scan.
+# count is unbounded), Git's object store, logs and transient Git lock files.
+# A Git-visible change there is caught by the backend's safety scan.
 set -u
 root="${ORKESTRATOR_WORKTREE_SIGNAL_ROOT:-/workspace}"
 config="${ORKESTRATOR_WORKTREE_SIGNAL_CONFIG:-/tmp/.orkestrator-worktree-signal}"
@@ -23,7 +23,11 @@ pidfile="$config.pid"
 # One ring per burst: after this much quiet, or this long after the burst began.
 settle="${ORKESTRATOR_WORKTREE_SIGNAL_SETTLE:-0.3}"
 max_wait_us="${ORKESTRATOR_WORKTREE_SIGNAL_MAX_WAIT_US:-1000000}"
-exclude='(^|/)node_modules(/|$)|/\.git/(objects|logs|lfs|rr-cache|modules)(/|$)|\.lock$'
+# Keep legitimate separated bursts below the receiver's flood threshold.
+min_gap_us=1000000
+# Convert fractional seconds without depending on an external calculator.
+printf -v settle_us '%.0f' "${settle}e6"
+exclude='(^|/)node_modules(/|$)|/\.git/(objects|logs|lfs|rr-cache|modules)(/|$)|/\.git/.*\.lock$'
 
 ring() {
   [ -r "$config" ] || return 0
@@ -70,22 +74,47 @@ echo "$$" > "$pidfile"
 trap 'trap - TERM; kill -TERM 0 2>/dev/null; exit 0' TERM INT HUP
 
 inotifywait --monitor --recursive \
-  --event close_write,attrib,create,delete,move,delete_self,move_self \
+  --event modify,close_write,attrib,create,delete,move,delete_self,move_self \
   --exclude "$exclude" --format 'E %e' "$root" 2>&1 | {
-  while IFS= read -r line; do
+  pending=0
+  last_ring_us=0
+  while :; do
+    if (( pending )); then
+      now_us="${EPOCHREALTIME/./}"
+      due_us=$(( quiet_us < deadline_us ? quiet_us : deadline_us ))
+      (( due_us < last_ring_us + min_gap_us )) && due_us=$(( last_ring_us + min_gap_us ))
+      wait_us=$(( due_us - now_us ))
+      if (( wait_us <= 0 )); then
+        ring "$reason"
+        last_ring_us="$now_us"
+        pending=0
+        continue
+      fi
+      printf -v timeout '%d.%06d' "$((wait_us / 1000000))" "$((wait_us % 1000000))"
+      IFS= read -r -t "$timeout" line
+    else
+      IFS= read -r line
+    fi
+    status=$?
+    if (( status > 128 )); then continue; fi # quiet/max-wait deadline
+    if (( status != 0 )); then
+      # Preserve the trailing change even when the event source exits.
+      if (( pending )); then sleep "$timeout"; ring "$reason"; fi
+      break
+    fi
     case "$line" in
       "Watches established.") ring ready; continue ;;
       "E "*) ;;
       *) continue ;;
     esac
-    reason=change
+    now_us="${EPOCHREALTIME/./}"
+    if (( !pending )); then
+      pending=1
+      deadline_us=$(( now_us + max_wait_us ))
+      reason=change
+    fi
+    quiet_us=$(( now_us + settle_us ))
     case "$line" in *Q_OVERFLOW*) reason=overflow ;; esac
-    started="${EPOCHREALTIME/./}"
-    while IFS= read -r -t "$settle" line; do
-      case "$line" in *Q_OVERFLOW*) reason=overflow ;; esac
-      (( ${EPOCHREALTIME/./} - started >= max_wait_us )) && break
-    done
-    ring "$reason"
   done
 }
 # inotifywait ended by itself (watch limit, root removed): stop trusting us.

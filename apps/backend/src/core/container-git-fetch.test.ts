@@ -354,7 +354,7 @@ describe("ContainerGitFetchPolicy", () => {
     });
   });
 
-  test("a revert joins a running fetch and takes over a queued one", async () => {
+  test("a revert joins a running fetch", async () => {
     const owner = createPolicy();
     owner.policy.observe(scope(), "tracking-ref");
     await flushMicrotasks();
@@ -433,6 +433,39 @@ describe("ContainerGitFetchPolicy admission", () => {
     expect(owner.calls).toHaveLength(1);
     owner.calls[0]!.gate.resolve(ok());
     expect(await recovering).toBe(true);
+    scanLease.release();
+    await owner.policy.idle();
+    await flushMicrotasks();
+    // Exactly one fetch: the queued attempt was performed inline, not twice.
+    expect(owner.calls).toHaveLength(1);
+    expect(owner.fetchKind()).toMatchObject({ started: 1, coalesced: 1 });
+    expect(pool.status()).toMatchObject({ active: 0, waiting: 0 });
+  });
+
+  test("an action inside the scan slot takes over a queued fetch instead of deadlocking", async () => {
+    const time = new ManualTime(0);
+    const pool = new WorkAdmissionPool({
+      name: "git-docker-scan",
+      now: time.now,
+      diagnostics: null,
+    });
+    const owner = createPolicy({ admission: pool });
+
+    // The scan holds the container's slot; a background fetch queues behind it.
+    const scanLease = await pool.acquire({ kind: "diff-scan", priority: "interactive", target });
+    owner.policy.observe(scope(), "tracking-ref");
+    await flushMicrotasks();
+    expect(pool.status().waiting).toBe(1);
+    expect(owner.calls).toHaveLength(0);
+
+    // A revert already holds the slot and must take over the waiting fetch.
+    const recovering = owner.policy.refreshForAction(scope());
+    await flushMicrotasks();
+    expect(pool.status().waiting).toBe(0);
+    expect(owner.calls).toHaveLength(1);
+    owner.calls[0]!.gate.resolve(ok(SHA_A, SHA_B));
+    expect(await recovering).toBe(true);
+    expect(owner.changes.every((change) => !change.baselineMoved)).toBe(true);
     scanLease.release();
     await owner.policy.idle();
     await flushMicrotasks();

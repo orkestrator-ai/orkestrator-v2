@@ -24,7 +24,7 @@ dockerTest(
     const storage = new StorageService(dir);
     await storage.init();
     const server = new AgentToolsServer(storage, "0.0.0.0");
-    const scans: DiffScanEvent[] = [];
+    const scans: Array<Extract<DiffScanEvent, { kind: "scanned" }>> = [];
     const tracking = new DiffStatsTracking({
       emit: () => undefined,
       onScanEvent: (event) => {
@@ -75,7 +75,9 @@ dockerTest(
         [
           "cd /workspace",
           "git init -q -b main",
-          "git -c user.email=a@b -c user.name=a commit -q --allow-empty -m base",
+          "printf 'base\\n' > bun.lock",
+          "git add bun.lock",
+          "git -c user.email=a@b -c user.name=a commit -q -m base",
           "mkdir -p src node_modules/pkg",
         ].join(" && "),
       ]);
@@ -113,15 +115,52 @@ dockerTest(
       }
       expect(scans.length).toBe(quietScans);
 
+      // Only a tracked dependency lockfile changes. It must invalidate both
+      // the cached list and counts promptly, before the safety scan.
+      const beforeLock = scans.length;
+      await docker([
+        "exec",
+        containerId,
+        "sh",
+        "-c",
+        "printf 'dependency\\n' >> /workspace/bun.lock",
+      ]);
+      await until(() => scans.length > beforeLock, "the lockfile change ring", 5_000);
+      expect(((await read()).changes as Array<{ path: string }>).map(({ path }) => path)).toEqual([
+        "bun.lock",
+      ]);
+      expect(scans.at(-1)!.result.stats.filesChanged).toBe(1);
+      await Bun.sleep(3_500);
+      expect(states().confirmed).toBe(1);
+      expect(tracking.worktreeSignals.status().demotions).toEqual({});
+
+      // A writer keeps its fd open after modifying an existing tracked file.
+      // MODIFY must ring without waiting for CLOSE_WRITE.
+      const beforeOpen = scans.length;
+      await docker([
+        "exec",
+        "--detach",
+        containerId,
+        "sh",
+        "-c",
+        "exec 3>>/workspace/bun.lock; printf 'held-open\\n' >&3; touch /tmp/worktree-writer-open; while [ ! -f /tmp/worktree-writer-close ]; do sleep 0.1; done; exec 3>&-; rm /tmp/worktree-writer-open",
+      ]);
+      await until(() => scans.length > beforeOpen, "a modify ring with the fd still open", 5_000);
+      await docker(["exec", containerId, "test", "-f", "/tmp/worktree-writer-open"]);
+      expect(scans.at(-1)!.result.stats.additions).toBe(2);
+      await docker(["exec", containerId, "touch", "/tmp/worktree-writer-close"]);
+      await Bun.sleep(2_500);
+      const beforeNew = scans.length;
+
       // A change rings: one scan, and the read sees it.
       const changedAt = Date.now();
       await docker(["exec", containerId, "sh", "-c", "echo hi > /workspace/src/new.ts"]);
-      await until(() => scans.length > quietScans, "a ring-driven scan");
+      await until(() => scans.length > beforeNew, "a ring-driven scan");
       const ringToScanMs = Date.now() - changedAt;
       const paths = ((await read()).changes as Array<{ path: string }>).map(
         (change) => change.path,
       );
-      expect(paths).toEqual(["src/new.ts"]);
+      expect(paths).toEqual(["bun.lock", "src/new.ts"]);
 
       // node_modules is outside the watches: no ring, no scan.
       const beforeExcluded = scans.length;
@@ -137,6 +176,9 @@ dockerTest(
       await until(() => states().confirmed === 1, "the new lineage's ready ring");
       expect(await docker(["exec", containerId, "pgrep", "-c", "-x", "inotifywait"])).toBe("1");
 
+      await Bun.sleep(3_500);
+      expect(tracking.worktreeSignals.status().demotions).toEqual({});
+
       // The watcher dies on its own: a lost ring drops back to the timers.
       await docker(["exec", containerId, "pkill", "-x", "inotifywait"]);
       await until(() => states().demoted === 1, "the lost ring");
@@ -151,5 +193,5 @@ dockerTest(
       await rm(dir, { recursive: true, force: true });
     }
   },
-  90_000,
+  120_000,
 );

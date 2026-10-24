@@ -84,6 +84,7 @@ export interface ContainerWorktreeSignalInstaller {
     credential: StateSignalCredential,
     context: ContainerWorktreeSignalContext,
     isCurrent: () => boolean,
+    signal?: AbortSignal,
   ): Promise<void>;
 }
 
@@ -117,6 +118,7 @@ type Lineage = {
   unsupported: boolean;
   demoted: boolean;
   arming: boolean;
+  abort: AbortController;
   credential?: StateSignalCredential;
   options: ContainerWorktreeWatcherOptions;
   rings: number;
@@ -169,6 +171,7 @@ export class ContainerWorktreeSignals {
       unsupported: this.unsupported.has(options.containerId),
       demoted: false,
       arming: false,
+      abort: new AbortController(),
       options,
       rings: 0,
       ringsInWindow: 0,
@@ -217,7 +220,11 @@ export class ContainerWorktreeSignals {
     const installer = this.installer;
     const context = this.context();
     const issue = context?.agentTools?.issueWorktreeSignal;
-    if (!installer || !context || !issue || lineage.closed || lineage.unsupported) return;
+    if (!installer || lineage.closed || lineage.unsupported) return;
+    if (!context || !issue) {
+      this.scheduleRetry(lineage);
+      return;
+    }
     if (lineage.arming || lineage.qualified) return;
     lineage.arming = true;
     const { containerId } = lineage;
@@ -243,9 +250,12 @@ export class ContainerWorktreeSignals {
       credential = issue.call(context.agentTools, (reason) => {
         if (credential && lineage.credential === credential) this.ring(lineage, reason);
       });
-      if (!credential) return;
+      if (!credential) {
+        this.scheduleRetry(lineage);
+        return;
+      }
       lineage.credential = credential;
-      await installer.install(containerId, credential, context, current);
+      await installer.install(containerId, credential, context, current, lineage.abort.signal);
       // A watcher whose `ready` ring never arrives (a firewall, a missing host
       // alias) is re-armed after the window; a confirmed one ignores this.
       this.scheduleRetry(lineage);
@@ -376,6 +386,7 @@ export class ContainerWorktreeSignals {
   private close(lineage: Lineage): void {
     if (lineage.closed) return;
     lineage.closed = true;
+    lineage.abort.abort();
     lineage.qualified = false;
     this.revoke(lineage);
     for (const timer of [lineage.hintTimer, lineage.graceTimer, lineage.retryTimer]) {

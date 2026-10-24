@@ -38,16 +38,27 @@ export function worktreeSignalInstallCommand(
   };
 }
 
-export const containerWorktreeSignalInstaller: ContainerWorktreeSignalInstaller = {
-  support: (containerId, context) =>
-    containerImageCapabilitySupport(containerId, context, "container-worktree-signal", 1),
-  async install(containerId, credential, context, isCurrent) {
-    // The same host preparation a bridge start does: the host alias, and the
-    // backend's current service port in a restricted container's firewall.
-    await ensureContainerAgentToolsHost(containerId);
-    await ensureContainerHostServicePorts(containerId, context.agentTools?.servicePort?.() ?? null);
-    if (!isCurrent()) return;
-    const { command, args, options } = worktreeSignalInstallCommand(containerId, credential);
-    await runCommand(command, args, options);
+/** Injectable process seams keep lifecycle cancellation testable without Docker. */
+export function createContainerWorktreeSignalInstaller(
+  deps = {
+    ensureHost: ensureContainerAgentToolsHost,
+    ensurePorts: ensureContainerHostServicePorts,
+    exec: runCommand,
   },
-};
+): ContainerWorktreeSignalInstaller {
+  return {
+    support: (containerId, context) =>
+      containerImageCapabilitySupport(containerId, context, "container-worktree-signal", 1),
+    async install(containerId, credential, context, isCurrent, signal) {
+      if (!isCurrent()) return;
+      await deps.ensureHost(containerId, signal);
+      if (!isCurrent()) return;
+      await deps.ensurePorts(containerId, context.agentTools?.servicePort?.() ?? null, signal);
+      if (!isCurrent()) return;
+      const { command, args, options } = worktreeSignalInstallCommand(containerId, credential);
+      await deps.exec(command, args, { ...options, signal });
+    },
+  };
+}
+
+export const containerWorktreeSignalInstaller = createContainerWorktreeSignalInstaller();

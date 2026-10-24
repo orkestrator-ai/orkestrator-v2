@@ -98,7 +98,9 @@ owns each.
    until the support window ends, or remove it with its tests.
 3. **Count legacy-path use.** Once the window is agreed, each path in the index
    should report a content-free counter, so retirement rests on evidence
-   rather than a guess. Some already count, such as `transcript.ui_fallback`,
+   rather than a guess. Some already count, such as `transcript.ui_fallback`
+   and, since 2026-10-24, outdated-bridge command catalogue reads
+   (`outdatedBridgeCatalogueReadCounts`, logged once per provider instance),
    but nothing records them in production.
 
 ### Compatibility paths awaiting retirement
@@ -108,7 +110,6 @@ in code at `2459b05c`.
 
 | Path | Where | Owner |
 | --- | --- | --- |
-| Legacy slash catalogue routes `/plugins/commands` (Claude, Pi) and `/global/slash-commands` (Codex, Cursor) | `HttpBridgeCatalogAdapter.commandCatalogue` (`apps/backend/src/core/http-bridge-catalog.ts`) on a session-route 404 and for sessionless reads; `bridges/claude-bridge/src/routes/plugins.ts`, `bridges/pi-bridge/src/http.ts`, `bridges/codex-bridge/src/index.ts`, `bridges/cursor-bridge/src/http.ts` | [0016-slash-command-catalogue.md](../cli-and-slash-commands/0016-slash-command-catalogue.md) |
 | Legacy preview loopback route `/__orkestrator/browser/loopback/<port>/` and the shared per-window preview partition | `GatewayProxy.proxyToTarget` (`apps/backend/src/gateway-proxy.ts`); `browserPreviewPartitionForWindow` (`apps/desktop/electron/desktop-window-lifecycle.ts`) | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md) |
 | Joined `sync-v1` history paging | `native-agent-transcript-projection.ts` (the `sync-v1` projection and v1 cursor namespace) | [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md) |
 | Reviewer-transcript compatibility read (`fallback: true`) and the Multi Review rollback gates (`evidencePermits`, `adaptiveScheduling`) | `multi-review-reviewer-transcript.ts`; `MultiReviewServiceOptions` (`multi-review-service.ts`) | [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md) |
@@ -120,6 +121,15 @@ in code at `2459b05c`.
 | Design receipts with no intent digest (settled before v2.21.0, or written by an older backend sharing the data directory) are matched on kind, preconditions, gesture and client ids | `settledMatches` (`apps/backend/src/core/design/records.ts`) | [0037-design-operation-recovery-edges.md](../design-canvas/0037-design-operation-recovery-edges.md) (item 4; retire once the window no longer covers backends older than 2.21.0) |
 | Build-pipeline downgrade export | `export_build_pipeline_for_downgrade` | This file (Code item 2) |
 | Renderer recognition of raw OpenCode envelopes from backends older than 2.19.17 (the "unrecognized" fallback stays) | The `opencode-envelope` entry of `LEGACY_TRANSCRIPT_SHAPES` (`apps/web/src/lib/chat/transcript-skew.ts`) | This file; retire once the window no longer covers backends older than 2.19.17 |
+
+Retired: the legacy slash catalogue routes (`/plugins/commands` on Claude and
+Pi, `/global/slash-commands` on Codex and Cursor) and the backend's fallback to
+them, on 2026-10-24 under a window decided for that path alone (2.21.0 plus
+seven minor releases; see
+[0016](../cli-and-slash-commands/0016-slash-command-catalogue.md#assumptions-and-decisions)).
+That decision does not settle the shared window below. A bridge older than the
+catalogue now reads `unavailable` (`outdated-bridge`) and each such read is
+counted.
 
 Downgrade fences are a separate class. They let older software refuse or
 safely ignore newer data, so they stay while downgrade to those versions is

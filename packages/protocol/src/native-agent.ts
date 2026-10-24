@@ -2134,6 +2134,8 @@ export const NATIVE_AGENT_COMMAND_CATALOGUE_ERROR_CODES = [
   "malformed",
   "too-large",
   "provider-error",
+  /** The bridge is older than catalogue version 1: its session route answered 404. */
+  "outdated-bridge",
 ] as const;
 export type NativeAgentCommandCatalogueErrorCode =
   (typeof NATIVE_AGENT_COMMAND_CATALOGUE_ERROR_CODES)[number];

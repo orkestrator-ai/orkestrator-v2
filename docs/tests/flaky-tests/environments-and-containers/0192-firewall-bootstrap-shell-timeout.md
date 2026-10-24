@@ -252,3 +252,27 @@ chooses blocked HTTPS probe` (root group 3381 passed, 2 failed; every other
 group passed) at a one-minute load average of 55. Evidence:
 `orkestrator-test-run.2r3jf8/root-and-agent-support-tests.log.gz`. The owner
 rerun alone at load 31–46 still timed out (`orkestrator-test-run.yb5lB7`).
+
+## Recurrence during 0016 validation (2026-10-24)
+
+- **Failure:** `GitHub ranges come from a fresh backend seed, else live, else this container's cache` and `policy 2 narrows host access to named ports and records what it applied` timed out at about 5,004 ms.
+- **Original command:** `mise run test:logged -- --name full-test-2 -- mise run test`
+  on branch `todo-0016-slash-command-catalogue` after rebasing onto `712274379`,
+  node mbp3, other worktrees validating on the host.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.CfvSIY/full-test-2.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name firewall-alone -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1` passed (21.1 s).
+- **Disposition:** recurrence confirmed by the isolated pass. No assertion,
+  deadline or skip was changed.
+- **Again after rebasing onto `a5d78cfcd` (full-test-3):** 15 firewall cases hit
+  the five-second budget (evidence
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.xqyQcT/full-test-3.log.gz`).
+  The owning file also failed alone twice while the host load average was 33
+  to 98 (3 and more cases at about 5,008 ms), then passed alone (24 passed,
+  0 failed) once the one-minute load fell to 10. The branch changes no
+  firewall test or `docker/` script.
+
+## Coordinator adapters main merge — 2026-10-24
+
+Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. GitHub seed/live/cache timed out at 5008.03 ms in the aggregate. `mise run test:logged -- --name merge-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` also failed (21 passed, three different five-second timeouts; 52.7 s). This run adds no independent pass-alone confirmation.
+
+Full failure names, counts, evidence paths and unresolved limitations are in [0724](../aggregate-validation-runs/0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.

@@ -389,6 +389,13 @@ export type EngineEvent = EngineEventMeta &
         reasoningEffort: string;
       }
     | { kind: "model.tool.called"; threadId: string | null; turnId: string }
+    /**
+     * One model response of the turn finished sampling. app-server reports
+     * token usage once per Responses API completion, tool-only responses
+     * included, so this is the only response boundary it names on the stable
+     * surface (`TurnAccumulator.noteModelResponseCompleted`).
+     */
+    | { kind: "model.response.completed"; threadId: string | null; turnId: string }
     | { kind: "turn.started"; threadId: string | null; turnId: string }
     | {
         kind: "item.started";

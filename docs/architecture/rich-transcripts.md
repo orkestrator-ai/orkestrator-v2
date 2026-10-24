@@ -572,8 +572,16 @@ git worktree remove --force /tmp/rt-base
 Options: `--runs N` (default 3, interleaved and order-alternated per run),
 `--cycles N` (20), `--keystrokes N` (240), `--cpu-throttle N` (CDP CPU
 throttling), `--no-stream` (diagnostic: no streaming response),
-`--cpu-profile` and `--no-minify` (CDP CPU profiles with readable names). The
-report (numbers only) is written to
+`--cpu-profile` and `--no-minify` (CDP CPU profiles with readable names), and
+`--retained-mib N` (pads the same 3,000 messages to about N MiB of encoded
+JSON through `?retainedMiB=N`, so a large retained history stays under the
+4,096-message client cap; the 2026-10-24 run at 8 MiB is in
+[0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md)).
+Every run also covers the page with another tab for 10 s while the response
+streams and then brings it back, recording the first frame and long tasks
+after. Headless Chrome keeps a covered page `visible`, so only `--headed`
+measures a truly hidden document; the report records the visibility the page
+saw. The report (numbers only) is written to
 `output/benchmarks/rich-transcripts/<run-id>.json`.
 
 **Fixture.** `/rich-transcript-perf`

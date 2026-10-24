@@ -11,6 +11,7 @@
  * disk, so full reads cost ~5.3GB of retained heap against a 1.6GB Codex home.
  * Full reads are reserved for hydrating one specific thread.
  */
+import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
@@ -30,7 +31,6 @@ import {
   type PersistedSessionTitleSource,
 } from "../session-titles.js";
 import {
-  createMessageId,
   type MessageRole,
   type NormalizedMessage,
   type NormalizedPart,
@@ -1240,6 +1240,26 @@ interface CodeModeCell {
 }
 
 /**
+ * The id of a replayed row, from where it sits in the rollout: the thread, the
+ * turn (`scope`), the row's kind and its position among that turn's rows of
+ * that kind. A rollout only grows, so every replay of it — a re-attach after
+ * an idle detach, a bridge restart — names each row alike, and a reader's
+ * retained rows and held place survive it. A replay never matches the ids the
+ * live stream minted: those rows exist before app-server names their turn.
+ */
+export function replayedRowId(
+  threadId: string,
+  scope: string,
+  kind: "user" | "assistant" | "unreadable",
+  ordinal: number,
+): string {
+  const digest = createHash("sha256")
+    .update(`${threadId}\0${scope}\0${kind}\0${ordinal}`)
+    .digest("hex");
+  return `msg-r-${digest.slice(0, 32)}`;
+}
+
+/**
  * Replays one rollout snapshot into normalized messages, streaming its record
  * blocks in file order. Returns `null` if the snapshot went stale mid-replay.
  *
@@ -1318,6 +1338,13 @@ async function replayPersistedRollout(
    * boundary the live stream splits at (`TurnAccumulator.opensModelStep`).
    */
   let currentRowCalledTool = false;
+  /**
+   * A model response finished since the current row opened: Codex records its
+   * token usage once per response, so the next tool call after a call is the
+   * next response even when it opens with no reasoning or message. Live, the
+   * same report is `TurnAccumulator.noteModelResponseCompleted`.
+   */
+  let responseCompletedInRow = false;
   /** When the next response began, if it began with a record that renders nothing. */
   let nextRowStartedAt: string | undefined;
   let lastTimestamp: string | undefined;
@@ -1332,16 +1359,26 @@ async function replayPersistedRollout(
       }
     | undefined;
 
+  const rowOrdinals = new Map<string, number>();
+  const nextRowId = (kind: "user" | "assistant"): string => {
+    const scope = currentTurnId ?? "";
+    const key = `${kind}\0${scope}`;
+    const ordinal = rowOrdinals.get(key) ?? 0;
+    rowOrdinals.set(key, ordinal + 1);
+    return replayedRowId(threadId, scope, kind, ordinal);
+  };
+
   const closeAssistantRow = (): void => {
     currentAssistantMessage = undefined;
     currentRowCalledTool = false;
+    responseCompletedInRow = false;
     nextRowStartedAt = undefined;
   };
 
   const ensureAssistantMessage = (timestamp: string): NormalizedMessage => {
     if (currentAssistantMessage) return currentAssistantMessage;
     currentAssistantMessage = {
-      id: createMessageId(),
+      id: nextRowId("assistant"),
       role: "assistant",
       content: "",
       parts: [],
@@ -1508,7 +1545,8 @@ async function replayPersistedRollout(
       } else {
         unreadableRun = {
           message: {
-            id: createMessageId(),
+            // A gap is named by where it starts in the file.
+            id: replayedRowId(threadId, currentTurnId ?? "", "unreadable", unreadable.offset),
             role: "assistant",
             content: "",
             parts: [],
@@ -1559,6 +1597,16 @@ async function replayPersistedRollout(
       return;
     }
 
+    // `token_usage_record` (codex 0.16x) and the older `token_count` event both
+    // follow each response's own records.
+    if (
+      record.type === "token_usage_record" ||
+      (record.type === "event_msg" && record.payload?.type === "token_count")
+    ) {
+      if (currentRowCalledTool) responseCompletedInRow = true;
+      return;
+    }
+
     if (record.type !== "response_item" || !record.payload) {
       return;
     }
@@ -1567,7 +1615,9 @@ async function replayPersistedRollout(
 
     if (
       currentRowCalledTool &&
-      (payload.type === "reasoning" || (payload.type === "message" && payload.role === "assistant"))
+      (payload.type === "reasoning" ||
+        (payload.type === "message" && payload.role === "assistant") ||
+        (responseCompletedInRow && ROLLOUT_TOOL_CALL_TYPES.has(String(payload.type))))
     ) {
       closeAssistantRow();
       nextRowStartedAt = timestamp;
@@ -1656,7 +1706,7 @@ async function replayPersistedRollout(
 
     closeAssistantRow();
     messages.push({
-      id: createMessageId(),
+      id: nextRowId("user"),
       role,
       content: text,
       parts: [...(text ? [{ type: "text" as const, content: text }] : []), ...attachments],

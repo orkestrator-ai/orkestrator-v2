@@ -22,6 +22,45 @@ export class CodexRuntimeTail {
     private readonly sessions: CodexRuntimeSessions,
   ) {}
 
+  /**
+   * Stops every running turn because the backend that owned this bridge is
+   * gone, waiting at most `budgetMs`. Each turn settles as a restart mid-turn
+   * (`TurnAccumulator.stoppedByShutdown`), exactly as if app-server had been
+   * killed, so a build stage still continues it once after the restart; only
+   * the agent stops sooner, and its rollout records where. Returns how many
+   * turns it asked to stop. A turn app-server has not named yet is left to the
+   * shutdown that follows, which ends the child either way.
+   */
+  async interruptForParentExit(budgetMs: number): Promise<number> {
+    const stopping: Promise<unknown>[] = [];
+    for (const context of this.ctx.registry.listThreads()) {
+      const turn = context.activeTurn;
+      if (!turn || turn.isTerminal() || turn.isUnconfirmed()) continue;
+      turn.stoppedByShutdown = true;
+      const { engineHandle } = context;
+      stopping.push(
+        this.ctx.options.engine
+          .interruptTurn(engineHandle, turn.turnId)
+          .then(() =>
+            this.ctx.options.engine.waitForTurnTerminal(engineHandle, turn.turnId, {
+              timeoutMs: budgetMs,
+            }),
+          )
+          .catch(() => undefined),
+      );
+    }
+    if (stopping.length === 0) return 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled(stopping),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, budgetMs);
+      }),
+    ]);
+    clearTimeout(timer);
+    return stopping.length;
+  }
+
   async abort(
     sessionId: string,
   ): Promise<{ status: "cancelling" | "idle"; phase: SessionPhase } | null> {

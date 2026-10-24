@@ -18,7 +18,16 @@
  */
 export const PARENT_PID_ENV = "ORKESTRATOR_PARENT_PID";
 
-const DEFAULT_POLL_INTERVAL_MS = 15_000;
+/**
+ * How often a child checks that its parent still exists. A signal-0 probe is
+ * one syscall, so a second costs nothing. It used to be 15 s, longer than the
+ * 5 to 7 s a restarted backend takes to start and reap the orphan, so a
+ * crashed backend's bridge kept its agent working until it was killed instead
+ * of draining itself.
+ */
+export const PARENT_WATCH_INTERVAL_MS = 1_000;
+
+const DEFAULT_POLL_INTERVAL_MS = PARENT_WATCH_INTERVAL_MS;
 
 /**
  * PID 1 is rejected on purpose: it is init/launchd and never exits, so

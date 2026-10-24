@@ -35,13 +35,26 @@ import {
   summarizeReports,
   type EfficiencyReport,
 } from "../../../scripts/efficiency/harness";
+import {
+  startResourceSampler,
+  summarizeResources,
+  type MemorySample,
+} from "../../../scripts/efficiency/resources";
+import { displayTailWorkload } from "../../../scripts/efficiency/workloads-storage";
+import {
+  activitySweepWorkload,
+  fileTreeCacheWorkload,
+  pipelineCheckpointWorkload,
+  probeWorkload,
+} from "../../../scripts/efficiency/workloads-supervision";
 
 /**
  * The efficiency harness (scripts/efficiency), documented in
  * docs/development/efficiency-harness.md. These tests keep its fixtures
- * deterministic and content-free and its accounting exact; the workloads
- * themselves import repository modules and run through `mise run
- * efficiency:baseline`, not here.
+ * deterministic and content-free and its accounting exact. Most workloads
+ * import repository modules and run through `mise run efficiency:baseline`,
+ * not here; the supervision workloads (k to n) are cheap, so their counters
+ * are pinned below.
  */
 
 describe("efficiency fixtures", () => {
@@ -235,6 +248,165 @@ describe("step-14 delta accounting", () => {
   });
 });
 
+describe("efficiency resources", () => {
+  test("the sampler records late ticks, peaks and what a collection left", async () => {
+    let clock = 0;
+    let heap = 100;
+    let collected = 0;
+    const memory = (): MemorySample => ({ heapUsedBytes: heap, rssBytes: heap * 10 });
+    const sampler = startResourceSampler(1, {
+      now: () => clock,
+      memory,
+      collect: () => {
+        collected += 1;
+        heap = 150;
+      },
+    });
+    heap = 400;
+    // A case that never yields: the loop is held for 20 ms.
+    clock = 21;
+    const window = sampler.stop();
+    expect(collected).toBe(1);
+    expect(window.start).toEqual({ heapUsedBytes: 100, rssBytes: 1000 });
+    expect(window.end).toEqual({ heapUsedBytes: 400, rssBytes: 4000 });
+    expect(window.retained).toEqual({ heapUsedBytes: 150, rssBytes: 1500 });
+    expect(window.peak).toEqual({ heapUsedBytes: 400, rssBytes: 4000 });
+    expect(window.lagMs).toEqual([20]);
+    const summary = summarizeResources([window, { ...window, lagMs: [1, 2] }]);
+    expect(summary).toEqual({
+      repetitions: 2,
+      coldRetainedHeapDeltaBytes: 50,
+      coldRssDeltaBytes: 3000,
+      heapUsedPeakBytes: 400,
+      rssPeakBytes: 4000,
+      eventLoopLag: { samples: 3, p50Ms: 2, p99Ms: 20, maxMs: 20 },
+    });
+  });
+
+  test("a sampler that yields records non-negative lag", async () => {
+    const sampler = startResourceSampler(1);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    const window = sampler.stop();
+    expect(window.lagMs.length).toBeGreaterThan(0);
+    expect(window.lagMs.every((lag) => lag >= 0)).toBe(true);
+    expect(summarizeResources([]).eventLoopLag).toEqual({
+      samples: 0,
+      p50Ms: 0,
+      p99Ms: 0,
+      maxMs: 0,
+    });
+  });
+
+  test("cases carry resources unless sampling is off", async () => {
+    const run = async () => ({ counters: { visits: 1 } });
+    const sampled = await runCase({ id: "r", description: "", run }, 2);
+    expect(sampled.resources?.repetitions).toBe(2);
+    expect(sampled.resources?.eventLoopLag.samples).toBeGreaterThanOrEqual(0);
+    expect(sampled.countersStable).toBe(true);
+    const plain = await runCase({ id: "r", description: "", run }, 2, { sampleResources: false });
+    expect(plain.resources).toBeUndefined();
+  });
+});
+
+describe("supervision workloads", () => {
+  const context = createContext(path.resolve(import.meta.dir, "../../.."));
+  const counters = async (
+    factory: typeof activitySweepWorkload,
+    caseId: string,
+  ): Promise<Record<string, unknown>> => {
+    const workload = await factory(context);
+    const definition = workload.cases.find((entry) => entry.id === caseId)!;
+    const report = await runCase(definition, 2, { sampleResources: false });
+    expect(report).toMatchObject({ supported: true, countersStable: true });
+    return report.counters!;
+  };
+
+  test("the batch route answers 100 sessions in two requests; an older bridge in one each", async () => {
+    expect(await counters(activitySweepWorkload, "batch-100")).toMatchObject({
+      requests: 2,
+      batchRequests: 2,
+      singleRequests: 0,
+      applied: 100,
+    });
+    expect(await counters(activitySweepWorkload, "older-bridge-100-x3")).toMatchObject({
+      batchRequests: 2,
+      batchRejected: 2,
+      singleRequests: 300,
+      applied: 300,
+    });
+  });
+
+  test("a watched tree is walked once; an unwatched one per age bound", async () => {
+    expect(await counters(fileTreeCacheWorkload, "watched-unchanged")).toMatchObject({
+      reads: 20,
+      walks: 1,
+      cacheHits: 19,
+    });
+    expect(await counters(fileTreeCacheWorkload, "watched-mutation")).toMatchObject({
+      walks: 2,
+      distinctDigests: 2,
+      finalRevision: 2,
+    });
+    const unwatched = await counters(fileTreeCacheWorkload, "unwatched-age-bound");
+    expect(unwatched.walks as number).toBeGreaterThan(1);
+  });
+
+  test("unchanged probes are answered from the token", async () => {
+    expect(await counters(probeWorkload, "progress-unchanged")).toMatchObject({
+      "reads.unchanged": 10,
+      "reads.snapshot": 1,
+      "calls.messages": 0,
+    });
+    expect(await counters(probeWorkload, "reviewer-unchanged")).toMatchObject({
+      "reads.unchanged": 10,
+      "reads.snapshot": 1,
+    });
+  });
+
+  test("an unchanged pipeline session is read whole and saved once", async () => {
+    expect(await counters(pipelineCheckpointWorkload, "unchanged-session")).toMatchObject({
+      wholeReads: 1,
+      saves: 1,
+      "store.commits": 1,
+      "probes.unchanged": 19,
+    });
+    expect(await counters(pipelineCheckpointWorkload, "moving-session")).toMatchObject({
+      wholeReads: 20,
+      saves: 20,
+    });
+  });
+});
+
+describe("display-tail checkpoint age", () => {
+  const context = createContext(path.resolve(import.meta.dir, "../../.."));
+  const counters = async (caseId: string): Promise<Record<string, unknown>> => {
+    const workload = await displayTailWorkload(context);
+    const definition = workload.cases.find((entry) => entry.id === caseId)!;
+    const report = await runCase(definition, 2, { sampleResources: false });
+    expect(report).toMatchObject({ supported: true, countersStable: true });
+    return report.counters!;
+  };
+
+  test("a streaming tail is checkpointed at the maximum age, and a quiet one after the quiet period", async () => {
+    expect(await counters("age-stream-1")).toMatchObject({
+      checkpointAgeMaxMs: 10_000,
+      keysStaleAfterDrain: 0,
+      maxConcurrentWrites: 1,
+    });
+    expect(await counters("age-burst-then-quiet")).toMatchObject({
+      writes: 1,
+      // The burst lasts 900 ms, then the 2 s quiet period.
+      checkpointAgeMaxMs: 2_900,
+    });
+  });
+
+  test("many streaming tails share the write pool, so slow writes push age past the bound", async () => {
+    const slow = await counters("age-stream-128-slow-writes");
+    expect(slow).toMatchObject({ maxConcurrentWrites: 2, keysStaleAfterDrain: 0 });
+    expect(slow.checkpointAgeMaxMs as number).toBeGreaterThan(10_000);
+  });
+});
+
 describe("efficiency harness", () => {
   const relocatedModules = [
     "progressive-transcript.ts",
@@ -379,8 +551,24 @@ describe("efficiency harness", () => {
     };
   }
 
-  test("comparison covers counters and availability, never timings", () => {
+  test("comparison covers counters and availability, never timings or resources", () => {
     expect(compareReports(report("a", 1), report("b", 1))).toEqual([]);
+    const withResources = (label: string, peak: number): EfficiencyReport => {
+      const value = report(label, 1);
+      value.workloads[0]!.cases[0]!.resources = {
+        repetitions: 1,
+        coldRetainedHeapDeltaBytes: peak,
+        coldRssDeltaBytes: peak,
+        heapUsedPeakBytes: peak,
+        rssPeakBytes: peak,
+        eventLoopLag: { samples: 1, p50Ms: peak, p99Ms: peak, maxMs: peak },
+      };
+      return value;
+    };
+    expect(compareReports(withResources("a", 1), withResources("b", 9))).toEqual([]);
+    expect(
+      JSON.stringify(summarizeReports(withResources("a", 1), withResources("b", 9))),
+    ).not.toContain("heapUsedPeakBytes");
     expect(compareReports(report("a", 1), report("b", 2))).toEqual([
       { workload: "w", caseId: "c", counter: "visits", baseline: 1, candidate: 2 },
     ]);

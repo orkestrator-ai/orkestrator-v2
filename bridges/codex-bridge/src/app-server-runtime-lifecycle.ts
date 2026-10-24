@@ -985,6 +985,11 @@ export class CodexRuntimeLifecycle {
         if (turn?.accepts(event)) turn.noteModelToolCall();
         return;
       }
+      case "model.response.completed": {
+        const turn = context.activeTurn;
+        if (turn?.accepts(event)) turn.noteModelResponseCompleted();
+        return;
+      }
       case "item.started":
       case "item.updated":
       case "item.completed": {
@@ -1123,7 +1128,8 @@ export class CodexRuntimeLifecycle {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
         this.discardOutlivingCommandWindows(turn);
-        turn.complete(event.status, event.error);
+        if (turn.stoppedByShutdown) this.completeRecoveredTurn(turn, event.status);
+        else turn.complete(event.status, event.error);
         this.ctx.options.changeEvidence?.turn(this.evidenceSource(context, turn), event.status);
         const finalize = () =>
           this.runFinalization(context, turn).catch((error) => {

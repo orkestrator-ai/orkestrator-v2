@@ -9,6 +9,7 @@ import {
 import {
   type IntervalTimers,
   PARENT_PID_ENV,
+  PARENT_WATCH_INTERVAL_MS,
   parseParentPid,
 } from "@orkestrator/protocol/parent-watchdog";
 import { hostname, port } from "./config.js";
@@ -20,8 +21,6 @@ import { drainPersistence, loadPersistedState } from "./persistence.js";
 import { sessions } from "./state.js";
 
 const IDLE_SWEEP_MS = 60 * 1000;
-/** How often to check that the backend that spawned us is still alive. */
-const PARENT_WATCH_MS = 5_000;
 
 /** Seams for the lifecycle's clock, parent probe and exit; production passes none. */
 export interface ServerLifecycleOptions {
@@ -90,7 +89,7 @@ function lifecycleFor(listenPort: number, options: ServerLifecycleOptions): Brid
       options.parentPid !== undefined
         ? options.parentPid
         : parseParentPid(process.env[PARENT_PID_ENV]),
-    parentWatchMs: PARENT_WATCH_MS,
+    parentWatchMs: PARENT_WATCH_INTERVAL_MS,
     exit: options.exit ?? ((code) => process.exit(code)),
     ...(options.timers ? { timers: options.timers } : {}),
     ...(options.isParentAlive ? { isParentAlive: options.isParentAlive } : {}),

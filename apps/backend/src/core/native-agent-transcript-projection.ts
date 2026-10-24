@@ -3161,11 +3161,13 @@ export class NativeAgentTranscriptProjection {
 
   private async readProgressiveSessionState(
     input: NativeAgentProgressiveInput,
+    timer?: ProgressiveReadPhaseTimer,
   ): Promise<NativeAgentSessionStateView | null> {
     const resolved = await this.host.resolveProjectionSession(input);
     if (!resolved) return null;
     const advertisedCapabilities = nativeCapabilities(input.agent);
-    const [snapshot, interactionSnapshot, queue, steerSupported] = await Promise.all([
+    timer?.sourceStarted();
+    const sourceReads = Promise.all([
       resolved.provider.sessionStateSnapshot
         ? resolved.provider.sessionStateSnapshot(resolved.session.providerSessionId)
         : resolved.provider.interactiveSnapshot
@@ -3187,6 +3189,10 @@ export class NativeAgentTranscriptProjection {
             .catch(() => false) ?? Promise.resolve(false))
         : Promise.resolve(false),
     ]);
+    // A failed source read ends the phase too, so `unavailable` keeps its time.
+    const [snapshot, interactionSnapshot, queue, steerSupported] = await sourceReads.finally(() =>
+      timer?.sourceEnded(),
+    );
     if (snapshot.status === "missing") return null;
     const commandRevision = (snapshot as ProviderSessionStateSnapshot).commandCatalogueRevision;
     if (commandRevision !== undefined) {
@@ -3442,22 +3448,24 @@ export class NativeAgentTranscriptProjection {
     );
     const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
     const startedAt = monotonicMs();
+    const phases = new ProgressiveReadPhaseTimer();
     try {
-      const value = await this.progressiveReadCovering(
-        key,
-        sessionKey,
-        epoch,
-        input.forceSnapshot === true,
-        () => this.readProgressiveSessionState(input),
+      const value = await phases.covering(() =>
+        this.progressiveReadCovering(
+          key,
+          sessionKey,
+          epoch,
+          input.forceSnapshot === true,
+          phases.own(() => this.readProgressiveSessionState(input, phases)),
+        ),
       );
       if (!value) {
-        this.recordProgressiveMetric("state", startedAt, "provider", "missing");
+        this.recordProgressiveMetric("state", startedAt, "provider", "missing", phases.phases());
         return { viewVersion: 1, status: "missing" };
       }
-      const token = createHash("sha256")
-        .update(JSON.stringify(value))
-        .digest("base64url")
-        .slice(0, 43);
+      const token = phases.normalize(() =>
+        createHash("sha256").update(JSON.stringify(value)).digest("base64url").slice(0, 43),
+      );
       const previous = this.progressiveStateCache.get(key);
       this.progressiveStateCache.delete(key);
       this.progressiveStateCache.set(key, { token, value });
@@ -3467,10 +3475,10 @@ export class NativeAgentTranscriptProjection {
         this.progressiveStateCache.delete(oldest);
       }
       if (!input.forceSnapshot && input.knownToken === token) {
-        this.recordProgressiveMetric("state", startedAt, "provider", "unchanged");
+        this.recordProgressiveMetric("state", startedAt, "provider", "unchanged", phases.phases());
         return { viewVersion: 1, status: "unchanged", token, identity: value.identity };
       }
-      this.recordProgressiveMetric("state", startedAt, "provider", "snapshot");
+      this.recordProgressiveMetric("state", startedAt, "provider", "snapshot", phases.phases());
       return {
         viewVersion: 1,
         status: "snapshot",
@@ -3486,7 +3494,7 @@ export class NativeAgentTranscriptProjection {
               : "initial",
       };
     } catch (error) {
-      this.recordProgressiveMetric("state", startedAt, "provider", "unavailable");
+      this.recordProgressiveMetric("state", startedAt, "provider", "unavailable", phases.phases());
       const cached = this.progressiveStateCache.get(key);
       return {
         viewVersion: 1,
@@ -3617,7 +3625,19 @@ export class NativeAgentTranscriptProjection {
       providerKey,
       (this.progressiveDiscoveryJobsByProvider.get(providerKey) ?? 0) + 1,
     );
-    const operation = this.progressiveRead(cacheKey, read);
+    // The job runs behind the views that asked for it, so its timing is its
+    // own sample: provider read, then committing the section.
+    const jobStartedAt = monotonicMs();
+    const phases = new ProgressiveReadPhaseTimer();
+    const timedRead = phases.own(async () => {
+      phases.sourceStarted();
+      try {
+        return await read();
+      } finally {
+        phases.sourceEnded();
+      }
+    });
+    const operation = phases.covering(() => this.progressiveRead(cacheKey, timedRead));
     let settled = false;
     const deadline = setTimeout(() => {
       if (
@@ -3644,11 +3664,20 @@ export class NativeAgentTranscriptProjection {
         settled = true;
         clearTimeout(deadline);
         if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
-        const { announce } = this.storeProgressiveDiscovery(cacheKey, {
-          value,
-          availability: "ready",
-          expiresAt: this.host.now() + 30_000,
-        });
+        const { announce } = phases.normalize(() =>
+          this.storeProgressiveDiscovery(cacheKey, {
+            value,
+            availability: "ready",
+            expiresAt: this.host.now() + 30_000,
+          }),
+        );
+        this.recordProgressiveMetric(
+          "discovery",
+          jobStartedAt,
+          "provider",
+          announce ? "snapshot" : "unchanged",
+          phases.phases(),
+        );
         // Every section expires after 30 s and an idle view's own read renews
         // it. Announcing an unchanged renewal would wake that view (and reset
         // its quiet backoff) four times per expiry for nothing: a view reads
@@ -3663,6 +3692,13 @@ export class NativeAgentTranscriptProjection {
         settled = true;
         clearTimeout(deadline);
         if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
+        this.recordProgressiveMetric(
+          "discovery",
+          jobStartedAt,
+          "provider",
+          "unavailable",
+          phases.phases(),
+        );
         const previous = this.progressiveDiscoveryCache.get(cacheKey);
         this.storeProgressiveDiscovery(cacheKey, {
           value: previous?.value,
@@ -3688,8 +3724,13 @@ export class NativeAgentTranscriptProjection {
     if (input.viewVersion !== NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION) {
       throw new Error("Native agent progressive view version is unsupported");
     }
+    const startedAt = monotonicMs();
     const resolved = await this.host.resolveProjectionSession(input);
-    if (!resolved) return { viewVersion: 1, status: "missing" };
+    if (!resolved) {
+      this.recordProgressiveMetric("discovery", startedAt, "memory", "missing");
+      return { viewVersion: 1, status: "missing" };
+    }
+    const assembleStartedAt = monotonicMs();
     const providerGeneration = this.host.providerGeneration(input) ?? `in-process:${input.agent}`;
     const identity = this.progressiveIdentity(
       input,
@@ -3754,9 +3795,15 @@ export class NativeAgentTranscriptProjection {
       .update(JSON.stringify(value))
       .digest("base64url")
       .slice(0, 43);
+    // Served from the section cache: the provider reads are the jobs above,
+    // each recorded when it settles. This read's own cost is assembling and
+    // hashing the view.
+    const normalizeMs = monotonicMs() - assembleStartedAt;
     if (!input.forceSnapshot && input.knownToken === token) {
+      this.recordProgressiveMetric("discovery", startedAt, "memory", "unchanged", { normalizeMs });
       return { viewVersion: 1, status: "unchanged", token, identity };
     }
+    this.recordProgressiveMetric("discovery", startedAt, "memory", "snapshot", { normalizeMs });
     return {
       viewVersion: 1,
       status: "snapshot",

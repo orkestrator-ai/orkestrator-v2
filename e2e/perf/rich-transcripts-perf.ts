@@ -3,7 +3,7 @@
  *
  *   mise exec -- bun e2e/perf/rich-transcripts-perf.ts \
  *     [--root change=.] [--root baseline=/path/to/base-worktree] \
- *     [--runs 3] [--cycles 20] [--keystrokes 240] [--cpu-profile]
+ *     [--runs 3] [--cycles 20] [--keystrokes 240] [--cpu-profile] [--retained-mib 8]
  *
  * Each `--root` is a repository checkout. Its `e2e/fixture` app is built with
  * that checkout's Vite config (production React) into a temporary directory
@@ -19,6 +19,12 @@
  *  - scroll: rAF frame intervals while wheel-scrolling up through history,
  *    long tasks, long animation frames, sampled queued work;
  *  - renderer mount counts, highlighter invocations, backend calls per phase;
+ *  - covered: another tab in front for 10 s while the response keeps
+ *    streaming, then the page brought back: time to the first frame, long tasks
+ *    and long animation frames in the 3 s after. Headless Chrome keeps a
+ *    covered page `visible` (and ignores minimizing and lifecycle freezing), so
+ *    only `--headed` measures a truly hidden and resumed document; the report
+ *    records the visibility the page saw;
  *  - cycles: N scroll/expand/reopen cycles, sampling settled cache entries and
  *    bytes, queued work, view-state entries, live workers, DOM nodes and the
  *    post-GC JS heap, then checking they converge within FRONTEND_RENDER_POLICY.
@@ -49,6 +55,8 @@ interface Options {
   cpuThrottle: number;
   minify: boolean;
   stream: boolean;
+  /** Grow the fixture's 3,000 messages to about this many MiB (`?retainedMiB`). */
+  retainedMiB: number;
 }
 
 function parseOptions(argv: string[]): Options {
@@ -63,6 +71,7 @@ function parseOptions(argv: string[]): Options {
     cpuThrottle: 1,
     minify: true,
     stream: true,
+    retainedMiB: 0,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -85,6 +94,7 @@ function parseOptions(argv: string[]): Options {
     else if (arg === "--no-minify") options.minify = false;
     // Diagnostic: measure typing and scrolling without the streaming response.
     else if (arg === "--no-stream") options.stream = false;
+    else if (arg === "--retained-mib") options.retainedMiB = Number(value());
     else throw new Error(`Unknown option ${arg}`);
   }
   if (options.roots.length === 0) options.roots.push({ label: "change", root: repositoryRoot });
@@ -490,13 +500,21 @@ async function measureRun(
 
   // --- load
   const navigationStart = Date.now();
-  await page.goto(`${server.url}/rich-transcript-perf`);
+  await page.goto(
+    `${server.url}/rich-transcript-perf${options.retainedMiB > 0 ? `?retainedMiB=${options.retainedMiB}` : ""}`,
+  );
   await page.waitForFunction(() => window.__richPerf?.ready === true, null, { timeout: 60_000 });
   await page.waitForSelector("[data-item-index]", { timeout: 60_000 });
   const firstRowMs = Date.now() - navigationStart;
   await sleep(2_000);
   const loadEnd = await now(page);
-  const load = { firstRowMs, ...(await longTasksBetween(page, 0, loadEnd)) };
+  const loadStats = await page.evaluate(() => window.__richPerf!.stats());
+  const load = {
+    firstRowMs,
+    messages: await page.evaluate(() => window.__richPerf!.messageCount()),
+    transcriptBytes: loadStats.transcriptBytes as number,
+    ...(await longTasksBetween(page, 0, loadEnd)),
+  };
   const loadCounters = await counters(page);
   const scroller = page.locator("[data-virtuoso-scroller]").first();
   const box = (await scroller.boundingBox())!;
@@ -671,6 +689,37 @@ async function measureRun(
     };
   }
   const controller = await scrollControllerCounters(page);
+
+  // --- covered by another tab while streaming, then brought back
+  await page.evaluate(() => window.__richPerf!.scrollToBottom());
+  await sleep(500);
+  const ticksBeforeHidden = (await counters(page)).streamTicks;
+  const cover = await context.newPage();
+  await cover.goto("about:blank");
+  await cover.bringToFront();
+  await sleep(10_000);
+  const hiddenState = await page.evaluate(() => document.visibilityState);
+  const hiddenTicks = (await counters(page)).streamTicks;
+  const shownAt = await now(page);
+  await page.bringToFront();
+  const firstFrameMs = await page.evaluate(
+    (start) =>
+      new Promise<number>((resolve) =>
+        requestAnimationFrame(() => resolve(performance.now() - start)),
+      ),
+    shownAt,
+  );
+  await sleep(3_000);
+  const shownEnd = await now(page);
+  const shownWindow = await longTasksBetween(page, shownAt, shownEnd);
+  const covered = {
+    visibilityWhileCovered: hiddenState,
+    streamTicksWhileCovered: hiddenTicks - ticksBeforeHidden,
+    firstFrameAfterShownMs: round(firstFrameMs),
+    longTasks: shownWindow.longTasks,
+    longAnimationFrames: shownWindow.longAnimationFrames,
+  };
+  await cover.close();
   await page.evaluate(() => window.__richPerf!.stopStream());
 
   // --- scroll / expand / reopen cycles
@@ -684,6 +733,7 @@ async function measureRun(
     /** Null where the checkout has no transcript scroll controller (baseline). */
     controller,
     refreshMs: round(refreshMs),
+    covered,
     cycles,
     unexpectedCommands: (await counters(page)).unexpectedCommands,
   };
@@ -1011,6 +1061,15 @@ async function main() {
         finalHeapMiB: metric((run) => run.cycles.samples.at(-1)?.heapUsedMiB ?? 0),
         loadFirstRowMs: metric((run) => run.load.firstRowMs),
         loadLongTaskMs: metric((run) => run.load.longTasks.totalMs),
+        loadMessages: metric((run) => run.load.messages),
+        loadTranscriptMiB: metric((run) => run.load.transcriptBytes / (1024 * 1024)),
+        shownFirstFrameMs: metric((run) => run.covered.firstFrameAfterShownMs),
+        shownLongTasks: metric((run) => run.covered.longTasks.count),
+        shownLongTaskMs: metric((run) => run.covered.longTasks.totalMs),
+        shownLongAnimationFrameBlockingMs: metric(
+          (run) => run.covered.longAnimationFrames.blockingMs,
+        ),
+        coveredWasHidden: runs.every((run) => run.covered.visibilityWhileCovered === "hidden"),
         allConverged: runs.every((run) => run.cycles.verdict.converged),
         unexpectedCommands: runs.reduce((sum, run) => sum + run.unexpectedCommands, 0),
       };

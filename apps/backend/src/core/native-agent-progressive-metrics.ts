@@ -24,13 +24,19 @@ export interface ProgressiveReadMetric {
   degraded?: boolean;
 }
 
-const MAX_METRICS = 256;
+/** Kept per domain: idle views poll state and discovery far more often than transcripts change. */
+const MAX_METRICS_PER_DOMAIN = 256;
 
 export class ProgressiveReadMetrics {
-  private readonly samples: ProgressiveReadMetric[] = [];
+  private readonly samplesByDomain = new Map<ProgressiveReadDomain, ProgressiveReadMetric[]>();
 
   record(metric: ProgressiveReadMetric): void {
-    this.samples.push({
+    let samples = this.samplesByDomain.get(metric.domain);
+    if (!samples) {
+      samples = [];
+      this.samplesByDomain.set(metric.domain, samples);
+    }
+    samples.push({
       ...metric,
       durationMs: Math.max(0, Math.round(metric.durationMs)),
       ...(metric.schedulerWaitMs === undefined
@@ -43,16 +49,18 @@ export class ProgressiveReadMetrics {
         ? {}
         : { normalizeMs: Math.max(0, Math.round(metric.normalizeMs)) }),
     });
-    if (this.samples.length > MAX_METRICS)
-      this.samples.splice(0, this.samples.length - MAX_METRICS);
+    if (samples.length > MAX_METRICS_PER_DOMAIN)
+      samples.splice(0, samples.length - MAX_METRICS_PER_DOMAIN);
   }
 
-  list(): readonly ProgressiveReadMetric[] {
-    return this.samples;
+  /** Every domain's samples, oldest first within a domain. */
+  list(domain?: ProgressiveReadDomain): readonly ProgressiveReadMetric[] {
+    if (domain) return this.samplesByDomain.get(domain) ?? [];
+    return [...this.samplesByDomain.values()].flat();
   }
 
   clear(): void {
-    this.samples.length = 0;
+    this.samplesByDomain.clear();
   }
 }
 

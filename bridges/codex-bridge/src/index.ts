@@ -2167,13 +2167,30 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 // serving — down with it.
 installFatalRejectionGuard({ label: "[codex-bridge]" });
 
+/**
+ * How long a dead backend's running turns get to stop before the drain ends
+ * app-server anyway. The next backend reaps an orphaned bridge about 5 s after
+ * it starts, so detection (`PARENT_WATCH_INTERVAL_MS`) plus this stays inside it.
+ */
+const PARENT_EXIT_INTERRUPT_BUDGET_MS = 2_000;
+
 const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
 if (parentPid !== null) {
   startParentWatchdog({
     parentPid,
     onParentExit: () => {
+      const detectedAt = performance.now();
       console.error(`[codex-bridge] Backend process ${parentPid} is gone; shutting down`);
-      shutdownHandler();
+      // Nothing supervises a turn once its backend is gone: stop it now rather
+      // than letting the agent keep editing until the drain kills app-server.
+      void appServerRuntime
+        .interruptForParentExit(PARENT_EXIT_INTERRUPT_BUDGET_MS)
+        .catch(() => 0)
+        .then((turns) => {
+          const ms = Math.round(performance.now() - detectedAt);
+          console.error(`[codex-bridge] Stopped ${turns} running turn(s) in ${ms} ms`);
+        })
+        .finally(shutdownHandler);
     },
   });
 }

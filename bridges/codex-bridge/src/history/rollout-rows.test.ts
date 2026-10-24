@@ -9,6 +9,7 @@ import { clearTranscriptCache } from "../transcript-cache.js";
 import {
   hydrateMessagesFromPersistedSession,
   invalidateTranscriptCatalogCache,
+  replayedRowId,
 } from "./rollout.js";
 
 let root: string;
@@ -216,4 +217,179 @@ test("live exec_command, repeated write_stdin, and request_user_input boundaries
   expect(replayRows.map((row) => row.content)).toEqual(
     Array.from({ length: 5 }, (_, i) => `response ${i}`),
   );
+});
+
+describe("tool-only responses", () => {
+  const usage = (second: number, turnId = "turn-1") => ({
+    timestamp: at(second),
+    type: "token_usage_record",
+    payload: { turn_id: turnId },
+  });
+  const call = (second: number, callId: string) =>
+    response(second, {
+      type: "function_call",
+      name: "exec_command",
+      call_id: callId,
+      arguments: JSON.stringify({ cmd: `cat ${callId}` }),
+    });
+  const output = (second: number, callId: string) =>
+    response(second, { type: "function_call_output", call_id: callId, output: "next" });
+  const commandItem = (id: string): Parameters<TurnAccumulator["onItemStarted"]>[0] => ({
+    id,
+    type: "command_execution",
+    command: `cat ${id}`,
+    aggregated_output: "",
+    status: "in_progress",
+  });
+
+  /** Responses of the turn: each is the calls it made, run one after another. */
+  const responses = [["read-1"], ["read-2"], ["read-3", "read-4"], ["read-5"]];
+
+  test("split at each usage report, live and on reload alike", async () => {
+    const records: object[] = [
+      { timestamp: at(0), type: "session_meta", payload: { id: "steps", cwd: "/fixture" } },
+      { timestamp: at(0), type: "turn_context", payload: { turn_id: "turn-1" } },
+      message(0, "user", "Follow the trail"),
+    ];
+    const turn = new TurnAccumulator({
+      threadId: "steps",
+      turnId: "turn-1",
+      engineGeneration: 1,
+      assistantMessageId: "live-0",
+    });
+    let second = 1;
+    for (const [index, calls] of responses.entries()) {
+      for (const callId of calls) {
+        records.push(call(second, callId));
+        const started = {
+          kind: "item.started",
+          threadId: "steps",
+          turnId: "turn-1",
+          item: commandItem(callId),
+        } as const;
+        if (turn.opensModelStep(started)) turn.startModelStep(`live-${index}`, at(second));
+        turn.onItemStarted(started.item);
+      }
+      // The usage report lands before the calls' outputs, as codex records it.
+      records.push(usage(second));
+      const reduced = reduceNotification(
+        {
+          kind: "notification",
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "steps",
+            turnId: "turn-1",
+            tokenUsage: { total: {}, last: { totalTokens: 22 }, modelContextWindow: 1000 },
+          },
+        },
+        1,
+        "handle",
+      );
+      for (const event of reduced.events) {
+        if (event.kind === "model.response.completed") turn.noteModelResponseCompleted();
+      }
+      for (const callId of calls) records.push(output(second, callId));
+      records.push({ timestamp: at(second), type: "event_msg", payload: { type: "token_count" } });
+      second += 1;
+    }
+    await writeRollouts(records);
+
+    const live = turn
+      .assistantSegmentsInOrder()
+      .map((segment) =>
+        turn.orderedForAssistantSegment(segment.assistantMessageId).map((item) => item.id),
+      );
+    const hydrated = await hydrateMessagesFromPersistedSession("steps");
+    const reloaded = hydrated.messages
+      .filter((row) => row.role === "assistant")
+      .map((row) => row.parts.map((part) => part.toolUseId));
+    expect(live).toEqual(responses);
+    expect(reloaded).toEqual(responses);
+  });
+
+  test("without usage reports a tool-only run stays one row, as before", async () => {
+    await writeRollouts([
+      { timestamp: at(0), type: "session_meta", payload: { id: "steps", cwd: "/fixture" } },
+      { timestamp: at(0), type: "turn_context", payload: { turn_id: "turn-1" } },
+      message(0, "user", "Follow the trail"),
+      call(1, "read-1"),
+      output(1, "read-1"),
+      call(2, "read-2"),
+      output(2, "read-2"),
+    ]);
+    const hydrated = await hydrateMessagesFromPersistedSession("steps");
+    expect(
+      hydrated.messages
+        .filter((row) => row.role === "assistant")
+        .map((row) => row.parts.map((part) => part.toolUseId)),
+    ).toEqual([["read-1", "read-2"]]);
+  });
+});
+
+describe("replayed row ids", () => {
+  const records = (turns: number): object[] => {
+    const out: object[] = [
+      { timestamp: at(0), type: "session_meta", payload: { id: "steps", cwd: "/fixture" } },
+    ];
+    for (let turn = 1; turn <= turns; turn += 1) {
+      out.push(
+        { timestamp: at(turn * 5), type: "turn_context", payload: { turn_id: `turn-${turn}` } },
+        message(turn * 5, "user", `Prompt ${turn}`),
+        response(turn * 5 + 1, {
+          type: "function_call",
+          name: "exec_command",
+          call_id: `call-${turn}`,
+          arguments: "{}",
+        }),
+        {
+          timestamp: at(turn * 5 + 1),
+          type: "token_usage_record",
+          payload: { turn_id: `turn-${turn}` },
+        },
+        response(turn * 5 + 2, {
+          type: "function_call_output",
+          call_id: `call-${turn}`,
+          output: "ok",
+        }),
+        reasoning(turn * 5 + 3),
+        message(turn * 5 + 3, "assistant", `Answer ${turn}`),
+      );
+    }
+    return out;
+  };
+
+  test("every replay of a rollout names its rows alike, and the rows stay unique", async () => {
+    await writeRollouts(records(2));
+    const first = (await hydrateMessagesFromPersistedSession("steps")).messages.map(
+      (row) => row.id,
+    );
+    clearTranscriptCache();
+    invalidateTranscriptCatalogCache();
+    const second = (await hydrateMessagesFromPersistedSession("steps")).messages.map(
+      (row) => row.id,
+    );
+    expect(first).toHaveLength(6);
+    expect(new Set(first).size).toBe(first.length);
+    expect(second).toEqual(first);
+
+    // A rollout only grows: a later turn leaves the earlier rows' ids alone.
+    await writeRollouts(records(3));
+    clearTranscriptCache();
+    invalidateTranscriptCatalogCache();
+    const grown = (await hydrateMessagesFromPersistedSession("steps")).messages.map(
+      (row) => row.id,
+    );
+    expect(grown.slice(0, first.length)).toEqual(first);
+    expect(new Set(grown).size).toBe(grown.length);
+  });
+
+  test("ids are scoped to the thread", () => {
+    expect(replayedRowId("thread-a", "turn-1", "assistant", 0)).not.toBe(
+      replayedRowId("thread-b", "turn-1", "assistant", 0),
+    );
+    expect(replayedRowId("thread-a", "turn-1", "assistant", 0)).not.toBe(
+      replayedRowId("thread-a", "turn-1", "user", 0),
+    );
+    expect(replayedRowId("thread-a", "turn-1", "assistant", 0)).toMatch(/^msg-r-[0-9a-f]{32}$/);
+  });
 });

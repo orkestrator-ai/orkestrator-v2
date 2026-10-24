@@ -149,3 +149,13 @@ Aggregate result: exit 1 after 664.7 seconds logged. Codex bridge reported 2230 
 - **Unchanged owner:** `mise run test:logged -- --name merge-codex-fixture-owner -- bun --cwd=bridges/codex-bridge test ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed (exit 0, 0.1 seconds logged).
 - **Evidence:** `orkestrator-test-run.O0jvRO/bridges.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent fixture-process deadline; contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+
+## Bun gate and preview coverage review — 2026-10-24
+
+- **Original command:** `mise run test:logged -- --name review-default-suite -- mise run test`, Bun 1.4.4 on macOS arm64. Workspace/root/bridges/protocol reservations were 4/1/2/1; the Codex package used one worker while other worktrees and the two Docker architecture builds ran.
+- **Failure:** `fake Codex app-server process > reports its version and rejects unsupported invocations` timed out after 5000 ms (5049.19 ms observed). No bridge source changed.
+- **Suite counts:** Codex reported 2356 passed, 40 skipped and one failed across 2397 tests in 88 files (60.49 seconds). The other four bridge package tasks passed.
+- **Unchanged owner:** `mise run test:logged -- --name review-fake-codex-isolated -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1` passed both tests with zero failures (0.1 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.2BemPO/bridges.log.gz` after aggregate finalization; outer run `orkestrator-test-run.LLUEZq`.
+- **Assessment:** confirmed intermittent recurrence; host scheduling contention remains a hypothesis. No implementation, assertion, deadline or skip changed.

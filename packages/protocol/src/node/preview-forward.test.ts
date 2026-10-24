@@ -1,13 +1,20 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { createServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  IncomingMessage,
+  ServerResponse,
+  type Server,
+} from "node:http";
 import {
   connect,
   createServer as createNetServer,
   type AddressInfo,
   type Server as NetServer,
-  type Socket,
+  Socket,
 } from "node:net";
+import { PassThrough } from "node:stream";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 
 import {
@@ -277,6 +284,83 @@ describe("preview header policy", () => {
         ["origin", origin],
       ]),
     ).toBe(true);
+  });
+});
+
+// Bypass node:http's parser so these exercise the forwarder even when Bun
+// rejects the same malformed bytes before emitting a request/upgrade event.
+describe("preview forwarder validation without the HTTP parser", () => {
+  const cases = [
+    { name: "non-ASCII target", url: "/a\u010d\u010aX-Evil:\u01201" },
+    { name: "network-path target", url: "//evil.test/path" },
+    { name: "duplicate Host headers", rawHeaders: ["Host", "evil.test"] },
+    {
+      name: "ambiguous body framing",
+      rawHeaders: ["Content-Length", "1", "Transfer-Encoding", "chunked"],
+    },
+  ];
+
+  test.each(cases)("rejects $name before connecting for requests and upgrades", async (invalid) => {
+    const transport = new Socket();
+    const request = new IncomingMessage(transport);
+    request.method = "GET";
+    request.url = invalid.url ?? "/valid";
+    request.rawHeaders = [
+      "Host",
+      "preview.test",
+      "Upgrade",
+      "websocket",
+      ...(invalid.rawHeaders ?? []),
+    ];
+    const response = new ServerResponse(request);
+    const client = new PassThrough();
+    const chunks: Buffer[] = [];
+    client.on("data", (chunk: Buffer) => chunks.push(chunk));
+    const hooks = {
+      connect: mock(async () => {
+        throw new Error("unexpected upstream connection");
+      }),
+    };
+    const policy = policyFor(3000, "https://preview.test");
+    try {
+      const result = await forwardPreviewRequest(
+        request,
+        response,
+        policy,
+        DEFAULT_PREVIEW_FORWARD_LIMITS,
+        hooks,
+      );
+      expect(result).toMatchObject({
+        outcome: "rejected",
+        category: "invalid-request",
+        status: 400,
+        bytesUp: 0,
+        bytesDown: 0,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.getHeader("x-orkestrator-preview-error")).toBe("invalid-request");
+      expect(hooks.connect).not.toHaveBeenCalled();
+
+      const upgrade = await forwardPreviewUpgrade(
+        request,
+        client,
+        Buffer.alloc(0),
+        policy,
+        DEFAULT_PREVIEW_FORWARD_LIMITS,
+        hooks,
+      );
+      expect(upgrade).toMatchObject({ outcome: "rejected", category: "invalid-request" });
+      await upgrade.closed;
+      expect(Buffer.concat(chunks).toString()).toStartWith("HTTP/1.1 400");
+      expect(Buffer.concat(chunks).toString()).toContain(
+        "x-orkestrator-preview-error: invalid-request",
+      );
+      expect(hooks.connect).not.toHaveBeenCalled();
+    } finally {
+      response.destroy();
+      client.destroy();
+      transport.destroy();
+    }
   });
 });
 
@@ -572,7 +656,7 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
 
   // Since Bun 1.4.4 the node:http parser answers these raw targets with a bare
   // 400 before the forwarder runs; Electron's Node still hands them to the
-  // forwarder, whose `invalid-request` refusal preview-http1.test.ts covers.
+  // forwarder. The direct validation tests above cover its refusal guards.
   // Either way nothing may reach the upstream.
   test("non-ASCII request targets are refused before any upstream I/O", async () => {
     const answer = await rawExchange(

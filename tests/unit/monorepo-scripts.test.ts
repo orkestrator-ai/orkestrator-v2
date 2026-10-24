@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dir, "../..");
@@ -16,6 +17,56 @@ const BRIDGE_MANIFESTS = [
 ];
 
 describe("monorepo orchestration scripts", () => {
+  test("Bun check rejects a type error and accepts the repaired project", () => {
+    const fixture = mkdtempSync(path.join(os.tmpdir(), "orkestrator-typecheck-"));
+    try {
+      writeFileSync(
+        path.join(fixture, "tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: { strict: true, noEmit: true, types: [] },
+          files: ["index.ts"],
+        }),
+      );
+      writeFileSync(path.join(fixture, "index.ts"), 'export const value: number = "wrong";\n');
+      const check = () =>
+        Bun.spawnSync([process.execPath, "check", "-p", "tsconfig.json"], {
+          cwd: fixture,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+      const failed = check();
+      expect(failed.exitCode).not.toBe(0);
+      expect(failed.stdout.toString() + failed.stderr.toString()).toContain("TS2322");
+      writeFileSync(path.join(fixture, "index.ts"), "export const value: number = 1;\n");
+      expect(check().exitCode).toBe(0);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  test("Bun fmt check rejects an unformatted file without modifying it", () => {
+    const fixture = mkdtempSync(path.join(os.tmpdir(), "orkestrator-format-"));
+    try {
+      writeFileSync(path.join(fixture, ".oxfmtrc.json"), read(".oxfmtrc.json"));
+      const file = path.join(fixture, "index.ts");
+      const unformatted = "export const value={messy:true}\n";
+      writeFileSync(file, unformatted);
+      const format = (...args: string[]) =>
+        Bun.spawnSync([process.execPath, "fmt", ...args, "index.ts"], {
+          cwd: fixture,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+      expect(format("--check").exitCode).toBe(1);
+      expect(readFileSync(file, "utf8")).toBe(unformatted);
+      expect(format().exitCode).toBe(0);
+      expect(readFileSync(file, "utf8")).toBe("export const value = { messy: true };\n");
+      expect(format("--check").exitCode).toBe(0);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   test("backend build externalizes Sharp and vendors its complete runtime closure", () => {
     const source = read("apps/backend/scripts/build.ts");
     const runtimeWorkflow = read(".github/workflows/validate-bun-runtime.yml");

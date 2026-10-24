@@ -38,6 +38,7 @@ async function fixture(files: Record<string, string>) {
     path.join(repositoryRoot, "scripts/move-backend-modules.ts"),
     path.join(root, "scripts/move-backend-modules.ts"),
   );
+  await copyFile(path.join(repositoryRoot, ".oxfmtrc.json"), path.join(root, ".oxfmtrc.json"));
   for (const [file, source] of Object.entries(files)) await write(root, file, source);
   run(root, ["git", "init", "--quiet"]);
   run(root, ["git", "add", "--", ...Object.keys(files)]);
@@ -196,6 +197,34 @@ describe("move-backend-modules CLI", () => {
       module: newPath.replace(/\.ts$/, ".js"),
     });
     expect(await read(root, "untracked.md")).toBe(oldPath);
+  }, 20_000);
+
+  test("honors repository formatter exclusions while rewriting tracked references", async () => {
+    const oldPath = `${core}/design-service.ts`;
+    const newPath = `${core}/design/service.ts`;
+    const markdown = `#   Untidy heading\n\n[module](../../${oldPath})\n`;
+    const ignored = `export const modulePath='${oldPath}'\n`;
+    const generated = "bridges/codex-bridge/src/app-server/generated/reference.ts";
+    const root = await fixture({
+      [oldPath]: 'export { value } from "./config";\n',
+      [`${core}/config.ts`]: "export const value = 1;\n",
+      "docs/reference.ts": ignored,
+      "docs/guide.md": markdown,
+      "GUIDE.md": markdown,
+      [generated]: ignored,
+      "caller.ts": `export const modulePath='${oldPath}'\n`,
+    });
+
+    move(root);
+
+    for (const file of ["docs/reference.ts", generated]) {
+      expect(await read(root, file)).toBe(ignored.replace(oldPath, newPath));
+    }
+    for (const file of ["docs/guide.md", "GUIDE.md"]) {
+      expect(await read(root, file)).toBe(markdown.replace(oldPath, newPath));
+    }
+    expect(await read(root, "caller.ts")).toBe(`export const modulePath = "${newPath}";\n`);
+    expect(await read(root, newPath)).toBe('export { value } from "../config";\n');
   }, 20_000);
 
   test("dry-run reports moves and rewrites while preserving file bytes and the existing git index", async () => {

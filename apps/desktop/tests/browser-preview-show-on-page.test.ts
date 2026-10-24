@@ -172,6 +172,9 @@ describe("Show on page", () => {
       pins: [pin("annotation-2", "/app#/settings")],
     });
     expect(result).toMatchObject({ outcome: "shown", navigated: true });
+    expect((await harness.manager.getCaptureDiagnostics()).anchorResolutions).toEqual({
+      "matched|stable-id": 1,
+    });
     expect(result.resolution).toMatchObject({ state: "matched", rect: { x: 1, y: 2 } });
     expect(contents.loadURL.mock.calls.at(-1)![0]).toBe(`${gateway}/app#/settings`);
     expect(contents.pinsConfig).toMatchObject({
@@ -197,6 +200,9 @@ describe("Show on page", () => {
     });
     expect(result).toMatchObject({ outcome: "shown", navigated: false });
     expect(calls).toBe(3);
+    expect((await harness.manager.getCaptureDiagnostics()).anchorResolutions).toEqual({
+      "matched|stable-id": 1,
+    });
     expect(contents.loadURL.mock.calls.length).toBe(loads);
   });
 

@@ -58,8 +58,9 @@ capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
 3. Development source hints.
    - Needs a producer that identifies itself and its project root.
    - Before `verified: true`, the backend checks containment and existence.
-     Extend `web-annotation-source-checks.ts`, including the container case in
-     [0043-web-annotation-known-limitations.md](0043-web-annotation-known-limitations.md).
+     Reuse `web-annotation-source-checks.ts`, which checks local worktrees and
+     (since [0043-web-annotation-known-limitations.md](0043-web-annotation-known-limitations.md))
+     container workspaces.
    - Hints stay candidate locations; the agent still checks the repository.
    - Never depend on private React (or other framework) runtime internals.
 4. Open shadow roots and same-origin iframes.

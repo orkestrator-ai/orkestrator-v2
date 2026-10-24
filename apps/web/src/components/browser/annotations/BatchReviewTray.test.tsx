@@ -77,6 +77,33 @@ describe("batch review tray", () => {
     ).toMatch(/image excluded/);
   });
 
+  test("summary assets are counted exactly, once per digest, without capture records", () => {
+    const shared = { assetId: "a", digest: "sha256:aa", bytes: 4096 };
+    const budget = batchEvidenceBudget([
+      {
+        id: "n1",
+        capture: undefined,
+        assets: [shared, { assetId: "b", digest: "sha256:bb", bytes: 1000 }],
+      },
+      // Another note with the same image (same digest) adds nothing.
+      { id: "n2", capture: undefined, assets: [{ ...shared, assetId: "c" }] },
+      { id: "n3", capture: undefined, assets: [] },
+    ]);
+    expect(budget).toMatchObject({
+      images: 2,
+      imageBytes: 5096,
+      unknownImageBytes: 0,
+      unknown: 0,
+      overflowId: null,
+    });
+    const many = Array.from({ length: WEB_ANNOTATION_LIMITS.briefAttachments + 1 }, (_, n) => ({
+      id: `m${n}`,
+      capture: undefined,
+      assets: [{ assetId: `x${n}`, digest: `sha256:${n}`, bytes: 1 }],
+    }));
+    expect(batchEvidenceBudget(many).overflowId).toBe(`m${WEB_ANNOTATION_LIMITS.briefAttachments}`);
+  });
+
   test("remaining byte capacity counts measured images and note text", () => {
     const capture = fixtureCapture("element", { assetIds: ["a", "b"] });
     const budget = batchEvidenceBudget(

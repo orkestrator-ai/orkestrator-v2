@@ -1,6 +1,7 @@
 /**
- * Commit one pending desktop capture to the backend (plan step 04, steps 3–5
- * of the acknowledged transfer protocol) and acknowledge it to the spool.
+ * Commit one pending desktop capture to the backend (steps 3 and 4 of the
+ * acknowledged transfer in "Pending spool and acknowledged transfer",
+ * docs/architecture/web-page-annotations.md) and acknowledge it to the spool.
  *
  * Every backend call uses operation ids derived from the desktop capture id,
  * so a retry after a lost response, a reload, or a reconnect finds the

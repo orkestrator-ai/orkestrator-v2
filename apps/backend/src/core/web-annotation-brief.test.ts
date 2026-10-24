@@ -119,6 +119,8 @@ describe("compileWebAnnotationBrief", () => {
     expect(head).toContain("## Operation: Discuss (analysis only)");
     expect(head).toContain("Do not implement changes for this request");
     expect(head).toContain("sent in the agent's plan (read-only) mode");
+    // A discussion is answered in the reply, never proposed as a plan.
+    expect(head).toContain("do not submit a plan for approval");
     expect(head).toContain("### [1] Annotation id `annotation-1`");
     expect(head).toContain("> Give the Save button more padding.");
     expect(occurrences(brief.body, WEB_ANNOTATION_EVIDENCE_OPEN)).toBe(1);
@@ -168,6 +170,7 @@ describe("compileWebAnnotationBrief", () => {
     );
     expect(brief.readOnly).toBe("advisory");
     expect(brief.body).toContain("not a technical restriction");
+    expect(brief.body).not.toContain("do not submit a plan for approval");
   });
 
   test("implementation brief asks for repository changes and optional result tool", () => {
@@ -311,6 +314,82 @@ describe("compileWebAnnotationBrief", () => {
     ]);
     expect(delivered.body).toContain("1 screenshot image is attached");
     expect(delivered.evidence).toMatchObject({ imageCount: 1, imageBytes: 1024 });
+  });
+
+  test("a region's crop and viewport images are labelled from the recorded relation", () => {
+    const full = asset("asset-full", "full");
+    const crop = asset("asset-crop", "crop");
+    const capture = fixtureCapture("region", {
+      id: "capture-annotation-1",
+      assetIds: ["asset-full", "asset-crop"],
+      regionCrop: {
+        assetId: "asset-crop",
+        sourceAssetId: "asset-full",
+        sourceRect: { x: 20, y: 40, width: 320, height: 120 },
+      },
+      producerSource: "client-declared",
+    });
+    const brief = compileWebAnnotationBrief(
+      input({ annotations: [item("annotation-1", { capture, assets: [full, crop] })] }),
+    );
+    const annotation = envelope(brief.body).annotations[0]!;
+    const images = (annotation.image as { images: Array<Record<string, unknown>> }).images;
+    expect(images).toEqual([
+      expect.objectContaining({ digest: full.digest, role: "viewport" }),
+      expect.objectContaining({
+        digest: crop.digest,
+        role: "region-crop",
+        cropOf: full.digest,
+        sourceRect: { x: 20, y: 40, width: 320, height: 120 },
+      }),
+    ]);
+    expect(annotation.page).toMatchObject({
+      producer: "desktop-native",
+      producerSource: "client-declared",
+    });
+
+    // Without a recorded relation the images are listed without roles.
+    const plain = compileWebAnnotationBrief(
+      input({
+        annotations: [
+          item("annotation-1", {
+            capture: { ...capture, regionCrop: undefined },
+            assets: [full, crop],
+          }),
+        ],
+      }),
+    );
+    const plainImages = (
+      envelope(plain.body).annotations[0]!.image as { images: Array<Record<string, unknown>> }
+    ).images;
+    expect(plainImages.every((image) => image.role === undefined)).toBe(true);
+  });
+
+  test("deduplicated viewport and crop digests retain each annotation's image roles", () => {
+    const annotations = ["first", "second"].map((id) => {
+      const full = asset(`full-${id}`, "shared-viewport");
+      const crop = asset(`crop-${id}`, "shared-crop");
+      return item(id, {
+        capture: fixtureCapture("region", {
+          id: `capture-${id}`,
+          assetIds: [full.id, crop.id],
+          regionCrop: {
+            assetId: crop.id,
+            sourceAssetId: full.id,
+            sourceRect: { x: 20, y: 40, width: 320, height: 120 },
+          },
+        }),
+        assets: [full, crop],
+      });
+    });
+    const brief = compileWebAnnotationBrief(input({ annotations }));
+    expect(brief.attachments).toHaveLength(2);
+    for (const annotation of envelope(brief.body).annotations) {
+      expect((annotation.image as { images: unknown[] }).images).toEqual([
+        expect.objectContaining({ role: "viewport", digest: annotations[0]!.assets[0]!.digest }),
+        expect.objectContaining({ role: "region-crop", cropOf: annotations[0]!.assets[0]!.digest }),
+      ]);
+    }
   });
 
   test("images are deduplicated by digest and capped by count and bytes", () => {

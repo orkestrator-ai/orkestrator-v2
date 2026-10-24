@@ -8,11 +8,12 @@
  * exercise what every client shares: two-client batch reservation races,
  * request bounds, queue holds, cancellation, and reload rehydration.
  *
- * The live implementation test is opt-in (`ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1`)
- * and requires a profile started with agent credentials; otherwise it is
- * reported as skipped, never as passed.
+ * The live implement and discuss tests are opt-in
+ * (`ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1`) and require a profile started
+ * with agent credentials; otherwise they are reported as skipped, never as
+ * passed. Each prints how its request settled (`[annotation-live] outcome`).
  */
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Page, type TestInfo } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -47,6 +48,7 @@ type Preparation = {
   bodyHash: string;
   sendable: boolean;
   briefBytes: number;
+  readOnly: WebAnnotationRequest["readOnly"];
 };
 
 function profileStatus(): Status {
@@ -537,6 +539,7 @@ test("live agent implements the fixture's expected source change", async ({
       type: "live-request-state",
       description: `${state} after ${Math.round((Date.now() - startedAt) / 1_000)} s`,
     });
+    await recordLiveOutcome(setup, sent.request.id, testInfo);
     expect(state).toBe("awaiting-review");
 
     // The repository change, not a DOM mutation: source + rendered page.
@@ -557,6 +560,171 @@ test("live agent implements the fixture's expected source change", async ({
     await expect(setup.page.locator(EXPECTED_SOURCE_CHANGE.selector)).toHaveText(
       EXPECTED_SOURCE_CHANGE.after,
     );
+  } finally {
+    await setup.cleanup();
+    await setup.page.context().close();
+  }
+});
+
+/**
+ * Content-free facts about how a live request settled: whether the turn
+ * outcome was known, the mode it was sent in, and how Discuss was enforced.
+ * Printed as well, so a logged run records them per provider.
+ */
+async function recordLiveOutcome(setup: Setup, requestId: string, testInfo: TestInfo) {
+  const settled = await getRequest(setup.invoke, setup, requestId);
+  const facts = {
+    agent: LIVE_AGENT,
+    operation: settled.operation,
+    state: settled.state,
+    turnOutcome: settled.turnOutcome ?? null,
+    dispatchMode: settled.dispatchMode ?? null,
+    readOnly: settled.readOnly,
+    interactions: (settled.interactions ?? []).map((item) => `${item.kind}:${item.state}`),
+  };
+  console.log(`[annotation-live] outcome ${JSON.stringify(facts)}`);
+  testInfo.annotations.push({ type: "live-outcome", description: JSON.stringify(facts) });
+  return settled;
+}
+
+test("live agent discusses a note and the turn outcome is known", async ({ browser }, testInfo) => {
+  test.skip(
+    !LIVE,
+    "Live annotation runs need ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1 and a profile started with agent credentials",
+  );
+  testInfo.setTimeout(900_000);
+  const status = profileStatus();
+  expect(status.status).toBe("ready");
+  const setup = await setUp(browser, status, "annotation-live-discuss", LIVE_AGENT, {
+    holdQueue: false,
+  });
+  try {
+    const receipt = await createNote(
+      setup,
+      setup.page,
+      EXPECTED_SOURCE_CHANGE.selector,
+      "Why might this label read awkwardly? Answer briefly; do not change anything.",
+      EXPECTED_SOURCE_CHANGE.route,
+    );
+    const preparation = await prepare(setup.invoke, setup, [receipt.annotationId], "discuss");
+    expect(preparation.sendable).toBe(true);
+    const sent = await setup.invoke<{ request: WebAnnotationRequest }>(C.requestSend, {
+      environmentId: setup.environmentId,
+      preparationId: preparation.preparationId,
+      requestId: `req-live-discuss-${Date.now()}`,
+      bodyHash: preparation.bodyHash,
+    });
+    const state = await waitForLiveAnnotationRequest({
+      readRequest: () => getRequest(setup.invoke, setup, sent.request.id),
+      agent: LIVE_AGENT,
+      profile,
+      testInfo,
+    });
+    const settled = await recordLiveOutcome(setup, sent.request.id, testInfo);
+    expect(state).toBe("completed");
+    // Claude applies plan mode per turn; a fresh session-scoped session is
+    // not in Plan, so Discuss is advisory there and never switches its mode.
+    expect(settled.readOnly).toBe(LIVE_AGENT === "claude" ? "plan-mode" : "advisory");
+    expect(settled.turnOutcome).toBe("completed");
+  } finally {
+    await setup.cleanup();
+    await setup.page.context().close();
+  }
+});
+
+test("live session-scoped agent already in Plan discusses read-only and never has its mode switched", async ({
+  browser,
+}, testInfo) => {
+  test.skip(
+    !LIVE || !["codex", "cursor", "grok"].includes(LIVE_AGENT),
+    "Needs ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1 and a session-scoped mode provider (codex, cursor or grok)",
+  );
+  testInfo.setTimeout(1_200_000);
+  const status = profileStatus();
+  expect(status.status).toBe("ready");
+  const setup = await setUp(browser, status, "annotation-live-plan", LIVE_AGENT, {
+    holdQueue: false,
+  });
+  const discussOnce = async (requestId: string) => {
+    const receipt = await createNote(
+      setup,
+      setup.page,
+      EXPECTED_SOURCE_CHANGE.selector,
+      "Why might this label read awkwardly? Answer briefly; do not change anything.",
+      EXPECTED_SOURCE_CHANGE.route,
+    );
+    return prepare(setup.invoke, setup, [receipt.annotationId], "discuss").then((preparation) => ({
+      preparation,
+      requestId,
+    }));
+  };
+  const send = async ({ preparation, requestId }: Awaited<ReturnType<typeof discussOnce>>) =>
+    setup.invoke<{ request: WebAnnotationRequest }>(C.requestSend, {
+      environmentId: setup.environmentId,
+      preparationId: preparation.preparationId,
+      requestId,
+      bodyHash: preparation.bodyHash,
+    });
+  const setMode = (mode: "plan" | "build") =>
+    setup.invoke("update_native_agent_controls", {
+      environmentId: setup.environmentId,
+      agent: LIVE_AGENT,
+      logicalSessionKey: setup.destination.logicalSessionKey,
+      update: { mode },
+    });
+  const option = async () => {
+    const { options } = await setup.invoke<{
+      options: Array<{
+        destination: WebAnnotationDestination;
+        planMode: boolean;
+        planModeScope?: string;
+      }>;
+    }>(C.destinations, { environmentId: setup.environmentId });
+    return options.find((candidate) => candidate.destination.tabId === setup.destination.tabId);
+  };
+  try {
+    // A first (advisory) discussion creates the provider session.
+    const first = await send(await discussOnce(`req-live-plan-a-${Date.now()}`));
+    await waitForLiveAnnotationRequest({
+      readRequest: () => getRequest(setup.invoke, setup, first.request.id),
+      agent: LIVE_AGENT,
+      profile,
+      testInfo,
+    });
+    await recordLiveOutcome(setup, first.request.id, testInfo);
+
+    // The user puts the session in Plan; Discuss is read-only from then on.
+    await setMode("plan");
+    expect(await option()).toMatchObject({ planMode: true, planModeScope: "session" });
+    const readOnly = await discussOnce(`req-live-plan-b-${Date.now()}`);
+    expect(readOnly.preparation.readOnly).toBe("plan-mode");
+    const sent = await send(readOnly);
+    const state = await waitForLiveAnnotationRequest({
+      readRequest: () => getRequest(setup.invoke, setup, sent.request.id),
+      agent: LIVE_AGENT,
+      profile,
+      testInfo,
+    });
+    const settled = await recordLiveOutcome(setup, sent.request.id, testInfo);
+    expect(state).toBe("completed");
+    expect(settled).toMatchObject({ readOnly: "plan-mode", dispatchMode: "plan" });
+    expect((await option())?.planModeScope).toBe("session");
+
+    // Prepared read-only, then the session leaves Plan before Send: refused,
+    // and the session stays in Build.
+    const stale = await discussOnce(`req-live-plan-c-${Date.now()}`);
+    expect(stale.preparation.readOnly).toBe("plan-mode");
+    await setMode("build");
+    const refused = await send(stale);
+    await expect
+      .poll(async () => (await getRequest(setup.invoke, setup, refused.request.id)).state, {
+        timeout: 60_000,
+      })
+      .toBe("failed");
+    const failed = await getRequest(setup.invoke, setup, refused.request.id);
+    expect(failed.stateReason).toContain("no longer in Plan mode");
+    testInfo.annotations.push({ type: "live-plan-refusal", description: failed.stateReason ?? "" });
+    expect((await option())?.planMode).toBe(false);
   } finally {
     await setup.cleanup();
     await setup.page.context().close();

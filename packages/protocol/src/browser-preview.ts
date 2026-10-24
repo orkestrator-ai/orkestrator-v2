@@ -521,4 +521,25 @@ export interface BrowserPreviewCaptureApi {
   captureResponsiveSet?(
     input: BrowserPreviewResponsiveSetInput,
   ): Promise<BrowserPreviewResponsiveSetResult>;
+  /** Content-free spool and anchor counters of this desktop process. */
+  getCaptureDiagnostics?(): Promise<BrowserPreviewCaptureDiagnostics>;
+}
+
+/**
+ * Content-free capture diagnostics of one desktop process: counts and bytes
+ * only, keyed by closed vocabularies. Never ids, URLs, selectors or text.
+ */
+export interface BrowserPreviewCaptureDiagnostics {
+  /** The pending spool now; null when this build has no spool. */
+  spool: {
+    pending: number;
+    imageBytes: number;
+    maxPending: number;
+    maxImageBytes: number;
+  } | null;
+  /**
+   * Anchor resolutions returned by Show pins and Show on page since the app
+   * started, keyed `state|rule` (for example `matched|stable-id`).
+   */
+  anchorResolutions: Record<string, number>;
 }

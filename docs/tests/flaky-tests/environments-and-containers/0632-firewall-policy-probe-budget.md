@@ -35,6 +35,8 @@
   not a flake by the register's definition; the branch touches neither the
   test nor `docker/`.
 
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3, `mise run test` via `test:logged`): eleven to fourteen `container firewall policy` cases hit the 5 s budget in the root group in both full runs that day; the owner passed alone with firewall-refresh (64.4 s).
+
 ## Recurrence during 0016 validation (2026-10-24)
 
 - **Failure:** every parametrized `policy 2`/`policy 3 allowlist … chooses blocked HTTPS probe` case hit the five-second budget (5,003-5,069 ms).

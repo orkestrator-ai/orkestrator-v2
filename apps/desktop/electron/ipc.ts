@@ -6,6 +6,7 @@ import type {
   BrowserPreviewCaptureAck,
   BrowserPreviewCaptureCapabilities,
   BrowserPreviewExpiredCaptureNotice,
+  BrowserPreviewCaptureDiagnostics,
   BrowserPreviewPinSnapshot,
   BrowserPreviewReplaceImageInput,
   BrowserPreviewResponsiveSetInput,
@@ -111,6 +112,7 @@ export type BrowserPreviewController = {
   listExpiredCaptureNotices?(): Promise<BrowserPreviewExpiredCaptureNotice[]>;
   dismissExpiredCaptureNotices?(captureIds?: string[]): Promise<void>;
   getPinResults?(tabId: string): Promise<BrowserPreviewPinSnapshot | null>;
+  getCaptureDiagnostics?(): Promise<BrowserPreviewCaptureDiagnostics>;
   showOnPage?(input: BrowserPreviewShowOnPageInput): Promise<BrowserPreviewShowOnPageResult>;
   captureResponsiveSet?(
     input: BrowserPreviewResponsiveSetInput,
@@ -549,6 +551,11 @@ export function registerMainIpc({
     const controller = previews(event);
     if (!controller.getPinResults) throw unavailable();
     return controller.getPinResults(captureTabId(tabId));
+  });
+  handle("orkestrator:browser-preview:capture-diagnostics", (event) => {
+    const controller = previews(event);
+    if (!controller.getCaptureDiagnostics) throw unavailable();
+    return controller.getCaptureDiagnostics();
   });
   handle("orkestrator:browser-preview:capture-show-on-page", (event, input: unknown) => {
     const controller = previews(event);

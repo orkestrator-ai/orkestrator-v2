@@ -702,6 +702,21 @@ export class BrowserPreviewCaptureStore {
     return descriptor;
   }
 
+  /** Content-free depth and size of the spool, with its limits. */
+  async stats(): Promise<{
+    pending: number;
+    imageBytes: number;
+    maxPending: number;
+    maxImageBytes: number;
+  }> {
+    return this.afterReady(async () => ({
+      pending: this.records.size,
+      imageBytes: this.imageBytesInUse(),
+      maxPending: this.limits.perProcess,
+      maxImageBytes: this.limits.imageBytes,
+    }));
+  }
+
   /** Newest first. Reading never consumes a record. */
   async list(): Promise<BrowserPreviewPendingCaptureDescriptor[]> {
     return this.afterReady(async () => {

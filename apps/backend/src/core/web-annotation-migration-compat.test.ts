@@ -1,5 +1,5 @@
 /**
- * Step 09 migration robustness and client compatibility: bounded pages,
+ * Legacy migration robustness and client compatibility: bounded pages,
  * per-draft failure isolation, older clients writing during and after
  * migration, dirty in-memory draft reconciliation, interrupted upgrades, and
  * the content-free migration receipt (screenshot references + ownership).

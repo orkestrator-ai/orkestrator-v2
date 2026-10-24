@@ -1,5 +1,5 @@
 /**
- * Backend-persisted, unpublished editor draft (plan step 05).
+ * Backend-persisted, unpublished editor draft.
  *
  * Typing autosaves after a short debounce with the last known draft revision,
  * one save at a time, so a delayed save can never overwrite a newer draft.

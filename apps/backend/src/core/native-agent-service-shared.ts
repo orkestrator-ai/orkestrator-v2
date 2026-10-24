@@ -167,6 +167,8 @@ export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSession
   attachments?: PromptAttachment[];
   schema?: JsonSchema;
   mode?: ProviderExecutionMode;
+  /** Backend-authored queued prompts may require the durable session mode. */
+  requireSessionMode?: "plan";
   fastMode?: boolean;
   subAgent?: string;
   /**

@@ -2207,6 +2207,106 @@ exec sleep 30
     ).rejects.toThrow("not containerized");
   });
 
+  test("validates and registers container workspace path checks before spawning Docker", async () => {
+    const commands = createCommandRegistry();
+    const handler = commands.get("check_container_workspace_paths");
+    expect(handler).toBeDefined();
+    const context = createContext(
+      createEnvironment({ containerId: "container-1", environmentType: "containerized" }),
+    ).context;
+    for (const containerId of [
+      undefined,
+      1,
+      "",
+      " ",
+      "--help",
+      "container/name",
+      "container\nname",
+    ]) {
+      await expect(
+        handler!(
+          { containerId, paths: ["src/file.ts"] },
+          createContext(
+            createEnvironment({
+              containerId: typeof containerId === "string" ? containerId : null,
+            }),
+          ).context,
+        ),
+      ).rejects.toThrow();
+    }
+    for (const paths of [
+      null,
+      "file",
+      [1],
+      ["../escape"],
+      ["/etc/passwd"],
+      Array(201).fill("file"),
+    ]) {
+      await expect(handler!({ containerId: "container-1", paths }, context)).rejects.toThrow(
+        "workspace-relative paths",
+      );
+    }
+    await withFakeDocker(
+      `#!/bin/sh
+[ "$1" = exec ] && [ "$2" = -i ] && [ "$3" = container-1 ] && [ "$4" = node ] || exit 2
+payload=$(cat)
+[ "$payload" = '["src/file.ts","missing.ts"]' ] || exit 3
+printf '["exists","missing"]'
+`,
+      async () => {
+        expect(
+          await handler!(
+            { containerId: "container-1", paths: ["src/file.ts", "missing.ts"] },
+            context,
+          ),
+        ).toEqual(["exists", "missing"]);
+      },
+    );
+  });
+
+  liveDockerTest(
+    "checks workspace paths through the registered command in a live container",
+    async () => {
+      const { stdout } = await execFileAsync("docker", [
+        "run",
+        "-d",
+        "--rm",
+        "--entrypoint",
+        "sleep",
+        process.env.ORKESTRATOR_TEST_DOCKER_IMAGE ??
+          (() => {
+            throw new Error(
+              "Set ORKESTRATOR_TEST_DOCKER_IMAGE to a disposable profile development image",
+            );
+          })(),
+        "infinity",
+      ]);
+      const containerId = stdout.trim();
+      try {
+        await execFileAsync("docker", [
+          "exec",
+          containerId,
+          "sh",
+          "-c",
+          "mkdir -p /workspace/src; touch /workspace/src/check.txt; ln -s /etc/passwd /workspace/src/escape",
+        ]);
+        const handler = createCommandRegistry().get("check_container_workspace_paths")!;
+        const context = createContext(
+          createEnvironment({ containerId, environmentType: "containerized" }),
+        ).context;
+        expect(
+          await handler(
+            { containerId, paths: ["src/check.txt", "src/missing.txt", "src/escape"] },
+            context,
+          ),
+        ).toEqual(["exists", "missing", "outside-workspace"]);
+      } finally {
+        await execFileAsync("docker", ["rm", "-f", containerId]);
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
   liveDockerTest(
     "executes rename-aware and containment-safe file mutations in a live container",
     async () => {

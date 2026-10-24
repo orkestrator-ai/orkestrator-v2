@@ -566,3 +566,14 @@ Evidence: host temporary artifacts `orkestrator-test-run.QHhbhR/merge-isolated-b
 and `orkestrator-test-run.AMX0fi/merge-gateway-owner.log.gz`; rerun artifacts
 under `output/agent-testing/merge-gateway-0331564a/browser/`. No implementation,
 assertion, timeout or skip changed.
+
+## Transcript scroll smoothness validation — 2026-10-24
+
+- `mise run test:agent:browser:isolated` (profile `qa-browser-ca22b087-f8c`,
+  removed afterwards): 28 passed, 53 skipped, 1 failed — this case, again a
+  `locator.click` timeout (15000 ms) in the narrow fullscreen-settings host
+  picker. Screenshot:
+  `output/agent-testing/qa-browser-ca22b087-f8c/browser/artifacts/browser-gateway-host-path--e1bef-fullscreen-settings-narrow-/test-failed-1.png`.
+- The change under validation does not touch settings, the gateway or the
+  host picker (web transcript scrolling, tool groups, Markdown streaming,
+  the Virtuoso patch). No assertion, timeout or skip changed.

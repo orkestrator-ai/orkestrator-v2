@@ -110,3 +110,47 @@ for (const view of ["native", "reviewer"]) {
     });
   }
 }
+
+for (const view of ["native", "reviewer"]) {
+  test(`${view}: find reaches a prepended row after the base index moved`, async ({ page }) => {
+    const query = new URLSearchParams({ mixed: "1" });
+    if (view === "reviewer") query.set("reviewer", "1");
+    await page.goto(`/transcript-paging?${query}`);
+    const list = page.locator("[data-transcript-scroller]");
+    await expect(list).toBeVisible();
+    await list.hover();
+    const load = page.getByRole("button", { name: "Load earlier messages", exact: true });
+    await expect
+      .poll(async () => {
+        await page.mouse.wheel(0, -4000);
+        return (await load.count()) > 0 && (await load.isVisible());
+      })
+      .toBe(true);
+    await load.click();
+    await expect(load).toHaveCount(0);
+    // 80 display rows were prepended: Virtuoso's base index moved by 80, and
+    // a match in the new history must still resolve to its own local row.
+    await list.click({ position: { x: 20, y: 20 } });
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+f" : "Control+f");
+    const input = page.getByRole("textbox", { name: "Find in chat" });
+    await expect(input).toBeVisible();
+    await input.fill("Reached stop 3.");
+    await expect(page.getByText(/^1 of 1$/)).toBeVisible();
+    const row = list.locator('[data-chat-message-key^="row-3"]').first();
+    await expect(row).toBeVisible();
+    const placed = await row.evaluate((element) => {
+      const scroller = element.closest<HTMLElement>("[data-transcript-scroller]")!;
+      const box = element.getBoundingClientRect();
+      const viewport = scroller.getBoundingClientRect();
+      return {
+        index: Number(element.dataset.chatMessageIndex),
+        inView: box.bottom > viewport.top && box.top < viewport.bottom,
+        atEnd: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 2,
+      };
+    });
+    // row-3's prose is the 7th display row (two per source row, prose first).
+    expect(placed.index).toBeLessThan(10);
+    expect(placed.inView).toBe(true);
+    expect(placed.atEnd).toBe(false);
+  });
+}

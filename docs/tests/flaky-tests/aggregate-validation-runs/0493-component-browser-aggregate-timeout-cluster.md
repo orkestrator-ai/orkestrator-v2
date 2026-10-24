@@ -259,3 +259,11 @@ Exact original failed cases:
   failure details and evidence are recorded in
   [0224](../previews-annotations-and-gateway/0224-host-picker-narrow-tools-popover.md).
   These scenario checks remain non-green.
+
+## Transcript scroll smoothness validation — 2026-10-24
+
+- `mise run test:browser`: 528 passed, 101 skipped, 3 failed. Both native
+  branch suggestion cases (`e2e/AgentLaunchDialog.spec.ts:7`, desktop and
+  mobile) failed with `toHaveValue`, and reproduce unchanged with one worker
+  on the base commit `f12cc5a53` as well as on this branch, so they are not
+  caused by the change. The third failure is case 0252.

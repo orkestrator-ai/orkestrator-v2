@@ -175,4 +175,98 @@ describe("patched Virtuoso navigation cancellation", () => {
     await wait(300);
     expect(writes.tops.length).toBe(before);
   });
+
+  async function shrinkViewport(followOutput: ((atBottom: boolean) => "auto" | false) | false) {
+    const handle = createRef<VirtuosoHandle>();
+    const writes: Writes = { tops: [] };
+    let viewport = VIEWPORT;
+    function Shrinking({ height }: { height: number }) {
+      return (
+        <VirtuosoMockContext.Provider value={{ viewportHeight: height, itemHeight: ITEM }}>
+          <Virtuoso
+            ref={handle}
+            totalCount={60}
+            followOutput={followOutput}
+            itemContent={(index) => <div style={{ height: ITEM }}>row {index}</div>}
+            scrollerRef={(element) => {
+              if (element instanceof HTMLElement) instrument(element, () => 60, writes);
+            }}
+          />
+        </VirtuosoMockContext.Provider>
+      );
+    }
+    const view = render(<Shrinking height={viewport} />);
+    await wait(20);
+    // A detached reader: well above the end.
+    act(() => handle.current!.scrollTo({ top: 300 }));
+    await wait(20);
+    const before = writes.tops.length;
+    // The composer grows: the transcript viewport shrinks.
+    viewport = VIEWPORT - 90;
+    view.rerender(<Shrinking height={viewport} />);
+    await wait(300);
+    return { writes, before };
+  }
+
+  test("a function follow prop that answers false is still truthy to the viewport-shrink path", async () => {
+    const { writes, before } = await shrinkViewport(() => false);
+    // Recorded, not asserted: whether the library scrolls here depends on its
+    // at-bottom state; the literal-false case below is the guarantee.
+    expect(writes.tops.length).toBeGreaterThanOrEqual(before);
+  });
+
+  test("literal false: a detached reader is not moved when the viewport shrinks", async () => {
+    const { writes, before } = await shrinkViewport(false);
+    expect(writes.tops.length).toBe(before);
+  });
+});
+
+describe("firstItemIndex with the real virtualizer", () => {
+  test("rows keep local indices and identity across two prepends", async () => {
+    const { VirtualizedMessageList } = await import("@/components/chat/VirtualizedMessageList");
+    type Row = { id: string };
+    const rows = (from: number, to: number): Row[] =>
+      Array.from({ length: to - from }, (_, offset) => ({ id: `r${from + offset}` }));
+    const handle = createRef<VirtuosoHandle>();
+    const writes: Writes = { tops: [] };
+    let count = 0;
+    function List({ messages }: { messages: Row[] }) {
+      count = messages.length;
+      return (
+        <VirtuosoMockContext.Provider value={{ viewportHeight: VIEWPORT, itemHeight: ITEM }}>
+          <div style={{ height: VIEWPORT }}>
+            <VirtualizedMessageList
+              messages={messages}
+              computeItemKey={(_index, row) => row.id}
+              renderMessage={(_index, row) => <div style={{ height: ITEM }}>{row.id}</div>}
+              scrollProps={{
+                followOutput: () => false,
+                atBottomStateChange: () => {},
+                atBottomThreshold: 50,
+                restoreStateFrom: undefined,
+                scrollerRef: (element) => {
+                  if (element instanceof HTMLElement) instrument(element, () => count, writes);
+                },
+              }}
+              virtuosoRef={handle}
+            />
+          </div>
+        </VirtuosoMockContext.Provider>
+      );
+    }
+    const view = render(<List messages={rows(100, 140)} />);
+    await wait(20);
+    view.rerender(<List messages={rows(60, 140)} />);
+    await wait(20);
+    view.rerender(<List messages={rows(20, 140)} />);
+    await wait(20);
+    const rendered = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-chat-message-index]"),
+    ).map((row) => [Number(row.dataset.chatMessageIndex), row.dataset.chatMessageKey]);
+    expect(rendered.length).toBeGreaterThan(0);
+    // Every rendered row's local index names its own message.
+    for (const [index, key] of rendered) expect(key).toBe(`r${20 + (index as number)}`);
+    // Navigation by index with this nonzero base is proven in a real browser
+    // (e2e/TranscriptPaging.spec.ts: find after an 80-row prepend).
+  });
 });

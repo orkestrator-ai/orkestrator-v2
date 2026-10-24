@@ -369,24 +369,41 @@ export function VirtualizedMessageList<TMessage>({
     [forwardScrollerRef],
   );
   const messagesRef = useRef(messages);
+  // Callers pass `computeItemKey` inline; read it through a ref so callbacks
+  // built from it (find navigation) keep their identity across renders.
+  const computeItemKeyRef = useRef(computeItemKey);
   useLayoutEffect(() => {
     messagesRef.current = messages;
-  }, [messages]);
+    computeItemKeyRef.current = computeItemKey;
+  }, [computeItemKey, messages]);
   // Virtuoso's rendered and reported indices include `firstItemIndex`; its
   // `scrollToIndex` takes the local data index. Everything in this component
   // (find matches, DOM index attributes, protected rows) is local.
   const firstItemIndex = useFirstItemIndex(messages, computeItemKey);
   /** Generation of find's own navigation; its match refinement may not outlive the reader moving. */
   const findNavigationRef = useRef<number | null>(null);
+  /**
+   * The match find last navigated to, by identity. Matches are recomputed
+   * whenever the rows change (every streaming update while find is open);
+   * only a different match is a navigation — re-navigating to the same one
+   * would pull a reader who scrolled away back to it on every token.
+   */
+  const lastFindMatchRef = useRef<string | null>(null);
   const handleFindNavigate = useCallback(
-    (match: { itemIndex: number }) => {
+    (match: AgentChatFindMatch) => {
       const message = messagesRef.current[match.itemIndex];
+      const identity = `${message === undefined ? match.itemIndex : computeItemKeyRef.current(match.itemIndex, message)}:${match.characterIndex}:${match.occurrenceIndex}`;
+      if (identity === lastFindMatchRef.current) return;
+      lastFindMatchRef.current = identity;
       if (controller) {
         const navigated = controller.navigateTo(
           {
             kind: "row",
             index: match.itemIndex,
-            key: message === undefined ? undefined : computeItemKey(match.itemIndex, message),
+            key:
+              message === undefined
+                ? undefined
+                : computeItemKeyRef.current(match.itemIndex, message),
             align: "center",
           },
           "find",
@@ -400,7 +417,7 @@ export function VirtualizedMessageList<TMessage>({
         behavior: "auto",
       });
     },
-    [computeItemKey, controller, virtuosoRef],
+    [controller, virtuosoRef],
   );
   const chatFind = useAgentChatFind({
     items: messages,
@@ -421,10 +438,16 @@ export function VirtualizedMessageList<TMessage>({
   useLayoutEffect(() => {
     if (!controller) return;
     controller.setRowIndexResolver((key) =>
-      messagesRef.current.findIndex((message, index) => computeItemKey(index, message) === key),
+      messagesRef.current.findIndex(
+        (message, index) => computeItemKeyRef.current(index, message) === key,
+      ),
     );
     return () => controller.setRowIndexResolver(null);
-  }, [computeItemKey, controller]);
+  }, [controller]);
+  // A new find session navigates to its first match again.
+  useEffect(() => {
+    if (!findOpen) lastFindMatchRef.current = null;
+  }, [findOpen]);
   const getSearchProjection =
     find?.getSearchProjection ??
     (find?.getSearchText as SearchTextGetter<TMessage> | undefined)?.projection;

@@ -141,4 +141,23 @@ describe("VirtualizedMessageList navigation and index spaces", () => {
     expect(resolve("target")).toBe(3);
     expect(resolve("missing")).toBe(-1);
   });
+
+  test("re-rendering with an inline key callback does not navigate find again", async () => {
+    const { controller, navigateTo } = fakeController();
+    const messages = [...rows("a", "b"), { id: "target", text: "needle here" }];
+    const view = render(<List messages={messages} controller={controller} />);
+    fireEvent.keyDown(document, { key: "f", metaKey: true });
+    const input = await screen.findByRole("textbox", { name: "Find in chat" });
+    act(() => {
+      fireEvent.change(input, { target: { value: "needle" } });
+    });
+    expect(await screen.findByText("1 of 1")).toBeTruthy();
+    const navigations = navigateTo.mock.calls.length;
+    expect(navigations).toBeGreaterThan(0);
+    // `List` passes a new `computeItemKey` arrow on every render.
+    for (let index = 0; index < 5; index += 1) {
+      view.rerender(<List messages={messages} controller={controller} />);
+    }
+    expect(navigateTo.mock.calls.length).toBe(navigations);
+  });
 });

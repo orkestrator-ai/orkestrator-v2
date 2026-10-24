@@ -247,3 +247,20 @@ this observation does not establish that its earlier cause returned. Exact
 commands, the second failure and evidence are in
 [0515](../aggregate-validation-runs/0515-idle-observation-main-merge-validation.md). No assertion, deadline
 or skip changed.
+
+## Recurrence during 0016 validation (2026-10-24)
+
+- **Failure:** the same case failed in the aggregate at 5,135.60 ms (five-second deadline).
+- **Original command:** `mise run test:logged -- --name full-test -- mise run test`
+  on branch `todo-0016-slash-command-catalogue` (0016 legacy catalogue
+  retirement), node mbp3, while a `dev:test` profile and live browser runs
+  shared the host.
+- **Suite counts:** backend 10,530 passed, 115 skipped, 17 failed across 618
+  files (672.7 s). 14 of the 17 are the deterministic OpenCode conformance
+  version check (`conformance-execution-policy.test.ts` expects `1.19.0`, the
+  pin and host binary are `1.19.4`; fails alone too, unchanged from `main`).
+  Root, bridges and protocol groups passed.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.IY8RjI/full-test.log.gz`.
+- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts tests/commands-integration.test.ts` from `apps/backend`: 55 passed, 0 failed.
+- **Disposition:** recurrence confirmed by the isolated pass. No assertion,
+  deadline or skip was changed.

@@ -212,3 +212,14 @@ passed. Evidence: host temporary artifacts `orkestrator-test-run.0lon9o/bridges.
 and `orkestrator-test-run.ROiLL4/merge-tests.log.gz`. The setup timeout followed
 by missing session state is consistent with earlier fixture failures; the cause
 is unconfirmed. No assertion, timeout, skip or implementation changed.
+
+## Recurrence during 0016 validation (2026-10-24)
+
+- **Failure:** `reports an authenticated credential as ready` and `an attached agent is ready without reading credentials` hit 10-second hook timeouts.
+- **Original command:** `mise run test:logged -- --name full-test-2 -- mise run test`
+  on branch `todo-0016-slash-command-catalogue` after rebasing onto `712274379`,
+  node mbp3, other worktrees validating on the host.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.CfvSIY/full-test-2.log.gz`.
+- **Isolated rerun:** `bun test src/http.test.ts --preload ../../tests/setup-node.ts` from `bridges/cursor-bridge`: 77 passed, 0 failed.
+- **Disposition:** recurrence confirmed by the isolated pass. No assertion,
+  deadline or skip was changed.

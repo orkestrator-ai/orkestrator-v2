@@ -130,6 +130,17 @@ Aggregate result: exit 1 after 664.7 seconds logged. Codex bridge reported 2230 
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.bqXLeN/bridges.log.gz` after aggregate completion.
 - **Assessment:** confirmed recurrence; subprocess scheduling under concurrent host load remains a hypothesis. No bridge implementation, assertion, timeout or skip changed.
 
+
+## Transcript-history main refresh — 2026-10-24
+
+- **Merge parents:** `109a3a90509f3b5f258881f9004c4fde4747f0a9` and `d6ed0717d00a9a04ba658ba6c50e0978bc2011a6`.
+- **Original command:** `env -u PORT mise run test:logged -- --name merge-complete-suite -- mise run test`, with the testing guide's GNU-tool PATH and `ORKESTRATOR_TEST_AREA_BASE=0014505caeed69395b3cc996dd541fcc6df12c23`. The default workspace/root/bridge/protocol reservations were 4/1/2/1; Codex used one worker after the bridge group waited 922.7 seconds for host capacity.
+- **Suite counts:** Codex reported 2,346 passed, forty skipped and two failed across 2,388 tests in 88 files (109.27 seconds).
+- **Failure:** 5027.62 ms; shared-host load exceeded 140 during this validation.
+- **Complete unchanged owner:** `env -u PORT mise run test:logged -- --name merge-codex-fake-process-owner -- bun test --cwd bridges/codex-bridge ./src/testing/fake-codex-app-server.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed (exit 0, 0.3 seconds logged).
+- **Evidence:** `orkestrator-test-run.YFMbrr/bridges.log.gz` below the host temporary directory after aggregate finalization; outer run `orkestrator-test-run.I7HssJ`.
+- **Assessment:** confirmed intermittent recurrence. Host contention remains a hypothesis; no implementation, assertion, deadline or skip changed.
+
 ## Design-agent links main merge — 2026-10-24
 
 - **Original command:** the testing guide's GNU-tool PATH with `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, merging `0014505caeed69395b3cc996dd541fcc6df12c23` into `ce4e1b007c4797868255438bd67d5d5168098773`.

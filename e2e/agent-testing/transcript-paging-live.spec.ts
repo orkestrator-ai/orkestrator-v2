@@ -111,6 +111,12 @@ const REVIEW_CODEX_MODEL =
  */
 const FIRST_REVIEWER_CODEX = process.env.ORKESTRATOR_AGENT_TEST_PAGING_FIRST_REVIEWER === "codex";
 const NATIVE_STOPS = Number(process.env.ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_STOPS ?? "150");
+/**
+ * `0` drops the sentence the native Codex case writes after each stop, so the
+ * run is tool calls only and every row boundary is the bridge's per-response
+ * one (`thread/tokenUsage/updated`), not a message after a call.
+ */
+const CODEX_STEP_NOTES = process.env.ORKESTRATOR_AGENT_TEST_PAGING_CODEX_NOTES !== "0";
 const REVIEW_STOPS = Number(process.env.ORKESTRATOR_AGENT_TEST_PAGING_REVIEW_STOPS ?? "130");
 const LIVE_WINDOW = DEFAULT_NATIVE_AGENT_LIVE_WINDOW.messages;
 /** A small page size, so the backend's cursors are followed several times. */
@@ -694,23 +700,30 @@ test.describe("live transcript paging", () => {
 
       // Claude reads with its Read tool, one response per read, and the
       // tool-only rows coalesce into tall per-minute blocks: the harder case
-      // for holding the reader's place. Codex reads with `cat` and opens a row
-      // only where a message follows a tool call, so it notes every stop.
+      // for holding the reader's place. Codex reads with `cat` and notes each
+      // stop in a sentence; with notes off the run is tool calls only, and each
+      // response still gets its own row from the bridge's usage report.
       const firstPrompt = [
         `This repository contains a trail of text files. It starts at ${trail.start}.`,
         "Each file names the next file. Follow the trail to its end.",
-        ...(NATIVE_PLATFORM === "codex"
+        ...(NATIVE_PLATFORM === "codex" && CODEX_STEP_NOTES
           ? [
               "Rules: read exactly one file per step with a single `cat` of that one file, wait",
               "for its result, then write one short sentence saying which stop you reached before",
               "reading the next. Never read several files at once, and never list, search or glob",
               "the directory.",
             ]
-          : [
-              "Rules: read exactly one file per response with your file-reading tool, wait for its",
-              "result before reading the next, never read several files at once, and never list,",
-              "search or glob the directory or run shell commands. Do not summarise along the way.",
-            ]),
+          : NATIVE_PLATFORM === "codex"
+            ? [
+                "Rules: read exactly one file per step with a single `cat` of that one file and wait",
+                "for its result before reading the next. Write nothing between steps. Never read",
+                "several files at once, and never list, search or glob the directory.",
+              ]
+            : [
+                "Rules: read exactly one file per response with your file-reading tool, wait for its",
+                "result before reading the next, never read several files at once, and never list,",
+                "search or glob the directory or run shell commands. Do not summarise along the way.",
+              ]),
         "When you reach the file that ends the trail, reply with only its closing word.",
       ].join(" ");
       await send(firstPrompt);

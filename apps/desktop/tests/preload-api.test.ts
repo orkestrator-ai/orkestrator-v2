@@ -316,6 +316,7 @@ describe("preload API factory", () => {
         "discardPendingCapture",
         "dismissExpiredCaptureNotices",
         "getCaptureCapabilities",
+        "getCaptureDiagnostics",
         "getCaptureStatus",
         "getPinResults",
         "listExpiredCaptureNotices",
@@ -368,6 +369,7 @@ describe("preload API factory", () => {
       [capture.getPinResults!("browser-1"), "capture-pins-results", ["browser-1"]],
       [capture.showOnPage!(showOnPage), "capture-show-on-page", [showOnPage]],
       [capture.captureResponsiveSet!(responsive), "capture-responsive-set", [responsive]],
+      [capture.getCaptureDiagnostics!(), "capture-diagnostics", []],
     ];
     for (const [call, channel, args] of calls) {
       await expect(call).resolves.toEqual<IpcEcho>({

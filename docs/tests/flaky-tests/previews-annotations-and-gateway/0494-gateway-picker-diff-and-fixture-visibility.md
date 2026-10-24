@@ -77,6 +77,8 @@ Both disposable profiles were stopped and reset; no owning source or test change
 
 - **Full-suite outcome:** 28 passed, 53 opt-in skips and only the capped-tree failure (534.6 s logged including lifecycle). Teardown also rejected an oversized artifact at its sanitization byte limit; this is a separate artifact failure. The one-shot runner stopped/reset `qa-browser-bcd7c9c1-ad3`, and its profile directory was confirmed absent. Manual owner profile `update-gateway-cb5bcc4a` was also stopped and reset; no live profile or disposable state was retained.
 
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3): `real browser gateway exercises an authoritative local environment` missed the fixture project (`getByText(origin)`, 30 s) in the isolated suite; the same test passed in the owning-file rerun on a fresh profile.
+
 ## GitHub HTML main merge — 2026-10-24
 
 - **Parents:** feature `66dd560f9b4414ed57e3450237c2a2735ca4cdc1` and main `d723429d58c52d8290c951fa113625431ad3c3fb`.
@@ -85,3 +87,7 @@ Both disposable profiles were stopped and reset; no owning source or test change
 - **Complete unchanged owner:** started fresh profile `merge-html-gateway-1024` with `mise run dev:test --profile merge-html-gateway-1024 --fixture --no-agent-credentials --agent-platforms codex`. `ORKESTRATOR_AGENT_TEST_PROFILE=merge-html-gateway-1024 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-html-gateway-1024 ORKESTRATOR_AGENT_TEST_DOCKER=0 ORKESTRATOR_AGENT_TEST_REVIEW=0 mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` passed fourteen active cases with ten opt-in skips (122.4 s logged).
 - **Evidence:** `orkestrator-test-run.JlHtIe/merge-isolated-browser.log.gz` under the host temporary directory; passing owner summary in `orkestrator-test-run.OKY7fc/summary.json`; sanitized results under `output/agent-testing/qa-browser-b4543173-e11/browser/` and `output/agent-testing/merge-html-gateway-1024/browser/`.
 - **Assessment and cleanup:** confirms an intermittent capped-tree recurrence; the original assertion and artifact failures remain explicit. No implementation, assertion, timeout or skip changed. The one-shot runner stopped/reset its profile, and the manual profile was stopped/reset with `dev:stop` and `dev:reset`; both profile directories were confirmed absent.
+
+## Environment-list UI main merge — 2026-10-24
+
+The aggregate recurrence passed in the complete unchanged owning-file rerun. Exact commands, durations, merge parents, aggregate results and evidence are retained in [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

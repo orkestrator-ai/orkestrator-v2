@@ -1011,6 +1011,55 @@ describe("AgentInfoButton provider resolution", () => {
 });
 
 describe("AgentInfoButton usage panel", () => {
+  for (const provider of ["claude", "codex"] as const) {
+    test(`places the ${provider} account controls directly below usage in the popover`, async () => {
+      seedUsage(
+        usage({ account: [{ window: "weekly", label: "Weekly quota", usedPercent: 25 }] }),
+        provider,
+      );
+      const account = {
+        id: "default",
+        platform: provider,
+        label: "Host login",
+        isDefault: true,
+        isActive: true,
+        signedIn: false,
+        identity: {},
+      };
+      nativeInvokeMock.mockImplementation(async (command: string) => {
+        if (command === "get_native_agent_projection") return mockNativeProjectionRead();
+        if (command === "list_agent_accounts") {
+          return { accounts: [account], active: { claude: "default", codex: "default" } };
+        }
+        if (command === "get_native_agent_session_account") {
+          return { platform: provider, source: "account", account, running: false };
+        }
+        return undefined;
+      });
+
+      render(<AgentInfoButton activeTab={provider === "claude" ? claudeTab() : codexTab()} />);
+      open();
+
+      const dialog = within(screen.getByRole("dialog", { name: "Agent information" }));
+      const section = dialog.getByTestId("agent-info-account");
+      expect(await within(section).findByRole("button", { name: "Add an account" })).toBeTruthy();
+      expect(within(section).queryByText("Reading account…") === null).toBe(true);
+      expect(
+        within(section).getByText(`${provider === "claude" ? "Claude Code" : "Codex"} account`),
+      ).toBeTruthy();
+      expect(
+        section.previousElementSibling?.contains(
+          dialog.getByRole("region", { name: "Account usage" }),
+        ),
+      ).toBe(true);
+      expect(dialog.getByText("Runtime").parentElement?.contains(section)).toBe(false);
+      expect(nativeInvokeMock).toHaveBeenCalledWith("get_native_agent_session_account", {
+        environmentId: ENVIRONMENT_ID,
+        agent: provider,
+      });
+    });
+  }
+
   test("shows live system percentages in one row and reveals full names on tap", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_system_usage"

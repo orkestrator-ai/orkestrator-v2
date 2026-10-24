@@ -142,6 +142,8 @@ export interface WebAnnotationCommitObservation {
   indexBytes: number;
   records: number;
   requestIds: readonly string[];
+  /** Annotations the commit touched (empty for draft commits). */
+  annotationIds: readonly string[];
   previous: Readonly<WebAnnotationManifest>;
   next: Readonly<WebAnnotationManifest>;
 }
@@ -1130,6 +1132,7 @@ export class WebAnnotationEnvironmentStore {
       indexBytes: next.indexBytes,
       records: outcome.records ?? 0,
       requestIds: outcome.requestIds ?? [],
+      annotationIds: outcome.annotationIds ?? [],
       previous: previous.manifest,
       next: next.manifest,
     });
@@ -1233,6 +1236,7 @@ export class WebAnnotationEnvironmentStore {
       indexBytes: outcome.next.indexBytes,
       records: outcome.records ?? 0,
       requestIds: [],
+      annotationIds: [],
       previous: outcome.previous!.manifest,
       next: outcome.next.manifest,
     });

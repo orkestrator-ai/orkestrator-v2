@@ -85,3 +85,12 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - The branch does not touch `runtime-env.ts` or its test. The unchanged owning file passed alone: `bun test src/runtime-env.test.ts --preload ../../tests/setup-node.ts` from `bridges/codex-bridge` (9 passed, 0 failed).
 - Evidence: `orkestrator-test-run.tfXbQS/codex-bridge.log.gz` below the host temporary directory.
 - Assessment: confirmed recurrence. No implementation, deadline, assertion or skip changed.
+
+## Annotation limitations latest-main refresh — 2026-10-24
+
+- **Parents:** feature `2e7edbc161b60cb188437783168f8bc8135f5953` and main `95c9cb46ae0a2b12fbc10ff73fa7c0614b254a0d`.
+- **Original command:** `ORKESTRATOR_TEST_AREA_BASE=0014505caeed69395b3cc996dd541fcc6df12c23 mise run test:logged -- --name refresh-0043-suite -- mise run test`; default 4/1/2/1 workspace/root/bridge/protocol reservations, one Bun worker per bridge package.
+- **Failure:** the configured runtime-helper case exceeded its 15-second deadline (15,003.11 ms). Codex reported 2,337 passed, 40 skipped and one failed across 87 files (54.70 s); the bridge group retained exit 1.
+- **Complete unchanged owner:** `mise run test:logged -- --name refresh-0043-codex-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/runtime-env.test.ts --parallel=1 --only-failures` passed (exit 0, 0.2 s).
+- **Evidence:** `orkestrator-test-run.fqu9cJ/bridges.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirms recurrence; no implementation, assertion, deadline or skip changed. The original aggregate remains non-green.

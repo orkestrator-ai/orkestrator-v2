@@ -3,6 +3,7 @@ import {
   WEB_ANNOTATION_LIMITS,
   WEB_ANNOTATION_REQUEST_STATES,
   WEB_ANNOTATION_REQUEST_STATE_LABELS,
+  webAnnotationProducerSource,
   canTransitionWebAnnotationRequest,
   isWebAnnotationRequestActive,
   webAnnotationPageKey,
@@ -106,6 +107,28 @@ describe("web annotation capture validation", () => {
     const input = fixtureCaptureInput();
     expect(validateWebAnnotationCaptureInput({ ...input, assetIds: ["a", "a"] }).ok).toBe(false);
     expect(validateWebAnnotationCaptureInput({ ...input, assetIds: ["../x"] }).ok).toBe(false);
+  });
+
+  test("image relations and the producer basis are never taken from a payload", () => {
+    const input = fixtureCaptureInput("region");
+    for (const forged of [
+      { ...input, regionCrop: { assetId: "a", sourceAssetId: "b", sourceRect: input.target } },
+      { ...input, producerSource: "backend" },
+      { ...input, target: { ...input.target, parentCaptureId: "capture-forged" } },
+    ]) {
+      expect(validateWebAnnotationCaptureInput(forged)).toEqual({
+        ok: false,
+        error: "Image relations and producer basis are assigned by the receiver",
+      });
+    }
+  });
+
+  test("a producer without a recorded basis is client-declared, except legacy imports", () => {
+    expect(webAnnotationProducerSource(fixtureCapture("element"))).toBe("client-declared");
+    expect(webAnnotationProducerSource(fixtureCapture("legacy-unresolved"))).toBe("backend");
+    expect(
+      webAnnotationProducerSource(fixtureCapture("element", { producerSource: "backend" })),
+    ).toBe("backend");
   });
 
   test("target validation honors enabled kinds", () => {

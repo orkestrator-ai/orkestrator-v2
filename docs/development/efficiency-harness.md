@@ -63,13 +63,17 @@ mise exec -- bun test tests/unit/efficiency/harness.test.ts
 | `a` | Unchanged transcript read, with and without a revision | Message serialization visits |
 | `b` | Bridge trimming functions (Cursor, Pi, ACP) and the shared helper | Message and part visits, retained ids |
 | `c` | Background Cursor stream with no reader | Retained parts and bytes, sampled peak |
-| `d` | Display-tail storage: update one of many tails, and one cold read | Payload reads and writes, syscall KiB |
+| `d` | Display-tail storage: update one of many tails, and one cold read; checkpoint age of streaming and quiet tails (1 and 128 sessions, 5 and 50 ms writes) | Payload reads and writes, syscall KiB; scheduler writes and coalesced updates, write-pool concurrency, checkpoint age p50 and max |
 | `e` | Bridge live window: v1 raw against v2 summary | Decoded and gzip bytes, messages retained, deferred detail bytes |
 | `f` | Backend projection: changed read of a 100-message window | Projected-row serializations |
 | `g` | Frontend accounting: tail update with 0, 1 and 8 MiB retained history | Message visits, accounted bytes |
 | `h` | Codex rollout reads under soft and hard cache budgets, plus interrupted JSONL | Full parses, bytes read, retained estimate, degraded status |
 | `i` | History paging: provider calls to load all earlier history | Provider calls by kind, messages returned |
 | `j` | Whole-message delta stream for 40 observations of one changing message | Decoded upsert bytes, bytes repeated from the client's previous copy |
+| `k` | Activity sweep over 1, 10 and 100 sessions, with the batch route and against an older bridge without it | Bridge requests by route, request and response bytes, sessions applied |
+| `l` | Files panel tree cache: 20 reads under qualified watcher coverage (unchanged, a hint, a mutation) and under the age bound | Walks, walked nodes, cache hits, misses and joins, revisions |
+| `m` | Progress probes and reviewer windows over 200 messages: unchanged, moved, and a provider without a snapshot surface | Reads by kind (`unchanged`, `snapshot`, `fallback`), provider calls, messages and bytes returned |
+| `n` | Build-pipeline transcript checkpoints over 20 passes: unchanged, moving, and no snapshot surface | Probes by kind, whole reads, saves, transcript-store commits, chunk writes and bytes |
 
 ## Method
 
@@ -91,10 +95,32 @@ mise exec -- bun test tests/unit/efficiency/harness.test.ts
 - **Syscall bytes** (workload `d`) are `/proc/self/io` `rchar`/`wchar` deltas
   around the awaited call, rounded to KiB. They are Linux-only and include
   backups and index files.
+- **Checkpoint age** (workload `d`, `age-*` cases) runs the real
+  `NativeAgentDisplayTailScheduler` with its default quiet period (2 s),
+  maximum age (10 s) and write pool (2) on a virtual clock and timer queue,
+  so the ages are exact and machine-independent. Sessions update on a fixed
+  cadence and each write takes a fixed virtual time. Age is the virtual time
+  from a key first becoming dirty to its write starting: how far a restart
+  preview can lag. It is a scheduling bound, not a measured disk latency;
+  the `records-*` cases give the real write cost.
 - **Secondary: wall-clock.** `performance.now()` around the measured
   operation only. Repetition 0 is cold; p50 and p95 are over warm
   repetitions. Timings are machine-specific, never compared by `--compare`,
   and not a production speed-up claim.
+- **Secondary: heap, RSS and event-loop lag** (`resources` on each case,
+  `scripts/efficiency/resources.ts`). Each repetition forces a collection,
+  samples `process.memoryUsage()` and timer lateness every 5 ms, and forces
+  another collection when it ends. `coldRetainedHeapDeltaBytes` is the heap
+  the cold repetition left reachable; `heapUsedPeakBytes` and `rssPeakBytes`
+  are the largest samples over all repetitions; `eventLoopLag` is how late
+  the 5 ms timer ticks fired (nearest-rank p50, p99, max). These describe the
+  harness process running one function-level case, not a production backend
+  or browser. Bun refreshes heap figures only at a collection, so the heap
+  peak undercounts short-lived allocation; a case shorter than one interval
+  that never blocks reports no lag samples. Like timings they are
+  machine-specific, never compared by `--compare`, never part of
+  `unstableCounters`, and left out of `--summary-out`. Heap bytes are not
+  encoded JSON bytes or source-file bytes; never read one as the other.
 - **Fixtures** come from a seed and a size (`fixtures.ts`): ASCII and
   multibyte prose, many short parts, 64 KiB tool results, 600-line diffs,
   192 KiB data-URL images, nested sub-agent activity, rewritten history,
@@ -108,15 +134,23 @@ mise exec -- bun test tests/unit/efficiency/harness.test.ts
 ## Limitations
 
 - Function-level only. Bridges are called in-process, not over HTTP; provider
-  stubs answer with the same protocol helpers a bridge uses.
+  stubs answer with the same protocol helpers a bridge uses. For the activity
+  sweep against real bridge processes over HTTP (latency p50, p95 and max for
+  1, 10 and 100 sessions, Codex and Claude, with and without the batch route),
+  run `bun scripts/activity-sweep-live.ts --codex <pinned codex binary>`; it
+  sends no prompts.
 - Counting via `toJSON` misses work done on copies the code makes
   (`{ ...message }`), so visit counts are lower bounds.
 - The frontend workload reproduces the mounted hook's calls rather than
-  rendering React.
+  rendering React. Workload `n` likewise reproduces the build supervisor's
+  `refreshMovedTranscript` call for call instead of running the supervisor,
+  and treats every pass as a persist boundary.
 - Not measured: remote delivery through a proxy, constrained bandwidth,
   reconnects and slow clients; real providers, bridges and rollouts; browser
-  long tasks, input latency and visibility latency; peak heap, RSS and
-  event-loop lag; workloads with several active review sessions. Those gaps
+  long tasks, input latency, visibility latency and browser heap; heap, RSS
+  and event-loop lag of a real backend or bridge under load (the `resources`
+  figures cover only the harness process); workloads with several active
+  review sessions. Those gaps
   are tracked in
   [0050-transcript-history-efficiency.md](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md)
   and [0052-remote-client-bandwidth.md](../todo/transcripts-and-observation/0052-remote-client-bandwidth.md).

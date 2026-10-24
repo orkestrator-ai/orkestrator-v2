@@ -87,15 +87,20 @@ Test code the runs below depend on.
    `mise run test:agent:docker` selects it. Assert that
    `.orkestrator/annotations/<request>-<digest>.png` is written inside the
    container, that settled-request cleanup removes it, and that result file
-   checks report `unavailable` (until the container check in
+   checks report `exists` / `missing` from inside the container (the container
+   check from
    [0043-web-annotation-known-limitations.md](0043-web-annotation-known-limitations.md)
-   lands).
+   landed on 2026-10-24; its script was checked in a real container, but not yet
+   through a Docker fixture environment).
 3. A real-stack assertion that a sent request writes
    `.orkestrator/annotations/<request>-<digest>.png` into the local worktree.
    Today only the skipped live test exercises this, and only implicitly.
-4. A live Discuss case and a needs-input or clarification case next to the
-   implement case. Discuss should run in plan mode on Claude and be labelled
-   advisory elsewhere.
+4. Discuss part done 2026-10-24 (see "Runs on 2026-10-24"): `live agent
+   discusses a note and the turn outcome is known` runs next to the implement
+   case and expects plan mode on Claude and advisory elsewhere, and `live
+   session-scoped agent already in Plan discusses read-only…` covers Codex,
+   Cursor and Grok sessions in Plan. Still open: a needs-input or
+   clarification case.
 5. Fixture-app routes for a CSS animation, a late-loading web font and an
    expired sign-in redirect. Use them to exercise `stable`/`unstable` from
    `web_annotation_result_capture` and the redirect handling of Show on page.
@@ -118,10 +123,8 @@ Test code the runs below depend on.
   for each provider in `AGENT_PLATFORMS`. Claude, Codex, Cursor and OpenCode
   passed; Grok and Pi were skipped for missing credentials, recorded with
   their reasons.
-- Re-run the live implement test for Grok and Pi once the host has a usable
-  login for each (Grok: `grok login` on the host; Pi: a provider in
-  `~/.pi/agent/auth.json`). A skipped provider is not a passing one. Grok last
-  passed on 2026-10-15 (437 s); Pi has never run.
+- Done 2026-10-24 on node mbp3 (see "Runs on 2026-10-24"): the live implement
+  test passed for Grok and Pi (and again for the other four).
 - Remote backend: connect the desktop to a backend on another host, capture,
   and confirm that `web_annotation_asset_stage` and materialization in the
   remote workspace both work.
@@ -198,6 +201,45 @@ Capability matrix and known limitations:
 Migration and rollback verification:
 Reviewer / date:
 ```
+
+### Runs on 2026-10-24 (macOS, node mbp3)
+
+Live implement and discuss per provider, run while closing
+[0043-web-annotation-known-limitations.md](0043-web-annotation-known-limitations.md).
+It is not a milestone sign-off.
+
+```text
+Milestone / PR / commit: live implement and discuss per provider; branch
+  todo-0043-annotation-limitations-8d52b6eaf37d on main 8454d18b8
+Implemented scope and remaining deferrals: 0043 items 1-9; the spec now
+  records each request's settled facts ([annotation-live] outcome)
+Platforms, providers, and client versions exercised: macOS 26.6.2 (arm64),
+  Docker 29.7.2, browser gateway client; host logins for claude, codex, cursor,
+  grok, opencode and pi
+Logged commands and results: table below
+Real workflow and inactive-environment evidence: none new
+Fault-injection boundaries exercised: a session switched from Plan to Build
+  between preparation and Send (refused, mode left alone)
+Capability matrix and known limitations: all six providers pass implement and
+  discuss; Discuss is read-only on Claude and on Codex/Cursor/Grok sessions
+  already in Plan
+Migration and rollback verification: not run
+Reviewer / date: Claude (worker agent), 2026-10-24; awaiting human review
+```
+
+One disposable profile, `qa-0043-live` (`mise run dev:test --profile
+qa-0043-live --fixture`), stopped and reset afterwards. Each provider ran
+`--grep 'live agent'` with `ORKESTRATOR_AGENT_TEST_ANNOTATION_AGENT=<agent>`
+through `mise run test:logged`, as on 2026-10-18.
+
+| Provider | Implement | Discuss | Discuss, session already in Plan |
+| --- | --- | --- | --- |
+| claude | Pass, outcome `completed` | Before the brief change 2 of 5 `completed`, 3 of 5 held on a pending plan approval; after it 5 of 5 `completed` in plan mode | not applicable |
+| codex | Pass, `completed` | Pass, advisory | Pass: `plan-mode`, sent in Plan; refused after a switch to Build |
+| cursor | Pass, `completed` | Pass, advisory | Pass, as Codex |
+| grok | Pass, `completed` (first pass since 2026-10-15) | Pass, advisory | Pass, as Codex |
+| opencode | Pass, `completed` | Pass, advisory | no modes |
+| pi | Pass, `completed` (first pass ever) | Pass, advisory | no modes |
 
 ### Runs on 2026-10-18 (macOS)
 

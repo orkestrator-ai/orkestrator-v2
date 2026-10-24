@@ -222,6 +222,7 @@ cache` at 5007.56 ms. The root group had 3382 passed and one failed test.
 complete unchanged owner in 19.6 s. Original group evidence is
 `orkestrator-test-run.AW4scv/root-and-agent-support-tests.log.gz` under the host
 temporary directory. No firewall implementation, assertion, timeout or skip changed.
+- **Recurrence (2026-10-24, node mbp3):** failed again in the todo-0050 aggregate (5005.02 ms) and when the owner was rerun alone under load average 16 to 35; `main` at `71227437` failed the same file the same way under the same load. See case 0632's recurrence for the comparison.
 
 - **Recurrence 2026-10-24 (node mbp3, Control MCP voice branch `todo-0041-control-mcp-voice-4a2c0ccc548b`):** failed in both `mise run test` aggregates (artifacts `orkestrator-test-run.SqxFKk` and `orkestrator-test-run.NcXAI6` under `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/`); the unchanged owner `tests/unit/firewall-policy.test.ts` passed alone (24 pass, 0 fail). The branch does not touch this area.
 
@@ -340,6 +341,11 @@ The combined merge repeated a failure in this owner during `mise run test:logged
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` failed: 22 passed, two failed in 49.11 s. Seed/live/cache timed out at 5040.02 ms, and the policy-3 address/protocol/port probe timed out at 5024.83 ms.
 - **Evidence:** `orkestrator-test-run.bFHIz7/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.ixE6Kq/merge-firewall-owner.log.gz` below the host temporary directory.
 - **Assessment:** no new complete-owner pass or cause was established; this observation is not newly classified as flaky. No implementation, assertion, timeout or skip changed.
+
+
+## Transcript-history refresh through main `95c9cb46` — 2026-10-24
+
+The integrated default suite timed out the stored-domain/repeated-range case at 5020.35 ms (root/support: 3,398 passed, one failed, 260.67 s). The complete unchanged owner retained seven five-second failures, including this case at 5007.20 ms: seventeen passed, seven failed, 60.0 s logged. It is not newly classified as a flake. Exact commands, merge parents, artifacts and the other owner failures are recorded in [0789](../aggregate-validation-runs/0789-transcript-history-main-refresh-validation.md). The test and firewall script are unchanged between the merge parents; no new cause was established and no deadline or assertion changed.
 
 ## Control MCP voice merge through `95c9cb46a` — 2026-10-24
 

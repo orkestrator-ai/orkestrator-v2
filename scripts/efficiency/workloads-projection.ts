@@ -47,7 +47,7 @@ interface Service {
   shutdown(): Promise<void>;
 }
 
-interface Modules {
+export interface Modules {
   service: new (storage: unknown, invoke: unknown, options: Json) => Service;
   storage: new (dataDir: string) => {
     init(): Promise<void>;
@@ -197,7 +197,7 @@ function v1Snapshot(modules: Modules, history: { messages: unknown[]; revision: 
 }
 
 /** Serves summaries, details and pages the way a v2 bridge does. */
-function v2Methods(
+export function v2Methods(
   summary: NonNullable<Modules["summary"]>,
   history: { messages: unknown[]; revision: number },
 ) {

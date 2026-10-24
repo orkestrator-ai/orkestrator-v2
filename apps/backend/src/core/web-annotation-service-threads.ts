@@ -16,6 +16,7 @@ import {
   WEB_ANNOTATION_SCHEMA_VERSION,
   isWebAnnotationRequestActive,
   webAnnotationPageKey,
+  webAnnotationProducerSource,
   webAnnotationUtf8Bytes,
   type WebAnnotation,
   type WebAnnotationArchiveInput,
@@ -33,7 +34,9 @@ import {
   type WebAnnotationListInput,
   type WebAnnotationListResult,
   type WebAnnotationOperationReceipt,
+  type WebAnnotationProducerSource,
   type WebAnnotationProvenance,
+  type WebAnnotationRegionCropRelation,
   type WebAnnotationRequest,
   type WebAnnotationResolveInput,
   type WebAnnotationResult,
@@ -62,6 +65,7 @@ import {
   type WebAnnotationContext,
 } from "./web-annotation-context.js";
 import type {
+  ManifestAsset,
   ManifestCapture,
   ManifestEntry,
   WebAnnotationEnvironmentStore,
@@ -100,6 +104,30 @@ function defaultTitle(body: string, target: WebAnnotationTarget): string {
       ?.trim() ?? "";
   const candidate = excerpt(firstLine || target.label, 80);
   return candidate || "Untitled note";
+}
+
+/**
+ * The crop-to-source relation of a region capture's two images, recorded by
+ * the backend only when the stored sizes agree with `target.imageRect`: the
+ * second image must be exactly that rectangle of the first (rounded and
+ * clamped to the source the way the desktop crops it, within one pixel). Any
+ * other shape (one image, a text-only capture, a mismatched upload) records no
+ * relation; the images stay plain evidence.
+ */
+export function regionCropRelation(
+  target: WebAnnotationTarget,
+  assets: readonly Pick<ManifestAsset, "id" | "width" | "height">[],
+): WebAnnotationRegionCropRelation | null {
+  if (target.kind !== "region" || !target.imageRect || assets.length !== 2) return null;
+  const [source, crop] = assets as [ManifestAsset, ManifestAsset];
+  const rect = target.imageRect;
+  const x = Math.min(Math.max(0, Math.round(rect.x)), source.width);
+  const y = Math.min(Math.max(0, Math.round(rect.y)), source.height);
+  const width = Math.max(0, Math.min(source.width - x, Math.round(rect.width)));
+  const height = Math.max(0, Math.min(source.height - y, Math.round(rect.height)));
+  if (width < 1 || height < 1) return null;
+  if (Math.abs(crop.width - width) > 1 || Math.abs(crop.height - height) > 1) return null;
+  return { assetId: crop.id, sourceAssetId: source.id, sourceRect: { x, y, width, height } };
 }
 
 function continuationTitle(title: string): string {
@@ -300,7 +328,7 @@ export class WebAnnotationThreads {
     });
   }
 
-  referenceAssets(tx: WebAnnotationTransaction, assetIds: readonly string[]) {
+  referenceAssets(tx: WebAnnotationTransaction, assetIds: readonly string[]): ManifestAsset[] {
     const assets = [];
     for (const id of assetIds) {
       const asset = tx.manifest.assets[id];
@@ -338,9 +366,12 @@ export class WebAnnotationThreads {
       stateReason?: string;
       resultOf?: { requestId: string; resultId?: string };
       comparison?: WebAnnotationCapture["comparison"];
+      /** Whether `producer` came from the submitting client or from the backend. */
+      producerSource: WebAnnotationProducerSource;
     },
   ): WebAnnotationCapture {
-    this.referenceAssets(tx, input.assetIds);
+    const assets = this.referenceAssets(tx, input.assetIds);
+    const regionCrop = regionCropRelation(input.target, assets);
     const capture: WebAnnotationCapture = {
       id: newId("capture"),
       annotationId: input.annotationId,
@@ -359,6 +390,8 @@ export class WebAnnotationThreads {
       ...(input.stateReason ? { stateReason: input.stateReason } : {}),
       ...(input.resultOf ? { resultOf: input.resultOf } : {}),
       ...(input.comparison ? { comparison: input.comparison } : {}),
+      ...(regionCrop ? { regionCrop } : {}),
+      producerSource: input.producerSource,
     };
     const bytes = tx.writeRecord("capture", capture.id, 1, capture);
     const index: ManifestCapture = {
@@ -381,7 +414,8 @@ export class WebAnnotationThreads {
     annotationId: string,
     revision: number,
     input: WebAnnotationCaptureInput,
-    producer: WebAnnotationCaptureProducer = input.producer,
+    /** Set by the backend for the command used (result captures); else the client's. */
+    assignedProducer?: WebAnnotationCaptureProducer,
     resultOf?: { requestId: string; resultId?: string },
     comparison?: WebAnnotationCapture["comparison"],
   ): WebAnnotationCapture {
@@ -389,7 +423,8 @@ export class WebAnnotationThreads {
       ...(comparison ? { comparison } : {}),
       annotationId,
       revision,
-      producer,
+      producer: assignedProducer ?? input.producer,
+      producerSource: assignedProducer ? "backend" : "client-declared",
       capturedAt: input.capturedAt,
       documentGeneration: input.documentGeneration,
       page: input.page,
@@ -432,8 +467,17 @@ export class WebAnnotationThreads {
     const request = annotation.activeRequestId
       ? manifest.requests[annotation.activeRequestId]
       : undefined;
+    // Exact image sizes from the index rows, so a batch review can match the
+    // preparation check without fetching captures or images.
+    const captureIndex = manifest.captures[annotation.currentCaptureId];
+    const assets = captureIndex?.assetIds.map((id) => manifest.assets[id]);
+    const currentCaptureAssets =
+      assets && assets.every((asset) => asset !== undefined)
+        ? assets.map((asset) => ({ assetId: asset.id, digest: asset.digest, bytes: asset.bytes }))
+        : undefined;
     return {
       ...this.project(store, annotation),
+      ...(currentCaptureAssets ? { currentCaptureAssets } : {}),
       activeRequest: request
         ? {
             id: request.id,
@@ -1205,6 +1249,7 @@ export class WebAnnotationThreads {
         redaction: carried.redaction,
         state: carried.state,
         ...(carried.stateReason ? { stateReason: carried.stateReason } : {}),
+        producerSource: webAnnotationProducerSource(carried),
       });
       const continuation: WebAnnotation = {
         id: continuationId,

@@ -188,3 +188,173 @@ describe("transcript read phase metrics", () => {
     );
   });
 });
+
+describe("state and discovery read phase metrics", () => {
+  const identity = {
+    environmentId: "env-1",
+    agent: "claude" as const,
+    logicalSessionKey: "env-env-1:state-discovery-metrics",
+  };
+
+  test("domains are bounded separately, so polling one never evicts another", () => {
+    const metrics = new ProgressiveReadMetrics();
+    metrics.record({
+      domain: "transcript",
+      cacheTier: "provider",
+      outcome: "delta",
+      durationMs: 1,
+    });
+    for (let index = 0; index < 300; index += 1) {
+      metrics.record({
+        domain: "discovery",
+        cacheTier: "memory",
+        outcome: "unchanged",
+        durationMs: 0,
+      });
+    }
+    expect(metrics.list("transcript")).toHaveLength(1);
+    expect(metrics.list("discovery")).toHaveLength(256);
+    expect(metrics.list()).toHaveLength(257);
+  });
+
+  test("a state read splits its time into source and normalization", async () => {
+    const stub = createProviderStub("claude", {
+      status: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return "idle";
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-state-phase-metrics-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const first = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        expect(first.status).toBe("snapshot");
+        if (first.status !== "snapshot") throw new Error("expected a snapshot");
+        await service.getSessionStateUpdate({
+          ...identity,
+          viewVersion: 1,
+          knownToken: first.token,
+        });
+        const samples = projectionInternals(service).progressiveMetrics.list(
+          "state",
+        ) as ProgressiveReadMetric[];
+        expect(samples.map((sample) => sample.outcome)).toEqual(["snapshot", "unchanged"]);
+        for (const sample of samples) {
+          expect(sample.sourceMs).toBeNumber();
+          expect(sample.normalizeMs).toBeNumber();
+          expect(sample.schedulerWaitMs).toBeNumber();
+          expect(
+            sample.sourceMs! + sample.normalizeMs! + sample.schedulerWaitMs!,
+          ).toBeLessThanOrEqual(sample.durationMs + 3);
+        }
+        expect(samples[0]!.sourceMs!).toBeGreaterThan(0);
+        expect(JSON.stringify(samples)).not.toContain(identity.logicalSessionKey);
+      },
+    );
+  });
+
+  test("discovery records each view read and each provider job", async () => {
+    const stub = createProviderStub("claude", {
+      slashCommands: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return [{ name: "/review", description: "Review", source: "project" }];
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-discovery-phase-metrics-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const input = { ...identity, viewVersion: 1 as const, sections: ["commands" as const] };
+        await service.ensureSession(input);
+        await service.getDiscoveryUpdate(input);
+        const internals = projectionInternals(service);
+        await waitForCondition(() =>
+          (internals.progressiveMetrics.list("discovery") as ProgressiveReadMetric[]).some(
+            (sample) => sample.cacheTier === "provider",
+          ),
+        );
+        const samples = internals.progressiveMetrics.list("discovery") as ProgressiveReadMetric[];
+        const view = samples.find((sample) => sample.cacheTier === "memory")!;
+        const job = samples.find((sample) => sample.cacheTier === "provider")!;
+        expect(view).toMatchObject({ outcome: "snapshot" });
+        expect(view.normalizeMs).toBeNumber();
+        expect(view.sourceMs).toBeUndefined();
+        expect(job.outcome === "snapshot" || job.outcome === "unchanged").toBe(true);
+        expect(job.sourceMs!).toBeGreaterThan(0);
+        expect(job.normalizeMs).toBeNumber();
+        expect(JSON.stringify(samples)).not.toContain("/review");
+      },
+    );
+  });
+});
+
+describe("discovery on return to an idle view", () => {
+  test("expired sections refill in at most two-job batches: values change, no token is lost", async () => {
+    let clock = 1_000;
+    const stub = createProviderStub("claude", {
+      slashCommands: async () => [{ name: "/review", description: "Review", source: "project" }],
+    });
+    await withService(
+      {
+        prefix: "orkestrator-discovery-return-",
+        provider: async () => stub.provider,
+        now: () => clock,
+      },
+      async ({ service }) => {
+        const input = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:discovery-return",
+          viewVersion: 1 as const,
+          sections: ["commands" as const, "mcp" as const, "runtime" as const],
+        };
+        await service.ensureSession(input);
+        const internals = projectionInternals(service);
+        const read = async (knownToken?: string) => {
+          const update = await service.getDiscoveryUpdate({
+            ...input,
+            ...(knownToken ? { knownToken } : {}),
+          });
+          // Let the scheduled section jobs settle before the next read.
+          await waitForCondition(() => internals.progressiveReads.size === 0);
+          return update;
+        };
+        const availability = (update: Awaited<ReturnType<typeof read>>) =>
+          update.status === "snapshot"
+            ? input.sections.map((section) => update.value.sections[section]?.availability)
+            : update.status;
+
+        // Fill every section, then settle on `unchanged`.
+        let token: string | undefined;
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const update = await read(token);
+          if (update.status === "unchanged") break;
+          if (update.status === "snapshot") token = update.token;
+        }
+        expect((await read(token)).status).toBe("unchanged");
+
+        // Off screen past the 30 s section lifetime, then back.
+        clock += 60_000;
+        const seen: unknown[] = [];
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const update = await read(token);
+          seen.push(availability(update));
+          if (update.status === "unchanged") break;
+          if (update.status === "snapshot") token = update.token;
+        }
+        // Commands follow their catalogue's own state, so they stay ready.
+        // The other sections read stale once expired; a provider runs at most
+        // two section jobs at a time, so they turn ready one batch per read
+        // (the commands job takes one slot). Each snapshot carries a changed
+        // value, and the reader's token is honoured as soon as nothing changed:
+        // the repeats on return are values filling in, not a dropped token.
+        expect(seen).toEqual([
+          ["ready", "stale", "stale"],
+          ["ready", "ready", "stale"],
+          ["ready", "ready", "ready"],
+          "unchanged",
+        ]);
+      },
+    );
+  });
+});

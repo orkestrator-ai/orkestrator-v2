@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { PARENT_WATCH_INTERVAL_MS } from "@orkestrator/protocol/parent-watchdog";
 import { FakeIntervals } from "@orkestrator/protocol/testing/fake-intervals";
 
 // `config.ts` reads its environment once, at import, so everything below is
@@ -35,7 +36,7 @@ function seedSession(lastAccessed: number) {
 }
 
 describe("Cursor bridge server lifecycle", () => {
-  test("start arms one idle sweep and a five-second parent watch", async () => {
+  test("start arms one idle sweep and the shared parent watch", async () => {
     await start(0, {
       timers,
       parentPid: 4213,
@@ -45,12 +46,12 @@ describe("Cursor bridge server lifecycle", () => {
     });
 
     expect(server.listening).toBe(true);
-    expect(timers.periods()).toEqual([5_000, 60_000]);
+    expect(timers.periods()).toEqual([PARENT_WATCH_INTERVAL_MS, 60_000]);
   });
 
   test("a repeated start rejects without arming or binding anything more", async () => {
     await expect(start(0, { timers, signals: null })).rejects.toThrow("already started");
-    expect(timers.periods()).toEqual([5_000, 60_000]);
+    expect(timers.periods()).toEqual([PARENT_WATCH_INTERVAL_MS, 60_000]);
   });
 
   test("the armed sweep detaches an idle session and keeps one with a background child", async () => {

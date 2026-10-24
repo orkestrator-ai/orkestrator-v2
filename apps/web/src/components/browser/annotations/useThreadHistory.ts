@@ -1,5 +1,6 @@
 /**
- * Thread history with backward paging (plan step 05 / step 03 `beforeSequence`).
+ * Thread history with backward paging (`web_annotation_entries` with
+ * `beforeSequence`).
  *
  * The synchronized snapshot carries the newest entry page. Older pages are
  * fetched on request and kept alongside every snapshot seen while the thread

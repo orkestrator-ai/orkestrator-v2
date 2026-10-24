@@ -589,6 +589,8 @@ assertion, timeout or skip changed.
   host picker (web transcript scrolling, tool groups, Markdown streaming,
   the Virtuoso patch). No assertion, timeout or skip changed.
 
+- **Recurrence 2026-10-24** (0043 known-limitations branch, node mbp3): the narrow host-picker case failed in `mise run test:agent:browser:isolated` (27 passed, 55 skipped, two failed) and again in an unchanged owning-file run on a fresh profile `qa-0043-gw` (12 passed, ten skipped, two failed); still unresolved.
+
 ## Control MCP voice main merge — 2026-10-24
 
 - **Parents:** feature `fc04c130d805d2c52b064d0d504eadc6188ac540` and main `0014505caeed69395b3cc996dd541fcc6df12c23`.
@@ -613,3 +615,7 @@ The merge parents are feature `3b5f889149d8c3603c869cd15b51d67af39c9aa6` and mai
 - **Complete unchanged owner:** fresh profile `main-refresh-gateway-1024`, started with `mise run dev:test --profile main-refresh-gateway-1024 --fixture --no-agent-credentials --agent-platforms codex`. `ORKESTRATOR_AGENT_TEST_PROFILE=main-refresh-gateway-1024 ORKESTRATOR_AGENT_TEST_RUN_ID=main-refresh-gateway-1024 ORKESTRATOR_AGENT_TEST_DOCKER=0 ORKESTRATOR_AGENT_TEST_REVIEW=0 mise run test:logged -- --name main-refresh-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` passed all fourteen active cases with ten opt-in skips (118.0 s logged), including both host-picker viewports.
 - **Evidence:** host temporary artifact `orkestrator-test-run.CQZ5QE/main-refresh-isolated-browser.log.gz` after suite completion; passing owner summary `orkestrator-test-run.BjAz4Y/summary.json`; sanitized browser results under `output/agent-testing/main-refresh-gateway-1024/browser/`.
 - **Assessment and cleanup:** the complete unchanged owner pass confirms an intermittent recurrence. Host contention remains a hypothesis; no implementation, assertion, timeout or skip changed. The manual owner profile was stopped/reset, with its directory removed; its foreground launcher exited 143 when explicitly stopped. The aggregate result and one-shot cleanup are recorded in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#latest-main-compatibility-refresh--2026-10-24).
+
+## Environment-list UI main merge — 2026-10-24
+
+The aggregate recurrence passed in the complete unchanged owning-file rerun. Exact commands, durations, merge parents, aggregate results and evidence are retained in [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

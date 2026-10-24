@@ -183,8 +183,9 @@ the changed paths can affect instead of always running every suite:
 
 - Documentation-only changes (prose in files such as `*.md`, `docs/**`, or
   `plans/**`, not content consumed by tests, builds, or tooling) need no test
-  suite: `mise run format:check` is enough. File role takes precedence over
-  location or extension; source under `docs/` still counts as code.
+  suite: `mise run format:check` is enough. This includes merge-conflict
+  resolutions confined to such files (see below). File role takes precedence
+  over location or extension; source under `docs/` still counts as code.
 - Every change to code or configuration runs `mise run format:check`,
   `mise run lint`, and `mise run typecheck`.
 - Code changes under `apps/`, `bridges/`, `packages/`, `scripts/`, or `tests/`
@@ -205,14 +206,15 @@ the changed paths can affect instead of always running every suite:
 
 #### Documentation-only merge-conflict resolution
 
-When the complete original conflicted-path list establishes that every conflict
-was in prose documentation, and the manual resolution changes only that prose,
-use documentation-only validation: confirm no conflict markers remain and run
-`mise run format:check`. Do not rerun tests, lint, typechecking, builds, or
-scenario suites solely for that merge-resolution step, even when code,
-configuration, or tests merge automatically. This exception takes precedence
-over the normal changed-path requirements above and generic merge-validation
-prompts that require checks for auto-merged code.
+Resolving merge conflicts that are only in documentation needs no tests. When
+the complete original conflicted-path list shows that every conflict was in
+prose documentation or other non-code text not consumed by tests, builds, or
+tooling, and the manual resolution changes only those files, confirm no
+conflict markers remain and run `mise run format:check`. That is the whole
+validation for the step: do not run tests, lint, typechecking, builds, or
+scenario suites for it, even when code, configuration, or tests from the target
+branch merged cleanly alongside it. This rule takes precedence over the normal
+changed-path requirements above and over generic merge-validation guidance.
 
 Capture the complete original unmerged path list before staging any resolution
 and retain it with the merge's parent commit IDs in local Git metadata for

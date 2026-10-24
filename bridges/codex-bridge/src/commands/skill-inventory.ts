@@ -16,7 +16,7 @@
  *
  * A child's first answer is not settled. app-server answers `skills/list`
  * before its plugin skills have loaded and sends no `skills/changed` when they
- * arrive (0.164.0, measured on 2026-10-24: 26 skills for the first 200-300 ms
+ * arrive (0.164.0, measured on 2026-10-24: 26 skills for the first 100-300 ms
  * after `initialize`, then 114, with no notification). So the first answer
  * from each generation is reported unsettled and re-read once after
  * `coldSettleMs`; that re-read is the authoritative one.

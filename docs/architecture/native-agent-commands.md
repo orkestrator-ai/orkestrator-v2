@@ -252,7 +252,7 @@ catalogue read cannot let `/clear` reach the CLI.
   are bridge-local; reserved names cannot be shadowed by a template.
   app-server answers the first `skills/list` after it starts before its plugin
   skills have loaded, and sends no `skills/changed` when they arrive (0.164.0:
-  26 skills for the first 200-300 ms, then 114). So the first answer from each
+  26 skills for the first 100-300 ms, then 114). So the first answer from each
   app-server generation is `stale`, and the bridge re-reads once 2 s later
   (`coldSettleMs` in `commands/skill-inventory.ts`); that answer is
   authoritative and bumps `commandRevision`.

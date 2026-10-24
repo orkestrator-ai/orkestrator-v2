@@ -152,8 +152,8 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
   | Provider | Groups shown (rows) | Refresh after adding a file | New row after reload |
   | --- | --- | --- | --- |
   | Claude (CLI 2.1.309) | Orkestrator (1), Other (53): the cold probe reports no sources | `reread`; listed | Yes |
-  | Pi (SDK 1.4.0) | Orkestrator (2), Templates (2), after the menu's "Refresh commands" attached the session | `reloaded`; listed | Yes |
-  | Grok (1.0.62) | Other (14; 34 in an earlier run): Grok reports no sources | `reread`; listed by push within 4 s | Yes |
+  | Pi (SDK and CLI 1.4.0) | Orkestrator (2), Templates (2), after the menu's "Refresh commands" attached the session | `reloaded`; listed | Yes |
+  | Grok (1.0.67) | Other (14; 34 in an earlier run): Grok reports no sources | `reread`; listed by push within 4 s | Yes |
 
   Keyboard order passed on all three: arrows followed the rendered order
   across group boundaries and clamped at both ends. Found on the way: a new Pi
@@ -235,8 +235,10 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
   the executor; no public payload carries them.
 - Catalogue reads are metadata only: no `lastAccessed` touch, no transcript
   hydration, no reattach.
-- Keep wire changes additive, and never treat a 404 as proof that a bridge is
-  merely old.
+- Keep wire changes additive. A 404 on the session route never selects
+  another route's rows: it means an older bridge, one that predates the route
+  or a pre-2.21 bridge that does not hold the session, so it reads
+  `outdated-bridge` and is re-checked on the next read.
 - Do not promise parity with a provider's terminal or editor menu. Some of its
   entries run prompts; others drive a terminal, open an editor, change
   settings or replace the session.

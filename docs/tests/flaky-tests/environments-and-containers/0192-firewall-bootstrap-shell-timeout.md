@@ -222,3 +222,14 @@ cache` at 5007.56 ms. The root group had 3382 passed and one failed test.
 complete unchanged owner in 19.6 s. Original group evidence is
 `orkestrator-test-run.AW4scv/root-and-agent-support-tests.log.gz` under the host
 temporary directory. No firewall implementation, assertion, timeout or skip changed.
+
+## Recurrence during 0016 validation (2026-10-24)
+
+- **Failure:** `GitHub ranges come from a fresh backend seed, else live, else this container's cache` and `policy 2 narrows host access to named ports and records what it applied` timed out at about 5,004 ms.
+- **Original command:** `mise run test:logged -- --name full-test-2 -- mise run test`
+  on branch `todo-0016-slash-command-catalogue` after rebasing onto `712274379`,
+  node mbp3, other worktrees validating on the host.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.CfvSIY/full-test-2.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name firewall-alone -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1` passed (21.1 s).
+- **Disposition:** recurrence confirmed by the isolated pass. No assertion,
+  deadline or skip was changed.

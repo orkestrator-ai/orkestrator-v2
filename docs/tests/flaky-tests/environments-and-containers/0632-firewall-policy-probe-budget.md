@@ -25,3 +25,14 @@
   tab); nothing in `tests/unit/firewall-policy.test.ts`,
   `docker/firewall-domains.sh` or the network allowlist changed there. The
   likely fix is an explicit outer budget for these cases, as 0159 took.
+
+## Recurrence during 0016 validation (2026-10-24)
+
+- **Failure:** every parametrized `policy 2`/`policy 3 allowlist … chooses blocked HTTPS probe` case hit the five-second budget (5,003-5,069 ms).
+- **Original command:** `mise run test:logged -- --name full-test-2 -- mise run test`
+  on branch `todo-0016-slash-command-catalogue` after rebasing onto `712274379`,
+  node mbp3, other worktrees validating on the host.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.CfvSIY/full-test-2.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name firewall-alone -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1` passed (21.1 s).
+- **Disposition:** recurrence confirmed by the isolated pass. No assertion,
+  deadline or skip was changed.

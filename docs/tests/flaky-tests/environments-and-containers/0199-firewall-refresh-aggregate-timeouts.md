@@ -47,3 +47,14 @@ aggregate-load timeouts.
 - **Suite counts:** The aggregate had not finished when the owner was checked. Its root group also reported Pi vendoring, diagnostic scanning and disk-report timeouts; Pi and disk-report still timed out in a separate four-owner rerun, so they are not newly confirmed flakes from this observation.
 - **Evidence:** Aggregate logs under `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.B8BU4Y/`; focused result `/tmp/annotation-firewall-owner.log`.
 - **Assessment:** Shared host contention remains plausible (load averages around 90–100); no firewall code, test, assertion or timeout changed.
+
+## Container state observation (0020) recurrence — 2026-10-24
+
+- **Original command:** `mise run test` on `todo-0020-container-state-observation-5c2ca9cd8360` after rebasing onto `origin/main` `a5d78cfcd`, default worker plan, host load average 15–22 from other work on the node.
+- **Failure:** the root group timed out twelve firewall shell-fixture cases across `tests/unit/firewall-policy.test.ts` and `tests/unit/firewall-refresh.test.ts` at about 5003–5010 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name firewall-alone -- bun test ./tests/unit/firewall-policy.test.ts ./tests/unit/firewall-refresh.test.ts --parallel=2 --only-failures` still failed the same twelve cases under the same load (27 pass, 12 fail). The same command on a clean `origin/main` worktree failed the identical twelve cases, so the change under test does not cause them. Not rerun at lower load.
+- **Evidence:** `orkestrator-test-run.lPZA8F/firewall-alone.log.gz` under the host temporary directory. No firewall implementation, assertion, timeout or skip changed.
+
+## Runtime-state ownership main merge — 2026-10-24
+
+`mise run test:logged -- --name merge-suite -- mise run test` used the default 4/1/2/1 workspace/root/bridge/protocol plan alongside browser suites and other validating worktrees. Root/support ran with one worker after waiting 953.5 s: 3,369 passed, twelve failed and one error across 3,381 tests in 161 files (609.28 s execution). Evidence: host temporary artifact `orkestrator-test-run.BJKk4l/root-and-agent-support-tests.log` (compressed at aggregate completion). `policy 3 refreshes the stored tuples and add/remove edit them` timed out at 5032.87 ms. `mise run test:logged -- --name merge-firewall-refresh-owner -- bun test ./tests/unit/firewall-refresh.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (28.9 s logged). This confirms a recurrence; no assertion, deadline or skip changed.

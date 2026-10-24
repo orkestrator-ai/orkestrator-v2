@@ -14,17 +14,6 @@ describe("classifyTranscriptEntry", () => {
     expect(classifyTranscriptEntry({ parts: [] })).toBe("display");
   });
 
-  test("recognizes OpenCode's raw envelope from a backend older than 2.19.17", () => {
-    expect(
-      classifyTranscriptEntry({
-        info: { id: "m1", role: "assistant", time: { created: 1 } },
-        parts: [{ id: "p1", type: "text", text: "Hi" }],
-      }),
-    ).toBe("opencode-envelope");
-    // A message with no parts yet, or none at all, is still an envelope.
-    expect(classifyTranscriptEntry({ info: { id: "m1" } })).toBe("opencode-envelope");
-  });
-
   test("keeps a display row that carries an `info` field of its own", () => {
     expect(classifyTranscriptEntry({ role: "assistant", content: "Hi", info: { id: "x" } })).toBe(
       "display",
@@ -46,24 +35,15 @@ describe("classifyTranscriptEntry", () => {
 });
 
 describe("transcriptEntryId", () => {
-  test("reads the id where each shape keeps it", () => {
+  test("reads the entry's own id", () => {
     expect(transcriptEntryId({ id: "flat" })).toBe("flat");
-    expect(transcriptEntryId({ info: { id: "envelope" } })).toBe("envelope");
-    expect(transcriptEntryId({ id: "", info: { id: 1 } })).toBeUndefined();
+    expect(transcriptEntryId({ info: { id: "nested" } })).toBeUndefined();
+    expect(transcriptEntryId({ id: "" })).toBeUndefined();
     expect(transcriptEntryId({})).toBeUndefined();
   });
 });
 
 describe("describeTranscriptSkew", () => {
-  test("tells the user which side to update for a legacy shape", () => {
-    expect(describeTranscriptSkew("opencode-envelope", 1)).toBe(
-      "1 OpenCode message not shown. The backend runs an Orkestrator version older than 2.19.17, which sends it in a format this app no longer reads. Update Orkestrator on the computer running the backend to see it.",
-    );
-    expect(describeTranscriptSkew("opencode-envelope", 3)).toBe(
-      "3 OpenCode messages not shown. The backend runs an Orkestrator version older than 2.19.17, which sends them in a format this app no longer reads. Update Orkestrator on the computer running the backend to see them.",
-    );
-  });
-
   test("does not guess which side is older for an unrecognized shape", () => {
     expect(describeTranscriptSkew("unrecognized", 1)).toBe(
       "1 transcript entry not shown: it is in a format this app does not recognize. If this app and its backend run different Orkestrator versions, update the older one.",

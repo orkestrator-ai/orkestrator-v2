@@ -4,6 +4,10 @@ import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent
 import { spawn } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  scriptedAnthropicEndpoint,
+  scriptedClaudeEnv,
+} from "../../../tests/conformance/execution-policy/scripted-anthropic.js";
 import { withPolicyCliFixture } from "../../../tests/conformance/execution-policy/vendor-cli.js";
 import { claudeExecutionSandbox } from "./services/claude-execution-sandbox.js";
 
@@ -14,91 +18,25 @@ async function qualify(scenario: Scenario) {
     // sandbox-exec matches canonical paths; macOS /var is a symlink.
     const cwd = await realpath(fixture.cwd);
     const marker = join(cwd, "marker");
-    let modelCalls = 0;
-    let networkHits = 0;
     const messages: SDKMessage[] = [];
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        if (new URL(request.url).pathname === "/unlisted") {
-          networkHits += 1;
-          return new Response("fixture");
-        }
-        const body = (await request.json()) as { stream?: boolean };
-        if (!new URL(request.url).pathname.endsWith("/messages"))
-          return Response.json({ input_tokens: 1 });
-        modelCalls += 1;
-        if (modelCalls > 3) return new Response("Unexpected model retry", { status: 400 });
-        const command =
-          scenario === "network" || scenario === "control"
-            ? `curl --silent --show-error --max-time 2 ${server.url.origin}/unlisted`
-            : `printf qualified > '${marker}'`;
-        const content =
-          modelCalls === 1
-            ? [
-                {
-                  type: "tool_use",
-                  id: "policy_probe",
-                  name: "Bash",
-                  input: {
-                    command,
-                    description: "Conformance fixture",
-                    dangerouslyDisableSandbox: scenario === "escape",
-                  },
-                },
-              ]
-            : [{ type: "text", text: "Done." }];
-        const message = {
-          id: `msg_${modelCalls}`,
-          type: "message",
-          role: "assistant",
-          model: "claude-sonnet-4-6",
-          content,
-          stop_reason: modelCalls === 1 ? "tool_use" : "end_turn",
-          stop_sequence: null,
-          usage: { input_tokens: 1, output_tokens: 1 },
-        };
-        if (!body.stream) return Response.json(message);
-        const events: unknown[] = [
-          { type: "message_start", message: { ...message, content: [], stop_reason: null } },
-        ];
-        for (const [index, block] of content.entries()) {
-          events.push({
-            type: "content_block_start",
-            index,
-            content_block:
-              block.type === "tool_use" ? { ...block, input: {} } : { type: "text", text: "" },
-          });
-          events.push({
-            type: "content_block_delta",
-            index,
-            delta:
-              "input" in block
-                ? { type: "input_json_delta", partial_json: JSON.stringify(block.input) }
-                : { type: "text_delta", text: block.text },
-          });
-          events.push({ type: "content_block_stop", index });
-        }
-        events.push(
-          {
-            type: "message_delta",
-            delta: { stop_reason: message.stop_reason, stop_sequence: null },
-            usage: { output_tokens: 1 },
+    const endpoint = scriptedAnthropicEndpoint((origin) => [
+      [
+        {
+          type: "tool_use",
+          id: "policy_probe",
+          name: "Bash",
+          input: {
+            command:
+              scenario === "network" || scenario === "control"
+                ? `curl --silent --show-error --max-time 2 ${origin}/unlisted`
+                : `printf qualified > '${marker}'`,
+            description: "Conformance fixture",
+            dangerouslyDisableSandbox: scenario === "escape",
           },
-          { type: "message_stop" },
-        );
-        return new Response(
-          events
-            .map((event) => {
-              const frame = event as { type: string };
-              return `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`;
-            })
-            .join(""),
-          { headers: { "content-type": "text/event-stream" } },
-        );
-      },
-    });
+        },
+      ],
+      [{ type: "text", text: "Done." }],
+    ]);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     const sandbox = claudeExecutionSandbox(
@@ -130,14 +68,7 @@ async function qualify(scenario: Scenario) {
           }
         : {}),
       env: {
-        // The SDK merges env with its parent; explicitly remove ambient credentials.
-        ...Object.fromEntries(Object.keys(process.env).map((key) => [key, undefined])),
-        ...fixture.env,
-        CLAUDE_CONFIG_DIR: join(fixture.root, "claude"),
-        ANTHROPIC_API_KEY: "fixture-key",
-        ANTHROPIC_BASE_URL: server.url.origin,
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-        CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+        ...scriptedClaudeEnv(fixture, endpoint, join(fixture.root, "claude")),
         ...(scenario === "unavailable" && process.platform === "linux"
           ? { PATH: fixture.root }
           : {}),
@@ -179,7 +110,7 @@ async function qualify(scenario: Scenario) {
       failure = error;
     } finally {
       clearTimeout(timeout);
-      server.stop(true);
+      endpoint.stop();
     }
     expect(controller.signal.aborted).toBe(false);
     const toolResults = messages.flatMap((message) =>
@@ -189,14 +120,14 @@ async function qualify(scenario: Scenario) {
     );
     if (scenario === "control") {
       expect(failure).toBeUndefined();
-      expect(networkHits).toBe(1);
+      expect(endpoint.networkHits()).toBe(1);
       expect(toolResults.some((block) => !block.is_error)).toBe(true);
     } else if (scenario === "unavailable" && process.platform === "linux") {
-      expect(modelCalls).toBe(0);
+      expect(endpoint.modelCalls()).toBe(0);
       expect(messages.some((message) => message.type === "result" && message.is_error)).toBe(true);
     } else {
       expect(failure).toBeUndefined();
-      expect(modelCalls).toBe(2);
+      expect(endpoint.modelCalls()).toBe(2);
       expect(toolResults).toHaveLength(1);
       expect(toolResults[0]!.is_error).toBe(true);
       if (scenario === "unavailable") expect(JSON.stringify(toolResults)).toContain("sandbox-exec");
@@ -207,7 +138,7 @@ async function qualify(scenario: Scenario) {
         () => false,
       ),
     ).toBe(false);
-    if (scenario !== "control") expect(networkHits).toBe(0);
+    if (scenario !== "control") expect(endpoint.networkHits()).toBe(0);
   });
 }
 

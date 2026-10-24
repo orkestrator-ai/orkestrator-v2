@@ -1,9 +1,43 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 const HOST_CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
+
+/**
+ * The Keychain service Claude Code reads for a configuration directory.
+ *
+ * Unset means the host's plain entry. Otherwise the suffix is the first eight
+ * hex digits of SHA-256 over the literal `CLAUDE_CONFIG_DIR` string (verified
+ * against Claude Code 2.1.283), so callers must pass exactly the string the
+ * CLI is launched with: a trailing slash or symlinked spelling is a different
+ * entry.
+ */
+export function claudeKeychainService(configDir: string | undefined): string {
+  if (!configDir) return HOST_CLAUDE_KEYCHAIN_SERVICE;
+  const suffix = createHash("sha256").update(configDir).digest("hex").slice(0, 8);
+  return `${HOST_CLAUDE_KEYCHAIN_SERVICE}-${suffix}`;
+}
+
+/**
+ * Where Claude Code itself looks for the login of a configuration directory.
+ *
+ * With `CLAUDE_CONFIG_DIR` set explicitly (`explicit`), Claude reads the
+ * Keychain entry named after that string and then only that directory's
+ * `.credentials.json`, even when it spells `~/.claude`. Without it, the plain
+ * entry and `~/.claude`. Reading the plain entry for an explicit directory
+ * hands over a different login than the CLI in that shell would use.
+ */
+export function claudeLoginLookupOptions(
+  configDir: string | undefined,
+  explicit: boolean,
+): { keychainService?: string; configDirOnly?: boolean } {
+  return explicit && configDir
+    ? { keychainService: claudeKeychainService(configDir), configDirOnly: true }
+    : {};
+}
 
 function readKeychainCommand(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {

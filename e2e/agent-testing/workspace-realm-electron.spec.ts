@@ -298,6 +298,8 @@ test("a leaf's workspace opens in the window's central region without moving or 
             homeSelected: Boolean(document.querySelector('[role="tab"][aria-controls="project-panel-home"][aria-selected="true"]')),
             coordinatorSelected: Boolean(document.querySelector('[role="tab"][aria-controls="project-panel-coordinator"][aria-selected="true"]')),
             coordinatorGate: Boolean(document.querySelector('[data-testid="leaf-mode-coordinator-gate"]')),
+            coordinatorChecking: Boolean(document.querySelector('[data-testid="leaf-mode-coordinator-pending"], [data-testid="leaf-mode-coordinator-unavailable"]')),
+            coordinatorPanel: Boolean(document.querySelector('#project-panel-coordinator')),
           })`,
         )) as {
           target: { nodeId: string } | null;
@@ -306,6 +308,8 @@ test("a leaf's workspace opens in the window's central region without moving or 
           homeSelected: boolean;
           coordinatorSelected: boolean;
           coordinatorGate: boolean;
+          coordinatorChecking: boolean;
+          coordinatorPanel: boolean;
         };
         return {
           count: webContents
@@ -347,7 +351,11 @@ test("a leaf's workspace opens in the window's central region without moving or 
     await leafProject.click({ button: "right" });
     await window.getByRole("menuitem", { name: "Open Board", exact: true }).click();
     await expect.poll(async () => (await realmState())?.coordinatorSelected).toBe(true);
-    await expect.poll(async () => (await realmState())?.coordinatorGate).toBe(true);
+    // The command node has a different repository. Main now opens this leaf's
+    // coordinator directly instead of gating it behind a command-node notice.
+    await expect.poll(async () => (await realmState())?.coordinatorChecking).toBe(false);
+    await expect.poll(async () => (await realmState())?.coordinatorPanel).toBe(true);
+    await expect.poll(async () => (await realmState())?.coordinatorGate).toBe(false);
     await leafProject.click();
     await expect.poll(async () => (await realmState())?.homeSelected).toBe(true);
     await leafRow.getByRole("button", { name: /^leaf-env, on / }).click();

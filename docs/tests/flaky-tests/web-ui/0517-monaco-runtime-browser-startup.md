@@ -34,3 +34,23 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name monaco-runtime-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/MonacoRuntime.spec.ts --workers=1 --output=output/playwright/monaco-owner` passed both viewport cases, exit 0 in 6.2 seconds.
 - **Evidence:** host temporary directory `orkestrator-test-run.QC9tF3/browser-suite.log.gz`; original trace under `output/playwright/test-results/MonacoRuntime-*`. Sidebar fixes are commit `6d6f9b83f` and the final focused sidebar browser rerun passed all 30 cases.
 - **Assessment:** confirmed intermittent recurrence. Host or fixture startup contention remains a hypothesis. No Monaco implementation, assertion, timeout or skip changed; the original aggregate remains failed.
+
+
+## Runtime-state ownership main merge — 2026-10-24
+
+`ORKESTRATOR_E2E_PORT=61933 mise run test:logged -- --name merge-components-bounded -- bunx playwright test --config e2e/playwright.config.ts --workers=2` ran all 682 cases: 575 passed, 102 skipped and five failed (1188.3 s logged), alongside other validating worktrees. Evidence: host temporary artifact `orkestrator-test-run.Qvr7ev/merge-components-bounded.log.gz`. The desktop editor was absent at the five-second deadline. `ORKESTRATOR_E2E_PORT=61933 mise run test:logged -- --name merge-monaco-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/MonacoRuntime.spec.ts --workers=1 --output output/playwright/merge-monaco-owner` passed the complete unchanged owner (7.0 s logged). This confirms a recurrence; no assertion, timeout or skip changed.
+
+
+## Agent accounts main merge — 2026-10-24
+
+`mise run test:logged -- --name merge-browser-fixed -- mise run test:browser`
+(nine workers) reported 577 passed, 102 skipped and seven failed in 694.4 s.
+The complete unchanged owner passed in the sequential one-worker command
+`mise run test:logged -- --name merge-browser-owners -- bunx playwright test --config e2e/playwright.config.ts AgentUsage.spec.ts DesignCanvas.spec.ts PaneBreakpoint.spec.ts AgentLaunchDialog.spec.ts MonacoRuntime.spec.ts VirtuosoFollow.spec.ts --workers=1`.
+That combined command reported twenty passed, four skipped and two failures
+(127.0 s), both in AgentLaunchDialog; this owner had no failures. Evidence:
+`orkestrator-test-run.BIyzun/merge-browser-fixed.log.gz` and
+`orkestrator-test-run.ngoXeT/merge-browser-owners.log.gz` below the host temporary
+directory. No assertion, timeout, skip or implementation changed in this owner.
+
+The desktop Monaco fixture missed its startup deadline.

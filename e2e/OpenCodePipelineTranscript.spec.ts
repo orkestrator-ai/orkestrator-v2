@@ -64,20 +64,18 @@ test("OpenCode pipeline/reviewer envelopes render as thinking and timed tool row
   await expect(transcript.getByTitle("Ran for 12s")).toBeVisible();
 });
 
-test("raw OpenCode envelopes from a backend older than 2.19.17 render as one update notice", async ({
-  page,
-}) => {
-  // What an older backend served: the stored envelopes, never normalized.
+test("unrecognized transcript entries render as one generic update notice", async ({ page }) => {
+  // An unknown future row format has no display fields.
   await page.route("**/fixture-opencode-display-transcript", (route) =>
-    route.fulfill({ json: raw }),
+    route.fulfill({ json: [{ kind: "display-row-v3", row: { text: "UNKNOWN_ROW_ONLY" } }] }),
   );
   await page.goto("/opencode-pipeline-transcript");
   const transcript = page.getByRole("region", { name: "Pipeline transcript" });
   await expect(
     transcript.getByText(
-      /^1 OpenCode message not shown\. The backend runs an Orkestrator version older than 2\.19\.17/,
+      /^1 transcript entry not shown: it is in a format this app does not recognize\./,
     ),
   ).toBeVisible();
-  await expect(transcript.getByText("The build and reviewer checks passed.")).toHaveCount(0);
-  await expect(transcript.getByText("RAW_ENVELOPE_ONLY")).toHaveCount(0);
+  await expect(transcript.getByText("UNKNOWN_ROW_ONLY")).toHaveCount(0);
+  await expect(transcript.getByText(/update the older one/)).toBeVisible();
 });

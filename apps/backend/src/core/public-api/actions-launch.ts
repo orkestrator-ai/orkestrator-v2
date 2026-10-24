@@ -22,6 +22,7 @@ import { boundedMessage, PublicActionError } from "./errors.js";
 import { textInput } from "./input.js";
 import type { PublicOperationRecord } from "./operation-ledger.js";
 import { observeRun } from "./run-observer.js";
+import { registerReconciler } from "./reconciler.js";
 import { publicEnvironmentSummary } from "./summaries.js";
 import type {
   MutationActionHandler,
@@ -244,3 +245,7 @@ export async function reconcileLaunch(
 }
 
 export const LAUNCH_HANDLERS: PublicActionHandler[] = [environmentLaunch];
+
+registerReconciler("environment.launch", (record, context) =>
+  record.stage === "executing" ? observeRun(record, context) : reconcileLaunch(record, context),
+);

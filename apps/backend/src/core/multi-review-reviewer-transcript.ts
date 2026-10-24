@@ -57,6 +57,7 @@ import {
   MULTI_REVIEW_HISTORY_PAGE_MAX_TARGET_BYTES,
 } from "@orkestrator/protocol/multi-review";
 import { normalizeOpenCodeDisplayEntries } from "./opencode-display-transcript.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 /** Messages returned to the reviewer tab at most. */
 export const MAX_REVIEWER_TRANSCRIPT_MESSAGES = 500;
@@ -359,6 +360,7 @@ export async function readReviewerTranscript(
   // provider is asked for no more messages than the tab can show, and the
   // response is byte-bounded here; a transport that can only fetch the whole
   // history still slices it before it reaches this module.
+  compatibilityPathUsage.record("multi-review.reviewer-transcript-fallback");
   const messages = await provider.messages(providerSessionId, { limit: limits.maxMessages });
   // Provider reads are raw (an OpenCode `{ info, parts }` envelope); the tab
   // renders display messages. Bounded after normalizing, which is what ships;

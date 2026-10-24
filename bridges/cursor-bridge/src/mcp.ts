@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 import type { McpServerConfig, SDKCustomTool, SDKJsonValue } from "@cursor/sdk";
 import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
 import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 import { workingDirectory } from "./config.js";
 import { isObject, nonBlank, type JsonObject, type SessionState } from "./state.js";
@@ -168,7 +169,12 @@ export interface CursorMcpConnection {
 }
 
 export interface CursorMcpTransport {
-  connect(url: string, token: string, signal?: AbortSignal): Promise<CursorMcpConnection>;
+  /** `token` is absent for a research server, which takes no credential. */
+  connect(
+    url: string,
+    token: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<CursorMcpConnection>;
 }
 
 export interface HostedOrkestratorTools {
@@ -205,14 +211,105 @@ export async function hostOrkestratorCustomTools(
   const url = agentMcp?.url.trim() || process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
   const token = agentMcp?.token.trim() || process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
   if (!url || !token) return undefined;
+  return hostServerTools({
+    url,
+    token,
+    name: (tool) => tool,
+    describe: (tool, description) =>
+      orkestratorDescription(description, `Orkestrator Control MCP tool ${tool}`),
+    health,
+    failure: options?.httpFallback
+      ? "Orkestrator MCP failed to connect in-process; this session will try the HTTP MCP client"
+      : "Orkestrator MCP failed to connect; this coordinator session will continue without delegation tools",
+  });
+}
+
+/**
+ * Separates a research server's name from its tool's in a hosted tool name.
+ * Orkestrator's own tools never contain it, and research server names cannot
+ * (letters, digits and hyphens only), so the split is unambiguous.
+ */
+export const RESEARCH_TOOL_SEPARATOR = "__";
+
+export interface HostedResearchTools extends HostedOrkestratorTools {
+  serverNames: string[];
+}
+
+/**
+ * Host a coordinator's research servers in-process, beside Orkestrator's tools.
+ *
+ * The launcher names them as process authority (Settings → Coordinator web
+ * research), so they are read only in a coordinator process, never from a
+ * request or a file. They are remote HTTPS servers that take no credential.
+ * Each tool is offered as `<server>__<tool>`; a server that does not connect
+ * is a notice, not a failed attach.
+ */
+export async function hostResearchCustomTools(
+  health?: SessionState["health"],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<HostedResearchTools | undefined> {
+  if (env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY !== "coordinator-read-only") return undefined;
+  const servers = coordinatorResearchMcpServersFromEnv(env);
+  const hosted = await Promise.all(
+    servers.map(async (server) => ({
+      server,
+      tools: await hostServerTools({
+        url: server.url,
+        name: (tool) => `${server.name}${RESEARCH_TOOL_SEPARATOR}${tool}`,
+        describe: (tool, description) =>
+          boundedText(description?.trim() || `Research MCP tool ${tool} from ${server.name}`),
+        health,
+        failure: `Research MCP server ${server.name} failed to connect; this coordinator session will continue without it`,
+      }),
+    })),
+  );
+  const connected = hosted.filter(
+    (entry): entry is { server: (typeof servers)[number]; tools: HostedOrkestratorTools } =>
+      entry.tools !== undefined,
+  );
+  if (connected.length === 0) return undefined;
+  return {
+    customTools: Object.assign({}, ...connected.map((entry) => entry.tools.customTools)),
+    toolNames: connected.flatMap((entry) => entry.tools.toolNames),
+    serverNames: connected.map((entry) => entry.server.name),
+    close: async () => {
+      await Promise.allSettled(connected.map((entry) => entry.tools.close()));
+    },
+  };
+}
+
+/**
+ * The server and tool a hosted (`custom-user-tools`) call belongs to: a
+ * research server's when the name carries the separator, else Orkestrator's.
+ */
+export function hostedToolOwner(tool: string): { server: string; tool: string } {
+  const separator = tool.indexOf(RESEARCH_TOOL_SEPARATOR);
+  return separator > 0
+    ? {
+        server: tool.slice(0, separator),
+        tool: tool.slice(separator + RESEARCH_TOOL_SEPARATOR.length),
+      }
+    : { server: AGENT_MCP_SERVER, tool };
+}
+
+async function hostServerTools(input: {
+  url: string;
+  token?: string;
+  name: (tool: string) => string;
+  describe: (tool: string, description: string | undefined) => string;
+  health?: SessionState["health"];
+  failure: string;
+}): Promise<HostedOrkestratorTools | undefined> {
   let connection: CursorMcpConnection | undefined;
   try {
-    connection = await connectWithTimeout(testTransport ?? defaultTransport, url, token);
+    connection = await connectWithTimeout(
+      testTransport ?? defaultTransport,
+      input.url,
+      input.token,
+    );
   } catch (error) {
-    health?.recordNotice({
-      message: options?.httpFallback
-        ? "Orkestrator MCP failed to connect in-process; this session will try the HTTP MCP client"
-        : "Orkestrator MCP failed to connect; this coordinator session will continue without delegation tools",
+    input.health?.recordNotice({
+      message: input.failure,
       method: "mcp/connect",
       severity: "warning",
       source: "bridge",
@@ -223,12 +320,12 @@ export async function hostOrkestratorCustomTools(
   const customTools: Record<string, SDKCustomTool> = {};
   const toolNames: string[] = [];
   for (const listed of connection.tools.slice(0, MAX_MCP_TOOLS)) {
-    const name = listed.name.trim();
-    if (!name || name.length > MAX_MCP_NAME_LENGTH) continue;
-    const remoteName = name;
+    const remoteName = listed.name.trim();
+    if (!remoteName || remoteName.length > MAX_MCP_NAME_LENGTH) continue;
+    const name = input.name(remoteName);
     const inputSchema = toolInputSchema(listed.inputSchema);
     customTools[name] = {
-      description: boundedDescription(listed.description, `Orkestrator Control MCP tool ${name}`),
+      description: input.describe(remoteName, listed.description),
       ...(inputSchema ? { inputSchema } : {}),
       execute: async (args) => {
         const forwardedArgs = args === undefined || args === null ? {} : args;
@@ -266,7 +363,7 @@ export async function hostOrkestratorCustomTools(
 async function connectWithTimeout(
   transport: CursorMcpTransport,
   url: string,
-  token: string,
+  token: string | undefined,
 ): Promise<CursorMcpConnection> {
   const controller = new AbortController();
   const attempt = transport.connect(url, token, controller.signal);
@@ -317,7 +414,7 @@ const defaultTransport: CursorMcpTransport = {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     transport = new StreamableHTTPClientTransport(new URL(url), {
-      requestInit: { headers: { Authorization: `Bearer ${token}` } },
+      ...(token ? { requestInit: { headers: { Authorization: `Bearer ${token}` } } } : {}),
       fetch: globalThis.fetch,
     });
     try {
@@ -364,12 +461,13 @@ const defaultTransport: CursorMcpTransport = {
   },
 };
 
-function boundedDescription(value: string | undefined, fallback: string): string {
+function orkestratorDescription(value: string | undefined, fallback: string): string {
   const text = value?.trim() || fallback;
-  const prefixed = text.startsWith("Orkestrator") ? text : `Orkestrator: ${text}`;
-  return prefixed.length > MAX_MCP_DESCRIPTION_BYTES
-    ? prefixed.slice(0, MAX_MCP_DESCRIPTION_BYTES)
-    : prefixed;
+  return boundedText(text.startsWith("Orkestrator") ? text : `Orkestrator: ${text}`);
+}
+
+function boundedText(text: string): string {
+  return text.length > MAX_MCP_DESCRIPTION_BYTES ? text.slice(0, MAX_MCP_DESCRIPTION_BYTES) : text;
 }
 
 function toolInputSchema(schema: unknown): Record<string, SDKJsonValue> | undefined {
@@ -427,8 +525,9 @@ function publicMcpError(error: unknown): string {
   return text.replace(/Bearer\s+\S+/gi, "Bearer [redacted]").slice(0, 500);
 }
 
-function canonicalMcpServer(server: string): string {
-  return server === CURSOR_CUSTOM_USER_TOOLS_SERVER ? "orkestrator" : server;
+/** Hosted calls are published under the server that owns them, not the SDK's carrier. */
+function canonicalMcpTool(server: string, tool: string): { server: string; tool: string } {
+  return server === CURSOR_CUSTOM_USER_TOOLS_SERVER ? hostedToolOwner(tool) : { server, tool };
 }
 
 export function publicCursorMcpServers(state: SessionState): NativeAgentMcpServer[] {
@@ -449,7 +548,7 @@ export function publicCursorMcpServers(state: SessionState): NativeAgentMcpServe
   const liveRunTools =
     state.runTools !== undefined && state.runTools !== state.retiredRunTools ? state.runTools : [];
   for (const toolName of liveRunTools) {
-    const parsed = parseMcpToolName(toolName, configuredByLength);
+    const parsed = parseMcpToolName(toolName, configuredByLength, false);
     if (!parsed) continue;
     const tools = ensureServer(inventory, parsed.server);
     if (!tools) continue;
@@ -457,22 +556,26 @@ export function publicCursorMcpServers(state: SessionState): NativeAgentMcpServe
     reportedInventory.add(parsed.server);
   }
   for (const toolName of state.observedMcpTools) {
-    const parsed = parseMcpToolName(toolName, configuredByLength);
+    const parsed = parseMcpToolName(toolName, configuredByLength, true);
     if (!parsed) continue;
     const tools = ensureServer(inventory, parsed.server);
     if (tools && tools.size < MAX_MCP_TOOLS) tools.add(parsed.tool);
   }
   // History only: the server stays listed (it was real, and may still be) but
   // contributes no tools, so without fresh evidence it reads as `unknown`.
-  const retired = [
-    ...(state.retiredMcpTools ?? []),
-    ...(state.retiredRunTools !== undefined && state.retiredRunTools === state.runTools
-      ? state.retiredRunTools
-      : []),
-  ];
-  for (const toolName of retired) {
-    const parsed = parseMcpToolName(toolName, configuredByLength);
-    if (parsed) ensureServer(inventory, parsed.server);
+  for (const [names, canonical] of [
+    [state.retiredMcpTools ?? [], true],
+    [
+      state.retiredRunTools !== undefined && state.retiredRunTools === state.runTools
+        ? state.retiredRunTools
+        : [],
+      false,
+    ],
+  ] as const) {
+    for (const toolName of names) {
+      const parsed = parseMcpToolName(toolName, configuredByLength, canonical);
+      if (parsed) ensureServer(inventory, parsed.server);
+    }
   }
 
   return [...inventory].map(([name, toolSet]) => {
@@ -481,7 +584,8 @@ export function publicCursorMcpServers(state: SessionState): NativeAgentMcpServe
       id: name,
       name,
       status: tools.length > 0 ? "connected" : "unknown",
-      ...(name === "orkestrator"
+      // Research servers are configured in Orkestrator's settings, not a file.
+      ...(name === "orkestrator" || state.researchMcpServerNames?.includes(name)
         ? { scope: "orkestrator" as const }
         : configured.has(name)
           ? { scope: "project" as const }
@@ -564,20 +668,23 @@ function ensureServer(
 function parseMcpToolName(
   value: string,
   configuredByLength: readonly string[],
+  canonical: boolean,
 ): { server: string; tool: string } | undefined {
   if (!value.startsWith("mcp__")) return undefined;
   for (const server of configuredByLength) {
     const prefix = `mcp__${server}__`;
     if (!value.startsWith(prefix)) continue;
     const tool = value.slice(prefix.length, prefix.length + MAX_MCP_NAME_LENGTH);
-    if (nonBlank(tool)) return { server: canonicalMcpServer(server), tool };
+    if (nonBlank(tool)) return canonical ? { server, tool } : canonicalMcpTool(server, tool);
   }
   const separator = value.indexOf("__", "mcp__".length);
   if (separator < 0) return undefined;
   const server = value.slice("mcp__".length, separator);
   const tool = value.slice(separator + 2, separator + 2 + MAX_MCP_NAME_LENGTH);
   return nonBlank(server) && nonBlank(tool) && server.length <= MAX_MCP_NAME_LENGTH
-    ? { server: canonicalMcpServer(server), tool }
+    ? canonical
+      ? { server, tool }
+      : canonicalMcpTool(server, tool)
     : undefined;
 }
 

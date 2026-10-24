@@ -284,3 +284,37 @@ is fixed, or the reason is recorded, before it merges.
 
 Never clear a user's global Docker or cache state to manufacture a cold run;
 "cold" means a new network, volumes and staged inputs per environment.
+
+### Exec cost and container change signals
+
+Two scripts measure what container observation costs, on whatever Docker the
+machine talks to. Run each on Docker Desktop and on Linux Engine and record
+the platform with the numbers.
+
+```bash
+# One docker exec, end to end: wall latency, the docker CLI's CPU and RSS,
+# dockerd/containerd/shim CPU (through a --privileged --pid=host helper: the
+# host on Linux Engine, the VM on Desktop), whole-machine busy CPU and, on
+# macOS, com.docker.backend and the VM process. With --repo also the status
+# scan and tree walk; with --watcher (an image with container-worktree-signal)
+# the watcher's watches, set-up time, RSS and idle CPU.
+mise exec -- bun apps/backend/scripts/container-exec-cost.ts \
+  --image orkestrator-v2:dev-<hash> --execs 200 --repo . --watcher
+
+# Against a running isolated profile started with
+# --fixture-environments local,container: execs per minute idle and with a
+# Files panel reading every 5 s, change-to-announcement and change-to-visible
+# latency, and signal health. --demote first stops the container's watcher,
+# which is how an image without the signal behaves.
+mise exec -- bun apps/backend/scripts/container-signal-profile-sample.ts --profile <p>
+mise exec -- bun apps/backend/scripts/container-signal-profile-sample.ts --profile <p> --demote
+```
+
+The live signal tests need a development image of the checkout
+(`mise run docker:build:dev`) and are skipped without one:
+
+```bash
+ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE=orkestrator-v2:dev-<hash> \
+  bun test apps/backend/tests/claude-state-signal-docker.test.ts \
+  apps/backend/tests/container-worktree-signal-docker.test.ts
+```

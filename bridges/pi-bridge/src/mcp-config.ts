@@ -7,10 +7,16 @@
  * - `user` always, from `<agentDir>/mcp.json` (`~/.pi/agent` on a host).
  * - `project` only when the execution policy opts into project resources,
  *   from `<cwd>/.pi/mcp.json`. A cloned repo must not spawn stdio on the host.
+ *
+ * A coordinator process adds a fourth, `research`: the remote HTTPS servers
+ * the launcher named as process authority (Settings → Coordinator web
+ * research). Reserved like `orkestrator`, so a file entry of the same name
+ * cannot stand in for one.
  */
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
 import { isObject, nonBlank } from "./state.js";
 import {
   ORKESTRATOR_ARTIFACT_MCP_PATH,
@@ -20,6 +26,8 @@ import {
 export const ORKESTRATOR_MCP_SERVER_NAME = "orkestrator";
 export const AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
 export const AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
+/** The coordinator process authority; see `agent-session.ts`. */
+const BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";
 
 const MAX_MCP_CONFIG_BYTES = 1024 * 1024;
 const MAX_MCP_SERVERS = 64;
@@ -37,7 +45,7 @@ export const BRIDGE_SECRET_ENV: ReadonlySet<string> = new Set([
   "PI_BRIDGE_TOKEN",
 ]);
 
-export type McpScope = "orkestrator" | "user" | "project";
+export type McpScope = "orkestrator" | "research" | "user" | "project";
 export type McpTransport = "http" | "stdio";
 
 export interface AgentMcpConnection {
@@ -345,18 +353,41 @@ export async function resolvePiMcpServers(input: {
   ]);
   const orkestrator = orkestratorMcpServer(input.agentMcp, input.env);
   const artifacts = orkestratorArtifactMcpServer(input.agentMcp);
+  const research = researchMcpServers(env);
   // The Orkestrator entries are reserved: they are inserted last so they win a
   // name collision, but the file scopes are truncated first so they are never
   // the entries `slice` discards. Without this, 64 user servers silently
   // disabled agent mail and coordinator delegation.
-  const reserved = [orkestrator, artifacts].filter(
+  const reserved = [orkestrator, artifacts, ...research].filter(
     (server): server is ResolvedMcpServer => server !== undefined,
   );
+  const reservedNamespaces = new Set(research.map((server) => mcpNamespace(server.id)));
   const resolved = fileServers
-    .filter((server) => server.id !== ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME)
+    .filter(
+      (server) =>
+        server.id !== ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME &&
+        !reservedNamespaces.has(mcpNamespace(server.id)),
+    )
     .slice(0, MAX_MCP_SERVERS - reserved.length);
   resolved.push(...reserved);
   return resolved;
+}
+
+/**
+ * The research servers a coordinator process was launched with.
+ *
+ * Read only under the coordinator's process authority: the launcher clears the
+ * research variables for every other bridge, and a worker's read-only review
+ * must not gain remote servers if one were inherited anyway.
+ */
+function researchMcpServers(env: NodeJS.ProcessEnv): ResolvedMcpServer[] {
+  if (env[BRIDGE_EXECUTION_POLICY_ENV] !== "coordinator-read-only") return [];
+  return coordinatorResearchMcpServersFromEnv(env).map((server) => ({
+    id: server.name,
+    scope: "research",
+    transport: "http",
+    url: server.url,
+  }));
 }
 
 export function sanitizeMcpName(value: string): string | undefined {

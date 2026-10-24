@@ -188,6 +188,7 @@ import {
 } from "./native-agent-projection-encoding.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 interface ProjectedProgressiveTranscript {
   value: NativeAgentTranscriptView;
@@ -3866,6 +3867,7 @@ export class NativeAgentTranscriptProjection {
     if (input.before.length > 1024) throw new Error("History cursor is too large");
     const direct = await this.directMessagePage(input);
     if (direct) return direct;
+    compatibilityPathUsage.record("history.joined-v1-page");
     const projection = await this.refreshProjection(
       { ...input, messageLimit: NATIVE_SYNC_LIVE_MESSAGES, representation: "sync-v1" },
       true,

@@ -914,15 +914,19 @@ focused, Escape stops the active tab's running turn (`useEscapeToStop`). A
 Claude CLI rate limit (429) ends the turn on an API error; rerun later rather
 than treating it as a product failure.
 
-The profile's Claude bridge authenticates with the host's **default** Claude
-login (on macOS the plain `Claude Code-credentials` Keychain entry; access
-token only), so check that login's usage in Settings before a run. The bridge
-keeps the profile's own `CLAUDE_CONFIG_DIR`; sessions, settings and project
-state stay there. The launching shell's `CLAUDE_CONFIG_DIR` is recorded only
-as a host credential source, so a scratch configuration directory is no longer
-needed to isolate session writes. Selecting the matching Keychain login when
-the shell names an added account remains tracked in
-[0003-agent-accounts-and-sign-in.md](../todo/agent-engines/0003-agent-accounts-and-sign-in.md).
+The profile's Claude bridge authenticates with the Claude login of the shell
+that started `dev:test` (access token only), so check that login's usage in
+Settings before a run. A shell with no `CLAUDE_CONFIG_DIR` uses the default
+login (on macOS the plain `Claude Code-credentials` Keychain entry). A shell
+whose `CLAUDE_CONFIG_DIR` is set, for example an Orkestrator agent tab on an
+added account, uses that directory's login: the desktop records the directory
+and that it was explicit (`ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT`),
+and the backend reads the matching hashed Keychain entry or that directory's
+`.credentials.json`, with no fallback to the default login. An explicit
+`~/.claude` counts as explicit, because Claude hashes it too. The bridge keeps
+the profile's own `CLAUDE_CONFIG_DIR`; sessions, settings and project state
+stay there, so a scratch configuration directory is not needed to isolate
+session writes.
 
 ### Live coordinator suite
 

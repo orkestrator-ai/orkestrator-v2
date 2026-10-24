@@ -892,7 +892,7 @@ answer.
 `bridges/claude-bridge/src/services/read-only-policy.ts` holds the read-only
 boundary for shell, because no tool-name rule can separate `git log` from
 `git commit` — which is why `capabilityPolicy`'s `shell.mutate` maps to no tool
-names at all. Two invariants keep it honest:
+names at all. Three invariants keep it honest:
 
 - **The command checked must be the command that runs.** `COMPOSITION_PATTERN`
   refuses anything that can become several commands, and a newline counts: the
@@ -900,11 +900,24 @@ names at all. Two invariants keep it honest:
   `ls\nrm -rf .` to a harmless-looking `ls`.
 - **The program name is not the whole command.** A program that launches another
   program does not belong in `READ_ONLY_COMMANDS` whatever it is called — `env`
-  is absent for that reason. Where a reading tool has a writing flag, name it in
-  `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`, `yq -i`) rather than dropping
-  the tool. Git subcommands whose effect depends on their arguments belong in
+  is absent for that reason, and a path (`bin/cat`) names whatever the checkout
+  put there, so programs run by bare name only. Where a reading tool has a
+  writing flag, name it in `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`,
+  `yq -i`) rather than dropping the tool; a one-letter flag there also matches
+  inside a cluster or with its value attached (`-no out`, `-oout`). A tool that
+  writes a positional (`uniq in out`) belongs in `POSITIONAL_LIMITS`, and one
+  with too many writing options to list (gawk) in `OPTION_ALLOWLISTS`. Git
+  subcommands whose effect depends on their arguments belong in
   `CONDITIONAL_GIT_SUBCOMMANDS`, not the flat read-only set: `branch`, `tag`,
   `remote` and `config` all read in one form and write in another.
+- **Assume no sandbox behind it.** The SDK sandbox lets a command write its
+  working directory, which for a coordinator is the user's checkout, so
+  `claudeReadOnlySandbox` denies writes there (`filesystem.denyWrite`). Where
+  the sandbox cannot start at all (Windows, Linux without bubblewrap and
+  socat; the launcher says so in `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`)
+  this allowlist is the whole boundary. A command it admits must neither write
+  nor reach the network on its own, which is why `gh`, `curl` and
+  `git ls-remote` are refused rather than left to the sandbox.
 
 ### Backend
 

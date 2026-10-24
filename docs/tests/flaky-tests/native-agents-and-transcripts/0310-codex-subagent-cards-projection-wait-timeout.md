@@ -41,3 +41,12 @@
 - **Owning-file rerun:** `mise run test:logged -- --name codex-cold-restart-recheck -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures` passed unchanged (one test, exit 0, 1.8 seconds logged).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.SfITWq/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer aggregate log in `orkestrator-test-run.uF2Bqh/repository-tests.log.gz` under the same temporary root. Passing rerun output was deleted by the logged runner.
 - **Assessment:** another observation of the cold projection before recovery settles. Host contention remains a hypothesis; the backend, bridge and owning test were unchanged by the image preview fix.
+
+
+## Mixed-version compatibility main merge — 2026-10-24
+
+- **Original command:** `ORKESTRATOR_TEST_AREA_BASE=712274379cc0a83226b8d2ab4b04e9a329fbcb14 mise run test:logged -- --name merge-suite -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1 on the shared macOS host, Bun 1.4.3; backend used two workers.
+- **Failure:** `each child keeps one card, its transcript and status across a fresh backend and a cold restart` failed its line-140 snapshot in 473.17 ms. Pending cards retained fallback names (`type_check`, `unit_check`) and empty actions instead of hydrated names and `tool:exec_command`, matching the earlier snapshot symptom.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-codex-subagent-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures` passed (one test, 2.2 s logged).
+- **Evidence:** `orkestrator-test-run.sWhHYC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate finalization; the aggregate summary is in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#mixed-version-compatibility-main-merge--2026-10-24).
+- **Assessment:** confirmed intermittent recurrence. Hydration under contention remains a hypothesis; no owning implementation, assertion, timeout or skip changed during merge resolution.

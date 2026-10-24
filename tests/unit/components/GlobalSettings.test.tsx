@@ -92,6 +92,27 @@ const mockGetAgentAccountUsage = mock(
     fetchedAt: "2026-09-30T10:00:00.000Z",
   }),
 );
+const mockGetAgentSignInStatus = mock(
+  async (
+    _platform: string,
+  ): Promise<import("@orkestrator/protocol/native-agent").NativeAgentAuthStatus> => ({
+    state: "signed-in",
+  }),
+);
+const mockSetActiveAgentAccount = mock(
+  async (_platform: string, _id: string): Promise<AgentAccountsSnapshot> => mockListAgentAccounts(),
+);
+const mockRenameAgentAccount = mock(
+  async (_platform: string, _id: string, _label: string): Promise<AgentAccountsSnapshot> =>
+    mockListAgentAccounts(),
+);
+const mockRemoveAgentAccount = mock(
+  async (_platform: string, _id: string): Promise<AgentAccountsSnapshot> => mockListAgentAccounts(),
+);
+const mockCursorSdkLoginStatus = mock(async () => ({
+  state: "idle" as const,
+  auth: { authenticated: false, source: "none" as const },
+}));
 const mockGetAgentAccountLogin = mock(async () => ({ state: "idle" as const }));
 const mockGetLogDirectory = mock(async (): Promise<string | null> => null);
 const mockGetLogStorageStats = mock(async () => ({ totalBytes: 1536, fileCount: 2 }));
@@ -156,6 +177,11 @@ mock.module("@/lib/backend", () => ({
   setOpenCodeZenApiKey: mockSetOpenCodeZenApiKey,
   getPlanUsage: mockGetPlanUsage,
   listAgentAccounts: mockListAgentAccounts,
+  getAgentSignInStatus: mockGetAgentSignInStatus,
+  setActiveAgentAccount: mockSetActiveAgentAccount,
+  renameAgentAccount: mockRenameAgentAccount,
+  removeAgentAccount: mockRemoveAgentAccount,
+  cursorSdkLoginStatus: mockCursorSdkLoginStatus,
   getAgentAccountUsage: mockGetAgentAccountUsage,
   getAgentAccountLogin: mockGetAgentAccountLogin,
   getLogDirectory: mockGetLogDirectory,
@@ -221,7 +247,25 @@ describe("GlobalSettings", () => {
     mockSetAnthropicApiKey.mockClear();
     mockSetOpenCodeZenApiKey.mockClear();
     mockGetPlanUsage.mockClear();
-    mockListAgentAccounts.mockClear();
+    mockListAgentAccounts.mockReset();
+    mockListAgentAccounts.mockImplementation(async () => ({
+      active: { claude: "default", codex: "default" },
+      accounts: (["claude", "codex"] as const).map((platform) => ({
+        id: "default",
+        platform,
+        label: "Host login",
+        isDefault: true,
+        isActive: true,
+        signedIn: true,
+        identity: {},
+      })),
+    }));
+    mockGetAgentSignInStatus.mockReset();
+    mockGetAgentSignInStatus.mockResolvedValue({ state: "signed-in" });
+    mockSetActiveAgentAccount.mockReset();
+    mockRenameAgentAccount.mockReset();
+    mockRemoveAgentAccount.mockReset();
+    mockCursorSdkLoginStatus.mockClear();
     mockGetAgentAccountUsage.mockClear();
     mockGetAgentAccountUsage.mockImplementation(async (platform) => ({
       platform,
@@ -335,6 +379,64 @@ describe("GlobalSettings", () => {
     cleanup();
     autoSaveClock.restore();
     window.orkestratorGateway = undefined;
+  });
+
+  test("Cursor sign-in controls remain available when Cursor is disabled", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, enabledAgentPlatforms: ["claude"] },
+      },
+    }));
+    render(<GlobalSettings activeSection="cursor" />);
+    expect(await screen.findByRole("button", { name: "Sign in with Cursor" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Cursor Agent sign-in" }) === null).toBe(true);
+  });
+
+  test("switching to a signed-out Claude account refreshes the adjacent sign-in card", async () => {
+    let snapshot: AgentAccountsSnapshot = {
+      active: { claude: "default", codex: "default" },
+      accounts: [
+        {
+          id: "default",
+          platform: "claude",
+          label: "Host login",
+          isDefault: true,
+          isActive: true,
+          signedIn: true,
+          identity: {},
+        },
+        {
+          id: "11111111-2222-4333-8444-555555555555",
+          platform: "claude",
+          label: "Work account",
+          isDefault: false,
+          isActive: false,
+          signedIn: false,
+          identity: {},
+        },
+      ],
+    };
+    mockListAgentAccounts.mockImplementation(async () => snapshot);
+    mockGetAgentSignInStatus.mockImplementation(async () => ({
+      state: snapshot.active.claude === "default" ? "signed-in" : "signed-out",
+      signIn: { kind: "terminal" },
+    }));
+    mockSetActiveAgentAccount.mockImplementation(async (_platform, id) => {
+      snapshot = {
+        ...snapshot,
+        active: { ...snapshot.active, claude: id },
+        accounts: snapshot.accounts.map((a) => ({ ...a, isActive: a.id === id })),
+      };
+      return snapshot;
+    });
+    render(<GlobalSettings activeSection="claude" />);
+    const card = screen.getByRole("region", { name: "Claude Code sign-in" });
+    expect(await within(card).findByText("Signed in")).toBeTruthy();
+    const added = await screen.findByRole("listitem", { name: "Work account" });
+    fireEvent.click(within(added).getByRole("button", { name: "Use" }));
+    expect(await within(card).findByText("Signed out")).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Sign in to Claude" })).toBeTruthy();
   });
 
   test("saves codexMode changes", async () => {

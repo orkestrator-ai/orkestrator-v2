@@ -3,7 +3,7 @@ import type { ConditionalResourceSnapshot } from "@orkestrator/protocol/resource
 
 import { createCommandFixtures } from "./command-fixtures";
 
-const { commandTesting, createCommandRegistry, createFakeChild, fs, path } =
+const { commandTesting, createCommandRegistry, createFakeChild, createRuntime, fs, path } =
   await createCommandFixtures();
 
 import type { CommandContext } from "./command-fixtures";
@@ -226,13 +226,14 @@ describe("Electron backend command registry", () => {
   test("does not let a stale child release replacement ownership", () => {
     const stale = createFakeChild(93001);
     const replacement = createFakeChild(93002);
-    commandTesting.setLocalServerProcess("codex:env-owner", replacement);
+    const { localServers } = createRuntime();
+    localServers.adoptProcess("codex:env-owner", replacement);
 
-    commandTesting.releaseLocalServerOwnership("codex:env-owner", stale);
-    expect(commandTesting.getLocalServerProcess("codex:env-owner")).toBe(replacement);
+    localServers.releaseOwnership("codex:env-owner", stale);
+    expect(localServers.process("codex:env-owner")).toBe(replacement);
 
-    commandTesting.releaseLocalServerOwnership("codex:env-owner", replacement);
-    expect(commandTesting.getLocalServerProcess("codex:env-owner")).toBeUndefined();
+    localServers.releaseOwnership("codex:env-owner", replacement);
+    expect(localServers.process("codex:env-owner")).toBeUndefined();
   });
 
   test.each(["cursor", "grok"] as const)(

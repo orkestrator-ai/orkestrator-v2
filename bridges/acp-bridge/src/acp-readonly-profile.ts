@@ -4,6 +4,9 @@ import { join } from "node:path";
 
 // Verified on Grok 1.0.52 stdio: permission answers cannot stop shell commands
 // that never ask. Remove the built-in mutation tools before any prompt runs.
+// `monitor` is Grok 1.0.67's waiting tool: a read-only turn hands work off and
+// ends rather than sitting on it, as Claude's refused `Monitor` does. Read
+// live with `scripts/coordinator-probes/grok-web-tools-probe.mjs coordinator`.
 export const GROK_READ_ONLY_PROFILE = `---
 name: orkestrator-read-only
 description: Read-only Orkestrator session
@@ -13,6 +16,7 @@ disallowedTools:
   - search_replace
   - run_terminal_cmd
   - Agent
+  - monitor
 ---
 `;
 

@@ -346,11 +346,8 @@ async function evaluateRun(
   return settle({ state: "completed", evidence }, accepted);
 }
 
-for (const action of ["session.start", "session.prompt", "environment.launch"] as const) {
-  registerReconciler(action, async (record, context) => {
-    if (action === "environment.launch" && record.stage !== "executing") {
-      return (await import("./actions-launch.js")).reconcileLaunch(record, context);
-    }
-    return observeRun(record, context);
-  });
+// `environment.launch` observes runs too, but registers its own reconciler in
+// `actions-launch.ts`, which imports this module.
+for (const action of ["session.start", "session.prompt"] as const) {
+  registerReconciler(action, observeRun);
 }

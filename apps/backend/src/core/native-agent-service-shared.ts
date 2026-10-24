@@ -447,6 +447,8 @@ export interface NativeAgentServiceOptions {
    * because the tracking service is attached after this one is built.
    */
   changeTracking?: () => NativeAgentChangeTrackingHooks | null | undefined;
+  /** Account a live local Claude or Codex bridge (`<agent>:<environmentId>`) was launched on. */
+  localBridgeAccountId?: (key: string) => string | undefined;
   /** Reports newly persisted, content-free background questions to the shell. */
   onAsyncQuestionAttention?: (event: { environmentId: string; sessionKey: string }) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */

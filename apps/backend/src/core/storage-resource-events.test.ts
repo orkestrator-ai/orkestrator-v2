@@ -688,7 +688,7 @@ describe("StorageService resource change announcements", () => {
         id: "e1",
       });
 
-      await storage.claimPromptQueueHead("claude env-e1:tab-1", "e1", "m1");
+      await storage.removePromptQueueMessage("claude env-e1:tab-1", "e1", "m1");
       expect(changes.at(-1)).toMatchObject({
         resource: "prompt-queue",
         id: "e1",

@@ -11,7 +11,6 @@ import {
 } from "../src/core/native-agent-service-projection-test-support";
 
 const {
-  commandTesting,
   createCommandRegistry,
   createContext,
   createEnvironment,
@@ -20,6 +19,29 @@ const {
   requestOk,
   writeBridgeEntrypoint,
 } = await createCommandFixtures();
+
+/** Backdates when a running bridge first failed its reuse health check. */
+function markLocalServerUnresponsiveSince(
+  context: CommandContext,
+  key: string,
+  since: number,
+): void {
+  const { localServers } = context.runtime;
+  const child = localServers.process(key);
+  if (!child) throw new Error(`No local server owns ${key}`);
+  localServers.markUnresponsive(key, { child, since, lastFailureAt: Date.now() });
+}
+
+function markLocalServerLastFailureAt(
+  context: CommandContext,
+  key: string,
+  lastFailureAt: number,
+): void {
+  const { localServers } = context.runtime;
+  const marker = localServers.unresponsiveMarker(key);
+  if (!marker) throw new Error(`No unresponsive marker for ${key}`);
+  localServers.markUnresponsive(key, { ...marker, lastFailureAt });
+}
 
 /**
  * A bridge whose health answer the test controls: `/fail?n=N` makes the next
@@ -203,10 +225,7 @@ describe("local bridge reuse under load", () => {
     await expect(
       commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
     ).rejects.toMatchObject({ retryable: true });
-    commandTesting.markLocalServerUnresponsiveSince(
-      `codex:${environmentId}`,
-      Date.now() - 3 * 60_000,
-    );
+    markLocalServerUnresponsiveSince(context, `codex:${environmentId}`, Date.now() - 3 * 60_000);
     await expect(requestOk(first.port, "/recover")).resolves.toBe(true);
     await expect(
       commands.get("peek_local_agent_bridge")?.({ environmentId, agent: "codex" }, context),
@@ -224,7 +243,7 @@ describe("local bridge reuse under load", () => {
       () => false,
     );
     await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
-    const child = commandTesting.getLocalServerProcess(`codex:${environmentId}`);
+    const child = context.runtime.localServers.process(`codex:${environmentId}`);
     expect(child).toBeDefined();
     if (!child) return;
     // ChildProcess types exitCode as readonly; the test fakes an exit in place.
@@ -247,12 +266,9 @@ describe("local bridge reuse under load", () => {
       () => true,
     );
     await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
-    commandTesting.markLocalServerUnresponsiveSince(
-      `codex:${environmentId}`,
-      Date.now() - 3 * 60_000,
-    );
+    markLocalServerUnresponsiveSince(context, `codex:${environmentId}`, Date.now() - 3 * 60_000);
     // Model a bridge that recovered while a cached provider skipped peeks.
-    commandTesting.markLocalServerLastFailureAt(`codex:${environmentId}`, Date.now() - 31_000);
+    markLocalServerLastFailureAt(context, `codex:${environmentId}`, Date.now() - 31_000);
     await expect(
       commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
     ).rejects.toMatchObject({ retryable: true });
@@ -265,10 +281,7 @@ describe("local bridge reuse under load", () => {
       () => true,
     );
     await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
-    commandTesting.markLocalServerUnresponsiveSince(
-      `codex:${environmentId}`,
-      Date.now() - 3 * 60_000,
-    );
+    markLocalServerUnresponsiveSince(context, `codex:${environmentId}`, Date.now() - 3 * 60_000);
 
     const replacement = (await commands.get("start_local_codex_server_cmd")?.(
       { environmentId },

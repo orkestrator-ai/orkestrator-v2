@@ -1,4 +1,7 @@
-import { getHostClaudeCredentials as readHostClaudeCredentials } from "./claude-host-credentials.js";
+import {
+  claudeLoginLookupOptions,
+  getHostClaudeCredentials as readHostClaudeCredentials,
+} from "./claude-host-credentials.js";
 export { getClaudeOAuthAccessToken } from "./claude-host-credentials.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
@@ -23,25 +26,29 @@ import {
 } from "./path-safety.js";
 import { randomUUID } from "node:crypto";
 import { INITIAL_PROMPT_STAGING_DIRECTORY } from "./prompt-attachments.js";
-import { WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS } from "./commands-runtime-state.js";
 import type { Environment, AppConfig } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
+  AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV,
   CONTAINER_GITHUB_CREDENTIAL_FILE,
   CONTAINER_CLAUDE_CREDENTIAL_FILE,
   CONTAINER_CURSOR_API_KEY_FILE,
   CONTAINER_CURSOR_CREDENTIAL_DIR,
-  CONTAINER_UNTRACKED_STATS_SCANNER,
-} from "./commands-runtime-state.js";
+} from "./agent-credential-files.js";
+import { CONTAINER_UNTRACKED_STATS_SCANNER } from "./container-scripts.js";
 import type { GitFetchScheduler } from "./git-fetch-scheduler.js";
 import {
   CONTAINER_FETCH_STDERR_BYTES,
   CONTAINER_REPO_IDENTITY_SNIPPET,
   CONTAINER_REPO_MARKER,
+  CONTAINER_REPO_PROBE_SCRIPT,
   containerRepoId,
+  parseContainerRepoProbe,
   type ContainerGitFetchPolicy,
 } from "./container-git-fetch.js";
+import type { WorkAdmissionPool } from "./work-admission.js";
+import { worktreeTargetKey } from "./worktree-adhoc-reads.js";
 import type { WorktreeRemoteFreshness } from "@orkestrator/protocol/worktree-snapshots";
 import {
   UNTRACKED_SCAN_CONCURRENCY,
@@ -51,6 +58,11 @@ import {
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+
+export const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [
+  ".orkestrator",
+  ".claude/settings.local.json",
+] as const;
 
 export const MAX_FILE_TREE_NODES = 5_000;
 
@@ -494,6 +506,10 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
   const untrackedScanner = `node -e ${quoteShell(CONTAINER_UNTRACKED_STATS_SCANNER)} -- ${MAX_BINARY_FILE_BYTES} ${UNTRACKED_SCAN_MAX_FILES}`;
   return `
       set -e -o pipefail
+      # Read-only, like the local scan: an opportunistic index refresh is a
+      # write the container's worktree watcher would ring for, so every scan
+      # would schedule its own rescan.
+      export GIT_OPTIONAL_LOCKS=0
       # A bare 'exit 0' here would come back as exit 1: this runs under 'bash -l',
       # whose ~/.bash_logout calls 'clear_console -q', and that fails with no
       # console attached. Under 'set -e' the failing logout hook replaces the
@@ -544,9 +560,9 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
       printf '\\036ORKESTRATOR_BASE_OID\\037%s' "$(git rev-parse --verify --quiet "$base^{commit}")"
       end_ref=${includeWorkingTree ? "" : "HEAD"}
       printf '\\036ORKESTRATOR_NAME_STATUS\\037'
-      git diff --name-status -z -M "$base" $end_ref | base64 -w0
+      git -c diff.autoRefreshIndex=false diff --name-status -z -M "$base" $end_ref | base64 -w0
       printf '\\036ORKESTRATOR_NUMSTAT\\037'
-      git diff --numstat -z -M "$base" $end_ref | base64 -w0
+      git -c diff.autoRefreshIndex=false diff --numstat -z -M "$base" $end_ref | base64 -w0
       printf '\\036ORKESTRATOR_UNTRACKED\\037'
       ${includeWorkingTree ? `git status --porcelain=v1 -z --untracked-files=all | ${untrackedScanner} | base64 -w0` : ""}
       printf '\\036ORKESTRATOR_END\\037'
@@ -723,7 +739,13 @@ function parseContainerGitStatusSections(
     output.slice(numstatStart + GIT_STATUS_NUMSTAT_MARKER.length, untrackedStart),
     "container git numstat section",
   );
-  const changes = parseGitFileChanges(nameStatusOutput, numstatOutput);
+  // The script diffs without refreshing the index (it must not write), so
+  // name-status may report stat-only modifications. Numstat checks contents
+  // and omits them, as in the local scan.
+  const changedPaths = parseGitNumstat(numstatOutput);
+  const changes = parseGitFileChanges(nameStatusOutput, numstatOutput).filter(
+    (change) => change.status !== "M" || changedPaths.has(change.path),
+  );
   if (!includeWorkingTree) return { changes, truncated: false };
 
   const existingPaths = new Set(changes.map((change) => change.path));
@@ -1904,7 +1926,62 @@ export const CONTAINER_SAFE_MUTATION_FUNCTIONS = [
   "}",
 ].join("\n");
 
-/** Container-owned Git/SSH configuration; excluded from the host runRemoteGit boundary. */
+export interface ContainerRevertDeps {
+  /** Runs a script in the container (`dockerExec`). */
+  exec: (containerId: string, script: string) => Promise<string>;
+  fetches: Pick<ContainerGitFetchPolicy, "knownRepoId" | "refreshForAction">;
+  /** The shared `git-docker-scan` pool, so the fetch never overlaps a scan of the container. */
+  admission?: Pick<WorkAdmissionPool, "run"> | null;
+}
+
+/**
+ * `revert_container_file`: refresh the comparison base through the container
+ * fetch policy, then revert. The policy's fetch replaces the script's old
+ * inline `git fetch ... || true` and keeps its contract: the revert waits for
+ * one bounded fetch, and nothing about that fetch (refused admission, a
+ * failing remote, a failed identity probe) stops the revert, which then
+ * resolves the base from local refs exactly as the old script did after a
+ * failed fetch.
+ */
+export async function revertContainerFile(
+  containerId: string,
+  target: string,
+  branch: string,
+  deps: ContainerRevertDeps,
+): Promise<void> {
+  const refresh = async () => {
+    const repoId =
+      deps.fetches.knownRepoId(containerId) ??
+      parseContainerRepoProbe(await deps.exec(containerId, CONTAINER_REPO_PROBE_SCRIPT));
+    await deps.fetches.refreshForAction({ containerId, repoId, ref: branch });
+  };
+  try {
+    if (deps.admission) {
+      await deps.admission.run(
+        {
+          kind: "git-fetch-container",
+          priority: "interactive",
+          target: worktreeTargetKey({ containerId }),
+        },
+        refresh,
+      );
+    } else {
+      await refresh();
+    }
+  } catch {
+    // As before: a fetch that could not run leaves the local refs to decide.
+  }
+  await deps.exec(containerId, containerRevertFileCommand(target, branch));
+}
+
+/**
+ * Reverts one path to the comparison base, resolved exactly as before:
+ * `origin/<branch>`, then the local `<branch>`. The fetch that used to run
+ * inline here (`git fetch origin "$branch" || true`) is now the caller's, through
+ * `ContainerGitFetchPolicy.refreshForAction` (see `revertContainerFile`), so
+ * the script itself never touches the network. Container-owned Git/SSH
+ * configuration; excluded from the host runRemoteGit boundary.
+ */
 export function containerRevertFileCommand(target: string, branch: string): string {
   return `
     set -euo pipefail
@@ -1912,7 +1989,6 @@ export function containerRevertFileCommand(target: string, branch: string): stri
     branch=${quoteShell(branch)}
     target=${quoteShell(target)}
     ${CONTAINER_SAFE_MUTATION_FUNCTIONS}
-    git fetch origin "$branch" >/dev/null 2>&1 || true
     if git rev-parse --verify --quiet "origin/$branch^{commit}" >/dev/null; then
       base="origin/$branch"
     elif git rev-parse --verify --quiet "$branch^{commit}" >/dev/null; then
@@ -2288,20 +2364,40 @@ export async function resolveContainerClaudeCredentials(
   return readRuntimeHostClaudeCredentials();
 }
 
+/**
+ * The configuration directory holding this runtime's host Claude login, and
+ * whether `CLAUDE_CONFIG_DIR` named it explicitly. An agent-test profile reads
+ * the directory the desktop recorded from the shell `dev:test` started in; any
+ * other runtime its own inherited `CLAUDE_CONFIG_DIR`, which its launches pass on.
+ */
+export function runtimeHostClaudeConfigDir(env: NodeJS.ProcessEnv = process.env): {
+  configDir: string | undefined;
+  explicit: boolean;
+} {
+  const agentTestDir = env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim();
+  if (agentTestDir) {
+    return {
+      configDir: agentTestDir,
+      explicit: env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV] === "1",
+    };
+  }
+  const configDir = env.CLAUDE_CONFIG_DIR?.trim() || undefined;
+  return { configDir, explicit: Boolean(configDir) };
+}
+
 /** The host login this runtime's Claude launches use, without the container opt-out. */
 export async function readRuntimeHostClaudeCredentials(): Promise<string | undefined> {
   const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
-  return getHostClaudeCredentials(
-    process.platform,
-    agentTestHostHome || os.homedir(),
-    process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim() ||
-      process.env.CLAUDE_CONFIG_DIR?.trim() ||
-      undefined,
+  const { configDir, explicit } = runtimeHostClaudeConfigDir();
+  return getHostClaudeCredentials(process.platform, agentTestHostHome || os.homedir(), configDir, {
     // Only an agent-test profile needs the lookup pinned to one keychain file.
     // An ordinary install runs as the logged-in user and may keep the record
     // outside `login.keychain-db`, so it keeps the default search list.
-    { allowDefaultKeychainSearchList: !agentTestHostHome },
-  );
+    allowDefaultKeychainSearchList: !agentTestHostHome,
+    // The entry Claude itself reads for that directory, so a profile started
+    // from an added account's shell spends that account, not the default one.
+    ...claudeLoginLookupOptions(configDir, explicit),
+  });
 }
 
 // `docker cp` behaves like `cp -a`: it preserves the staging tree's modes and

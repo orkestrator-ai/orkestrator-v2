@@ -39,3 +39,13 @@
 - **Rerun:** the same command, unchanged, at 01:45Z passed all eleven cases with two opt-in skips in 4.9 minutes. That rerun was the whole Docker set rather than the owning file alone.
 - **Evidence:** lost; the run artifacts were under `/tmp` and the host rebooted afterwards.
 - **Assessment:** recurrence under load. No timeout, assertion or skip changed. The profile was stopped and reset.
+
+## Container state observation main merge — 2026-10-24
+
+- **Parents:** feature `66a9736cc0c663bef147a65fc2d158e1951482dd` and main `d6ed0717d00a9a04ba658ba6c50e0978bc2011a6`.
+- **Original command:** `ORKESTRATOR_AGENT_TEST_PROFILE=merge-main-validation mise run test:logged -- --name merge-docker -- mise run test:agent:docker`; one Playwright worker, rebuilt workspace development image `orkestrator-v2:dev-8540c28917b1`, credential-free local/container fixture, alongside other validation.
+- **Failure:** the narrow case could not find Resources within five seconds (`container-settings.spec.ts:106`). The original Docker run reported ten passed, two skipped and one failed in 327.8 s logged.
+- **Complete unchanged owner:** `ORKESTRATOR_AGENT_TEST_PROFILE=merge-main-validation ORKESTRATOR_AGENT_TEST_DOCKER=1 mise run test:logged -- --name merge-container-settings-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts container-settings.spec.ts --workers=1` passed all three cases in 138.6 s logged (133.7 s Playwright execution).
+- **Evidence:** `orkestrator-test-run.tLYllM/merge-docker.log.gz` below the host temporary directory; the original aggregate remains failed.
+- **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip changed, and this observation does not establish a cause.
+- **Cleanup:** `dev:stop` and `dev:reset` completed for `merge-main-validation`, removing two exact-owner containers, four volumes, one network and disposable profile state.

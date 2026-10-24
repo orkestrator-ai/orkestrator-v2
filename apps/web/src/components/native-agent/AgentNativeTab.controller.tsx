@@ -81,6 +81,7 @@ import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTran
 import {
   adoptNativeAgentSession,
   beginNativeAgentSignIn,
+  cancelNativeAgentSignIn,
   getNativeAgentAuthStatus,
   openInBrowser,
   recoverMultiReviewFixSession,
@@ -928,8 +929,22 @@ export function SharedNativeAgentController({
   );
 
   const composer = projection?.composer;
+  const codexAuthNotice =
+    platform === "codex"
+      ? projection?.notices?.find(
+          (notice) =>
+            notice.kind === "auth" &&
+            (notice.state === "needs-auth" ||
+              notice.state === "expired" ||
+              notice.state === "signed-out"),
+        )
+      : undefined;
   const authenticationReadiness =
-    projection?.readiness?.state === "authentication-required" ? projection.readiness : null;
+    projection?.readiness?.state === "authentication-required"
+      ? projection.readiness
+      : codexAuthNotice
+        ? { message: codexAuthNotice.message, signIn: undefined }
+        : null;
   const authenticationRequired = authenticationReadiness !== null;
   // Read legacy sign-in routes on demand. Codex also exposes its live device
   // login here, so recover that snapshot even when readiness already names
@@ -1063,19 +1078,29 @@ export function SharedNativeAgentController({
       ...(isRemoteGatewayConnection() ? { deviceCode: true } : {}),
     })
       .then((result) => {
+        // Keep cancellation available even when the provider returns a bad URL.
+        setSignInDetails(
+          result.code
+            ? { code: result.code, expiresAt: Date.now() + NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS }
+            : {},
+        );
         if (result.url) {
-          const url = new URL(result.url);
-          if (url.protocol !== "https:" && url.protocol !== "http:") {
+          let url: URL;
+          try {
+            url = new URL(result.url);
+            if (url.protocol !== "https:" && url.protocol !== "http:")
+              throw new Error("Invalid scheme");
+          } catch {
+            void cancelNativeAgentSignIn({
+              environmentId: data.environmentId,
+              agent: platform,
+              logicalSessionKey: sessionKey,
+            }).catch(() => undefined);
             throw new Error("The sign-in URL is invalid");
           }
+          setSignInDetails((previous) => ({ ...previous, url: url.href }));
           openSignInUrl(url.href);
         }
-        setSignInDetails({
-          ...(result.url ? { url: result.url } : {}),
-          ...(result.code
-            ? { code: result.code, expiresAt: Date.now() + NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS }
-            : {}),
-        });
         if (result.code) setAuthReadAttempt((attempt) => attempt + 1);
         if (result.code) toast.info(`Enter code ${result.code} to finish signing in to ${label}`);
         else if (result.url) toast.info(`Finish signing in to ${label} in your browser`);
@@ -1087,6 +1112,23 @@ export function SharedNativeAgentController({
       })
       .finally(() => setSignInPending(false));
   }, [data.environmentId, label, openSignInUrl, platform, sessionKey, setAuthReadAttempt]);
+  // Abandoning the sign-in releases the provider's side of it too (Codex stops
+  // waiting on its loopback callback or device code). A device code lapses on
+  // the bridge by itself, so only an explicit abandon needs this.
+  const cancelSignIn = useCallback(() => {
+    setSignInDetails(null);
+    void cancelNativeAgentSignIn({
+      environmentId: data.environmentId,
+      agent: platform,
+      logicalSessionKey: sessionKey,
+    })
+      .catch((error: unknown) => {
+        toast.error(
+          `Could not cancel ${label} sign-in: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      })
+      .finally(() => setAuthReadAttempt((attempt) => attempt + 1));
+  }, [data.environmentId, label, platform, sessionKey, setAuthReadAttempt]);
   const resolvedComposer = useMemo(
     () =>
       withResolvedNativeComposerModel(composer?.models ?? [], composer?.selectedModelId, platform),
@@ -2627,6 +2669,11 @@ export function SharedNativeAgentController({
               <span>
                 Code <span className="select-all font-mono font-semibold">{signInCode}</span>
               </span>
+            ) : null}
+            {signInDetails ? (
+              <Button type="button" size="sm" variant="ghost" onClick={cancelSignIn}>
+                Cancel sign-in
+              </Button>
             ) : null}
           </div>
         ) : terminalSignInCommand && createTerminalTab ? (

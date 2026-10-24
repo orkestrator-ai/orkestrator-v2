@@ -99,24 +99,15 @@ import {
 } from "./project-home-environment.js";
 import type { Environment, EnvironmentStatus } from "./models.js";
 import type { PtyProcess } from "./pty.js";
-import type { StorageService } from "./storage.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { completeTerminalHistory, configureTerminalHistory } from "./terminal-history.js";
 import {
-  terminalProcesses,
-  terminalOutputGenerations,
   CONTAINER_WORKSPACE_SETUP_COMMAND,
   SETUP_DONE_OSC_SEQUENCE,
   SETUP_FAILED_OSC_SEQUENCE,
   SETUP_DONE_PRINTF_CMD,
   SETUP_FAILED_PRINTF_CMD,
-  environmentSetupSessions,
-  environmentSetupTasks,
-  environmentSetupStartTasks,
-  environmentStartTasks,
-  environmentLifecycleOperations,
-  environmentBaselineTasks,
-} from "./commands-runtime-state.js";
+} from "./container-scripts.js";
 import {
   prMonitorService,
   invalidatePendingPrMonitorSync,
@@ -138,23 +129,15 @@ import {
 } from "./commands-review.js";
 import {
   toClientEnvironment,
-  terminalOutputBufferLength,
-  deleteRetainedTerminalOutputBuffer,
-  emitTerminalOutput,
-  resetTerminalOutputBuffer,
   logSetupTerminal,
   terminalEnv,
   resolveLocalShellPath,
-  cleanupTerminalSession,
-  assertEnvironmentNotDeleting,
   assertEnvironmentDeletionNotRequested,
 } from "./commands-terminal.js";
 import {
   readLocalHeadCommit,
   ensureCreatedFromCommitBeforeSetup,
-  enqueueLocalServerEnvironmentOperation,
   stopLocalServersForEnvironmentUnlocked,
-  cancelOpenCodeAgentToolsConfiguration,
 } from "./commands-local-server-lifecycle.js";
 import {
   resolveRemoteWorktreeStartPoint,
@@ -176,8 +159,8 @@ import {
   environmentLifecycleErrorMessage,
   logEnvironmentLifecycleFailure,
 } from "./commands-error-text.js";
-import type { EnvironmentSetupStartResult } from "./commands-runtime-state.js";
-import type { CommandContext, BackendEmit } from "./commands-context.js";
+import type { EnvironmentSetupStartResult } from "./environment-operations.js";
+import type { CommandContext } from "./commands-context.js";
 import {
   startContainerWithAgentAccounts,
   syncContainerAgentAccountsOnStart,
@@ -188,10 +171,11 @@ export function spawnTerminalProcess(
   command: string,
   args: string[],
   options: { cwd?: string; cols: number; rows: number; env?: NodeJS.ProcessEnv },
-  emit: BackendEmit,
+  context: Pick<CommandContext, "emit" | "runtime">,
   hooks: { onData?: (data: string) => void; onExit?: () => void } = {},
 ): PtyProcess {
-  const existing = terminalProcesses.get(id);
+  const terminals = context.runtime.terminals;
+  const existing = terminals.process(id);
   if (existing) {
     if (isSetupTerminalSessionId(id)) {
       logSetupTerminal("reusing existing PTY", {
@@ -220,7 +204,7 @@ export function spawnTerminalProcess(
     env: terminalEnv(options.env),
   });
 
-  terminalProcesses.set(id, terminalProcess);
+  terminals.registerProcess(id, terminalProcess);
   if (isSetupTerminalSessionId(id)) {
     logSetupTerminal("PTY spawned", {
       sessionId: id,
@@ -228,7 +212,7 @@ export function spawnTerminalProcess(
     });
   }
   terminalProcess.onData((data) => {
-    emitTerminalOutput(id, data, emit);
+    terminals.emitOutput(id, data, context.emit);
     hooks.onData?.(data);
   });
   terminalProcess.onExit(({ exitCode, signal }) => {
@@ -237,12 +221,12 @@ export function spawnTerminalProcess(
         sessionId: id,
         exitCode,
         signal,
-        bufferChars: terminalOutputBufferLength(id),
+        bufferChars: terminals.outputLength(id),
       });
     }
     hooks.onExit?.();
     void completeTerminalHistory(id).catch(() => undefined);
-    cleanupTerminalSession(id);
+    terminals.cleanupSession(id);
   });
   return terminalProcess;
 }
@@ -373,13 +357,14 @@ export function getOrkestratorContainerStates(
 
 export async function syncStoredEnvironmentStatus(
   environment: Environment,
-  storage: StorageService,
+  context: Pick<CommandContext, "storage" | "runtime">,
   knownContainerStates?: Map<string, EnvironmentStatus> | null,
   strictKnownContainerStates = false,
 ): Promise<Environment> {
   if (environment.environmentType === "local") {
     return environment;
   }
+  const { storage } = context;
 
   // Lifecycle state owned by the backend is authoritative over Docker's
   // resource state. During an admitted start the container may not have been
@@ -391,7 +376,7 @@ export async function syncStoredEnvironmentStatus(
   // durable failure remains stable across renderer rehydration and backend
   // restart until the user actually retries or stops the environment.
   if (
-    environmentStartTasks.has(environment.id) ||
+    context.runtime.environments.isStarting(environment.id) ||
     environment.status === "error" ||
     Boolean(environment.lifecycleError?.trim())
   ) {
@@ -489,24 +474,27 @@ export async function readEnvironmentSetupCommands(environment: Environment): Pr
  * output once; treating this window as "not running" makes it reconnect and
  * replay the same buffer until preparation finishes.
  */
-export function isTerminalSessionAttachable(sessionId: string): boolean {
-  if (terminalProcesses.has(sessionId)) return true;
+export function isTerminalSessionAttachable(
+  context: Pick<CommandContext, "runtime">,
+  sessionId: string,
+): boolean {
+  if (context.runtime.terminals.hasProcess(sessionId)) return true;
   if (!isSetupTerminalSessionId(sessionId)) return false;
 
   const environmentId = sessionId.slice(0, -":setup".length);
-  const setupSession = environmentSetupSessions.get(environmentId);
+  const setupSession = context.runtime.environments.setupSession(environmentId);
   return setupSession?.sessionId === sessionId && setupSession.running;
 }
 
 // Setup-session buffers are intentionally retained after the PTY exits so the
 // renderer can replay them on reattach. Free them (and the tracked session /
 // task state) when the owning environment is removed.
-export function cleanupEnvironmentSetupState(environmentId: string): void {
-  deleteRetainedTerminalOutputBuffer(setupTerminalSessionId(environmentId));
-  environmentSetupSessions.delete(environmentId);
-  environmentSetupTasks.delete(environmentId);
-  environmentSetupStartTasks.delete(environmentId);
-  environmentBaselineTasks.delete(environmentId);
+export function cleanupEnvironmentSetupState(
+  context: Pick<CommandContext, "runtime">,
+  environmentId: string,
+): void {
+  context.runtime.terminals.deleteRetainedOutput(setupTerminalSessionId(environmentId));
+  context.runtime.environments.forgetSetupState(environmentId);
 }
 
 export function buildSetupTerminalCommand(commands: string[], finalShellCommand: string): string {
@@ -564,7 +552,8 @@ export function beginSetupPreparationSession(
   context: CommandContext,
 ): string {
   const sessionId = setupTerminalSessionId(environment.id);
-  resetTerminalOutputBuffer(sessionId);
+  const terminals = context.runtime.terminals;
+  terminals.resetOutput(sessionId);
   configureTerminalHistory({
     sessionId,
     dataDir: context.storage.getDataDir(),
@@ -573,9 +562,9 @@ export function beginSetupPreparationSession(
     rows: 24,
     environmentId: environment.id,
     tabId: "setup",
-    generation: terminalOutputGenerations.get(sessionId) ?? 1,
+    generation: terminals.outputGeneration(sessionId) ?? 1,
   });
-  environmentSetupSessions.set(environment.id, {
+  context.runtime.environments.recordSetupSession({
     environmentId: environment.id,
     sessionId,
     running: true,
@@ -587,7 +576,7 @@ export function beginSetupPreparationSession(
     environmentType: environment.environmentType,
     sessionId,
   });
-  emitTerminalOutput(sessionId, formatSetupPreparationIntro(environment), context.emit);
+  terminals.emitOutput(sessionId, formatSetupPreparationIntro(environment), context.emit);
   context.emit("environment-setup-started", {
     environment_id: environment.id,
     session_id: sessionId,
@@ -660,13 +649,14 @@ export async function spawnSetupTerminal(
     containerId: environment.containerId ?? null,
   });
 
+  const terminals = context.runtime.terminals;
   const existingSession = options.continuesPreparationSession
-    ? environmentSetupSessions.get(environment.id)
+    ? context.runtime.environments.setupSession(environment.id)
     : undefined;
   // A retry starts a clean buffer; a run that already streamed its preparation
   // output into this session keeps it, so the clone log stays visible.
-  if (!existingSession) resetTerminalOutputBuffer(sessionId);
-  environmentSetupSessions.set(environment.id, {
+  if (!existingSession) terminals.resetOutput(sessionId);
+  context.runtime.environments.recordSetupSession({
     environmentId: environment.id,
     sessionId,
     running: true,
@@ -680,7 +670,7 @@ export async function spawnSetupTerminal(
     rows: 24,
     environmentId: environment.id,
     tabId: "setup",
-    generation: terminalOutputGenerations.get(sessionId) ?? 1,
+    generation: terminals.outputGeneration(sessionId) ?? 1,
   });
 
   if (environment.environmentType === "local") {
@@ -707,7 +697,7 @@ export async function spawnSetupTerminal(
         rows: 24,
         env: envWithManagedBinaries(context),
       },
-      context.emit,
+      context,
       { onData: tracker.onData, onExit: tracker.onExit },
     );
   } else {
@@ -722,16 +712,16 @@ export async function spawnSetupTerminal(
       "docker",
       ["exec", "-it", environment.containerId, "zsh", "-lc", setupCommand],
       { cols: 80, rows: 24 },
-      context.emit,
+      context,
       { onData: tracker.onData, onExit: tracker.onExit },
     );
   }
 
-  emitTerminalOutput(sessionId, formatSetupTerminalIntro(environment, commands), context.emit);
+  terminals.emitOutput(sessionId, formatSetupTerminalIntro(environment, commands), context.emit);
   logSetupTerminal("emitted setup intro", {
     environmentId: environment.id,
     sessionId,
-    bufferChars: terminalOutputBufferLength(sessionId),
+    bufferChars: terminals.outputLength(sessionId),
   });
 
   context.emit("environment-setup-started", {
@@ -769,14 +759,14 @@ export async function completeEnvironmentSetup(
     });
     updated = (await context.storage.getEnvironment(updated.id)) ?? updated;
   }
-  const session = environmentSetupSessions.get(environment.id);
+  const session = context.runtime.environments.setupSession(environment.id);
   logSetupTerminal("setup completed", {
     environmentId: environment.id,
     sessionId: session?.sessionId ?? null,
-    bufferChars: session?.sessionId ? terminalOutputBufferLength(session.sessionId) : 0,
+    bufferChars: session?.sessionId ? context.runtime.terminals.outputLength(session.sessionId) : 0,
   });
   if (session) {
-    environmentSetupSessions.set(environment.id, {
+    context.runtime.environments.recordSetupSession({
       ...session,
       running: false,
       completedAt: new Date().toISOString(),
@@ -810,15 +800,15 @@ export async function failEnvironmentSetup(
 ): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   const lifecycleError = environmentLifecycleErrorMessage(error);
-  const session = environmentSetupSessions.get(environmentId);
+  const session = context.runtime.environments.setupSession(environmentId);
   logSetupTerminal("setup failed", {
     environmentId,
     sessionId: session?.sessionId ?? null,
     error: message,
-    bufferChars: session?.sessionId ? terminalOutputBufferLength(session.sessionId) : 0,
+    bufferChars: session?.sessionId ? context.runtime.terminals.outputLength(session.sessionId) : 0,
   });
   if (session) {
-    environmentSetupSessions.set(environmentId, {
+    context.runtime.environments.recordSetupSession({
       ...session,
       running: false,
       completedAt: new Date().toISOString(),
@@ -947,7 +937,7 @@ export async function startEnvironmentSetupOnce(
     // get_terminal_session keeps reporting an attachable terminal that has no
     // process behind it. Avoid manufacturing a failure session for errors that
     // happened before an attempt published one.
-    if (environmentSetupSessions.get(running.id)?.running) {
+    if (context.runtime.environments.setupSession(running.id)?.running) {
       await failEnvironmentSetup(running.id, error, context);
     } else {
       await failEnvironmentSetupBeforeAttempt(running.id, error, context);
@@ -963,7 +953,11 @@ export async function startEnvironmentSetupAfterPreparation(
 ): Promise<EnvironmentSetupStartResult> {
   const current = await prepareEnvironmentForSetup(environment, context, (chunk) => {
     if (preparationSessionId && chunk) {
-      emitTerminalOutput(preparationSessionId, toTerminalText(chunk), context.emit);
+      context.runtime.terminals.emitOutput(
+        preparationSessionId,
+        toTerminalText(chunk),
+        context.emit,
+      );
     }
   });
 
@@ -983,14 +977,14 @@ export async function startEnvironmentSetupAfterPreparation(
     };
   }
 
-  const existingTask = environmentSetupTasks.get(current.id);
-  const existingSession = environmentSetupSessions.get(current.id);
+  const existingTask = context.runtime.environments.setupTask(current.id);
+  const existingSession = context.runtime.environments.setupSession(current.id);
   if (existingTask && existingSession) {
     logSetupTerminal("setup already running", {
       environmentId: current.id,
       sessionId: existingSession.sessionId,
-      terminalRunning: terminalProcesses.has(existingSession.sessionId),
-      bufferChars: terminalOutputBufferLength(existingSession.sessionId),
+      terminalRunning: context.runtime.terminals.hasProcess(existingSession.sessionId),
+      bufferChars: context.runtime.terminals.outputLength(existingSession.sessionId),
     });
     return {
       setupStarted: true,
@@ -1002,22 +996,20 @@ export async function startEnvironmentSetupAfterPreparation(
   const { sessionId, completion } = await spawnSetupTerminal(current, commands, context, {
     continuesPreparationSession: preparationSessionId !== undefined,
   });
-  const task = completion
-    .then(async (success) => {
-      if (!success) {
-        throw new Error("Setup script failed");
-      }
-      return completeEnvironmentSetup(current, context);
-    })
-    .catch(async (error) => {
-      await failEnvironmentSetup(current.id, error, context);
-      throw error;
-    })
-    .finally(() => {
-      environmentSetupTasks.delete(current.id);
-    });
-
-  environmentSetupTasks.set(current.id, task);
+  const task = context.runtime.environments.trackSetupTask(
+    current.id,
+    completion
+      .then(async (success) => {
+        if (!success) {
+          throw new Error("Setup script failed");
+        }
+        return completeEnvironmentSetup(current, context);
+      })
+      .catch(async (error) => {
+        await failEnvironmentSetup(current.id, error, context);
+        throw error;
+      }),
+  );
   void task.catch(() => undefined);
 
   return {
@@ -1031,16 +1023,9 @@ export function startEnvironmentSetup(
   environment: Environment,
   context: CommandContext,
 ): Promise<EnvironmentSetupStartResult> {
-  const existing = environmentSetupStartTasks.get(environment.id);
-  if (existing) return existing;
-
-  const task = startEnvironmentSetupOnce(environment, context).finally(() => {
-    if (environmentSetupStartTasks.get(environment.id) === task) {
-      environmentSetupStartTasks.delete(environment.id);
-    }
-  });
-  environmentSetupStartTasks.set(environment.id, task);
-  return task;
+  return context.runtime.environments.joinSetupStart(environment.id, () =>
+    startEnvironmentSetupOnce(environment, context),
+  );
 }
 
 type DelegationCommandRunner = (
@@ -1486,7 +1471,7 @@ export function startAssignedContainerRuntimeTask(
   return enqueueEnvironmentLifecycleOperation(environmentId, context, async () => {
     const environment = await context.storage.getEnvironment(environmentId);
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    assertEnvironmentNotDeleting(environment.id);
+    context.runtime.environments.assertNotDeleting(environment.id);
     assertEnvironmentDeletionNotRequested(environment, environment.id);
     if (!environment.containerId) return null;
     const runtime = await startContainerRuntime(environment, context, identity);
@@ -1506,7 +1491,7 @@ export async function startEnvironmentOnce(
   // Admission checks make the common case fail early. This second check is
   // required because the start may have waited behind another lifecycle
   // operation while a durable deletion tombstone was persisted.
-  assertEnvironmentNotDeleting(environment.id);
+  context.runtime.environments.assertNotDeleting(environment.id);
   assertEnvironmentDeletionNotRequested(environment, environment.id);
   if (identity.operationId && environment.environmentType === "containerized") {
     const parsed = parseContainerLifecycle(environment.containerLifecycle);
@@ -1690,58 +1675,31 @@ export async function admitEnvironmentStartTask(
   // Check both before and after the storage read. The first avoids needless I/O
   // for a delete already admitted in this process; the second closes the
   // await-sized race and enforces a tombstone recovered from persistent state.
-  assertEnvironmentNotDeleting(environmentId);
+  context.runtime.environments.assertNotDeleting(environmentId);
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   assertEnvironmentDeletionNotRequested(environment, environmentId);
-  assertEnvironmentNotDeleting(environmentId);
+  context.runtime.environments.assertNotDeleting(environmentId);
 
-  const existing = environmentStartTasks.get(environmentId);
-  if (existing) return { task: existing };
-
-  const task = enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
-    startEnvironmentOnce(environmentId, context, schedulePendingRename, identity),
-  ).finally(() => {
-    if (environmentStartTasks.get(environmentId) === task) {
-      environmentStartTasks.delete(environmentId);
-    }
-  });
-  environmentStartTasks.set(environmentId, task);
+  const task = context.runtime.environments.joinStart(environmentId, () =>
+    enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
+      startEnvironmentOnce(environmentId, context, schedulePendingRename, identity),
+    ),
+  );
   return { task };
 }
 
-/**
- * Serializes all resource-changing lifecycle operations for one environment.
- *
- * The queue tail always settles successfully so one failed operation cannot
- * poison retries. Callers still receive the original result/rejection.
- */
+/** Serializes all resource-changing lifecycle operations for one environment. */
 export function enqueueEnvironmentLifecycleOperation<T>(
   environmentId: string,
   context: CommandContext,
   operation: () => Promise<T>,
 ): Promise<T> {
-  const previous = environmentLifecycleOperations.get(environmentId) ?? Promise.resolve();
-  const result = context.environmentLifecycleTasks.admit(() => previous.then(operation, operation));
-  const tail = result.then(
-    () => undefined,
-    () => undefined,
+  return context.runtime.environments.enqueueLifecycleOperation(
+    environmentId,
+    context.environmentLifecycleTasks,
+    operation,
   );
-  environmentLifecycleOperations.set(environmentId, tail);
-  void tail.finally(() => {
-    if (environmentLifecycleOperations.get(environmentId) === tail) {
-      environmentLifecycleOperations.delete(environmentId);
-    }
-  });
-  return result;
-}
-
-/**
- * Once a conflicting operation has been admitted, a later start must queue
- * behind it instead of joining an earlier start that will be stopped/deleted.
- */
-export function invalidateEnvironmentStartDedupe(environmentId: string): void {
-  environmentStartTasks.delete(environmentId);
 }
 
 export async function stopEnvironmentOnce(
@@ -1830,7 +1788,7 @@ export async function stopEnvironmentOnce(
   let stopError: unknown;
   if (environment.worktreePath) {
     try {
-      await enqueueLocalServerEnvironmentOperation(environment.id, () =>
+      await context.runtime.localServers.enqueueEnvironmentOperation(environment.id, () =>
         stopLocalServersForEnvironmentUnlocked(environment.id, context),
       );
     } catch (error) {
@@ -1853,7 +1811,7 @@ export function stopEnvironmentTask(
   invalidateDiscovery: (environmentId: string) => void,
   identity: ContainerMutationIdentity = {},
 ): Promise<void> {
-  invalidateEnvironmentStartDedupe(environmentId);
+  context.runtime.environments.invalidateStartDedupe(environmentId);
   return enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
     stopEnvironmentOnce(environmentId, context, invalidateDiscovery, identity),
   );
@@ -1942,14 +1900,14 @@ async function recreateEnvironmentOnceUnfenced(
   if (!environment.containerId) return;
   // Re-read under the lifecycle queue: the request may have waited behind a
   // start/recreate that replaced the runtime the user reviewed.
-  assertEnvironmentNotDeleting(environment.id);
+  context.runtime.environments.assertNotDeleting(environment.id);
   assertEnvironmentDeletionNotRequested(environment, environment.id);
   if (request.intent !== "discard" && request.expectedContainerId) {
     // A preserving rebuild copies the workspace and provider state into a new
     // storage set and commits the new runtime only after it verified. Any
     // failure before the commit leaves the original authoritative.
     const wasRunning = environment.status === "running";
-    invalidateEnvironmentStartDedupe(environment.id);
+    context.runtime.environments.invalidateStartDedupe(environment.id);
     try {
       await replaceRuntimePreservingState(
         {
@@ -1975,13 +1933,13 @@ async function recreateEnvironmentOnceUnfenced(
       throw error;
     }
     invalidateDiscovery(environment.id);
-    cancelOpenCodeAgentToolsConfiguration(`container:${environment.containerId}`);
+    context.runtime.localServers.openCodeAgentTools.cancel(`container:${environment.containerId}`);
     // Per-runtime watchers of the replaced container are retired; everything
     // keyed by environment (sessions, parked dispatches, queued prompts)
     // resolves the new runtime on its next use.
     shutdownClaudeStatePolling(environment.containerId);
     context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(environment.containerId);
-    cleanupEnvironmentSetupState(environment.id);
+    cleanupEnvironmentSetupState(context, environment.id);
     // Setup belongs to a runtime: the new one runs it again (the preserved
     // checkout is kept, so the clone step is skipped). The workspace itself,
     // and the commit it was created from, carry over unchanged.
@@ -2025,7 +1983,7 @@ async function recreateEnvironmentOnceUnfenced(
     invalidateDiscovery(environment.id);
     context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
     shutdownClaudeStatePolling(containerId);
-    cancelOpenCodeAgentToolsConfiguration(`container:${containerId}`);
+    context.runtime.localServers.openCodeAgentTools.cancel(`container:${containerId}`);
     await advanceContainerOperation(context, environment.id, operationId, { phase: "removing" });
   } catch (error) {
     await completeContainerOperation(context, environment.id, operationId, "failed", {
@@ -2047,7 +2005,7 @@ async function recreateEnvironmentOnceUnfenced(
     }
     context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(containerId);
     await context.storage.clearBackendTerminalSessionIds?.(environment.id);
-    cleanupEnvironmentSetupState(environment.id);
+    cleanupEnvironmentSetupState(context, environment.id);
     const storage = parsedRecord.record.storage;
     await completeContainerOperation(context, environment.id, operationId, "succeeded", {
       phase: "retained",
@@ -2086,7 +2044,7 @@ async function recreateEnvironmentOnceUnfenced(
   // Terminals and setup state belong to the removed runtime. A pane-carried
   // PTY id or a retained setup buffer must not attach to the replacement.
   await context.storage.clearBackendTerminalSessionIds?.(environment.id);
-  cleanupEnvironmentSetupState(environment.id);
+  cleanupEnvironmentSetupState(context, environment.id);
   // Discard deletes the workspace too. Persistent volumes go with it; one that
   // will not remove stays referenced as a retained copy rather than orphaned.
   // The next start begins a new workspace generation on a new storage set.
@@ -2119,17 +2077,19 @@ export function restoreRecoveryCopyTask(
   return enqueueEnvironmentLifecycleOperation(request.environmentId, context, async () => {
     const environment = await context.storage.getEnvironment(request.environmentId);
     if (!environment) throw new Error(`Environment not found: ${request.environmentId}`);
-    assertEnvironmentNotDeleting(environment.id);
+    context.runtime.environments.assertNotDeleting(environment.id);
     assertEnvironmentDeletionNotRequested(environment, environment.id);
-    invalidateEnvironmentStartDedupe(environment.id);
+    context.runtime.environments.invalidateStartDedupe(environment.id);
     const restored = await restoreRecoveryCopy(request, context);
     if (!restored) return undefined;
     invalidateDiscovery(environment.id);
     if (environment.containerId) {
       context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(environment.containerId);
-      cancelOpenCodeAgentToolsConfiguration(`container:${environment.containerId}`);
+      context.runtime.localServers.openCodeAgentTools.cancel(
+        `container:${environment.containerId}`,
+      );
     }
-    cleanupEnvironmentSetupState(environment.id);
+    cleanupEnvironmentSetupState(context, environment.id);
     const { createdFromCommit: _kept, ...setupReset } = discardedRuntimeSetupUpdates();
     await context.storage.updateEnvironment(environment.id, setupReset);
     return startEnvironmentOnce(environment.id, context, schedulePendingRename);
@@ -2144,7 +2104,7 @@ export function discardRecoveryCopyTask(
   return enqueueEnvironmentLifecycleOperation(request.environmentId, context, async () => {
     const environment = await context.storage.getEnvironment(request.environmentId);
     if (!environment) throw new Error(`Environment not found: ${request.environmentId}`);
-    assertEnvironmentNotDeleting(environment.id);
+    context.runtime.environments.assertNotDeleting(environment.id);
     assertEnvironmentDeletionNotRequested(environment, environment.id);
     return discardRecoveryCopy(request, context);
   });
@@ -2159,7 +2119,8 @@ export function recreateEnvironmentTask(
   // Only a discard replaces the runtime here; a preserving rebuild detaches
   // start dedupe once it is admitted. A refused request must not detach a
   // later start from one already in flight.
-  if (request.intent === "discard") invalidateEnvironmentStartDedupe(request.environmentId);
+  if (request.intent === "discard")
+    context.runtime.environments.invalidateStartDedupe(request.environmentId);
   return enqueueEnvironmentLifecycleOperation(request.environmentId, context, () =>
     recreateEnvironmentOnce(request, context, schedulePendingRename, invalidateDiscovery),
   );
@@ -2173,13 +2134,13 @@ export async function runEnvironmentSetupNow(
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   if (environment.setupScriptsComplete) return environment;
 
-  const existingTask = environmentSetupTasks.get(environmentId);
+  const existingTask = context.runtime.environments.setupTask(environmentId);
   if (existingTask) return existingTask;
 
   const result = await startEnvironmentSetup(environment, context);
   if (!result.setupStarted) return result.environment;
 
-  const task = environmentSetupTasks.get(environmentId);
+  const task = context.runtime.environments.setupTask(environmentId);
   if (!task) throw new Error(`Setup task was not started: ${environmentId}`);
   return task;
 }
@@ -2338,11 +2299,16 @@ export function parseIpTokens(output: string): string[] {
  * tools URL. Linux Engine needs a host-gateway alias, while Docker Desktop must
  * use its built-in DNS rather than an explicit Linux bridge-gateway override.
  */
-export async function ensureContainerAgentToolsHost(containerId: string): Promise<void> {
+export async function ensureContainerAgentToolsHost(
+  containerId: string,
+  signal?: AbortSignal,
+): Promise<void> {
   let existing = await dockerExec(
     containerId,
     `getent hosts ${CONTAINER_AGENT_TOOLS_HOST} 2>/dev/null || true`,
     10_000,
+    undefined,
+    signal,
   );
 
   // Docker Desktop's gateway hostname is a reliable in-container signal that
@@ -2354,12 +2320,16 @@ export async function ensureContainerAgentToolsHost(containerId: string): Promis
     containerId,
     `getent hosts ${DOCKER_DESKTOP_GATEWAY_HOST} 2>/dev/null || true`,
     10_000,
+    undefined,
+    signal,
   );
   if (parseIpTokens(desktopGateway).length > 0) {
     const explicitHostEntry = await dockerExec(
       containerId,
       `grep -E '^[^#]*[[:space:]]${CONTAINER_AGENT_TOOLS_HOST.replaceAll(".", "\\.")}([[:space:]]|$)' /etc/hosts 2>/dev/null || true`,
       10_000,
+      undefined,
+      signal,
     );
     if (explicitHostEntry.trim()) {
       const repairHosts = `
@@ -2372,12 +2342,14 @@ export async function ensureContainerAgentToolsHost(containerId: string): Promis
       await runCommand(
         "docker",
         ["exec", "--user", "root", containerId, "bash", "-lc", repairHosts],
-        { timeoutMs: 10_000 },
+        { timeoutMs: 10_000, signal },
       );
       existing = await dockerExec(
         containerId,
         `getent hosts ${CONTAINER_AGENT_TOOLS_HOST} 2>/dev/null || true`,
         10_000,
+        undefined,
+        signal,
       );
     }
     if (parseIpTokens(existing).length === 0) {
@@ -2396,7 +2368,7 @@ export async function ensureContainerAgentToolsHost(containerId: string): Promis
       "{{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}}",
       containerId,
     ],
-    { timeoutMs: 10_000 },
+    { timeoutMs: 10_000, signal },
   );
   const gateway = parseIpTokens(stdout)[0];
   if (!gateway) {
@@ -2426,7 +2398,7 @@ export async function ensureContainerAgentToolsHost(containerId: string): Promis
       "orkestrator-host-repair",
       gateway,
     ],
-    { timeoutMs: 10_000 },
+    { timeoutMs: 10_000, signal },
   );
 }
 
@@ -2463,6 +2435,7 @@ export async function resolveContainerAgentToolConnection(
 export async function ensureContainerHostServicePorts(
   containerId: string,
   servicePort: number | null,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!servicePort) return;
   const current = await runCommand(
@@ -2474,8 +2447,9 @@ export async function ensureContainerHostServicePorts(
       "-c",
       "[ -f /etc/orkestrator/network-policy ] && cat /etc/orkestrator/network-policy /etc/orkestrator/host-service-ports || true",
     ],
-    { timeoutMs: 10_000 },
+    { timeoutMs: 10_000, signal },
   ).catch(() => null);
+  signal?.throwIfAborted();
   if (!current) return;
   const [policy, ports = ""] = current.stdout.trim().split("\n");
   if (policy?.trim() !== "2" && policy?.trim() !== "3") return;
@@ -2491,6 +2465,6 @@ export async function ensureContainerHostServicePorts(
       "--host-ports",
       String(servicePort),
     ],
-    { timeoutMs: 20_000 },
+    { timeoutMs: 20_000, signal },
   );
 }

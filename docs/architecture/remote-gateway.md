@@ -214,16 +214,16 @@ until either version changes. The Settings **Debug** section shows the same
 note. The public CLI has its own schema handshake instead
 ([public-cli.md](public-cli.md)).
 
-The known symptom of a newer renderer on an older backend is in OpenCode
-build-pipeline and Multi Review transcripts. A backend older than 2.19.17 sends
-them as raw `{ info, parts }` envelopes, which the renderer no longer
-normalizes: most messages vanished and the rest showed as empty rows. The
-transcript adapter (`toPipelineTranscript`) now checks each entry's shape
-(`apps/web/src/lib/chat/transcript-skew.ts`). Each run of raw envelopes, or of
-entries with no field of a display row (most likely a newer backend's shape),
-becomes one muted notice saying how many were not shown and what to update.
-Detection is by shape, so it needs no version handshake and never fires on
-what a current backend sends.
+How long each side must cope with an older other side is the support window
+in [version-compatibility.md](version-compatibility.md). Within it, transcript
+views check each entry's shape at the transcript adapter
+(`toPipelineTranscript`, `apps/web/src/lib/chat/transcript-skew.ts`): each run
+of entries with no field of a display row (most likely a newer backend's
+shape) becomes one muted notice saying how many were not shown and what to
+update. Detection is by shape, so it needs no version handshake and never
+fires on what a current backend sends. The OpenCode-specific notice for
+backends older than 2.19.17 (raw `{ info, parts }` envelopes) was retired on
+2026-10-24, because those backends are outside the window.
 
 ## Event stream reconnects
 

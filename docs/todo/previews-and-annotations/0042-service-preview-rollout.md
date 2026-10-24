@@ -993,7 +993,13 @@ Tailscale Serve 1.102.4. Single machine.
 
 - How long is the support window for the legacy route and the pre-preview
   layout schema? Should compatibility mode remain as an explicit fallback
-  after the desktop default flips?
+  after the desktop default flips? (Partly answered 2026-10-24: the window is
+  published releases from the floor, the newest Stable at least 60 days old;
+  see [`version-compatibility.md`](../../architecture/version-compatibility.md).
+  The legacy route can go once the floor is at or above the first Stable
+  release with service previews as the desktop default, and stored legacy
+  URL tabs have a migration. `preview.legacy-loopback-route` counts its
+  requests. The fallback question stays open.)
 - Is it acceptable that annotations on legacy URL tabs keep needing the legacy
   route?
 - What observation window and thresholds apply to each cohort, and who signs

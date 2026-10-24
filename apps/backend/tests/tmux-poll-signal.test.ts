@@ -9,6 +9,7 @@ import {
   ClaudeStatePollManager,
   type ClaudeStateSignalSupport,
 } from "../src/core/tmux";
+import { CLAUDE_STATE_ABSENT_MARKER } from "../src/core/tmux-poll";
 import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics";
 import { ManualTime, deferred, flushMicrotasks } from "../src/core/recurring-test-support";
 import { createEnvironment } from "./tmux-test-harness.js";
@@ -28,6 +29,8 @@ function createSignalHarness(
     probeRings?: boolean;
     install?: (credential: StateSignalCredential, isCurrent: () => boolean) => Promise<void>;
     legacy?: boolean;
+    /** No state file yet: terminal Claude has never run in the container. */
+    absent?: boolean;
     rejectPersistence?: () => boolean;
     readGate?: () => Promise<void> | undefined;
   } = {},
@@ -35,7 +38,7 @@ function createSignalHarness(
   const time = new ManualTime(1_000_000);
   const environment = createEnvironment("/worktree", "env-signal");
   environment.containerId = CONTAINER;
-  let fileState = "waiting";
+  let fileState = options.absent ? CLAUDE_STATE_ABSENT_MARKER : "waiting";
   let revision = 0;
   let completions = 0;
   const completed: string[] = [];
@@ -109,7 +112,9 @@ function createSignalHarness(
     readState: async () => {
       reads.push(time.now());
       const value =
-        options.legacy || fileState === "" ? fileState : `${fileState} ${revision} ${completions}`;
+        options.legacy || fileState === "" || fileState === CLAUDE_STATE_ABSENT_MARKER
+          ? fileState
+          : `${fileState} ${revision} ${completions}`;
       await options.readGate?.();
       return value;
     },
@@ -258,6 +263,11 @@ describe("Claude state signal", () => {
     await harness.start();
     expect(harness.supportCalls()).toBe(1);
     expect(harness.installs()).toBe(0);
+    expect(harness.manager.status()).toMatchObject({
+      containers: 1,
+      states: { unsupported: 1, confirmed: 0 },
+      fallback: 1,
+    });
     harness.manager.shutdown(CONTAINER);
   });
 
@@ -265,6 +275,7 @@ describe("Claude state signal", () => {
     const harness = createSignalHarness({ probeRings: false });
     await harness.start();
     expect(harness.installs()).toBe(1);
+    expect(harness.manager.status().states).toMatchObject({ armed: 1, confirmed: 0 });
     await harness.time.advance(5_000);
     expect(harness.reads).toHaveLength(6);
     expect(harness.currentInterval()).toBe(CLAUDE_STATE_POLL_INTERVAL_MS);
@@ -312,6 +323,13 @@ describe("Claude state signal", () => {
     expect(harness.currentInterval()).toBe(CLAUDE_STATE_POLL_INTERVAL_MS);
     expect(first.revoked).toBe(true);
     expect(harness.ringServer(first)).toBe(false);
+    // Visible in diagnostics, not only in a log line.
+    expect(harness.manager.status()).toMatchObject({
+      containers: 1,
+      states: { demoted: 1, confirmed: 0 },
+      fallback: 1,
+      demotions: { "missed-change": 1 },
+    });
 
     // Reconciliation inside the window does not re-arm.
     await harness.start();
@@ -321,7 +339,13 @@ describe("Claude state signal", () => {
     await harness.start();
     expect(harness.issued).toHaveLength(2);
     expect(harness.currentInterval()).toBe(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+    expect(harness.manager.status()).toMatchObject({
+      states: { demoted: 0, confirmed: 1 },
+      fallback: 0,
+      demotions: { "missed-change": 1 },
+    });
     harness.manager.shutdown(CONTAINER);
+    expect(harness.manager.status().containers).toBe(0);
   });
 
   test("a doorbell during a read that ran before the write still announces it", async () => {
@@ -368,6 +392,10 @@ describe("Claude state signal", () => {
     await harness.start();
     expect(harness.issued[0]!.revoked).toBe(true);
     expect(harness.currentInterval()).toBe(CLAUDE_STATE_POLL_INTERVAL_MS);
+    expect(harness.manager.status()).toMatchObject({
+      states: { demoted: 1 },
+      demotions: { "arm-failed": 1 },
+    });
 
     fail = false;
     await harness.time.advance(CLAUDE_STATE_SIGNAL_RETRY_MS - 1_000);
@@ -412,6 +440,51 @@ describe("Claude state signal", () => {
     expect(harness.currentInterval()).toBe(CLAUDE_STATE_POLL_INTERVAL_MS);
     // The server now refuses the credential, so a flood costs no read.
     expect(harness.ringServer(signal)).toBe(false);
+    expect(harness.manager.status().demotions).toEqual({ "rang-too-often": 1 });
+    harness.manager.shutdown(CONTAINER);
+  });
+
+  test("a container that never ran terminal Claude costs only the safety read", async () => {
+    const harness = createSignalHarness({ absent: true });
+    await harness.start();
+    // The probe ring confirmed the doorbell; no state file is an answer.
+    expect(harness.currentInterval()).toBe(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+    const before = harness.reads.length;
+    await harness.time.advance(10 * 60_000);
+    expect(harness.reads.length - before).toBe(20);
+    expect(harness.emitted).toEqual([]);
+    expect(harness.manager.status()).toMatchObject({ states: { confirmed: 1 }, fallback: 0 });
+
+    // The first hook is read and shown at once.
+    harness.hook("working");
+    await flushMicrotasks();
+    expect(harness.emitted).toEqual([{ event: `claude-state-${CONTAINER}`, state: "working" }]);
+    harness.hook("waiting");
+    await flushMicrotasks();
+    expect(harness.emitted.map((entry) => entry.state)).toEqual(["working", "waiting"]);
+    expect(harness.currentInterval()).toBe(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+    harness.manager.shutdown(CONTAINER);
+  });
+
+  test("a whole first turn with both rings lost is still recovered from the counters", async () => {
+    const harness = createSignalHarness({ absent: true });
+    await harness.start();
+    harness.completionRecords.length = 0;
+    harness.hook("working", false);
+    harness.hook("waiting", false);
+    await harness.time.advance(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+    expect(harness.emitted.map((entry) => entry.state)).toEqual(["waiting"]);
+    expect(harness.probes).toEqual(["env-signal"]);
+    expect(harness.completionRecords).toEqual(["env-signal"]);
+    harness.manager.shutdown(CONTAINER);
+  });
+
+  test("without the doorbell an absent state file keeps the 1 s poll", async () => {
+    const harness = createSignalHarness({ absent: true, support: ["unsupported"] });
+    await harness.start();
+    await harness.time.advance(10_000);
+    expect(harness.intervals).toEqual([CLAUDE_STATE_POLL_INTERVAL_MS]);
+    expect(harness.reads).toHaveLength(11);
     harness.manager.shutdown(CONTAINER);
   });
 
@@ -422,6 +495,7 @@ describe("Claude state signal", () => {
     await harness.time.advance(3_000);
     expect(harness.supportCalls()).toBe(0);
     expect(harness.intervals).toEqual([CLAUDE_STATE_POLL_INTERVAL_MS]);
+    expect(harness.manager.status().states.unarmed).toBe(1);
     harness.manager.shutdown(CONTAINER);
   });
 });

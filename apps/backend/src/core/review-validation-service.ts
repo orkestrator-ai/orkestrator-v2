@@ -1,5 +1,5 @@
 import { beginEnvironmentMutation } from "./environment-replacement-fence.js";
-import { withContainerRuntimeCredential } from "./commands-runtime-state.js";
+import { withContainerRuntimeCredential } from "./container-scripts.js";
 import {
   isReviewValidationRun,
   newReviewValidationRun,

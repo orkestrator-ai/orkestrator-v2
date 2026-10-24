@@ -18,6 +18,7 @@ import {
   withPolicyCliFixture,
 } from "../../../../tests/conformance/execution-policy/vendor-cli.js";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
+import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
 import {
   nativeAgentPolicyEffects,
   resolveNativeAgentApprovalMode,
@@ -138,7 +139,9 @@ runExecutionPolicyConformance(
         );
         const { policy } = await permissions.createSession("conformance", { policy: shape.policy });
         expect(created).toHaveLength(1);
-        expect(await policyCliOutput(opencode!, ["--version"], fixture)).toContain("1.19.0");
+        expect(await policyCliOutput(opencode!, ["--version"], fixture)).toContain(
+          PINNED_TOOLCHAIN_VERSIONS.opencode,
+        );
         const config = JSON.parse(await policyCliOutput(opencode!, ["debug", "config"], fixture));
         const projectResources = config.instructions?.includes("POLICY_PROBE.md") === true;
         expect(projectResources).toBe(true);

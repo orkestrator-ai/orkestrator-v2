@@ -873,3 +873,73 @@ counting the failed observation as a missed signal. Only accepted observations
 advance the counters. A recovered completion restores the durable completion
 token and unread badge when storage missed the working edge, and triggers the armed PR refresh and
 the one-shot agent-created PR probe once, even if the final state is unchanged.
+
+A container where terminal Claude has never run has neither state file. The
+read then prints a framed `absent` marker (`CLAUDE_STATE_ABSENT_MARKER`),
+which counts as a successful observation at revision 0 with no completions:
+it emits and persists nothing, but a confirmed doorbell keeps the 30 s safety
+read, and a first turn missed between two reads is still recovered from the
+counters. It still counts towards stale marking after three reads, as before.
+Without this, every container that never ran terminal Claude stayed on the
+1 s poll with a confirmed doorbell (seen in a 2026-10-24 profile run).
+
+`ClaudeStatePollManager.status()` reports the signal's health, per state
+(`unarmed`, `arming`, `armed`, `confirmed`, `demoted`, `unsupported`), how
+many containers run the 1 s poll (`fallback`), lifetime demotions by reason
+(`missed-change`, `rang-too-often`, `arm-failed`) and accepted rings, in the
+`signals` block of recurring diagnostics (`claude-state-signal`). It is
+content-free: no container id. The demotion log line still names the
+container.
+
+## Container worktree signal (`container-worktree-signal=1`)
+
+A container's Files panel and diff counts have no host-side watcher. Without
+a signal, every panel read past 3 s costs a status exec, the tree re-walks
+every 10 s while the panel is open, and the counts rescan every 15 s. With
+the signal, `DiffStatsService` treats the container like a watched local
+worktree: results stay valid until a ring, a known mutation or an explicit
+refresh, and only a 60 s safety scan runs
+(`CONTAINER_SAFETY_NET_INTERVAL_MS`).
+
+`orkestrator-worktree-signal` (`docker/orkestrator-worktree-signal.sh`) runs
+`inotifywait --monitor --recursive` over `/workspace` as `node`, in its own
+session. It ignores `node_modules` (the tree skips it and its watch count is
+unbounded), Git's object store, logs and transient `.git/**/*.lock` files;
+project dependency lockfiles, `.git/index`, `HEAD`, `refs` and `packed-refs`
+are watched. Modify events announce writes even while a file descriptor stays
+open. A burst of events becomes one ring after 300 ms of quiet or 1 s from
+its start, with at least 1 s between change rings and a trailing notification. Rings carry no paths or content, only
+a reason header that can add work but never remove it: `ready` once the
+watches are established, `change`, `overflow` (an inotify queue overflow) and
+`lost` when `inotifywait` exits by itself (a watch or instance limit, the root
+removed). The container status scan runs with `GIT_OPTIONAL_LOCKS=0` and
+`diff.autoRefreshIndex=false`, as the local scan does, so a scan never writes
+the index and rings for itself; stat-only modifications are filtered with
+numstat.
+
+| Step | What happens | Where |
+| --- | --- | --- |
+| Lineage | `DiffStatsService` starts one watcher per tracking lineage (a container start, a retarget, a resume after a pause, a backend start, a replacement container) through `startContainerWatcher`; a pause, untrack or retarget closes it, aborts in-flight host preparation or installation and revokes its credential | `DiffStatsService.attachContainerWatcher` |
+| Arm | If the image declares the capability: issue a credential for `/worktree-signal`, prepare the host alias and service port, then `docker exec -i --user node <id> orkestrator-worktree-signal start` with the curl config on stdin (0600, never argv). The script stops a previous lineage's watcher (pid file plus `/proc/<pid>/cmdline` check, since `/tmp` survives a restart) and starts a new one. Installs are serialized per container | `container-worktree-signal-install.ts` |
+| Confirm | Until the `ready` ring arrives the entry keeps the unwatched bounds. The ring marks it qualified and rescans both views once, because nothing before it was announced | `ContainerWorktreeSignals.ring` |
+| Ring | Each ring hints the file list and the tree, forwarded at most once per 2 s (trailing), so constant writes cost at most one status exec per 2 s | `CONTAINER_WORKTREE_SIGNAL_MIN_HINT_GAP_MS` |
+| Miss | A safety scan whose list changed although nothing advanced the entry's epoch from the previous scan through this scan's completion reports `unannouncedChange`; unless a ring arrives within 3 s (one still settling in the container) the lineage is demoted | `CONTAINER_WORKTREE_SIGNAL_MISS_GRACE_MS` |
+| Lost, flood | A `lost` ring, or more than 120 rings a minute, demotes at once and rescans | `CONTAINER_WORKTREE_SIGNAL_MAX_RINGS_PER_MINUTE` |
+| Retry | A demoted lineage, a failed install, an install whose `ready` ring never arrived, an uninspectable image and an unavailable agent-tools issuer re-arm 5 min after the last attempt; an image without the capability is never asked again for that container | `CONTAINER_WORKTREE_SIGNAL_RETRY_MS` |
+
+The credential rings only `/worktree-signal`; a Claude state credential is
+refused there and a worktree credential on `/claude-state-signal`. Neither
+opens `/mcp`. A container restarted without the backend seeing it stop loses
+its watcher silently; the next safety scan finds anything that changed
+meanwhile and demotes it. Unit tests (`NODE_ENV=test`) and images without the
+capability keep the 3 s, 10 s and 15 s bounds. The health of every lineage is
+in the `signals` block of recurring diagnostics (`container-worktree-signal`),
+with demotion reasons `missed-change`, `rang-too-often`, `arm-failed` and
+`watcher-lost`.
+
+Measured on Docker Desktop 29.7.2 (Apple M5 Max, 2026-10-24, this
+repository's HEAD as the workspace, 513 watches): the watcher's three
+processes use 7 MB RSS and no CPU while idle, set up in 254 ms, and the kernel
+holds about 0.5 MB for the watches. One tree walk costs about 130 ms of VM CPU
+and one status scan about 150 ms, plus about 19 ms in the host `docker` CLI
+each. A file change reaches a completed scan in about 0.45 s.

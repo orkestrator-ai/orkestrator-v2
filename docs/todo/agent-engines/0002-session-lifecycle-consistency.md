@@ -12,8 +12,9 @@ permanent browser spec for Cursor, Pi, OpenCode and Grok, and since
 persistence shedding, steer saturation, a dead generation, an old Claude
 bridge and a stop during Pi's startup. Pi's live close retention passed on
 2026-10-23. What is left is the live Cursor run (whose resumed transcript
-lost the first prompt on 2026-10-23), the legacy close fallback (blocked on a
-support window) and one live check of Cursor's resume rows.
+lost the first prompt on 2026-10-23), the legacy close fallback (unblocked by
+0034's support window on 2026-10-24) and one live check of Cursor's resume
+rows.
 
 ## Current state
 
@@ -242,16 +243,22 @@ support window) and one live check of Cursor's resume rows.
 
 ### Code
 
-1. **Retire the legacy close fallback after the support window** (blocked).
-   Remove the `DELETE` fallback and `LEGACY_DELETE_RETAINS_HISTORY` from
+1. **Retire the legacy close fallback** (unblocked 2026-10-24). Remove the
+   `DELETE` fallback and `LEGACY_DELETE_RETAINS_HISTORY` from
    `closeBridgeSessionRetaining`, and the `bridge-upgrade-required` path, once
-   no supported bridge predates `POST /session/:id/close`. There is no agreed
-   support window yet
-   ([0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)
-   owns that decision), so nothing can be retired. Until then, a 404 or 405
-   keeps meaning "old bridge", never "already closed". The restart notice is
-   now proved in the browser suite, so retiring it later has a test to
-   delete with it.
+   no supported bridge predates `POST /session/:id/close`. That is true now:
+   the support window
+   ([`version-compatibility.md`](../../architecture/version-compatibility.md),
+   decided in
+   [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md))
+   covers published releases from v2.21.0, and every bridge in v2.21.0 has
+   the close route (#853, 2026-09-26). Only unpublished source builds predate
+   it. Before removing, read the `bridge-close.legacy-delete` and
+   `bridge-close.upgrade-required` counters (`get_compatibility_path_usage`)
+   on the machines you can reach. After removal a 404 or 405 from the close
+   route must still never mean "already closed": report it as an old bridge
+   that needs a restart, without a DELETE. Delete the browser-suite restart
+   notice test with the path.
 
 ### Qualification
 
@@ -505,6 +512,10 @@ bounded-state occupancy in `/runtime-health`) are decided below.
 - **Choice:** keep it. Retiring needs a support window that 0034 has not
   agreed; removing it now would turn an old Claude bridge's 404 into a
   failure with no notice, or worse, tempt a DELETE.
+- **Update 2026-10-24:** 0034 set the window (published releases from
+  v2.21.0 today), and every bridge in v2.21.0 has the close route, so the
+  item is unblocked. It stays open for this file's owner; the usage counters
+  added by 0034 give the evidence to check first.
 
 ### Pi startup interrupt is proved in the browser suite (Qualification item 2)
 

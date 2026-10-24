@@ -63,3 +63,7 @@ other workspace package passed; aggregate exit 1 after 852.0 seconds.
 - **Suite counts:** backend: 9904 passed, 80 skipped, two failed and one between-test error across 9986 tests in 571 files (572.47 s); the other failure is tracked in 0672. Root/support, bridges and protocol passed.
 - **Evidence:** `orkestrator-test-run.H9pUnY/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory; passing focused output was removed by `test:logged`.
 - **Assessment:** confirms another intermittent recurrence. No environment-move implementation, test, deadline, assertion or skip changed. The shared-host contention hypothesis remains unproven.
+
+## Agent accounts main merge — 2026-10-24
+
+The backend aggregate timed out `move_environment > a failed submodule re-link restores the original checkout` at 5133.53 ms. The complete unchanged owner passed in 33.9 s: `mise run test:logged -- --name merge-environment-move-owner -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`. Original evidence: `orkestrator-test-run.AdOl8u/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. No assertion, deadline or skip changed. See [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md).

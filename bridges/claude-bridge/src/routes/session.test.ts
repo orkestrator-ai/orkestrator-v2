@@ -557,11 +557,36 @@ describe("session routes", () => {
       const readiness = {
         state: "authentication-required" as const,
         message: "Claude isn't signed in. Sign in to Claude to keep working.",
-        signIn: { kind: "terminal" as const, hint: "Open a Claude terminal tab and run /login." },
+        signIn: {
+          kind: "terminal" as const,
+          hint: "Sign in to Claude from the sign-in card in this tab or from Settings → Claude.",
+        },
       };
       mockClaudeReadiness.mockImplementationOnce(() => readiness);
       const locked = await jsonBody(await app.request("/session/s-1"));
       expect(locked.readiness).toEqual(readiness);
+    });
+
+    test("serves a session's turn-time auth notice only while it stands", async () => {
+      const base = {
+        id: "s-1",
+        title: "Test",
+        status: "error" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+      };
+      mockGetSession.mockImplementationOnce(() => base);
+      const clear = await jsonBody(await app.request("/session/s-1"));
+      expect(Object.hasOwn(clear, "authNotice")).toBe(false);
+
+      const authNotice = {
+        state: "expired" as const,
+        message: "Claude's login was refused. Sign in to Claude again to keep working.",
+        occurrenceId: "assistant-1",
+      };
+      mockGetSession.mockImplementationOnce(() => ({ ...base, authNotice }));
+      const raised = await jsonBody(await app.request("/session/s-1"));
+      expect(raised.authNotice).toEqual(authNotice);
     });
 
     test("publishes the command inventory revision only when an inventory exists", async () => {

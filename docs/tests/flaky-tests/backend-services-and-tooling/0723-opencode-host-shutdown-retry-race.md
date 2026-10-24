@@ -12,3 +12,11 @@
 - **Hypothesis:** host scheduling may race child exit against database-lock retry recognition and shutdown signaling; the separate owner passed, but the precise cause is unproven. The owner and production host-start module match both merge parents. No implementation, assertion, timeout or skip changed.
 
 - **Final suite counts:** backend 10,675 passed, 77 skipped and eighteen failed across 630 files (789.98 s); repository aggregate exited 1 in 905.6 s. Fourteen failures were the existing OpenCode version mismatch; the other owners and reruns are detailed in the linked merge record.
+
+
+## Coordinator adapter review — 2026-10-24
+
+The aggregate repeated this case during coordinator adapter validation. Exact
+commands, timing, owner rerun results and evidence are recorded in
+[0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
+The owning implementation, assertions, timeouts and skips were unchanged.

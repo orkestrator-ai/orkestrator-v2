@@ -420,9 +420,17 @@ function operationSection(input: CompileBriefInput, readOnly: WebAnnotationReadO
       "",
       "Answer the user's question about the annotated page, analyze the likely cause, and suggest approaches.",
       "Do not implement changes for this request: do not edit files, commit, or run commands that modify the repository or environment.",
-      readOnly === "plan-mode"
-        ? "This request was sent in the agent's plan (read-only) mode."
-        : "This is an instruction for this request, not a technical restriction; the session keeps its existing permissions.",
+      ...(readOnly === "plan-mode"
+        ? [
+            "This request was sent in the agent's plan (read-only) mode.",
+            // Live runs: in plan mode, Claude often ended a discussion by
+            // proposing its answer as a plan for approval, which left the
+            // request waiting on a plan approval nobody asked for.
+            "Give your answer in your reply and end the turn there. This is not a planning task: do not submit a plan for approval or ask to leave plan mode.",
+          ]
+        : [
+            "This is an instruction for this request, not a technical restriction; the session keeps its existing permissions.",
+          ]),
       "The user reviews the answer and decides whether to request changes.",
     ];
   }

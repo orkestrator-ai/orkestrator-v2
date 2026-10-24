@@ -119,6 +119,8 @@ describe("compileWebAnnotationBrief", () => {
     expect(head).toContain("## Operation: Discuss (analysis only)");
     expect(head).toContain("Do not implement changes for this request");
     expect(head).toContain("sent in the agent's plan (read-only) mode");
+    // A discussion is answered in the reply, never proposed as a plan.
+    expect(head).toContain("do not submit a plan for approval");
     expect(head).toContain("### [1] Annotation id `annotation-1`");
     expect(head).toContain("> Give the Save button more padding.");
     expect(occurrences(brief.body, WEB_ANNOTATION_EVIDENCE_OPEN)).toBe(1);
@@ -168,6 +170,7 @@ describe("compileWebAnnotationBrief", () => {
     );
     expect(brief.readOnly).toBe("advisory");
     expect(brief.body).toContain("not a technical restriction");
+    expect(brief.body).not.toContain("do not submit a plan for approval");
   });
 
   test("implementation brief asks for repository changes and optional result tool", () => {

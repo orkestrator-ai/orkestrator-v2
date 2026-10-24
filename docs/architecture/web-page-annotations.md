@@ -1,7 +1,8 @@
 # Web page annotations
 
-Status: Living — implemented behind capability negotiation; real-stack gates
-(native window, Docker, live agents) not yet run. Gates and evidence are in
+Status: Living — implemented behind capability negotiation. Live implement
+and Discuss runs pass on all six providers (2026-10-24); Docker, remote and
+milestone sign-offs are still open. Gates and evidence are in
 [0044-web-annotation-qualification.md](../todo/previews-and-annotations/0044-web-annotation-qualification.md).
 
 Select part of a preview, save a note without any agent open, discuss it with
@@ -65,6 +66,18 @@ navigation-stale capture has no image, and its page identity is the page the
 target was selected on, read before the first probe. Geometry records viewport, scroll, zoom,
 device pixel ratio and the downscale transform (longest side ≤ 2,000 px,
 ≤ 8 MiB).
+
+A region keeps the full-viewport screenshot (its first image, which
+`target.imageRect` addresses) and adds the crop cut from the already-redacted
+spool image. The backend records the relation as `capture.regionCrop`
+(`assetId`, `sourceAssetId`, `sourceRect`) when the stored sizes agree with
+`imageRect` within a pixel; the brief labels the images `viewport` and
+`region-crop`. A payload naming `regionCrop`, `producerSource` or the old
+`parentCaptureId` is refused: both are assigned by the backend. Every capture
+also gets `producerSource`: `client-declared` for a producer named by the
+submitting client (any authenticated client can name `desktop-native`, so the
+thread says "reported by the client, not verified"), `backend` for legacy
+imports and result captures.
 
 Page identity comes from the real view URL in main, never from the page:
 `{kind: "port"}` for loopback or gateway previews, `{kind: "service"}` for
@@ -240,7 +253,11 @@ schedule: at most one trailing pass per 750 ms, a pause after 120 passes until
 the host re-sends pins, no work while the document is hidden, and a shared
 budget of 60,000 node visits or 120 ms per pass. Main clears pins for every
 new document and emits `pins-invalidated`, so the panel re-sends them from
-backend records after a reload, navigation or remount.
+backend records after a reload, navigation or remount. Every result carries
+the document generation it was resolved against; the panel keeps only results
+of the newest generation it has seen for the tab, so after Show on page
+navigates (or the page reloads) the page being left is never shown as
+current.
 
 **Show on page** navigates to the note's logical route through the current
 preview routing, waits for the document, resolves the anchor, then scrolls and
@@ -250,10 +267,16 @@ routing changed, the panel asks the user to navigate and reselect.
 
 ## Requests
 
-**Discuss** asks for analysis without changes. When the destination supports
-per-turn plan mode it is requested (`readOnly: "plan-mode"`); otherwise the
-request is labelled advisory. Neither is presented as a sandbox. **Request
-changes** asks for a repository change with a readable report.
+**Discuss** asks for analysis without changes. It runs read-only
+(`readOnly: "plan-mode"`) when the destination can do that without changing the
+session's mode: a per-turn plan mode (Claude, `planModeScope: "turn"`), or a
+Codex, Cursor or Grok session whose recorded mode is already Plan
+(`planModeScope: "session"`). Otherwise it is labelled advisory, and the
+destination picker lists the sessions in the environment that can discuss
+read-only; with none, it says how to get one (a Claude session, or Plan set in
+a session's own chat). A plan-mode brief tells the agent to answer in its reply
+and not submit a plan for approval. Neither mode is presented as a sandbox.
+**Request changes** asks for a repository change with a readable report.
 
 Preparation (`web_annotation_request_prepare`) compiles the brief in the
 backend and returns the exact destination, instruction, evidence manifest and
@@ -285,7 +308,9 @@ else calls providers.
 The reconciler re-drives step 2–4 only for requests still in `prepared`; it
 never allocates a new id. It observes state from storage and in-memory activity
 snapshots only; it never polls tab-facing bridge routes or hydrates idle
-sessions.
+sessions. A native turn-end edge also observes that session's active requests
+at once (`noteTurnEnded`, loaded environments only), so the turn outcome is read
+while the bridge that ran the turn is still up.
 
 | Observation | Request state |
 | --- | --- |
@@ -304,7 +329,13 @@ is never mistaken for an acknowledged dispatch, and the id is never
 republished. The turn outcome comes from the drain's own status read (or one
 status read once the turn has ended), recorded content-free on the session.
 Implementation requests are sent with the session's current mode, or with no
-mode at all; discussion uses plan mode only where it is per-turn.
+mode at all. Discussion uses plan mode per turn where the provider scopes modes
+to a turn; for a session-scoped provider it is sent in Plan only while the
+session's recorded mode is Plan, marked `requireSessionMode: "plan"`. Publish
+fails the request if the session left Plan after preparation, and the drain
+parks the prompt with the reason (Retry or Cancel) if it leaves Plan while
+queued, so the mode is never switched back and the discussion never runs with
+write access.
 
 Cancel removes a still-queued message through the queue's atomic fence. A
 claimed or in-flight request is reported as still active, with a typed
@@ -393,6 +424,11 @@ before preparing with `followUpOf`.
 Result review keeps the agent's report (outcome, summary, files, checks, cited
 evidence, the report revision it carries) apart from what Orkestrator observed
 (after-captures with their comparison metadata and the backend's file checks).
+File checks cover containment and existence only and never read contents:
+local worktrees from the host, container workspaces inside the container
+(`check_container_workspace_paths`, `stat` after `realpath` against
+`/workspace`). Both take at most 200 paths with a 2 s budget; the container
+exec is killed after 5 s, and a check that cannot run reports `unavailable`.
 
 Annotation items in the native chat queue are shown as frozen web annotation
 requests with a link to their note: they can be reordered or removed (removal
@@ -439,6 +475,19 @@ lists them. Old prompt envelopes still render in transcripts.
 
 The new capture path never writes into native chat drafts.
 
+## Diagnostics
+
+`WebAnnotationMetrics` series are built from closed vocabularies only (command
+names, states, operations, agent platforms, evidence sections, anchor states
+and rules). Besides command, capture, storage and request lifecycle series they
+count evidence the brief omitted or that was unavailable, turn outcomes per
+agent, acceptance time (from the request, or from the note when resolved
+without one), reopened notes, and anchor resolutions of result captures. The
+desktop keeps its own counters (`getCaptureDiagnostics`: pending spool depth
+and image bytes against the limits, pin and Show on page resolutions by state
+and rule). Settings → Web page annotations → Diagnostics loads both on demand
+and copies them as JSON; counts reset when the backend or app restarts.
+
 ## Client capability matrix
 
 | Client | Behavior |
@@ -454,6 +503,9 @@ The new capture path never writes into native chat drafts.
 - A turn outcome is `unknown` when no running bridge answers the status read
   (the read never starts one), the status is neither idle nor an error, or a
   later request was dispatched first; the card says so rather than guessing.
+  The turn-end read makes this rare: live runs on all six providers on
+  2026-10-24 settled every request with a known outcome, but a prompt sent from
+  chat before the turn end is observed can still supersede one.
 - Pending questions and approvals are answerable from the request card only
   when their bodies can be read from the destination session's projection;
   otherwise the card offers **Answer in chat**.
@@ -461,20 +513,18 @@ The new capture path never writes into native chat drafts.
   search in time is labelled as such rather than as a missing target.
 - Pixel differences are not implemented and are never advertised. A thread
   summary for a different session is a deterministic excerpt of recent
-  entries, not a generated summary. Batch byte capacity in the review tray
-  counts only images whose records were already read; the backend checks it
-  exactly on preparation.
-- Discuss is enforced read-only only where the provider applies plan mode per
-  turn (Claude today). Elsewhere it is labelled advisory and runs under the
-  session's existing permissions.
-- A region crop is stored as the capture's second asset; there is no explicit
-  crop-to-parent relation. Reported file paths are checked for containment and
-  existence in local worktrees only; Docker environments report `unavailable`.
-- Pin results are not checked against the page generation. After **Open that
-  page** navigates, the pins shown are those sent for the page being left
-  until the next pin refresh.
-- The capture `producer` field is client-declared; a gateway client can label a
-  capture `desktop-native`. Provenance is still assigned by the server.
+  entries, not a generated summary. The review tray counts images exactly from
+  summaries on current backends; against an older backend it counts only
+  images whose records were already read. The backend checks the brief exactly
+  on preparation.
+- Discuss is read-only only on Claude and on Codex, Cursor or Grok sessions
+  already in Plan. OpenCode and Pi have no modes; other sessions are advisory
+  and run under their existing permissions. A mode changed only inside a
+  provider's own terminal UI is not seen (the recorded control is used), which
+  errs towards advisory and refusing.
+- The crop relation is checked by image size, not by pixels.
+- The capture `producer` is client-declared and labelled as such; nothing
+  attests it. Provenance is still assigned by the server.
 - The gateway token is a single user credential that reaches every
   environment, as for other environment-scoped commands.
 - Not yet exercised on a real stack: Docker materialization, remote backend

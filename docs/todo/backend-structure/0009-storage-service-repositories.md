@@ -156,8 +156,8 @@ All on this branch, 2026-10-25.
 - `mise run typecheck`: no errors (backend: 1,531 and 1,036 files).
 - `mise run lint`: exit 0, no finding in a changed file.
 - First `mise run test` (head `f960eca3`): bridges and codex protocol lockfile
-  passed; root failed one test (`mise-tasks.test.ts`: this file named
-  `bun run typecheck`, fixed); the backend workspace failed 9 of 11,530: the
+  passed; root failed one test (`mise-tasks.test.ts`: this file told the
+  reader to run the backend package script instead of the mise task, fixed); the backend workspace failed 9 of 11,530: the
   8 routing tests above (fixed) and one timeout recorded as flake
   [0905](../../tests/flaky-tests/backend-services-and-tooling/0905-public-api-environment-create-replay-timeout.md)
   (its owner passed alone).

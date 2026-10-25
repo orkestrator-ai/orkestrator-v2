@@ -5,14 +5,23 @@
  */
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 
 import { requestGlobalSettings } from "./settings-navigation";
 
 export interface McpSettingsIntent {
   provider?: AgentPlatform;
   environmentId?: string;
-  /** Exact native server name, used only to highlight matching rows. */
+  /**
+   * Exact name a live session reports for the server. The section joins it to
+   * the saved row that session loads (`joinLiveMcpServer`) only within this
+   * intent's provider and environment.
+   */
   serverName?: string;
+  /** Layer the live session reports the server was loaded from. */
+  serverScope?: NativeAgentMcpServer["scope"];
+  /** The live session the link came from, to show its apply outcome. */
+  logicalSessionKey?: string;
 }
 
 export const MCP_SETTINGS_INTENT_EVENT = "orkestrator:mcp-settings-intent";

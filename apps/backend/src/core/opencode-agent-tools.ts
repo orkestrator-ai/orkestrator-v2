@@ -304,6 +304,15 @@ export class OpenCodeAgentToolsReconciler {
     return task.then(outcome);
   }
 
+  /**
+   * Forget the recorded outcome for `key`, so the next {@link schedule} posts
+   * the entry again. For an instance disposal, which drops runtime-added
+   * servers while the server process (and its fingerprint) stays the same.
+   */
+  forget(key: string): void {
+    this.outcomes.delete(key);
+  }
+
   /** The connection a live local OpenCode server was launched with, if recorded. */
   launchConnection(key: string): AgentToolConnection | undefined {
     return this.launchConnections.get(key);

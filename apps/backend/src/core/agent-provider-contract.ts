@@ -786,9 +786,17 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
   /**
    * Bridge-level MCP configuration reload that never starts an agent process:
    * `not-running` when nothing is running to reload, `unsupported` when the
-   * bridge predates the route. Session-free, so it survives a bridge restart.
+   * bridge predates the route, `busy` when the provider itself refused
+   * because work is running (OpenCode's directory instance is only disposed
+   * while idle). Session-free, so it survives a bridge restart.
    */
-  reloadMcpConfiguration?(): Promise<"reloaded" | "not-running" | "unsupported">;
+  reloadMcpConfiguration?(): Promise<"reloaded" | "not-running" | "unsupported" | "busy">;
+  /**
+   * Names of the MCP servers the provider's runtime has loaded now, for the
+   * MCP apply scheduler's post-reload check. Process- or directory-level, not
+   * a session's; never starts a process that is not running.
+   */
+  loadedMcpServerNames?(): Promise<string[]>;
   authStatus?(): Promise<NativeAgentAuthStatus>;
   /**
    * `deviceCode` asks for a flow without a loopback callback, for a browser

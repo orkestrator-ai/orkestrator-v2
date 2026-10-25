@@ -223,6 +223,60 @@ describe("Codex reload probe", () => {
   });
 });
 
+describe("OpenCode reload probe", () => {
+  function openCodeContext(outcome: string, names?: string[]) {
+    const calls: unknown[][] = [];
+    const forgotten: string[] = [];
+    const statusReads: string[] = [];
+    const context = {
+      nativeAgents: {
+        reloadMcpConfigurationIfRunning: async (...args: unknown[]) => {
+          calls.push(args);
+          return outcome;
+        },
+        loadedMcpServerNamesIfRunning: async (...args: unknown[]) => {
+          calls.push(["names", ...args]);
+          return names;
+        },
+      },
+      runtime: {
+        localServers: {
+          openCodeAgentTools: { forget: (key: string) => forgotten.push(key) },
+          enqueueEnvironmentOperation: (environmentId: string) => {
+            statusReads.push(environmentId);
+            return Promise.resolve({ running: false, port: null, pid: null });
+          },
+        },
+      },
+    } as unknown as CommandContext;
+    return { probe: createMcpRuntimeProbe(context), calls, forgotten, statusReads };
+  }
+
+  test("a rebuilt instance gets Orkestrator's entry back and reports its listing", async () => {
+    const { probe, calls, forgotten, statusReads } = openCodeContext("reloaded", ["fixture"]);
+    await expect(probe.reloadOpenCode!("env-1")).resolves.toEqual({
+      outcome: "reloaded",
+      names: ["fixture"],
+    });
+    expect(calls).toEqual([
+      ["env-1", "opencode"],
+      ["names", "env-1", "opencode"],
+    ]);
+    // Disposal dropped the runtime-only entry; it is posted again at once.
+    expect(forgotten).toEqual(["local:env-1"]);
+    expect(statusReads).toEqual(["env-1"]);
+  });
+
+  test("anything but a reload touches nothing else", async () => {
+    const { probe, calls, forgotten } = openCodeContext("busy");
+    await expect(probe.reloadOpenCode!("env-1")).resolves.toEqual({ outcome: "busy" });
+    expect(calls).toEqual([["env-1", "opencode"]]);
+    expect(forgotten).toEqual([]);
+    const none = createMcpRuntimeProbe({} as unknown as CommandContext);
+    await expect(none.reloadOpenCode!("env-1")).resolves.toEqual({ outcome: "not-running" });
+  });
+});
+
 describe("MCP configuration evidence probe", () => {
   test("reads through the observation-only service path and copies only the evidence fields", async () => {
     const calls: unknown[][] = [];

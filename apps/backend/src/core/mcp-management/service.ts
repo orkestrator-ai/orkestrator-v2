@@ -34,19 +34,29 @@ import {
   type McpMutationResult,
   type McpOperationSnapshot,
   type McpOverlayResolutionResult,
+  type McpRuntimeApplyEntry,
   type McpTargetCapabilities,
   type McpTargetList,
   type McpValidationResult,
 } from "@orkestrator/protocol/mcp-management";
 
 import {
-  advanceCodexRuntimes,
+  advanceReloadRuntimes,
   planRuntimes,
   publicApply,
   type GenerationParts,
   type PlannedRuntime,
+  type ReloadExpectation,
   type RuntimeProbe,
 } from "./apply.js";
+import {
+  CODEX_TURN_APPLIED_REASON,
+  codexTurnBaseline,
+  codexTurnsStarted,
+  hasCodexTurnWork,
+  lookupSession,
+  sessionsByKey,
+} from "./codex-turn-evidence.js";
 import {
   EvidenceScheduler,
   evidenceRole,
@@ -1256,6 +1266,7 @@ export class McpManagementService {
       spec.excludedReason,
       now,
       stored.snapshot.savedRevision,
+      { openCodeInstanceSource: !spec.sourceId.startsWith("opencode:user-") },
     );
     const coveredRuntimeIds = new Set(
       planned.runtimes
@@ -1296,6 +1307,17 @@ export class McpManagementService {
       ...(runtime.bridgePid !== undefined ? { bridgePid: runtime.bridgePid } : {}),
       ...(runtime.generation ? { generation: runtime.generation } : {}),
     }));
+    // A Codex runtime whose process is not running waits for a turn on the
+    // next one, which reads the saved file when it starts.
+    if (planned.runtimes.some((runtime) => isAwaitingCodexTurn(runtime))) {
+      const sessions = sessionsByKey(await this.options.probe.sessions());
+      for (const record of stored.recovery.runtimes) {
+        const runtime = planned.runtimes.find((entry) => entry.runtimeId === record.runtimeId);
+        if (runtime && isAwaitingCodexTurn(runtime)) {
+          record.turnBaseline = codexTurnBaseline(lookupSession(sessions, record));
+        }
+      }
+    }
     stored.recovery.applyQueuedAt = now;
     stored.snapshot.updatedAt = now;
     await this.operations.put(stored);
@@ -1330,6 +1352,7 @@ export class McpManagementService {
     const operations = this.operations.list();
     return (
       this.hasQueuedWork() ||
+      hasCodexTurnWork(operations, this.now()) ||
       this.evidence.hasWork(operations) ||
       this.externalEdits.hasWork(operations)
     );
@@ -1393,7 +1416,7 @@ export class McpManagementService {
       const queuedAt = Date.parse(stored.recovery.applyQueuedAt ?? stored.snapshot.updatedAt);
       let superseded: Supersession | undefined;
       let merged: string | undefined;
-      const outcome = await advanceCodexRuntimes(
+      const outcome = await advanceReloadRuntimes(
         this.options.probe,
         planned,
         queuedAt,
@@ -1408,6 +1431,7 @@ export class McpManagementService {
           }
           return superseded;
         },
+        reloadExpectation(stored),
       );
       if (!outcome.changed && !merged) continue;
       // A reload's outcome was observed against the process it reached.
@@ -1421,7 +1445,7 @@ export class McpManagementService {
           .catch(() => undefined);
         if (generation) observed.set(index, generation);
       }
-      // A request may cancel or replace the plan while reloadCodex awaits.
+      // A request may cancel or replace the plan while a reload awaits.
       if (stored.snapshot.apply.runtimes !== runtimes) continue;
       const next = outcome.runtimes.map((runtime, index) => {
         const current = runtimes[index]!;
@@ -1432,8 +1456,17 @@ export class McpManagementService {
       });
       stored.snapshot.apply.runtimes = next;
       const reloaded = new Set(outcome.reloaded);
+      const awaitingTurn = new Set(outcome.awaitingTurn);
+      // Read after the reload answered: a dispatch accepted from here on
+      // started its turn on a process that holds the change.
+      const sessions = awaitingTurn.size
+        ? sessionsByKey(await this.options.probe.sessions().catch(() => []))
+        : undefined;
       for (const record of stored.recovery.runtimes ?? []) {
         if (reloaded.has(record.runtimeId)) record.reloaded = true;
+        if (sessions && awaitingTurn.has(record.runtimeId)) {
+          record.turnBaseline = codexTurnBaseline(lookupSession(sessions, record));
+        }
       }
       if (merged) noteOnce(stored.snapshot, merged);
       // The change is gone for every runtime still waiting on it, not only
@@ -1442,10 +1475,56 @@ export class McpManagementService {
       if (superseded) retireSuperseded(next, superseded, nowIso(this.now), heldRuntimes(stored));
       await this.finishApplyUpdate(stored);
     }
+    // Codex threads that started a turn since their app-server reloaded.
+    await this.checkCodexTurns();
     // Proof of adoption for runtimes that apply on their own boundary.
     await this.evidence.check(this.operations.list());
     // Outside edits for waiting runtimes that neither pass above reads.
     await this.externalEdits.check(this.operations.list());
+  }
+
+  /**
+   * Mark Codex runtimes `applied` whose session started a turn after their
+   * app-server reloaded the change (`codex-turn-evidence.ts`). Reads the
+   * persisted session records only; never a bridge.
+   */
+  private async checkCodexTurns(): Promise<void> {
+    const operations = this.operations.list();
+    if (!hasCodexTurnWork(operations, this.now())) return;
+    const sessions = sessionsByKey(await this.options.probe.sessions());
+    const started = codexTurnsStarted(operations, sessions, this.now());
+    if (!started.size) return;
+    const generations = await this.runtimeGenerations().catch(() => undefined);
+    const now = nowIso(this.now);
+    for (const [stored, ids] of started) {
+      const runtimes = stored.snapshot.apply.runtimes;
+      const observed = new Map<string, string>();
+      for (const record of stored.recovery.runtimes ?? []) {
+        if (!ids.has(record.runtimeId) || !record.logicalSessionKey) continue;
+        const generation = await generations
+          ?.of(record.environmentId, record.agent as AgentPlatform, record.logicalSessionKey)
+          .catch(() => undefined);
+        if (generation) observed.set(record.runtimeId, generation);
+      }
+      // A request may cancel or replace the plan while generations are read.
+      if (stored.snapshot.apply.runtimes !== runtimes) continue;
+      const next: McpRuntimeApplyEntry[] = runtimes.map((runtime) => {
+        if (!ids.has(runtime.runtimeId) || runtime.state !== "pending-next-turn") return runtime;
+        const generation = observed.get(runtime.runtimeId);
+        return {
+          ...runtime,
+          state: "applied",
+          reason: CODEX_TURN_APPLIED_REASON,
+          updatedAt: now,
+          ...(generation ? { generation } : {}),
+        };
+      });
+      for (const record of stored.recovery.runtimes ?? []) {
+        if (ids.has(record.runtimeId)) delete record.turnBaseline;
+      }
+      stored.snapshot.apply.runtimes = next;
+      await this.finishApplyUpdate(stored);
+    }
   }
 
   /**
@@ -1694,6 +1773,26 @@ export class McpManagementService {
     } catch {
       // Events are hints; snapshots remain authoritative.
     }
+  }
+}
+
+/** A Codex runtime planned to wait for its next turn on a process not yet running. */
+function isAwaitingCodexTurn(runtime: PlannedRuntime): boolean {
+  return runtime.agent === "codex" && runtime.state === "pending-next-turn";
+}
+
+/** The server name a rebuilt runtime must list once the change loaded. */
+function reloadExpectation(stored: StoredOperation): ReloadExpectation {
+  switch (stored.snapshot.kind) {
+    case "add":
+    case "update":
+    case "set-enabled":
+      return { present: stored.recovery.name };
+    case "rename":
+      return stored.recovery.newName ? { present: stored.recovery.newName } : {};
+    default:
+      // A removal proves nothing by presence, and a re-apply names no change.
+      return {};
   }
 }
 

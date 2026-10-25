@@ -48,6 +48,13 @@ export interface ApplySession {
   /** The provider session the logical session maps to now, when persisted. */
   providerSessionId?: string;
   pendingDispatch: boolean;
+  /** The open dispatch's request id, when one is open. */
+  pendingDispatchId?: string;
+  /**
+   * The newest dispatch the provider accepted for this session. A different
+   * value later means a turn started since (Codex reload evidence).
+   */
+  lastDispatchId?: string;
   coordinator: boolean;
   projectResources?: boolean;
 }
@@ -66,7 +73,14 @@ export interface RuntimeProbe {
    * `not-running` means the next process start reads the saved file anyway, and
    * `unsupported` means the bridge predates the reload route.
    */
-  reloadCodex(environmentId: string): Promise<CodexReloadOutcome>;
+  reloadCodex(environmentId: string): Promise<ReloadOutcome>;
+  /**
+   * Rebuild the environment's OpenCode instance for its worktree so it reads
+   * the saved files again (`instance.dispose`), only if its server is already
+   * running and every session there is idle. `busy` means OpenCode itself saw
+   * work running; `names` are the MCP servers the rebuilt instance lists.
+   */
+  reloadOpenCode?(environmentId: string): Promise<{ outcome: ReloadOutcome; names?: string[] }>;
   /**
    * What the session's bridge reports about the MCP configuration its live
    * runtime was built from, read through the no-touch `/runtime-health`
@@ -81,6 +95,7 @@ export interface RuntimeProbe {
 }
 
 export type CodexReloadOutcome = "reloaded" | "not-running" | "unsupported";
+export type ReloadOutcome = CodexReloadOutcome | "busy";
 
 export interface PlannedRuntime extends McpRuntimeApplyEntry {
   agent: AgentPlatform;
@@ -103,6 +118,10 @@ export interface GenerationParts {
 }
 
 const NOT_RUNNING = "Loads when the environment next starts this provider.";
+const OPENCODE_RESTART =
+  "OpenCode reads configuration when its server starts; stop and start the environment to load the change.";
+const OPENCODE_USER_RESTART =
+  "OpenCode keeps its user configuration until its server restarts; stop and start the environment to load the change.";
 export const ENVIRONMENT_DELETED = "The environment was deleted.";
 export const COORDINATOR_BLOCKED =
   "Coordinator sessions use a private configuration home and do not load user MCP servers.";
@@ -243,6 +262,16 @@ export async function planRuntimes(
   sourceExcluded: string | undefined,
   now: string,
   savedRevision?: string,
+  options: {
+    /**
+     * OpenCode: the saved file is one each directory instance reads when it
+     * is built (project files, `.opencode` and config directories,
+     * `OPENCODE_CONFIG`), so rebuilding the instance loads it. OpenCode 1.19
+     * caches the user files in `$XDG_CONFIG_HOME/opencode` for the server's
+     * lifetime, so those still need a restart.
+     */
+    openCodeInstanceSource?: boolean;
+  } = {},
 ): Promise<{ runtimes: PlannedRuntime[]; omitted: number }> {
   const environments = new Map(
     (await probe.environments()).map((environment) => [environment.id, environment]),
@@ -332,13 +361,26 @@ export async function planRuntimes(
         add(session, environment, "queued", "Waiting to reload Codex's MCP configuration.", local);
         break;
       case "opencode":
-        add(
-          session,
-          environment,
-          "restart-required",
-          "OpenCode reads configuration when its server starts; stop and start the environment to load the change.",
-          local,
-        );
+        // A worktree's instance is rebuilt in place once the directory is
+        // idle, for files an instance reads when it is built. A container's
+        // server is not reloaded from here, so it still needs the restart.
+        if (local && options.openCodeInstanceSource) {
+          add(
+            session,
+            environment,
+            "queued",
+            "Waiting to reload OpenCode's configuration for this worktree.",
+            local,
+          );
+        } else {
+          add(
+            session,
+            environment,
+            "restart-required",
+            local ? OPENCODE_USER_RESTART : OPENCODE_RESTART,
+            local,
+          );
+        }
         break;
       case "grok":
         add(
@@ -358,33 +400,78 @@ export async function planRuntimes(
 export const CODEX_APPLY_WAIT_MS = 30 * 60_000;
 const CODEX_RELOAD_TIMEOUT_MS = 30_000;
 
+/** Providers whose apply is one reload per environment, run while it is idle. */
+const RELOADED_PROVIDERS = new Set<AgentPlatform>(["codex", "opencode"]);
+
+/** What a reload proves about the saved change, for the OpenCode post-reload check. */
+export interface ReloadExpectation {
+  /** A server name the rebuilt runtime must list (added, edited or renamed to). */
+  present?: string;
+}
+
+const RELOAD_TEXT = {
+  codex: {
+    name: "Codex",
+    busy: "Waiting for Codex to finish its current work.",
+    applying: "Reloading Codex's MCP configuration.",
+    timeout: "Codex stayed busy for 30 minutes; retry apply when its sessions are idle.",
+    unsupported:
+      "This Codex bridge predates on-request reload; stop and start the environment to load the change.",
+    refused: "Codex did not accept the reload request; retry apply.",
+  },
+  opencode: {
+    name: "OpenCode",
+    busy: "Waiting for OpenCode to finish its current work in this worktree.",
+    applying: "Reloading OpenCode's configuration for this worktree.",
+    timeout: "OpenCode stayed busy for 30 minutes; retry apply when its sessions are idle.",
+    unsupported: OPENCODE_RESTART,
+    refused: "OpenCode did not rebuild its instance; retry apply.",
+  },
+} as const;
+
 /**
- * Advance queued Codex runtimes. Returns the updated list, whether any are
- * still waiting, and the ids of those whose app-server reloaded. One reload
- * per environment covers every thread in it.
+ * Advance queued Codex and OpenCode runtimes. Returns the updated list,
+ * whether any are still waiting, the ids of Codex runtimes whose app-server
+ * reloaded, and the ids of Codex runtimes now waiting for a turn (reloaded,
+ * or nothing running) — the service records their turn baseline. One reload
+ * per environment covers every session in it.
+ *
+ * Codex: `config/mcpServer/reload` on the environment's app-server; threads
+ * use the change from their next turn, which the service proves separately.
+ *
+ * OpenCode: `instance.dispose` for the worktree, only while every session
+ * there is idle (the provider checks again), so the next request rebuilds the
+ * instance from the saved files. The rebuilt instance's MCP listing is the
+ * evidence: `applied` when it lists `expectation.present` (or the change was
+ * a removal), `restart-required` when it does not.
  *
  * `refusal` is asked once, just before the first reload, whether the change
  * still applies; a supersession cancels the queued runtimes, with its reason
  * and `cancelReason`, instead of reloading.
  */
-export async function advanceCodexRuntimes(
+export async function advanceReloadRuntimes(
   probe: RuntimeProbe,
   runtimes: PlannedRuntime[],
   queuedAt: number,
   nowMs: number,
   refusal?: () => Promise<Supersession | undefined>,
+  expectation: ReloadExpectation = {},
 ): Promise<{
   runtimes: PlannedRuntime[];
   waiting: boolean;
   changed: boolean;
   reloaded: string[];
+  awaitingTurn: string[];
 }> {
   const now = new Date(nowMs).toISOString();
   const queued = runtimes.filter(
     (runtime) =>
-      runtime.agent === "codex" && (runtime.state === "queued" || runtime.state === "applying"),
+      RELOADED_PROVIDERS.has(runtime.agent) &&
+      (runtime.state === "queued" || runtime.state === "applying"),
   );
-  if (!queued.length) return { runtimes, waiting: false, changed: false, reloaded: [] };
+  if (!queued.length) {
+    return { runtimes, waiting: false, changed: false, reloaded: [], awaitingTurn: [] };
+  }
   const environments = new Map(
     (await probe.environments()).map((environment) => [environment.id, environment]),
   );
@@ -392,11 +479,13 @@ export async function advanceCodexRuntimes(
   let waiting = false;
   let changed = false;
   const reloaded: string[] = [];
+  const awaitingTurn: string[] = [];
   const byEnvironment = new Map<string, PlannedRuntime[]>();
   for (const runtime of queued) {
-    const list = byEnvironment.get(runtime.environmentId!) ?? [];
+    const key = `${runtime.agent}\u0000${runtime.environmentId!}`;
+    const list = byEnvironment.get(key) ?? [];
     list.push(runtime);
-    byEnvironment.set(runtime.environmentId!, list);
+    byEnvironment.set(key, list);
   }
   let refused: Promise<Supersession | undefined> | undefined;
   const set = (
@@ -414,40 +503,43 @@ export async function advanceCodexRuntimes(
       runtime.updatedAt = now;
     }
   };
-  for (const [environmentId, list] of byEnvironment) {
+  for (const list of byEnvironment.values()) {
+    const provider = list[0]!.agent as "codex" | "opencode";
+    const environmentId = list[0]!.environmentId!;
+    const text = RELOAD_TEXT[provider];
+    const wait = () => {
+      if (nowMs - queuedAt > CODEX_APPLY_WAIT_MS) {
+        set(list, "failed", text.timeout);
+      } else {
+        set(list, "queued", text.busy);
+        waiting = true;
+      }
+    };
     const environment = environments.get(environmentId);
     if (!environment) {
       // Deleted (or being deleted): there is nothing left to apply to.
       set(list, "cancelled", ENVIRONMENT_DELETED);
       continue;
     }
-    if (environment.status !== "running" || !environment.providerRunning("codex")) {
+    if (environment.status !== "running" || !environment.providerRunning(provider)) {
       set(list, "pending-next-turn", NOT_RUNNING);
+      if (provider === "codex") awaitingTurn.push(...list.map((runtime) => runtime.runtimeId));
       continue;
     }
-    // The reload is process-wide: every Codex session in the environment must be idle.
+    // The reload is process- or directory-wide: every session sharing it must be idle.
     const shared = sessions.filter(
       (session) =>
-        session.agent === "codex" &&
+        session.agent === provider &&
         session.environmentId === environmentId &&
         !session.coordinator,
     );
     const busy = shared.some(
       (session) =>
         session.pendingDispatch ||
-        probe.activity(environmentId, "codex", session.logicalSessionKey) !== "idle",
+        probe.activity(environmentId, provider, session.logicalSessionKey) !== "idle",
     );
     if (busy) {
-      if (nowMs - queuedAt > CODEX_APPLY_WAIT_MS) {
-        set(
-          list,
-          "failed",
-          "Codex stayed busy for 30 minutes; retry apply when its sessions are idle.",
-        );
-      } else {
-        set(list, "queued", "Waiting for Codex to finish its current work.");
-        waiting = true;
-      }
+      wait();
       continue;
     }
     // The file may have changed since the save; a reload would then load a
@@ -458,30 +550,65 @@ export async function advanceCodexRuntimes(
       set(list, "cancelled", superseded.reason, superseded.cancelReason);
       continue;
     }
-    set(list, "applying", "Reloading Codex's MCP configuration.");
+    set(list, "applying", text.applying);
     try {
       // Environment-level and no-spawn: a bridge restart that forgot every
-      // session still reloads, and a stopped app-server is never cold-started.
-      const outcome = await withTimeout(probe.reloadCodex(environmentId), CODEX_RELOAD_TIMEOUT_MS);
+      // session still reloads, and a stopped process is never cold-started.
+      const result =
+        provider === "codex"
+          ? {
+              outcome: await withTimeout(probe.reloadCodex(environmentId), CODEX_RELOAD_TIMEOUT_MS),
+            }
+          : probe.reloadOpenCode
+            ? await withTimeout(probe.reloadOpenCode(environmentId), CODEX_RELOAD_TIMEOUT_MS)
+            : { outcome: "unsupported" as const };
+      const outcome = result.outcome;
       if (outcome === "unsupported") {
-        set(
-          list,
-          "restart-required",
-          "This Codex bridge predates on-request reload; stop and start the environment to load the change.",
-        );
-      } else {
+        set(list, "restart-required", text.unsupported);
+      } else if (outcome === "busy") {
+        wait();
+      } else if (outcome === "not-running") {
         set(
           list,
           "pending-next-turn",
-          outcome === "reloaded"
-            ? "Codex reloaded its MCP configuration; each thread uses it from its next turn."
-            : "Codex is not running; it reads the saved configuration when it next starts.",
+          `${text.name} is not running; it reads the saved configuration when it next starts.`,
         );
-        if (outcome === "reloaded") reloaded.push(...list.map((runtime) => runtime.runtimeId));
+        if (provider === "codex") awaitingTurn.push(...list.map((runtime) => runtime.runtimeId));
+      } else if (provider === "codex") {
+        set(
+          list,
+          "pending-next-turn",
+          "Codex reloaded its MCP configuration; each thread uses it from its next turn.",
+        );
+        reloaded.push(...list.map((runtime) => runtime.runtimeId));
+        awaitingTurn.push(...list.map((runtime) => runtime.runtimeId));
+      } else {
+        const names = "names" in result ? result.names : undefined;
+        if (!names) {
+          // Disposed, but the rebuilt instance has not answered yet; the next
+          // request builds it from the saved files either way.
+          set(
+            list,
+            "pending-next-turn",
+            "OpenCode dropped this worktree's instance; it rebuilds it from the saved files at its next request.",
+          );
+        } else if (expectation.present && !names.includes(expectation.present)) {
+          set(
+            list,
+            "restart-required",
+            `OpenCode rebuilt this worktree's instance but does not list ${expectation.present}; stop and start the environment to load the change.`,
+          );
+        } else {
+          set(
+            list,
+            "applied",
+            "OpenCode rebuilt this worktree's instance from the saved configuration.",
+          );
+        }
       }
     } catch {
-      set(list, "failed", "Codex did not accept the reload request; retry apply.");
+      set(list, "failed", text.refused);
     }
   }
-  return { runtimes, waiting, changed, reloaded };
+  return { runtimes, waiting, changed, reloaded, awaitingTurn };
 }

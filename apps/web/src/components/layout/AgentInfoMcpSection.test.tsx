@@ -72,7 +72,15 @@ describe("AgentInfoMcpSection links into saved configuration", () => {
     expect(links.length).toBe(2);
     const dbLink = screen.getByRole("button", { name: "Saved configuration", description: "db" });
     fireEvent.click(dbLink);
-    expect(intents).toEqual([{ provider: "codex", environmentId: "env-1", serverName: "db" }]);
+    expect(intents).toEqual([
+      {
+        provider: "codex",
+        environmentId: "env-1",
+        serverName: "db",
+        serverScope: "project",
+        logicalSessionKey: "env-1:tab-1",
+      },
+    ]);
   });
 
   test("the panel-level link is visible while the inventory is collapsed", () => {
@@ -104,6 +112,23 @@ describe("AgentInfoMcpSection links into saved configuration", () => {
     render(<McpServersSettingsLink platform="pi" />);
     fireEvent.click(screen.getByRole("button", { name: "Manage Pi MCP servers" }));
     expect(intents).toEqual([{ provider: "pi" }]);
+  });
+});
+
+describe("AgentInfoMcpSection shows what to do outside Orkestrator", () => {
+  test("a server's hint is shown under its row", () => {
+    renderSection([
+      {
+        id: "docs",
+        name: "docs",
+        status: "needs-auth",
+        actions: ["reconnect"],
+        hint: "Sign in from a terminal where this environment's OpenCode runs: opencode mcp auth docs, then reconnect the server.",
+      },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: /Tools/ }));
+    expect(screen.getByText(/opencode mcp auth docs/)).toBeTruthy();
+    expectDomAbsent(screen.queryByRole("button", { name: /Sign in docs/ }), "sign-in action");
   });
 });
 

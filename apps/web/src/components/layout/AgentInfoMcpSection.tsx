@@ -99,11 +99,20 @@ export function AgentInfoMcpSection({
   const unhealthy = servers?.some(
     (server) => server.status === "failed" || server.status === "needs-auth",
   );
-  const manage = (serverName?: string) =>
+  // A row link carries the row's exact name and layer plus this session, so
+  // the section can pick the saved row this session loads, not every row
+  // that happens to share the name.
+  const manage = (server?: NativeAgentMcpServer) =>
     requestMcpServerSettings({
       provider,
       environmentId,
-      ...(serverName ? { serverName } : {}),
+      ...(server
+        ? {
+            serverName: server.name,
+            ...(server.scope ? { serverScope: server.scope } : {}),
+            logicalSessionKey: sessionKey,
+          }
+        : {}),
     });
   return (
     <div className="space-y-1.5">
@@ -112,7 +121,7 @@ export function AgentInfoMcpSection({
           servers={servers}
           busyAction={busyAction}
           onAction={onAction}
-          onManageServer={(server) => manage(server.name)}
+          onManageServer={(server) => manage(server)}
         />
       ) : servers ? (
         <p className="text-xs text-muted-foreground">

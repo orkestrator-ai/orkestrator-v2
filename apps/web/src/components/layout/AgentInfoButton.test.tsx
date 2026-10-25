@@ -4555,6 +4555,25 @@ describe("AgentInfoButton runtime inventory", () => {
     expect(metricValue("Plugins")).toBe("1");
     expect(metricValue("Commands")).toBe("3");
   });
+
+  test("drops the MCP count tile when the session lists its servers", () => {
+    seedClaudeProjection({
+      runtime: {
+        mcpServers: 1,
+        plugins: 1,
+        commands: 3,
+        mcp: [{ id: "docs", name: "docs", status: "connected", toolCount: 4, actions: [] }],
+      },
+    });
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    // The server list says the same thing, with names and states.
+    expect(screen.getByRole("button", { name: /Tools 4/ })).toBeTruthy();
+    expect(screen.queryByText("MCP") === null).toBe(true);
+    expect(metricValue("Plugins")).toBe("1");
+    expect(metricValue("Commands")).toBe("3");
+  });
 });
 
 describe("AgentInfoButton ACP agents", () => {

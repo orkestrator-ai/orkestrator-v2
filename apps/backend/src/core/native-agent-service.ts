@@ -3854,7 +3854,7 @@ export class NativeAgentService {
   async reloadMcpConfigurationIfRunning(
     environmentId: string,
     agent: BuildPipelineAgent,
-  ): Promise<"reloaded" | "not-running" | "unsupported"> {
+  ): Promise<"reloaded" | "not-running" | "unsupported" | "busy"> {
     const provider = await this.observeProvider({
       environmentId,
       agent,
@@ -3863,6 +3863,24 @@ export class NativeAgentService {
     if (!provider) return "not-running";
     if (!provider.reloadMcpConfiguration) return "unsupported";
     return provider.reloadMcpConfiguration();
+  }
+
+  /**
+   * Names of the MCP servers an environment's *already running* provider has
+   * loaded, resolved like {@link reloadMcpConfigurationIfRunning}: never
+   * starts a process. `undefined` when nothing is running or the provider
+   * cannot say.
+   */
+  async loadedMcpServerNamesIfRunning(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+  ): Promise<string[] | undefined> {
+    const provider = await this.observeProvider({
+      environmentId,
+      agent,
+      logicalSessionKey: "mcp-configuration-reload",
+    });
+    return provider?.loadedMcpServerNames?.();
   }
 
   /**

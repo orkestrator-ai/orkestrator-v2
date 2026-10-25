@@ -19,6 +19,7 @@ import {
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
+import { getLocalServerStatus } from "./commands-servers.js";
 import { runCommandBuffer } from "./shell.js";
 import type { ApplyEnvironment, ApplySession, RuntimeProbe } from "./mcp-management/apply.js";
 import { DOCKER_LABEL_INPUTS_REVISION } from "./constants.js";
@@ -101,6 +102,12 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
           logicalSessionKey: session.logicalSessionKey,
           providerSessionId: session.providerSessionId,
           pendingDispatch: !!session.pendingDispatch,
+          ...(session.pendingDispatch?.requestId
+            ? { pendingDispatchId: session.pendingDispatch.requestId }
+            : {}),
+          ...(session.dispatchedRequestIds?.length
+            ? { lastDispatchId: session.dispatchedRequestIds.at(-1) }
+            : {}),
           coordinator: session.executionPolicy === "coordinator-read-only",
           projectResources: session.policy?.projectResources,
         }));
@@ -117,6 +124,22 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
       // Environment-level and no-spawn: never resolves a session (which a
       // restarted bridge may not have) and never cold-starts app-server.
       return service.reloadMcpConfigurationIfRunning(environmentId, "codex");
+    },
+    async reloadOpenCode(environmentId) {
+      const service = context.nativeAgents;
+      if (!service) return { outcome: "not-running" };
+      // Idle-gated inside the provider too: the directory's instance is
+      // disposed only while no session there is busy and no dispatch is open.
+      const outcome = await service.reloadMcpConfigurationIfRunning(environmentId, "opencode");
+      if (outcome !== "reloaded") return { outcome };
+      // Disposal dropped the runtime-only `orkestrator` entry with the old
+      // instance. Post it again now rather than when its memo expires.
+      context.runtime.localServers.openCodeAgentTools.forget(`local:${environmentId}`);
+      void getLocalServerStatus(environmentId, context, "opencode").catch(() => undefined);
+      const names = await service
+        .loadedMcpServerNamesIfRunning(environmentId, "opencode")
+        .catch(() => undefined);
+      return { outcome, ...(names ? { names } : {}) };
     },
     async mcpConfigEvidence(environmentId, agent, logicalSessionKey) {
       const service = context.nativeAgents;

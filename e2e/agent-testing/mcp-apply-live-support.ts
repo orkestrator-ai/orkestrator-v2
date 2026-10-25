@@ -82,6 +82,13 @@ export interface ProbeVerdict {
    * so only the tool name tells the two apart).
    */
   substitutedBy?: string;
+  /**
+   * A probe that must fail passed although the model substituted another
+   * server's tool, because the session's own MCP inventory, read after the
+   * turn, lists the substitute and not the probed name. Proof of absence then
+   * comes from the runtime, not from the model's choice.
+   */
+  absenceProvenBy?: "inventory";
   passed: boolean;
   reason?: string;
 }
@@ -110,6 +117,12 @@ export function judgeProbe(input: {
   toolRows?: readonly string[];
   /** Dispatch failures, provider errors and timeouts are never reachability evidence. */
   turnError?: string;
+  /**
+   * Server names the session's live MCP inventory reported after the turn;
+   * absent when the session reports none. Used only to judge a substituted
+   * call on a probe that must fail.
+   */
+  inventory?: readonly string[];
 }): ProbeVerdict {
   const call = input.events.find((event) => event.event === "call" && event.nonce === input.nonce);
   const reached = call !== undefined;
@@ -119,10 +132,31 @@ export function judgeProbe(input: {
     call !== undefined && input.reply.includes(probeResult(call.label, call.tag, input.nonce));
   const named = probeServersInToolRows(input.toolRows ?? []);
   const substitutedBy = named.length > 0 && !named.includes(input.server) ? named[0] : undefined;
+  // A model asked for a server that is gone may call the one it was renamed
+  // to (OpenCode, 2026-10-21). That proves nothing about the old name by
+  // itself, but the runtime's own inventory does: the substitute loaded, the
+  // probed name did not.
+  const absenceProvenBy =
+    substitutedBy !== undefined &&
+    !input.expect.reach &&
+    input.turnError === undefined &&
+    input.inventory !== undefined &&
+    input.inventory.includes(substitutedBy) &&
+    !input.inventory.includes(input.server)
+      ? ("inventory" as const)
+      : undefined;
   let reason: string | undefined;
   if (input.turnError !== undefined) reason = `probe turn failed: ${input.turnError}`;
-  else if (substitutedBy) reason = `the model called "${substitutedBy}" instead`;
-  else if (!input.expect.reach) {
+  else if (absenceProvenBy) reason = undefined;
+  else if (substitutedBy) {
+    reason = `the model called "${substitutedBy}" instead${
+      !input.expect.reach && input.inventory === undefined
+        ? " (the session reported no MCP inventory to prove the old name absent)"
+        : !input.expect.reach && input.inventory?.includes(input.server)
+          ? ` and the session still lists "${input.server}"`
+          : ""
+    }`;
+  } else if (!input.expect.reach) {
     if (call) reason = `the removed server "${call.label}" (${call.tag}) still answered the call`;
     else if (!replyUnavailable)
       reason = "the settled turn did not report the tool unavailable or refused";
@@ -138,6 +172,7 @@ export function judgeProbe(input: {
     replyHasResult,
     replyUnavailable,
     ...(substitutedBy ? { substitutedBy } : {}),
+    ...(absenceProvenBy ? { absenceProvenBy } : {}),
     passed: reason === undefined,
     ...(reason ? { reason } : {}),
   };

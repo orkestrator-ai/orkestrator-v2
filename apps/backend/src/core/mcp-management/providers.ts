@@ -18,6 +18,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { OPENCODE_MCP_SIGN_IN_GUIDANCE } from "@orkestrator/protocol/native-agent";
 import {
   MCP_MANAGEMENT_LIMITS,
   type McpCapabilityFlag,
@@ -418,7 +419,7 @@ async function opencodeSources(
       inlineText: homes.opencodeConfigContent,
     });
   }
-  const managedDir = homes.opencodeManagedDir ?? "/etc/opencode";
+  const managedDir = homes.opencodeManagedDir ?? opencodeManagedDir(process.platform);
   for (const [[name, format], precedence] of OPENCODE_FILES.map(
     (file, i) => [file, 50 + i] as const,
   )) {
@@ -433,6 +434,27 @@ async function opencodeSources(
         }),
       );
     }
+  }
+}
+
+/**
+ * OpenCode's managed configuration folder, as the pinned 1.19.4 resolves it
+ * (re-derived from the binary on 2026-10-25): `/Library/Application
+ * Support/opencode` on macOS, `%ProgramData%\\opencode` on Windows,
+ * `/etc/opencode` elsewhere. macOS also reads an MDM profile
+ * (`ai.opencode.managed.plist`), which is not a file this catalog parses.
+ */
+export function opencodeManagedDir(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  switch (platform) {
+    case "darwin":
+      return "/Library/Application Support/opencode";
+    case "win32":
+      return path.join(env.ProgramData || "C:\\ProgramData", "opencode");
+    default:
+      return "/etc/opencode";
   }
 }
 
@@ -840,6 +862,8 @@ export const CONTAINER_HOMES: ProviderHomes = {
   xdgConfigHome: "/home/node/.config",
   piAgentDir: "/home/node/.pi/agent",
   grokHome: "/home/node/.grok",
+  // The image is Linux whatever the backend's host is.
+  opencodeManagedDir: "/etc/opencode",
 };
 export const CONTAINER_WORKSPACE = "/workspace";
 
@@ -1042,7 +1066,7 @@ const APPLY: Record<AgentPlatform, McpTargetCapabilities["apply"]> = {
     strategy: "directory-restart",
     impact: "directory",
     description:
-      "OpenCode reads configuration when its server starts; the change applies after the environment's OpenCode server restarts.",
+      "OpenCode rebuilds a worktree's project configuration in place once no session there is busy; open sessions use it from their next message. User files in OpenCode's config folder, and a container's OpenCode server, need a restart.",
   },
   cursor: {
     strategy: "idle-reattach",
@@ -1096,7 +1120,7 @@ const TERMINAL: Record<AgentPlatform, McpTargetCapabilities["terminal"]> = {
 const SIGN_IN: Record<AgentPlatform, McpCapabilityFlag> = {
   claude: flag(true),
   codex: flag(true),
-  opencode: flag(true),
+  opencode: flag(false, OPENCODE_MCP_SIGN_IN_GUIDANCE),
   cursor: flag(
     false,
     "Sign in to the server from Cursor itself; the Cursor SDK reuses that authorization.",

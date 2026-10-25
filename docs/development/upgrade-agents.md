@@ -935,6 +935,22 @@ the two calls together.
    isolated XDG directories, verifies that CLI health reports the same version as the SDK
    pin, constructs the real v2 client, and lists sessions. It does not call a
    model or spend credits.
+
+   Then re-prove what MCP apply relies on, also without credentials:
+
+   ```bash
+   OPENCODE_CLI_PATH=/absolute/path/to/new/opencode \
+     mise run verify:opencode:mcp-live
+   ```
+
+   It checks that `instance.dispose` rebuilds a worktree's MCP servers from
+   its project file, stops the old server processes, drops runtime-added
+   entries and keeps sessions, and that the user files in
+   `$XDG_CONFIG_HOME/opencode` stay cached until the server restarts. If the
+   second test fails because the user file is reloaded, plan `opencode:user-*`
+   sources for the in-place reload too (`apply.ts`); if the first fails, MCP
+   apply's OpenCode reload no longer works. See
+   [`mcp-management.md`](../architecture/mcp-management.md) ("OpenCode reload").
 7. Smoke-test both UI native chat and a build-pipeline OpenCode phase. Exercise
    streaming, question and permission rehydration, abort, resume, and session
    status because those use different portions of the v2 client.

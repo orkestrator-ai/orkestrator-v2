@@ -11,7 +11,7 @@ import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { McpManagementSnapshot, McpMutation } from "@orkestrator/protocol/mcp-management";
 
-import type { ApplySession, CodexReloadOutcome, RuntimeProbe } from "./apply.js";
+import type { ApplySession, CodexReloadOutcome, ReloadOutcome, RuntimeProbe } from "./apply.js";
 import type { RuntimeEvidenceRead } from "./evidence.js";
 import type { ContainerNetworkView } from "./network-hints.js";
 import { McpManagementService } from "./service.js";
@@ -32,6 +32,13 @@ export interface Fixture {
   reloadControl: { wait?: () => Promise<void> };
   /** What the fake Codex bridge answers to a reload that does not fail. */
   reloadOutcome: { value: CodexReloadOutcome };
+  /**
+   * What the fake OpenCode server answers to an instance reload, and the MCP
+   * servers the rebuilt instance lists. Defaults to `unsupported` (restart).
+   */
+  openCodeReload: { value: { outcome: ReloadOutcome; names?: string[] } | Error };
+  /** Every OpenCode reload, in order, by environment id. */
+  openCodeReloads: string[];
   /**
    * What each session's bridge reports about its MCP configuration, keyed
    * `environmentId:agent:logicalSessionKey`. Absent keys answer `none`; an
@@ -82,6 +89,8 @@ export function createFixture(
   const reloadFailure = { value: null as Error | null };
   const reloadControl: { wait?: () => Promise<void> } = {};
   const reloadOutcome = { value: "reloaded" as CodexReloadOutcome };
+  const openCodeReload: Fixture["openCodeReload"] = { value: { outcome: "unsupported" } };
+  const openCodeReloads: string[] = [];
   const rollout = { value: undefined as unknown };
   const evidence = new Map<string, RuntimeEvidenceRead | Error>();
   const evidenceReads: string[] = [];
@@ -134,6 +143,11 @@ export function createFixture(
       if (reloadFailure.value) throw reloadFailure.value;
       reloads.push(environmentId);
       return reloadOutcome.value;
+    },
+    reloadOpenCode: async (environmentId) => {
+      openCodeReloads.push(environmentId);
+      if (openCodeReload.value instanceof Error) throw openCodeReload.value;
+      return openCodeReload.value;
     },
     mcpConfigEvidence: async (environmentId, agent, key) => {
       const id = `${environmentId}:${agent}:${key}`;
@@ -209,6 +223,8 @@ export function createFixture(
     reloadFailure,
     reloadControl,
     reloadOutcome,
+    openCodeReload,
+    openCodeReloads,
     evidence,
     evidenceReads,
     evidenceHook,

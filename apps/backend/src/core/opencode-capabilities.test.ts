@@ -185,3 +185,69 @@ describe("OpenCodeCapabilities.authStatus", () => {
     expect(status.signIn?.hint).toBe("Sign opencode-go in from Settings → OpenCode.");
   });
 });
+
+describe("OpenCodeCapabilities.mcpServers", () => {
+  test("redacts credential-shaped error text before bounding it", async () => {
+    const client = {
+      mcp: {
+        status: async () => ({
+          data: {
+            docs: {
+              status: "failed",
+              error: `401 from https://user:hunter2hunter2@mcp.example.test/?api_key=sk-abcdefghijklmnopqrstuvwx Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123 ${"x".repeat(3_000)}`,
+            },
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+    const servers = await new OpenCodeCapabilities(
+      client,
+      "/workspace",
+      () => ({ signal: new AbortController().signal }),
+      async () => [],
+    ).mcpServers();
+    const error = servers[0]?.error ?? "";
+    expect(error).toContain("401 from");
+    expect(error).not.toContain("hunter2hunter2");
+    expect(error).not.toContain("abcdefghijklmnopqrstuvwxyz0123");
+    expect(error).not.toContain("sk-abcdefghijklmnopqrstuvwx");
+    expect(error.length).toBeLessThanOrEqual(2_000);
+  });
+});
+
+describe("OpenCode MCP sign-in", () => {
+  function withStatus(status: Record<string, unknown>, calls: string[] = []) {
+    const client = {
+      mcp: {
+        status: async () => ({ data: status }),
+        auth: {
+          start: async () => {
+            calls.push("start");
+            return { data: { authorizationUrl: "https://auth.example.test/authorize" } };
+          },
+        },
+      },
+    } as unknown as OpencodeClient;
+    return new OpenCodeCapabilities(
+      client,
+      "/workspace",
+      () => ({ signal: new AbortController().signal }),
+      async () => [],
+    );
+  }
+
+  test("a server that needs auth gets the terminal route, not an in-app sign-in", async () => {
+    const [server] = await withStatus({ docs: { status: "needs_auth" } }).mcpServers();
+    expect(server).toMatchObject({ status: "needs-auth", actions: ["reconnect"] });
+    expect(server?.hint).toContain("opencode mcp auth docs");
+  });
+
+  test("a stale sign-in request is refused with the route, and starts nothing", async () => {
+    const calls: string[] = [];
+    await expect(withStatus({}, calls).mcpServerAction("docs", "sign-in")).rejects.toThrow(
+      "opencode mcp auth docs",
+    );
+    // `mcp.auth.start` alone leaves OpenCode with no callback waiter.
+    expect(calls).toEqual([]);
+  });
+});

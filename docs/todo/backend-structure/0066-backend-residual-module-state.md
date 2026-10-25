@@ -102,7 +102,30 @@ Run on this host (macOS, Apple Silicon) on 2026-10-25:
   fixtures, the PR monitor or `BackendRuntime` passed through `test:logged`
   (101 s); `src/core/public-api` and the container lifecycle, readiness and
   diff-stats files passed.
-- `mise run test` on the merged branch: FULL_SUITE_RESULT
+- `mise run test`, first run on the merged branch: backend 22 failures, all
+  real regressions of this work: hand-built contexts without a `runtime` in
+  `review-validation-service.test.ts` (3), `commands-registry-design.test.ts`
+  (9), `commands-review.test.ts` (9) and
+  `design/session-links-commands.test.ts` (1), reaching the fence through
+  `controlReviewValidation`, the design registry wrapper and
+  `createEnvironmentCommandRunner`. Fixed by giving those contexts a runtime;
+  the four files then passed (39 tests). The other two failures were flakes
+  in code this branch does not touch: the desktop fixture tree digest timeout
+  (existing case 0258; the owner passed alone, 48 pass) and a cursor-bridge
+  steer hook timeout (new case 0855; the owner passed alone, 21 pass).
+- `mise run test`, final run on `cddad46c`: web (9,670 tests), desktop,
+  bridges, codex protocol lockfile, CLI, protocol and toolchain passed.
+  Backend: 11,048 tests, 10,963 pass, 84 skip, 1 fail, the agent-mail backlog
+  timeout (existing case 0661; owner passed alone, 50 pass). Root: 3,415
+  tests, 3,414 pass, 1 fail,
+  `runOpenCodeLiveCompatibility > kills the server when the overall deadline expires`
+  (case 0166, reopened; owner passed alone, 31 pass). Neither failure is in
+  code this branch changed.
+- Scenario suites (`test:agent:browser:isolated`, `test:agent:docker`,
+  `test:agent:electron`) were not run: the change is backend-internal state
+  ownership with no renderer, Electron or Docker lifecycle behaviour change,
+  and production runs one backend per process, so behaviour there is
+  unchanged.
 
 ## Assumptions and decisions
 

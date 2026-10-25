@@ -1,6 +1,6 @@
 # Test suite and CI health
 
-Checked against `main` at `20f6de91` (2026-10-25).
+Checked against `main` at `5a8b11b9` (2026-10-25).
 
 `mise run test` should be fast and green, and stay that way, without weakening
 what it proves. Every test file has exactly one owner, waits are controlled
@@ -116,15 +116,24 @@ one live check (an Electron spec with a hung `close()`).
      `CI` cannot run on a branch without a pull request, so a throwaway branch
      (`todo-0030-ci-probe-e11a519267e2`) dispatched `validate-bun-runtime.yml`
      with its own jobs skipped and `ci.yml`'s three jobs copied in unchanged
-     (renamed "… (todo 0030 probe)"), on this branch's tree: run
-     PROBE3_RUN. PROBE3_RESULT Two earlier probe runs found the Ubuntu 26.04
-     facts: 40193653132 (full suite plus diagnostics) and 40195484352 (the
-     AppArmor and zsh fixes, step by step). The probe branch is deleted after
-     the evidence is recorded.
+     (renamed "… (todo 0030 probe)"), on this branch's tree. Results:
+
+     | Run | Tree | bun fmt and oxlint | Typecheck | Unit and integration tests |
+     | --- | --- | --- | --- | --- |
+     | 40197666008 | first commit (`75bf354fa`, the same content as rebased `0da1c6218`) | success | success | success: workspace 1,032.7 s, root 158.8 s, bridges 117.2 s |
+     | 40198993774 | final head `bd7efe330`, rebased on `5a8b11b9` | success | success | success: workspace 1,209.4 s, root 201.5 s, bridges 150.4 s |
+
+     Earlier probe runs found the Ubuntu 26.04 facts and the last two
+     failures: 40193653132 (full suite plus diagnostics), 40195484352 (the
+     AppArmor and zsh fixes, step by step) and 40195714408 (everything green
+     except two root tests that read `main.ts` source, updated for the
+     extracted window bookkeeping and the dev version). The probe branch was
+     deleted after the evidence was recorded. These runs do not count towards
+     the three green `main` runs.
    - **Still to do (maintainer):** after the branch merges, wait for three
      consecutive green `CI` runs on `main`, then run the command below. `main`
-     itself was not green on any of the 25 most recent runs on 2026-10-25, all
-     before this branch.
+     itself failed every completed run from 2026-10-24 17:43 to 2026-10-25
+     11:45 (the last before this branch was written).
    - Required checks: `bun fmt and oxlint`, `Typecheck` and
      `Unit and integration tests` from `.github/workflows/ci.yml`, all reported
      by `github-actions` (app 15368). Rechecked on 2026-10-25 against the check

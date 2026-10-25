@@ -45,3 +45,10 @@
   under `output/playwright/arrival-final/`. Repository and isolated application
   suites were also running. Timing or follow-state interaction under load
   remains a hypothesis. No owner assertion, timeout or skip changed.
+
+
+## Resume cleanup coverage validation — 2026-10-25
+
+The desktop waiting-group case received inner scrollTop 704 instead of zero in the five-worker component run and again in the complete unchanged one-worker owner rerun. No new owner pass was established; both results remain failed.
+
+The original component run reported 734 passed, 102 skipped and six failed. The six complete owning files ran sequentially with one worker: 80 passed, one skipped and three failed (307.4 s). Exact commands, per-owner results and artifact paths are in [0822](../aggregate-validation-runs/0822-resume-cleanup-coverage-validation.md). No owning implementation, assertion, deadline or skip changed.

@@ -53,6 +53,20 @@ describe("OpenCode instance reload", () => {
     expect(h.reload.pending).toBe(false);
   });
 
+  test("an apply attempt leaves busy retries to its owner, even after an idle event", async () => {
+    const h = harness(false);
+    expect(await h.reload.requestOnce()).toBe("busy");
+    expect(h.reload.pending).toBe(false);
+    h.setIdle(true);
+    h.reload.observeEvent("session.idle", {});
+    const release = await h.reload.enterDispatch();
+    release();
+    expect(h.calls).toEqual(["idle"]);
+    expect(await h.reload.requestOnce()).toBe("reloaded");
+    h.reload.idleObserved();
+    expect(h.calls).toEqual(["idle", "idle", "dispose", "reloaded"]);
+  });
+
   test("a busy directory defers, and the next idle edge reloads it exactly once", async () => {
     const h = harness(false);
     await expect(h.reload.request()).resolves.toBe("deferred");

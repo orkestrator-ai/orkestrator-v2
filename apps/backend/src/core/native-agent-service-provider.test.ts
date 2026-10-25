@@ -1689,3 +1689,40 @@ describe("MCP configuration evidence", () => {
     );
   });
 });
+
+describe("OpenCode MCP listing observation", () => {
+  test("an absent server returns undefined without invoking a start command", async () => {
+    const commands: string[] = [];
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      commands.push(command);
+      expect(command).toBe("peek_local_agent_bridge");
+      return null as T;
+    };
+    await withService({ prefix: "opencode-mcp-no-spawn-", invoke }, async ({ service }) => {
+      expect(await service.openCodeMcpServerNamesIfRunning("env-1")).toBeUndefined();
+      expect(commands).toEqual(["peek_local_agent_bridge"]);
+    });
+  });
+
+  test("a running server lists names through observation without a session or spawn", async () => {
+    const inventory = mock(async () => [
+      { id: "docs", name: "Documentation", status: "connected" as const, actions: [] },
+    ]);
+    const stub = createProviderStub("opencode");
+    await withService(
+      {
+        prefix: "opencode-mcp-observe-",
+        environment: { localOpencodePort: 12345, localOpencodePassword: "test" },
+        provider: async (input) => {
+          expect(input.agent).toBe("opencode");
+          return { ...stub.provider, mcpServers: inventory };
+        },
+      },
+      async ({ service }) => {
+        expect(await service.openCodeMcpServerNamesIfRunning("env-1")).toEqual(["Documentation"]);
+        expect(inventory).toHaveBeenCalledWith("");
+        expect(stub.createSession).not.toHaveBeenCalled();
+      },
+    );
+  });
+});

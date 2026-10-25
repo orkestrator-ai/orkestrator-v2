@@ -31,7 +31,7 @@ and "Control MCP").
 | Documents | `mcp-management/document.ts`, `json-edit.ts`, `toml-edit.ts` | Minimal edits plus whole-document semantic verification |
 | Files | `mcp-management/source-store.ts` | Bounded reads, keyed revisions, cross-process locks, atomic replace |
 | Operations | `mcp-management/operations-store.ts` | Durable operation records and recovery intent |
-| Apply | `mcp-management/apply.ts` | Per-runtime plan and the Codex reload queue |
+| Apply | `mcp-management/apply.ts`, `codex-turn-evidence.ts` | Per-runtime plan, the Codex and OpenCode reload queue, and Codex's per-thread turn evidence |
 | Environment overlays | `mcp-management/overlay.ts`, `overlay-store.ts`, `overlay-service.ts`, `overlay-requests.ts` | Container-private MCP changes: pure merge/rebase/conflict rules, private durable records, materialisation after boot, divergence actions, defaults refresh |
 | Container hints | `mcp-management/network-hints.ts`, `path-audit.ts` | Restricted-network and container-`localhost` warnings, container sign-in reason, host-only command and `cwd` path warnings |
 | UI | `apps/web/src/components/settings/mcp-servers/` | Section, editor, preview, row actions, apply status |
@@ -62,7 +62,7 @@ described below. Higher precedence wins for a same-name entry.
 | OpenCode | Project `.opencode/` | `<worktree>/.opencode/opencode.json(c)` | JSON/JSONC `mcp` | 30+ | yes | as project |
 | OpenCode | Config directories | `~/.opencode/`, then `$OPENCODE_CONFIG_DIR` | JSON/JSONC `mcp` | 32+, 34+ | yes | — |
 | OpenCode | Inline | `OPENCODE_CONFIG_CONTENT` | JSONC `mcp` | 40 | never | — |
-| OpenCode | Managed | `/etc/opencode/` (when present) | JSON/JSONC `mcp` | 50+ | never | — |
+| OpenCode | Managed | `/Library/Application Support/opencode/` on macOS, `%ProgramData%\opencode\` on Windows, `/etc/opencode/` elsewhere and in containers (when present) | JSON/JSONC `mcp` | 50+ | never | — |
 | Cursor | Backend user | `~/.cursor/mcp.json` | JSON `mcpServers` | 10 | yes | — |
 | Cursor | Project | `<worktree>/.cursor/mcp.json` | JSON `mcpServers` | 20 | yes | **excluded** on host, unless the environment's execution policy turns project resources on |
 | Grok | Managed | `/etc/grok/managed_config.toml`, `$GROK_HOME/managed_config.toml` | TOML `[mcp_servers.*]` | 6–7 | never | — |
@@ -120,6 +120,13 @@ is not permission to execute. The editor never changes an execution policy.
 - **OpenCode and Codex merge.** OpenCode deep-merges same-name entries and
   Codex merges them field by field; a higher entry that omits a field inherits
   it. Rows say so rather than claiming replacement.
+- **OpenCode's loader at 1.19.4** (re-derived from the pinned binary on
+  2026-10-25; the full order is recorded in the todo file): the table above
+  holds. Remote layers (`<url>/.well-known/opencode`, the active
+  organisation's `<url>/api/config`) and the macOS MDM profile are read too
+  and are not modelled. The user files in `$XDG_CONFIG_HOME/opencode` are
+  cached for the server's lifetime, so only a restart loads a change to them;
+  every other layer is read again whenever the directory's instance is built.
 - **Pi follows the bridge, which follows Pi 1.x.** The catalog mirrors the Pi
   bridge's loader (`bridges/pi-bridge/src/mcp-config.ts`), which follows Pi's
   own (`dist/extensions/mcp/config.js` in `@earendil-works/pi-coding-agent`):
@@ -178,7 +185,7 @@ is not permission to execute. The editor never changes an execution policy.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Claude | ✓ | ✓ | ✗ bridge drops SSE | ✗ | ✗ | — | existing reconnect/elicitation |
 | Codex | ✓ | ✓ | ✗ | `enabled` | ✓ | timeouts, bearer variable, tool allow/deny, required | existing OAuth action |
-| OpenCode | ✓ (`local`) | ✓ (`remote`) | ✗ | `enabled` | ✓ | timeout, disable auto-OAuth | existing `mcp.auth.start` |
+| OpenCode | ✓ (`local`) | ✓ (`remote`) | ✗ | `enabled` | ✓ | timeout, disable auto-OAuth | ✗ (`opencode mcp auth <server>` in the environment; see below) |
 | Cursor | ✓ | ✓ | ✓ | ✗ | ✓ | — | ✗ (sign in via Cursor) |
 | Grok | ✓ | ✓ | ✗ unverified | shown, not editable (unverified) | ✗ | timeouts | ✗ |
 | Pi | ✓ | ✓ | ✗ (run as HTTP; Pi's CLI rejects it) | `enabled` | ✓ (`~/` expands) | — (limits: 32 args, 32 env, 16 headers) | ✗ (Pi terminals: `/mcp login`) |
@@ -264,8 +271,8 @@ already knows (persisted native sessions) and never creates a session.
 | Provider | Strategy | What the backend reports |
 | --- | --- | --- |
 | Claude | the bridge re-reads files every query; a CLI kept alive by background work is updated in place | `pending-next-turn`, then `applied` on evidence (below); `restart-required` while that CLI still runs a removed or renamed server |
-| Codex | `config/mcpServer/reload` on the environment's app-server | `queued` until **every** Codex session in the environment is idle (unknown activity and pending dispatches count as busy), then one reload; `pending-next-turn` after it succeeds, `failed` on error or after 30 minutes busy |
-| OpenCode | server restart | `restart-required`; nothing is restarted |
+| Codex | `config/mcpServer/reload` on the environment's app-server | `queued` until **every** Codex session in the environment is idle (unknown activity and pending dispatches count as busy), then one reload; `pending-next-turn` after it succeeds, then `applied` per thread once its session starts a turn after the reload; `failed` on error or after 30 minutes busy |
+| OpenCode | `instance.dispose` of the worktree's instance, for files an instance reads when it is built | `queued` until **every** OpenCode session in the environment is idle, then one rebuild; `applied` when the rebuilt instance's `mcp.status` lists the change, `restart-required` when it does not; the user files and container servers are `restart-required` (nothing is restarted) |
 | Cursor | bridge reattaches at the next message | `pending-next-turn` (see below), then `applied` on evidence |
 | Grok | process restart | `restart-required`, then `applied` on evidence after the bridge restarts |
 | Pi | bridge rebuilds its MCP generation at the next message | `pending-next-turn` (see below), then `applied` on evidence |
@@ -293,6 +300,37 @@ Codex bridge, which reloads only if an app-server child is already running
 before the first reload the backend re-reads the source; if the change is no
 longer in it (see [External edits](#external-edits)) the queued runtimes are
 `cancelled` and nothing is reloaded.
+
+**Codex turn evidence.** A thread uses a reloaded configuration from its next
+`turn/start`. When the reload (or the answer that nothing was running)
+completes, each Codex runtime records its session's newest accepted dispatch
+(`dispatchedRequestIds`) and any dispatch still open; a newer accepted
+dispatch than both makes it `applied`, read from persisted session records
+only (Codex's session routes can cold-start app-server). The open dispatch is
+excluded because its turn may have started before the reload landed. Inside
+the 24-hour evidence window only.
+
+**OpenCode reload.** OpenCode builds one instance per directory and reads
+project files, `.opencode` and config directories and `OPENCODE_CONFIG` when
+it does. Apply reuses the command refresh's `OpenCodeInstanceReload`: once
+the backend sees every OpenCode session in the environment idle, the provider
+checks `session.status` again, refuses during a dispatch, and calls
+`instance.dispose` for the worktree (`busy` keeps it queued). Disposal stops
+the instance's MCP processes and drops runtime-added entries, so the probe
+posts Orkestrator's `orkestrator` entry again at once, then reads `mcp.status`,
+which builds the new instance from disk. Stored sessions are kept (proven on
+the pinned binary by `mise run verify:opencode:mcp-live`). OpenCode 1.19.4
+caches the user files in `$XDG_CONFIG_HOME/opencode` for the server's
+lifetime (`instance.dispose` and `global.dispose` both keep them), so saves to
+those stay `restart-required`; so do container servers.
+
+**OpenCode MCP sign-in.** OpenCode completes an MCP OAuth sign-in only for a
+request that waits for the browser's callback (`mcp.auth.authenticate`, or
+`opencode mcp auth`); `mcp.auth.start` alone leaves its callback server with
+no waiter, and it refuses the redirect. The live panel therefore offers no
+OpenCode sign-in: a `needs-auth` row carries the hint `opencode mcp auth
+<server>`, run where the environment's OpenCode runs, and a sign-in request
+from an older renderer is refused with the same text.
 
 **Fan-out.** One apply schedules and tracks up to 256 runtimes
 (`runtimesTrackedPerOperation`) and advances every one of them: every tracked
@@ -370,7 +408,8 @@ A runtime becomes `applied` when all of these hold:
 A failed or timed-out read, `absent` / `excluded`, or a read that predates the
 save all leave the planned state untouched and are not errors; a bridge older
 than the report is named, as above. Only local runtimes are polled (containers and
-coordinators never read the saved host file), and never Codex or OpenCode.
+coordinators never read the saved host file), and never Codex or OpenCode,
+whose evidence comes from their reload (above).
 Reads go through `NativeAgentService.mcpConfigEvidenceIfRunning`: persisted
 mapping → provider resolved like the activity sweep (never starts a bridge) →
 the runtime-health route, which touches no liveness and re-attaches nothing.
@@ -618,7 +657,14 @@ The settings section re-reads its snapshot on mount, on that event, on event
 stream reconnect and when the browser comes back online (an event can arrive
 on a stream that survived an outage while its re-read fails), and drops
 responses for a target the user has switched away from. A link from an agent's
-info panel names the provider and environment; the section reads that intent
+info panel names the provider and environment, and a row's link also its
+exact name, its live layer and the session. The section joins that row to the
+one saved row the session loads (`mcp-live-join.ts`: same provider and
+environment, exact name, a source of the live layer, then the effective row;
+Pi's sanitized spelling is matched by the bridge's rule), highlights only that
+row, says when other rows share the name or when the server is injected, from
+a plugin or from no file it reads, and shows the session's newest apply
+outcome. The section reads that intent
 during render and clears it only after it mounts, so a render React discards
 (the settings page is lazy) cannot lose it. Drafts live only in the open
 dialog and are never persisted.
@@ -637,7 +683,8 @@ worktrees; nothing reads or writes the operator's configuration):
 | Evidence | `service-evidence.test.ts` (per-provider applied/not-applied rules, bounds, idleness, digest privacy), `service-generations.test.ts` (generation labels, newer runs, reads straddling a replacement, no carry-over on re-apply, Codex reload), `service-older-bridges.test.ts` (older-bridge outcomes and recovery), `service-external-edits.test.ts` (superseded and merged edits, refused re-apply, Codex reload refused, the slow watch for unpolled runtimes), `service-apply-scope.test.ts` (fan-out paging, more environments than the page, the tracked cap), `http-bridge-mcp-config-evidence.test.ts` (bridge shapes, the reporting marker, renderer summary excludes digests), `native-agent-service-provider.test.ts` (no bridge start) |
 | Commands | `commands-registry-mcp.test.ts` (correlation ids, rollout commands, reload probe), `http-bridge-mcp-reload.test.ts`, `storage-config-mcp-rollout.test.ts`, `apps/backend/tests/gateway-base.test.ts` (body cap) |
 | Bridges | Pi `mcp.test.ts`, `mcp-config.test.ts`, `mcp-config-upstream.test.ts`, `mcp-lifecycle.test.ts`, `agent-session.test.ts`, `http.test.ts`; Cursor `agent-session.test.ts`, `agent-session-mcp-reattach.test.ts`, `http.test.ts`, `persistence.test.ts`; Claude `mcp-config-scope.test.ts`, `session-manager-prompt-mcp.test.ts`, `runtime-health-body.test.ts`; ACP `acp-mcp-inventory.test.ts`; Codex `mcp-reload-route.test.ts`, `process-supervisor.test.ts` |
-| UI | `mcp-draft.test.ts`, `mcp-local-validation.test.ts`, `ProviderMcpSettings.test.tsx`, `McpEditorFlows.test.tsx`, `McpEntryFlows.test.tsx`, `McpStatusAndStates.test.tsx`, `AgentInfoMcpSection.test.tsx`, `FullscreenSettingsLayout.test.tsx`, `ActionBar.test.tsx` — focus return, keyboard-only flows, conflict reload, discard prompt, rollout gate, empty/offline/partial states |
+| Apply (2026-10-25) | `service-apply.test.ts` (OpenCode idle-gated rebuild, its listing check, user files and containers kept on restart; Codex turn evidence, the open dispatch excluded, not-running, the evidence window), `commands-registry-mcp.test.ts` (OpenCode reload probe re-posts `orkestrator`), `opencode-capabilities.test.ts` (sign-in guidance, error redaction), `http-bridge-mcp-inventory.test.ts` (relay redaction), `apps/backend/tests/opencode-mcp-reload-live.test.ts` (`mise run verify:opencode:mcp-live`: the pinned OpenCode 1.19.4, credential-free) |
+| UI | `mcp-live-join.test.ts`, `mcp-draft.test.ts`, `mcp-local-validation.test.ts`, `ProviderMcpSettings.test.tsx`, `McpEditorFlows.test.tsx`, `McpEntryFlows.test.tsx`, `McpStatusAndStates.test.tsx`, `AgentInfoMcpSection.test.tsx`, `FullscreenSettingsLayout.test.tsx`, `ActionBar.test.tsx` — focus return, keyboard-only flows, conflict reload, discard prompt, rollout gate, empty/offline/partial states |
 | Container reader | Manual smoke against a throwaway container: ok, absent, oversized, offline, shell-metacharacter path |
 | Environment overlay | `overlay.test.ts` (merge, rebase, tombstones, conflicts, divergence, import, server-map rewrite), `service-overlay.test.ts` (private save, host file unchanged, backend restart, stop/start and rebuild reapply, pending restart, conflicts and both resolutions, divergence blocks edits, import, reapply, reset, unreadable record, defaults refresh and stale token, persistent project writes, container apply plan, network and `localhost` warnings, path audit, sign-in) |
 | Containers (live) | 2026-10-23, `apps/backend/tests/mcp-overlay-live.test.ts` on an image built from this tree (`RUN_LIVE_DOCKER_TESTS=1`): Cursor `mcp.json` copied alone with 0600; writer conflict, private and preserved modes, refusals outside the homes, through file and directory symlinks; boot id and path probe; overlay across backend restart, a real stop and start, a replacement container and an in-container edit with import; a real `volume-v1` rebuild re-staging the backend user's current Codex file and dropping an in-container edit, then the real start path reapplying the overlay |
@@ -648,11 +695,14 @@ Live providers (2026-10-18, `e2e/agent-testing/mcp-apply-live.spec.ts`, record
 in [the todo file](../todo/mcp/0039-mcp-management.md#live-apply-record-2026-10-18)):
 Claude, Codex, OpenCode and Cursor have historical add, edit, rename, remove
 and restart observations across their writable scopes. Codex's reload reaches
-existing threads at their next turn; OpenCode needs the restart its outcome
-asks for; Cursor re-reads its files when the session reattaches. The corrected
-harness still needs to re-qualify busy turns, negative tool-call results and
-Claude's warm SSE stale-server hook; the original matrix records its limits.
-Grok and Pi were skipped for want of credentials.
+existing threads at their next turn; OpenCode needed the restart its outcome
+then asked for; Cursor re-reads its files when the session reattaches. The
+corrected harness still needs to re-qualify busy turns, negative tool-call
+results and Claude's warm SSE stale-server hook; the original matrix records
+its limits. Grok and Pi were skipped for want of credentials. The 2026-10-25
+OpenCode in-place rebuild and Codex turn evidence have unit tests and, for
+OpenCode, a credential-free run on the pinned binary, but no model-facing live
+run yet.
 
 Inactive-environment apply evidence and recovery passed for Claude, including
 a cut stream, reload, bridge generation changes and a shared user file (see

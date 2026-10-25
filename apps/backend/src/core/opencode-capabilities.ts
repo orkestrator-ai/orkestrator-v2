@@ -4,7 +4,11 @@ import type {
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
 } from "@orkestrator/protocol/native-agent";
-import { isSelectableOpenCodeProvider } from "@orkestrator/protocol/native-agent";
+import {
+  isSelectableOpenCodeProvider,
+  OPENCODE_MCP_SIGN_IN_GUIDANCE,
+} from "@orkestrator/protocol/native-agent";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";
 import { readOpenCodeCommandInventory } from "./opencode-commands.js";
 
@@ -77,13 +81,21 @@ export class OpenCodeCapabilities {
             id: name.slice(0, 256),
             name: name.slice(0, 256),
             status: normalized,
+            // No in-app sign-in: OpenCode completes MCP OAuth only for a
+            // request that waits for the callback (see the guidance's notes).
             actions:
               normalized === "connected"
                 ? ["disable"]
                 : normalized === "needs-auth"
-                  ? ["sign-in", "reconnect"]
+                  ? ["reconnect"]
                   : ["enable", "reconnect"],
-            ...(typeof status.error === "string" ? { error: status.error.slice(0, 2_000) } : {}),
+            ...(normalized === "needs-auth"
+              ? { hint: OPENCODE_MCP_SIGN_IN_GUIDANCE.replace("<server>", name.slice(0, 256)) }
+              : {}),
+            // A server's error can echo a URL or header with a token in it.
+            ...(typeof status.error === "string"
+              ? { error: redactSecrets(status.error).slice(0, 2_000) }
+              : {}),
           },
         ];
       });
@@ -102,14 +114,10 @@ export class OpenCodeCapabilities {
       return {};
     }
     if (action === "sign-in") {
-      const response = await this.client.mcp.auth.start(
-        { name: serverId, directory: this.directory },
-        this.requestOptions(),
-      );
-      assertSdkResponse(response, "OpenCode MCP sign in");
-      const data = asRecord(response.data);
-      const url = nonEmptyString(data?.authorizationUrl) ?? nonEmptyString(data?.url);
-      return url ? { url } : {};
+      // `mcp.auth.start` returns a URL whose callback OpenCode then refuses,
+      // because nothing waits for it; a renderer that still offers the
+      // action gets the route that does complete.
+      throw new Error(OPENCODE_MCP_SIGN_IN_GUIDANCE.replace("<server>", serverId.slice(0, 256)));
     }
     const response = await this.client.mcp.connect(
       { name: serverId, directory: this.directory },

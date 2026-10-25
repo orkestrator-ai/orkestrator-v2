@@ -73,6 +73,19 @@ test("a running Claude CLI unloads removed and renamed MCP servers", async () =>
     remoteCalls: 0,
     keepCalls: 1,
   });
+  // Upstream (0039 item 8): an edit under the same name connects the new
+  // process and offers only its tools, but the CLI leaves the old process
+  // running until it exits. When this starts failing with one `alpha` alive,
+  // the CLI stops a replaced server itself: make `alive: ["alpha"]` the
+  // expectation and close the item.
+  expect(result.replace).toEqual({
+    servers: ["alpha"],
+    tools: ["mcp__alpha__probe_alpha"],
+    stale: [],
+    alive: ["alpha", "alpha"],
+    started: ["alpha", "alpha"],
+    initialized: ["alpha", "alpha"],
+  });
   // A server only the CLI's own settings load knew about cannot be
   // unloaded in place, so the sync reports it for refusal instead.
   expect(result.fileOnly).toEqual({

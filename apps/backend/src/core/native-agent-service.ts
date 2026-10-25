@@ -3854,7 +3854,7 @@ export class NativeAgentService {
   async reloadMcpConfigurationIfRunning(
     environmentId: string,
     agent: BuildPipelineAgent,
-  ): Promise<"reloaded" | "not-running" | "unsupported"> {
+  ): Promise<"reloaded" | "not-running" | "unsupported" | "busy"> {
     const provider = await this.observeProvider({
       environmentId,
       agent,
@@ -3863,6 +3863,23 @@ export class NativeAgentService {
     if (!provider) return "not-running";
     if (!provider.reloadMcpConfiguration) return "unsupported";
     return provider.reloadMcpConfiguration();
+  }
+
+  /**
+   * Names of the MCP servers an environment's *already running* OpenCode
+   * server lists for its worktree, resolved like
+   * {@link reloadMcpConfigurationIfRunning}: never starts a process.
+   * OpenCode's inventory is directory-level, so no session is named.
+   * `undefined` when nothing is running.
+   */
+  async openCodeMcpServerNamesIfRunning(environmentId: string): Promise<string[] | undefined> {
+    const provider = await this.observeProvider({
+      environmentId,
+      agent: "opencode",
+      logicalSessionKey: "mcp-configuration-reload",
+    });
+    const servers = await provider?.mcpServers?.("");
+    return servers?.map((server) => server.name);
   }
 
   /**

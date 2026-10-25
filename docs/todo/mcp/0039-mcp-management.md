@@ -4,7 +4,11 @@ Checked against `main` at `2459b05c` (2026-10-15); inactive-environment
 qualification against `a5d338c1` and live apply record against `140a50e8`
 (2026-10-18). Code items 1, 9 and 11, Codex paging (item 3) and error
 redaction (item 6) closed on 2026-10-22 from `b83ae534`, with the Grok trust
-rules re-derived from the pinned Grok 1.0.52.
+rules re-derived from the pinned Grok 1.0.52. Code items 2, 3, 5, 6 and 12
+closed, items 4 and 7 decided, item 8 pinned by a canary, and the OpenCode
+rules re-derived from the pinned OpenCode 1.19.4 on 2026-10-25 from
+`ba7cc8d4` (branch `todo-0039-mcp-management-36df0f37c530`; see
+[Assumptions and decisions](#assumptions-and-decisions)).
 
 The MCP server editor ([`mcp-management.md`](../../architecture/mcp-management.md))
 reads and writes each agent platform's own MCP files and reports saved state,
@@ -24,10 +28,21 @@ collects the live evidence the shipped behaviour has never had.
   "Manage saved MCP servers…" in `apps/web/src/components/layout/AgentInfoMcpSection.tsx`.
 - Apply strategies (`apply.ts`): Claude, Cursor and Pi report
   `pending-next-turn`, then `applied` on bridge evidence. Codex queues one
-  environment reload, then stays `pending-next-turn` (never `applied`).
-  OpenCode is `restart-required`. Grok is `restart-required`, then `applied`
-  once the bridge process is replaced. The live record below confirms the
-  Claude, Codex, OpenCode and Cursor strategies on real providers. Pi's
+  environment reload, then `pending-next-turn`, then `applied` per thread once
+  its session starts a turn after the reload (`codex-turn-evidence.ts`, read
+  from the backend's own dispatch records). OpenCode queues one idle-gated
+  `instance.dispose` per worktree for files an instance reads when it is built
+  (project files, `.opencode` and config directories, `OPENCODE_CONFIG`),
+  re-adds the runtime-only `orkestrator` entry, and is `applied` when the
+  rebuilt instance's `mcp.status` lists the change; the user files in
+  `$XDG_CONFIG_HOME/opencode` and container servers stay `restart-required`,
+  because OpenCode 1.19.4 caches the user files for the server's lifetime.
+  Grok is `restart-required`, then `applied` once the bridge process is
+  replaced. The live record below confirms the Claude, Codex, OpenCode and
+  Cursor strategies of 2026-10-18 on real providers; the new Codex turn
+  evidence and OpenCode reload have unit tests, and the OpenCode reload's
+  mechanism is proven on the pinned binary (`mise run
+  verify:opencode:mcp-live`), not yet with a model in a live session. Pi's
   strategy was seen live on 2026-10-22 (`pending-next-turn`, then `applied`
   per probed tab), but its user-scope probes failed, so it is not qualified;
   Grok is unrun.
@@ -64,10 +79,12 @@ collects the live evidence the shipped behaviour has never had.
   `restart-required` until a new CLI proves it gone.
   `mise run verify:claude:mcp-live` proves this on the real CLI without
   credentials; it passed again on 2026-10-22 at CLI 2.1.296 (6.0 s, after
-  one silent hang recorded as flake 0671).
-- Current pins: Claude Agent SDK 0.3.296 / CLI 2.1.296, Codex 0.162.1,
-  OpenCode 1.19.0, Cursor SDK 1.0.37, Grok 1.0.52, Pi 1.2.0. The live record
-  below used exactly these.
+  one silent hang recorded as flake 0671), and on 2026-10-25 at CLI 2.1.309
+  (9.4 s) with the new "replace" scenario (item 8).
+- Current pins (2026-10-25): Claude Agent SDK 0.3.309 / CLI 2.1.309, Codex
+  0.164.0, OpenCode 1.19.4, Grok 1.0.67, Pi 1.4.0. The live records below
+  used the earlier pins: Claude Agent SDK 0.3.296 / CLI 2.1.296, Codex
+  0.162.1, OpenCode 1.19.0, Cursor SDK 1.0.37, Grok 1.0.52, Pi 1.2.0.
 - Live probe spec: `e2e/agent-testing/mcp-apply-live.spec.ts` (opt-in,
   `ORKESTRATOR_AGENT_TEST_LIVE_MCP=1`) with the dependency-free probe server
   `e2e/agent-testing/mcp-probe-server.mjs`; the verdict rules have unit tests
@@ -90,9 +107,30 @@ collects the live evidence the shipped behaviour has never had.
   ACP bridge runs Grok with `GROK_FOLDER_TRUST=0`. Containers already were.
 - Codex `listMcpServers` and the runtime-health MCP panel follow
   `mcpServerStatus/list`'s `nextCursor` (100 per page, at most 10 pages; a
-  truncated read keeps the last cursor). Claude MCP `error` strings are
-  redacted with the shared `@orkestrator/protocol/secret-redaction` (moved
-  from the Codex bridge) before the 2,000-character bound.
+  truncated read keeps the last cursor). Live-inventory `error` strings are
+  redacted with the shared `@orkestrator/protocol/secret-redaction` before
+  their bound in every adapter: the Claude, Codex and Pi bridges, OpenCode's
+  `mcp.status` mapping, and again in the backend relay for every HTTP bridge
+  (`http-bridge-catalog.ts`). Cursor sets no `error`; ACP/Grok keeps only an
+  allowlisted reason code.
+- The live panel's "Config" link joins a live row to the saved row its
+  session loads (`mcp-live-join.ts`): exact name, the live scope's sources,
+  then the effective row, only within the link's provider and environment
+  (Pi's sanitized spelling is matched and named). The settings view
+  highlights that one row, says when other rows share the name, names
+  injected, plugin and unknown rows, and shows that session's newest apply
+  outcome (`runtimeId` = environment plus logical session).
+- Claude's no-control fallback keeps each init status (`pending` →
+  `connecting`, `needs-auth`, `disabled`, `failed`, anything else `unknown`)
+  and the layer from the init row's `source` (`mcp-runtime-status.ts`).
+  The count-only "MCP" tile is shown only for a session that reports no server
+  list, for every provider.
+- OpenCode MCP OAuth: `mcp.auth.start` alone never completes in the pinned
+  1.19.4 (traced in the binary: no callback waiter is registered, so OpenCode's
+  callback server on `127.0.0.1:19876` answers the browser "Invalid or expired
+  state parameter"). The live panel therefore offers no OpenCode sign-in; a
+  `needs-auth` row carries the hint "opencode mcp auth <server>", and the
+  target capability says the same.
 - Host Cursor and Pi project files follow the environment's execution
   policy: with project resources on they are `allowed` and apply plans them
   like any other source (`hostProjectTrust` in `providers.ts`; the target
@@ -102,55 +140,87 @@ collects the live evidence the shipped behaviour has never had.
 
 ### Code
 
-2. **OpenCode application.** Choose a directory-scoped reconcile or an
-   idle-gated server restart that keeps sessions, pending questions and the
-   runtime-only `orkestrator` injection; add evidence so OpenCode can report
-   `applied`. Trace how OAuth completes after `mcp.auth.start`
-   (`apps/backend/src/core/opencode-capabilities.ts`); nothing calls
-   `mcp.auth.callback`. Until then show external-authentication guidance.
-3. **Codex.** A reload reaches existing threads at their next turn (live,
-   2026-10-18: add, edit, rename and remove each reached two idle threads
-   with no restart). Still missing: thread-level `applied` evidence, so the
-   outcome stops at `pending-next-turn`. (Paging `mcpServerStatus/list` is
-   done.)
-4. **Grok.** Per-session ACP application is not implemented: user servers are
-   not passed at session load, and the collision rules are undocumented.
-   Inventory stays process-level; Grok 1.0.52's `server_status` carries
-   `sessionId` (see `vendorMcpServerStatus` in
-   `bridges/acp-bridge/src/acp-mcp-inventory.ts`), which may allow per-session
-   correlation.
-5. **Saved-to-live row join.** Join saved entries to live runtime rows by
-   exact native name plus target and runtime identity. `AgentInfoMcpSection`
-   links by server name only (`manage(server.name)`).
-6. **Live-inventory polish.**
-   - Claude's no-control fallback in `readSessionMcpServers`
-     (`bridges/claude-bridge/src/services/session-manager-catalog.ts`) uses
-     `initData`, which `session-manager-prompt-handlers/init.ts` collapses to
-     connected or failed.
-   - Count-only "MCP" metric tiles remain for Claude and OpenCode in
-     `apps/web/src/components/layout/AgentInfoButton.tsx`.
-   - Claude's runtime `error` strings are now redacted; other bridges'
-     live-inventory errors were not audited here.
-7. **Unmodelled layers.** Claude plugins, Cursor plugins and team settings,
-   OpenCode remote or organisation configuration and Codex profiles are
-   visible only in the live panel. Model one only where a passive reader
-   exists.
-8. **Replaced Claude server processes linger (blocked upstream).** On CLI
-   2.1.296, a `setMcpServers` call that changes a server's configuration
-   connects the new one but leaves the old process running, with its old
-   environment, until the CLI exits; a server loaded from a settings file and
-   then replaced the same way does too. Neither is offered to the model.
-   Report it to Anthropic, then add the old process's exit to
-   `session-manager-prompt-mcp-sync.live-probe.ts` once fixed.
-12. **OpenCode rename probe calls the new name.** On 2026-10-21, in
-    `qa-hosthome-0610` (see "Agent-test provider home isolation evidence" in
-    [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)),
-    `opencode-go/deepseek-v4.1-flash` answered every "call the old server"
-    probe after a rename by calling the renamed one, in both runs (user and
-    project scope); add, edit and remove passed, and the old server was gone.
-    The same model passed on 2026-10-18. Make the probe name a tool the
-    model cannot substitute (or accept a call to a different server when the
-    old one is absent from the tool rows), or pin a model that follows it.
+2. ~~**OpenCode application.**~~ Done 2026-10-25. Apply queues OpenCode
+   runtimes of a local worktree like Codex: once every OpenCode session there
+   is idle (backend activity, then OpenCode's own `session.status`, and never
+   during a dispatch), the provider's existing `OpenCodeInstanceReload` calls
+   `instance.dispose` for the worktree; the probe then posts the runtime-only
+   `orkestrator` entry again (`OpenCodeAgentToolsReconciler.forget` plus a
+   status read) and reads the rebuilt instance's `mcp.status`. `applied` when
+   it lists the added, edited or renamed name (any listing for a removal),
+   `restart-required` when it does not, `pending-next-turn` when the listing
+   could not be read. Only sources an instance reads when it is built are
+   reloaded; the user files in `$XDG_CONFIG_HOME/opencode` and container
+   servers keep `restart-required` (see the decisions). OAuth after
+   `mcp.auth.start` was traced in the pinned binary and never completes; the
+   panel now gives the `opencode mcp auth <server>` route instead of a sign-in
+   that cannot finish. Evidence: `service-apply.test.ts` (OpenCode cases),
+   `commands-registry-mcp.test.ts` ("OpenCode reload probe"),
+   `opencode-capabilities.test.ts` ("OpenCode MCP sign-in"), and
+   `apps/backend/tests/opencode-mcp-reload-live.test.ts` on the real pinned
+   1.19.4 (`mise run verify:opencode:mcp-live`, 2 passed, 3.4 s): a project
+   file edit is not seen until `instance.dispose`, then the rebuilt instance
+   lists only the renamed server, the old server's process and the
+   runtime-added server are gone, and a stored session survives; a user-file
+   edit is not seen even after `instance.dispose` and `global.dispose`.
+   Remaining: a model-facing live run (in "Corrected live probes" below).
+3. ~~**Codex.**~~ Done 2026-10-25. When the reload (or the answer that nothing
+   was running) completes, each Codex runtime records its session's newest
+   accepted dispatch and any dispatch still open; a newer accepted dispatch
+   than both makes it `applied` ("The thread started a turn after Codex
+   loaded the saved configuration."), within the 24-hour evidence window
+   (`codex-turn-evidence.ts`; tests in `service-apply.test.ts`). Paging
+   `mcpServerStatus/list` was already done. A live Codex run of the new state
+   is still to do (in "Corrected live probes").
+4. ~~**Grok.**~~ Decided 2026-10-25: no per-session ACP application. Grok
+   loads user and project servers when its process starts; passing user
+   servers again in `session/new` would run a second copy beside the file's
+   one under rules nobody documents, and the bridge keys inventory by name,
+   so the two would merge into one row. Restart-based evidence already
+   proves application. Per-session correlation through `server_status`'s
+   `sessionId` was not built: only the per-tab `orkestrator` entry can differ
+   between sessions, and its shape needs a Grok login to verify. See the
+   decisions.
+5. ~~**Saved-to-live row join.**~~ Done 2026-10-25 (see current state):
+   `mcp-live-join.ts`, `McpLiveJoinNotice.tsx`, the extended
+   `McpSettingsIntent`, and tests in `mcp-live-join.test.ts`,
+   `McpStatusAndStates.test.tsx` and `AgentInfoMcpSection.test.tsx`.
+6. ~~**Live-inventory polish.**~~ Done 2026-10-25: Claude's fallback keeps
+   init statuses and layers (`mcp-runtime-status.ts`; test in
+   `session-manager-catalog-transport.test.ts`); the count-only tiles are gone
+   whenever the server list is reported (`AgentInfoButton.test.tsx`); every
+   bridge's error text is redacted (tests in `opencode-capabilities.test.ts`
+   and `http-bridge-mcp-inventory.test.ts`).
+7. ~~**Unmodelled layers.**~~ Decided 2026-10-25, per layer. No passive reader
+   exists for Cursor plugins and team settings (held by Cursor's service),
+   OpenCode remote configuration (fetched from `<url>/.well-known/opencode`
+   and the active organisation's `<url>/api/config` on every instance build,
+   traced in 1.19.4) or Codex profiles (Orkestrator never passes
+   `--profile`), so they stay unmodelled and the live join names such rows as
+   coming from a layer this editor does not read. Claude plugins do have one
+   (`installed_plugins.json` and each plugin's `.mcp.json`), but mirroring
+   them needs the CLI's enablement rules; that is
+   [0121-claude-plugin-mcp-servers.md](0121-claude-plugin-mcp-servers.md).
+8. **Replaced Claude server processes linger (blocked upstream).** Still true
+   on CLI 2.1.309: the live probe's new "replace" scenario edits a server under
+   the same name and finds both processes alive, while only the new one is
+   connected and offered. `session-manager-prompt-mcp-sync.live.test.ts` now
+   asserts that, so it fails when the CLI starts stopping the old process;
+   then expect one `alpha` and close this item. Not yet reported to
+   Anthropic: filing is outward-facing and was left to a maintainer. Draft:
+   "Claude Code 2.1.309, Agent SDK `Query.setMcpServers`: replacing a stdio
+   server's configuration under the same name connects a new process but
+   never stops the old one; the old process keeps its environment until the
+   CLI exits. Same for a server first loaded from `.claude.json` and then
+   replaced. Repro: `bridges/claude-bridge/src/services/session-manager-prompt-mcp-sync.live-probe.ts`,
+   scenario `replace`."
+12. ~~**OpenCode rename probe calls the new name.**~~ Done 2026-10-25 in the
+    harness: a probe that must fail, where the model called another probe
+    server instead, passes only when the session's own MCP inventory (read
+    from the projection right after the turn) lists that substitute and not
+    the probed name (`absenceProvenBy: "inventory"`); with no inventory, or
+    the old name still listed, it fails as before (`judgeProbe` tests in
+    `mcp-apply-live-support.test.ts`). An OpenCode rerun is still to do.
 
 ### Qualification
 
@@ -158,10 +228,16 @@ Shared prerequisites and batching are in
 [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 Use temporary homes and harmless fixture servers; never the operator's files.
 
-- **Re-derive provider rules at current pins.** The OpenCode and Grok source
-  and precedence tables came from older binaries' embedded docs. Grok's
-  folder-trust rule was re-derived from 1.0.52 on 2026-10-22 (see current
-  state); its source and precedence table and all of OpenCode's were not.
+- **Re-derive provider rules at current pins.** OpenCode: done for 1.19.4 on
+  2026-10-25 from the loader embedded in the pinned binary (record below):
+  the table holds, except that the managed folder on macOS is
+  `/Library/Application Support/opencode` (fixed: `opencodeManagedDir`), and
+  the user files are cached for the server's lifetime (apply now says so).
+  Grok: the pin moved to 1.0.67 after the 1.0.52 trust re-derivation of
+  2026-10-22, so its trust rule, source and precedence table all need
+  deriving again with `grok inspect` in throwaway `GROK_HOME`s. Codex has no
+  parity guard yet; Pi's two parity tests and Claude's live probe pass at the
+  new pins.
 - **Grok and Pi live probes.** Run `mcp-apply-live.spec.ts` for Grok (user
   and project scopes, saved `enabled`, SSE) once the host has a current Grok
   login (it expired on 2026-10-19, so Grok is still unrun). Pi ran on
@@ -173,7 +249,15 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   with the corrected-check gaps below.
 - **Corrected live probes and completion matrix.** Rerun the busy-turn and
   negative tool-call checks, including Claude's warm SSE stale-server hook,
-  under the corrected harness. The [completion matrix](#completion-matrix)
+  under the corrected harness. The 2026-10-25 changes also need their first
+  model-facing run: OpenCode project scope should now reach the new server
+  with no restart (`applied` after the in-place reload) while the user scope
+  keeps `restart-required`; Codex runtimes should turn `applied` after each
+  tab's next turn; and the OpenCode rename's "old fails" probe should pass on
+  the inventory when the model substitutes the new name. Not run here: they
+  need provider logins seeded into a disposable profile by hand (see the
+  isolation note in the 2026-10-18 method), which this worker did not do with
+  the operator's credentials. The [completion matrix](#completion-matrix)
   retains the original observations and names the cells still unverified;
   provider errors, silence and substituted tools do not prove removal.
 - **Inactive environment.** Claude's apply evidence and recovery checks passed
@@ -203,6 +287,38 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   browser showing correct backend paths and operation recovery.
 - **Release decision.** Keep or narrow the all-on rollout default once the
   matrix is filled.
+
+## OpenCode 1.19.4 configuration loader (2026-10-25)
+
+Read from the JavaScript embedded in the pinned binary
+(`toolchains/opencode/1.19.4/darwin-arm64/opencode`, `Config.loadInstanceState`
+and `ConfigPaths`), and checked live where it matters for apply
+(`mise run verify:opencode:mcp-live`). Later layers win; `mcp` entries are
+deep-merged.
+
+| Order | Layer | Re-read on `instance.dispose`? |
+| --- | --- | --- |
+| 1 | Remote `<url>/.well-known/opencode` for each `wellknown` auth entry | yes (network) |
+| 2 | `$XDG_CONFIG_HOME/opencode/config.json` < `opencode.json` < `opencode.jsonc` (plus the legacy TOML `config` migration) | **no**: cached with an infinite TTL, invalidated only when OpenCode writes the file itself (`Config.updateGlobal`); `global.dispose` does not reload it either (live) |
+| 3 | `$OPENCODE_CONFIG` | yes |
+| 4 | Project `opencode.json` < `opencode.jsonc`, found upward from the directory to the worktree root, outermost first; skipped with `OPENCODE_DISABLE_PROJECT_CONFIG` | yes (live) |
+| 5 | Config directories: project `.opencode/` (unless disabled), then `~/.opencode/`, then `$OPENCODE_CONFIG_DIR`, each `opencode.json` < `opencode.jsonc` | yes |
+| 6 | `OPENCODE_CONFIG_CONTENT` | yes (environment of the server) |
+| 7 | Active organisation's `<url>/api/config` | yes (network) |
+| 8 | Managed folder `opencode.json` < `opencode.jsonc`: `/Library/Application Support/opencode` on macOS, `%ProgramData%\opencode` on Windows, `/etc/opencode` elsewhere | yes |
+| 9 | macOS MDM profile `/Library/Managed Preferences/[<user>/]ai.opencode.managed.plist` | yes (not modelled) |
+
+MCP OAuth in the same binary: `MCP.startAuth` (`POST /mcp/{name}/auth`)
+starts the callback server (`127.0.0.1:19876/mcp/oauth/callback` unless
+`oauth.redirectUri` or `callbackPort` is set), stores the state and the
+pending transport, and returns the URL. Only `MCP.authenticate`
+(`POST /mcp/{name}/auth/authenticate`, and `opencode mcp auth [name]`)
+registers a waiter for that state, opens the browser on the server's machine,
+and calls `MCP.finishAuth`, which stores the tokens in OpenCode's
+`mcp-auth.json` and reconnects the server. The callback server answers a
+state nobody waits for with "Invalid or expired state parameter", so a
+sign-in begun with `startAuth` alone cannot complete; the waiter times out
+after 5 minutes.
 
 ## Qualification record: inactive environment (2026-10-18)
 
@@ -489,8 +605,9 @@ and was not probed.
 
 Auth limitation per provider, from the target capabilities: Claude has no
 in-app MCP sign-in beyond its existing reconnect and elicitation; Codex has
-its existing OAuth action; OpenCode uses `mcp.auth.start`, whose completion
-is still unverified (code item 2); Cursor, Grok and Pi have none (Cursor
+its existing OAuth action; OpenCode used `mcp.auth.start`, which was traced on
+2026-10-25 and never completes (code item 2), so it now gives the
+`opencode mcp auth <server>` route instead; Cursor, Grok and Pi have none (Cursor
 servers sign in through Cursor, Pi terminals through `/mcp login`). The
 probe servers need no authentication, so no sign-in flow was exercised.
 
@@ -562,8 +679,10 @@ directory and were deleted with it.
 - `strictMcpConfig` stays off for Claude: it would also drop plugin MCP
   servers, so the running-CLI sync cannot rely on it either.
 - Mirrored merge and acceptance rules must be re-traced on every pin upgrade.
-  For Pi the two parity tests fail when either side moves; the other
-  providers have no such guard yet.
+  For Pi the two parity tests fail when either side moves; for OpenCode,
+  `verify:opencode:mcp-live` fails when the user-file cache or the in-place
+  reload changes; Claude's running-CLI behaviour has `verify:claude:mcp-live`.
+  Codex and Grok have no such guard yet.
 - Terminal sessions get guidance only; no command is injected.
 - **Runtime generation** is the environment's recorded bridge pid plus the
   persisted provider session id, as a keyed 16-character label. It needs no
@@ -621,9 +740,15 @@ directory and were deleted with it.
 
 ## Open questions
 
-- OpenCode and Grok: offer an explicit, idle-gated "restart to apply", or
-  keep guidance only? Is per-session Grok application worth it when
-  restart-based evidence works?
+- Resolved 2026-10-25: OpenCode applies through an automatic, idle-gated
+  in-place instance rebuild for the files an instance reads (no server
+  restart); the user files and containers keep restart guidance. Grok keeps
+  guidance only, and per-session Grok application is not worth it while
+  restart-based evidence works (see the decisions).
+- Whether to offer an explicit, idle-gated "restart OpenCode to apply" for
+  the user files. Not built: a server restart drops every pending question and
+  permission in the environment, which is a bigger step than apply has taken
+  so far.
 
 ## Needs verification
 
@@ -637,7 +762,12 @@ directory and were deleted with it.
   login (the host's expired on 2026-10-19). The host's own `grok` is 1.0.62,
   not the pin; the checks used the toolchain's 1.0.52.
 
-- How OpenCode OAuth completes after `mcp.auth.start`.
+- ~~How OpenCode OAuth completes after `mcp.auth.start`.~~ Traced 2026-10-25:
+  it does not (see the OpenCode 1.19.4 record). Whether
+  `mcp.auth.authenticate` could be driven from the panel (it opens the
+  browser on the server's machine and holds the request up to 5 minutes) is
+  not verified; the guidance route is what ships.
+- Whether Grok 1.0.67 still follows the 1.0.52 trust rule and source table.
 - Agent-account homes: `syncClaudeAccountSettings`
   (`apps/backend/src/core/agent-accounts-homes.ts`) copies host
   `mcpServers` into an account's `.claude.json` one way, before launch, and
@@ -648,8 +778,30 @@ directory and were deleted with it.
   from `homedir()/.claude.json`, so a server the CLI loaded from the account's
   own `.claude.json` and nowhere else is never reported stale when removed.
 
+## Assumptions and decisions
+
+Made on 2026-10-25 while closing the code items, without stopping to ask.
+
+| Decision | Options | Choice and why | Pros | Cons |
+| --- | --- | --- | --- | --- |
+| OpenCode apply (item 2) | (a) keep `restart-required`; (b) idle-gated server restart; (c) idle-gated `instance.dispose` per worktree | (c), reusing the command refresh's `OpenCodeInstanceReload`: it is directory-scoped, already idle-gated twice, keeps stored sessions (proven live) and rebuilds MCP servers from disk | No restart, no lost sessions; old server processes exit; evidence from the rebuilt instance's own listing | Drops the runtime-only `orkestrator` entry (re-posted at once) and any pending question in that directory (only disposed while idle); a busy directory waits up to 30 minutes, then fails |
+| OpenCode user files | (a) dispose anyway; (b) rewrite the user file through `PATCH /global/config` to invalidate the cache; (c) keep `restart-required` | (c): OpenCode 1.19.4 caches `$XDG_CONFIG_HOME/opencode` for the server's lifetime (traced and proven live); (b) would rewrite the user's file | Truthful outcome; nothing touches the user's file | User-scope saves still need a stop and start |
+| OpenCode `applied` evidence | (a) a successful dispose alone; (b) dispose plus the rebuilt instance's `mcp.status` | (b): the name must be listed after an add, edit, enable or rename; a removal proves itself by the rebuild | A shadowing layer or a failed load shows as `restart-required` instead of a false `applied` | The status read builds the instance (starts its stdio servers) right after apply rather than at the next message |
+| OpenCode containers | (a) dispose `/workspace` too; (b) keep `restart-required` | (b): the `orkestrator` re-post for containers runs on a different path, and no container run proved it | No new container behaviour without evidence | Container saves still need a restart |
+| OpenCode MCP sign-in | (a) keep `mcp.auth.start` + open the URL; (b) drive `mcp.auth.authenticate`; (c) guidance | (c), as the item asked "until then": (a) never completes (traced), (b) opens a browser on the server's machine, blocks a request up to 5 minutes, and is unverified with a real OAuth server | Honest; the CLI route works wherever the server runs, container included | One more step for the user; the action from older renderers is refused with the same text |
+| Codex `applied` (item 3) | (a) a bridge field on `/runtime-health` (per-thread last `turn/start`); (b) the backend's own `dispatchedRequestIds` | (b): Codex's session routes can cold-start app-server, so a bridge read is not no-touch; the backend already records every accepted dispatch | No bridge or protocol change; works across bridge restarts and for "not running" | Proves a turn was dispatched after the reload, not what the thread loaded; a dispatch open at reload completion is excluded, so that turn alone never proves it |
+| Strategy name | (a) new `McpApplyStrategy` value for OpenCode; (b) keep `directory-restart`, change the description | (b): older renderers label the existing value | No compatibility path | The name says less than it does |
+| Grok per-session apply (item 4) | (a) pass user servers in `session/new`; (b) keep restart-based apply | (b): Grok already loads the files at process start; a session copy would run beside it with undocumented collision rules and merge with it in a name-keyed inventory | No duplicate servers; nothing new to qualify without a login | A Grok change still needs a restart |
+| Unmodelled layers (item 7) | (a) model every layer; (b) model only layers with a passive reader | (b): only Claude plugins qualify, and they need the CLI's enablement rules, so they moved to their own file (0121) | No guessed sources; the live join already labels such rows | Plugin servers stay visible only in the live panel for now |
+| Live row join (item 5) | (a) name only (as before); (b) name, scope and target; (c) also by runtime | (c): exact name and target, live scope picks the source, then effective status and precedence; the session's apply outcome by `runtimeId` | One highlighted row; explains injected, plugin and unknown rows | Pi's sanitized names are matched by rule, which must track the bridge |
+| Count-only MCP tiles (item 6) | (a) delete; (b) show only when no list is reported | (b): an older bridge that reports only the count still shows something | No duplicate number beside the list | Two code paths |
+| Rename probe (item 12) | (a) a tool name the model cannot substitute; (b) pin another model; (c) accept a substitution when the runtime's inventory proves the old name gone | (c): a renamed process keeps its label and tool, so (a) cannot work; (b) breaks when the model changes | Absence is proven by the runtime, not by the model's choice | Needs the session to report an inventory (OpenCode does) |
+| Item 8 report | (a) file it with Anthropic now; (b) draft it and pin the behaviour | (b): filing is outward-facing; the canary tells us when it is fixed | Nothing published without a maintainer | Still unreported |
+
 ## Related
 
+- [0121-claude-plugin-mcp-servers.md](0121-claude-plugin-mcp-servers.md) for a
+  read-only Claude plugin source (split from item 7).
 - [0040-mcp-environment-delivery.md](0040-mcp-environment-delivery.md) for containers,
   remote backends and environment-private configuration.
 - [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md) and

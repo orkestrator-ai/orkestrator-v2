@@ -125,6 +125,18 @@ export class TerminalRuntime {
     return this.processes.size;
   }
 
+  /** Live local terminal shells and the environment each was opened for. */
+  localProcessRoots(): Array<{ environmentId: string; pid: number }> {
+    const roots: Array<{ environmentId: string; pid: number }> = [];
+    for (const [id, process] of this.processes) {
+      const config = this.sessionConfigs.get(id);
+      if (config?.kind === "local" && process.pid > 1) {
+        roots.push({ environmentId: config.environmentId, pid: process.pid });
+      }
+    }
+    return roots;
+  }
+
   registerProcess(id: string, process: PtyProcess): void {
     this.processes.set(id, process);
   }

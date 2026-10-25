@@ -392,11 +392,12 @@ describe("runCommand capture", () => {
   test("redacts output and preserves a nonzero exit outcome", async () => {
     const failure = await runCommand(
       process.execPath,
-      ["-e", 'console.error("secret-value"); process.exit(7)'],
+      ["-e", 'console.log("secret-value"); console.error("secret-value"); process.exit(7)'],
       { redactValues: ["secret-value"] },
     ).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(CommandFailedError);
     expect((failure as CommandFailedError).message).toBe("[REDACTED]");
+    expect((failure as CommandFailedError).stdout).toBe("[REDACTED]\n");
     expect((failure as CommandFailedError).exitCode).toBe(7);
     expect((failure as CommandFailedError).timedOut).toBe(false);
   });

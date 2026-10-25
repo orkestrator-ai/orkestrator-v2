@@ -81,6 +81,8 @@ export interface RuntimeProbe {
    * work running; `names` are the MCP servers the rebuilt instance lists.
    */
   reloadOpenCode?(environmentId: string): Promise<{ outcome: ReloadOutcome; names?: string[] }>;
+  /** Best-effort listing after disposal, with its own timeout budget. */
+  openCodeMcpServerNames?(environmentId: string): Promise<string[] | undefined>;
   /**
    * What the session's bridge reports about the MCP configuration its live
    * runtime was built from, read through the no-touch `/runtime-health`
@@ -583,7 +585,14 @@ export async function advanceReloadRuntimes(
         reloaded.push(...list.map((runtime) => runtime.runtimeId));
         awaitingTurn.push(...list.map((runtime) => runtime.runtimeId));
       } else {
-        const names = "names" in result ? result.names : undefined;
+        const names =
+          ("names" in result ? result.names : undefined) ??
+          (probe.openCodeMcpServerNames
+            ? await withTimeout(
+                probe.openCodeMcpServerNames(environmentId),
+                CODEX_RELOAD_TIMEOUT_MS,
+              ).catch(() => undefined)
+            : undefined);
         if (!names) {
           // Disposed, but the rebuilt instance has not answered yet; the next
           // request builds it from the saved files either way.

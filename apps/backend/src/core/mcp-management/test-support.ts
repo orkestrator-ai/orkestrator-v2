@@ -26,6 +26,7 @@ export interface Fixture {
   dataDir: string;
   events: Array<[string, unknown]>;
   sessions: ApplySession[];
+  sessionReadControl: { read?: () => ApplySession[] | Promise<ApplySession[]> };
   activity: Map<string, "idle" | "working" | "waiting" | "unknown">;
   reloads: string[];
   reloadFailure: { value: Error | null };
@@ -66,6 +67,7 @@ export interface Fixture {
   containerNetwork: { value: ContainerNetworkView | null };
   /** Staged inputs a defaults refresh rewrote, by source id. */
   stagedDefaults: Map<string, string>;
+  probe: RuntimeProbe;
   service: McpManagementService;
   now: { value: number };
   write(relative: string, content: string): string;
@@ -84,6 +86,7 @@ export function createFixture(
   for (const dir of [home, worktree, dataDir]) mkdirSync(dir, { recursive: true });
   const events: Array<[string, unknown]> = [];
   const sessions: ApplySession[] = [];
+  const sessionReadControl: Fixture["sessionReadControl"] = {};
   const activity = new Map<string, "idle" | "working" | "waiting" | "unknown">();
   const reloads: string[] = [];
   const reloadFailure = { value: null as Error | null };
@@ -135,7 +138,7 @@ export function createFixture(
           },
         };
       }),
-    sessions: async () => sessions,
+    sessions: async () => (sessionReadControl.read ? sessionReadControl.read() : sessions),
     activity: (environmentId, agent, key) =>
       activity.get(`${environmentId}:${agent}:${key}`) ?? "idle",
     reloadCodex: async (environmentId) => {
@@ -218,6 +221,7 @@ export function createFixture(
     dataDir,
     events,
     sessions,
+    sessionReadControl,
     activity,
     reloads,
     reloadFailure,
@@ -239,6 +243,7 @@ export function createFixture(
     containerNetwork,
     stagedDefaults,
     now,
+    probe,
     service: newService(),
     newService,
     write(relative, content) {

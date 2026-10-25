@@ -1605,7 +1605,7 @@ export interface NativeAgentMcpServer {
   id: string;
   name: string;
   status: "connected" | "connecting" | "failed" | "needs-auth" | "disabled" | "unknown";
-  scope?: "user" | "project" | "orkestrator" | "plugin";
+  scope?: "user" | "project" | "local" | "orkestrator" | "plugin";
   transport?: "stdio" | "sse" | "http";
   toolCount?: number;
   tools?: string[];

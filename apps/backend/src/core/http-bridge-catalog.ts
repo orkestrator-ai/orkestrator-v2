@@ -194,6 +194,7 @@ export class HttpBridgeCatalogAdapter {
           actions,
           ...(server?.scope === "user" ||
           server?.scope === "project" ||
+          server?.scope === "local" ||
           server?.scope === "orkestrator" ||
           server?.scope === "plugin"
             ? { scope: server.scope }

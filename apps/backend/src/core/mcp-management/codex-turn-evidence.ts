@@ -17,10 +17,8 @@
  * a later one, which read the saved file when it started. A turn that never
  * comes leaves the runtime `pending-next-turn`, which is the truth.
  *
- * Not distinguished: a change superseded by an outside edit after its reload
- * is held (that app-server keeps it until its next reload), so a later turn
- * still marks the runtime `applied` even if the app-server was replaced in
- * between and loaded the newer file instead.
+ * A later managed reload rechecks earlier waiting changes against the source
+ * it loads. Overwritten changes are retired before turn evidence is accepted.
  */
 
 import type { McpRuntimeApplyEntry } from "@orkestrator/protocol/mcp-management";
@@ -44,10 +42,13 @@ function sessionKey(environmentId: string, agent: string, logicalSessionKey: str
   return `${environmentId}\u0000${agent}\u0000${logicalSessionKey}`;
 }
 
-export function codexTurnBaseline(session: ApplySession | undefined): CodexTurnBaseline {
+export function codexTurnBaseline(
+  session: ApplySession | undefined,
+): CodexTurnBaseline | undefined {
+  if (!session) return undefined;
   return {
-    lastDispatchId: session?.lastDispatchId ?? null,
-    ...(session?.pendingDispatchId ? { pendingDispatchId: session.pendingDispatchId } : {}),
+    lastDispatchId: session.lastDispatchId ?? null,
+    ...(session.pendingDispatchId ? { pendingDispatchId: session.pendingDispatchId } : {}),
   };
 }
 
@@ -77,7 +78,9 @@ function waitingRecords(stored: StoredOperation, nowMs: number) {
     stored.snapshot.apply.runtimes.map((runtime) => [runtime.runtimeId, runtime.state]),
   );
   return (stored.recovery.runtimes ?? []).filter(
-    (record) => record.turnBaseline && states.get(record.runtimeId) === "pending-next-turn",
+    (record) =>
+      (record.turnBaseline || record.turnBaselinePending) &&
+      states.get(record.runtimeId) === "pending-next-turn",
   );
 }
 
@@ -97,8 +100,9 @@ export function codexTurnsStarted(
   const started = new Map<StoredOperation, Set<string>>();
   for (const stored of operations) {
     for (const record of waitingRecords(stored, nowMs)) {
+      if (record.turnConfigurationPending || !record.turnBaseline) continue;
       const latest = lookupSession(sessions, record)?.lastDispatchId;
-      const baseline = record.turnBaseline!;
+      const baseline = record.turnBaseline;
       if (!latest || latest === baseline.lastDispatchId || latest === baseline.pendingDispatchId) {
         continue;
       }

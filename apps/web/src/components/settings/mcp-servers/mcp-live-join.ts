@@ -54,8 +54,12 @@ export type McpLiveJoin =
     };
 
 /** Live scopes and the saved source scopes they can come from. */
-const LIVE_SCOPE_SOURCES: Record<"user" | "project", ReadonlySet<McpConfigSource["scope"]>> = {
-  user: new Set(["backend-user", "claude-local", "environment-private"]),
+const LIVE_SCOPE_SOURCES: Record<
+  "user" | "project" | "local",
+  ReadonlySet<McpConfigSource["scope"]>
+> = {
+  user: new Set(["backend-user", "environment-private"]),
+  local: new Set(["claude-local"]),
   project: new Set(["project"]),
 };
 
@@ -99,13 +103,18 @@ export function joinLiveMcpServer(
     const injected = named.find((definition) => definition.status === "protected");
     return { kind: "injected", ...(injected ? { entryId: injected.entryId } : {}) };
   }
+  if (!ref.scope) {
+    const injected = named.find((definition) => definition.status === "protected");
+    if (injected) return { kind: "injected", entryId: injected.entryId };
+  }
   if (!named.length) return { kind: "not-found" };
   const scoped =
     ref.scope && ref.scope in LIVE_SCOPE_SOURCES
       ? named.filter((definition) => {
           const scope = sources.get(definition.sourceId)?.scope;
           return (
-            scope !== undefined && LIVE_SCOPE_SOURCES[ref.scope as "user" | "project"].has(scope)
+            scope !== undefined &&
+            LIVE_SCOPE_SOURCES[ref.scope as "user" | "project" | "local"].has(scope)
           );
         })
       : [];

@@ -1315,9 +1315,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return this.capabilitiesAdapter.mcpServers();
   }
 
-  /** MCP apply: the command refresh's idle-gated `instance.dispose`; `busy` waits. */
+  /** MCP apply: one idle-gated `instance.dispose`; the apply scheduler owns retries. */
   async reloadMcpConfiguration(): Promise<"reloaded" | "busy"> {
-    return (await this.commandReload.request()) === "reloaded" ? "reloaded" : "busy";
+    return this.commandReload.requestOnce();
   }
 
   mcpServerAction(

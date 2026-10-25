@@ -254,7 +254,7 @@ describe("Claude MCP inventory without a live control", () => {
       { name: "docs", status: "connected", scope: "project" },
       { name: "slow", status: "connecting", scope: "user" },
       { name: "oauth", status: "needs-auth", scope: undefined },
-      { name: "off", status: "disabled", scope: "project" },
+      { name: "off", status: "disabled", scope: "local" },
       { name: "broken", status: "failed", scope: undefined },
       { name: "odd", status: "unknown", scope: undefined },
     ]);

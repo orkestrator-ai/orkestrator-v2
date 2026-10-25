@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { MCP_MANAGEMENT_CHANGED_EVENT } from "@orkestrator/protocol/mcp-management";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 
@@ -13,6 +14,9 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
+import { joinLiveMcpServer } from "../settings/mcp-servers/mcp-live-join";
+import { definition, snapshot } from "../settings/mcp-servers/mcp-test-fixtures";
+import { McpLiveJoinNotice } from "../settings/mcp-servers/McpLiveJoinNotice";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
 
 const listenMock = nativeListen as unknown as ReturnType<typeof mock>;
@@ -49,11 +53,14 @@ function captureIntents(): McpSettingsIntent[] {
   return intents;
 }
 
-function renderSection(list: NativeAgentMcpServer[] | undefined) {
+function renderSection(
+  list: NativeAgentMcpServer[] | undefined,
+  provider: AgentPlatform = "codex",
+) {
   return render(
     <AgentInfoMcpSection
       environmentId="env-1"
-      provider="codex"
+      provider={provider}
       sessionKey="env-1:tab-1"
       servers={list}
       busyAction={null}
@@ -81,6 +88,48 @@ describe("AgentInfoMcpSection links into saved configuration", () => {
         logicalSessionKey: "env-1:tab-1",
       },
     ]);
+  });
+
+  test("Claude links use the saved key while displaying the advertised name", () => {
+    const intents = captureIntents();
+    renderSection(
+      [{ id: "docs", name: "Documentation", scope: "local", status: "connected", actions: [] }],
+      "claude",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Tools/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Saved configuration", description: "Documentation" }),
+    );
+    expect(intents[0]).toMatchObject({ serverName: "docs", serverScope: "local" });
+    const base = snapshot();
+    const rows = snapshot({
+      target: { ...base.target, context: { ...base.target.context, environmentId: "env-1" } },
+      sources: base.sources.map((source) => ({ ...source, scope: "claude-local" })),
+    });
+    expect(
+      joinLiveMcpServer(rows, {
+        provider: "claude",
+        environmentId: "env-1",
+        serverName: intents[0]!.serverName!,
+        scope: intents[0]!.serverScope,
+      }),
+    ).toMatchObject({ kind: "saved", entryId: rows.definitions[0]!.entryId });
+  });
+
+  test("a scope-less injected collision explains that the live connection has no saved file", () => {
+    const rows = snapshot({
+      definitions: [
+        definition({ name: "orkestrator", status: "shadowed" }),
+        definition({ name: "orkestrator", entryId: "injected", status: "protected" }),
+      ],
+    });
+    const liveRef = { provider: "claude" as const, environmentId: null, serverName: "orkestrator" };
+    const join = joinLiveMcpServer(rows, liveRef);
+    expect(join.kind).toBe("injected");
+    if (join.kind === "other-target") throw new Error("wrong target");
+    render(<McpLiveJoinNotice liveRef={liveRef} join={join} snapshot={rows} />);
+    expect(screen.getByRole("note").textContent).toContain("Orkestrator's own connection");
+    expect(screen.getByRole("note").textContent).toContain("not saved in these files");
   });
 
   test("the panel-level link is visible while the inventory is collapsed", () => {

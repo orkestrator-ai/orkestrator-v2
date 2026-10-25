@@ -299,6 +299,30 @@ describe("OpenCode agent-tool configuration", () => {
     expect(agentTools().state("test")).toBe("connected");
   });
 
+  test("forget after disposal replaces an in-flight POST even with the same fingerprint", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = await serveMcpResponse(async () => {
+      if (server.requests.length === 1) await gate;
+      return { body: CONNECTED_BODY };
+    });
+    try {
+      schedule("test", server.port);
+      await waitFor(() => server.requests.length === 1, "pre-disposal POST");
+      agentTools().recordLaunchConnection("test", connection);
+      agentTools().forget("test");
+      schedule("test", server.port);
+      await agentTools().settled("test");
+      expect(server.requests).toHaveLength(2);
+      expect(agentTools().state("test")).toBe("connected");
+      expect(agentTools().launchConnection("test")).toEqual(connection);
+    } finally {
+      release();
+    }
+  });
+
   test("cancellation aborts an in-flight generation without recording an outcome", async () => {
     const server = await serveMcpResponse(async () => {
       await sleep(150);

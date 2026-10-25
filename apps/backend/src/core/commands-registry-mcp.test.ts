@@ -256,8 +256,8 @@ describe("OpenCode reload probe", () => {
     const { probe, calls, forgotten, statusReads } = openCodeContext("reloaded", ["fixture"]);
     await expect(probe.reloadOpenCode!("env-1")).resolves.toEqual({
       outcome: "reloaded",
-      names: ["fixture"],
     });
+    await expect(probe.openCodeMcpServerNames!("env-1")).resolves.toEqual(["fixture"]);
     expect(calls).toEqual([
       ["env-1", "opencode"],
       ["names", "env-1"],

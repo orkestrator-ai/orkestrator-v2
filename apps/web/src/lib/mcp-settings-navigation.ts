@@ -13,8 +13,8 @@ export interface McpSettingsIntent {
   provider?: AgentPlatform;
   environmentId?: string;
   /**
-   * Exact name a live session reports for the server. The section joins it to
-   * the saved row that session loads (`joinLiveMcpServer`) only within this
+   * Exact configuration key of the live server (its display name may differ).
+   * The section joins it to the saved row that session loads (`joinLiveMcpServer`) only within this
    * intent's provider and environment.
    */
   serverName?: string;

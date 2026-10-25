@@ -69,6 +69,10 @@ export interface OperationRecovery {
      * proves a turn started with the change (`codex-turn-evidence.ts`).
      */
     turnBaseline?: { lastDispatchId: string | null; pendingDispatchId?: string };
+    /** A missing catalogue read must be retried before accepting turn evidence. */
+    turnBaselinePending?: boolean;
+    /** A later reload could not establish that its configuration still holds this change. */
+    turnConfigurationPending?: boolean;
   }>;
   applyQueuedAt?: string;
 }

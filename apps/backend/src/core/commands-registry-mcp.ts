@@ -136,10 +136,10 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
       // instance. Post it again now rather than when its memo expires.
       context.runtime.localServers.openCodeAgentTools.forget(`local:${environmentId}`);
       void getLocalServerStatus(environmentId, context, "opencode").catch(() => undefined);
-      const names = await service
-        .openCodeMcpServerNamesIfRunning(environmentId)
-        .catch(() => undefined);
-      return { outcome, ...(names ? { names } : {}) };
+      return { outcome };
+    },
+    async openCodeMcpServerNames(environmentId) {
+      return context.nativeAgents?.openCodeMcpServerNamesIfRunning(environmentId);
     },
     async mcpConfigEvidence(environmentId, agent, logicalSessionKey) {
       const service = context.nativeAgents;

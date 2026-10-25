@@ -968,6 +968,19 @@ test.describe("live MCP apply", () => {
             }
           }
           record.operation.afterEvidence = await evidence(result.operation.operationId);
+          if (platform === "codex") {
+            // The real model turn above must both reach the changed tool and
+            // advance that thread's scheduler evidence from pending to applied.
+            for (const tab of new Set(probes.map((entry) => entry.tab))) {
+              const runtime = record.operation.afterEvidence.find((entry) =>
+                entry.label.endsWith(` · ${tab}`),
+              );
+              expect(
+                runtime?.state,
+                `${name}: Codex thread ${tab} adopted the saved configuration`,
+              ).toBe("applied");
+            }
+          }
           return { record, entryId: result.entryId };
         };
 

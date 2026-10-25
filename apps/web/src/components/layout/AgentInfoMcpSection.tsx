@@ -108,7 +108,7 @@ export function AgentInfoMcpSection({
       environmentId,
       ...(server
         ? {
-            serverName: server.name,
+            serverName: provider === "claude" ? server.id : server.name,
             ...(server.scope ? { serverScope: server.scope } : {}),
             logicalSessionKey: sessionKey,
           }

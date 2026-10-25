@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { mcpScope } from "../../../../../../bridges/claude-bridge/src/services/mcp-runtime-status";
 
 import type { McpConfigSource } from "@orkestrator/protocol/mcp-management";
 
@@ -55,6 +56,49 @@ describe("joinLiveMcpServer", () => {
       entryId: "claude:project/ZG9jcw",
     });
   });
+
+  test("Claude bridge scopes distinguish same-named user, local and project definitions", () => {
+    const localSource: McpConfigSource = {
+      ...userSource,
+      sourceId: "claude:local",
+      scope: "claude-local",
+      precedence: 20,
+    };
+    const rows = snapshot({
+      sources: [userSource, localSource, projectSource],
+      definitions: [
+        definition({ status: "shadowed" }),
+        definition({ entryId: "local-docs", sourceId: localSource.sourceId, status: "shadowed" }),
+        definition({ entryId: "project-docs", sourceId: projectSource.sourceId }),
+      ],
+    });
+    for (const [sdkScope, entryId] of [
+      ["user", "claude:user/ZG9jcw"],
+      ["local", "local-docs"],
+      ["project", "project-docs"],
+    ]) {
+      expect(joinLiveMcpServer(rows, ref({ scope: mcpScope(sdkScope, "docs") }))).toMatchObject({
+        kind: "saved",
+        entryId,
+      });
+    }
+  });
+
+  for (const provider of ["codex", "opencode"] as const) {
+    test(`${provider} scope-less injected rows beat shadowed file entries`, () => {
+      const rows = snapshot({
+        target: { ...snapshot().target, provider },
+        definitions: [
+          definition({ name: "orkestrator", status: "shadowed" }),
+          definition({ name: "orkestrator", entryId: "injected", status: "protected" }),
+        ],
+      });
+      expect(joinLiveMcpServer(rows, ref({ provider, serverName: "orkestrator" }))).toEqual({
+        kind: "injected",
+        entryId: "injected",
+      });
+    });
+  }
 
   test("a scope no saved row has falls back to the name alone", () => {
     const userOnly = snapshot();

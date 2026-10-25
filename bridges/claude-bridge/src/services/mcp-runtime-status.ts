@@ -1,6 +1,9 @@
 import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 
-import type { McpServerRuntimeStatus } from "../types/index.js";
+type McpServerRuntimeStatus = Pick<
+  NativeAgentMcpServer,
+  "name" | "status" | "scope" | "transport" | "error" | "tools"
+>;
 
 /**
  * Live layer of a server as the live panel names it. The SDK reports a
@@ -10,7 +13,7 @@ import type { McpServerRuntimeStatus } from "../types/index.js";
 export function mcpScope(scope: string | undefined, name: string): NativeAgentMcpServer["scope"] {
   if (name === "orkestrator") return "orkestrator";
   if (scope?.includes("plugin")) return "plugin";
-  if (scope === "project" || scope === "local") return "project";
+  if (scope === "project" || scope === "local") return scope;
   return "user";
 }
 

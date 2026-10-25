@@ -310,6 +310,10 @@ export class OpenCodeAgentToolsReconciler {
    * servers while the server process (and its fingerprint) stays the same.
    */
   forget(key: string): void {
+    // A POST started before disposal cannot establish the rebuilt instance's
+    // connection, even when its fingerprint is unchanged.
+    this.configurations.get(key)?.controller.abort();
+    this.configurations.delete(key);
     this.outcomes.delete(key);
   }
 

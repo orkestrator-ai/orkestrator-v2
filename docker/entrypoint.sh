@@ -905,12 +905,13 @@ fi
 if [ -d /opencode-data ]; then
     # Only the login is portable. The host's opencode.db (its session database,
     # often several GB) is never copied; nor are snapshot/, storage/ or
-    # account.json. In a live run of OpenCode 1.19.4
-    # (scripts/qualify-opencode-seeded-data.sh) nothing opened a seeded
-    # snapshot directory, which is keyed by the worktree's path, or
-    # account.json; of storage/ only the legacy-migration index was read, and
-    # an empty storage/ recreates it. Copying them cost bytes on every start
-    # and offered nothing a container uses.
+    # account.json. OpenCode 1.19.4 keeps console accounts and the selected
+    # organization in SQLite (preserved via OPENCODE_DB), not account.json.
+    # scripts/qualify-opencode-seeded-data.sh exercises an active account
+    # against an authenticated local console with and without the host seed.
+    # Snapshots are keyed by the worktree path; of storage/ only the legacy
+    # migration index is needed, and an empty storage/ recreates it. Copying
+    # the host seed cost bytes on every start and offered nothing a container uses.
     copy_agent_file /opencode-data "$HOME/.local/share/opencode" auth.json OpenCode
 
     chmod 600 "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true

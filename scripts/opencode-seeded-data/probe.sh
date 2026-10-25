@@ -6,7 +6,7 @@
 # against a local mock model: a `write` tool call, the session diff, a revert
 # and an unrevert. Prints a summary and `RESULT key=value` lines.
 #
-#   probe.sh <volume|legacy> <migrated|unmigrated|none>
+#   probe.sh <volume|legacy> <migrated|unmigrated|none> [inactive|active]
 #
 # volume: OPENCODE_DB on its own directory, as on persistent storage; legacy:
 # OpenCode's default database path. migrated: the seed includes
@@ -15,6 +15,7 @@
 set -euo pipefail
 MODE="${1:?mode: volume or legacy}"
 SEED="${2:?seed: migrated, unmigrated or none}"
+ACCOUNT="${3:-inactive}"
 PROBE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA="$HOME/.local/share/opencode"
 WORK="$(mktemp -d)"
@@ -81,11 +82,23 @@ if [ "$MODE" = volume ]; then
 fi
 export OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1
 
+if [ "$ACCOUNT" = active ]; then
+    # 1.19.4 keeps console accounts in SQLite, not the obsolete account.json.
+    # Initialize with the real CLI, then install a synthetic unexpired account.
+    opencode db "INSERT INTO account (id,email,url,access_token,refresh_token,token_expiry,time_created,time_updated) VALUES ('acc_probe','probe@example.invalid','http://127.0.0.1:4010','probe-access','',4102444800000,1,1)" > /dev/null
+    opencode db "INSERT INTO account_state (id,active_account_id,active_org_id) VALUES (1,'acc_probe','org_probe')" > /dev/null
+    # The provider must come from the authenticated console response. A turn
+    # cannot accidentally pass using only the local provider configuration.
+    cp "$HOME/.config/opencode/opencode.json" "$WORK/console-config.json"
+    printf '{"autoupdate":false,"share":"disabled"}\n' > "$HOME/.config/opencode/opencode.json"
+fi
+
 inotifywait -m -r -q -e open,access,modify,attrib,close_write,create,delete,moved_from,moved_to \
     --format '%e %w%f' "$DATA" > "$WORK/events.txt" 2> "$WORK/inotify.err" &
 INOTIFY=$!
 sleep 1
-MOCK_WRITE_PATH="$REPO/written.txt" bun "$PROBE_DIR/mock-llm.js" 2> "$WORK/mock.err" &
+MOCK_WRITE_PATH="$REPO/written.txt" MOCK_CONSOLE_CONFIG="$WORK/console-config.json" \
+    MOCK_CONSOLE_MARKER="$WORK/console-authenticated" bun "$PROBE_DIR/mock-llm.js" 2> "$WORK/mock.err" &
 MOCK=$!
 cd "$REPO"
 opencode serve --port "$PORT" --hostname 127.0.0.1 > "$WORK/serve.out" 2>&1 &
@@ -96,7 +109,7 @@ trap cleanup EXIT
 api() { curl -sS --max-time 120 -H 'content-type: application/json' "$@"; }
 base="http://127.0.0.1:$PORT"
 for _ in $(seq 1 150); do
-    api "$base/global/health" > "$WORK/health.json" 2>/dev/null && break
+    api --max-time 1 "$base/global/health" > "$WORK/health.json" 2>/dev/null && break
     sleep 0.2
 done
 written() { [ -f "$REPO/written.txt" ] && echo yes || echo no; }
@@ -113,6 +126,10 @@ after_revert="$(written)"
 api -X POST "$base/session/$session/unrevert" > /dev/null
 after_unrevert="$(written)"
 api "$base/session" > "$WORK/sessions.json"
+if [ "$ACCOUNT" = active ]; then
+    opencode console orgs > "$WORK/orgs.txt" 2>&1
+    grep -q 'org_probe' "$WORK/orgs.txt"
+fi
 sleep 1
 cleanup
 wait "$SERVE" 2>/dev/null || true
@@ -138,6 +155,8 @@ echo "-- events on seeded paths (count event path):"
 echo "${seeded_events:-  (none)}"
 echo "RESULT mode=$MODE"
 echo "RESULT seed=$SEED"
+echo "RESULT account=$ACCOUNT"
+echo "RESULT console_authenticated=$([ -f "$WORK/console-authenticated" ] && echo yes || echo no)"
 echo "RESULT turn=$turn"
 echo "RESULT tools=$tools"
 echo "RESULT diff=$diff_files"

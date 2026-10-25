@@ -22,7 +22,7 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
 import { getLocalServerStatus } from "./commands-servers.js";
 import { runCommandBuffer } from "./shell.js";
 import type { ApplyEnvironment, ApplySession, RuntimeProbe } from "./mcp-management/apply.js";
-import { DOCKER_LABEL_INPUTS_REVISION } from "./constants.js";
+import { DOCKER_LABEL_INPUTS_REVISION, DOCKER_LABEL_NETWORK_POLICY } from "./constants.js";
 import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
 import { containerAllowedDomains, containerNetworkPolicy } from "./container-network.js";
 import { observeContainerBoot } from "./container-readiness.js";
@@ -418,11 +418,19 @@ export function containerNetworkView(
     if (!environment || environment.environmentType !== "containerized") return null;
     if (environment.networkAccessMode === "full") return { mode: "full" };
     const config = await context.storage.loadConfig();
-    const imageId = currentRuntimeIdentity(environment, context)?.imageId;
-    const policyVersion = containerNetworkPolicy(
-      (await imageCapabilities(imageId, context))?.["network-policy"] ?? 0,
-      process.env.ORKESTRATOR_NETWORK_POLICY,
-    );
+    const runtime = currentRuntimeIdentity(environment, context);
+    const policyLabel = runtime?.containerId
+      ? await containerLabel(runtime.containerId, DOCKER_LABEL_NETWORK_POLICY)
+      : null;
+    // Kept runtimes retain the policy selected at creation, even when their
+    // image supports a newer policy or the backend override has changed.
+    const policyVersion =
+      policyLabel === "1" || policyLabel === "2" || policyLabel === "3"
+        ? (Number(policyLabel) as 1 | 2 | 3)
+        : containerNetworkPolicy(
+            (await imageCapabilities(runtime?.imageId, context))?.["network-policy"] ?? 0,
+            process.env.ORKESTRATOR_NETWORK_POLICY,
+          );
     return {
       mode: "restricted",
       allowedDomains: containerAllowedDomains(environment, config, policyVersion),

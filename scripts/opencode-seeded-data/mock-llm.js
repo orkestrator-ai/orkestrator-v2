@@ -15,6 +15,21 @@ Bun.serve({
   port,
   hostname: "127.0.0.1",
   async fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path.startsWith("/api/")) {
+      // Synthetic console account: exercise the real account/config lookup,
+      // including its bearer token and selected organization, without billing.
+      if (request.headers.get("authorization") !== "Bearer probe-access")
+        return new Response("unauthorized", { status: 401 });
+      if (path === "/api/orgs") return Response.json([{ id: "org_probe", name: "Probe" }]);
+      if (path === "/api/config" && request.headers.get("x-org-id") === "org_probe") {
+        await Bun.write(process.env.MOCK_CONSOLE_MARKER, "authenticated\n");
+        return Response.json({
+          config: JSON.parse(await Bun.file(process.env.MOCK_CONSOLE_CONFIG).text()),
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }
     if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
       return new Response("not found", { status: 404 });
     }

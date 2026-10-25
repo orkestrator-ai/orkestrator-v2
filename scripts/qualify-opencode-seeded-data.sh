@@ -6,13 +6,15 @@
 # entrypoint overridden: a real `opencode serve` and one turn against a local
 # mock model (a file write, the session diff, revert and unrevert) while
 # inotify records every open under OpenCode's data directory. No credentials
-# and no provider are involved.
+# and no external provider are involved. Active-account variants use a synthetic
+# SQLite console account and require its authenticated remote configuration.
 #
 #   scripts/qualify-opencode-seeded-data.sh <image>
 #
 # Variants: volume and legacy database paths, each with nothing seeded (what a
 # container gets now) and with a current host's seed; plus an old host's seed
-# without storage/migration. Passes when every turn, diff, revert and unrevert
+# without storage/migration. Both database paths also run with an active console
+# account, with and without a host seed. Passes when every turn, diff, revert and unrevert
 # works, no seeded snapshot directory or account.json is ever opened, a
 # migrated seed is read only for storage/migration, and no host session is
 # listed. Exits 0 on pass, 1 on a failed check, 2 on setup errors.
@@ -39,12 +41,13 @@ check() {
     fi
 }
 
-for variant in "volume none" "legacy none" "volume migrated" "legacy migrated" "volume unmigrated"; do
-    read -r mode seed <<< "$variant"
+for variant in "volume none inactive" "legacy none inactive" "volume migrated inactive" "legacy migrated inactive" "volume unmigrated inactive" \
+    "volume none active" "legacy none active" "volume migrated active" "legacy migrated active"; do
+    read -r mode seed account <<< "$variant"
     output="$(docker run --rm --network none --entrypoint bash \
         --label orkestrator-qualification=opencode-seeded-data \
         -v "$ROOT/scripts/opencode-seeded-data:/probe:ro" \
-        "$IMAGE" /probe/probe.sh "$mode" "$seed" 2>&1)" || {
+        "$IMAGE" /probe/probe.sh "$mode" "$seed" "$account" 2>&1)" || {
         echo "$output" | tail -20 >&2
         echo "setup: probe failed for $variant" >&2
         exit 2
@@ -56,11 +59,16 @@ for variant in "volume none" "legacy none" "volume migrated" "legacy migrated" "
     check diff "$(result diff)" written.txt
     check written "$(result written)" yes,no,yes
     check host_session_listed "$(result host_session_listed)" false
+    if [ "$account" = active ]; then
+        check console_authenticated "$(result console_authenticated)" yes
+    fi
     check opened_account "$(result opened_account)" 0
     check opened_snapshot "$(result opened_snapshot)" 0
     case "$seed" in
         none) check opened_storage_migration "$(result opened_storage_migration)" 0 ;;
-        migrated) check opened_storage_migration "$(result opened_storage_migration)" 1 ;;
+        # The active-account setup initializes SQLite before watching starts,
+        # so its legacy-migration index has already been consumed.
+        migrated) [ "$account" = active ] || check opened_storage_migration "$(result opened_storage_migration)" 1 ;;
     esac
     # An old host's seed has no migration index, so OpenCode runs its legacy
     # storage migrations over it; that is reported, not a failure.

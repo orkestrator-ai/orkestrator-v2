@@ -87,3 +87,21 @@ After the full aggregate ended, `mise run test:logged -- --name merge2-after-agg
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-recurring-baseline-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/recurring-baseline.test.ts --parallel=1 --only-failures` also failed at 5000.36 ms, with four passes, one failure and 66 expectations (27.0 s logged).
 - **Evidence:** `orkestrator-test-run.BDDGcj/merge-backend-complete.log.gz` after finalization and `orkestrator-test-run.GJ6mlD/merge-recurring-baseline-owner.log.gz` under the host temporary directory. Aggregate counts are in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#mixed-version-compatibility-main-merge--2026-10-24).
 - **Assessment:** remains unresolved on this host; the isolated failure does not establish a new flake. No owning implementation, assertion, timeout or skip changed.
+
+## Composer model admission validation — 2026-10-25
+
+Recurred in `mise run test:logged -- --name review-tests -- mise run test`
+on `todo-0004-composer-model-params-803868a90fcb`, Bun 1.4.4 on the shared
+macOS host. The unchanged case exceeded its five-second deadline
+(5047.64 ms). The backend aggregate reported 11318 passed,
+84 skipped, two failed and one between-tests error across 670 files.
+
+The complete unchanged owner passed alone (exit 0, 10.0 seconds):
+
+```sh
+mise run test:logged -- --name observation-baseline-recheck -- bun test --cwd apps/backend ./tests/recurring-baseline.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: `orkestrator-test-run.T3LqzB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory. The original aggregate remains failed.
+No owning implementation, assertion, deadline or skip was changed.

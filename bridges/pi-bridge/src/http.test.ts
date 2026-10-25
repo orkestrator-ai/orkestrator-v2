@@ -42,6 +42,7 @@ const { loadPersistedState, setPersistWriteGateForTests } = await import("./pers
 const { applySessionEvent } = await import("./translate.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 const { buildCommandCatalogue, publishCommandCatalogue } = await import("./commands.js");
+const { setCommandPreviewReaderForTests } = await import("./command-preview.js");
 const { NOT_AUTHENTICATED_MESSAGE } = await import("./credentials.js");
 const { requestToolApproval, resolveApproval } = await import("./interactions.js");
 const { approvalTimeoutMs } = await import("./config.js");
@@ -3253,6 +3254,63 @@ describe("command catalogue routes", () => {
     const refresh = await call("/session/does-not-exist/commands/refresh", { method: "POST" });
     expect(refresh.status).toBe(200);
     expect((await refresh.json()).outcome).toBe("failed");
+  });
+
+  test("a new tab lists its templates and skills before the first turn, without attaching", async () => {
+    let attaches = 0;
+    let reads = 0;
+    setAgentSessionTestHooks({
+      createAgentSession: async () => {
+        attaches += 1;
+        throw new Error("a catalogue read must never attach");
+      },
+    });
+    setCommandPreviewReaderForTests(async () => {
+      reads += 1;
+      return buildCommandCatalogue({ promptTemplates: [template("review")] as never });
+    });
+    try {
+      const created = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({
+          clientSessionKey: "preview-before-first-turn",
+          policy: {
+            id: "interactive-host",
+            sandbox: "provider",
+            approvals: "auto-approve",
+            projectResources: true,
+            networkAccess: "full",
+          },
+        }),
+      });
+      expect(created.status).toBe(201);
+      const sessionId = (await created.json()).sessionId as string;
+      const state = sessions.get(sessionId)!;
+      state.lastAccessed = 1;
+
+      const body = await (await call(`/session/${sessionId}/commands`)).json();
+      expect(body).toMatchObject({
+        catalogueVersion: 1,
+        status: "stale",
+        attachPending: true,
+        commands: [{ name: "/review", id: "pi:template:review", source: "template" }],
+      });
+      // Still metadata: the read that started the preview kept no session warm.
+      expect(state.lastAccessed).toBe(1);
+      // Pushed on the status the backend already polls, so a late read is seen.
+      expect((await (await call(`/session/${sessionId}/status`)).json()).commandRevision).toBe(
+        body.revision,
+      );
+      await call(`/session/${sessionId}/commands`);
+      expect(reads).toBe(1);
+      expect(attaches).toBe(0);
+      expect(state.session).toBeNull();
+    } finally {
+      setCommandPreviewReaderForTests(undefined);
+      setAgentSessionTestHooks(undefined);
+      sessions.clear();
+      clientSessionKeys.clear();
+    }
   });
 
   test("publishes the inventory revision on status and session reads", async () => {

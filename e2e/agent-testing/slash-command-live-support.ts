@@ -2,7 +2,7 @@
  * Shared plumbing for the live slash-command specs
  * (`slash-command-inactive.spec.ts`, `slash-command-picker.spec.ts`): the
  * profile manifest, an authenticated invoke, sidebar navigation and a host
- * worktree's files. Nothing here runs at import time.
+ * worktree's or a container's files. Nothing here runs at import time.
  */
 import { expect, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
@@ -63,6 +63,53 @@ export function hostWorkspace(root: string): Workspace {
       assertRelative(relative);
       const file = path.join(root, relative);
       return existsSync(file) ? readFileSync(file, "utf8") : undefined;
+    },
+  };
+}
+
+/**
+ * A container's `/workspace`, which exists only inside the container. Files
+ * are written as `node`, the user the bridges and providers run as, so the
+ * provider can read and the model's shell can append to them.
+ */
+export function containerWorkspace(containerId: string): Workspace {
+  const exec = (script: string, relative: string, input?: string) => {
+    assertRelative(relative);
+    return spawnSync(
+      "docker",
+      [
+        "exec",
+        ...(input === undefined ? [] : ["-i"]),
+        "--user",
+        "node",
+        "--workdir",
+        "/workspace",
+        containerId,
+        "sh",
+        "-c",
+        script,
+        "sh",
+        relative,
+      ],
+      { encoding: "utf8", ...(input === undefined ? {} : { input }) },
+    );
+  };
+  const failed = (action: string, result: ReturnType<typeof spawnSync>) =>
+    new Error(`docker exec (${action}) exited ${result.status}: ${String(result.stderr).trim()}`);
+  return {
+    write(relative, body) {
+      const result = exec('mkdir -p "$(dirname "$1")" && cat > "$1"', relative, body);
+      if (result.status !== 0) throw failed("write", result);
+    },
+    remove(relative) {
+      const result = exec('rm -f -- "$1"', relative);
+      if (result.status !== 0) throw failed("remove", result);
+    },
+    read(relative) {
+      const result = exec('[ -e "$1" ] || exit 3; cat -- "$1"', relative);
+      if (result.status === 3) return undefined;
+      if (result.status !== 0) throw failed("read", result);
+      return result.stdout;
     },
   };
 }

@@ -91,3 +91,12 @@ Both disposable profiles were stopped and reset; no owning source or test change
 ## Environment-list UI main merge — 2026-10-24
 
 The aggregate recurrence passed in the complete unchanged owning-file rerun. Exact commands, durations, merge parents, aggregate results and evidence are retained in [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Repository separator validation — 2026-10-25
+
+- **Change:** `146fff6c6` on `repo-group-separators-4be2bb2ba0a0-r1`.
+- **Original command:** `mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`, one Playwright worker in credential-free Codex fixture `qa-browser-64de7786-258`, alongside repository and component-browser validation.
+- **Failures and counts:** The capped-tree case at `browser-gateway.spec.ts:711` could not find the `build` folder button within five seconds at line 777, called from line 803. The narrow host picker also repeated its 15-second `Repository settings` timeout at line 241 (0224). The completed suite reported 27 passed, 56 skipped and two failed; teardown separately rejected the capped-tree trace at its 16 MiB sanitization limit. Exit 1 in 522.0 seconds including lifecycle.
+- **Complete unchanged owner:** Fresh fixture `qa-repo-separator-gateway-1025`, started with `mise run dev:test --profile qa-repo-separator-gateway-1025 --fixture --no-agent-credentials --agent-platforms codex`. `ORKESTRATOR_AGENT_TEST_PROFILE=qa-repo-separator-gateway-1025 ORKESTRATOR_AGENT_TEST_RUN_ID=qa-repo-separator-gateway-1025 mise run test:logged -- --name gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` reported 13 passed, ten skipped and one failed (164.0 s). Capped-tree reload passed; the narrow picker retained the same timeout. The complete owner remains non-green, so this observation does not establish a new flaky classification.
+- **Evidence:** `orkestrator-test-run.ylec4w/isolated-browser.log.gz` and `orkestrator-test-run.0DUmeD/gateway-owner.log.gz` under the host temporary directory; browser results under `output/agent-testing/<profile>/browser/`.
+- **Cleanup:** The one-shot runner stopped/reset its profile; the manual owner profile was also stopped/reset with `dev:stop` and `dev:reset`. No profile state was retained. No gateway implementation, assertion, deadline or skip changed.

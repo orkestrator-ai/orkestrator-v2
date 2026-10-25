@@ -271,6 +271,15 @@ model).
     profiles were stopped and reset.
   - Host homes: the scenario runs use disposable provider homes; the
     profiles stage host logins without refresh tokens.
+  - Checks: `mise run format:check`, `mise run lint` (exit 0; existing
+    warnings only) and `mise run typecheck` pass; `packages/cli` suite
+    259/259. Complete `mise run test`: exit 1 after about 27 minutes, solely on
+    `commands-file-copy.test.ts` (EPIPE in a container helper case this
+    branch does not touch); that file passed alone three times. Registered
+    as flake
+    [0910](../../tests/flaky-tests/environments-and-containers/0910-file-copy-container-helper-stdin-epipe.md).
+    Root/agent-support, bridges, the protocol lockfile and every other
+    workspace package passed. The aggregate remains failed.
   - Not run: Pi, Cursor, Grok (no credentials, item 1); container
     `live-session`; Linux (the 2026-09-26 run is still the latest Linux
     evidence).

@@ -148,14 +148,6 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
       test.setTimeout(TURN_TIMEOUT_MS * 3 + 300_000);
       page.setDefaultTimeout(15_000);
       await page.setViewportSize({ width: 1600, height: 1000 });
-      // A dev profile's backend reports the Electron version, so stream
-      // reconnects raise this reminder over the composer. Dismiss it.
-      await page.addLocatorHandler(
-        page.getByText("Reload to use the matching version."),
-        async (reminder) => {
-          await reminder.click();
-        },
-      );
 
       const status = profileStatus(profile);
       expect(status.profile, "dev:status answered for a different profile").toBe(profile);

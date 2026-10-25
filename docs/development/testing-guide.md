@@ -551,7 +551,8 @@ Generate the reference before making the change; no artifact is committed
   multi review its `WorkflowDueScheduler` (15 s reconciliation scan,
   per-workflow due passes). Each domain reports `storageReads` (store content
   decoded, cached or not, and uncached row queries) beside `storageStats`
-  (reuse of already-decoded records). The test holds every attempt to a
+  (reuse of already-decoded records) and `storageBytes` (what those reads
+  fetched from SQLite; cache-served reads fetch nothing). The test holds every attempt to a
   per-domain budget (`STORAGE_PER_ATTEMPT` in `recurring-baseline.test.ts`),
   so one extra read per pass fails it.
 
@@ -608,6 +609,24 @@ auth file and sends it only as a loopback request header. Stdout is a Markdown
 summary. Measured limits: the Electron window is a client (its renderer
 polls), bridges and Docker are not in the CPU/RSS totals, and detection is
 backend-side, a lower bound on change-to-visible.
+
+`--soak-cycles N` adds a lifecycle soak to every arm, after the window and the
+freshness probes. Each cycle creates, starts (to `ready`), stops, restarts and
+deletes one environment of each `--soak-environments` kind (`local` by
+default, `local,container` for both) through the CLI; a failed step still
+deletes its environment. Before and after the soak it reads the live
+footprint three times, 5 s apart: scheduler keys per owner and job kind,
+admission leases, container fetch and signal records, running recorded jobs,
+and event-stream and terminal subscribers. A gauge is a leak when its lowest
+reading after the settle is above its highest reading before the cycles. The
+run exits 1 when a soak step failed, a gauge leaked or the profile's logs hold
+a guard line.
+
+```bash
+mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --window-ms 60000 --freshness-probes 0 --soak-cycles 20 \
+  --soak-environments local,container --out output/benchmarks/recurring-soak.json
+```
 
 For transcript, projection and storage cost, use the
 [efficiency harness](efficiency-harness.md) (`mise run efficiency:baseline`).

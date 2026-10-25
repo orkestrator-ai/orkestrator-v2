@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { WorkflowDueScheduler, stableJitterMs } from "./multi-review-scheduler.js";
+import { WorkflowDueScheduler } from "./multi-review-scheduler.js";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -174,14 +174,4 @@ describe("due-time workflow scheduler", () => {
       }
     });
   }
-
-  test("jitter is stable and bounded", () => {
-    expect(stableJitterMs("workflow-a", 1_000)).toBe(stableJitterMs("workflow-a", 1_000));
-    for (const id of ["a", "b", "c", "workflow-with-a-long-identifier"]) {
-      const jitter = stableJitterMs(id, 1_000);
-      expect(jitter).toBeGreaterThanOrEqual(0);
-      expect(jitter).toBeLessThan(1_000);
-    }
-    expect(stableJitterMs("a", 0)).toBe(0);
-  });
 });

@@ -29,6 +29,7 @@ import type { StorageService } from "./storage.js";
 import { resizeKanbanImage, type KanbanTask } from "./storage-shared.js";
 import { assertValidPromptImages } from "./prompt-attachments.js";
 import { generateEnvironmentNameWithCodexExec } from "./commands-agent-support.js";
+import type { CommandContext } from "./commands-context.js";
 
 export interface FeatureBuildContext {
   storage: StorageService;
@@ -36,6 +37,7 @@ export interface FeatureBuildContext {
   appRoot?: string;
   resourceRoot?: string;
   toolchainBinDir?: string;
+  runtimeFlavor?: CommandContext["runtimeFlavor"];
   /** Test seam for the same background naming task used by environments. */
   generateEnvironmentName?: (description: string) => Promise<string>;
 }
@@ -121,6 +123,7 @@ async function generateRefinedFeatureTitle(
           appRoot: context.appRoot,
           resourceRoot: context.resourceRoot,
           ...(context.toolchainBinDir ? { toolchainBinDir: context.toolchainBinDir } : {}),
+          ...(context.runtimeFlavor ? { runtimeFlavor: context.runtimeFlavor } : {}),
         })
       : "";
   return featureTitleFromGeneratedName(generatedName);

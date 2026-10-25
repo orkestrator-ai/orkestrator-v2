@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  combineFootprints,
   parsePsCpuTime,
   parsePsRows,
   percentile,
   pickKindCounters,
   processTreeTotals,
+  soakFootprint,
+  soakLeaks,
   summarizeWindow,
   type LiveSample,
 } from "../../scripts/recurring-live-ab-summary";
@@ -168,5 +171,65 @@ describe("per-kind observation windows", () => {
       expect(summary.kinds.scan?.startedPerMinute).toBeNaN();
       expect(summary.kinds.scan?.workUnitsPerMinute["storage-read"]).toBeNaN();
     }
+  });
+});
+
+describe("soak footprint", () => {
+  test("reads counts only, summing schedulers that share an owner", () => {
+    const footprint = soakFootprint({
+      stream: { open: 2, opened: 40 },
+      terminalWebSocket: { open: 1, channelsOpen: 3 },
+      recurringWork: {
+        metrics: { kinds: { "diff-scan": { active: 1, started: 99 } } },
+        schedulers: [
+          {
+            owner: "workflow",
+            keys: 2,
+            settling: 0,
+            byKind: { "looped-review-tick": { keys: 2 } },
+          },
+          { owner: "workflow", keys: 3, settling: 1, byKind: {} },
+        ],
+        admission: [{ pool: "git-docker-scan", active: 1, waiting: 0, granted: 500 }],
+        fetchPolicies: [
+          { name: "container-git-fetch", status: { records: 1, containers: 1, inFlight: 0 } },
+        ],
+        signals: [{ name: "claude-state-signal", status: { containers: 1, rings: 7 } }],
+      },
+    });
+    expect(footprint).toEqual({
+      schedulers: 2,
+      "scheduler:workflow:keys": 5,
+      "scheduler:workflow:settling": 1,
+      "scheduler:workflow:looped-review-tick": 2,
+      pools: 1,
+      "pool:git-docker-scan:active": 1,
+      "pool:git-docker-scan:waiting": 0,
+      "fetch:container-git-fetch:records": 1,
+      "fetch:container-git-fetch:containers": 1,
+      "fetch:container-git-fetch:inFlight": 0,
+      "signal:claude-state-signal:containers": 1,
+      "kind:diff-scan:active": 1,
+      "stream:open": 2,
+      "terminal:open": 1,
+      "terminal:channels": 3,
+    });
+    expect(soakFootprint(null)).toBeNull();
+    expect(soakFootprint({ stream: { open: 1 } })).toBeNull();
+  });
+
+  test("combines samples and reports only gauges that stayed above baseline", () => {
+    const before = combineFootprints([{ a: 1, b: 2 }, null, { a: 3 }], "max")!;
+    expect(before).toEqual({ a: 3, b: 2 });
+    const after = combineFootprints(
+      [
+        { a: 4, b: 2, c: 1 },
+        { a: 3, b: 5, c: 2 },
+      ],
+      "min",
+    )!;
+    expect(after).toEqual({ a: 3, b: 2, c: 1 });
+    expect(soakLeaks(before, after)).toEqual([{ gauge: "c", baseline: 0, final: 1 }]);
+    expect(combineFootprints([null], "min")).toBeNull();
   });
 });

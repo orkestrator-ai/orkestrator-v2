@@ -221,6 +221,53 @@ describe("service browser tabs", () => {
     invokeMock.mockImplementation(() => Promise.resolve());
   });
 
+  test("Show any process confirms with the current revision then probes and refreshes", async () => {
+    const waiting = fixturePreviewService({
+      definition: {
+        targetKind: "worktree",
+        provenance: "entry-port",
+        userOverride: false,
+        definitionRevision: 7,
+      },
+    });
+    waiting.endpoint = {
+      ...waiting.endpoint,
+      state: "unavailable",
+      listener: "unattributed",
+      failure: previewError("target-unverified", { retryable: true }),
+    };
+    installBackend({ capabilities: fixturePreviewCapabilities(), services: [waiting] });
+    seedTab(serviceUri("/"));
+    renderTab();
+    const button = await screen.findByRole("button", { name: "Show any process" });
+    invokeMock.mockClear();
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "update_preview_service",
+        expect.objectContaining({ serviceId: FIXTURE_SERVICE_ID, expectedRevision: 7, patch: {} }),
+      ),
+    );
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("probe_preview_service", {
+        serviceId: FIXTURE_SERVICE_ID,
+      }),
+    );
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "get_preview_services",
+        expect.objectContaining({ environmentId: FIXTURE_ENVIRONMENT_ID }),
+      ),
+    );
+    const commands = invokeMock.mock.calls.map((call) => call[0]);
+    expect(commands.indexOf("update_preview_service")).toBeLessThan(
+      commands.indexOf("probe_preview_service"),
+    );
+    expect(commands.indexOf("probe_preview_service")).toBeLessThan(
+      commands.lastIndexOf("get_preview_services"),
+    );
+  });
+
   test("attaches the service reference through the desktop tunnel and persists in-page navigation", async () => {
     const { browserPreview, emitState } = installBackend({
       capabilities: fixturePreviewCapabilities(),
@@ -684,39 +731,43 @@ describe("service browser tabs", () => {
     });
   });
 
-  test("an unregistered container port offers registration, never a host-port guess", async () => {
-    installBackend({
-      capabilities: fixturePreviewCapabilities(),
-      services: [fixturePreviewService()],
-      resolution: {
-        kind: "unregistered",
-        path: "/",
-        bindHint: true,
-        suggestion: { targetKind: "container", applicationPort: 4000, scheme: "http" },
-      },
-    });
-    seedTab(
-      formatPreviewIntentUri({
-        environmentId: FIXTURE_ENVIRONMENT_ID,
-        source: "container-terminal",
-        url: "http://0.0.0.0:4000/",
-      }),
-    );
-    renderTab();
-    const register = await screen.findByRole("button", { name: "Register port 4000" });
-    expect(
-      screen.queryByRole("button", { name: "Open as a temporary backend host port" }) === null,
-    ).toBe(true);
-    expect(screen.getByText(/0\.0\.0\.0, which is its bind address/)).toBeTruthy();
-    fireEvent.click(register);
-    fireEvent.click(await screen.findByRole("button", { name: "Register" }));
-    await waitFor(() =>
-      expect(parsePreviewTabTarget(tabUrl())).toMatchObject({
-        kind: "service",
-        ref: { serviceId: "svc_registered_0003" },
-      }),
-    );
-  });
+  test.each(["container-terminal", "agent-link"] as const)(
+    "an unregistered container %s offers registration without a host fallback",
+    async (source) => {
+      installBackend({
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+        resolution: {
+          kind: "unregistered",
+          path: "/",
+          bindHint: true,
+          suggestion: { targetKind: "container", applicationPort: 4000, scheme: "http" },
+        },
+      });
+      seedTab(
+        formatPreviewIntentUri({
+          environmentId: FIXTURE_ENVIRONMENT_ID,
+          source,
+          url: "http://0.0.0.0:4000/",
+        }),
+      );
+      renderTab();
+      const register = await screen.findByRole("button", { name: "Register port 4000" });
+      expect(
+        screen.queryByRole("button", { name: "Open as a temporary backend host port" }) === null,
+      ).toBe(true);
+      expect(screen.getByText(/0\.0\.0\.0, which is its bind address/)).toBeTruthy();
+      expect(screen.getByText(/inside this environment's container/)).toBeTruthy();
+      fireEvent.click(register);
+      fireEvent.click(await screen.findByRole("button", { name: "Register" }));
+      await waitFor(() =>
+        expect(parsePreviewTabTarget(tabUrl())).toMatchObject({
+          kind: "service",
+          ref: { serviceId: "svc_registered_0003" },
+        }),
+      );
+    },
+  );
 
   test("an unregistered host terminal port offers a temporary backend host port and opens the original URL", async () => {
     useEnvironmentStore.setState((state) => ({
@@ -755,6 +806,57 @@ describe("service browser tabs", () => {
     expect(invokeMock).toHaveBeenCalledWith("resolve_preview_target", {
       intent: { url, source: "worktree-terminal", environmentId: FIXTURE_ENVIRONMENT_ID },
     });
+  });
+
+  test("a dev server on the next free port is offered as a move of its service, never moved on its own", async () => {
+    useEnvironmentStore.setState((state) => ({
+      environments: state.environments.map((environment) => ({
+        ...environment,
+        environmentType: "local",
+        containerId: null,
+      })),
+    }));
+    const app = fixturePreviewService({
+      definition: { label: "app", targetKind: "worktree", applicationPort: 3000 },
+    });
+    installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [app],
+      resolution: {
+        kind: "unregistered",
+        path: "/",
+        bindHint: false,
+        suggestion: { targetKind: "worktree", applicationPort: 3001, scheme: "http" },
+      },
+    });
+    seedTab(
+      formatPreviewIntentUri({
+        environmentId: FIXTURE_ENVIRONMENT_ID,
+        source: "worktree-terminal",
+        url: "http://localhost:3001/",
+      }),
+    );
+    renderTab();
+
+    const move = await screen.findByRole("button", { name: "Move app from port 3000 to 3001" });
+    expect(invokeMock).not.toHaveBeenCalledWith("update_preview_service", expect.anything());
+    fireEvent.click(move);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "update_preview_service",
+        expect.objectContaining({
+          serviceId: app.definition.serviceId,
+          expectedRevision: app.definition.definitionRevision,
+          patch: { applicationPort: 3001 },
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(parsePreviewTabTarget(tabUrl())).toMatchObject({
+        kind: "service",
+        ref: { serviceId: app.definition.serviceId },
+      }),
+    );
   });
 
   test("older backends keep the original link behaviour", async () => {

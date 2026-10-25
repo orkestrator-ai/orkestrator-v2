@@ -1,7 +1,7 @@
 # Design-agent links main refresh validation
 
 - **ID:** 0772
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-24, macOS arm64, Bun 1.4.3.
 - **Merge parents:** `94aff89b051ff1a60accde8c648a13ae1c901a18` and `d6ed0717d00a9a04ba658ba6c50e0978bc2011a6`; common ancestor `0014505caeed69395b3cc996dd541fcc6df12c23`.
 - **Scope:** the combined merge initially changed 248 paths, including backend, renderer, bridge, protocol, desktop and CLI code. Original conflicts were the agent-bridges index, Pi vendoring case 0514, and backend-services-and-tooling index. Both parents' flake history was preserved. The complete original NUL-delimited conflict list and parent IDs were retained in local Git metadata before staging.
@@ -227,3 +227,7 @@ ClaudeInteractions passed (confirmed recurrence of 0252). ToolGroupFold reported
 - **Final checks:** formatting, flake-registry consistency, local documentation links, whitespace and conflict-marker checks passed. No test profile was retained. The original component-browser, isolated-browser and image-smoke exits remain non-green; no assertion or timeout was changed to obtain a passing result.
 
 Original evidence under the host temporary directory: `orkestrator-test-run.6yNWW5/refresh-95c9-browser.log.gz`, `orkestrator-test-run.wqj1Si/refresh-95c9-owner-AgentLaunchDialog.log.gz`, and `orkestrator-test-run.hYA3KD/refresh-95c9-image-smoke.log.gz`. Passing logged commands retain summaries and delete raw logs. No implementation, assertion, deadline or skip was changed for these results. Electron main/preload/IPC, CLI and iOS are unchanged from this merge's common ancestor, so their additional scenario suites were omitted.
+
+## Triage 2026-10-25
+
+Environmental: load reached 127.71 on 18 cores while image builds, browser and Electron runs shared the host. All sixteen non-OpenCode failing Bun owners passed alone, and the OpenCode `1.19.0` vs `1.19.4` assertions are fixed by #1217 (`95c9cb46a`): `apps/backend/src/core/conformance-execution-policy.test.ts:143` now compares with `PINNED_TOOLCHAIN_VERSIONS.opencode`. Unrerun browser and Electron failures do not establish flakes; native branch selection is the deterministic failure in [0493](0493-component-browser-aggregate-timeout-cluster.md).

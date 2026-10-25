@@ -1,7 +1,7 @@
 # Transcript-history main refresh validation
 
 - **ID:** 0789
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-24
 - **Merge parents:** `109a3a90509f3b5f258881f9004c4fde4747f0a9` and `d6ed0717d00a9a04ba658ba6c50e0978bc2011a6`.
 - **Common ancestor:** `0014505caeed69395b3cc996dd541fcc6df12c23`.
@@ -88,3 +88,7 @@ The original aggregate remains non-green. No assertion, timeout or skip was chan
 - **Core evidence:** the authoritative `main-a566-tests` result was PASS (exit 0, 527.2 s). The runner removed successful output, including its temporary outer/inner run directories; outcomes are also retained beside the original conflict capture in local Git metadata.
 
 The Electron owner remains non-green, including its three unexecuted serial successors. Live-provider, iOS and unrelated platform qualification were not enabled. No assertion, timeout, skip or implementation was changed to produce a passing result.
+
+## Triage 2026-10-25
+
+Environmental: load was 147.21/97.88/58.08 on 18 cores and the wrapper hit its 1,800-second deadline after long capacity waits. Efficiency ([0788](../backend-services-and-tooling/0788-efficiency-checkpoint-aggregate-timeout.md)) and the Codex owners passed alone; Pi staging (0514) and disk report (0259) also failed alone at that load. The OpenCode `1.19.0` vs `1.19.4` assertions are fixed by #1217 (`95c9cb46a`): `apps/backend/src/core/conformance-execution-policy.test.ts:143` now compares with `PINNED_TOOLCHAIN_VERSIONS.opencode`. Firewall failures are the mbp3 host condition in [0632](../environments-and-containers/0632-firewall-policy-probe-budget.md). The Electron Notes focus failure reproduces alone; it is reported to the lead.

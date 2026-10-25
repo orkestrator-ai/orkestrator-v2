@@ -1,7 +1,7 @@
 # Coordinator fixture digest times out in the aggregate
 
 - **ID:** 0258
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Test:** `fixture tree digest > names every class of change a coordinator could make`
 - **Owning file:** `apps/desktop/scripts/dev/coordinator-live.test.ts`
@@ -200,3 +200,20 @@ The unchanged owning file passed alone (48 pass, 2.3 s, after failing twice more
 - **Assessment:** confirmed intermittent recurrence. Shared-host filesystem/process contention remains a hypothesis; no desktop implementation, assertion, timeout or skip changed.
 
 - **Recurrence 2026-10-25 (residual module state branch `todo-0066-residual-module-state-40e8f98a7ef0`):** `mise run test` aggregate (reservations 4/1/2/1); the digest timed out after 5024.65 ms. Artifact `orkestrator-test-run.20ctxb` under the host temporary directory. The unchanged owner passed alone (`bun test scripts/dev/coordinator-live.test.ts` in `apps/desktop`: 48 pass, 0 fail, 4.36 s), and the whole desktop package passed alone (1248 tests, 0 fail). The branch does not touch `apps/desktop`.
+
+## Recurrence on 2026-10-25 (todo 0030 validation)
+
+- **Command:** `bun run test:workspace` in `apps/desktop`, then the owner alone
+  twice with `bun test --preload ../../tests/setup-node.ts scripts/dev/coordinator-live.test.ts`,
+  on macOS at load average 44–48 (other agents' suites running).
+- **Failure:** `names every class of change a coordinator could make` hit the
+  default 5 s budget in all three runs (5013–5028 ms); 47 other tests passed.
+  It fails alone at that load, so it is load-bound rather than order-bound.
+- **Scope:** the branch does not touch `scripts/dev/` or the test's imports.
+  The same desktop package passed on GitHub Actions in todo 0030's probe run
+  40195714408.
+- **Fix:** the case now has an explicit 30 s budget
+  (`apps/desktop/scripts/dev/coordinator-live.test.ts`): it takes about two
+  dozen digests, each spawning Git several times. No assertion changed.
+- **Verification:** at the same load (44–47), the owner passed 3 of 3 runs
+  (48 pass each), where it had failed 3 of 3 before.

@@ -25,7 +25,10 @@
  * backend) with connection switches and window close releasing on the
  * backend that issued each attachment.
  */
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import type { Page, TestInfo } from "@playwright/test";
+import { closeElectronWithin } from "./design-electron-cleanup";
+import { expect, test } from "./electron-fixtures";
+import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -297,7 +300,7 @@ async function closeElectron(): Promise<void> {
       } catch {}
     }
   }
-  await app.close().catch(() => undefined);
+  await closeElectronWithin(app, 10_000);
   await expect.poll(() => children.filter(alive).length, { timeout: 20_000 }).toBe(0);
 }
 
@@ -735,6 +738,7 @@ test.beforeAll(async () => {
       VITE_ORKESTRATOR_PROFILE: profile.id,
     },
   });
+  ownProcessGroup(vite);
   const partial = {
     temporaryRoot,
     profile,
@@ -804,19 +808,11 @@ test.afterAll(async () => {
   if (running) await closeElectron().catch(() => undefined);
   stack = null;
   await current.remoteProcess?.stop().catch(() => undefined);
-  if (current.viteApp?.process.pid) {
-    try {
-      process.kill(-current.viteApp.process.pid, "SIGTERM");
-    } catch {}
-  }
+  if (current.viteApp) await stopProcessGroup(current.viteApp.process).catch(() => undefined);
   for (const service of Object.values(current.services ?? {})) {
     await service.fixture?.close().catch(() => undefined);
   }
-  if (current.vite?.pid) {
-    try {
-      process.kill(-current.vite.pid, "SIGTERM");
-    } catch {}
-  }
+  if (current.vite) await stopProcessGroup(current.vite).catch(() => undefined);
   await rm(current.temporaryRoot, { recursive: true, force: true });
 });
 
@@ -1684,10 +1680,12 @@ export default {
     ? path.join(pinned, "node_modules", "vite", "bin", "vite.js")
     : path.join(webRoot, "node_modules", "vite", "bin", "vite.js");
   const [port] = (await reserveLoopbackPorts(1)) as [number];
-  const child = spawn(
-    process.execPath,
-    [viteBin, "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
-    { cwd: root, detached: true, stdio: "ignore" },
+  const child = ownProcessGroup(
+    spawn(
+      process.execPath,
+      [viteBin, "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
+      { cwd: root, detached: true, stdio: "ignore" },
+    ),
   );
   const app = { process: child, root, port };
   s().viteApp = app;
@@ -1803,9 +1801,7 @@ test("a Vite app keeps HMR updates made while its tab is hidden, unmounted or re
     expect(seen.filter((entry) => entry.host !== `localhost:${vite.port}`)).toEqual([]);
     expect(seen.filter((entry) => entry.ingressHeader)).toEqual([]);
   } finally {
-    try {
-      process.kill(-vite.process.pid!, "SIGTERM");
-    } catch {}
+    await stopProcessGroup(vite.process).catch(() => undefined);
     s().viteApp = null;
   }
 });

@@ -12,3 +12,9 @@
 - **Isolated rerun:** `mise run test:logged -- --name draft-fix-rerun-preview-retention -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/preview-partition-retention.test.ts --parallel=1 --only-failures` passed the complete unchanged owning file, exit 0 in 0.5 seconds logged.
 - **Evidence:** `orkestrator-test-run.x5x58l/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.NEAVB6/draft-fix-suite.log.gz` under the host temporary directory. The outer logger reached its 30-minute deadline before backend completion; the child log was compressed after its watchdog stopped the process tree.
 - **Assessment:** the isolated pass establishes an intermittent failure. Event-loop or host contention is plausible, but its cause remains unconfirmed. No preview implementation, assertion, delay, timeout or skip was changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** recurred on 2026-10-25 in [0815](../aggregate-validation-runs/0815-container-rebuild-state-validation.md) (load 54 to 65). The owner passed alone there and today (18/18, 0.2 s; Bun 1.4.4). The test still expects at least two runs of 5 ms timers after a fixed `Bun.sleep(40)` (`preview-partition-retention.test.ts:463`).
+- **Next step:** poll (bounded) until two runs are seen, then close the transport and check that no further run happens.

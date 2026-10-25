@@ -1130,15 +1130,16 @@ test("a command that expires while queued keeps no stale queue explanation", asy
   });
   const blocker = scheduler.enqueue({ owner: "b".repeat(64), workers: 1, memoryMiB: 64 });
   try {
-    await control(root, run, "start", { ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS: "6000" });
-    // The reason is written by the worker's heartbeat, not by the enqueue that
-    // first reports "queued", so wait for the explanation itself.
-    let queued = await waitUntilQueued(root, run);
-    const explained = Date.now() + 3000;
-    while (!queued.results[0]!.queueReason && Date.now() < explained) {
-      await Bun.sleep(50);
-      queued = await control(root, run, "status");
-    }
+    // The worker publishes "queued" together with its reason, and the test reads
+    // that state file directly (no control process per poll), so seeing it needs
+    // only a few 20 ms polls; 3 s of queueing leaves wide margin before expiry.
+    await control(root, run, "start", { ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS: "3000" });
+    const queued = await observeUntil(
+      root,
+      run,
+      (next) => next.results[0]?.status === "queued" && next.results[0].queueReason !== undefined,
+      3000,
+    );
     expect(queued.results[0]!.queueReason).toContain("worker slots");
     let done = await control(root, run, "status");
     const deadline = Date.now() + 12000;

@@ -9,6 +9,7 @@ export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: [
     "electron-main.spec.ts",
+    "electron-cleanup.spec.ts",
     "web-annotations-electron.spec.ts",
     "terminal-input-resume-electron.spec.ts",
     "service-preview-electron.spec.ts",

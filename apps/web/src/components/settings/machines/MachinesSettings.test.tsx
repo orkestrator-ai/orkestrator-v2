@@ -641,7 +641,7 @@ test("a leaf's own window lists only its own agent logins", async () => {
   render(<MachinesSettings />);
   await waitFor(() => expect(screen.getAllByTestId("machine-agent-accounts-row")).toHaveLength(1));
   expect(screen.getByTestId("machine-agent-accounts-row").textContent).toContain("Desk");
-  expect(screen.queryByRole("button", { name: "By account" })).toBeNull();
+  expectDomAbsent(screen.queryByRole("button", { name: "By account" }), "By account toggle");
 });
 
 // Settings is a z-[60] fullscreen surface; a default z-50 dialog renders

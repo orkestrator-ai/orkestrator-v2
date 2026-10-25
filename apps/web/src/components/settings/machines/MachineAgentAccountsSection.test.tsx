@@ -8,6 +8,7 @@ import type {
 } from "@orkestrator/protocol/agent-accounts";
 import * as realNodeEvents from "@/lib/federation/node-events";
 import type { NodeEventSubscriber } from "@/lib/federation/node-events";
+import { expectDomAbsent } from "../../../../../../tests/bounded-test-diagnostics";
 
 const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 let machines: MachineAgentAccounts[];
@@ -337,7 +338,9 @@ describe("preferred login", () => {
       command: "set_preferred_agent_identity",
       args: { platform: "claude", email: null },
     });
-    await waitFor(() => expect(screen.queryByTestId("machine-agent-preferred")).toBeNull());
+    await waitFor(() =>
+      expectDomAbsent(screen.queryByTestId("machine-agent-preferred"), "preferred summary"),
+    );
   });
 
   test("flags machines off it and switches the ones that have it", async () => {
@@ -381,7 +384,7 @@ describe("preferred login", () => {
         "2 of 3 machines on it",
       ),
     );
-    expect(screen.queryByRole("button", { name: "Use preferred" })).toBeNull();
+    expectDomAbsent(screen.queryByRole("button", { name: "Use preferred" }), "Use preferred");
   });
 
   test("a machine's own dialog does not flag it", async () => {
@@ -390,7 +393,7 @@ describe("preferred login", () => {
       render(<MachineAgentAccountsSection nodeId="node-leaf" />);
     });
     await screen.findAllByTestId("machine-agent-accounts-row");
-    expect(screen.queryByTestId("machine-agent-preferred")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Use preferred" })).toBeNull();
+    expectDomAbsent(screen.queryByTestId("machine-agent-preferred"), "preferred summary");
+    expectDomAbsent(screen.queryByRole("button", { name: "Use preferred" }), "Use preferred");
   });
 });

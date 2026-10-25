@@ -134,11 +134,19 @@ export function isReservedPreviewCookieName(name: string): boolean {
 //    tears down both legs. Nothing is replayed after a disconnect.
 //
 // Any unknown, duplicate, out-of-order, or oversized frame closes with 4400.
+//
+// Liveness: the server pings every 30 s and closes a tunnel from which no
+// frame arrived in the last interval. A client sends its own WebSocket pings
+// (PREVIEW_TUNNEL_CLIENT_PING_MS), so it stays alive while it has stopped
+// reading and cannot answer pings queued behind application data. Older
+// servers answer those pings and ignore them; older clients only pong.
 
 export const PREVIEW_TUNNEL_PATH = "/__orkestrator/preview/tunnel";
 export const PREVIEW_TUNNEL_SUBPROTOCOL = "orkestrator.preview-tunnel.v1";
 export const PREVIEW_TUNNEL_VERSION = 1;
 export const PREVIEW_TUNNEL_HELLO_TIMEOUT_MS = 5_000;
+/** Client heartbeat: half the server's 30-second liveness interval. */
+export const PREVIEW_TUNNEL_CLIENT_PING_MS = 15_000;
 
 export const PREVIEW_TUNNEL_CLOSE = {
   normal: 1000,

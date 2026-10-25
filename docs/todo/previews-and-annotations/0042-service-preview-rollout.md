@@ -2,7 +2,9 @@
 
 Checked against `main` at `2459b05c` (2026-10-15); real-Electron runs against
 `a5d338c1` (2026-10-18) and `9b3f53a2` (2026-10-21); partition retention,
-fault tests and single-machine runs against `b83ae534` (2026-10-22).
+fault tests and single-machine runs against `b83ae534` (2026-10-22); node
+retention, tunnel liveness, compatibility cases and UI items against
+`00a0cb82` (2026-10-25).
 
 Service previews shipped in #831 (`4f02156b`). Each previewed application gets
 a backend-owned service identity, carried by a desktop tunnel, private HTTPS
@@ -53,14 +55,18 @@ partitions, and the evidence log where run results are now recorded.
   partition once its service is gone from the backend's full list (removed, or
   its environment deleted), and every preview partition of a forgotten
   connection, then removes the directories on the next start; see
-  [browser-previews.md](../../architecture/browser-previews.md). The shared
-  legacy partitions of live connections are never cleared. Legacy URL tabs are
-  never converted to service tabs.
+  [browser-previews.md](../../architecture/browser-previews.md). Since
+  2026-10-25 it also clears a workspace node's partitions once every command
+  node that listed the node has removed it. The shared legacy partitions of
+  live connections are never cleared. A legacy URL tab is converted to a
+  service tab only when the user chooses **Open as service** (2026-10-25).
 - Tests: `e2e/preview/private-origin.spec.ts` has Chromium, Firefox and WebKit
   projects on an isolated stack (`apps/backend/src/preview-browser-harness.ts`,
-  throwaway CA and browser-local loopback proxy). Since 2026-10-23, each runs
-  eight cases plus opt-in Vite HMR, including sibling reads, hostile workers
-  and external redirects into same-service frames. WebKit is engine signal,
+  throwaway CA and browser-local loopback proxy). Since 2026-10-25, each runs
+  14 cases plus opt-in Vite HMR, including sibling reads, hostile workers,
+  external redirects into same-service frames, `srcset`, source maps, SPA
+  deep links, storage isolation, frame and popup handling and an IPv6-only
+  target. WebKit is engine signal,
   not shipping Safari/iOS qualification. The opt-in Docker, relay, Vite and
   benchmark suites are listed in [`testing-guide.md`](../../development/testing-guide.md)
   §"Opt-in preview checks"; since 2026-10-22 they are `mise run
@@ -71,8 +77,10 @@ partitions, and the evidence log where run results are now recorded.
   `e2e/agent-testing/service-preview-electron.spec.ts` (in
   `mise run test:agent:electron`, so not in CI either) opens worktree
   services in the real Electron window with `ORKESTRATOR_PREVIEW_TRANSPORT=1`
-  on a disposable agent-test profile: 13 tests, including a Vite application
-  and a second window on a second, disposable standalone backend. Agent-test backends keep that variable
+  on a disposable agent-test profile: 17 tests since 2026-10-25, including a
+  Vite application, a second window on a second, disposable standalone
+  backend, a retention pass, Reset site data with a hostile worker and legacy
+  URL tab history. Agent-test backends keep that variable
   and `ORKESTRATOR_PREVIEW_RELAY` (`AGENT_TEST_SAFE_ENV_NAMES` in
   `apps/desktop/electron/backend-process.ts`); before 2026-10-18 they were
   stripped, so the override silently did nothing in an isolated profile.
@@ -97,64 +105,94 @@ partitions, and the evidence log where run results are now recorded.
    - Once legacy URL tabs are retired, set a retention window for the shared
      window/connection partitions of live connections, then clean up only
      partitions this install created.
-   - Partitions keyed to a workspace node (`node:<id>`) are reconciled against
-     that node's services, but nothing clears them when the node itself is
-     removed from the command node.
-   - Not exercised in a real Electron window: the retention passes run 60 s
-     after a window's transport starts, longer than the Electron spec waits.
-     Unit tests cover it with fake and real directories.
-5. Optional: when a legacy URL tab's port maps unambiguously to a current
-   service in the same environment and generation, offer "Open as service".
-   Keep ambiguous tabs as they are, with "Choose service". Never infer
-   ownership from the port alone or from which environment is active.
+   - Done 2026-10-25: partitions keyed to a workspace node (`node:<id>`) are
+     cleared once every command node that listed the node has removed it
+     (`rememberNode`, `reconcileNodes`, `transferNodes` in
+     `preview-partition-retention.ts`, wired in `main.ts`). Ten unit tests in
+     `apps/desktop/tests/preview-partition-retention.test.ts` ("node
+     partitions"). Not exercised against a real command node with a forgotten
+     node; see the evidence log.
+   - Done 2026-10-25: a service-removal pass ran in a real Electron window.
+     Agent-test profiles may shorten the passes with
+     `ORKESTRATOR_AGENT_TEST_PREVIEW_RETENTION_MS` (100 ms to 30 min,
+     `previewRetentionTimingForRuntime` in `runtime-profile.ts`; every other
+     flavor ignores it, unit-tested). The spec removes a service whose tab it
+     closed and sees its partition's cookies cleared 31 to 32 s later (the
+     30 s retirement lease plus one pass), the partition listed in
+     `preview-partitions-pending.json`, the sibling's cookie kept, and after a
+     relaunch the directory gone and the sibling's directory and cookie kept.
+5. Done 2026-10-25: a legacy URL tab whose loopback port maps to exactly one
+   enabled, available service of its own environment in the current backend
+   epoch shows **Open as service** (`legacyUrlServiceMatch`,
+   `confirmLegacyUrlServiceMatch` in `apps/web/src/lib/preview-service-entry.ts`,
+   `BrowserTab.tsx`). The click re-reads the snapshot and converts only if the
+   same service still has the same epoch and endpoint generation, keeping the
+   path, query and fragment. Ambiguous tabs are left as they are with no
+   prompt (legacy URL tabs never had a "Choose service" flow; that exists only
+   for terminal links). Tests: `preview-service-entry.test.ts` (new) and
+   `BrowserTab.test.tsx`.
 6. After the support window (see Open questions), remove compatibility mode
    from `ServiceBrowserTab` and retire the legacy route and its rewrite
    helpers, as a separate reviewed change.
 7. Done 2026-10-22: comments citing deleted plan steps reworded (the listed
    files and `apps/web/src/vite-env.d.ts`).
-8. Verify whether legacy URL tabs (`BrowserTab`, `attachUrl` in
-   `browser-preview-manager.ts`) have the stale-path bug fixed for service
-   tabs on 2026-10-18: `attachUrl` loads whenever the attach URL differs from
-   the view's current URL, and the renderer re-attaches on every resize and
-   scroll, so a re-attach sent before the renderer saw a link, a redirect or
-   Back may undo it. Reproduce in the real window (link, then Back, then a
-   resize) before changing anything; the fix would mirror `navigationBasis`.
-9. Verify why the pane-layout store re-applies an older saved `browserData.url`
-   of a tab after a newer local save. On 2026-10-18 a service tab saved `/`
-   then `/app/next` and its `serviceRef.path` later returned to `/`.
-   `ServiceBrowserTab` now treats an echo of its own earlier save as stale
-   (`persistedBases`), but other tab types may follow such echoes. Check
-   whether save acknowledgements or layout events are applied out of order in
-   `paneLayoutStore.ts`. Related, seen on 2026-10-21: a `save_pane_layout` from
-   outside the renderer (the Electron spec's, with a different tab set) did not
-   reach an open renderer that had already hydrated the environment, even
-   after re-selecting it; the spec now reloads the renderer when it changes the
-   tab set. Check whether another client's layout save should reach an open
-   renderer.
+8. Done 2026-10-25: the bug reproduced in the real window. Back during a
+   resize burst left a legacy URL tab bouncing between `/` and `/app/next`
+   12 times, and a re-attach sent right behind Back also bounced. Fixed as for
+   service tabs: URL states carry `navigation`, the renderer sends each URL's
+   `navigationBasis` (`BrowserTab.tsx`, `ipc.ts`,
+   `packages/protocol/src/browser-preview.ts`), and `attachUrl` loads only a
+   URL chosen against the view's latest navigation; renderers that send no
+   basis keep the old rule. Unit tests in `browser-preview-manager.test.ts`,
+   `main-ipc.test.ts` and `BrowserTab.test.tsx` fail without their half of
+   the fix. After it, 5 of 5 UI rounds and both deterministic cases (Back and
+   a link) held in the real window; the spec keeps them as a regression
+   case.
+9. Verified 2026-10-25: the store does not apply saves out of order. Local
+   saves are queued per environment (`pane-layout-persistence.ts`), an older
+   save's acknowledgement is skipped after a newer local edit, change-feed
+   reads are declined while a local write is queued or in flight or when
+   their revision is older, and a declined read is re-fetched after the local
+   writes (`store-resource-sync.ts`, only the newest read applies). A
+   regression test (`store-resource-sync.test.ts`: a plain URL tab saves `/a`
+   then `/b`, and the `/a` read answers late) fails with those guards removed.
+   The 2026-10-18 return to `/` fits the re-attach bug in item 8 instead.
+   Another client's `save_pane_layout` is meant to reach an open renderer
+   (change announcement, re-read, adopt), and new tests show it does in both
+   a browser client and an Electron-style window. Re-selecting an environment
+   never re-reads the layout (hydration is once per renderer), so it could not
+   have recovered a missed update. Still open: the 2026-10-21 miss did not
+   reproduce at unit level; check in a real Electron window whether that
+   announcement reaches it.
 10. Done 2026-10-22: service tabs are named "<service label> N" once their
     environment's service list is loaded (`DraggableTab.tsx`); other browser
     tabs stay "Browser N". The Electron spec now finds service tabs by that
     name.
-11. Give the address field room in narrow panes. At the narrowest window
-    (800×600, 100 %) the browser pane is 519 CSS px wide, above the 448 px
-    (`@md/browser`) wrap point, so the toolbar stays on one row and the address
-    field is 92 px wide (about a dozen characters of
-    `http://localhost:<port>/`). It works (Cmd/Ctrl+L selects it, it scrolls),
-    but the URL cannot be read. Wrap earlier, or let the picker and buttons
-    shrink first.
-12. Flake [0620](../../tests/flaky-tests/previews-annotations-and-gateway/0620-service-preview-keyboard-picker-register-item.md):
-    four times on 2026-10-21 the keyboard test could not reach, or open,
-    **Register a service…** from the picker. Likely cause: Radix moves menu
-    focus in a timer, and Chromium throttles timers in a window that other
-    worktrees' windows cover. The spec now waits for focus to move and turns
-    that throttling off; 5 runs and the full Electron suite passed since.
-    Confirm it holds on loaded runs, then consider the same switches for every
-    Electron spec (`electron-launch-switches.ts`).
+11. Done 2026-10-25: the toolbar now stays on one row only from
+    `@2xl/browser` (672 px); below that the address takes a full-width second
+    row, and on one row it keeps at least `min(10rem, 60%)` while the service
+    picker shrinks first (shared classes in `browser-tab-hooks.ts`, used by
+    `ServiceBrowserTab.tsx` and `BrowserTab.tsx`). Worked out from the classes,
+    a 519 px pane gives the address about 358 px in a service tab and 371 px in
+    a URL tab (was 92 and about 144). Class-contract tests only; not measured
+    in a real window.
+12. Done 2026-10-25: flake
+    [0620](../../tests/flaky-tests/previews-annotations-and-gateway/0620-service-preview-keyboard-picker-register-item.md)
+    (the keyboard test missing **Register a service…** under Chromium timer
+    throttling) held on loaded runs: it passed in all 7 runs (5 single-spec,
+    2 full suites, load 21 to 80). The three throttling switches moved into
+    `ELECTRON_TEST_SWITCHES` (`electron-launch-switches.ts`), so every
+    Electron spec gets them. 0620 stays open in the registry for one more
+    loaded window.
 13. Flake [0622](../../tests/flaky-tests/previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md):
     once, in a slow run, a remote preview attachment was still held 20 s after
     its window's `close()`. It did not recur; the spec now times the close
     and the release separately. If it recurs with the window gone, capture
-    Electron's output and check the close-path release.
+    Electron's output and check the close-path release. 2026-10-25: no
+    recurrence in 6 runs on this branch (window gone 208 to 230 ms after
+    `close()`), but the registry records a recurrence the same day on another
+    branch at an earlier attachment-count check, with no output captured.
+    Still open.
 
 ### Qualification
 
@@ -218,18 +256,18 @@ log below.
   and the spec asserts nothing reaches the sibling
   ([0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md)).
   The same worker checks passed in Firefox and Playwright WebKit on
-  2026-10-23. Still open: Electron's **Reset site data** with a worker installed
-  on a desktop-tunnel service, and shipping Safari.
-- Compatibility cases not yet run in a real browser:
+  2026-10-23. Electron's **Reset site data** with the hostile and benign
+  workers installed on a desktop-tunnel service passed on 2026-10-25 (see the
+  evidence log). Still open: shipping Safari.
+- Compatibility cases. Passed in Playwright Chromium, Firefox and WebKit on
+  2026-10-25 (see the evidence log): SPA deep links and history, the `srcset`
+  route, source maps, IndexedDB, BroadcastChannel, service-worker and Cache
+  isolation between siblings, frame denial of bootstrap, session and refusal
+  pages and the web client's no-opener popup, and an IPv6-only (`::1`)
+  target. Still not run in a real browser:
   - a streaming or router framework fixture alongside the pinned Vite 7.3.6;
-  - SPA deep links and history;
-  - the `srcset` route (served, never asserted);
-  - source maps;
   - real-provider OAuth compatibility (synthetic external redirects into a
-    same-service frame and top-level return are covered since 2026-10-23);
-  - IndexedDB, BroadcastChannel, service-worker and Cache isolation;
-  - popup and frame denial (unit tests only);
-  - an IPv6-only target (resolver level only).
+    same-service frame and top-level return are covered since 2026-10-23).
 - Performance thresholds. Set them from the two-machine baseline (first byte,
   connect time, HMR delivery, peak queue and decode bytes, socket counts)
   before any cohort counts as passing. Not set: no two-machine baseline
@@ -893,6 +931,114 @@ Tailscale Serve 1.102.4. Single machine.
   browsing and real wildcard-DNS browser publication through `publicPort`
   remain open. No system DNS, trust-store or production-profile edits.
 
+2026-10-25, node retention, tunnel liveness, compatibility cases, legacy tab
+history and UI items, branch `todo-0042-service-preview-rollout-f64ae24ade8a`
+from `main` at `00a0cb82`. Single machine; nothing here is two-machine,
+shipping Safari, iOS, Windows or real DNS evidence.
+
+| Item | Version |
+| --- | --- |
+| Host | macOS 27.0 (26A425, arm64), shared with other live-test worktrees (load average 21 to 80) |
+| Bun / Node (mise) | 1.4.4 / 22.23.1 (Bun 1.4.2 on `PATH` for direct `bunx` runs) |
+| Electron / Playwright | 45.0.0 / 1.64.0 |
+| Browsers | Chromium 156.0.8078.4, Firefox 157.0, WebKit 27.2 (Playwright builds) |
+
+- Effective capabilities: defaults everywhere (`transport`, `relay` and
+  publication off); the Electron spec turns the transport on with
+  `ORKESTRATOR_PREVIEW_TRANSPORT=1` on its disposable profiles, and adds
+  `ORKESTRATOR_AGENT_TEST_PREVIEW_RETENTION_MS` for the retention case. No
+  default changed and the legacy route was not touched.
+- Compatibility cases, `mise run test:logged -- --name preview-browser --
+  mise run test:preview:browser`: passed (55.3 s); with the list reporter 42
+  passed and 3 skipped (Vite HMR, fixture unset), 14 passed per engine. The
+  six new tests passed 54 of 54 with `--repeat-each=3`. Observed:
+  - `srcset`: pixel ratio 1 loads `small.png`, 2 loads `large.png`, from the
+    service origin (the fixture now serves real PNGs; both paths were 404).
+  - Source maps: the `sourceMappingURL` resolves against the script and the
+    map loads from the page's origin with `application/json` and the exact
+    bytes; Chromium's `Debugger.scriptParsed` reports the same map URL.
+  - SPA: `/app/deep/route?x=1#h` loads directly after sign-in; `pushState`,
+    reload, Back and Forward keep the path and state; sign-in adds no history
+    entry; no visited URL holds `__orkestrator_preview`, the grant or the
+    attachment id.
+  - Isolation between `app` and `other` (a second `app` page as the positive
+    control): IndexedDB, BroadcastChannel, Cache Storage and the `/sw.js`
+    worker are all invisible to the sibling.
+  - Frames and popups: bootstrap, session and refusal pages carry
+    `X-Frame-Options: DENY` and `frame-ancestors 'none'`; framed from another
+    site, the bootstrap (405), a bad session code (403) and the signed-in
+    service (401, the Lax cookie is not sent) render nothing and the fixture
+    sees no request. The web client's popup flow lands with
+    `window.opener === null`; a plain cross-site `window.open` keeps its
+    opener, because private origins add no COOP (now documented in
+    `browser-previews.md`).
+  - IPv6: a fixture bound only to `::1`, registered with `addressFamily:
+    "auto"`, loads and its WebSocket works. The harness had faked the family
+    probe to always fail; it now uses the real `defaultProbeFamily`.
+  - Not tested: a framed bootstrap POST with a valid grant. By code reading
+    the bootstrap and session-code paths do not check Fetch Metadata, so such
+    a POST would probably use up the grant while its page cannot render; it
+    needs the one-use grant in hand, so it was not pursued.
+- Real Electron, `bunx playwright test --config
+  e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts`:
+  17 of 17 in 3 consecutive runs (141, 239 and 226 s, load 23 to 46) after
+  test-side fixes (a cookie without expiry could not survive the relaunch;
+  the relaunch reopens on the second backend; a one-shot visibility read).
+  - Retention: see code item 4 (cookies cleared 31.1 to 32.3 s after removal,
+    directory removed after relaunch, sibling kept).
+  - Reset site data with the hostile worker (`/sw-hostile/install`) and the
+    benign `/sw.js` at scope `/sw/`, plus a cookie, localStorage and
+    IndexedDB: before, 2 registrations, the hostile worker answering
+    `/__orkestrator_preview/…` and `/sw/marker` answered by the worker;
+    after **Preview options → Reset this site's data**, no controller, 0
+    registrations, `/sw/marker` answered by the fixture (404), all storage
+    and the server-side cookie empty; the page reloads through the tunnel and
+    `svc-b` keeps its cookie, storage and worker.
+  - Legacy URL tab history: see code item 8 (12 bounces before the fix; 5 of
+    5 rounds and both deterministic cases held after).
+- Full Electron suite: `svc0042-suite-1` (583.5 s, load 43 to 60) 31 passed,
+  3 failed, 5 skipped or not run; the service-preview spec passed 17/17. The
+  failures: [0515](../../tests/flaky-tests/electron-and-desktop/0515-electron-nickname-reload-timeout.md)
+  (recurrence, with [0157](../../tests/flaky-tests/electron-and-desktop/0157-electron-first-window-startup-timeout.md)
+  in the first owner rerun), new [0940](../../tests/flaky-tests/previews-annotations-and-gateway/0940-annotation-late-font-fixture-reload-timeout.md)
+  (an A/B of that test passed 2/2 with and without the new throttling
+  switches) and new [0941](../../tests/flaky-tests/electron-and-desktop/0941-workspace-realm-profile-cleanup-enotempty.md);
+  each unchanged owner passed alone. `svc0042-suite-2`: 38 passed, 1 skipped
+  (Linux Wayland), 0 failed, 376.4 s. Since #1265 `closeElectronWithin`
+  called `app.process()` after Electron quit and threw, which also broke the
+  multi-backend relaunch; `design-electron-cleanup.ts` now tolerates the
+  disposed handle.
+- Unit and focused suites, through `mise run test:logged`: desktop retention
+  (10 new node tests), tunnel client and server (new liveness tests; the
+  server one fails with the client-ping handling removed), protocol
+  WebSocket, `disk-report`, runtime profile (14), desktop manager and IPC
+  (111), web browser tabs, pane layout and preview entry (563 across 28
+  files), and the backend preview files that use the fixture.
+- Repository checks: `mise run check` (format, lint, typecheck) and
+  `bun check -p e2e/tsconfig.json` passed. The first full `mise run test`
+  (`full-tests-0042`, 1768.1 s) failed only on two defects in this change,
+  both fixed: a DOM query passed to `toBeNull` in `ServiceBrowserTab.test.tsx`
+  and the moved toolbar classes in `tests/unit/mobile-responsive-contracts.test.ts`.
+  The second (`full-tests-0042-2`, 1653.8 s, load 38 to 48) passed the root,
+  bridges and lockfile groups and failed the workspace group on five
+  backend timing failures in untouched files; every owner passed alone
+  (environment-move on its second rerun). After rebasing onto `main` at
+  `26b51f144` (which brought in #1258, preview service discovery),
+  `mise run check`, the touched web, desktop and backend preview suites and
+  `mise run test:preview:browser` passed again; the third full run
+  (`full-tests-0042-3`, 1765.9 s) failed only on two backend timeouts in
+  untouched files (terminal history, environment-move restart recovery),
+  whose owners passed alone. Recorded as
+  [0942](../../tests/flaky-tests/aggregate-validation-runs/0942-service-preview-rollout-0042-validation.md).
+- Two-machine tool and bench: not rerun (no change to them).
+- Not exercised: node-partition retention against a real command node with a
+  forgotten node (unit tests only); the narrow toolbar in a real window (class
+  contracts only); the 2026-10-21 cross-client layout miss (code item 9).
+- Cleanup: the specs removed their temporary roots and stopped Electron,
+  both backends and every fixture; no temporary root or Electron process was
+  left; the A/B spec and config were deleted. No containers were used.
+  Evidence: `output/agent-testing/svc0042-*`.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner
@@ -934,7 +1080,9 @@ Tailscale Serve 1.102.4. Single machine.
   - Raising the hard ceiling. It stays proportional to the read size.
   The old twice-the-limit capacity close has no reachable trigger, so it was
   removed. A reader that stops entirely holds at most the queue, one read and
-  its admission slot until the 30-second liveness ping closes it.
+  its admission slot: until the 30-second liveness ping closes it if the
+  client is gone, or until the tab closes while the desktop keeps pinging
+  (2026-10-25, decision D2).
 - A closing tunnel lets a slow reader drain (2026-10-17). `PreviewWebSocket`
   starts its 2-second close-handshake grace from the close frame's write
   callback, which runs once every earlier byte has been flushed. Before that
@@ -999,19 +1147,89 @@ Tailscale Serve 1.102.4. Single machine.
   The legacy route can go once the floor is at or above the first Stable
   release with service previews as the desktop default, and stored legacy
   URL tabs have a migration. `preview.legacy-loopback-route` counts its
-  requests. The fallback question stays open.)
+  requests. The fallback question stays open; recommendation in D8.)
 - Is it acceptable that annotations on legacy URL tabs keep needing the legacy
-  route?
+  route? (Recommendation in D8.)
 - What observation window and thresholds apply to each cohort, and who signs
-  off?
-- Should the Chromium preview spec or the Docker suites join a regular gated
-  run?
-- Should tunnel liveness outlast a reader paused by backpressure? The desktop
-  stream stops reading the WebSocket while Chromium is not consuming (paused
-  media, for example). The backend's ping then waits behind queued data, gets
-  no pong, and the tunnel is terminated 30 to 60 seconds later. Options: keep
-  this as the stopped-reader bound; add a separate, longer stall deadline that
-  resets on drain; or ping on a channel that is not behind application data.
+  off? (Proposed starting point in D8; needs the two-machine baseline.)
+- Answered 2026-10-25 (decision D3): the preview browser and Docker suites
+  join change-gated validation, not CI. The testing guide's "Verification by
+  change type" table and `AGENTS.md` now name `mise run test:preview:browser`
+  (and `test:preview:docker`, `test:agent:electron`) for changes to preview
+  origins, forwarding, resolution, the relay or the fixtures.
+- Answered 2026-10-25 (decision D2): tunnel liveness outlasts a reader paused
+  by backpressure. The desktop pings the backend every 15 seconds and the
+  backend counts any client frame as liveness, so a stalled but live reader
+  keeps its tunnel; a silent client is still closed after 30 to 60 seconds.
+
+## Assumptions and decisions
+
+Recorded 2026-10-25 for the work done on branch
+`todo-0042-service-preview-rollout-f64ae24ade8a`.
+
+- **D1. How node partitions learn that a node was removed.** Options: (a)
+  intercept `forget_node` in Electron; (b) treat a node as removed when any
+  command node's `list_nodes` lacks it; (c) remember which command
+  connections listed each node and forget it once all of them have dropped
+  it, moving vouchers on a command handover. Chose (c). The renderer calls
+  `forget_node` straight through the gateway, so (a) misses forgets from
+  other clients and the CLI; (b) would wipe site data when a handover moves a
+  node away from its old command node. Pros: needs only an authoritative
+  registry read on the existing 30-minute schedule; unreachable, suspended or
+  malformed registries never count as removal. Cons: a node removed while no
+  window uses its command node is cleaned up only when one does; a journal
+  (`preview-partitions-pending.json.nodes`, at most 1,024 nodes and 8 command
+  connections each) is one more file; forgetting a command connection also
+  forgets nodes reached only through it, as for its own partitions.
+- **D2. Tunnel liveness behind backpressure** (was an open question).
+  Options: keep closing stopped readers after 30 to 60 s; a longer stall
+  deadline that resets on drain; liveness on a channel not behind application
+  data. Chose the third, as client pings: the desktop sends a WebSocket ping
+  every 15 s (`PREVIEW_TUNNEL_CLIENT_PING_MS`) and the backend counts any
+  inbound frame as alive (`preview-tunnel-server.ts`; `PreviewWebSocket` now
+  emits `ping`). Pros: a paused-media tab keeps its stream, which matches the
+  invariant that inactivity never cancels application work; dead clients are
+  still detected; no frame format change, and both mixed-version pairings
+  behave as before. Cons: a live desktop whose reader never resumes holds
+  the queue, one read and an admission slot until the tab closes (the
+  admission bound still caps the total); the upload direction is unchanged (a
+  backend paused on a slow upstream cannot read the client's pings, so that
+  tunnel is still closed by liveness).
+- **D3. Gated runs for the preview suites** (was an open question). Options:
+  add the browser suite to CI; a scheduled workflow; change-gated through the
+  validation rules review preparation reads. Chose change-gated. CI runs no
+  browser today; adding three engines would add their download and about a
+  minute to every run, and a workflow cannot be proved from a worker. Pros:
+  runs exactly when preview code changes. Cons: relies on the reviewer or
+  review preparation selecting it; nothing catches drift from unrelated
+  changes.
+- **D4. "Open as service" scope.** Options: offer it whenever the port
+  matches a service; require the tab's environment, current epoch, one
+  claimant and an available endpoint, and re-check on click. Chose the strict
+  rule (the item's own "never infer ownership from the port alone"). Cons:
+  tabs whose service is stopped or whose port is shared get no offer.
+- **D5. Narrow toolbar.** Options: let controls shrink on one row; wrap
+  earlier. Chose both: wrap below 672 px, and on one row the picker shrinks
+  first with an address minimum. Con: in narrow panes the address sits below
+  the buttons but still comes before them in tab order.
+- **D6. Pane-layout echoes (item 9).** No store change: the guards exist and
+  a regression test now fails without them. The remaining doubt is a live
+  check, left open in item 9.
+- **D7. Measuring partition disk use.** Added preview partition rows to
+  `mise run disk:report` (service and shared legacy partitions, with how many
+  are cleared and waiting for the next start) rather than a one-off `du`, so
+  a long-lived profile can be measured by anyone.
+- **D8. Remaining open questions** (support window fallback, annotations on
+  legacy URL tabs, cohort thresholds and sign-off) are product calls that
+  need the maintainer and a two-machine baseline. Recommendation recorded,
+  not adopted: keep compatibility mode as an explicit, labelled fallback for
+  one Stable release after the desktop default flips, then retire it with the
+  legacy route; annotations on legacy URL tabs go with the route (offer
+  **Open as service** first); thresholds come from the two-machine baseline
+  (a proposed starting point: p95 first byte and connect time within 1.5×
+  the direct route over the same link, no
+  unbounded queue growth, and zero cross-service reach), signed off by the
+  maintainer.
 
 ## Needs verification
 
@@ -1022,6 +1240,10 @@ Tailscale Serve 1.102.4. Single machine.
   after light use; 16 shared legacy partitions, 93 MB in total. Retention of
   service partitions now exists; the shared legacy ones (code item 4) are the
   larger share. A profile with many services over months is still unmeasured.
+  Since 2026-10-25 `mise run disk:report` reports both partition kinds
+  (decision D7). A second data point, this host's production profile
+  (macOS 27, read-only): no service partitions and one shared partition,
+  172 kB.
 
 ## Related
 

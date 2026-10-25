@@ -348,8 +348,11 @@ The preview suite uses a browser-local loopback proxy, throwaway certificates
 and fresh contexts; it changes neither system DNS nor the trust store. Chromium
 pins the test leaf. Firefox and WebKit bypass certificate validation only in
 those contexts. WebKit engine coverage does **not** qualify shipping Safari or
-iOS. The suite covers sibling reads/frames, visible links, hostile workers and
-same-service iframe returns through a synthetic external identity provider.
+iOS. The suite covers sibling reads/frames, visible links, hostile workers,
+same-service iframe returns through a synthetic external identity provider,
+`srcset`, source maps, SPA deep links and history, IndexedDB,
+BroadcastChannel, Cache and worker isolation, frame and popup handling, and
+an IPv6-only (`::1`) service.
 
 Live Tailscale Serve header preservation is a separate opt-in transport check:
 
@@ -1131,6 +1134,7 @@ Use the default suite plus the additional evidence relevant to the change:
 | User-visible or background renderer flow | Isolated-stack browser cycle, including inactive-environment rehydration |
 | Electron main/preload/IPC | Focused Electron tests plus `mise run test:agent:electron` |
 | Docker lifecycle or ownership | Local fixture coverage plus `mise run test:agent:docker` |
+| Service previews: private origins, publication, bootstrap, request forwarding, or the preview fixtures | `mise run test:preview:browser` (all three engines); add `mise run test:preview:docker` for target resolution, port publication or the relay, and `mise run test:agent:electron` for the desktop tunnel. See "Opt-in preview checks". |
 | iOS | `mise run test:all` on macOS with Xcode, or report that iOS was not run |
 
 For real-stack flows, artifact handling, authentication, and safe profile

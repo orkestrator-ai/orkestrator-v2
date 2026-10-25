@@ -28,8 +28,13 @@ import { Button } from "@/components/ui/button";
 import { isWkWebViewClient } from "@/lib/client-platform";
 import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { cn } from "@/lib/utils";
-import { resolveBrowserAddress } from "@/lib/browser-address";
+import { displayUrlFromNativePreview, resolveBrowserAddress } from "@/lib/browser-address";
 import { boundBrowserHistory } from "@/lib/browser-history";
+import {
+  confirmLegacyUrlServiceMatch,
+  legacyUrlHostPort,
+  legacyUrlServiceMatch,
+} from "@/lib/preview-service-entry";
 import {
   attachBrowserPreview,
   goBackBrowserPreview,
@@ -41,12 +46,20 @@ import {
   setBrowserPreviewVisible,
 } from "@/lib/native/browser-preview";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
 import type { BrowserTabData } from "@/types/paneLayout";
 import { AnnotatedPreviewArea, AnnotationsButton } from "./annotations/BrowserAnnotationsLayout";
 import { currentPageForManualUrl } from "./annotations/format";
 import { useBrowserAnnotations } from "./annotations/useBrowserAnnotations";
-import { errorMessage, useAddressBarShortcut, useBlockingOverlay } from "./browser-tab-hooks";
+import {
+  BROWSER_ADDRESS_FORM_CLASS,
+  BROWSER_ADDRESS_INPUT_CLASS,
+  BROWSER_TOOLBAR_ACTIONS_CLASS,
+  BROWSER_TOOLBAR_CLASS,
+  errorMessage,
+  useAddressBarShortcut,
+  useBlockingOverlay,
+} from "./browser-tab-hooks";
 import { ServiceBrowserTab } from "./ServiceBrowserTab";
 
 interface BrowserTabProps {
@@ -58,26 +71,6 @@ interface BrowserTabProps {
 }
 
 const OPAQUE_PREVIEW_SANDBOX = "allow-forms allow-pointer-lock allow-presentation allow-scripts";
-const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
-function displayUrlFromNativePreview(previewUrl: string, currentDisplayUrl: string): string | null {
-  if (!previewUrl) return null;
-  try {
-    const preview = new URL(previewUrl);
-    const gatewayMatch = GATEWAY_PREVIEW_PATH.exec(preview.pathname);
-    if (!gatewayMatch) return preview.protocol === "http:" ? preview.toString() : null;
-
-    const display = new URL(currentDisplayUrl);
-    const displayPort = display.port || "80";
-    if (gatewayMatch[1] !== displayPort) return null;
-    display.pathname = gatewayMatch[2] ?? "/";
-    display.search = preview.search;
-    display.hash = preview.hash;
-    return display.toString();
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Browser tabs are either a registered preview service (durable service
  * reference, transport resolved at attach time) or a manual loopback address
@@ -112,6 +105,12 @@ function ManualBrowserTab({
   })();
   const [address, setAddress] = useState(data.url);
   const [currentUrl, setCurrentUrl] = useState(data.url);
+  // A native preview's latest navigation (`BrowserPreviewState.navigation`),
+  // and the one `currentUrl` was chosen against, sent as the attach's
+  // `navigationBasis`: main never loads a URL chosen before the view's latest
+  // navigation, so a routine re-attach cannot undo a link, a redirect or Back.
+  const [viewNavigation, setViewNavigation] = useState<number | undefined>(undefined);
+  const [urlBasis, setUrlBasis] = useState<number | undefined>(undefined);
   // The tracked history only drives the iframe preview: a native preview's
   // history lives in Chromium (see `moveThroughHistory`). The refs are the
   // authoritative cursor for the handlers that mutate it, so a second click or
@@ -182,14 +181,31 @@ function ManualBrowserTab({
   });
   const stopAnnotationForPageChange = annotations.stopSelection;
 
+  const conversionAttempt = useRef(0);
+  const conversionMounted = useRef(false);
+  useLayoutEffect(() => {
+    conversionMounted.current = true;
+    return () => {
+      conversionMounted.current = false;
+      conversionAttempt.current += 1;
+    };
+  }, []);
+  useLayoutEffect(() => {
+    conversionAttempt.current += 1;
+  }, [currentUrl, data.url, data.navigationRequestId, environmentId, viewNavigation]);
+
   const applyNativeSurfaceState = useCallback(
     (state: BrowserPreviewState | null) => {
       if (!state || state.tabId !== tabId) return;
       setNativeState(state);
       setIsLoading(state.loading);
       setError(state.error);
+      if (state.navigation !== undefined) {
+        if (state.navigation !== viewNavigation) conversionAttempt.current += 1;
+        setViewNavigation(state.navigation);
+      }
     },
-    [tabId],
+    [tabId, viewNavigation],
   );
 
   const applyNativeState = useCallback(
@@ -198,13 +214,20 @@ function ManualBrowserTab({
       applyNativeSurfaceState(state);
       const navigatedDisplayUrl = displayUrlFromNativePreview(state.url, currentUrl);
       if (!navigatedDisplayUrl) return;
-      if (navigatedDisplayUrl === currentUrl) return;
+      if (navigatedDisplayUrl === currentUrl) {
+        // Only the first basis is taken from an unchanged URL: a state sent
+        // while Back is in flight still shows the old URL but already counts
+        // the move, and pairing them would make the old URL look current.
+        if (urlBasis === undefined && state.navigation !== undefined) setUrlBasis(state.navigation);
+        return;
+      }
       setAddress(navigatedDisplayUrl);
       setCurrentUrl(navigatedDisplayUrl);
+      setUrlBasis(state.navigation);
       setLocallyPersistedUrl(navigatedDisplayUrl);
       updateTabBrowserUrl(tabId, navigatedDisplayUrl, environmentId);
     },
-    [applyNativeSurfaceState, currentUrl, environmentId, tabId, updateTabBrowserUrl],
+    [applyNativeSurfaceState, currentUrl, environmentId, tabId, updateTabBrowserUrl, urlBasis],
   );
 
   // The persisted tab changed (restored, or another client navigated it):
@@ -222,6 +245,8 @@ function ManualBrowserTab({
     setAddress(data.url);
     setCurrentUrl(data.url);
     if (!followsLocalNavigation) {
+      // Chosen elsewhere, now: against the latest navigation seen here.
+      setUrlBasis(viewNavigation);
       setHistory(data.history ?? (data.url ? [data.url] : []));
       setHistoryIndex(data.historyIndex ?? (data.url ? 0 : -1));
       setIsLoading(Boolean(data.url));
@@ -290,6 +315,82 @@ function ManualBrowserTab({
     }
   }, [browserPreviewSupported, currentUrl]);
   const resolved = resolution.resolved;
+
+  // "Open as service": offered only when this tab's own environment has
+  // exactly one current service on the URL's host port (see
+  // `legacyUrlServiceMatch`). The port alone, or the active environment,
+  // never decides it; an ambiguous port leaves the tab as it is.
+  const legacyHostPort = useMemo(() => legacyUrlHostPort(currentUrl), [currentUrl]);
+  const previewCapabilities = usePreviewServiceStore((state) => state.capabilities);
+  const environmentPreviewSnapshot = usePreviewServiceStore(
+    (state) => state.environments[environmentId]?.snapshot ?? null,
+  );
+  useEffect(() => {
+    if (!isActive || legacyHostPort === null || !browserPreviewSupported) return;
+    ensurePreviewServiceSync();
+    void usePreviewServiceStore.getState().refreshEnvironment(environmentId);
+  }, [browserPreviewSupported, environmentId, isActive, legacyHostPort]);
+  const serviceMatch = useMemo(
+    () =>
+      legacyUrlServiceMatch(
+        currentUrl,
+        environmentId,
+        previewCapabilities,
+        environmentPreviewSnapshot,
+      ),
+    [currentUrl, environmentId, environmentPreviewSnapshot, previewCapabilities],
+  );
+  const [serviceConversion, setServiceConversion] = useState<{
+    url: string;
+    state: "checking" | "changed" | "error";
+    attempt: number;
+  } | null>(null);
+  const conversionState = serviceConversion?.url === currentUrl ? serviceConversion.state : null;
+  const openAsService = useCallback(() => {
+    if (!serviceMatch) return;
+    const url = currentUrl;
+    const attempt = ++conversionAttempt.current;
+    const liveData = () =>
+      usePaneLayoutStore
+        .getState()
+        .getAllTabs(environmentId)
+        .find((tab) => tab.id === tabId)?.browserData;
+    const original = liveData();
+    const isCurrent = () =>
+      conversionMounted.current &&
+      conversionAttempt.current === attempt &&
+      liveData()?.url === original?.url &&
+      liveData()?.navigationRequestId === original?.navigationRequestId;
+    const clearCancelled = () =>
+      setServiceConversion((current) => (current?.attempt === attempt ? null : current));
+    setServiceConversion({ url, state: "checking", attempt });
+    void confirmLegacyUrlServiceMatch(url, environmentId, serviceMatch)
+      .then((target) => {
+        if (!isCurrent()) {
+          if (conversionMounted.current) clearCancelled();
+          return;
+        }
+        if (!target) {
+          setServiceConversion({ url, state: "changed", attempt });
+          return;
+        }
+        setServiceConversion(null);
+        stopAnnotationForPageChange();
+        updateTabBrowserUrl(tabId, target, environmentId, [], -1);
+      })
+      .catch(() => {
+        if (isCurrent()) setServiceConversion({ url, state: "error", attempt });
+        else if (conversionMounted.current) clearCancelled();
+      });
+  }, [
+    currentUrl,
+    environmentId,
+    serviceMatch,
+    stopAnnotationForPageChange,
+    tabId,
+    updateTabBrowserUrl,
+  ]);
+
   const visibleError = error ?? resolution.error;
   const visibleLoading = isLoading && resolved !== null;
   // Direct loopback previews need their real origin for normal browser behavior
@@ -312,10 +413,12 @@ function ManualBrowserTab({
         return;
       }
 
+      conversionAttempt.current += 1;
       stopAnnotationForPageChange();
       setError(null);
       setAddress(next.displayUrl);
       setCurrentUrl(next.displayUrl);
+      setUrlBasis(viewNavigation);
       setIsLoading(true);
       if (!nativeBrowserPreview) setLoadRevision((revision) => revision + 1);
       setLocallyPersistedUrl(next.displayUrl);
@@ -363,6 +466,7 @@ function ManualBrowserTab({
       stopAnnotationForPageChange,
       tabId,
       updateTabBrowserUrl,
+      viewNavigation,
     ],
   );
 
@@ -380,6 +484,7 @@ function ManualBrowserTab({
 
   const moveThroughHistory = useCallback(
     (offset: -1 | 1) => {
+      conversionAttempt.current += 1;
       if (nativeBrowserPreview) {
         stopAnnotationForPageChange();
         // Chromium owns this preview's history. The tracked array only records
@@ -464,6 +569,7 @@ function ManualBrowserTab({
         void attachBrowserPreview({
           tabId,
           url: resolved.iframeUrl,
+          ...(urlBasis === undefined ? {} : { navigationBasis: urlBasis }),
           bounds,
           visible: isActive && !hasBlockingOverlay && !annotations.previewHidden,
         })
@@ -503,6 +609,7 @@ function ManualBrowserTab({
     nativeBrowserPreview,
     resolved,
     tabId,
+    urlBasis,
   ]);
 
   const canGoBack = nativeBrowserPreview ? Boolean(nativeState?.canGoBack) : historyIndex > 0;
@@ -553,7 +660,7 @@ function ManualBrowserTab({
         !isActive && "hidden",
       )}
     >
-      <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 border-b border-border/80 bg-muted/25 px-2 py-1.5 @md/browser:flex-nowrap">
+      <div className={BROWSER_TOOLBAR_CLASS}>
         <Button
           type="button"
           variant="ghost"
@@ -588,10 +695,7 @@ function ManualBrowserTab({
           <RefreshCw className={cn("h-4 w-4", visibleLoading && "animate-spin")} />
         </Button>
 
-        <form
-          className="flex w-full min-w-0 basis-full items-center @md/browser:w-auto @md/browser:basis-0 @md/browser:flex-1"
-          onSubmit={handleSubmit}
-        >
+        <form className={BROWSER_ADDRESS_FORM_CLASS} onSubmit={handleSubmit}>
           <div
             className={cn(
               "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-input-surface shadow-sm transition-colors focus-within:border-primary/60",
@@ -606,7 +710,7 @@ function ManualBrowserTab({
               ref={addressInputRef}
               value={address}
               onChange={(event) => setAddress(event.target.value)}
-              className="h-full min-w-0 flex-1 bg-transparent px-2.5 font-mono text-xs text-foreground outline-none placeholder:font-sans placeholder:text-muted-foreground"
+              className={BROWSER_ADDRESS_INPUT_CLASS}
               aria-label="Browser address"
               aria-invalid={Boolean(visibleError)}
               placeholder="localhost:3000"
@@ -622,29 +726,55 @@ function ManualBrowserTab({
             Go
           </Button>
         </form>
-        <AnnotationsButton annotations={annotations} />
-        {nativeBrowserPreview && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            aria-label="Open preview DevTools"
-            title="Open preview DevTools"
-            disabled={!resolved || !nativeAttached}
-            onClick={() => {
-              void openBrowserPreviewDevTools(tabId)
-                .then(applyNativeState)
-                .catch((devToolsError) => {
-                  setError(errorMessage(devToolsError));
-                });
-            }}
-          >
-            <Code2 className="h-4 w-4" />
-          </Button>
-        )}
+        <div className={BROWSER_TOOLBAR_ACTIONS_CLASS}>
+          <AnnotationsButton annotations={annotations} />
+          {nativeBrowserPreview && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              aria-label="Open preview DevTools"
+              title="Open preview DevTools"
+              disabled={!resolved || !nativeAttached}
+              onClick={() => {
+                void openBrowserPreviewDevTools(tabId)
+                  .then(applyNativeState)
+                  .catch((devToolsError) => {
+                    setError(errorMessage(devToolsError));
+                  });
+              }}
+            >
+              <Code2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
+      {serviceMatch && (
+        <div
+          role="status"
+          className="flex min-w-0 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/80 bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground"
+        >
+          <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
+            {conversionState === "changed"
+              ? `The service on port ${legacyHostPort} changed while this was checked, so nothing was converted.`
+              : conversionState === "error"
+                ? "Could not check the preview service. Try again."
+                : `Port ${legacyHostPort} is the ${serviceMatch.service.definition.label} preview service in this environment. As a service tab it follows the service when its port changes.`}
+          </span>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="h-7 shrink-0"
+            disabled={conversionState === "checking"}
+            onClick={openAsService}
+          >
+            Open as service
+          </Button>
+        </div>
+      )}
       {visibleError && (
         <div
           role="alert"
@@ -670,7 +800,12 @@ function ManualBrowserTab({
             className="absolute inset-0 block h-full min-h-0 w-full min-w-0 max-w-full border-0 bg-background [color-scheme:dark]"
             sandbox={previewSandbox}
             referrerPolicy={isDirectPreview ? "no-referrer" : undefined}
-            onLoad={() => setIsLoading(false)}
+            onLoad={() => {
+              // Cross-origin iframe routes cannot be read here, but a new
+              // document must still invalidate a pending conversion offer.
+              conversionAttempt.current += 1;
+              setIsLoading(false);
+            }}
           />
         ) : (
           <div className="absolute inset-0 grid place-items-center bg-[radial-gradient(circle_at_center,hsl(var(--muted))_0,transparent_65%)] p-6 text-center">

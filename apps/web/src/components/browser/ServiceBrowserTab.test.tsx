@@ -19,7 +19,10 @@ import {
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { resetPreviewServiceSyncForTests } from "@/stores/previewServiceStore";
+import {
+  resetPreviewServiceSyncForTests,
+  usePreviewServiceStore,
+} from "@/stores/previewServiceStore";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import { FakeWebAnnotationBackend } from "@/test/web-annotation-fakes";
 import type { BrowserTabData } from "@/types/paneLayout";
@@ -84,6 +87,7 @@ interface Backend {
   capabilities: ReturnType<typeof fixturePreviewCapabilities> | null;
   services: ReturnType<typeof fixturePreviewService>[];
   resolution?: unknown;
+  snapshot?: () => Promise<ReturnType<typeof fixturePreviewSnapshot>>;
 }
 
 function installBackend(backend: Backend, native = true) {
@@ -97,7 +101,7 @@ function installBackend(backend: Backend, native = true) {
           throw new Error("Unknown backend command: get_preview_capabilities");
         return backend.capabilities;
       case "get_preview_services":
-        return fixturePreviewSnapshot(backend.services);
+        return backend.snapshot ? backend.snapshot() : fixturePreviewSnapshot(backend.services);
       case "resolve_preview_target":
         return backend.resolution;
       case "probe_preview_service":
@@ -150,6 +154,14 @@ function installBackend(backend: Backend, native = true) {
           : {}),
       }),
     ),
+    navigate: mock(async (tabId: string, url: string): Promise<BrowserPreviewState> => ({
+      tabId,
+      url,
+      loading: false,
+      canGoBack: true,
+      canGoForward: false,
+      error: null,
+    })),
     setVisible: mock(async () => null),
     setBounds: mock(async () => null),
     reload: mock(async () => null),
@@ -176,6 +188,41 @@ function installBackend(backend: Backend, native = true) {
     /** Main's Cmd/Ctrl+L from inside a native preview view. */
     focusAddress: (tabId: string) => act(() => focusAddressListener?.(tabId)),
   };
+}
+
+/**
+ * The narrow-pane toolbar contract, asserted by class because happy-dom cannot
+ * measure (keep in step with `BrowserTab.test.tsx`). One row only from `@2xl`
+ * (672 px). Below it, so at the 519 px pane of an 800×600 window, the buttons
+ * share the first row and the address form takes a full-width second row. On
+ * one row the address keeps at least min(10rem, 60%).
+ */
+function expectBrowserToolbarLayout(toolbar: HTMLElement) {
+  const classes = (element: Element | null | undefined) => element?.className.split(/\s+/) ?? [];
+  const input = toolbar.querySelector('input[aria-label="Browser address"]');
+  const form = input?.closest("form");
+  const actions = form?.nextElementSibling;
+  expect(classes(toolbar)).toEqual(
+    expect.arrayContaining(["flex-wrap", "@2xl/browser:flex-nowrap"]),
+  );
+  expect(toolbar.className).not.toMatch(/@(md|lg|xl)\/browser:flex-nowrap/);
+  expect(form?.parentElement).toBe(toolbar);
+  expect(classes(form)).toEqual(
+    expect.arrayContaining([
+      "order-last",
+      "w-full",
+      "basis-full",
+      "@2xl/browser:order-none",
+      "@2xl/browser:basis-0",
+      "@2xl/browser:flex-1",
+    ]),
+  );
+  expect(classes(input)).toEqual(expect.arrayContaining(["min-w-[min(10rem,60%)]", "flex-1"]));
+  expect(classes(input)).not.toContain("min-w-0");
+  // Everything after the form is one right-aligned group on the button row.
+  expect((actions?.nextElementSibling ?? null) === null).toBe(true);
+  expect(classes(actions)).toEqual(expect.arrayContaining(["ml-auto", "shrink-0"]));
+  expect(actions?.querySelector('button[aria-label^="Annotations"]') != null).toBe(true);
 }
 
 const serviceUri = (path = "/", serviceId = FIXTURE_SERVICE_ID) =>
@@ -598,6 +645,46 @@ describe("service browser tabs", () => {
     expect(screen.getByText("Compatibility mode")).toBeTruthy();
   });
 
+  test("compatibility navigation and Back retain route and basis on resize/scroll", async () => {
+    const { browserPreview, emitState } = installBackend({
+      capabilities: fixturePreviewCapabilities({
+        surfaces: {
+          ...fixturePreviewCapabilities().surfaces,
+          desktopTunnel: { available: false, reason: "disabled", upstreamSchemes: ["http"] },
+        },
+      }),
+      services: [fixturePreviewService()],
+    });
+    seedTab(serviceUri("/a"));
+    renderTab();
+    await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
+    for (const [path, navigation] of [
+      ["/next?q=1#top", 3],
+      ["/a", 4],
+    ] as const) {
+      emitState({
+        tabId: "browser-1",
+        url: `http://localhost:49152${path}`,
+        navigation,
+        loading: false,
+        canGoBack: true,
+        canGoForward: false,
+        error: null,
+      });
+      await waitFor(() => expect(tabUrl()).toBe(serviceUri(path)));
+      fireEvent(window, new Event("resize"));
+      fireEvent.scroll(window);
+      await waitFor(() =>
+        expect(browserPreview.attach).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            url: `http://localhost:49152${path}`,
+            navigationBasis: navigation,
+          }),
+        ),
+      );
+    }
+  });
+
   test("a stopped environment explains itself and offers to start it", async () => {
     const service = fixturePreviewService();
     service.endpoint = {
@@ -620,6 +707,30 @@ describe("service browser tabs", () => {
         environmentId: FIXTURE_ENVIRONMENT_ID,
       }),
     );
+  });
+
+  test("wraps the address onto its own row in narrow panes; the picker shrinks before the address", async () => {
+    installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService()],
+    });
+    seedTab(serviceUri());
+    const { container } = renderTab();
+    const input = (await screen.findByLabelText("Browser address")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("http://localhost:3000/"));
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.className).toContain("@container/browser");
+    expectBrowserToolbarLayout(root.firstElementChild as HTMLElement);
+    const options = screen.getByRole("button", { name: "Preview options" });
+    expect(options.parentElement).toBe(input.closest("form")!.nextElementSibling as HTMLElement);
+
+    const picker = screen.getByRole("button", { name: /^Preview service / });
+    expect(picker.nextElementSibling).toBe(input);
+    const pickerClasses = picker.className.split(/\s+/);
+    expect(pickerClasses).toEqual(
+      expect.arrayContaining(["shrink", "min-w-[4.5rem]", "max-w-[14rem]"]),
+    );
+    expect(pickerClasses).not.toContain("shrink-0");
   });
 
   test("the address bar navigates by path within the service", async () => {
@@ -881,5 +992,269 @@ describe("service browser tabs", () => {
     renderTab();
     expect(await screen.findByText("Different backend")).toBeTruthy();
     expect(browserPreview.attach).not.toHaveBeenCalled();
+  });
+
+  describe("legacy URL tabs", () => {
+    // The fixture service is container port 3000 published on host port 49152.
+    const legacyUrl = "http://127.0.0.1:49152/app/next?tab=2";
+
+    test("a port one current service owns offers Open as service, keeping the path", async () => {
+      installBackend({
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      });
+      seedTab(legacyUrl);
+      renderTab();
+      expect(await screen.findByText(/Port 49152 is the web preview service/)).toBeTruthy();
+      expect(tabUrl()).toBe(legacyUrl);
+
+      fireEvent.click(screen.getByRole("button", { name: "Open as service" }));
+      await waitFor(() => expect(tabUrl()).toBe(serviceUri("/app/next?tab=2")));
+      expect(invokeMock).toHaveBeenCalledWith("get_preview_services", expect.anything());
+    });
+
+    test.each(["typed", "link", "external", "service", "unmount", "iframe"])(
+      "delayed conversion cannot overwrite %s navigation",
+      async (kind) => {
+        const backend: Backend = {
+          capabilities: fixturePreviewCapabilities(),
+          services: [fixturePreviewService()],
+        };
+        const native = installBackend(backend, kind !== "iframe");
+        seedTab(legacyUrl);
+        const view = renderTab();
+        const open = await screen.findByRole("button", { name: "Open as service" });
+        let resolve!: (value: ReturnType<typeof fixturePreviewSnapshot>) => void;
+        backend.snapshot = () =>
+          new Promise((done) => {
+            resolve = done;
+          });
+        fireEvent.click(open);
+        await waitFor(() => expect(resolve).toBeDefined());
+        const next = kind === "service" ? serviceUri("/new") : "http://127.0.0.1:49152/new";
+        if (kind === "typed") {
+          const input = screen.getByLabelText("Browser address");
+          fireEvent.change(input, { target: { value: next } });
+          fireEvent.submit(input.closest("form")!);
+        } else if (kind === "link") {
+          native.emitState({
+            tabId: "browser-1",
+            url: next,
+            navigation: 2,
+            loading: false,
+            canGoBack: true,
+            canGoForward: false,
+            error: null,
+          });
+        } else if (kind === "iframe") {
+          fireEvent.load(screen.getByTitle("Backend browser preview"));
+        } else if (kind === "unmount") {
+          view.unmount();
+        } else {
+          act(() =>
+            usePaneLayoutStore
+              .getState()
+              .updateTabBrowserUrl("browser-1", next, FIXTURE_ENVIRONMENT_ID),
+          );
+        }
+        const expected = kind === "unmount" || kind === "iframe" ? legacyUrl : next;
+        await act(async () => {
+          resolve(fixturePreviewSnapshot(backend.services));
+        });
+        expect(tabUrl()).toBe(expected);
+      },
+    );
+
+    test("a superseded attempt cannot commit after navigating away and back", async () => {
+      const backend: Backend = {
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      };
+      installBackend(backend);
+      seedTab(legacyUrl);
+      renderTab();
+      const open = await screen.findByRole("button", { name: "Open as service" });
+      let resolveOld!: (value: ReturnType<typeof fixturePreviewSnapshot>) => void;
+      backend.snapshot = () =>
+        new Promise((done) => {
+          resolveOld = done;
+        });
+      fireEvent.click(open);
+      await waitFor(() => expect(resolveOld).toBeDefined());
+      act(() =>
+        usePaneLayoutStore
+          .getState()
+          .updateTabBrowserUrl("browser-1", "http://127.0.0.1:49152/other", FIXTURE_ENVIRONMENT_ID),
+      );
+      act(() =>
+        usePaneLayoutStore
+          .getState()
+          .updateTabBrowserUrl("browser-1", legacyUrl, FIXTURE_ENVIRONMENT_ID),
+      );
+      await act(async () => {
+        resolveOld(fixturePreviewSnapshot(backend.services));
+      });
+      expect(tabUrl()).toBe(legacyUrl);
+      let resolveNew!: (value: ReturnType<typeof fixturePreviewSnapshot>) => void;
+      backend.snapshot = () =>
+        new Promise((done) => {
+          resolveNew = done;
+        });
+      fireEvent.click(screen.getByRole("button", { name: "Open as service" }));
+      await waitFor(() => expect(resolveNew).toBeDefined());
+      await act(async () => {
+        resolveNew(fixturePreviewSnapshot(backend.services));
+      });
+      expect(tabUrl()).toBe(serviceUri("/app/next?tab=2"));
+    });
+
+    test("only the latest conversion attempt can commit while confirmations overlap", async () => {
+      const backend: Backend = {
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      };
+      installBackend(backend);
+      seedTab(legacyUrl);
+      renderTab();
+      const open = await screen.findByRole("button", { name: "Open as service" });
+      let resolveOld!: (value: ReturnType<typeof fixturePreviewSnapshot>) => void;
+      backend.snapshot = () =>
+        new Promise((done) => {
+          resolveOld = done;
+        });
+      fireEvent.click(open);
+      await waitFor(() => expect(resolveOld).toBeDefined());
+      const next = "http://127.0.0.1:49152/new-attempt";
+      act(() =>
+        usePaneLayoutStore
+          .getState()
+          .updateTabBrowserUrl("browser-1", next, FIXTURE_ENVIRONMENT_ID),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Open as service" }));
+      let resolveNew!: (value: ReturnType<typeof fixturePreviewSnapshot>) => void;
+      backend.snapshot = () =>
+        new Promise((done) => {
+          resolveNew = done;
+        });
+      await act(async () => {
+        resolveOld(fixturePreviewSnapshot(backend.services));
+      });
+      await waitFor(() => expect(resolveNew).toBeDefined());
+      expect(tabUrl()).toBe(next);
+      expect(screen.getByRole("button", { name: "Open as service" }).hasAttribute("disabled")).toBe(
+        true,
+      );
+      await act(async () => {
+        resolveNew(fixturePreviewSnapshot(backend.services));
+      });
+      expect(tabUrl()).toBe(serviceUri("/new-attempt"));
+    });
+
+    test("a failed confirmation retains the offer and can be retried", async () => {
+      const backend: Backend = {
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      };
+      installBackend(backend);
+      seedTab(legacyUrl);
+      renderTab();
+      const open = await screen.findByRole("button", { name: "Open as service" });
+      backend.snapshot = async () => {
+        throw new Error("temporarily offline");
+      };
+      fireEvent.click(open);
+      expect(await screen.findByText(/Could not check the preview service/)).toBeTruthy();
+      expect(screen.queryByText(/changed while this was checked/) === null).toBe(true);
+      expect(tabUrl()).toBe(legacyUrl);
+      backend.snapshot = undefined;
+      fireEvent.click(screen.getByRole("button", { name: "Open as service" }));
+      await waitFor(() => expect(tabUrl()).toBe(serviceUri("/app/next?tab=2")));
+    });
+
+    test("confirmation waits for a post-click snapshot behind an earlier request", async () => {
+      const backend: Backend = {
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      };
+      installBackend(backend);
+      seedTab(legacyUrl);
+      renderTab();
+      const open = await screen.findByRole("button", { name: "Open as service" });
+      let resolveOld!: (value: ReturnType<typeof fixturePreviewSnapshot>) => void;
+      const old = fixturePreviewSnapshot(backend.services);
+      backend.snapshot = () =>
+        new Promise((done) => {
+          resolveOld = done;
+        });
+      const pending = usePreviewServiceStore.getState().refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+      await waitFor(() => expect(resolveOld).toBeDefined());
+      fireEvent.click(open);
+      const rebound = fixturePreviewService();
+      rebound.endpoint.endpointGeneration += 1;
+      backend.services = [rebound];
+      let resolveNew!: (value: ReturnType<typeof fixturePreviewSnapshot>) => void;
+      backend.snapshot = () =>
+        new Promise((done) => {
+          resolveNew = done;
+        });
+      await act(async () => {
+        resolveOld(old);
+        await pending;
+      });
+      await waitFor(() => expect(resolveNew).toBeDefined());
+      expect(tabUrl()).toBe(legacyUrl);
+      await act(async () => {
+        resolveNew(fixturePreviewSnapshot([rebound]));
+      });
+      expect(await screen.findByText(/changed while this was checked/)).toBeTruthy();
+      expect(tabUrl()).toBe(legacyUrl);
+      const requests = invokeMock.mock.calls.filter(
+        ([command]) => command === "get_preview_services",
+      );
+      expect(requests.at(-1)![1]).not.toHaveProperty("knownRevision");
+    });
+
+    test("an ambiguous port keeps the tab as it is", async () => {
+      const api = fixturePreviewService({
+        definition: { serviceId: API_SERVICE_ID, label: "api", entry: false },
+      });
+      installBackend({
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService(), api],
+      });
+      seedTab(legacyUrl);
+      renderTab();
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("get_preview_services", expect.anything()),
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      expect(screen.queryByRole("button", { name: "Open as service" }) === null).toBe(true);
+      expect(tabUrl()).toBe(legacyUrl);
+    });
+
+    test("a binding that changed after the offer was shown is not followed", async () => {
+      const backend: Backend = {
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      };
+      installBackend(backend);
+      seedTab(legacyUrl);
+      renderTab();
+      const open = await screen.findByRole("button", { name: "Open as service" });
+
+      // The container was recreated: same service and host port, new generation.
+      const rebound = fixturePreviewService();
+      rebound.endpoint = { ...rebound.endpoint, endpointGeneration: 2 };
+      backend.services = [rebound];
+      fireEvent.click(open);
+      expect(await screen.findByText(/changed while this was checked/)).toBeTruthy();
+      expect(tabUrl()).toBe(legacyUrl);
+
+      // The new binding is offered afresh and only converts on a second request.
+      fireEvent.click(screen.getByRole("button", { name: "Open as service" }));
+      await waitFor(() => expect(tabUrl()).toBe(serviceUri("/app/next?tab=2")));
+    });
   });
 });

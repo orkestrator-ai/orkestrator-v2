@@ -53,6 +53,8 @@ export interface PreviewWebSocketEvents {
   message: [data: Buffer, isBinary: boolean];
   close: [code: number, reason: string];
   drain: [];
+  /** A peer's ping, after the pong reply is queued. */
+  ping: [];
   pong: [];
 }
 
@@ -257,6 +259,7 @@ export class PreviewWebSocket extends EventEmitter<PreviewWebSocketEvents> {
     switch (opcode) {
       case WS_OPCODE.ping:
         if (this.isOpen) this.writeFrame(WS_OPCODE.pong, payload);
+        this.emit("ping");
         return;
       case WS_OPCODE.pong:
         this.emit("pong");

@@ -1204,6 +1204,87 @@ describe("BrowserPreviewManager", () => {
     );
   });
 
+  test("a re-attach chosen before a link or an in-page route never undoes it", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+    contents.emit("did-navigate", {}, input.url);
+    const seen = (harness.emitState.mock.calls.at(-1) as unknown as [{ navigation: number }])[0];
+    expect(seen.navigation).toBe(1);
+
+    // A link commits; the renderer's next bounds sync still carries the old URL.
+    contents.currentUrl = "http://localhost:3000/next";
+    contents.emit("did-navigate", {}, contents.currentUrl);
+    const stale = await harness.manager.attach({ ...input, navigationBasis: seen.navigation });
+    expect(contents.loadURL).toHaveBeenCalledTimes(1);
+    expect(stale).toMatchObject({ url: "http://localhost:3000/next", navigation: 2 });
+
+    // The same for an in-page route.
+    contents.currentUrl = "http://localhost:3000/next#section";
+    contents.emit("did-navigate-in-page", {}, contents.currentUrl, true);
+    await harness.manager.attach({
+      ...input,
+      url: "http://localhost:3000/next",
+      navigationBasis: 2,
+    });
+    expect(contents.loadURL).toHaveBeenCalledTimes(1);
+    expect(contents.getURL()).toBe("http://localhost:3000/next#section");
+  });
+
+  test("Back counts as a navigation when it starts, so a re-attach sent before its commit is stale", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+    contents.emit("did-navigate", {}, input.url);
+    contents.currentUrl = "http://localhost:3000/next";
+    contents.emit("did-navigate", {}, contents.currentUrl);
+    contents.canGoBackValue = true;
+    contents.activeIndex = 1;
+    contents.historyEntries = [
+      { title: "Root", url: input.url },
+      { title: "Next", url: "http://localhost:3000/next" },
+    ];
+
+    const back = harness.manager.goBack(input.tabId);
+    expect(back.navigation).toBe(3);
+    // Sent by a resize before the renderer saw Back: its URL is the link's.
+    await harness.manager.attach({
+      ...input,
+      url: "http://localhost:3000/next",
+      navigationBasis: 2,
+    });
+    contents.currentUrl = input.url;
+    contents.emit("did-navigate", {}, input.url);
+    await harness.manager.attach({
+      ...input,
+      url: "http://localhost:3000/next",
+      navigationBasis: 2,
+    });
+    expect(contents.navigationHistory.goBack).toHaveBeenCalledTimes(1);
+    expect(contents.loadURL).toHaveBeenCalledTimes(1);
+    expect(contents.getURL()).toBe(input.url);
+  });
+
+  test("a URL chosen against the latest navigation still loads, and no basis keeps the old rule", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+    contents.emit("did-navigate", {}, input.url);
+
+    // Another client moved the tab after the renderer saw the view's latest navigation.
+    await harness.manager.attach({
+      ...input,
+      url: "http://localhost:3000/chosen",
+      navigationBasis: 1,
+    });
+    expect(contents.loadURL).toHaveBeenLastCalledWith("http://localhost:3000/chosen");
+
+    // An older renderer sends no basis: any URL other than the view's loads.
+    await harness.manager.attach({ ...input, url: "http://localhost:3000/older" });
+    expect(contents.loadURL).toHaveBeenLastCalledWith("http://localhost:3000/older");
+    expect(contents.loadURL).toHaveBeenCalledTimes(3);
+  });
+
   test("does not accept committed or in-page URLs outside the authorized scope", async () => {
     const harness = createHarness();
     await harness.manager.attach(input);
@@ -1428,6 +1509,7 @@ describe("BrowserPreviewManager", () => {
       canGoBack: false,
       canGoForward: false,
       error: null,
+      navigation: 0,
     });
 
     harness.manager.destroyAll();

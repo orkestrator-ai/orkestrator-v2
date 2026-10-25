@@ -21,9 +21,13 @@
  * project search) hiding the view; keyboard use of the picker, service dialog,
  * diagnostics and Cmd/Ctrl+L; the narrowest window at 100 and 150 % zoom; a
  * Vite application updated by HMR while its tab is hidden, unmounted and
- * reloaded; and a second window on a second backend (a disposable standalone
- * backend) with connection switches and window close releasing on the
- * backend that issued each attachment.
+ * reloaded; a legacy URL tab whose link and Back survive re-attaches sent
+ * before the renderer saw them; **Reset site data** removing a hostile service
+ * worker and the service's storage but not its sibling's; a second window on a
+ * second backend (a disposable standalone backend) with connection switches
+ * and window close releasing on the backend that issued each attachment; and
+ * a real retention pass clearing a removed service's partition, whose
+ * directory the next start removes.
  */
 import type { Page, TestInfo } from "@playwright/test";
 import { closeElectronWithin } from "./design-electron-cleanup";
@@ -53,6 +57,7 @@ import {
   browserPreviewPartitionForWindow,
 } from "../../apps/desktop/electron/desktop-window-lifecycle";
 import {
+  AGENT_TEST_PREVIEW_RETENTION_ENV,
   resolveRuntimeProfile,
   type RuntimeProfile,
 } from "../../apps/desktop/electron/runtime-profile";
@@ -70,8 +75,11 @@ const templateRoot = path.join(repositoryRoot, "test-fixtures", "agent-project")
 const BOUNDS = { x: 0, y: 0, width: 960, height: 640 };
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-/** `a` and `b` are local fixtures, `r` a fixture on a second backend, `v` a Vite app. */
-type Name = "a" | "b" | "r" | "v";
+/**
+ * `a` and `b` are local fixtures, `r` a fixture on a second backend, `v` a
+ * Vite app, `g` a local fixture whose service the retention test removes.
+ */
+type Name = "a" | "b" | "r" | "v" | "g";
 
 interface Service {
   marker: string;
@@ -189,16 +197,8 @@ async function waitForApi(window: Page): Promise<void> {
 async function launchElectron(current: Pick<Stack, "profile" | "profilePath" | "rendererUrl">) {
   const app = await electron.launch({
     executablePath: electronExecutable,
-    args: [
-      ...ELECTRON_TEST_SWITCHES,
-      // Other worktrees' windows can cover this one on a shared desktop.
-      // Chromium then throttles its timers, and Radix menus move keyboard
-      // focus in a timer (flake 0620). A user never types into a covered window.
-      "--disable-backgrounding-occluded-windows",
-      "--disable-background-timer-throttling",
-      "--disable-renderer-backgrounding",
-      path.join(packageRoot, "dist", "electron", "main.js"),
-    ],
+    // The shared switches include turning off background throttling (flake 0620).
+    args: [...ELECTRON_TEST_SWITCHES, path.join(packageRoot, "dist", "electron", "main.js")],
     cwd: repositoryRoot,
     env: {
       ...process.env,
@@ -209,6 +209,9 @@ async function launchElectron(current: Pick<Stack, "profile" | "profilePath" | "
       ORKESTRATOR_PREVIEW_TRANSPORT: "1",
       // Never contend for the fixed control-MCP port an installed app may own.
       ORKESTRATOR_CONTROL_MCP_PORT: "0",
+      // Partition retention passes every 2 s instead of after a minute
+      // (agent-test runtimes only), so the retention test sees one run.
+      [AGENT_TEST_PREVIEW_RETENTION_ENV]: "2000",
     },
   });
   dismissStartupDialogs(app);
@@ -397,8 +400,8 @@ function viewsOn(viewOrigin: string, windowId = s().windowId): Promise<ViewInfo[
   );
 }
 
-/** Evaluate in the (single) preview page on a service's ingress origin. */
-function inService<T>(name: Name, script: string): Promise<T> {
+/** Evaluate in the (single) preview page whose URL is on `viewOrigin`. */
+function inOrigin<T>(viewOrigin: string, script: string): Promise<T> {
   return s().app.evaluate(
     async ({ webContents }, { viewOrigin, script }) => {
       const matches = webContents
@@ -409,8 +412,13 @@ function inService<T>(name: Name, script: string): Promise<T> {
       if (matches.length !== 1) throw new Error(`Expected one preview, found ${matches.length}`);
       return matches[0]!.executeJavaScript(script, true);
     },
-    { viewOrigin: origin(name), script },
+    { viewOrigin, script },
   ) as Promise<T>;
+}
+
+/** Evaluate in the (single) preview page on a service's ingress origin. */
+function inService<T>(name: Name, script: string): Promise<T> {
+  return inOrigin<T>(origin(name), script);
 }
 
 /** Run `action` on the main-process web contents of a service's preview. */
@@ -541,18 +549,21 @@ const UI_TABS: Record<Name, string> = {
   b: "service-ui-tab-b",
   r: "service-ui-tab-r",
   v: "service-ui-tab-v",
+  g: "service-ui-tab-g",
 };
 /** The services `showServiceTabs` last laid out, in tab order. */
 let uiTabOrder: Name[] = ["a", "b"];
+/** The tab set the renderer last hydrated (see `showTabs`). */
+let uiTabSet = "a,b";
 
-/** Show the environment with one service tab per service, rendered by the real renderer. */
-async function showServiceTabs(active: Name, names: Name[] = ["a", "b"]): Promise<void> {
-  for (const name of names) {
-    if (s().origins[name]) continue;
-    // Learn the ingress origin; the tab then reuses the same service group.
-    await attachService(name, `origin-probe-${name}`, false);
-    await preview("destroy", `origin-probe-${name}`);
-  }
+interface LayoutTab {
+  id: string;
+  type: "browser";
+  browserData: { url: string };
+}
+
+/** Save a one-pane layout of browser tabs and show it in the real renderer. */
+async function showTabs(activeTabId: string, tabs: LayoutTab[], tabSet: string): Promise<void> {
   const current = await invoke<{ revision?: number } | null>("get_pane_layout", {
     environmentId: s().environmentId,
   });
@@ -563,29 +574,40 @@ async function showServiceTabs(active: Name, names: Name[] = ["a", "b"]): Promis
       version: PANE_LAYOUT_VERSION,
       containerId: null,
       activePaneId: "service-ui-pane",
-      root: {
-        kind: "leaf",
-        id: "service-ui-pane",
-        activeTabId: UI_TABS[active],
-        tabs: names.map((name) => ({
-          id: UI_TABS[name],
-          type: "browser",
-          browserData: { url: formatPreviewServiceUri(serviceTarget(name)) },
-        })),
-      },
+      root: { kind: "leaf", id: "service-ui-pane", activeTabId, tabs },
     },
   });
   // An open renderer keeps the tab set it already hydrated rather than this
   // external save (docs/todo/previews-and-annotations/0042-service-preview-rollout.md, code item 9), so a
   // different set needs a fresh renderer.
-  const reload = names.join() !== uiTabOrder.join();
-  uiTabOrder = names;
+  const reload = tabSet !== uiTabSet;
+  uiTabSet = tabSet;
   if (reload) {
     await s().window.reload();
     await waitForApi(s().window);
   }
   await uiStore("selectProjectAndEnvironment", s().projectId, s().environmentId);
   await closeStartupDialogs();
+}
+
+/** Show the environment with one service tab per service, rendered by the real renderer. */
+async function showServiceTabs(active: Name, names: Name[] = ["a", "b"]): Promise<void> {
+  for (const name of names) {
+    if (s().origins[name]) continue;
+    // Learn the ingress origin; the tab then reuses the same service group.
+    await attachService(name, `origin-probe-${name}`, false);
+    await preview("destroy", `origin-probe-${name}`);
+  }
+  uiTabOrder = names;
+  await showTabs(
+    UI_TABS[active],
+    names.map((name) => ({
+      id: UI_TABS[name],
+      type: "browser",
+      browserData: { url: formatPreviewServiceUri(serviceTarget(name)) },
+    })),
+    names.join(),
+  );
 }
 
 /**
@@ -656,10 +678,15 @@ async function expectViewOnHost(
  * each read first gives the dialog handlers a locator assertion to run on.
  */
 async function visibility(name: Name): Promise<boolean[]> {
+  return visibilityOn(origin(name));
+}
+
+/** Visibility of the views on `viewOrigin`, as `visibility` reads it. */
+async function visibilityOn(viewOrigin: string): Promise<boolean[]> {
   await expect(s().window.getByRole("dialog"))
     .toHaveCount(0, { timeout: 1_000 })
     .catch(() => undefined);
-  return (await viewsOn(origin(name))).map((view) => view.visible);
+  return (await viewsOn(viewOrigin)).map((view) => view.visible);
 }
 
 /** Poll a service's view visibility; on a miss, record what covers the window. */
@@ -1806,6 +1833,337 @@ test("a Vite app keeps HMR updates made while its tab is hidden, unmounted or re
   }
 });
 
+// ---------------------------------------------------------------------------
+// Legacy URL tabs and re-attaches, and Reset site data with a hostile worker.
+
+const LEGACY_TAB = "legacy-ui-tab";
+
+/** The renderer host rect of a tab's native preview, in CSS pixels. */
+function hostRect(tabId: string) {
+  return s().window.evaluate((tabId) => {
+    const rect = document
+      .querySelector(`[data-native-browser-preview="${tabId}"]`)
+      ?.getBoundingClientRect();
+    if (!rect) throw new Error(`No preview host for ${tabId}`);
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  }, tabId);
+}
+
+/** Jiggle the main window's width, as a user dragging its edge would. */
+function resizeBurst(steps = 24, everyMs = 16): Promise<void> {
+  return s().app.evaluate(
+    async ({ BrowserWindow }, { id, steps, everyMs }) => {
+      const host = BrowserWindow.fromId(id);
+      if (!host) throw new Error("Main window not found");
+      const [width, height] = host.getSize();
+      for (let step = 0; step < steps; step += 1) {
+        host.setSize(width! - (step % 2 === 0 ? 9 : 0), height!);
+        await new Promise((resolve) => setTimeout(resolve, everyMs));
+      }
+      host.setSize(width!, height!);
+    },
+    { id: s().windowId, steps, everyMs },
+  );
+}
+
+test("a legacy URL tab keeps a link and Back through routine re-attaches", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(180_000);
+  const page = s().window;
+  const legacyOrigin = `http://localhost:${fixtureOf("a").port}`;
+  await showTabs(
+    LEGACY_TAB,
+    [{ id: LEGACY_TAB, type: "browser", browserData: { url: `${legacyOrigin}/` } }],
+    "legacy",
+  );
+  try {
+    const legacyPath = () =>
+      inOrigin<string>(
+        legacyOrigin,
+        `document.readyState === "complete" && document.body?.dataset.loaded === "svc-a" ? location.pathname : ""`,
+      ).catch(() => "");
+    await expect.poll(legacyPath, { timeout: 30_000 }).toBe("/");
+    await expect.poll(() => visibilityOn(legacyOrigin), { timeout: 30_000 }).toEqual([true]);
+    const [legacyView] = await viewsOn(legacyOrigin);
+    // A legacy tab: the window's shared preview session, never a service partition.
+    expect(legacyView?.storagePath ?? "").not.toContain("orkestrator-preview-svc-");
+    const address = page.getByRole("textbox", { name: "Browser address" }).first();
+
+    // Every main-frame commit of the view, so a bounce shows even once it settles.
+    await s().app.evaluate(({ webContents }, viewOrigin) => {
+      const contents = webContents
+        .getAllWebContents()
+        .find((candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith(viewOrigin));
+      if (!contents) throw new Error("Legacy preview web contents not found");
+      const trace: string[] = [];
+      (globalThis as Record<string, unknown>).__legacyTrace = trace;
+      contents.on("did-navigate", (_event, url) => trace.push(new URL(url).pathname));
+      contents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
+        if (isMainFrame) trace.push(new URL(url).pathname);
+      });
+    }, legacyOrigin);
+    const trace = () =>
+      s().app.evaluate(() => [
+        ...((globalThis as Record<string, unknown>).__legacyTrace as string[]),
+      ]);
+    const resetTrace = () =>
+      s().app.evaluate(() => {
+        ((globalThis as Record<string, unknown>).__legacyTrace as string[]).length = 0;
+      });
+    const followLink = async () => {
+      await inOrigin(
+        legacyOrigin,
+        `(() => {
+          document.body.insertAdjacentHTML("beforeend", '<a id="legacy-next" href="/app/next">next</a>');
+          document.querySelector("#legacy-next").click();
+          return true;
+        })()`,
+      );
+      await expect.poll(legacyPath).toBe("/app/next");
+      // The renderer has applied the link: its next re-attach carries /app/next.
+      await expect(address).toHaveValue(`${legacyOrigin}/app/next`);
+    };
+
+    // From the UI: a link, then Back while the window is being resized, so
+    // the renderer re-attaches with the address it showed before Back.
+    const rounds: Array<{ path: string; trace: string[]; address: string }> = [];
+    for (let round = 0; round < 5; round += 1) {
+      await followLink();
+      await resetTrace();
+      const burst = resizeBurst();
+      await page.getByRole("button", { name: "Back", exact: true }).click();
+      await burst;
+      // As in the service history test: long enough to catch any bounce.
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      const path = await legacyPath();
+      rounds.push({ path, trace: await trace(), address: await address.inputValue() });
+      if (path !== "/") break;
+      await expect(address).toHaveValue(`${legacyOrigin}/`);
+    }
+    record(testInfo, "legacy-back-rounds", JSON.stringify(rounds));
+
+    // The same race, ordered on purpose: the attach a bounds sync sends before
+    // the renderer has seen the view's navigation, with the basis of the state
+    // it last applied. Back: sent right behind the Back call. Link: sent once
+    // the link has committed in main.
+    const stale: Record<string, { path: string; trace: string[] }> = {};
+    const staleAttach = (url: string, basis: number | undefined, back: boolean) =>
+      hostRect(LEGACY_TAB).then((bounds) =>
+        page.evaluate(
+          async ({ tabId, url, bounds, basis, back }) => {
+            const api = (globalThis as any).orkestrator.browserPreview;
+            const reattach = { tabId, url, bounds, visible: true };
+            if (typeof basis === "number") Object.assign(reattach, { navigationBasis: basis });
+            await Promise.all([back ? api.goBack(tabId) : null, api.attach(reattach)]);
+          },
+          { tabId: LEGACY_TAB, url, bounds, basis, back },
+        ),
+      );
+    const appliedBasis = async () =>
+      (
+        (await preview<BrowserPreviewState | null>("setVisible", LEGACY_TAB, true)) as
+          | (BrowserPreviewState & { navigation?: number })
+          | null
+      )?.navigation;
+
+    await followLink();
+    let basis = await appliedBasis();
+    await resetTrace();
+    await staleAttach(`${legacyOrigin}/app/next`, basis, true);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    stale.back = { path: await legacyPath(), trace: await trace() };
+
+    await expect(address).toHaveValue(`${legacyOrigin}/`);
+    await expect.poll(legacyPath).toBe("/");
+    basis = await appliedBasis();
+    await resetTrace();
+    await inOrigin(
+      legacyOrigin,
+      `(() => {
+        document.body.insertAdjacentHTML("beforeend", '<a id="legacy-link" href="/app/next">next</a>');
+        document.querySelector("#legacy-link").click();
+        return true;
+      })()`,
+    );
+    await expect.poll(legacyPath).toBe("/app/next");
+    await staleAttach(`${legacyOrigin}/`, basis, false);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    stale.link = { path: await legacyPath(), trace: await trace() };
+    record(testInfo, "legacy-stale-reattach", JSON.stringify(stale));
+
+    expect(rounds.filter((round) => round.path !== "/" || round.trace.join() !== "/")).toEqual([]);
+    expect(stale).toEqual({
+      back: { path: "/", trace: ["/"] },
+      link: { path: "/app/next", trace: ["/app/next"] },
+    });
+  } finally {
+    await uiStore("selectProject", null).catch(() => undefined);
+    await preview("destroy", LEGACY_TAB).catch(() => undefined);
+  }
+});
+
+test("Reset site data removes a hostile service worker and the service's storage, and leaves its sibling alone", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(180_000);
+  const page = s().window;
+  // The sibling first: a cookie, storage and a live worker of its own.
+  await showServiceTabs("b");
+  await expectVisibility("b", [true]);
+  await waitForService("b", null);
+  await inService(
+    "b",
+    `(async () => {
+      document.cookie = "sibling=svc-b; path=/";
+      localStorage.setItem("sibling", "svc-b");
+      await navigator.serviceWorker.register("/sw.js");
+      await navigator.serviceWorker.ready;
+      return true;
+    })()`,
+  );
+  const siblingState = () =>
+    inService<{ cookie: string; local: string | null; worker: string | null }>(
+      "b",
+      `(async () => ({
+        cookie: document.cookie,
+        local: localStorage.getItem("sibling"),
+        worker: navigator.serviceWorker.controller
+          ? await fetch("/sw/marker").then((r) => r.json()).then((b) => b.worker)
+          : null,
+      }))()`,
+    );
+  await expect.poll(async () => (await siblingState().catch(() => null))?.worker).toBe("svc-b");
+
+  await uiTab("a").click();
+  await expectVisibility("a", [true]);
+  await waitForService("a", null);
+  await inService(
+    "a",
+    `(async () => {
+      document.cookie = "reset=svc-a; path=/";
+      localStorage.setItem("reset", "svc-a");
+      await new Promise((resolve, reject) => {
+        const open = indexedDB.open("reset-db", 1);
+        open.onupgradeneeded = () => open.result.createObjectStore("items");
+        open.onsuccess = () => { open.result.close(); resolve(true); };
+        open.onerror = () => reject(open.error);
+      });
+      // The benign worker too, at /sw/ only, so it answers /sw/marker for
+      // navigations there while the hostile one owns everything else.
+      const benign = await navigator.serviceWorker.register("/sw.js", { scope: "/sw/" });
+      while (!benign.active) await new Promise((resolve) => setTimeout(resolve, 25));
+      return true;
+    })()`,
+  );
+  // The fixture's own install page registers the hostile worker at scope `/`.
+  await inService("a", `location.assign("/sw-hostile/install"); true`);
+  await expect
+    .poll(
+      () =>
+        inService<string | null>(
+          "a",
+          `location.pathname === "/sw-hostile/install" ? (document.body?.dataset.hostileWorker ?? null) : null`,
+        ).catch(() => null),
+      { timeout: 30_000 },
+    )
+    .toBe("active");
+  // Leave the install page, so the reload a reset triggers cannot re-register it.
+  await inService("a", `location.assign("/"); true`);
+  await waitForService("a", "/");
+  const serviceState = () =>
+    inService<{
+      controller: string | null;
+      registrations: number;
+      intercepted: boolean;
+      frameMarker: string | null;
+      marker: number;
+      cookie: string;
+      local: string | null;
+      databases: string[];
+      serverCookie: string | null;
+    }>(
+      "a",
+      `(async () => ({
+        controller: navigator.serviceWorker.controller?.scriptURL ?? null,
+        registrations: (await navigator.serviceWorker.getRegistrations()).length,
+        intercepted: (await fetch("/__orkestrator_preview/session?code=probe").then((r) => r.text())).includes("hostile-report"),
+        // A navigation inside /sw/: the benign worker answers it, else the network.
+        frameMarker: await new Promise((resolve) => {
+          const frame = document.createElement("iframe");
+          frame.src = "/sw/marker?probe=" + Date.now();
+          frame.onload = () => {
+            resolve(frame.contentDocument?.body?.textContent?.trim() ?? null);
+            frame.remove();
+          };
+          document.body.append(frame);
+        }),
+        marker: (await fetch("/sw/marker")).status,
+        cookie: document.cookie,
+        local: localStorage.getItem("reset"),
+        databases: (await indexedDB.databases()).map((db) => db.name).sort(),
+        serverCookie: (await fetch("/cookies/echo").then((r) => r.json())).cookie,
+      }))()`,
+    );
+  const before = await serviceState();
+  record(testInfo, "before-reset", JSON.stringify(before));
+  // The hostile worker controls the page and answers the preview session path itself.
+  expect(new URL(before.controller ?? "http://invalid/").pathname).toBe("/sw-hostile.js");
+  expect(before.intercepted).toBe(true);
+  expect(before.registrations).toBe(2);
+  expect(before.frameMarker).toBe(JSON.stringify({ worker: "svc-a" }));
+  expect(before.cookie).toContain("reset=svc-a");
+  expect(before.local).toBe("svc-a");
+  expect(before.databases).toContain("reset-db");
+
+  // Reset through the tab's own menu, which calls PreviewTransportManager.resetSiteData.
+  const fixture = fixtureOf("a");
+  const pageLoads = () => fixture.requests.filter((entry) => entry.path === "/").length;
+  const loadsBefore = pageLoads();
+  await inService("a", `window.__beforeReset = true; true`);
+  await focusApp();
+  await page.getByRole("button", { name: "Preview options" }).click();
+  await page.getByRole("menuitem", { name: /Reset this site's data/ }).click();
+  const outcome = page.getByText(/^(Site data cleared|Could not clear site data)$/).first();
+  await expect(outcome).toBeVisible({ timeout: 20_000 });
+  expect(await outcome.textContent()).toBe("Site data cleared");
+
+  // The open view reloads: a new document, through the tunnel, with no worker.
+  await expect
+    .poll(
+      () =>
+        inService<boolean>(
+          "a",
+          `!window.__beforeReset && document.readyState === "complete" && document.body?.dataset.loaded === "svc-a" && location.pathname === "/"`,
+        ).catch(() => false),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  const after = await serviceState();
+  record(testInfo, "after-reset", JSON.stringify(after));
+  expect(after).toEqual({
+    controller: null,
+    registrations: 0,
+    intercepted: false,
+    frameMarker: "not found: svc-a",
+    marker: 404,
+    cookie: "",
+    local: null,
+    databases: [],
+    serverCookie: null,
+  });
+  expect(pageLoads()).toBeGreaterThan(loadsBefore);
+  expect(
+    fixture.requests.filter((entry) => entry.headerNames.includes(PREVIEW_INGRESS_HEADER)),
+  ).toEqual([]);
+  await expectVisibility("a", [true]);
+
+  // The sibling service kept everything.
+  const sibling = await siblingState();
+  record(testInfo, "sibling-after-reset", JSON.stringify(sibling));
+  expect(sibling.cookie).toContain("sibling=svc-b");
+  expect(sibling.local).toBe("svc-b");
+  expect(sibling.worker).toBe("svc-b");
+});
+
 /** Call `run` with `values` in `process.env`, restored as soon as it returns. */
 function withEnvironment<T>(values: Record<string, string>, run: () => T): T {
   const saved = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]));
@@ -2206,4 +2564,100 @@ test("windows on different backends never share previews, and switches release o
       () => false,
     ),
   ).toBe(true);
+});
+
+/** Cookies named `name` (any, when omitted) in a partition's native session. */
+function partitionCookies(partition: string, name?: string): Promise<number> {
+  return s().app.evaluate(
+    async ({ session }, { partition, name }) =>
+      (await session.fromPartition(partition).cookies.get(name ? { name } : {})).length,
+    { partition, name },
+  );
+}
+
+const exists = (target: string) =>
+  stat(target).then(
+    () => true,
+    () => false,
+  );
+
+test("a removed service's partition is cleared by a real retention pass, and its directory goes on the next start", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(240_000);
+  // After the previous test's restart the window reopens on the connection
+  // used last, which may be the second backend.
+  await useConnection(s().window, LOCAL_CONNECTION_ID);
+  const fixture = await startPreviewFixture({ marker: "svc-gone" });
+  // Closed by `afterAll` from here on, even if registration fails.
+  s().services.g = { marker: "svc-gone", fixture, port: fixture.port } as Service;
+  s().services.g = await registerService(invoke, {
+    marker: "svc-gone",
+    fixture,
+    port: fixture.port,
+    environmentId: s().environmentId,
+    backendInstanceId: s().backendInstanceId,
+  });
+  await attachService("g", "retention-g");
+  await waitForService("g");
+  await inService(
+    "g",
+    `document.cookie = "gone=svc-gone; path=/"; localStorage.setItem("gone", "svc-gone"); true`,
+  );
+  const [view] = await viewsOn(origin("g"));
+  const gone = browserPreviewServicePartition(1, LOCAL_CONNECTION_ID, svc("g"));
+  const sibling = browserPreviewServicePartition(1, LOCAL_CONNECTION_ID, svc("a"));
+  const goneName = gone.slice("persist:".length);
+  expect(view!.storagePath).toContain(goneName);
+  // The sibling (a live service of the same connection and window slot).
+  await s().app.evaluate(async ({ session }, partition) => {
+    const native = session.fromPartition(partition);
+    // Persistent (an expiry), so it must also survive the restart below.
+    await native.cookies.set({
+      url: "https://retention.test",
+      name: "sibling",
+      value: "kept",
+      expirationDate: Math.floor(Date.now() / 1000) + 3_600,
+    });
+    await native.cookies.flushStore();
+  }, sibling);
+  expect(await partitionCookies(gone, "gone")).toBe(1);
+
+  // Close the tab, then remove the service on the backend.
+  await preview("destroy", "retention-g");
+  await expect.poll(async () => (await viewsOn(origin("g"))).length).toBe(0);
+  const removed = await invoke<{ kind: string }>("remove_preview_service", {
+    serviceId: svc("g").serviceId,
+    operationId: "remove-svc-gone",
+  });
+  expect(removed.kind).toBe("removed");
+  const removedAt = Date.now();
+  // The transport holds the partition through its 30-second retirement
+  // lease; the first 2-second pass after that clears it.
+  await expect.poll(() => partitionCookies(gone), { timeout: 90_000, intervals: [1_000] }).toBe(0);
+  const userData = await s().app.evaluate(({ app }) => app.getPath("userData"));
+  const pending = JSON.parse(
+    await readFile(path.join(userData, "preview-partitions-pending.json"), "utf8"),
+  ) as string[];
+  record(
+    testInfo,
+    "retention",
+    JSON.stringify({
+      clearedAfterMs: Date.now() - removedAt,
+      pendingIncludes: pending.includes(goneName),
+    }),
+  );
+  expect(pending).toContain(goneName);
+  expect(pending).not.toContain(sibling.slice("persist:".length));
+  expect(await partitionCookies(sibling, "sibling")).toBe(1);
+
+  // The directory stays until the next start, which removes it before any session exists.
+  const goneDirectory = path.join(userData, "Partitions", goneName);
+  const siblingDirectory = path.join(userData, "Partitions", sibling.slice("persist:".length));
+  expect(await exists(goneDirectory)).toBe(true);
+  await closeElectron();
+  const restarted = await launchElectron(s());
+  Object.assign(s(), restarted);
+  await expect.poll(() => exists(goneDirectory), { timeout: 20_000 }).toBe(false);
+  expect(await exists(siblingDirectory)).toBe(true);
+  expect(await partitionCookies(sibling, "sibling")).toBe(1);
 });

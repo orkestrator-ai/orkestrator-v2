@@ -78,4 +78,51 @@ describe("PreviewTunnelStream slow browser reader", () => {
       }
     },
   );
+
+  test("pings the backend while its reader has stopped, and stops pinging once closed", async () => {
+    let backend: PreviewWebSocket | undefined;
+    let pings = 0;
+    const server = createServer();
+    server.on("upgrade", (request, socket, head) => {
+      backend =
+        acceptPreviewWebSocket(request, socket, head, {
+          protocol: PREVIEW_TUNNEL_SUBPROTOCOL,
+          maxPayload: PREVIEW_LIMITS.tunnelFrameMaxBytes,
+        }) ?? undefined;
+      backend?.on("ping", () => (pings += 1));
+      backend?.on("message", (data, binary) => {
+        if (binary) return;
+        const frame = parsePreviewTunnelClientFrame(data.toString());
+        if (frame?.type === "open") backend!.send(encodePreviewTunnelFrame({ type: "open-ok" }));
+      });
+      backend?.start();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    let stream: PreviewTunnelStream | undefined;
+    try {
+      stream = await openPreviewTunnel({
+        url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/`,
+        attachmentId: "att_test",
+        credential: "test-credential",
+        pingIntervalMs: 20,
+      });
+      // Fill the stream past its high-water mark without reading: the socket pauses.
+      const chunk = Buffer.alloc(PREVIEW_LIMITS.tunnelFrameMaxBytes, 0x61);
+      for (let index = 0; index < 64; index += 1) backend!.send(chunk, true);
+      const deadline = Date.now() + 2_000;
+      while (pings < 3 && Date.now() < deadline) await Bun.sleep(10);
+      expect(pings).toBeGreaterThanOrEqual(3);
+      expect(stream.readableLength).toBeGreaterThan(0);
+      stream.destroy();
+      await Bun.sleep(30);
+      const after = pings;
+      await Bun.sleep(80);
+      expect(pings).toBe(after);
+    } finally {
+      stream?.destroy();
+      backend?.terminate();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });

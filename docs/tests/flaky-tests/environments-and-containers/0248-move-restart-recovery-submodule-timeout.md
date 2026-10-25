@@ -327,6 +327,15 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - **Evidence:** `orkestrator-test-run.N5VXK9/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; the enclosing log is `orkestrator-test-run.gSVRr6/annotation-suite.log.gz`.
 - **Assessment:** recurrence of the known deadline failure. The annotation fixes do not change the move implementation or its tests; no deadline, assertion or skip was changed.
 
+## Design links resume identity validation — 2026-10-25
+
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded its five-second deadline (5062.23 ms), followed by `killed 1 dangling process`.
+- **Original command:** `mise run test` on `todo-0038-design-conversation-links-852aa84d76e8` (commit `f771a8b8c`; native-session resume identity and teardown fallback, no environment-move or Git code changed), Bun 1.4.4, default reservations, host load average 37–52 from other workers.
+- **Aggregate counts:** backend 11,437 passed, 89 skipped, 3 failed across 681 files (796.55 s); the third failure is the new owner case [0930](../backend-services-and-tooling/0930-coordinator-codex-login-renewal-loginless.md).
+- **Owning-file rerun:** `mise exec -- bun test --preload ../../tests/setup-node.ts src/core/environment-move.test.ts` from `apps/backend` passed unchanged twice (37 pass, 0 fail each).
+- **Evidence:** `orkestrator-test-run.ZkIWTS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Changes:** recorded recurrence only; no test, timeout, assertion or skip changed.
+
 ## Recurring-work qualification validation — 2026-10-25
 
 - **Original command:** `mise run test:logged -- --name full-0048 -- mise run test` on `todo-0048-recurring-work-qualification-dbe14f8256cc` (storage read path, recurring-work harness and scripts only), macOS 27.0 arm64, Bun 1.4.4, standard worker leases.

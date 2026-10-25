@@ -44,7 +44,7 @@ writers on one `.jsonl`. When touching the prompt path:
   ends under such a turn hands the foreground back (`endClaudeRuntime`).
 - **Launch-only settings are refused, not ignored.** Output schema, execution
   policy, agent, settings sources, effective context beta, prompt suggestions,
-  effective Chrome access, cost budget, plugins and managed credentials cannot change on a live CLI. Adaptive thinking
+  effective Chrome access, plugins and managed credentials cannot change on a live CLI. Adaptive thinking
   can only reset a runtime launched in adaptive mode; bypass mode requires the
   launch capability. A prompt that changes them while the runtime still owes
   work (a live task, an owed continuation, a parked card) is a 409 before
@@ -100,6 +100,25 @@ single multi-megabyte row fits no transcript window, so readers can only show a
 trimmed copy and lose it once a newer row pushes it out of the live tail. A
 tool result, denial or command change rebuilds the row holding that call
 (`refreshToolRows`), not only the newest one.
+
+`session-manager-prompt-stream.test.ts` drives the stream (`PromptStream`)
+directly on a bare session; extend it with any new row rule. When touching it:
+
+- **The delta path allocates nothing new.** `applyPartialAssistantMessage` and
+  the flush scheduling run once per token: no new closures, objects or `Date`
+  calls there. The block lookup refills one reused target per stream.
+- **Rows are compared by identity** (`dirtyRows`, `rowOfMessage`,
+  `sharedRows`). Never copy a row or rebuild those maps.
+- **A released turn and its successor share rows** through the module-level
+  `sessionStreamRows`, keyed by session and reset when `session.messages` is
+  replaced.
+- **Coalescing.** Deltas land in their row at once; the rebuild and emit happen
+  at most once per `STREAM_EVENT_COALESCE_MS`, and every non-delta frame
+  flushes first. `finalizeTurn` must call `clearFlushTimer`, or a finished
+  turn publishes late.
+- **Turn flags belong on `TurnState`.** The plan-mode re-prompt flags
+  (`planApprovedThisTurn` and the two pending prompts) live on the turn, where
+  the code that reads them is, not on the stream.
 
 ## Session catalogue and transport
 

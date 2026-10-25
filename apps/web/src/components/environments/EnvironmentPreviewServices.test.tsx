@@ -74,6 +74,57 @@ describe("environment preview services", () => {
     );
   });
 
+  test("Show any process confirms the current revision and refreshes the environment", async () => {
+    const service = fixturePreviewService({
+      definition: {
+        targetKind: "worktree",
+        provenance: "entry-port",
+        userOverride: false,
+        definitionRevision: 7,
+      },
+    });
+    service.endpoint = {
+      ...service.endpoint,
+      state: "unavailable",
+      listener: "unattributed",
+      failure: previewError("target-unverified", { retryable: true }),
+    };
+    install({
+      get_preview_capabilities: () => fixturePreviewCapabilities(),
+      get_preview_services: () => fixturePreviewSnapshot([service]),
+      update_preview_service: () => ({
+        kind: "definition",
+        replayed: false,
+        definition: { ...service.definition, userOverride: true },
+      }),
+    });
+    render(
+      <EnvironmentPreviewServices
+        environment={{ id: FIXTURE_ENVIRONMENT_ID, environmentType: "local" }}
+      />,
+    );
+    const button = await screen.findByRole("button", { name: "Show any process on port 3000" });
+    invokeMock.mockClear();
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "update_preview_service",
+        expect.objectContaining({
+          serviceId: service.definition.serviceId,
+          expectedRevision: 7,
+          patch: {},
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "get_preview_services",
+        expect.objectContaining({ environmentId: FIXTURE_ENVIRONMENT_ID }),
+      ),
+    );
+    expect(invokeMock.mock.calls[0]![0]).toBe("update_preview_service");
+  });
+
   test("older backends explain that browser tabs use ports directly", async () => {
     install({
       get_preview_capabilities: () => {

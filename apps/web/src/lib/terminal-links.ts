@@ -4,6 +4,15 @@ export interface TerminalBrowserTabRequest {
   environmentId: string;
   sourceTabId: string;
   url: string;
+  /** Who printed the link. Agent links resolve as `agent-link` intents. Defaults to terminal. */
+  origin?: "terminal" | "agent";
+}
+
+const LOOPBACK_URL = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?([/?#]|$)/i;
+
+/** A link to a loopback address, which a preview tab interprets in its source environment. */
+export function isLoopbackUrl(url: string): boolean {
+  return LOOPBACK_URL.test(url.trim());
 }
 
 type LinkMouseModifiers = Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">;

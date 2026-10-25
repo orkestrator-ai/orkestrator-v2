@@ -466,6 +466,154 @@ describe("catalog states", () => {
     );
   });
 
+  test("a live row's link highlights only the row its session loads, with its apply outcome", async () => {
+    const projectSource = {
+      ...snapshot().sources[0]!,
+      sourceId: "claude:project",
+      scope: "project" as const,
+      owner: "native-project" as const,
+      label: "Project (this worktree)",
+      precedence: 30,
+    };
+    const environment = {
+      ...target,
+      context: { ...target.context, kind: "environment" as const, environmentId: "e1" },
+    };
+    install({
+      ...baseHandlers,
+      list_mcp_management_targets: () => ({
+        protocolVersion: 1,
+        backendId: "b1",
+        targets: [environment],
+      }),
+      get_mcp_management_snapshot: () =>
+        snapshot({
+          target: environment,
+          sources: [snapshot().sources[0]!, projectSource],
+          definitions: [
+            definition({ status: "shadowed", statusReason: "Hidden by Project." }),
+            definition({ entryId: "claude:project/ZG9jcw", sourceId: "claude:project" }),
+          ],
+          operations: [
+            operation({
+              apply: {
+                state: "pending-next-turn",
+                runtimes: [
+                  {
+                    ...runtime("e1\u0000e1:tab-1", "pending-next-turn"),
+                  },
+                ],
+                omitted: 0,
+              },
+            }),
+          ],
+        }),
+    });
+    requestMcpServerSettings({
+      provider: "claude",
+      environmentId: "e1",
+      serverName: "docs",
+      serverScope: "project",
+      logicalSessionKey: "e1:tab-1",
+    });
+    render(<ProviderMcpSettings />);
+    const note = await screen.findByRole("note", { name: "Server from the live session" });
+    expect(note.textContent).toContain("highlighted row in Project (this worktree)");
+    expect(note.textContent).toContain("Another row has the same name");
+    expect(note.textContent).toContain("Saved; not loaded until the session's next message");
+    const rows = screen.getAllByRole("listitem", { name: /^docs,/ });
+    expect(rows.filter((row) => row.getAttribute("aria-current") === "true")).toHaveLength(1);
+    expect(
+      within(screen.getByRole("region", { name: "Project (this worktree)" }))
+        .getByRole("listitem", { name: /^docs,/ })
+        .getAttribute("aria-current"),
+    ).toBe("true");
+  });
+
+  test.each([false, true])(
+    "a live plugin server highlights its read-only row (settings now off: %s)",
+    async (disabled) => {
+      const disabledReason =
+        'Disabled: enabledPlugins["docs@inline"] is false in ~/.claude/settings.json.';
+      const pluginSource = {
+        ...snapshot().sources[0]!,
+        sourceId: "claude:plugin-0123456789abcdef",
+        scope: "plugin" as const,
+        owner: "plugin" as const,
+        label: "Plugin docs",
+        displayPath: "~/.claude/plugins/cache/m/docs/1.0.0/.mcp.json",
+        precedence: 101,
+        writable: false,
+        readOnlyReason: "Managed by Claude Code's plugin settings.",
+        note: 'enabledPlugins["docs@m"] is false, but Orkestrator passes this plugin to Claude Code directly.',
+      };
+      const blocked = { supported: false, reason: "Managed by Claude Code's plugin settings." };
+      install({
+        ...baseHandlers,
+        get_mcp_management_snapshot: () =>
+          snapshot({
+            sources: [pluginSource, snapshot().sources[0]!],
+            definitions: [
+              definition(),
+              definition({
+                entryId: "claude:plugin-0123456789abcdef/cGx1Z2lu",
+                sourceId: pluginSource.sourceId,
+                name: "plugin:docs:search",
+                ...(disabled
+                  ? { status: "disabled" as const, enabled: false, statusReason: disabledReason }
+                  : {}),
+                readOnlyReason: blocked.reason,
+                actions: { edit: blocked, rename: blocked, remove: blocked, setEnabled: blocked },
+              }),
+            ],
+          }),
+      });
+      requestMcpServerSettings({
+        provider: "claude",
+        serverName: "plugin:docs:search",
+        serverScope: "plugin",
+      });
+      render(<ProviderMcpSettings />);
+      const note = await screen.findByRole("note", { name: "Server from the live session" });
+      expect(note.textContent).toContain("highlighted row in Plugin docs");
+      expect(note.textContent).toContain("Plugin servers are read-only here");
+      if (disabled) {
+        expect(note.textContent).toContain(
+          `The files now say the plugin is off (${disabledReason.replace(/\.$/, "")})`,
+        );
+        expect(note.textContent).toContain(
+          "the session loaded it before that changed, or loads it some other way",
+        );
+      }
+      const region = screen.getByRole("region", { name: "Plugin docs" });
+      expect(
+        within(region)
+          .getByRole("listitem", { name: /^plugin:docs:search,/ })
+          .getAttribute("aria-current"),
+      ).toBe("true");
+      expect(region.textContent).toContain("Managed by Claude Code's plugin settings.");
+      expect(region.textContent).toContain("passes this plugin to Claude Code directly");
+      const regions = screen
+        .getAllByRole("region")
+        .map((element) => element.getAttribute("aria-label"));
+      expect(regions.indexOf("Plugin docs")).toBeGreaterThan(
+        regions.indexOf(snapshot().sources[0]!.label),
+      );
+    },
+  );
+
+  test("a live row with no saved entry says where it may come from", async () => {
+    install(baseHandlers);
+    requestMcpServerSettings({ provider: "claude", serverName: "from-plugin-team" });
+    render(<ProviderMcpSettings />);
+    const note = await screen.findByRole("note", { name: "Server from the live session" });
+    expect(note.textContent).toContain("No saved server named from-plugin-team");
+    expectDomAbsent(
+      screen.queryAllByRole("listitem").find((row) => row.getAttribute("aria-current")) ?? null,
+      "highlighted row",
+    );
+  });
+
   test("very long names and paths wrap or truncate instead of overflowing", async () => {
     const longName = `server-${"x".repeat(240)}`;
     const longCommand = `/opt/${"deep/".repeat(60)}bin/run`;

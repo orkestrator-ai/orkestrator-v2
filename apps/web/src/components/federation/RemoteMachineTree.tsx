@@ -19,8 +19,12 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronRight,
+  Container,
   Copy,
+  FolderInput,
+  FolderMinus,
   GripVertical,
+  Laptop,
   LayoutGrid,
   Link2,
   Loader2,
@@ -28,10 +32,14 @@ import {
   PanelRight,
   Play,
   Plus,
+  RotateCw,
+  Settings2,
   Square,
   Trash2,
 } from "lucide-react";
 import type { BackendId } from "@orkestrator/protocol/federation";
+import { GithubIcon } from "@/components/icons/GithubIcon";
+import { AddToFolderDialog } from "@/components/projects/AddToFolderDialog";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -62,6 +70,7 @@ import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import { useNodeEnvironmentChangeProjection } from "@/lib/federation/node-change-projections";
 import {
@@ -76,11 +85,14 @@ import { moveId, withOrder } from "@/lib/federation/remote-order";
 import type { FederatedEnvironment, FederatedProject } from "@/lib/federation/summaries";
 import {
   buildProjectTree,
+  listProjectFolderNames,
   normalizeProjectFolderName,
   parseProjectFolderDragId,
   projectFolderKey,
   projectSortableIds,
+  resolveAddProjectToFolder,
   resolveProjectArrangement,
+  resolveRemoveProjectFromFolder,
   resolveRenameProjectFolder,
   resolveSortProjectFolder,
   resolveUngroupProjectFolder,
@@ -108,6 +120,20 @@ const ACTIVITY_TEXT: Record<FederatedEnvironment["activity"], string> = {
   waiting: "Awaiting input",
   idle: "Idle",
 };
+
+/**
+ * Opens a public web page on this client. No node is involved, so this skips
+ * the backend's `open_in_browser`, which the window's workspace (possibly a
+ * leaf) would run.
+ */
+function openWebPage(url: string): void {
+  const openExternal = window.orkestrator?.shell?.openExternal;
+  if (openExternal) {
+    void openExternal(url).catch(() => toast.error("Could not open repository in browser."));
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
 
 function reportWriteError(machine: MachineView, what: string, error: unknown): void {
   if (error instanceof OutcomeUnknownError) {
@@ -221,6 +247,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
   const arrangements = useStore(projectWrites.store);
   const { environmentsOf, reorder } = useRemoteEnvironments();
   const [dragging, setDragging] = useState<"project" | "other" | null>(null);
+  const [folderDialogKey, setFolderDialogKey] = useState<string | null>(null);
   const writable = isMachineWritable(machine);
   const sortable = writable && !machine.truncated;
 
@@ -283,6 +310,10 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
     if (project) reorder(machine, project, activeId, overId);
   };
 
+  const folderDialogItem = folderDialogKey
+    ? (items.find((item) => item.id === folderDialogKey) ?? null)
+    : null;
+
   const renderProject = (item: RemoteProjectItem) => (
     <RemoteProjectGroup
       key={item.id}
@@ -292,6 +323,16 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
       isCollapsed={collapsedProjectKeys.includes(item.id)}
       onToggleCollapse={() => setProjectKeyCollapsed(item.id)}
       sortable={sortable}
+      {...(sortable
+        ? {
+            onAddToFolder: () => setFolderDialogKey(item.id),
+            ...(item.folder
+              ? {
+                  onRemoveFromFolder: () => arrange(resolveRemoveProjectFromFolder(items, item.id)),
+                }
+              : {}),
+          }
+        : {})}
     />
   );
 
@@ -335,6 +376,23 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
         })}
         <SidebarRootDropZone active={dragging === "project"} />
       </SortableContext>
+      <AddToFolderDialog
+        open={folderDialogItem !== null}
+        onOpenChange={(open) => {
+          if (!open) setFolderDialogKey(null);
+        }}
+        projectName={folderDialogItem?.name ?? ""}
+        currentFolder={folderDialogItem?.folder ?? null}
+        existingFolders={listProjectFolderNames(items)}
+        onSubmit={(folderName) => {
+          if (!folderDialogItem) return;
+          arrange(resolveAddProjectToFolder(items, folderDialogItem.id, folderName));
+          // A folder the user just filed something into has to be visible,
+          // otherwise the project appears to have vanished from the sidebar.
+          const normalized = normalizeProjectFolderName(folderName);
+          if (normalized) setFolderKeyCollapsed(folderCollapseKey(normalized), false);
+        }}
+      />
     </DndContext>
   );
 }
@@ -353,6 +411,8 @@ export function RemoteProjectGroup({
   showMachine,
   label = project.name,
   labelClassName,
+  onAddToFolder,
+  onRemoveFromFolder,
 }: {
   machine: MachineView;
   project: FederatedProject;
@@ -365,8 +425,15 @@ export function RemoteProjectGroup({
   /** Shown instead of the project name (a repository group names the machine). */
   label?: string;
   labelClassName?: string;
+  /** Opens the folder composer for this project; omitted where folders are not arranged. */
+  onAddToFolder?: () => void;
+  /** Lifts this project back out to the root level; omitted when it has no folder. */
+  onRemoveFromFolder?: () => void;
 }) {
   const writable = isMachineWritable(machine);
+  const githubRepositoryUrl = project.repositoryHint
+    ? getGitHubRepositoryUrl(`https://${project.repositoryHint}`)
+    : null;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: project.key,
     disabled: !sortable,
@@ -376,6 +443,14 @@ export function RemoteProjectGroup({
       connectionId: machine.connectionId,
       projectId: project.ref.projectId,
       ...(board ? { boardTab: "coordinator" as const } : {}),
+      title: project.name,
+    });
+  // The project's own dialogs, in its machine's workspace, as its sidebar opens them.
+  const openProjectDialog = (dialog: "repository-settings" | "delete-project") =>
+    openMachineWorkspace({
+      connectionId: machine.connectionId,
+      projectId: project.ref.projectId,
+      dialog,
       title: project.name,
     });
   const chevron = (
@@ -434,6 +509,20 @@ export function RemoteProjectGroup({
                 <LayoutGrid className="h-4 w-4 mr-2" />
                 Open Board
               </ContextMenuItem>
+              {githubRepositoryUrl && (
+                <ContextMenuItem onClick={() => openWebPage(githubRepositoryUrl)}>
+                  <GithubIcon className="h-4 w-4 mr-2" />
+                  Open Repo on GitHub
+                </ContextMenuItem>
+              )}
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                disabled={!writable}
+                onClick={() => openProjectDialog("repository-settings")}
+              >
+                <Settings2 className="h-4 w-4 mr-2" />
+                Repository Settings
+              </ContextMenuItem>
               <ContextMenuSeparator />
               <ContextMenuItem
                 disabled={!writable}
@@ -452,6 +541,30 @@ export function RemoteProjectGroup({
               >
                 <Copy className="h-4 w-4 mr-2" />
                 Copy to Machine…
+              </ContextMenuItem>
+              {onAddToFolder && (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onClick={onAddToFolder}>
+                    <FolderInput className="h-4 w-4 mr-2" />
+                    Add to Folder
+                  </ContextMenuItem>
+                  {onRemoveFromFolder && (
+                    <ContextMenuItem onClick={onRemoveFromFolder}>
+                      <FolderMinus className="h-4 w-4 mr-2" />
+                      Remove from Folder
+                    </ContextMenuItem>
+                  )}
+                </>
+              )}
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                variant="destructive"
+                disabled={!writable}
+                onClick={() => openProjectDialog("delete-project")}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete Project
               </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
@@ -571,8 +684,19 @@ export function RemoteEnvironmentItem({
   environment: FederatedEnvironment;
   subtitle?: string;
 }) {
-  const { busy, writable, open, copyLink, start, stop, requestDelete, deleteDialog } =
-    useFederatedEnvironmentActions(machine, environment);
+  const {
+    busy,
+    writable,
+    open,
+    copyLink,
+    openSettings,
+    start,
+    stop,
+    restart,
+    fork,
+    requestDelete,
+    deleteDialog,
+  } = useFederatedEnvironmentActions(machine, environment);
   const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   // The same `environment-net` projection the machine's own rows show, read
@@ -612,6 +736,28 @@ export function RemoteEnvironmentItem({
       icon: <Link2 className="h-4 w-4 mr-2" />,
       onSelect: copyLink,
     },
+    {
+      key: "settings",
+      label: "Settings",
+      icon: <Settings2 className="h-4 w-4 mr-2" />,
+      onSelect: openSettings,
+      disabled: !writable,
+    },
+    { key: "fork-separator", separator: true },
+    {
+      key: "fork-local",
+      label: "Fork local",
+      icon: <Laptop className="h-4 w-4 mr-2" />,
+      onSelect: () => fork("local"),
+      disabled: !writable || busy || environment.deleting,
+    },
+    {
+      key: "fork-container",
+      label: "Fork container",
+      icon: <Container className="h-4 w-4 mr-2" />,
+      onSelect: () => fork("containerized"),
+      disabled: !writable || busy || environment.deleting,
+    },
     ...(!isLocalEnvironment
       ? ([
           { key: "container-actions", separator: true },
@@ -625,6 +771,13 @@ export function RemoteEnvironmentItem({
             ),
             onSelect: isRunning ? stop : start,
             disabled: !writable || busy || isTransitioning,
+          },
+          {
+            key: "restart",
+            label: "Restart",
+            icon: <RotateCw className="h-4 w-4 mr-2" />,
+            onSelect: restart,
+            disabled: !writable || busy || !isRunning || isTransitioning,
           },
         ] satisfies EnvironmentMenuItem[])
       : []),

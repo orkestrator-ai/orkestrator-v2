@@ -1,4 +1,3 @@
-import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
 import {
   MAX_RETAINED_STORAGE_SETS,
   parseContainerLifecycle,
@@ -407,15 +406,17 @@ export interface RestoreCopyRequest extends RecoveryCopyRequest {
  * runtime and storage are kept as a `restore-source` copy in the same commit,
  * so nothing current is lost. A retained runtime that still exists is swapped
  * back in; a storage set whose runtime is gone gets a new runtime from the
- * current image. Must run inside the lifecycle queue; the caller starts the
- * environment afterwards.
+ * current image. Either way the restored runtime takes a new generation, so a
+ * handle bound to the generation it had before it was set aside is refused
+ * (`runtime-changed`) rather than reattached. Must run inside the lifecycle
+ * queue; the caller starts the environment afterwards.
  */
 export async function restoreRecoveryCopy(
   request: RestoreCopyRequest,
   context: CommandContext,
 ): Promise<{ containerId: string } | undefined> {
   // No agent prompt reaches this environment while its runtime is replaced.
-  return withEnvironmentReplacement(request.environmentId, () =>
+  return context.runtime.environments.fence.withReplacement(request.environmentId, () =>
     restoreRecoveryCopyUnfenced(request, context),
   );
 }
@@ -502,7 +503,9 @@ async function restoreRecoveryCopyUnfenced(
         storageSetId: _set,
         ...runtime
       } = group.runtime;
-      target = runtime;
+      // The container keeps the generation label and name it was created
+      // with; the record's generation is what handles are checked against.
+      target = { ...runtime, runtimeGeneration: nextRuntimeGeneration(environment) };
     } else {
       const image = await resolveDockerImage(configuredImageRef(context));
       if (image.kind !== "present") {

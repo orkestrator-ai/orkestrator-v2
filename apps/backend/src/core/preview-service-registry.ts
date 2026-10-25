@@ -12,6 +12,7 @@ import {
   type PreviewEndpointSnapshot,
   type PreviewError,
   type PreviewLimits,
+  type PreviewListenerAttribution,
   type PreviewReadiness,
   type PreviewRegistrySnapshot,
   type PreviewServiceDefinition,
@@ -47,12 +48,15 @@ export interface ResolvedPreviewTarget {
 }
 
 export type PreviewResolution =
-  | { ok: true; target: ResolvedPreviewTarget }
+  | { ok: true; target: ResolvedPreviewTarget; listener?: PreviewListenerAttribution }
   | {
       ok: false;
       error: PreviewError;
       /** Which layers were established before the failure. */
       readiness?: Partial<PreviewReadiness>;
+      listener?: PreviewListenerAttribution;
+      /** The answer can change without a lifecycle event (a server starting): re-resolve with backoff. */
+      recheck?: boolean;
     };
 
 export interface PreviewTargetResolverPort {
@@ -167,22 +171,28 @@ function lifecycleFingerprint(environment: Environment | null): string {
   });
 }
 
-/** Deterministic generated definitions for an environment's configured ports. */
-export function desiredGeneratedDefinitions(environment: Environment): Array<{
+export interface GeneratedDefinition {
   key: string;
   label: string;
   port: number;
   entry: boolean;
   kind: "entry-port" | "port-mapping";
-}> {
-  if (environment.environmentType !== "containerized") return [];
-  const desired: Array<{
-    key: string;
-    label: string;
-    port: number;
-    entry: boolean;
-    kind: "entry-port" | "port-mapping";
-  }> = [];
+  targetKind: "container" | "worktree";
+}
+
+/**
+ * Deterministic generated definitions for an environment's configured ports.
+ *
+ * Containers get their entry port and every TCP mapping. A local environment
+ * gets only its entry port, as a `worktree` service that opens nothing but a
+ * server this environment provably started (`requiresListenerOwner`): every
+ * local environment of a project carries the same entry port and shares the
+ * backend host's loopback. Nothing is ever generated from a port scan.
+ */
+export function desiredGeneratedDefinitions(environment: Environment): GeneratedDefinition[] {
+  const local = environment.environmentType === "local";
+  if (!local && environment.environmentType !== "containerized") return [];
+  const desired: GeneratedDefinition[] = [];
   const seen = new Set<number>();
   if (environment.entryPort && environment.entryPort > 0) {
     desired.push({
@@ -191,9 +201,11 @@ export function desiredGeneratedDefinitions(environment: Environment): Array<{
       port: environment.entryPort,
       entry: true,
       kind: "entry-port",
+      targetKind: local ? "worktree" : "container",
     });
     seen.add(environment.entryPort);
   }
+  if (local) return desired;
   for (const mapping of environment.portMappings ?? []) {
     // UDP publications are not HTTP services; never infer preview capability.
     if (mapping.protocol === "udp" || seen.has(mapping.containerPort)) continue;
@@ -204,6 +216,7 @@ export function desiredGeneratedDefinitions(environment: Environment): Array<{
       port: mapping.containerPort,
       entry: false,
       kind: "port-mapping",
+      targetKind: "container",
     });
   }
   return desired;
@@ -719,6 +732,16 @@ export class PreviewServiceRegistry {
       if (!this.runtime.has(definition.serviceId))
         this.runtime.set(definition.serviceId, this.newRuntime());
       if (previous) {
+        // Every revision invalidates captured definitions, including confirmation
+        // (userOverride) and readiness-only edits. Let the new resolve run now.
+        const entry = this.runtime.get(definition.serviceId)!;
+        entry.token += 1;
+        entry.jobController?.abort();
+        entry.job = null;
+        entry.probe = null;
+        entry.probeAttempt = 0;
+        if (entry.probeTimer) clearTimeout(entry.probeTimer);
+        entry.probeTimer = null;
         const targetChanged =
           previous.applicationPort !== definition.applicationPort ||
           previous.scheme !== definition.scheme ||
@@ -883,7 +906,7 @@ export class PreviewServiceRegistry {
         }
         const userDuplicate = peers.some(
           (peer) =>
-            peer.targetKind === "container" &&
+            peer.targetKind === want.targetKind &&
             peer.applicationPort === want.port &&
             peer.scheme === "http",
         );
@@ -896,7 +919,7 @@ export class PreviewServiceRegistry {
           serviceId: newServiceId(),
           environmentId: environment.id,
           label: want.label,
-          targetKind: "container",
+          targetKind: want.targetKind,
           applicationPort: want.port,
           scheme: "http",
           addressFamily: "auto",
@@ -962,6 +985,9 @@ export class PreviewServiceRegistry {
   ): Promise<PreviewServiceSnapshot> {
     await this.init();
     if (!this.definitions.has(serviceId)) throw previewFailure("not-found");
+    // An explicit check restarts the recheck schedule of a waiting service.
+    const entry = this.runtime.get(serviceId);
+    if (entry && !entry.target) entry.probeAttempt = 0;
     await this.resolveNow(serviceId);
     if (options.probe) await this.probeNow(serviceId);
     const snapshot = this.serviceSnapshot(serviceId);
@@ -1089,6 +1115,7 @@ export class PreviewServiceRegistry {
         hostPort: target.port,
         containerId: target.containerId ? target.containerId.slice(0, 12) : null,
         ownership: target.ownership,
+        listener: resolution.listener,
         failure: null,
         readiness: {
           ...(sameBinding ? entry.endpoint.readiness : emptyPreviewReadiness()),
@@ -1110,6 +1137,9 @@ export class PreviewServiceRegistry {
       return;
     }
     if (entry.target) {
+      // Losing a verified binding starts a new ownership retry window, even
+      // when readiness probes exhausted the previous window.
+      entry.probeAttempt = 0;
       entry.target = null;
       entry.generationBindingKey = null;
       this.setEndpoint(serviceId, { endpointGeneration: entry.endpoint.endpointGeneration + 1 });
@@ -1124,6 +1154,7 @@ export class PreviewServiceRegistry {
       hostPort: null,
       containerId: null,
       ownership: null,
+      listener: resolution.listener,
       failure: failed,
       readiness: {
         ...emptyPreviewReadiness(),
@@ -1140,11 +1171,44 @@ export class PreviewServiceRegistry {
         observedAt: new Date(this.now()).toISOString(),
       },
     });
+    if (resolution.recheck) this.scheduleRecheck(serviceId);
+  }
+
+  /**
+   * Re-resolve a service whose owner check may change on its own (a dev server
+   * starting in this environment, another environment's server stopping), on
+   * the readiness backoff schedule. Bounded: it stops after the last step until
+   * a lifecycle change or an explicit refresh restarts it.
+   */
+  private scheduleRecheck(serviceId: string): void {
+    const entry = this.runtime.get(serviceId);
+    if (!entry || this.disposed) return;
+    // A readiness probe left from an earlier available binding has no target now.
+    if (entry.probeTimer) clearTimeout(entry.probeTimer);
+    entry.probeTimer = null;
+    if (entry.probeAttempt >= this.backoff.length) return;
+    const wait = this.backoff[entry.probeAttempt]!;
+    entry.probeAttempt += 1;
+    entry.probeTimer = setTimeout(() => {
+      entry.probeTimer = null;
+      if (this.runtime.get(serviceId) !== entry || this.disposed) return;
+      void this.resolveNow(serviceId)
+        .then(() => {
+          if (entry.target) {
+            entry.probeAttempt = 0;
+            this.scheduleProbe(serviceId, 0);
+          }
+        })
+        .catch(() => undefined);
+    }, wait);
+    entry.probeTimer.unref?.();
   }
 
   private scheduleProbe(serviceId: string, delayMs: number): void {
     const entry = this.runtime.get(serviceId);
     if (!entry || this.disposed || !this.options.readiness) return;
+    // Nothing to probe; the timer may hold a pending recheck instead.
+    if (!entry.target) return;
     if (entry.probeTimer) clearTimeout(entry.probeTimer);
     entry.probeTimer = setTimeout(() => {
       entry.probeTimer = null;
@@ -1272,6 +1336,7 @@ export class PreviewServiceRegistry {
         hostPort: null,
         containerId: null,
         ownership: null,
+        listener: undefined,
         readiness: emptyPreviewReadiness(),
       });
       this.queueEvent(definition.environmentId, serviceId);

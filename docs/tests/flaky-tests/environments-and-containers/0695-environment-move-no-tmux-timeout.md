@@ -13,3 +13,9 @@
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.LQHXO7/design-recovery.log.gz`.
 - **Hypothesis:** concurrent host load delayed the Git/worktree fixture beyond its deadline; not established. The later missing-directory error is consistent with the timed-out body continuing after fixture cleanup.
 - **Changes:** evidence only; the owning source, assertions, timeout and skips were not changed. The original broad backend run remains failed. The focused design recovery checks and disposable real-stack design checks passed separately.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** single observation. Same family as [0248](0248-move-restart-recovery-submodule-timeout.md), [0291](0291-environment-move-submodule-aggregate-timeout.md) and [0621](0621-environment-move-nested-submodules-aggregate-timeout.md): Git-heavy environment-move fixtures under Bun's generic five-second budget. No later change gives these cases a budget.
+- **Next step:** give the environment-move fixture cases an explicit budget, as [0130](0130-electron-command-registry-fixture-shim-timeouts.md) did for the command-registry shims, and track that work under 0291.

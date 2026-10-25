@@ -12,7 +12,7 @@
  * the next mount). The local copy records the revision it was typed against,
  * so a newer server draft becomes a conflict rather than being overwritten.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   WEB_ANNOTATION_COMMANDS,
   type WebAnnotationDraft,
@@ -80,7 +80,6 @@ export function useAnnotationDraft({
   /** True while the only copy of the current text is on this computer. */
   const [localOnly, setLocalOnly] = useState(false);
   const conflictRef = useRef(conflict);
-  conflictRef.current = conflict;
   const revisionRef = useRef(0);
   const textRef = useRef("");
   const dirtyRef = useRef(false);
@@ -101,7 +100,16 @@ export function useAnnotationDraft({
   /** Updated only when the editor identity changes, never during render. */
   const targetRef = useRef({ environmentId, editorId });
   const contextRef = useRef(context);
-  contextRef.current = context;
+  useLayoutEffect(() => {
+    conflictRef.current = conflict;
+  }, [conflict]);
+  useLayoutEffect(() => {
+    contextRef.current = context;
+  });
+  // `persist` and `scheduleRetry` call each other and are used by the effect
+  // below; these refs hold their latest versions (assigned after commit).
+  const persistRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const scheduleRetryRef = useRef<() => void>(() => undefined);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -142,6 +150,10 @@ export function useAnnotationDraft({
     keyRef.current = key;
     targetRef.current = { environmentId, editorId };
     retryAttemptRef.current = 0;
+    // Switching editors re-hydrates from the stored local copy and from text
+    // typed before this effect ran (refs written by `setText`, see
+    // `textKeyRef`); neither can be read during render, so the reset stays here.
+    // oxlint-disable-next-line react/set-state-in-effect
     setConflict(null);
     setDraftId(null);
     setError(null);
@@ -294,8 +306,9 @@ export function useAnnotationDraft({
     savingRef.current = promise;
     return promise;
   }, [cancelRetry, enabled, syncLocalNow]);
-  const persistRef = useRef(persist);
-  persistRef.current = persist;
+  useLayoutEffect(() => {
+    persistRef.current = persist;
+  }, [persist]);
 
   const scheduleRetry = useCallback(() => {
     if (!mountedRef.current || retryTimerRef.current) return;
@@ -307,8 +320,9 @@ export function useAnnotationDraft({
       if (!conflictRef.current && dirtyRef.current) void persistRef.current();
     }, delay);
   }, []);
-  const scheduleRetryRef = useRef(scheduleRetry);
-  scheduleRetryRef.current = scheduleRetry;
+  useLayoutEffect(() => {
+    scheduleRetryRef.current = scheduleRetry;
+  }, [scheduleRetry]);
 
   // A reconnected gateway flushes text typed while it was away.
   useEffect(() => {

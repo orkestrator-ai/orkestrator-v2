@@ -14,3 +14,9 @@
 ## Design-agent links refresh through d6ed0717d — 2026-10-24
 
 The nine-worker `mise run test:browser` run repeated failures in this owner; the complete unchanged owner passed across both viewports with one worker in 20.8 s. Command: `ORKESTRATOR_E2E_PORT=54733 mise run test:logged -- --name design-links-browser-owner-usage -- bunx playwright test --config e2e/playwright.config.ts AgentUsage.spec.ts --workers=1 --output output/playwright/design-links-owner-usage`. The aggregate had 496 passes, 89 failures and 101 skips. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the parents and original evidence. No assertion, deadline or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** two observations, both in nine-worker browser suites (the second had 89 failures). The owner passes with one worker.
+- **Next step:** on recurrence, read the trace to see whether the 30 s went to fixture startup or to the assertion. If it was startup, fold this case into [0382](0382-component-browser-parallel-load.md).

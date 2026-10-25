@@ -30,14 +30,15 @@ import { StorageService } from "../src/core/storage.js";
 
 /**
  * Drives the *real* feature-planning, build-pipeline, looped-review and
- * multi-review supervisors (recurring-processes step 08) over a fixture of
- * many completed records and a few active ones, in two modes:
+ * multi-review supervisors over a fixture of many completed records and a few
+ * active ones, in two modes:
  *
- * - `rollback`: the previous whole-store tick, stepped at its own interval
- *   (1 s / 1.5 s / 1 s / 1 s) — `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK`. Multi
- *   review's rollback is the adaptive `WorkflowDueScheduler`, which runs on
- *   real timers; its legacy whole-store tick (`adaptiveScheduling: false`)
- *   stands in for it here.
+ * - `rollback`: what `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects. For
+ *   feature planning, build pipelines and looped review that is the previous
+ *   whole-store tick, stepped at its own interval (1 s / 1.5 s / 1 s). Multi
+ *   review's rollback is the adaptive `WorkflowDueScheduler`, driven on the
+ *   same manual clock as the keyed mode (15 s reconciliation scan, per-workflow
+ *   due passes).
  * - `keyed`: the keyed supervisor on a manual clock, with the 30 s safety
  *   discovery.
  *
@@ -71,6 +72,12 @@ export interface WorkflowDomainCounts {
   storageReads: number;
   /** Revision checks that reused records already decoded (build pipelines' control cache). */
   storageStats: number;
+  /**
+   * Serialized length of the content those reads fetched from SQLite. A row
+   * read charges its row, a whole-store read every row; cache-served reads
+   * charge nothing.
+   */
+  storageBytes: number;
   /** Provider status/activity reads for the active records. */
   providerReads: number;
 }
@@ -450,7 +457,7 @@ async function runDomain(
       provider = new BusyProvider("claude");
       owner = new MultiReviewService(storage, multiReviewInvoke, {
         keyedScheduling: keyed,
-        ...(keyed ? clock : { autoAdvance: false, adaptiveScheduling: false }),
+        ...clock,
         provider: async () => provider as unknown as BuildPipelineProvider,
       });
     }
@@ -458,6 +465,16 @@ async function runDomain(
     await owner.init();
     if (keyed) {
       await advanceKeyedWork(time, [owner], fixture.windowMs, LEGACY_TICK_MS[domain]);
+    } else if (domain === "multi-review") {
+      // The due scheduler is not the keyed supervisor, so its own in-flight
+      // count tells the settle loop when real storage I/O has finished.
+      const scheduler = (owner as unknown as { scheduler: { inFlight: number } }).scheduler;
+      await advanceKeyedWork(
+        time,
+        [{ schedulingStatus: () => ({ inFlight: scheduler.inFlight }) }],
+        fixture.windowMs,
+        LEGACY_TICK_MS[domain],
+      );
     } else {
       const tick = (owner as unknown as { requestTick(): Promise<void> }).requestTick.bind(owner);
       for (let elapsed = 0; elapsed < fixture.windowMs; elapsed += LEGACY_TICK_MS[domain]) {
@@ -471,6 +488,7 @@ async function runDomain(
       recordsSelected: counters?.workUnits["record-selected"] ?? 0,
       storageReads: counters?.workUnits["storage-read"] ?? 0,
       storageStats: counters?.workUnits["storage-stat"] ?? 0,
+      storageBytes: counters?.bytes ?? 0,
       providerReads: provider.reads,
     };
   } finally {

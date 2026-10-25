@@ -348,9 +348,6 @@ export function claudeQueryOptions(
     // opt-in, and a coordinator's read-only boundary always excludes
     // driving the user's signed-in browser.
     extraArgs: effectiveClaudeChrome(policy, options) ? { chrome: null } : { "no-chrome": null },
-    ...(typeof options?.maxBudgetUsd === "number" && options.maxBudgetUsd > 0
-      ? { maxBudgetUsd: options.maxBudgetUsd }
-      : {}),
     includePartialMessages: true,
     // Preserve the full nested transcript. Every forwarded subagent block
     // carries parent_tool_use_id and is rendered inside its Agent card.

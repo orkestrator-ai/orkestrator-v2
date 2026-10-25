@@ -13,3 +13,9 @@
 - **Evidence:** `orkestrator-test-run.XHMi6K/bridges.log.gz` below the host temporary directory after aggregate completion.
 - **Hypothesis:** process scheduling under concurrent host load can inflate a wall-clock performance assertion. The isolated pass establishes intermittence without identifying the source of the delay.
 - **Disposition:** recorded without changing the implementation, assertion, deadline or skips.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** no commit has touched the owner since 2026-10-22. The wall-clock bound `expect(performance.now() - start).toBeLessThan(50)` is still at `app-server-runtime-helpers.test.ts:198`. The complete owner passed alone once today (10 pass, 73 ms; Bun 1.4.4, load average about 35).
+- **Next step:** replace the wall-clock bound with a structural check (for example, count visited nodes through a test seam). The `estimate` bound on the next line already proves the depth cap.

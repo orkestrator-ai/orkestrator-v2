@@ -8,6 +8,7 @@ import {
 } from "./argv.js";
 import { attentionCommands } from "./commands/attention.js";
 import { changesCommands } from "./commands/changes.js";
+import { completionCommands } from "./commands/completion.js";
 import { connectionCommands } from "./commands/connection.js";
 import { environmentCommands } from "./commands/environment.js";
 import { hostCommands } from "./commands/host.js";
@@ -44,6 +45,7 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...toolchainCommands,
   ...hostCommands,
   ...serviceCommands,
+  ...completionCommands(() => CLIENT_COMMANDS),
 ];
 
 export const COMMAND_TREE: CommandTree = { commands: CLIENT_COMMANDS };

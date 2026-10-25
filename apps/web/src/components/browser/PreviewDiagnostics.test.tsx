@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { fixturePreviewService } from "@orkestrator/protocol/testing/preview-contract-fixtures";
 
+import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { PreviewDiagnostics } from "./PreviewDiagnostics";
+
+const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
 describe("preview diagnostics", () => {
   afterEach(cleanup);
@@ -49,5 +52,44 @@ describe("preview diagnostics", () => {
     elsewhere.focus();
     fireEvent.click(screen.getByRole("button", { name: "Route details" }));
     expect(document.activeElement).toBe(elsewhere);
+  });
+
+  test("route details name the owner and open copyable framework hints", async () => {
+    invokeMock.mockImplementation(async (command: string) =>
+      command === "get_preview_public_origin" ? { origin: "https://s-abc.preview.example" } : null,
+    );
+    const service = fixturePreviewService({
+      definition: { targetKind: "worktree" },
+    });
+    render(
+      <PreviewDiagnostics
+        diagnosis={null}
+        service={{
+          ...service,
+          endpoint: {
+            ...service.endpoint,
+            transportKind: "backend-loopback",
+            ownership: "user-registered",
+            listener: "unattributed",
+          },
+        }}
+        transport={null}
+        mode="desktop-tunnel"
+        onAction={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Route details" }));
+    expect(
+      screen.getByText("user-registered · any process listening on this port is shown"),
+    ).toBeTruthy();
+    const toggle = screen.getByRole("button", { name: "Framework setup hints" });
+    expect(screen.queryByTestId("preview-framework-hints") === null).toBe(true);
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await waitFor(() => expect(screen.getByText(/^AUTH_URL=https:\/\/s-abc/)).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Copy the Vite snippet" })).toBeTruthy();
+    expect(invokeMock).toHaveBeenCalledWith("get_preview_public_origin", {
+      serviceId: service.definition.serviceId,
+    });
   });
 });

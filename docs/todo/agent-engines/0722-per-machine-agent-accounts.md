@@ -1,7 +1,7 @@
 # Agent accounts across machines
 
 Checked against `main` at `71227437` (2026-10-24), with both rounds of this
-work applied on top.
+work applied on top; the third round (2026-10-25) was built on `ba7cc8d4`.
 
 The goal is to see and change which agent login each machine uses, from
 wherever the user is working. How it works now is in
@@ -55,13 +55,30 @@ Done on 2026-10-24, second round (every code item this file listed):
 - Cursor's sign-in opens its link in the client (`openBrowser: false`,
   `NO_OPEN_BROWSER`), from any machine.
 
+Done on 2026-10-25, third round (the open questions and the verification
+this machine can produce):
+
+- **Preferred login.** A star on an email in the overview's "By account" view
+  records the platform's preferred login (`set_preferred_agent_identity`,
+  kept in the answering machine's `agent-accounts.json`, returned by
+  `list_machine_agent_accounts`). A summary line per platform counts the
+  machines on it and switches every machine that has it but uses another;
+  by machine, a cell off it offers **Use preferred** or says **No preferred
+  login**. Nothing switches by itself. See
+  [Assumptions and decisions](#assumptions-and-decisions).
+- **A leaf's own window** shows Settings → Machines → Agent accounts limited
+  to itself, where it showed nothing before.
+- `accountInfo()`, Cursor's `NO_OPEN_BROWSER` and Codex's access-only
+  `auth.json` were checked; the evidence is under
+  [Needs verification](#needs-verification).
+
 How all of it works is in
 [agent-accounts.md](../../architecture/agent-accounts.md#machines).
 
 ## Outstanding work
 
-No code items remain. What is left is qualification and the open questions
-below.
+No code items remain. What is left is qualification, which needs two real
+machines, and the MBP3 check below.
 
 ### Qualification
 
@@ -74,7 +91,10 @@ Batched with the two-machine runs in
   expiry comes back on a refreshed token.
 - From the command node, switch the leaf's Claude account in the overview, in
   Settings with the leaf chosen, and in a leaf tab's information panel. The
-  next idle prompt runs on the new account, and the panel shows it.
+  next idle prompt runs on the new account, and the panel shows it. In the
+  overview, include a preferred login: star an email both machines have,
+  then **Use on 1 more machine** moves the leaf, and starring an email only
+  the command node has shows the leaf as **No preferred login**.
 - Add an account on the leaf from the command node's Settings, with the
   browser on the client machine. The same for Cursor's sign-in: no browser
   opens on the leaf's desktop.
@@ -101,28 +121,107 @@ Batched with the two-machine runs in
 
 ## Open questions
 
-- Should the command node keep a **preferred identity** per platform (for
-  example "Claude: work@x.com") as an inherited preference, so each leaf
-  activates its own account with that email and the overview flags machines
-  not signed in to it? Only the email would travel, never a credential.
-- Should a leaf's own window, with a leaf as the target, show the overview
-  limited to itself?
+None. Both questions this file listed were decided and built on 2026-10-25;
+see [Assumptions and decisions](#assumptions-and-decisions).
 
 ## Needs verification
 
 - On the leaf that failed (MBP3): whether `~/.claude/.credentials.json` was
   older than the Keychain login, and why `claude auth login` exited 1 there.
   The new failure message should now name the reason; a locked login keychain
-  under a LaunchAgent started from SSH is the likely one.
-- Whether `accountInfo()` in the pinned Claude Agent SDK returns an email.
-  Today the panel takes the email from the account registry.
-- That the pinned Cursor SDK still skips its browser launch under
-  `NO_OPEN_BROWSER` (`bridges/cursor-bridge/src/login-cli.ts` says it does;
-  the backend test only checks that the variable is set).
-- That the pinned Codex accepts an access-only `auth.json` in a local
-  coordinator home as it does in containers (checked live there on
-  2026-10-21 with 0.162), and reads its blanked `refresh_token` without
-  attempting a refresh before the access token expires.
+  under a LaunchAgent started from SSH is the likely one. **Still open:** it
+  needs MBP3 itself; nothing on another machine can show its Keychain or its
+  file dates.
+- ~~Whether `accountInfo()` in the pinned Claude Agent SDK returns an
+  email.~~ **Done 2026-10-25.** With SDK 0.3.309 and this Mac's host OAuth
+  login, `query(...).accountInfo()` returned `email` (an address),
+  `organization`, `subscriptionType: "Claude Max"` and `apiProvider:
+  "firstParty"`; no `tokenSource` or `apiKeySource`. Only the field names and
+  the non-identifying values were printed. The panel keeps taking the email
+  from the account registry, which has it before any session starts, so
+  nothing changed.
+- ~~That the pinned Cursor SDK still skips its browser launch under
+  `NO_OPEN_BROWSER`.~~ **Done 2026-10-25.** `Cursor.auth.login` in 1.0.40
+  spawns the opener only when `!process.env.NO_OPEN_BROWSER` and no
+  `SSH_CONNECTION`/`SSH_CLIENT`/`SSH_TTY` is set, and publishes the URL
+  first. `bridges/cursor-bridge/src/login-no-open-browser.test.ts` now runs
+  the real SDK with a fake `open`/`xdg-open` first on `PATH` and a closed
+  local backend: without the variable the fake opener runs (the control),
+  with `NO_OPEN_BROWSER=1` it does not, and the URL is published both times.
+- ~~That the pinned Codex accepts an access-only `auth.json` in a local
+  coordinator home.~~ **Done 2026-10-25, offline.**
+  `scripts/codex-access-only-auth-probe.ts` against the pinned
+  `codex-cli 0.164.0`, with a synthetic login reduced by
+  `restrictCodexAuthSnapshot` and a local server standing in for ChatGPT and
+  the token endpoint:
+  - the coordinator form (token three days from expiry): `codex login status`
+    says "Logged in using ChatGPT", every backend request carries the access
+    token, no refresh is attempted, and the file is unchanged;
+  - the same with `last_refresh` nine days old: still no refresh. 0.164
+    decides on the access token's `exp` (refresh within five minutes of it)
+    and uses `last_refresh` only for a token without a readable `exp`
+    (`proactive_refresh_reason` in `codex-rs/login/src/auth/manager.rs` at
+    `rust-v0.164.0`). The comment on `restrictCodexAuthSnapshot` said eight
+    days and was corrected;
+  - a token three minutes from expiry (the positive control) and a 401 from
+    the backend: Codex tries the refresh with an empty `refresh_token`, the
+    attempt fails, and the file keeps its blank token.
+
+  The run stops at Codex's workspace routing discovery, which needs a real
+  ChatGPT backend, so no model turn ran. A real coordinator turn on an added
+  account stays in the Qualification item above.
+
+## Assumptions and decisions
+
+### Preferred login across machines
+
+- **Options.** (a) Do nothing: the "By account" view already shows which
+  machines have which login. (b) The question's form: an inherited
+  preference the command node hands down, and each leaf activates its own
+  account with that email by itself. (c) A preference kept by the machine
+  answering the overview that only flags machines and offers an explicit
+  switch, here or for every machine at once.
+- **Choice.** (c).
+- **Why.** Switching is the one account action that changes which
+  subscription pays for a machine's next prompt. A leaf that switched by
+  itself (on attach, on a new login, on a settings sync) would do it while
+  nobody is looking at it, and a sync that arrives late or out of order
+  could move it back. One click on "Use on N more machines" gets the same
+  result with the user present. Keeping it in `agent-accounts.json` rather
+  than the global config avoids the renderer's whole-config write dropping a
+  key no settings form edits (the reason the account registry lives there).
+- **Pros.** No credential and not even the email leaves the machine; no
+  surprise switches; works with leaves on older builds (only the command
+  node needs the new command); a cell says at a glance which machines are
+  off the preferred login and which cannot use it.
+- **Cons.** A new leaf does not move onto the preferred login until someone
+  presses the switch; the preference is not live across two open clients
+  (it shows on the next full read); a login without an email cannot be
+  preferred; a leaf's own window does not see the command node's
+  preference.
+
+### The overview in a leaf's own window
+
+- **Options.** Keep hiding it in leaf mode; show the full fleet through the
+  command node; show the leaf alone.
+- **Choice.** Show the leaf alone (`selfOnly`).
+- **Why.** The backend already answers `list_machine_agent_accounts` with
+  only itself in leaf mode, and the leaf's own logins are its own to switch.
+  The fleet belongs to the command node's window.
+- **Pros.** The leaf's accounts are visible and switchable on the Machines
+  page without opening its settings dialog; no new command.
+- **Cons.** It repeats the row the leaf's settings dialog already shows.
+
+### Verification method
+
+- **Options** for the Codex question: a real login copied into a scratch
+  home, or a synthetic login against a local server.
+- **Choice.** Synthetic, reduced by the product's own
+  `restrictCodexAuthSnapshot`, plus the 0.164.0 source.
+- **Why.** It handles no real credential, needs no account, and the
+  near-expiry case proves the harness sees a refresh when Codex makes one.
+- **Cons.** It cannot reach a model turn (workspace routing needs the real
+  backend), so a real coordinator turn stays a qualification item.
 
 ## Related
 

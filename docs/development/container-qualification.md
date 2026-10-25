@@ -47,14 +47,16 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
 | Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts` | C28 |
 | Final image | `bash docker/tests/final-image-smoke.sh <image>` (CI runs it on the native amd64 and arm64 builds in `validate-bun-runtime.yml`) | C27 |
-| Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`), deletion through the ledger (`browser-gateway.spec.ts`) |
+| Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`), deletion through the ledger (`browser-gateway.spec.ts`), design export into an Orkestrator container (`design-container-export.spec.ts`) |
 | Real stack, live approval | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL=1 mise run test:agent:docker` | C11 approval half (`container-approval-stop.spec.ts`, a real Claude turn) |
 | Real stack, root terminal | Included in `test:agent:docker`; start the profile with `--fixture-network full` for the full-network half | **New root terminal**: uid 0, outbound access by network mode (`container-root-terminal.spec.ts`) |
 | Real stack, local | `mise run test:agent:browser:isolated` | C30 |
 | Provider resume | `scripts/qualify-session-resume.sh <profile> <agent> [environment-name]` | C13 |
+| OpenCode seeded data | `container-live-data-contracts.test.ts` (also `scripts/qualify-opencode-seeded-data.sh <image>`) | Real OpenCode turns, diff, revert and unrevert with and without host seeds on both database paths. Active console accounts in SQLite must retrieve provider configuration using their bearer token and selected organization from a local console fixture. Inotify checks the omitted host paths; no external credentials or billing. |
+| Volume copy metadata | `container-live-data-contracts.test.ts` | Production `copy-volume` between real Docker volumes with a read-only source; compare raw `user.*` file/directory attributes and `security.capability` bytes before and after. Missing xattr or setcap support fails qualification. |
 | Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
 | Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
-| Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm` |
+| Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, then the benchmarks (C28), uploaded as `container-benchmarks-<platform>` |
 | Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | None yet: the external egress design in [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md), item 3 |
 
 `test:logged` kills a command that prints nothing for 300 s, and Bun prints
@@ -99,6 +101,65 @@ joins a workload to it with no added capability, and checks policy 3
 egress, root tampering, live edits, published and host-service ports, and
 restarts of either side: exit 0 pass, 1 fail, 2 setup error. The backend does
 not create this topology yet.
+
+## Rootless Linux host (2026-10-25)
+
+The first run on a real rootless Linux daemon, not a nested
+`docker:dind-rootless`:
+- **Host:** Omarchy (Arch), kernel 7.2.8, x86_64.
+- **Daemon:** Docker Engine 29.9.1 rootless, run as a systemd user service
+  (`dockerd-rootless-setuptool.sh`, RootlessKit 3.3.0, slirp4netns 1.3.3,
+  builtin port driver), with the systemd cgroup driver on cgroup v2. The user
+  slice delegates only `cpu memory pids`; `docker info` warns that there is no
+  cpuset or io support.
+- **Image:** `orkestrator-v2:q0021-rootless-amd64`. This is the amd64 review
+  build `orkestrator-v2:review-ede1e368-amd64` with two files from the todo
+  0021 branch (`e6440483`) laid on top: `entrypoint.sh` and
+  `orkestrator-migrate.sh`, the only container scripts that differed from it.
+  Its manifest matches the branch's except `appVersion` (2.29.0-beta). It was
+  streamed into the rootless daemon because the host had 13 GB free.
+- **Command:** each suite as in [Suites](#suites), from a clone of the branch,
+  with `DOCKER_HOST=unix:///run/user/1000/docker.sock`.
+
+| Suite | Result |
+| --- | --- |
+| Live lifecycle (C09, C11, C12, C20) | 5/6. Both C12 volume tests pass. C20 fails: see staged inputs below |
+| Live replacement (C14–C19) | 10/10 |
+| Live data contracts (volume xattrs and capabilities, OpenCode accounts) | 2/2 |
+| Live network (C22, C24, C26) | 3/4. C24 budgets pass with `cpu memory pids` delegated. C22 fails on host-service reachability, below |
+| Live firewall (C23, policy 3 tuples) | 2/2: `ip_set`, `xt_set` and `nf_tables` were loaded on the stock kernel |
+| Live readiness faults | 5/8. The two C09 boots fail on a fixture `/tmp` mount, below; C22 host-service reply below |
+| Live rebuild faults (C15) | 4/5 in the sequence, then 5/5 on a rerun; the failure is a port collision, below |
+
+Volume storage, migration, rebuild, restore, capacity and the fault paths all
+pass on rootless. That qualified `volume-v1` there, and
+`ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` was removed. The rootless gaps
+this run found are tracked in
+[0109-rootless-linux-runtime-gaps.md](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md):
+
+- **Staged inputs are unreadable (C20).** The staged revision is owned by the
+  host user and is owner-only (`0700`/`0600`). Under rootless the host user
+  is container root, so the container's `node` user cannot open
+  `/codex-home`. A minimal reproduction got `Permission denied` even for a
+  `0644` file inside a `0700` directory. A provider's login and
+  configuration silently do not arrive. Nothing leaks.
+- **The agent-tools port is unreachable (C22).** `host.docker.internal`
+  resolves inside RootlessKit's network namespace, which has host loopback
+  disabled by default. The probe was refused (curl exit 7), and
+  `container-host-reachability` reported the path closed (`host=blocked`), so
+  the product says so rather than hanging.
+- **A read-only file bind from a `nosuid,nodev` mount fails.** Docker
+  refuses it with `remount-ro … operation not permitted`. The fixtures staged
+  the GitHub ranges seed under a tmpfs `/tmp` mounted that way; with `TMPDIR`
+  on the home filesystem both C09 tests pass. A data directory on a
+  `nodev`/`nosuid` filesystem, such as a separately mounted `/home`, would
+  fail the same way in production.
+- **An ephemeral published port can collide with a host process (C15).**
+  Rootless dockerd chooses the port inside its namespace and RootlessKit then
+  binds it on the host. The candidate got `127.0.0.1:33169`, which the
+  host's own running Orkestrator Claude bridge held, and the rebuild failed
+  `port-conflict` with the original kept. The rerun drew other ports and
+  passed.
 
 ## Docker Desktop on Apple Silicon (2026-10-23)
 
@@ -264,6 +325,10 @@ the report records no commands, paths or contents. It prints a table and
 writes JSON to `output/benchmarks/` (git-ignored), removing its own reports
 older than 30 days.
 
+Runtimes get the built-in default budget, as on a new install; set
+`ORKESTRATOR_BENCHMARK_UNRESTRICTED=1` to run them without limits. The report
+records which (`budget`) and the limits Docker applied (`appliedLimits`).
+
 The harness asserts only that rebuilds succeed and no log follower survives.
 Compare the report with these targets by hand. They were set on Linux
 x86_64, 12 CPUs, Docker Engine 29.7.2, no resource budget, restricted mode
@@ -284,6 +349,50 @@ is fixed, or the reason is recorded, before it merges.
 
 Never clear a user's global Docker or cache state to manufacture a cold run;
 "cold" means a new network, volumes and staged inputs per environment.
+
+### Workload budgets
+
+`container-workload-budget.ts` measures realistic workloads in fresh
+containers under each budget condition, on whatever Docker the machine
+talks to. That includes a remote Linux Engine through
+`DOCKER_HOST=ssh://user@host`, because all timing happens inside the
+container.
+
+```bash
+mise exec -- bun apps/backend/scripts/container-workload-budget.ts \
+  --image orkestrator-v2:dev-<hash> \
+  --workloads browser,browser-single,provider,build,combined \
+  --budget budget=2,4096,1024 --budget default=null,8192,4096 [--repeat 3]
+```
+
+Each run creates a container with the condition's `--cpus`, `--memory`
+(equal `--memory-swap`), `--pids-limit` and the `--shm-size` the backend
+would pass, and bypasses the entrypoint. The workloads live in
+`apps/backend/scripts/container-workload/`:
+
+- browser: Playwright Chromium, 3 browsers × 2 heavy pages with tall
+  screenshots.
+- browser-single: one browser, the same 2 pages.
+- provider: 3 Claude Code CLIs × 3 turns, each turn making real Bash and
+  Read tool calls against a loopback mock of the Messages API. No
+  credentials are needed.
+- build: this checkout's HEAD. A cold `bun install` from the container's
+  own empty cache, then a warm reinstall, a Turbo typecheck and a Vite
+  build. An image with a different Bun gets the pinned one first, untimed.
+- combined: the build, one browser and two CLIs at once.
+
+A fork-free sampler records peak anonymous memory, `shmem` and PIDs every
+250 ms. The kernel's `memory.peak`, `pids.peak`, `memory.events` and
+`cpu.stat` are read at the end. The JSON report under `output/benchmarks/`
+has sizes, counts and durations only. Containers are labelled
+`app=orkestrator-workload-budget` and removed.
+
+The built-in default ([container-lifecycle.md](../architecture/container-lifecycle.md#built-in-default))
+was chosen from the 2026-10-25 runs on Docker Desktop arm64 and Linux
+Engine amd64. Their results are in
+[0022](../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md#evidence-2026-10-25).
+Rerun them when a workload grows (a new browser default, a heavier build),
+before you change the default.
 
 ### Exec cost and container change signals
 

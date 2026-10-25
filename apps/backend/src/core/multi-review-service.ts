@@ -139,7 +139,8 @@ import {
   type EvidencePermitPhase,
 } from "./review-evidence-permits.js";
 import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
-import { WorkflowDueScheduler, stableJitterMs } from "./multi-review-scheduler.js";
+import { WorkflowDueScheduler } from "./multi-review-scheduler.js";
+import { systemRecurringTimers } from "./recurring-scheduler.js";
 import {
   isSupervisedPhase,
   multiReviewDiscovery,
@@ -148,6 +149,7 @@ import {
   needsInteractiveFixObservation,
   needsPausedStopReconciliation,
   reviewSession,
+  stableJitterMs,
   supervisionDemand,
   type MultiReviewObligation,
 } from "./multi-review-scheduling.js";
@@ -200,6 +202,7 @@ import {
   type AutoPrLaunchOutcome,
   type InteractiveFixTurnOutcome,
 } from "./multi-review-auto-pr.js";
+import type { ReviewPackageVerification } from "./commands-review.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 /** Structured reports need a mutation boundary without provider planning behavior. */
@@ -488,11 +491,6 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
   observationIntervalMs?: number;
   /** Period of the authoritative storage scan that rediscovers workflows. */
   reconcileIntervalMs?: number;
-  /**
-   * False restores the fixed interval scan with catch-up passes. Kept as a
-   * rollback gate while the due-time scheduler soaks.
-   */
-  adaptiveScheduling?: boolean;
   addressDispatchRetryMs?: number;
   maxAddressDispatchAttempts?: number;
   provider?: (
@@ -553,16 +551,8 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
     workflow: MultiReviewWorkflow,
     session: MultiReviewFixSession,
   ) => Promise<void>;
-  /**
-   * Reviewer fan-out concurrency. Clamped by the shared runner; set every limit
-   * to `1` to restore strictly serial admission and observation.
-   */
+  /** Reviewer fan-out concurrency; clamped by the shared fan-out runner. */
   reviewFanoutConcurrency?: Partial<ReviewFanoutConcurrency>;
-  /**
-   * When false, every reviewer admission re-verifies the review package, as
-   * before evidence permits existed. Kept as a rollback gate for one release.
-   */
-  evidencePermits?: boolean;
   /** Content-free efficiency measurements (tests and benchmarks). */
   efficiency?: MultiReviewEfficiencyObserver;
 }
@@ -596,14 +586,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * across retries and backend restarts.
    */
   private readonly foregroundAddressDispatches = new Set<string>();
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private renewTimer: ReturnType<typeof setInterval> | null = null;
-  private tickRun: { pending: boolean; promise: Promise<void> } | null = null;
+  /** The due scheduler's lease renewal; the keyed driver runs its own. */
+  private renewTimer: unknown = null;
   private readonly scheduler: WorkflowDueScheduler;
   private stopped = false;
   /**
-   * Selected once (step 08): the keyed driver, else the adaptive due
-   * scheduler (its rollback), else the legacy tick. Never more than one.
+   * Selected once: the keyed driver, else the adaptive due scheduler (its
+   * rollback). Never both.
    */
   private readonly keyed: boolean;
   private supervisor: KeyedWorkflowSupervisor<MultiReviewObligation> | null = null;
@@ -633,22 +622,27 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       // Collected by the workflow's next pass, like an accepted result is.
       wake: (environmentId) => this.wakeEnvironment(environmentId, "result-accepted"),
     });
-    this.keyed =
-      options.keyedScheduling ??
-      (options.adaptiveScheduling !== false && keyedSchedulingEnabled("multi-review"));
+    this.keyed = options.keyedScheduling ?? keyedSchedulingEnabled("multi-review");
     // The spacing is the slowest cadence these counts were designed for (the
     // 3 s observation interval), so the elapsed bound never shortens a grace.
     this.pollGate = new ElapsedPollGate(
       options.observationIntervalMs ?? options.pollIntervalMs ?? DEFAULT_OBSERVATION_MS,
       options.schedulerClock ? { now: options.schedulerClock.now } : {},
     );
+    const schedulerNow = options.schedulerClock?.now ?? Date.now;
     this.scheduler = new WorkflowDueScheduler({
       run: (workflowId) => this.runScheduled(workflowId),
-      nextDueAt: (workflowId) => this.nextDueAt(workflowId),
+      nextDueAt: async (workflowId) => {
+        const delayMs = await this.nextDelayMs(workflowId);
+        return delayMs === undefined ? undefined : schedulerNow() + delayMs;
+      },
       discover: () => this.discoverSupervisedWorkflows(),
       reconcileIntervalMs:
         this.options.reconcileIntervalMs ?? this.options.pollIntervalMs ?? DEFAULT_RECONCILE_MS,
       maxConcurrent: MAX_CONCURRENT_WORKFLOW_PASSES,
+      ...(options.schedulerClock
+        ? { now: options.schedulerClock.now, timers: options.schedulerClock.timers }
+        : {}),
       onPass: ({ queueDelayMs, durationMs }) =>
         recordEfficiency(this.options.efficiency, {
           owner: "multi-review",
@@ -661,10 +655,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   async init(): Promise<void> {
     this.stopped = false;
-    if (this.timer) clearInterval(this.timer);
-    if (this.renewTimer) clearInterval(this.renewTimer);
-    this.timer = null;
-    this.renewTimer = null;
+    this.stopLeaseRenewal();
     // The workflow store is authoritative across backend restarts. Restore the
     // environment projection before the renderer can mistake an active review
     // for completed work, and retire a stale working source left by a workflow
@@ -692,32 +683,35 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       return;
     }
     if (this.options.autoAdvance !== false) {
-      if (this.options.adaptiveScheduling === false) {
-        this.timer = setInterval(
-          () => void this.requestTick(),
-          this.options.pollIntervalMs ?? DEFAULT_POLL_MS,
-        );
-        this.timer.unref?.();
-        void this.requestTick();
-      } else {
-        // The first reconciliation scan runs immediately and rebuilds every
-        // due time from storage; nothing about scheduling survives a restart.
-        this.scheduler.start();
-      }
-      this.renewTimer = setInterval(
-        () => void this.renewLeases(),
-        this.options.controllerRenewMs ?? CONTROLLER_RENEW_MS,
-      );
-      this.renewTimer.unref?.();
+      // The first reconciliation scan runs immediately and rebuilds every
+      // due time from storage; nothing about scheduling survives a restart.
+      this.scheduler.start();
+      this.armLeaseRenewal();
     }
+  }
+
+  /** A fixed-period renewal on the scheduler's clock, re-armed after each run. */
+  private armLeaseRenewal(): void {
+    const timers = this.options.schedulerClock?.timers ?? systemRecurringTimers;
+    const handle = timers.set(() => {
+      if (this.renewTimer !== handle) return;
+      void this.renewLeases().finally(() => {
+        if (this.renewTimer === handle && !this.stopped) this.armLeaseRenewal();
+      });
+    }, this.options.controllerRenewMs ?? CONTROLLER_RENEW_MS);
+    this.renewTimer = handle;
+  }
+
+  private stopLeaseRenewal(): void {
+    if (this.renewTimer !== null) {
+      (this.options.schedulerClock?.timers ?? systemRecurringTimers).clear(this.renewTimer);
+    }
+    this.renewTimer = null;
   }
 
   async shutdown(): Promise<void> {
     this.stopped = true;
-    if (this.timer) clearInterval(this.timer);
-    if (this.renewTimer) clearInterval(this.renewTimer);
-    this.timer = null;
-    this.renewTimer = null;
+    this.stopLeaseRenewal();
     this.supervisor?.stop();
     this.supervisor = null;
     this.unsubscribeStorage?.();
@@ -726,7 +720,6 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     await Promise.allSettled([
       ...this.locks.values(),
       ...[...this.scheduledRuns.values()].map((entry) => entry.promise),
-      ...(this.tickRun ? [this.tickRun.promise] : []),
     ]);
     await Promise.allSettled([...this.providers.values()].map((provider) => provider.dispose?.()));
     this.providers.clear();
@@ -813,11 +806,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         recordEfficiency(this.options.efficiency, {
           owner: "multi-review",
           operation:
-            transcript.kind === "unchanged"
-              ? "transcript.ui_unchanged"
-              : transcript.fallback
-                ? "transcript.ui_fallback"
-                : "transcript.ui_read",
+            transcript.kind === "unchanged" ? "transcript.ui_unchanged" : "transcript.ui_read",
           phase: "ui",
           bytes: transcript.kind === "snapshot" ? transcript.bytes : 0,
           elapsedMs: Date.now() - started,
@@ -933,12 +922,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       recordRead: (read, elapsedMs) =>
         recordEfficiency(this.options.efficiency, {
           owner: "multi-review",
-          operation:
-            read.kind === "unchanged"
-              ? "transcript.ui_unchanged"
-              : read.fallback
-                ? "transcript.ui_fallback"
-                : "transcript.ui_read",
+          operation: read.kind === "unchanged" ? "transcript.ui_unchanged" : "transcript.ui_read",
           phase: "ui",
           bytes: read.kind === "snapshot" ? read.bytes : 0,
           elapsedMs,
@@ -2175,7 +2159,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   /**
-   * The keyed driver (step 08). Same due-time policy as the adaptive
+   * The keyed driver. Same due-time policy as the adaptive
    * scheduler it replaces (`nextDueAt`: 1 s for boundaries, 3 s plus a stable
    * spread while simply observing a provider, address-handoff backoff), but
    * on the shared primitive with obligation-aware discovery, scoped wakeups,
@@ -2209,10 +2193,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           this.passTriggers.delete(pass.key);
         }
       },
-      nextDelayMs: async (key) => {
-        const dueAt = await this.nextDueAt(key);
-        return dueAt === undefined ? null : Math.max(0, dueAt - Date.now());
-      },
+      nextDelayMs: async (key) => (await this.nextDelayMs(key)) ?? null,
       admission: this.options.workflowAdmission ?? null,
       ...(this.options.schedulerClock
         ? { now: this.options.schedulerClock.now, timers: this.options.schedulerClock.timers }
@@ -2271,11 +2252,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * A timer-driven pass. Unlike {@link advanceNow} it joins a pass already in
    * progress instead of requesting another: a timer that fires during a slow
    * pass is not evidence that anything changed.
-   */
-  /**
+   *
    * Under the adaptive scheduler one `multi-review-tick` attempt is either a
    * reconciliation scan or one workflow's due pass; both are observed so the
-   * cost stays comparable with the legacy whole-service tick.
+   * cost stays comparable with the keyed driver's.
    */
   private runScheduled(workflowId: string): Promise<void> {
     recurringWorkMetrics.requested("multi-review-tick");
@@ -2307,8 +2287,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     });
   }
 
-  /** Next pass for one workflow, computed from the state its last pass left. */
-  private async nextDueAt(workflowId: string): Promise<number | undefined> {
+  /**
+   * Delay until the next pass for one workflow, computed from the state its
+   * last pass left. Relative, so each driver adds it to its own clock; the
+   * retry stamps it compares against are wall-clock.
+   */
+  private async nextDelayMs(workflowId: string): Promise<number | undefined> {
     if (this.stopped) return undefined;
     const record = await this.storage.getMultiReviewWorkflow(workflowId);
     if (!record || !isMultiReviewWorkflow(record.snapshot)) return undefined;
@@ -2321,58 +2305,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       const retryAt = needsAutoPrLaunch(workflow)
         ? this.autoPrRetryAt.get(workflowId)
         : this.addressDispatchRetryAt.get(workflowId);
-      return retryAt !== undefined && retryAt > now ? retryAt : now + fastMs;
+      return retryAt !== undefined && retryAt > now ? retryAt - now : fastMs;
     }
     const observeMs =
       this.options.observationIntervalMs ?? this.options.pollIntervalMs ?? DEFAULT_OBSERVATION_MS;
     // Spread workflows restored together across a third of the interval.
-    return now + observeMs + stableJitterMs(workflowId, observeMs >= 1_000 ? observeMs / 3 : 0);
-  }
-
-  private requestTick(): Promise<void> {
-    recurringWorkMetrics.requested("multi-review-tick");
-    if (this.tickRun) {
-      recurringWorkMetrics.coalesced("multi-review-tick");
-      this.tickRun.pending = true;
-      return this.tickRun.promise;
-    }
-    const run = { pending: false, promise: Promise.resolve() };
-    run.promise = (async () => {
-      do {
-        run.pending = false;
-        await recurringWorkMetrics.observe("multi-review-tick", () => this.tick());
-      } while (run.pending && !this.stopped);
-    })().finally(() => {
-      if (this.tickRun === run) this.tickRun = null;
-    });
-    this.tickRun = run;
-    return run.promise;
-  }
-
-  private async tick(): Promise<void> {
-    if (this.stopped) return;
-    const records = await this.storage.listAllMultiReviewWorkflows();
-    recurringWorkMetrics.work("record-scanned", records.length);
-    await Promise.all(
-      records.flatMap((record) => {
-        if (!isMultiReviewWorkflow(record.snapshot)) return [];
-        const workflow = record.snapshot;
-        if (
-          !(
-            isSupervisedPhase(workflow.phase) ||
-            needsPausedStopReconciliation(workflow) ||
-            needsInteractiveFixObservation(workflow) ||
-            needsAutoPrLaunch(workflow) ||
-            (workflow.pendingResultConsumptions?.length ?? 0) > 0 ||
-            (workflow.addressPromptPending === true && this.options.dispatchAddressPrompt)
-          )
-        ) {
-          return [];
-        }
-        recurringWorkMetrics.work("record-selected");
-        return [this.runLocked(record.id)];
-      }),
-    );
+    return observeMs + stableJitterMs(workflowId, observeMs >= 1_000 ? observeMs / 3 : 0);
   }
 
   private runLocked(workflowId: string): Promise<void> {
@@ -3477,17 +3415,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       ...(workflow.reviewPackage
         ? {
             beforeAdmission: () => this.verifyReviewEvidence(workflow, token, "fanout"),
-            reviewerPrompt: async (index: number, count: number) => {
-              if (this.options.evidencePermits === false) {
-                await this.assertReviewPackageIntegrity(workflow, token);
-              }
-              return createPackagedMultiReviewerPrompt({
+            reviewerPrompt: async (index: number, count: number) =>
+              createPackagedMultiReviewerPrompt({
                 reviewPackage: workflow.reviewPackage!,
                 reviewInstruction: workflow.reviewInstruction,
                 reviewerNumber: index + 1,
                 reviewerCount: count,
-              });
-            },
+              }),
           }
         : {}),
       reviewSnapshot: async () =>
@@ -4054,6 +3988,30 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.save(workflow, token);
     }
     if (request.state === "dispatching") {
+      // Only this request's acceptance can settle a recovered dispatch intent.
+      // An idle/error session may still describe its superseded request.
+      const acceptance = await provider
+        .dispatchStatus?.(session.providerSessionId, request.requestId)
+        .catch(() => "unknown" as const);
+      await this.assertFence(workflow.id, token);
+      if (acceptance !== "dispatched") {
+        const scope = `${request.requestId}\0idle`;
+        if (!this.countPoll(workflow.id, scope)) return;
+        request.idleResultPolls = Math.min(
+          (request.idleResultPolls ?? 0) + 1,
+          MAX_IDLE_RESULT_POLLS,
+        );
+        await this.save(workflow, token);
+        if (
+          request.idleResultPolls >= MAX_IDLE_RESULT_POLLS ||
+          this.pollsExhausted(workflow.id, scope, request.idleResultPolls, MAX_IDLE_RESULT_POLLS)
+        ) {
+          throw new Error(`The ${modelLabel} dispatch acceptance could not be confirmed`);
+        }
+        return;
+      }
+      delete request.idleResultPolls;
+      this.pollGate.clear(`${workflow.id}\0${request.requestId}\0idle`);
       request.state = "sent";
       delete request.continuationPrompt;
       await this.save(workflow, token);
@@ -4094,7 +4052,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     }
     const { status, error: statusDetail } = observation;
     await this.assertFence(workflow.id, token);
-    if (status === "idle" && observation.turnSettled === false) return;
+    if ((status === "idle" || status === "error") && observation.turnSettled === false) return;
     if (status === "running") {
       if (request.idleResultPolls !== undefined || request.usageFinalizationPolls !== undefined) {
         delete request.idleResultPolls;
@@ -4842,12 +4800,6 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   ): Promise<void> {
     const reviewPackage = workflow.reviewPackage;
     if (!reviewPackage) return;
-    if (this.options.evidencePermits === false) {
-      // Rollback gate: the legacy path verifies inside every reviewer prompt,
-      // so fan-out admission itself has nothing to add.
-      if (phase === "consolidation") await this.assertReviewPackageIntegrity(workflow, token);
-      return;
-    }
     try {
       const outcome = await this.evidencePermits.ensure(
         workflow.id,
@@ -4880,7 +4832,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     token: string,
   ): Promise<void> {
     const verifyStarted = Date.now();
-    const verification = await this.invoke<{ valid: boolean; reason?: string }>(
+    const verification = await this.invoke<ReviewPackageVerification>(
       "verify_looped_review_package",
       {
         environmentId: workflow.environmentId,
@@ -4892,7 +4844,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       operation: "evidence.verify",
       phase: efficiencyPhase(workflow.phase),
       outcome: verification.valid ? "success" : "failed",
-      bytes: workflow.reviewPackage?.bytes,
+      // The package and every validation artifact it references were hashed.
+      bytes: (workflow.reviewPackage?.bytes ?? 0) + (verification.artifactBytes ?? 0),
+      count: verification.artifacts,
       elapsedMs: Date.now() - verifyStarted,
     });
     await this.assertFence(workflow.id, token);

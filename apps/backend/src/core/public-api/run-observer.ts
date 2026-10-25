@@ -6,6 +6,7 @@ import {
 } from "@orkestrator/protocol/public-api-resources";
 import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
 import type { PublicOperationRecord } from "./operation-ledger.js";
+import { nativePromptQueueKey } from "./prompt-delivery.js";
 import { PROVIDER_COMPLETION } from "./providers.js";
 import { registerReconciler } from "./reconciler.js";
 import { nativeTabsOfLayout } from "./summaries.js";
@@ -78,20 +79,143 @@ function sameExecution(a: PublicExecutionState | undefined, b: PublicExecutionSt
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * A run admitted with `enqueue` waits in the session's durable prompt queue
+ * under its own operation ID. It settles from the queue and the dispatch
+ * journal only: still held → pending; journaled → observed like any other
+ * run; parked → unknown (retry or discard); refused at dequeue → failed with
+ * the provider's reason; gone without being sent → cancelled (someone
+ * removed it). The queue is read before the session because the drainer
+ * journals a dispatch on the session before it acknowledges the queue item.
+ */
+async function evaluateQueuedRun(
+  record: PublicOperationRecord,
+  context: PublicActionContext,
+): Promise<OperationPatch | null> {
+  const target = await runTarget(record, context);
+  const observedAt = new Date(context.now()).toISOString();
+  if (!target) {
+    return {
+      state: "interrupted",
+      stage: "completed",
+      execution: { state: "interrupted", evidence: "none", observedAt },
+      error: { code: "run-interrupted", message: "The run's session no longer exists" },
+    };
+  }
+  const storage = context.command.storage;
+  const id = target.requestId;
+  const queue = await storage.getPromptQueue(
+    nativePromptQueueKey(target.agent, target.logicalSessionKey),
+  );
+  const refused = queue?.dispatchError;
+  if (refused && (refused.requestId === id || refused.messageId === id)) {
+    const message = refused.message.slice(0, 500);
+    return {
+      state: "failed",
+      stage: "completed",
+      dispatch: { state: "rejected", origin: "provider", error: message },
+      execution: { state: "failed", evidence: "none", error: message, observedAt },
+      error: { code: "operation-failed", message },
+    };
+  }
+  const held = [
+    ...(queue?.messages ?? []),
+    queue?.inFlight?.message,
+    queue?.outstandingClaim?.message,
+  ].some((message) => isRecord(message) && message.id === id);
+  const session = await storage.getNativeAgentSession(
+    nativeAgentSessionStorageKey(target.environmentId, target.agent, target.logicalSessionKey),
+  );
+  if (session?.pendingDispatch?.requestId === id) {
+    return {
+      state: "unknown",
+      stage: "dispatching",
+      dispatch: { state: "unknown", recoverable: true },
+      execution: {
+        state: "unknown",
+        evidence: "none",
+        reason: "Dispatch is not confirmed; retry or discard it",
+        observedAt,
+      },
+    };
+  }
+  if (session?.dispatchedRequestIds?.includes(id)) {
+    const accepted = { ...record, dispatch: { state: "accepted" as const }, stage: "executing" };
+    const observed = await evaluateRun(accepted, context);
+    return { ...observed, dispatch: { state: "accepted" }, stage: observed?.stage ?? "executing" };
+  }
+  if (held) {
+    return record.stage === "queued" ? null : { stage: "queued", dispatch: { state: "pending" } };
+  }
+  if (record.stage === "queueing" && record.generation === context.generation) {
+    // Still being written by the request that admitted it.
+    return null;
+  }
+  if (record.stage === "queueing") {
+    return {
+      state: "interrupted",
+      stage: "completed",
+      dispatch: { state: "not-sent" },
+      execution: { state: "interrupted", evidence: "none", observedAt },
+      error: {
+        code: "run-interrupted",
+        message: "The backend restarted before the prompt was queued; nothing was sent",
+      },
+    };
+  }
+  return {
+    state: "cancelled",
+    stage: "completed",
+    dispatch: { state: "not-sent" },
+    execution: {
+      state: "cancelled",
+      evidence: "none",
+      reason: "The queued prompt was removed before it was sent",
+      observedAt,
+    },
+    error: { code: "run-cancelled", message: "The queued prompt was removed before it was sent" },
+  };
+}
+
 async function evaluateRun(
   record: PublicOperationRecord,
   context: PublicActionContext,
 ): Promise<OperationPatch | null> {
+  if (record.stage === "staging-attachments") {
+    if (record.generation === context.generation) return null;
+    return {
+      state: "interrupted",
+      stage: "completed",
+      dispatch: { state: "not-sent" },
+      execution: {
+        state: "interrupted",
+        evidence: "none",
+        observedAt: new Date(context.now()).toISOString(),
+      },
+      error: {
+        code: "run-interrupted",
+        message: "The backend restarted while staging attachments; nothing was sent or queued",
+      },
+    };
+  }
+  if (record.dispatch?.state === "pending" || record.stage === "queueing") {
+    return evaluateQueuedRun(record, context);
+  }
   if (record.dispatch?.state !== "accepted" && record.dispatch?.state !== "unknown") {
-    if (record.stage !== "dispatching" || record.generation === context.generation) return null;
+    if (record.generation === context.generation) return null;
     const target = await runTarget(record, context);
     if (!target) {
       return {
         state: "interrupted",
         stage: "completed",
+        dispatch: { state: "not-sent" },
         error: {
           code: "run-interrupted",
-          message: "No session was created before the backend restarted",
+          message: "No session was created before the backend restarted; nothing was sent",
         },
       };
     }
@@ -112,6 +236,7 @@ async function evaluateRun(
     return {
       state: "interrupted",
       stage: "completed",
+      dispatch: { state: "not-sent" },
       error: {
         code: "run-interrupted",
         message: "No dispatch was recorded before the backend restarted",
@@ -348,6 +473,6 @@ async function evaluateRun(
 
 // `environment.launch` observes runs too, but registers its own reconciler in
 // `actions-launch.ts`, which imports this module.
-for (const action of ["session.start", "session.prompt"] as const) {
+for (const action of ["session.start", "session.prompt", "session.command"] as const) {
   registerReconciler(action, observeRun);
 }

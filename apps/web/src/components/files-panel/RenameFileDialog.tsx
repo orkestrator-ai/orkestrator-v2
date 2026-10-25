@@ -42,11 +42,19 @@ export function RenameFileDialog({
   const newName = value.trim();
   const unchanged = newName === currentName;
 
+  // Opening the dialog for a file starts from its current name.
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  if (filePath !== openedFor) {
+    setOpenedFor(filePath);
+    if (filePath !== null) {
+      setValue(fileName(filePath));
+      setError(null);
+    }
+  }
+
   useEffect(() => {
     if (filePath === null) return;
     const name = fileName(filePath);
-    setValue(name);
-    setError(null);
     const frame = requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(0, fileNameStemLength(name));

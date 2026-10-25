@@ -535,7 +535,9 @@ export function AgentRuntimePanel({
   const metrics = includeMetrics
     ? (
         [
-          ["MCP", runtime?.mcpServers],
+          // The MCP section lists servers and tools when the session reports
+          // them; the count is only for a session that does not.
+          ["MCP", runtime?.mcp === undefined ? runtime?.mcpServers : undefined],
           ["Commands", runtime?.commands],
           ["Skills", runtime?.skills],
           ["Hooks", runtime?.hooks],
@@ -1430,6 +1432,9 @@ function McpServerRow({
       </div>
       {server.error ? (
         <p className="break-words px-2.5 pb-1 pl-6 text-destructive">{server.error}</p>
+      ) : null}
+      {server.hint ? (
+        <p className="break-words px-2.5 pb-1 pl-6 text-muted-foreground">{server.hint}</p>
       ) : null}
     </div>
   );

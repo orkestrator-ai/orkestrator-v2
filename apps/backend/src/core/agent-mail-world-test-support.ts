@@ -56,6 +56,8 @@ export class MailWorld {
   private readonly prompts = new Map<string, string[]>();
   /** Actors whose next dispatch is refused, as a bridge that will not start would. */
   readonly refuseNext = new Set<string>();
+  /** Simulate the dispatch gate finding a busy session after the presence read. */
+  readonly holdNext = new Set<string>();
   private requestCounter = 0;
 
   /** Environments the drain asked to start because coordinator mail was waiting. */
@@ -175,7 +177,7 @@ export class MailWorld {
     if (this.refuseNext.delete(key)) {
       return Promise.resolve({ outcome: "rejected" as const, error: "bridge would not start" });
     }
-    if (this.busy.has(key))
+    if (this.holdNext.delete(key) || this.busy.has(key))
       return Promise.resolve({ outcome: "held" as const, reason: "busy" as const });
     this.busy.add(key);
     this.prompts.set(key, [...(this.prompts.get(key) ?? []), input.prompt]);

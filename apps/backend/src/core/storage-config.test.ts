@@ -25,6 +25,15 @@ describe("StorageService config migration", () => {
         memoryMiB: 4096,
         pids: 512,
       });
+      // Only the dedicated setter removes it (back to the built-in default);
+      // all-null limits are stored as an explicit opt-out.
+      const unrestricted = { cpus: null, memoryMiB: null, pids: null };
+      await storage.setContainerResourceLimits(unrestricted);
+      expect((await storage.loadConfig()).global.containerResourceLimits).toEqual(unrestricted);
+      await storage.setContainerResourceLimits(undefined);
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.loadConfig()).global.containerResourceLimits).toBeUndefined();
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }

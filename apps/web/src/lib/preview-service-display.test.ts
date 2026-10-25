@@ -70,6 +70,28 @@ describe("service readiness and diagnosis", () => {
     expect(serviceSummary(fixturePreviewService())).toBe("web · container:3000 · ready");
   });
 
+  test("waiting seeded services and other-environment listeners have distinct picker tones", () => {
+    const service = fixturePreviewService({
+      definition: { targetKind: "worktree", provenance: "entry-port", userOverride: false },
+    });
+    service.endpoint = {
+      ...service.endpoint,
+      state: "unavailable",
+      listener: "none",
+      failure: previewError("target-unverified", { retryable: true }),
+    };
+    expect(serviceReadiness(service)).toEqual({ label: "waiting for server", tone: "starting" });
+    service.endpoint.listener = "other-environment";
+    expect(serviceReadiness(service)).toEqual({
+      label: "another environment's server",
+      tone: "problem",
+    });
+    service.endpoint.listener = "unchecked";
+    expect(diagnoseService(service)?.actions).toEqual(["retry", "confirm-association"]);
+    service.endpoint.failure = previewError("target-unverified", { retryable: false });
+    expect(diagnoseService(service)?.actions).toEqual(["confirm-association"]);
+  });
+
   test("401/404 are reachable, not down", () => {
     const service = fixturePreviewService();
     service.endpoint.readiness.http = { state: "ok", statusClass: "4xx" };

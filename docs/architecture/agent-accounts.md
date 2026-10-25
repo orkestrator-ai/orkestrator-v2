@@ -534,8 +534,10 @@ itself. Where each surface acts:
   and Codex, with each machine's active account and a switch
   (`list_machine_agent_accounts`). The command node asks each enabled machine
   for `list_agent_accounts` and `read_host_agent_sign_ins` in parallel, eight
-  seconds each; one that cannot answer shows as not connected. A node in leaf mode lists only itself. Each
-  machine's own settings dialog shows its row. Registry changes reload the
+  seconds each; one that cannot answer shows as not connected. A node in leaf mode lists only itself,
+  and a leaf's own window shows the section with that one row (its machines
+  are its command node's to manage). Each machine's own settings dialog shows
+  its row. Registry changes reload the
   overview so attached and removed machines are reflected immediately. Peer
   account summaries and live sign-in rereads are rebuilt from validated fields;
   a malformed account row shows an error for that machine.
@@ -556,6 +558,21 @@ itself. Where each surface acts:
     settings, on that machine) on each connected machine that lacks it. A
     login without an email cannot be matched across machines and is listed
     alone.
+  - **Preferred login.** A star on an email group in By account makes that
+    email the platform's preferred login (`set_preferred_agent_identity`
+    `{ platform, email | null }`). The machine answering the overview keeps
+    it in its own `agent-accounts.json` (`preferred`) and returns it with
+    `list_machine_agent_accounts`; it is an email only and is never sent to
+    another machine. Above both views a line per platform says how many
+    machines use it and how many lack it, with a switch for every machine
+    that has it but uses another. By machine, a cell off it shows **Use
+    preferred** where the machine has that login and **No preferred login**
+    where it does not. Nothing switches by itself: a leaf adding or removing
+    a login, or a machine coming back online, never changes which account it
+    uses. A preference change made in another client shows on the next full
+    read (opening the page or the refresh button), not live. A machine's own
+    settings dialog does not flag its row. Older command nodes reject the
+    command, so the star reports an error there.
   - **Grok and Pi** have no accounts. Each machine reports whether it has a
     login a local bridge would use (`read_host_agent_sign_ins`,
     `agent-sign-ins.ts`), from files and variable names only, never a value:
@@ -597,7 +614,8 @@ one already open, keeps the login the container held.
 
 ## Provider behaviour relied on
 
-Checked against Claude Code 2.1.283 and Codex 0.158.0.
+Checked against Claude Code 2.1.283 and Codex 0.158.0, except where a line
+names another version.
 
 - Claude's Keychain service for a config directory is
   `Claude Code-credentials-<first 8 hex of sha256(CLAUDE_CONFIG_DIR)>`
@@ -617,5 +635,22 @@ Checked against Claude Code 2.1.283 and Codex 0.158.0.
 - Codex keeps its login in `$CODEX_HOME/auth.json`. Its `chatgptAuthTokens`
   login needs the `experimentalApi` capability, which the bridge leaves off,
   and is memory-only.
+- Codex 0.164.0 accepts the access-only `auth.json` in a local home: `codex
+  login status` reads it as a ChatGPT login and backend requests carry its
+  access token. It refreshes proactively only once the access token is
+  within five minutes of its `exp`; `last_refresh` counts only for a token
+  without a readable `exp`. Inside that window, or after a 401, it tries the
+  blank refresh token once, the attempt fails, and the file is left as it
+  was. A coordinator is replaced at the same five-minute lead
+  (`TOKEN_REPLACEMENT_LEAD_MS`) when next used while idle, so only a turn
+  running across that point sees the failed attempt. Checked offline with
+  `scripts/codex-access-only-auth-probe.ts` on 2026-10-25.
+- The Claude Agent SDK's `accountInfo()` returns the login's email (0.3.309,
+  host OAuth login, with organization, subscription type and API provider;
+  checked 2026-10-25). The panel still takes the email from the account
+  registry, which has it before any session starts.
+- The Cursor SDK's login (1.0.40) skips spawning the system opener when
+  `NO_OPEN_BROWSER` is set or an SSH variable is present, and still publishes
+  the URL (`bridges/cursor-bridge/src/login-no-open-browser.test.ts`).
 - With `sessions/` symlinked, a second `CODEX_HOME` with a fresh state
   database lists, resumes and continues the first home's threads.

@@ -7,6 +7,11 @@ and other MCP clients through a local Streamable HTTP server. Every public
 action the `orkestrator` CLI can run is reachable through it, under the same
 request keys, receipts and error codes ([public-cli.md](public-cli.md)).
 
+Outside agents get a short public summary of this guide and the CLI at
+[orkestrator.dev/skill.md](https://orkestrator.dev/skill.md), linked from
+`/llms.txt` (`apps/web-public/public/`). Update it when the port, the
+Settings labels or the credential rules change.
+
 ## Connect a client
 
 1. Keep Orkestrator running.
@@ -148,7 +153,11 @@ Risky actions are confirmed with a stateless token. Each action's class lives
 beside its schema in `PUBLIC_ACTION_INPUTS`:
 
 - `always`: `project.create`, `project.remove`, `environment.delete`,
-  `environment.recreate` with `discard`, `run.discard`.
+  `environment.recreate` with `discard`, `run.discard`. `project.remove` with
+  `cascade` is refused for every Control MCP credential
+  (`capability-unavailable`): deleting environments is a separate destructive
+  grant that `projects` must not imply, so only the operator's own CLI
+  cascades.
 - `voice` (voice profile only): `environment.stop`, `environment.exec`, and
   `session.interaction.resolve` when it approves a command or file change
   (`answer` or `approve-for-session` on any interaction but a question).

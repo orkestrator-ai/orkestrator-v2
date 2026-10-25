@@ -72,6 +72,13 @@ one, and no public payload contains a path or a template body.
   the route, or it is a pre-2.21 bridge that does not hold the session). The
   backend reports that as `unavailable` with the error code `outdated-bridge`
   and counts it; it never falls back to a global list.
+- `attachPending: true` (with `status: "stale"` only) says the rows are what
+  the bridge could read without starting the provider session, and the
+  provider adds more commands once the session attaches (its first turn or an
+  explicit refresh). The backend carries it onto the catalogue state, keeps it
+  on rows retained through a failed re-read, and drops it from any list that
+  is not `stale`; the picker adds "More commands load when the session starts;
+  refresh to load them now." Pi is the only bridge that sends it.
 - Enhanced rows without an `id` and `executionKind` are dropped. A bridge
   cannot mint a `session-action`; those are the backend's.
 - Rows are bounded (see `COMMAND_CATALOGUE_LIMITS`): 512 rows, 256-byte names
@@ -144,6 +151,12 @@ interprets prompt text itself and has no suppression (Claude, Grok) refuse a
 literal prompt whose leading token names a known command rather than running
 it (`literalCommandSuppression`).
 
+The public CLI sends explicit intent: `session prompt` and `session start`
+carry `literal` only with `--literal` (otherwise the tab's typed default
+applies), and `session command` always carries `selected` with the binding
+revision the backend resolved at admission, so it is never re-resolved by
+name ([public-cli.md](public-cli.md#sessions-and-runs)).
+
 ## Session actions and collisions
 
 The backend merges runtime actions into the provider list
@@ -176,7 +189,7 @@ providers, at these pins:
 | Codex | app-server 0.162.1 | 2026-10-17: skills, templates, built-ins, refusals, restart; browser scenario on a host worktree. 2026-10-23: disabled skills; browser scenario on a host worktree and in a container |
 | OpenCode | SDK and server 1.19.0 | 2026-10-17: discovery, `session.command`, refusals, reload |
 | Grok | 1.0.52 / ACP SDK 1.8.0 | 2026-10-17: user skills, push updates, re-send after `session/load`; project skills after the folder-trust fix |
-| Pi | SDK 1.2.0 | 2026-10-23: discovery, extension-before-template precedence, headless extensions, templates, literal opt-out, mid-turn refresh |
+| Pi | SDK 1.2.0; pre-attach list on 1.4.0 | 2026-10-23: discovery, extension-before-template precedence, headless extensions, templates, literal opt-out, mid-turn refresh. 2026-10-25: templates listed before the first turn (todo 0069) |
 | Cursor | SDK 1.0.37 | 2026-10-17: still `unsupported` |
 
 The record, including what each run did not cover (a backend restart,
@@ -193,7 +206,7 @@ unavailable with a reason. Re-qualify on every pin change
 | Codex templates | Bounded scan of `.codex/prompts` and `~/.codex/prompts` | Relative path | `bridge-template`: `$ARGUMENTS` expansion only | Scan errors reported as truncation |
 | Codex built-ins | Bridge | `/help`, `/models` | `bridge-local` | — |
 | OpenCode | One `command.list({directory})`; refresh reloads the directory instance when idle | Exact server key, case-sensitive, no aliases | `provider-command` via `session.command` with a reserved `messageID` | List errors fail the read; an empty list stays empty; `stale` while a requested reload waits for idle |
-| Pi | One builder over templates, skills and extensions (`sourceInfo` origin) | Template `/name`, skill `/skill:name`, extension invocation name | `provider-prompt` via `session.prompt({source:"rpc"})` | A persisted list is `stale` after restart |
+| Pi | One builder over templates, skills and extensions (`sourceInfo` origin); before attach, the same builder over a resource-only read (templates and skills) | Template `/name`, skill `/skill:name`, extension invocation name | `provider-prompt` via `session.prompt({source:"rpc"})` | Before attach: `stale` with `attachPending` when the policy loads extensions, otherwise `ready`; a persisted list is `stale` after restart |
 | Grok | ACP `available_commands_update` (push only) | Name as sent; `input.hint` as argument hint | `provider-prompt` via `session/prompt` | `ready` once this process received a list, even an empty one; restored rows are `stale` and not executable |
 | Cursor | None | — | — | `unsupported` |
 | Orkestrator | Backend | `/steer`, `/compact` | `session-action` | — |
@@ -285,7 +298,27 @@ catalogue read cannot let `/clear` reach the CLI.
   `stale` and suppresses automatic retries until the next explicit refresh
   (`opencode-command-reload.ts`).
 - **Pi**: extensions win over skills and templates, as in the SDK, and only
-  the effective winner is listed. Literal intent uses
+  the effective winner is listed. Before a session attaches, the bridge lists
+  its templates and skills from Pi's own `DefaultResourceLoader` with
+  extensions off (`command-preview.ts`): no extension module is imported, no
+  `resolveProjectTrust` pass runs (trust comes from the execution policy), and
+  a missing configured package is skipped rather than installed (the loader's
+  `packageManager.resolve` is given a `skip` handler; pinned against the real
+  SDK in `command-preview.test.ts`). Session create starts the read, and the
+  first catalogue read waits up to 5 s for it; it never attaches or touches
+  `lastAccessed`. The list is `stale` with `attachPending` when the policy
+  lets extensions load, since extension commands and resources an extension
+  adds through `resources_discover` exist only after attach. When the policy
+  excludes extensions (host sessions without project resources, read-only
+  sessions) nothing can add a command at attach, so the read is `ready`. Rows
+  an attach read (live, kept across an idle detach, or restored) are never
+  replaced by a preview, and an attach that lands first wins over a late one.
+  A read that finishes while an attach is in flight, after its policy
+  changed, or after the session closed is discarded; if that attach then
+  fails, the next catalogue read reads again.
+  A selection from a preview row is re-checked after the prompt route
+  attaches, against the attached list and Pi's dispatch order, so a template
+  an extension shadows is refused with 422, never run as the extension. Literal intent uses
   `expandPromptTemplates: false`, which cannot stop extension `input` handlers.
   `reload()` replaces the extension runner, including the approval gate, so
   refresh answers `deferred` while a turn runs and reloads when idle. SDK 1.2.0
@@ -325,7 +358,10 @@ answers a session that has not run a turn from one control-only CLI probe
 (`status: "stale"`) and the picker shows `loading` while the first read is in
 flight, so a new tab only ever shows its own session's rows. The
 probe sends no message (`controlOnlyQuery`): the Agent SDK drops
-`maxTurns: 0`, so a `prompt: ""` probe used to start a real turn.
+`maxTurns: 0`, so a `prompt: ""` probe used to start a real turn. The Pi
+bridge answers one from a resource-only read of its templates and skills,
+marked `attachPending` when extensions will add commands at attach (see the
+Pi provider note).
 
 There is no global catalogue. The legacy routes (`/plugins/commands` on the
 Claude and Pi bridges, `/global/slash-commands` on Codex and Cursor) and the

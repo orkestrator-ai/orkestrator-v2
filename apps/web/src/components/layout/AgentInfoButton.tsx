@@ -332,6 +332,8 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   const neutralProjection = useNativeAgentProjectionStore((state) =>
     activeSession ? state.projections.get(activeSession.sessionKey) : undefined,
   );
+  // A session that lists its MCP servers needs no separate count tile.
+  const reportsMcpList = neutralProjection?.runtime?.mcp !== undefined;
   const neutralControlUpdatePending =
     controlUpdateState?.sessionIdentity === activeSession?.sessionKey;
   const updateNeutralControls = useCallback(
@@ -1650,11 +1652,20 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                   }
                 />
                 {activeSession.provider === "claude" ? (
-                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                    <Metric
-                      label="MCP"
-                      value={String(neutralProjection?.runtime?.mcpServers ?? 0)}
-                    />
+                  <div
+                    className={cn(
+                      "grid gap-2 text-center text-xs",
+                      reportsMcpList ? "grid-cols-2" : "grid-cols-3",
+                    )}
+                  >
+                    {/* The server list above already counts servers and tools;
+                        the tile is only for a session that reports no list. */}
+                    {reportsMcpList ? null : (
+                      <Metric
+                        label="MCP"
+                        value={String(neutralProjection?.runtime?.mcpServers ?? 0)}
+                      />
+                    )}
                     <Metric
                       label="Plugins"
                       value={String(neutralProjection?.runtime?.plugins ?? 0)}
@@ -1666,10 +1677,12 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                   </div>
                 ) : activeSession.provider === "opencode" ? (
                   <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                    <Metric
-                      label="MCP"
-                      value={String(neutralProjection?.runtime?.mcpServers ?? 0)}
-                    />
+                    {reportsMcpList ? null : (
+                      <Metric
+                        label="MCP"
+                        value={String(neutralProjection?.runtime?.mcpServers ?? 0)}
+                      />
+                    )}
                     <Metric
                       label="Skills"
                       value={String(neutralProjection?.runtime?.skills ?? 0)}

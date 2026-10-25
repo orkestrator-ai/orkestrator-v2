@@ -8,15 +8,18 @@ The restart continuation and step reminders were added on `9da80451`
 [Restart continuation and step reminders](#restart-continuation-and-step-reminders-2026-10-17).
 The Claude bridge reports restart interruptions since 2026-10-18; see
 [Claude restart interruption](#claude-restart-interruption-2026-10-18).
+Every code item and the killed-Claude-CLI qualification were finished on
+2026-10-25 on top of `ba7cc8d4`, with a first 8-reviewer scale run; see
+[Gates, fallback, pipeline reminders and measurement](#gates-fallback-pipeline-reminders-and-measurement-2026-10-25).
+Only the scale qualification is left.
 
 Multi Review's control plane covers reviewer admission, observation,
 persistence, evidence verification and consolidation input. Its cost must stay
 bounded, and independent of retained review history, as a panel grows towards
 the 32-reviewer maximum. The mechanisms shipped in #833, and #852 made the keyed
-supervisor the default driver. What remains is rollback gates that outlived
-their one-release window, the Build Pipeline steps' share of the two recovery
-gaps the real-stack cycle found, and scale evidence
-that was never collected.
+supervisor the default driver. What remains is scale evidence from a mixed
+real-provider panel of 8 to 32 reviewers, which needs credentials for more
+platforms than Claude and Codex.
 
 ## Current state
 
@@ -45,16 +48,19 @@ that was never collected.
   (`MultiReviewProgressTracker.nextProbeAt`). The reviewer tab reads through
   `multi-review-reviewer-transcript.ts`: `MAX_REVIEWER_TRANSCRIPT_MESSAGES` is
   500, `MAX_REVIEWER_TRANSCRIPT_BYTES` is 2 MiB, the source token is scoped to
-  the session, and unchanged polls answer `unchanged`. A provider without
-  `transcriptSnapshot` gets a bounded compatibility read marked
-  `fallback: true` and counted as `transcript.ui_fallback`.
+  the session, and unchanged polls answer `unchanged`. Every read goes through
+  the provider's `transcriptSnapshot`; a provider without it fails the read
+  (the count-bounded compatibility read was retired on 2026-10-25).
 - **Scheduling.** `KeyedWorkflowSupervisor` (`workflow-supervisor.ts`) is the
   default. `wakeWorkflows` in `index.ts` delivers provider-transition wakeups
   to `MultiReviewService.wakeEnvironment`. `WorkflowDueScheduler`
   (`multi-review-scheduler.ts`) runs only when
-  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` names `multi-review` or `all`.
-  `adaptiveScheduling: false` turns off both and restores a 1 s `setInterval`
-  plus `requestTick` scan.
+  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` names `multi-review` or `all`, and
+  goes with that switch
+  ([0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)).
+  Both drivers share one relative due-time policy (`nextDelayMs`) and take
+  the `schedulerClock` test seam. The legacy 1 s tick
+  (`adaptiveScheduling: false`) and the `evidencePermits` gate are gone.
 - **Payload budgets.** `packages/protocol/src/structured-review/budgets.ts`
   (`STRUCTURED_REVIEW_MAX_*`) bounds each report. `CONSOLIDATION_MAX_EVIDENCE_BYTES`
   (640 KiB, `review-consolidation-evidence.ts`) bounds consolidation input, and
@@ -62,8 +68,12 @@ that was never collected.
 - **Measurement.** `multi-review-efficiency.bench.test.ts` with
   `multi-review-efficiency-fixtures.ts` covers 1, 2, 4, 8, 16 and 32 reviewers,
   an 8-reviewer panel over 50 retained workflows, a mixed-provider panel and a
-  slow reviewer. Production passes no observer, so
-  `recordEfficiency` events go to `NOOP_EFFICIENCY_OBSERVER`.
+  slow reviewer. `evidence.verify` reports the package's bytes plus every
+  referenced validation artifact's (`bytes`) and the artifact count (`count`).
+  The opt-in `multi-review-large-evidence.bench.test.ts` times real hashing of
+  hundreds of MiB. Production passes no observer, so `recordEfficiency` events
+  go to `NOOP_EFFICIENCY_OBSERVER`; that is deliberate (see
+  [Assumptions and decisions](#assumptions-and-decisions)).
 - **Unreachable bridges.** A reviewer whose bridge cannot be reached (a
   `ProviderUnavailableError` from its status read or unattended-interaction
   sweep) keeps its session, request and state. The runner asks the host to
@@ -72,7 +82,7 @@ that was never collected.
   died. The idle-poll bound (`REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS`) still fails
   a reviewer whose bridge never answers. Multi Review evicts its provider
   (`MultiReviewService.evictUnreachableProvider`); Build Pipeline review stages
-  get the bounded retry but do not evict yet.
+  evict only the failed cached instance (review recovery follow-up below).
 - **Follow-up turns.** A reviewer, and each Multi Review step (preparation,
   consolidation, Fix), gets two bounded same-session follow-ups under a fresh
   request id. The first is the result reminder (`workflowResultReminderPrompt`):
@@ -89,11 +99,18 @@ that was never collected.
   flags `resultReminderSent` and `restartContinuationSent` are persisted on the
   reviewer and on `activeRequest`, and the second miss or second restart fails
   closed. Build Pipeline review stages get the reviewer half through the shared
-  runner.
+  runner. Build Pipeline's own stage turns and its consolidation get both too:
+  the continuation since #1083 (`continueInterruptedStage`, the consolidation's
+  `restartContinuationSent`) and the reminder since 2026-10-25
+  (`remindMissingStageResult`, `prepareConsolidationResultReminder`), spent
+  through `resultReminderSent` on `PipelineSession` and
+  `ReviewConsolidationSession`.
 - **Live cycle.** `e2e/agent-testing/multi-review-live.spec.ts`
   (`ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1`) runs the inactive-environment
-  cycle on the real stack: unmount, renderer reload, backend restart and a
-  killed reviewer bridge. Each case is a real two-reviewer review launched
+  cycle on the real stack: unmount, renderer reload, backend restart, a
+  killed reviewer bridge and a killed Claude Code process under a live bridge.
+  `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>` adds an n-reviewer scale
+  case. Each case is a real two-reviewer review launched
   through the launcher. How to run it is in
   [agent-testing.md](../../development/agent-testing.md#automated-checks).
 - **Storage.** `multi-reviews` is a SQLite `record` store (`STORE_LAYOUTS` in
@@ -111,65 +128,60 @@ that was never collected.
 
 ### Code
 
-1. **Remove the Multi Review rollback gates.** They were kept "for one release"
-   when they merged during 2.16.x and have shipped in every release since,
-   up to 2.20.0.
-   - `MultiReviewServiceOptions.evidencePermits`: remove both `=== false`
-     branches (the per-reviewer verify in the reviewer prompt callback and the
-     early return in `verifyReviewEvidence`) and the test that exercises them in
-     `multi-review-service-efficiency.test.ts`.
-   - `adaptiveScheduling` and the legacy `setInterval` / `requestTick` tick.
-     `DEFAULT_POLL_MS` stays, because the keyed supervisor uses it. Update the
-     `multi-review-tick` (B16) comment in `packages/protocol/src/recurring-work.ts`.
-   - `WorkflowDueScheduler`, `multi-review-scheduler.ts` and
-     `multi-review-scheduler.test.ts` go when
-     [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md) removes
-     `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` for `multi-review`. Move
-     `stableJitterMs` first if the keyed path still uses it.
-   - Keep `reviewFanoutConcurrency` as ordinary configuration, but drop the
-     rollback wording from its doc comment.
-2. **Retire the reviewer-transcript compatibility fallback** in
-   `multi-review-reviewer-transcript.ts` once no reviewer platform reaches it.
-   `HttpBridgeProvider` and `OpenCodeProvider` both implement
-   `transcriptSnapshot` today. A bridge that predates `/transcript` is handled
-   lower down, in `readHttpBridgeTranscriptSnapshot`
-   (`http-bridge-progressive.ts`), and never sets `fallback: true` (see
-   [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)).
-3. **Give Build Pipeline's own steps the restart continuation and result
-   reminder.** Its review stages share the runner and already have both. Its
-   consolidation (`build-pipeline-review-fanout.ts`, the `status === "error"`
-   branch) and other stage turns (`build-pipeline-service-supervisor.ts`) still
-   fail on a cut-short turn or a missing result. Reuse
-   `workflowRestartContinuationPrompt` and `workflowResultReminderPrompt`, with
-   the same once-only, persisted spent flags.
-4. **Add seeded, CI-sized randomised interleaving tests** across concurrent
-   reviewers. They should interleave commit resolution, provider completion,
-   cancellation, fence loss and restart. They were planned but never written.
-5. **Close the measurement gaps.**
-   - Verification counts only the package's declared size. Referenced artifact
-     bytes are not reported.
-   - There is no opt-in large-evidence case (hundreds of MiB, real hashing).
-     The benchmark fakes verification.
-   - There is no production sink for `recordEfficiency`. Either feed it into
-     the backend's content-free recurring metrics, or stop treating "rollout
-     observation" as a gate (see Open questions).
+All done on 2026-10-25; evidence in
+[Gates, fallback, pipeline reminders and measurement](#gates-fallback-pipeline-reminders-and-measurement-2026-10-25).
+
+1. ~~**Remove the Multi Review rollback gates.**~~ Done.
+   - ~~`MultiReviewServiceOptions.evidencePermits`~~: both `=== false` branches
+     and the "rollback gate restores per-reviewer verification" test removed.
+   - ~~`adaptiveScheduling` and the legacy `setInterval` / `requestTick`
+     tick~~: removed; `DEFAULT_POLL_MS` stays. The B16 comment in
+     `packages/protocol/src/recurring-work.ts` is updated.
+   - `WorkflowDueScheduler`, `multi-review-scheduler.ts` and its test stay,
+     as the `multi-review` domain's rollback under
+     `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK`. Their removal is owned by
+     [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)
+     ("Code: after soak"). `stableJitterMs`, which the keyed path still
+     uses, moved to `multi-review-scheduling.ts` on 2026-10-25, so that
+     removal is now self-contained.
+   - ~~Drop the rollback wording from `reviewFanoutConcurrency`~~: done.
+2. ~~**Retire the reviewer-transcript compatibility fallback.**~~ Done. The
+   branch, the `fallback` flag on snapshot reads, the `transcript.ui_fallback`
+   operation and the `multi-review.reviewer-transcript-fallback` counter and
+   register row are gone.
+3. ~~**Give Build Pipeline's own steps the restart continuation and result
+   reminder.**~~ Done. The continuation had already shipped in #1083
+   (2026-10-18) for stage turns and consolidation; this file was not updated
+   then. The reminder shipped on 2026-10-25.
+4. ~~**Add seeded, CI-sized randomised interleaving tests.**~~ Done:
+   `review-fanout-interleaving.test.ts`.
+5. ~~**Close the measurement gaps.**~~ Done.
+   - ~~Referenced artifact bytes are not reported~~: `evidence.verify` now
+     carries them for both owners.
+   - ~~No opt-in large-evidence case~~: `multi-review-large-evidence.bench.test.ts`.
+   - ~~No production sink for `recordEfficiency`~~: decided against; rollout
+     observation is no longer a gate (Open questions).
 
 ### Qualification
 
 - **Real-stack inactive-environment cycle** and **browser suites**: done on
   2026-10-17, see [Qualification results](#qualification-results-2026-10-17).
   Re-run `multi-review-live.spec.ts` after any change to the fan-out, the
-  reviewer tab or bridge session recovery.
-- **A killed Claude Code process, live.** Add a disruption to
-  `multi-review-live.spec.ts` that signals only the Claude reviewer's CLI
-  child (confirmed a descendant of this profile's bridge, as the bridge-kill
-  case does) while the bridge stays up. The reviewer should complete after
-  the restart continuation. Only the SDK contract and unit tests cover this
-  today (see [Claude restart interruption](#claude-restart-interruption-2026-10-18)).
+  reviewer tab or bridge session recovery. Re-run on 2026-10-25 after this
+  change (see below).
+- ~~**A killed Claude Code process, live.**~~ Done on 2026-10-25: "continues
+  a reviewer whose Claude Code process was killed under a live bridge".
 - **Scale.** Run a mixed real-provider panel at 8 to 32 reviewers. Record that
-  the caps hold under real rate limits, plus tail latency and peak RSS. This
-  needs several providers' credentials; batch it with the runs in
+  the caps hold under real rate limits, plus tail latency and peak RSS. The
+  harness exists (`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>` in
+  `multi-review-live.spec.ts`, which writes `scale.json`), and an
+  8-reviewer Claude and Codex panel passed on 2026-10-25 (see below), but the
+  panel it runs is Claude and Codex only. A mixed panel needs Cursor, Grok, OpenCode
+  and Pi credentials that this host's test profiles do not carry; batch it
+  with the runs in
   [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
+  Extending the case to those platforms means adding their model picks to
+  its reviewer list.
 
 ### Deferred until measured
 
@@ -480,6 +492,276 @@ landed live, so the step continuation and the step reconnect are covered by
 the deterministic tests (`multi-review-claude-bridge-restart.test.ts` uses a
 real bridge process and a fake CLI).
 
+## Gates, fallback, pipeline reminders and measurement (2026-10-25)
+
+Built on `ba7cc8d4` on macOS arm64 (Apple M5 Pro), with other live
+environments on the host.
+
+Code:
+
+- **Rollback gates (item 1).** `evidencePermits` and `adaptiveScheduling` are
+  gone from `MultiReviewServiceOptions`, with the legacy `setInterval` tick
+  (`requestTick`, `tick`) and the test that exercised the permit gate. The
+  keyed driver and `WorkflowDueScheduler` now share `nextDelayMs`, a relative
+  delay each adds to its own clock, and the due scheduler and its lease
+  renewal take the `schedulerClock` seam (`WorkflowDueSchedulerOptions.timers`,
+  `inFlight`). The recurring-baseline harness used the legacy tick as a
+  stand-in for the multi-review rollback; it now drives the real
+  `WorkflowDueScheduler` on the manual clock. On the test fixture (30
+  completed and 2 active workflows, 90 s) the rollback scans 7 times (224
+  records) against the keyed driver's 4 (128), both read providers 104 times,
+  and storage per attempt fell from a budget of 19 to 10 (475 reads over 59
+  attempts). The run is deterministic (two runs equal).
+- **Transcript fallback (item 2).** `readReviewerTranscript` throws when the
+  provider has no `transcriptSnapshot` instead of reading `messages`. Tests
+  whose fakes lacked the surface now give it one; five progress and usage
+  tests in `multi-review-service.test.ts` opt out because they exercise the
+  messages-based progress path, which is a separate surface.
+- **Build Pipeline reminders (item 3).** At the structured-result deadline
+  (`awaitStructuredResult`) a tool-mode stage turn gets one reminder in the
+  same session under a new result key, through `sendStageFollowUp`, which the
+  restart continuation now shares. The prompt is
+  `workflowResultReminderPrompt`; the result kind comes from the slot's
+  `binding`, because the turn's prompt context is cleared once it goes idle.
+  The consolidation gets one when its idle-poll bound runs out
+  (`prepareConsolidationResultReminder`), sharing
+  `prepareConsolidationFollowUp` with its continuation. Neither applies to
+  structured-output turns, to a slot that already holds a result
+  (`received`) or one whose correction budget is spent (`needs-attention`).
+- **Interleaving tests (item 4).** `review-fanout-interleaving.test.ts`
+  with `review-fanout-interleaving-support.ts`: a seeded PRNG (mulberry32)
+  holds every host commit and provider call (`save`, `provider()`,
+  `createSession`, `send`, status reads, `structured`, `messages`,
+  `abandonSession`, result-slot calls) pending and settles them in a
+  seed-chosen order. Five suites of 24 seeds each, on panels of 2 to 8
+  reviewers across Claude, Codex and OpenCode with seed-chosen concurrency
+  limits, plan or build mode, and one of ten per-reviewer scripts (complete,
+  fail, restart once, restart twice, invalid report once, no submit,
+  ambiguous send, refused send, unreachable bridge, create failure): plain
+  ordering, cancellation and reviewer stop at a random step, fence loss with
+  an immediate takeover, a crash with a new runner over committed state, and
+  random combinations. After every seed it checks at-most-once dispatch per
+  request id (and at most one continuation, one reminder and three repairs
+  per reviewer), no send from a fenced controller or after a committed
+  cancellation, non-overlapping saves, settled state never going back, the
+  admission, observation and per-provider caps, peer isolation, and that a
+  restarted runner over a settled panel calls no provider. A failing seed
+  prints its replay command; `ORKESTRATOR_FANOUT_INTERLEAVING_SEEDS=<n>` or
+  `=<s1>,<s2>` widens or replays a run. The file runs in about 3 s (127 tests,
+  3 runs, no flakes); a local 4,000-seed sweep (20,000 scenarios) took about
+  29 s. It found three runner bugs. One is fixed here: accepting a
+  tool-transport report swallowed a `*FenceError` from `consumeResult` as a
+  "Deferred result consumption", so a fenced pass resolved instead of
+  rejecting (`review-fanout.ts` now rethrows; the case fails without it). The
+  other two (a recovered `dispatching` request treated as sent without asking
+  the provider, and a takeover mid-continuation counting the old restart
+  twice) change dispatch-recovery semantics, stay as `test.todo` cases, and
+  are filed as
+  [0112-review-fanout-dispatch-recovery.md](0112-review-fanout-dispatch-recovery.md).
+- **Measurement (item 5).** `verifyValidationArtifacts` returns the artifacts
+  and bytes it hashed; `verifyEnvironmentReviewPackage` returns them as
+  `artifacts` and `artifactBytes`; Multi Review's and the Build Pipeline
+  fan-out's `evidence.verify` add them to `bytes` and report `count`. In a
+  container the verifier now reads each artifact's size with `stat` before
+  `sha256sum`, and enforces the same 32 MiB per-stream bound as on local
+  disk.
+
+Tests:
+
+- `build-pipeline-result-reminder.test.ts` (5 tests): a tool-mode stage that
+  never submits gets one reminder in the same session under a new key and
+  either delivers or fails at the next deadline; a structured-output stage
+  still fails without one; a tool-mode consolidation gets one and either
+  delivers or fails after its idle bound. The four tool-mode cases fail with
+  the reminder calls disabled.
+- `review-validation-worker.test.ts`: local and container verification report
+  artifact counts and bytes; a container artifact over 32 MiB is refused.
+  `review-validation-service.test.ts` checks the real runner's report
+  (`artifacts: 2, artifactBytes: 8`).
+- `multi-review-reviewer-transcript.test.ts`: a provider without the surface
+  fails the read without calling `messages`; joined history paging is still
+  covered through a snapshot-only provider.
+- `recurring-baseline.test.ts`: the multi-review rollback scans every 15 s,
+  reads providers as often as the keyed driver, and stays within 10 storage
+  reads per attempt.
+- `build-pipeline-artifact-turns.test.ts`: both consolidation turns (the
+  original and the reminder) get and settle their own artifact grant.
+
+Large evidence, real hashing (`multi-review-large-evidence.bench.test.ts`,
+local internal SSD):
+
+| Bun | Evidence | Artifacts | Verify per pass | Per generation (2 passes) | Peak RSS growth |
+| --- | --- | --- | --- | --- | --- |
+| 1.4.4 (pinned) | 256 MiB | 8 | 149, 135 ms | 284 ms | 15 MiB |
+| 1.4.4 (pinned) | 512 MiB | 16 | 253, 259 ms | 511 ms | 19 MiB |
+| 1.4.2 | 512 MiB | 16 | 357, 514 ms | 871 ms | 28 MiB |
+| 1.4.2 | 1 GiB | 32 | 1,158, 858 ms | 2,016 ms | 24 MiB |
+
+A changed byte in the last artifact failed verification every run.
+Container verification (hashing inside the container) was not measured.
+
+Live, on disposable profile `qa-cli-kill-0027` (`dev:test --fixture
+--credential-source claude --credential-source codex --agent-platforms
+claude,codex`; pinned Claude Code 2.1.309, Agent SDK 0.3.309, Codex 0.164.0;
+Haiku 4.5 and GPT-6-Luna at low effort):
+
+- "continues a reviewer whose Claude Code process was killed under a live
+  bridge" passed (137.5 s). The spec confirmed the bridge was a child of the
+  profile's backend and that exactly one `claude --output-format stream-json`
+  process was the bridge's child, then sent it `SIGKILL`. The bridge kept its
+  pid; the Claude reviewer "completed after the restart continuation" and
+  the Codex peer completed. The first attempt failed before signalling:
+  the matcher excluded any command containing `mcp`, and the CLI's own
+  arguments name its MCP config. It now matches the executable.
+- The whole file then ran (635.8 s): the unmount and reload cases passed,
+  and the backend-restart case failed on its prompt count. The Codex reviewer
+  had completed after its restart continuation, but its rehydrated
+  transcript held three user turns (`<environment_context>`, prompt,
+  restart). Codex 0.164.0 persists its injected `<environment_context>`
+  block as a user message, which the bridge's rollout filter
+  (`isSyntheticPersistedUserText`, `bridges/codex-bridge/src/history/rollout.ts`)
+  did not know; this is the same class as the 2026-10-17 `# AGENTS.md
+  instructions` fix. The filter now drops a message that is exactly that
+  block (`rollout.test.ts` covers it, and that a user's own text mentioning
+  it is kept). Serial mode skipped the last two cases.
+- After rebuilding the Codex bridge and restarting the profile,
+  `-g "backend restart|interrupted reviewer bridge|Claude Code process was
+  killed"` passed 3 of 3 (518.1 s). Restart: both reviewers "completed after
+  the restart continuation" (189.7 s). Killed bridge: Claude "completed after
+  the restart continuation", Codex completed (159.2 s). Killed CLI: the same
+  (164.7 s).
+- Scale harness, `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=8` (four Claude
+  Haiku 4.5 and four Codex GPT-6-Luna reviewers, Codex preparing and
+  consolidating): passed in 261.3 s. All 8 completed and the review reached
+  `ready` in 252 s. Reviewer latency p50 78.9 s, p95 and max 110.6 s. At most
+  4 reviewers were setting up at once (the admission cap), and at most 4 per
+  platform were running. Backend RSS went from 621 to 626 MiB. This is
+  two-provider evidence at the bottom of the 8 to 32 range, not the mixed
+  panel the scale item asks for.
+- The profile was stopped and reset. Content-free outcomes are in
+  `output/agent-testing/qa-cli-kill-0027/browser/results.json`.
+
+Validation: `mise run format:check`, `mise run lint` and `mise run typecheck`
+passed. The focused backend owners (46 Build Pipeline, Multi Review and
+fan-out files, the recurring baseline, verification and transcript tests)
+passed. `mise run test` exited 1 after 1,734.4 s on four five-second timeouts
+in untouched tests under host load average 47 to 98, recorded as flake
+[0820](../../tests/flaky-tests/aggregate-validation-runs/0820-multi-review-scale-cost-validation.md);
+each owner passed alone, two of them only with a 30 s deadline under that
+load. Browser, Docker, Electron and iOS suites were not run: no renderer,
+container or desktop code changed, and the live real-stack Multi Review file
+covers the reviewer tab.
+
+## Assumptions and decisions
+
+Taken on 2026-10-25 without stopping to ask, as the delegation required.
+
+1. **`WorkflowDueScheduler`: keep it until the switch goes, or remove it now.**
+   Chosen: keep it, and let 0048 remove it with
+   `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=multi-review`. Why: the item itself
+   tied its removal to 0048, whose "Code: after soak" has not started (the busy
+   profile, live GitHub and providers soak have not run). Removing it now
+   would leave the documented `multi-review` rollback value doing nothing.
+   Pros: the rollback stays real, and is now measured on the manual clock
+   instead of through a stand-in. Cons: about 230 lines live on for one more
+   cycle, and 0048 must remember to move `stableJitterMs` first (its item now
+   says so).
+2. **The harness's multi-review rollback mode: drive the real due scheduler,
+   drop the mode, or keep a stand-in.** Chosen: drive the real one, adding a
+   `timers` seam and an `inFlight` count to `WorkflowDueScheduler` and a
+   relative `nextDelayMs`. Why: the stand-in was the code being deleted, and
+   dropping the mode would lose the only comparison of the two drivers. Pros:
+   the comparison is now of what actually ships; one due-time policy feeds
+   both drivers. Cons: the rollback numbers changed meaning (fewer scans,
+   equal provider reads), so older `--compare` artifacts show differences for
+   `multi-review` that are not regressions; the harness reaches the private
+   scheduler through a cast, as it reached `requestTick` before.
+3. **A provider without `transcriptSnapshot`: throw, return an empty
+   snapshot, or keep a quiet fallback.** Chosen: throw a descriptive error.
+   Why: no production provider lacks the surface, so the case only means a
+   wiring bug; an empty snapshot would show a blank tab that looks healthy.
+   Pros: an unbounded or legacy read cannot come back unnoticed. Cons: a test
+   fake or a future provider must implement the surface to show a reviewer
+   tab; the five tests that cover the messages-based progress path had to
+   opt out explicitly.
+4. **Where the stage reminder learns its result kind.** Options: the cleared
+   `activePromptContext`, a new persisted field, or the result slot's own
+   `binding`. Chosen: `binding`, checked against the phase's expected kind.
+   Why: the slot already records the kind for tool-mode turns, which are the
+   only ones the reminder serves, so nothing new needs persisting. Pros: no
+   schema change beyond the spent flag. Cons: one extra slot read at the
+   deadline, and no reminder when the slot store is missing the entry, which
+   then fails as before.
+5. **Reminder scope: tool mode only, or structured output too.** Chosen:
+   tool mode only, as for reviewers and Multi Review's steps. Why: a
+   structured-output turn has no tool to forget; a missing result there is a
+   provider fault another turn does not fix. Pros: the same contract
+   everywhere. Cons: none found.
+6. **One shared follow-up helper or two copies.** Chosen: shared
+   (`sendStageFollowUp`, `prepareConsolidationFollowUp`), with the spent flag
+   as a parameter, like `MultiReviewService.prepareStepFollowUp`. Pros: the
+   continuation and the reminder cannot drift. Cons: the restart path was
+   touched; its restart prompt now says "review preparation" rather than
+   the kind id `review-preparation`.
+7. **Artifact bytes: a new efficiency field or the existing ones.** Chosen:
+   `bytes` is now the package plus its artifacts, and `count` is the artifact
+   count. Why: the event schema is a fixed, content-free set, and verification
+   cost is what `bytes` was meant to measure. Pros: no schema change. Cons:
+   `evidence.verify` bytes before and after this change are not comparable.
+8. **Container artifact size: an extra `stat`, or no size in containers.**
+   Chosen: `stat -c %s` before `sha256sum`, enforcing the local 32 MiB bound.
+   Why: the producer caps each stream at 32 MiB already, so the check costs
+   nothing legitimate, and a container artifact had no bound at all. Pros:
+   parity with local disk and a real byte count. Cons: one more exec per
+   artifact per verification (two verifications per generation); a container
+   image without GNU or BusyBox `stat` would fail verification.
+9. **Large-evidence case: through `verifyEnvironmentReviewPackage`, or the
+   artifact verifier.** Chosen: `verifyValidationArtifacts` on a real local
+   worktree. Why: the artifacts are what grows to hundreds of MiB; the
+   package itself is a bounded JSON file whose hash is negligible, and the
+   full path needs Git and the package generator. Pros: real files, real
+   streamed hashing, bounded RSS checked, and runnable on any host. Cons: it
+   does not time package parsing or container hashing.
+10. **A production sink for `recordEfficiency`, or drop rollout observation
+    as a gate.** Chosen: no sink. Why: the gates soaked from 2026-09-24
+    through 2.30.0 with no recorded regression; the recurring metrics already
+    count the supervisor's work content-free; and a second always-on metrics
+    path would need its own bounds and retention. Pros: no new production
+    surface. Cons: per-operation efficiency is measured only in tests and
+    benchmarks; a production regression would show first in recurring
+    metrics or user reports.
+11. **Killed-CLI disruption: kill any Claude process, or one proven child.**
+    Chosen: exactly one direct child of the owned bridge that is the
+    stream-json `claude` executable, else fail before signalling. Why: the
+    host runs other profiles and the installed app, whose Claude processes
+    must never be touched. Pros: cannot signal anything else. Cons: a future
+    SDK that launches the CLI differently fails the check and needs the
+    matcher updated (the failure says so).
+12. **Scale qualification: run what this host can, or wait.** Chosen: build
+    the harness, run it at 8 reviewers on Claude and Codex, and leave the
+    mixed-provider run open. Why: the item asks for a mixed real-provider
+    panel, and only Claude and Codex credentials are on this host's test
+    profiles. Pros: the caps, tail latency and RSS have a first real
+    measurement, and the full run is one command when credentials exist.
+    Cons: two providers at the smallest panel size is not the evidence the
+    item asks for, and the 1 s sampling can catch a cap being exceeded but
+    cannot prove it never was.
+13. **Bugs the interleaving tests found: fix all here, file all, or split.**
+    Chosen: fix the swallowed fence error, file the two dispatch-recovery
+    bugs as 0112 and keep them as `test.todo`. Why: the fence fix is one line
+    that restores a stated invariant; the other two need a provider
+    dispatch-status answer and a change to which interruption a continuation
+    honours, which is design work with its own risk. Pros: this change stays
+    reviewable and CI stays green with the bugs pinned. Cons: two known
+    recovery bugs ship until 0112 is done.
+14. **Codex `<environment_context>` rows: fix in this change or file it.**
+    Chosen: fix it here, in `isSyntheticPersistedUserText`. Why: the live
+    restart case required by this file failed on it with Codex 0.164.0, the
+    same way the `# AGENTS.md instructions` heading did on 2026-10-17, and the
+    fix is one tightly matched condition (only a message that is exactly the
+    block). Pros: rehydrated Codex transcripts stop showing an injected user
+    turn. Cons: touches a bridge in a fan-out change.
+
 ## Constraints and rationale
 
 - **The ten invariants.** Every change must keep all of these.
@@ -608,21 +890,27 @@ real bridge process and a fake CLI).
 
 ## Open questions
 
-- Should `WorkflowDueScheduler` survive as the keyed-scheduling rollback
-  target, or go with the switch?
-- Is "rollout observation" still a gate? The deleted baseline's "Rollout
-  observations" section was never filled. If the soak since 2026-09-24 is enough, remove the
-  gates without a production metrics sink.
+- ~~Should `WorkflowDueScheduler` survive as the keyed-scheduling rollback
+  target, or go with the switch?~~ It goes with the switch (decided
+  2026-10-25; see [Assumptions and decisions](#assumptions-and-decisions)).
+- ~~Is "rollout observation" still a gate?~~ No. The soak since 2026-09-24
+  was enough, and the gates were removed without a production metrics sink.
 
 ## Needs verification
 
-- Whether any supported reviewer platform still reaches the reviewer-transcript
-  fallback in production. On 2026-10-17 every completed Claude and Codex
-  reviewer read in the live cycle answered without `fallback: true`; Cursor,
-  Grok, OpenCode and Pi reviewers were not run.
+- ~~Whether any supported reviewer platform still reaches the
+  reviewer-transcript fallback in production.~~ Settled from the code on
+  2026-10-25: every reviewer provider is built by `createNativeAgentProvider`
+  (`native-agent-provider.ts`) as either `HttpBridgeProvider` (Claude, Codex,
+  Cursor, Grok and Pi bridges) or `OpenCodeProvider`, and both implement
+  `transcriptSnapshot`. A bridge without `/transcript` is served inside
+  `readHttpBridgeTranscriptSnapshot`, below this module. Cursor, Grok,
+  OpenCode and Pi reviewers were still not run live.
 
 ## Related
 
+- [0112-review-fanout-dispatch-recovery.md](0112-review-fanout-dispatch-recovery.md):
+  the two dispatch-recovery bugs the interleaving tests found.
 - [0025-multi-review-panel-value.md](0025-multi-review-panel-value.md): consolidation
   quality, prefix-cache savings, presets and lenses.
 - [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md): owns

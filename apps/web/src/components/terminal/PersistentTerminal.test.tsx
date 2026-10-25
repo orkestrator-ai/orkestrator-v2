@@ -1,3 +1,4 @@
+import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode, useCallback, useState } from "react";
@@ -259,6 +260,8 @@ const FIRST_RETRY_MS = 250;
 const SECOND_RETRY_MS = 500;
 const THIRD_RETRY_MS = 1000;
 const BOOTSTRAP_DELAY_MS = 300;
+/** The visibility redraw's last refit, armed once its PTY size bounce has finished. */
+const REDRAW_FINAL_REFRESH_MS = 50;
 /** For async queries while the 1 s clock (Testing Library's default timeout) is controlled. */
 const QUERY_TIMEOUT = { timeout: 2_000 };
 
@@ -713,6 +716,12 @@ describe("PersistentTerminal", () => {
     Object.defineProperty(document, "hasFocus", { configurable: true, value: () => false });
     window.orkestrator = { isolatedViewState: true } as Window["orkestrator"];
     const terminalData = createTerminalData();
+    // Reattaching the opened terminal runs the visibility redraw, which bounces
+    // the PTY size and only then arms its final refit. The armed timer is the
+    // signal that the bounce is over; running it covers the refit as well.
+    const finalRefresh = installControlledTimeout(REDRAW_FINAL_REFRESH_MS, {
+      label: "PersistentTerminal visibility redraw final refresh",
+    });
     try {
       render(
         <PersistentTerminal
@@ -730,11 +739,11 @@ describe("PersistentTerminal", () => {
       );
 
       await waitFor(() => expect(terminalData.fitAddon.fit).toHaveBeenCalled());
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 60));
-      });
+      await waitFor(() => expect(finalRefresh.pendingCount()).toBe(1));
+      await advanceClock(finalRefresh);
       expect(resizeMock).not.toHaveBeenCalled();
     } finally {
+      finalRefresh.restore();
       Object.defineProperty(document, "hasFocus", {
         configurable: true,
         value: originalHasFocus,
@@ -3173,6 +3182,46 @@ describe("PersistentTerminal", () => {
       expect(writeMock).toHaveBeenCalledWith("pasted text");
     });
   });
+
+  it.each(["metaKey", "ctrlKey"])(
+    "yields %s+Shift+K to the dialog without PTY input",
+    async (modifier) => {
+      render(
+        <>
+          <KeyboardShortcutsDialog />
+          <PersistentTerminal
+            terminalData={createTerminalData()}
+            tabId="tab-1"
+            tabType="plain"
+            containerId="container-1"
+            environmentId="env-1"
+            isEnvironmentVisible
+            isActive
+            isFocused
+            isFirstTab={false}
+            paneId="pane-1"
+          />
+        </>,
+      );
+      await waitFor(() => expect(terminalKeyHandler).toBeDefined());
+      writeMock.mockClear();
+      const event = new KeyboardEvent("keydown", {
+        key: "K",
+        shiftKey: true,
+        [modifier]: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      const handled = terminalKeyHandler!(event);
+      // xterm only emits input for keys its custom handler accepts.
+      if (handled) terminalInputHandler?.("\x0b");
+      expect(handled).toBe(false);
+      expect(event.defaultPrevented).toBe(false);
+      fireEvent(window, event);
+      await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+      expect(writeMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("sends Shift+Enter as LF without letting xterm submit the prompt", async () => {
     const terminalData = createTerminalData();

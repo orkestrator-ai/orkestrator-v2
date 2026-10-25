@@ -107,3 +107,61 @@ corrected and revalidated by the settings change.
 ## Environment-list UI main merge — 2026-10-24
 
 The normalization case exceeded 5000 ms in the combined workspace run (5000.99 ms), with a subsequent null-cursor error from the timed-out work. The complete unchanged owner passed alone (7.2 s). See [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md) for commands, parents and retained evidence. No implementation, assertion, timeout or skip changed.
+
+## Federated dialog readiness validation — 2026-10-25
+
+A different pagination case in the unchanged owner reproduced its deadline in
+both the aggregate and an isolated rerun; this observation does not establish
+that this particular case is intermittent.
+
+- Original command: `mise run test:logged -- --name repo-tests -- mise run test`,
+  Bun 1.4.4, workspace/root/bridges/protocol reservations 4/1/2/1, two backend
+  workers and other worktrees validating concurrently.
+- Failure: `terminal history > pages fixed history backwards and rejects a cursor for another history`
+  at `apps/backend/src/core/terminal-history.test.ts:257`, 5240.04 ms against the
+  five-second deadline. Backend counts: 10457 passed, 79 skipped, two failed,
+  one error across 615 files in 585.85 seconds. The other failing case was the
+  duplicate-account directory assertion recorded in 0239.
+- Complete unchanged owner:
+  `mise run test:logged -- --name history-owner-rerun -- bun test --cwd apps/backend ./src/core/terminal-history.test.ts --parallel=1 --only-failures`.
+  Result: 24 passed, one failed, one error in 12.8 seconds. The same case timed
+  out after 5020.94 ms; late work then expected `row-1250` from a missing page.
+- Evidence: `orkestrator-test-run.DHlEAe/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and `orkestrator-test-run.ZGKKU9/history-owner-rerun.log.gz` in the platform
+  temporary directory. No history implementation, assertion, timeout or skip
+  was changed.
+
+## Composer model admission validation — 2026-10-25
+
+Recurred in `mise run test:logged -- --name review-tests -- mise run test`
+on `todo-0004-composer-model-params-803868a90fcb`, Bun 1.4.4 on the shared
+macOS host. The unchanged case exceeded its five-second deadline
+(5002.45 ms). The timed-out pagination work also raised a late `row-1250` assertion after cleanup. The backend aggregate reported 11318 passed,
+84 skipped, two failed and one between-tests error across 670 files.
+
+The complete unchanged owner passed alone (exit 0, 7.3 seconds):
+
+```sh
+mise run test:logged -- --name terminal-history-recheck -- bun test --cwd apps/backend ./src/core/terminal-history.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: `orkestrator-test-run.T3LqzB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory. The original aggregate remains failed.
+No owning implementation, assertion, deadline or skip was changed.
+
+## Coordinator consistency validation — 2026-10-25
+
+- **Command:** `mise run test:logged -- --name consistency-suite -- mise run test`, on branch `todo-0028-coordinator-consistency-b1b98c1981f1`, with two isolated backend workers and other worktrees validating concurrently.
+- **Failure:** the normalization test timed out at 5002.36 ms; late work then accessed `recent.previousCursor` on a null page at line 297. Backend counts were 11087 passed and one failed.
+- **Complete unchanged owner:** `mise run test:logged -- --name terminal-history-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures` passed, exit 0 in 8.4 seconds.
+- **Evidence:** `orkestrator-test-run.Sh2roc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** recurrence of the existing aggregate timeout, confirmed intermittent by the unchanged owner's isolated pass. No history code, assertion, timeout or skip changed.
+
+## Live provider review validation — 2026-10-25
+
+The two-worker backend aggregate repeated this failure at `2238f5ec4`. The
+complete unchanged owner passed alone with one isolated worker. Exact failure
+text, durations, commands, suite counts and retained evidence are recorded in
+[0887](../aggregate-validation-runs/0887-live-provider-review-validation.md).
+No implementation, assertion, deadline or skip changed; the original aggregate
+remains failed.

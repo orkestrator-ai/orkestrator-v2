@@ -1,7 +1,7 @@
 # Efficiency checkpoint workload exceeds its aggregate deadline
 
 - **ID:** 0788
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-24
 - **Test:** `supervision workloads > an unchanged pipeline session is read whole and saved once`
 - **File:** `tests/unit/efficiency/harness.test.ts`
@@ -13,3 +13,8 @@
 - **Complete unchanged owner after root completion:** `env -u PORT mise run test:logged -- --name merge-efficiency-owner-after-root -- bun test ./tests/unit/efficiency/harness.test.ts --parallel=1 --only-failures`, same GNU-tool PATH, passed (exit 0, 7.2 seconds logged). The host load had fallen to approximately 76 before this rerun.
 - **Aggregate evidence:** `orkestrator-test-run.YFMbrr/root-and-agent-support-tests.log.gz` after aggregate finalization; outer run `orkestrator-test-run.I7HssJ`.
 - **Hypothesis:** contention during real temporary-store initialization and checkpoint commits exceeded the generic deadline. The workload uses real `StorageService` and performs both unchanged and moving session cases; no test, assertion, timeout, skip or implementation changed during this merge resolution. The final whole-owner pass establishes intermittence; the earlier failed rerun remains part of the evidence.
+
+## Triage 2026-10-25
+
+- **Disposition:** environmental (host load).
+- **Evidence:** host load reached 147 during the aggregate, and the first isolated rerun failed the same way at that load. The owner passed once load fell to about 76. A run that fails alone at that load is a host condition, not a flake by the registry's definition. Reopen if it fails at normal load.

@@ -8,7 +8,11 @@ import { create } from "zustand";
  * therefore only records the request here; `AppDialogHost` renders the dialog
  * outside the drawer, and the drawer closes when a request arrives.
  */
-export type AppDialogRequest = { kind: "environment-settings"; environmentId: string };
+export type AppDialogRequest =
+  | { kind: "environment-settings"; environmentId: string }
+  /** Also how another machine's project menu reaches these, in that machine's workspace. */
+  | { kind: "repository-settings"; projectId: string }
+  | { kind: "delete-project"; projectId: string };
 
 interface AppDialogState {
   /** The dialog to show, or null when none is open. */

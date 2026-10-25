@@ -1,3 +1,4 @@
+import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
@@ -382,6 +383,34 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     ).toBe(true);
     expect(writeInteractiveTerminalMock).not.toHaveBeenCalled();
   });
+
+  test.each(["metaKey", "ctrlKey"])(
+    "yields %s+Shift+K to the dialog without bridge input",
+    async (modifier) => {
+      render(
+        <>
+          <KeyboardShortcutsDialog />
+          <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />
+        </>,
+      );
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+      const terminal = terminalInstances[0]!;
+      const event = new KeyboardEvent("keydown", {
+        key: "K",
+        shiftKey: true,
+        [modifier]: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      const handled = terminal.emitKey(event);
+      if (handled) terminal.emitData("\x0b");
+      expect(handled).toBe(false);
+      expect(event.defaultPrevented).toBe(false);
+      fireEvent(window, event);
+      await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+      expect(writeInteractiveTerminalMock).not.toHaveBeenCalled();
+    },
+  );
 
   test("passes Cmd+W through to the application tab shortcut", async () => {
     render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);

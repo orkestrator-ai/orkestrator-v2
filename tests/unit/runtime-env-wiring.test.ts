@@ -329,7 +329,6 @@ describe("container runtime environment wiring", () => {
     // single symlinked or oversized entry cannot drop the whole directory.
     expect(entrypoint).toContain("copy_agent_directory /codex-home");
     expect(entrypoint).toContain("copy_agent_directory_entries /claude-config");
-    expect(entrypoint).toContain("copy_agent_directory_entries /opencode-data");
     expect(entrypoint).toContain("copy_agent_directory_entries /grok-home");
     expect(entrypoint).toContain("copy_agent_directory /grok-config");
     // Each call site names its agent so a skipped file is attributable.
@@ -982,18 +981,17 @@ eval "$block"
     // which meant the host's multi-GB opencode.db session database (plus its
     // -wal/-shm siblings) was copied into every container on every start.
     expect(entrypoint).not.toContain("find /opencode-data -maxdepth 1 -type f");
-    expect(entrypoint).toContain("copy_agent_file /opencode-data");
-    expect(entrypoint).toContain("copy_agent_directory_entries /opencode-data");
-
-    for (const allowlisted of ["auth.json", "account.json", "storage", "snapshot"]) {
-      expect(entrypoint).toMatch(
-        new RegExp(
-          `^[ \\t]*${allowlisted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`,
-          "m",
-        ),
-      );
-    }
-    for (const excluded of ["opencode.db", "opencode.db-wal", "opencode.db-shm"]) {
+    // The login is the only portable OpenCode data. A live run of 1.19.4
+    // (scripts/qualify-opencode-seeded-data.sh) never opened a host-seeded
+    // snapshot/ directory or account.json, and read only storage/'s
+    // legacy-migration index, which an empty storage/ recreates.
+    const copies = entrypoint
+      .split("\n")
+      .filter((line) => /^\s*copy_agent_/.test(line) && line.includes(" /opencode-data "));
+    expect(copies.map((line) => line.trim())).toEqual([
+      'copy_agent_file /opencode-data "$HOME/.local/share/opencode" auth.json OpenCode',
+    ]);
+    for (const excluded of ["opencode.db", "account.json", "storage", "snapshot"]) {
       expect(entrypoint).not.toMatch(
         new RegExp(`^[ \\t]*${excluded.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
       );
@@ -1052,7 +1050,7 @@ printf 'continued'
     });
   });
 
-  test("OpenCode data copy takes the credential and skips the session database", () => {
+  test("OpenCode data copy takes only the credential", () => {
     withTempDir((dir) => {
       const source = join(dir, "source");
       const destination = join(dir, "destination");
@@ -1070,12 +1068,7 @@ printf 'continued'
 
       const result = runShell(
         agentCopyHelperHarness(`
-for file in auth.json account.json; do
-  copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$file" OpenCode
-done
-for dir in storage snapshot; do
-  copy_agent_directory_entries "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$dir" OpenCode
-done
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json OpenCode
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -1088,11 +1081,16 @@ done
       // OpenCode's credential is a plain file, so unlike Claude it rides the
       // existing mount — this is what keeps container OpenCode logged in.
       expect(readFileSync(join(destination, "auth.json"), "utf8")).toBe('{"token":"opencode"}\n');
-      expect(readFileSync(join(destination, "account.json"), "utf8")).toBe('{"account":"test"}\n');
-      expect(readFileSync(join(destination, "storage", "kept.json"), "utf8")).toBe("kept\n");
-      expect(readFileSync(join(destination, "snapshot", "kept.json"), "utf8")).toBe("kept\n");
 
-      for (const excluded of ["opencode.db", "opencode.db-wal", "opencode.db-shm", "log"]) {
+      for (const excluded of [
+        "opencode.db",
+        "opencode.db-wal",
+        "opencode.db-shm",
+        "log",
+        "account.json",
+        "storage",
+        "snapshot",
+      ]) {
         expect(() => statSync(join(destination, excluded))).toThrow();
       }
     });
@@ -2274,7 +2272,7 @@ eval "$claude_setup"
     // aggregate load that passed the default five seconds (flake 0160).
   }, 15_000);
 
-  test("OpenCode setup block merges user config, skips the database, and copies data per-entry", () => {
+  test("OpenCode setup block merges user config and copies only the login", () => {
     withTempDir((dir) => {
       const config = join(dir, "opencode-config");
       const data = join(dir, "opencode-data");
@@ -2340,22 +2338,11 @@ eval "$opencode_setup"
         opencode: { type: "api", key: "k" },
         openai: { type: "oauth", access: "a", refresh: "", expires: 1 },
       });
-      expect(readFileSync(join(home, ".local", "share", "opencode", "account.json"), "utf8")).toBe(
-        '{"account":"test"}\n',
-      );
-      expect(() => statSync(join(home, ".local", "share", "opencode", "opencode.db"))).toThrow();
-      // Data directories copy per-entry: real records land, the symlinked one
-      // is skipped individually, and the excluded runtime dir never appears.
-      expect(
-        readFileSync(join(home, ".local", "share", "opencode", "storage", "kept.json"), "utf8"),
-      ).toBe("kept\n");
-      expect(
-        readFileSync(join(home, ".local", "share", "opencode", "snapshot", "kept.json"), "utf8"),
-      ).toBe("kept\n");
-      expect(() =>
-        statSync(join(home, ".local", "share", "opencode", "storage", "linked.json")),
-      ).toThrow();
-      expect(() => statSync(join(home, ".local", "share", "opencode", "log"))).toThrow();
+      // Nothing else in the data directory reaches the container: OpenCode
+      // never reads a host's snapshot/, storage/ or account.json there.
+      for (const excluded of ["opencode.db", "account.json", "storage", "snapshot", "log"]) {
+        expect(() => statSync(join(home, ".local", "share", "opencode", excluded))).toThrow();
+      }
     });
   });
 

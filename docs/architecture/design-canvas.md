@@ -19,10 +19,22 @@ canvas that remembers the file as its save location (`design_open_file`,
 `openDesignFile` in `design/exports.ts`). Create is blocked, with a one-line
 reason and **Check again**, when the backend, storage or renderer is unavailable.
 
+The brief is the new agent tab's opening prompt, and the backend owns sending
+it. `handTabInitialPromptToBackend` (`apps/web/src/lib/tab-initial-prompt.ts`)
+puts it on the tab's durable prompt queue under
+`initial-prompt:<environment>:<tab>` as soon as the tab exists. The backend
+queue dispatcher creates the session, waits until the environment is ready for
+agents and sends it, so switching environment, or never opening the tab, does
+not hold up the first turn. Until that queue write lands, the prompt also
+stays on the tab as a renderer fallback, sent under the same request id, which
+the backend dedupes. The fallback never joins a running turn's id-less queue
+(`noQueue` in the controller's `submit`). The review action's opening prompt
+uses the same helper.
+
 Images pasted into the **New design** brief are written into the environment
-(`.orkestrator/clipboard/`, like a composer paste) and seeded into the new
-agent tab's draft before it mounts, so they travel as attachments of its first
-message. The chat beside the canvas is an ordinary native conversation, so
+(`.orkestrator/clipboard/`, like a composer paste). They travel as attachments
+of the queued prompt, and are also seeded into the new agent tab's draft for
+the fallback until the queue write lands. The chat beside the canvas is an ordinary native conversation, so
 pasting an image into its composer attaches it as usual. New design and Ask
 agent reserve attachment slots as paste events arrive and disable confirmation
 until decoding and file writes settle. Submission freezes further image pastes;
@@ -282,9 +294,23 @@ the frame in blue; Delete/Backspace deletes it — undoable, and confirmed first
 on legacy canvases; a canvas-background click or Escape deselects), Escape
 priority (gesture → preview → element selection → frame selection → drawers),
 design undo only when the canvas owns the shortcut. Narrow panes use
-Layers/Inspector drawers. **Preview** mode routes scroll and hover into the
-frame while links, forms, navigation, scripts and network stay blocked; Escape
-inside the frame returns to Inspect.
+Layers/Inspector drawers. Short panes (under 400 px, about 400% zoom) keep the
+Layers and inspector toggles and the design name in the toolbar and move every
+other tool into a **More design tools** menu; there the inspector scrolls as
+one column and the Layers heading and filter note are visually hidden, so the
+panels keep their height (WCAG 1.4.10). Zoom steps keep the menu open; other
+items run after it closes, so focus returns to its trigger. **Preview** mode
+routes scroll and hover into the frame while links, forms, navigation, scripts
+and network stay blocked; Escape inside the frame returns to Inspect.
+
+Inspector fields are named by their visible label ("Fill", "Align items"),
+not the CSS property, so speech input can use what it sees (WCAG 2.5.3); the
+property is in the field's `data-property` and the label's tooltip, and tests
+and tooling address fields through it. Enter on a Layers row whose frame has
+not rendered brings the frame into view, announces that it is loading and
+selects the layer when the frame renders; selecting anything else or moving to
+another frame first drops the wait, and after 10 s it is dropped with an
+announcement.
 
 ## Save, export and download
 
@@ -358,7 +384,14 @@ Code: `apps/backend/src/core/design/session-links.ts`,
   tab the identity a resume needs: Codex's thread id, read from the session
   before it is closed (`NativeAgentService.resumableSessionIdIfRunning`,
   observe only), and the provider session id for Claude, which resumes by it.
-  An identity that cannot be read is not recorded rather than guessed. The
+  If the open session can no longer be read (its bridge restarted or lost it
+  before the close landed), teardown uses the identity the provider last
+  reported for that session: every native state read keeps it on the tab's
+  mapping (`PersistedNativeAgentSession.resumeIdentity`, written only when it
+  changes and only for the provider session it was read from). The identity
+  read before the close is also journaled on the teardown intent, so a close
+  replayed after a backend restart records the same one. An identity that
+  cannot be named is not recorded rather than guessed. The
   link is written after the provider-session teardown lock is released (a
   resume holds its canvas lane while waiting for that lock), and recording
   never fails the close.
@@ -404,7 +437,8 @@ Backend: the `core/design/` `service`, `operations`, `history`, `lifecycle`,
 `sync`, `records`, `exports`, `export-writer`, `renderer`, `mcp`,
 `cross-process`, `host-file` and `session-links` tests,
 `commands-registry-teardown` (a closing tab records its session on design
-links) and `commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
+links, including from the identity kept on the mapping when the session is
+gone), `storage-native-agent-resume-identity` and `commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
 plus one real-Chromium renderer test). Backend tests reach a storage bound
 (change log, history entries) by lowering it with `withDesignLimit`, not with
 hundreds of fsynced commits, and check the shipped bound in memory. A test
@@ -418,8 +452,13 @@ command registry at desktop and phone widths;
 `e2e/agent-testing/design-live.spec.ts` (opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1`)
 runs the full tool cycle, Ask agent, an approval, the handoff and closing and
 resuming the design conversation with real Claude and Codex.
+`e2e/agent-testing/design-resume-clients-live.spec.ts` (opt-in,
+`ORKESTRATOR_AGENT_TEST_LIVE_DESIGN_RESUME=1`) has two signed-in browser clients
+press Resume on one closed design conversation at once and checks they get
+one tab and one live session.
 `e2e/DesignCanvasAccessibility.spec.ts` runs a keyboard-only journey with focus
-survival, accessibility-tree, reduced-motion, zoom and narrow-pane checks, and
+survival, accessibility-tree, label-in-name, reduced-motion, 200% and 400% zoom
+and narrow-pane checks, and
 `e2e/agent-testing/design-canvas-electron.spec.ts` (`mise run test:agent:electron`)
 drives the canvas in the real Electron window. The opt-in
 `core/design/export-container.test.ts` (`ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE`)

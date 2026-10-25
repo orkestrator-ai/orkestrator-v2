@@ -10,6 +10,7 @@ import type {
 import { claudePlanWindowFromLabel } from "@orkestrator/protocol/plan-usage";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
+import { mcpScope } from "./mcp-runtime-status.js";
 import {
   claudeExecutableOptions,
   generateMessageId,
@@ -226,13 +227,6 @@ function createProbe(): Query {
   });
 }
 
-function mcpScope(scope: string | undefined, name: string): NativeAgentMcpServer["scope"] {
-  if (name === "orkestrator") return "orkestrator";
-  if (scope?.includes("plugin")) return "plugin";
-  if (scope === "project" || scope === "local") return "project";
-  return "user";
-}
-
 function mcpTransport(status: McpServerStatus): NativeAgentMcpServer["transport"] | undefined {
   const type = (status.config as { type?: unknown } | undefined)?.type;
   if (type === "stdio" || type === "sse" || type === "http") return type;
@@ -267,7 +261,7 @@ function normalizeMcp(status: McpServerStatus): NativeAgentMcpServer {
     id: status.name,
     name: status.serverInfo?.name || status.name,
     status: mappedStatus,
-    scope: mcpScope(status.scope, status.name),
+    scope: mcpScope(status.scope, status.name, status.source),
     ...(transport ? { transport } : {}),
     toolCount: tools.length,
     ...(tools.length ? { tools } : {}),

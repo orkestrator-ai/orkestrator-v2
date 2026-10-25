@@ -336,6 +336,16 @@ run = [
 description = "Prove Claude MCP removal and rename on a running CLI (real CLI, no credentials)"
 run = "bun test --cwd bridges/claude-bridge ./src/services/session-manager-prompt-mcp-sync.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
 
+[tasks."verify:claude:plugin-mcp-live"]
+description = "Prove the MCP editor's Claude plugin rows match the pinned CLI (real CLI, no credentials)"
+env = { RUN_LIVE_CLAUDE_PLUGIN_MCP = "1" }
+run = "bun test --cwd apps/backend ./tests/claude-plugin-mcp-live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
+
+[tasks."verify:opencode:mcp-live"]
+description = "Prove OpenCode's in-place MCP reload on the pinned binary (real binary, no credentials)"
+env = { RUN_LIVE_OPENCODE_MCP = "1" }
+run = "bun test --cwd apps/backend ./tests/opencode-mcp-reload-live.test.ts --parallel=1"
+
 [tasks."verify:toolchains:live"]
 description = "Verify live toolchain artifacts"
 env = { RUN_LIVE_TOOLCHAIN_ARTIFACTS = "1" }

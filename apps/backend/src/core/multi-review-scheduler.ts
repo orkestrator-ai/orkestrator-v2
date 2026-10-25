@@ -21,7 +21,12 @@
  *
  * Nothing here is persisted. The durable workflow is the only authority; this
  * is a timer projection of it, rebuilt by the first scan after startup.
+ *
+ * This is the `multi-review` domain's rollback under
+ * `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK`; it goes with that switch
+ * (0048-recurring-work-qualification.md).
  */
+import { type RecurringTimerFactory, systemRecurringTimers } from "./recurring-scheduler.js";
 
 export interface WorkflowDueSchedulerOptions {
   /** Runs one supervision pass. Must not reject for workflow-level faults. */
@@ -35,6 +40,8 @@ export interface WorkflowDueSchedulerOptions {
   /** Maximum workflows advanced at once. */
   maxConcurrent: number;
   now?: () => number;
+  /** Test seam: timers on the same clock as {@link now}. */
+  timers?: RecurringTimerFactory;
   /** Receives bounded, content-free pass diagnostics. */
   onPass?(event: { queueDelayMs: number; durationMs: number }): void;
 }
@@ -47,14 +54,16 @@ export class WorkflowDueScheduler {
   private readonly dueRevision = new Map<string, number>();
   private revision = 0;
   private readonly running = new Map<string, Promise<void>>();
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private timer: unknown = null;
   private reconcileAt = 0;
   private reconciling: Promise<void> | null = null;
   private stopped = true;
   private readonly now: () => number;
+  private readonly timers: RecurringTimerFactory;
 
   constructor(private readonly options: WorkflowDueSchedulerOptions) {
     this.now = options.now ?? Date.now;
+    this.timers = options.timers ?? systemRecurringTimers;
   }
 
   get active(): boolean {
@@ -66,6 +75,11 @@ export class WorkflowDueScheduler {
     return this.due.size;
   }
 
+  /** Passes and reconciliation scans running now. */
+  get inFlight(): number {
+    return this.running.size + (this.reconciling ? 1 : 0);
+  }
+
   start(): void {
     this.stopped = false;
     this.reconcileAt = this.now();
@@ -74,7 +88,7 @@ export class WorkflowDueScheduler {
 
   async stop(): Promise<void> {
     this.stopped = true;
-    if (this.timer) clearTimeout(this.timer);
+    if (this.timer !== null) this.timers.clear(this.timer);
     this.timer = null;
     this.due.clear();
     this.dueRevision.clear();
@@ -116,7 +130,8 @@ export class WorkflowDueScheduler {
 
   private arm(): void {
     if (this.stopped) return;
-    if (this.timer) clearTimeout(this.timer);
+    if (this.timer !== null) this.timers.clear(this.timer);
+    this.timer = null;
     let nextAt = this.reconciling ? Infinity : this.reconcileAt;
     if (this.running.size < this.options.maxConcurrent) {
       for (const [workflowId, dueAt] of this.due) {
@@ -124,8 +139,7 @@ export class WorkflowDueScheduler {
       }
     }
     if (!Number.isFinite(nextAt)) return;
-    this.timer = setTimeout(() => void this.fire(), Math.max(0, nextAt - this.now()));
-    this.timer.unref?.();
+    this.timer = this.timers.set(() => void this.fire(), Math.max(0, nextAt - this.now()));
   }
 
   private async fire(): Promise<void> {
@@ -212,19 +226,4 @@ export class WorkflowDueScheduler {
       this.running.set(workflowId, pass);
     }
   }
-}
-
-/**
- * Stable per-workflow jitter in `[0, spreadMs)`, so workflows restored together
- * after a restart do not all poll their providers in the same instant. The
- * identifier is only hashed locally; it never leaves this function.
- */
-export function stableJitterMs(workflowId: string, spreadMs: number): number {
-  if (spreadMs <= 0) return 0;
-  let hash = 2166136261;
-  for (let index = 0; index < workflowId.length; index++) {
-    hash ^= workflowId.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0) % Math.floor(spreadMs);
 }

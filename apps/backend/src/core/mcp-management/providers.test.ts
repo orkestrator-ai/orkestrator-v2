@@ -6,8 +6,10 @@ import path from "node:path";
 import { loadCatalog, summarizeEntries } from "./catalog.js";
 import {
   CONTAINER_CLAUDE_LOCAL_REASON,
+  CONTAINER_HOMES,
   CONTAINER_PROJECT_EPHEMERAL_REASON,
   containerSources,
+  opencodeManagedDir,
   providerCapabilities,
   providerSources,
   resolveProviderHomes,
@@ -263,6 +265,18 @@ describe("container sources", () => {
       "opencode:project-opencode.json",
       "opencode:injected",
     ]);
+  });
+});
+
+describe("OpenCode managed folder", () => {
+  test("follows the platform the pinned OpenCode resolves it on", () => {
+    expect(opencodeManagedDir("darwin")).toBe("/Library/Application Support/opencode");
+    expect(opencodeManagedDir("linux")).toBe("/etc/opencode");
+    expect(opencodeManagedDir("win32", { ProgramData: "D:\\Data" })).toBe(
+      path.join("D:\\Data", "opencode"),
+    );
+    // A container is Linux whatever the backend runs on.
+    expect(CONTAINER_HOMES.opencodeManagedDir).toBe("/etc/opencode");
   });
 });
 

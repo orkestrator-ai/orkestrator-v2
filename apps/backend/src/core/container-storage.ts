@@ -92,35 +92,31 @@ export type StorageFormatDecision =
   | { format: "volume-v1" }
   | {
       format: "legacy-layer";
-      reason:
-        | "disabled-by-configuration"
-        | "image-without-storage-contract"
-        | "engine-without-volume-subpath";
+      reason: "image-without-storage-contract" | "engine-without-volume-subpath";
     };
 
-/**
- * New runtimes use persistent volumes only when the image implements the
- * storage contract, the daemon supports sub-path mounts, and the rollout
- * switch has not disabled it. Existing legacy runtimes are never migrated here.
- */
 /**
  * Release safety switch: `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` refuses
  * new rebuilds and migrations while everything that recovers data — listing,
  * restoring and discarding recovery copies, resolving an interrupted
- * operation — keeps working.
+ * operation — keeps working. Permanent: it only ever refuses new work.
  */
 export function replacementAdmissionPaused(environment: NodeJS.ProcessEnv = process.env): boolean {
   return environment.ORKESTRATOR_CONTAINER_REPLACEMENT === "paused";
 }
 
+/**
+ * New runtimes use persistent volumes whenever the image implements the
+ * storage contract and the daemon supports sub-path mounts. Existing legacy
+ * runtimes are never migrated here. An image or engine without the contract is
+ * the compatibility boundary and keeps the writable layer; there is no switch
+ * that forces it on a capable one (`ORKESTRATOR_CONTAINER_STORAGE=legacy-layer`
+ * was removed once volume storage passed on a rootless Linux host).
+ */
 export function selectStorageFormat(
   capabilities: ImageManifest["capabilities"] | null,
   topology: Pick<DockerTopology, "serverVersion" | "kind">,
-  environment: NodeJS.ProcessEnv = process.env,
 ): StorageFormatDecision {
-  if (environment.ORKESTRATOR_CONTAINER_STORAGE === "legacy-layer") {
-    return { format: "legacy-layer", reason: "disabled-by-configuration" };
-  }
   if (!capabilities?.["persistent-workspace"]) {
     return { format: "legacy-layer", reason: "image-without-storage-contract" };
   }

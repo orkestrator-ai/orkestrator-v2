@@ -188,7 +188,7 @@ independently of panel size, up to the 32-reviewer maximum:
 | Concurrent observations | 8 (`DEFAULT_REVIEW_OBSERVATION_CONCURRENCY`) | `review-fanout-scheduler.ts` |
 | Concurrent work per provider | 4 (`DEFAULT_REVIEW_PROVIDER_CONCURRENCY`) | `review-fanout-scheduler.ts` |
 | Any configured cap | Clamped to 16 (`MAX_REVIEW_FANOUT_CONCURRENCY`) | `review-fanout-scheduler.ts` |
-| Evidence verifications | 2 per evidence generation: before admission and before consolidation | `review-evidence-permits.ts` |
+| Evidence verifications | 2 per evidence generation: before admission and before consolidation. Each hashes the package and every validation artifact it references (at most 32 MiB per stream); `evidence.verify` reports both as `bytes` and the artifact count as `count` | `review-evidence-permits.ts`, `review-validation-artifacts.ts` |
 | Provider transcript reads | At most one progress read per live reviewer per 60 s; none on other passes | `multi-review-progress.ts`, `review-fanout-transcript.ts` |
 | Observational writes | At most one workflow write per pass, for any panel size | `ReviewFanoutRunner.stageObservation` |
 | Controller fence checks | One committed row read each, with no lease, whatever the panel size or retained review history; four per running reviewer per pass, plus one (and one per pending request) on providers that report interactions | `StorageReviews.validateMultiReviewController` |
@@ -252,7 +252,30 @@ MULTI_REVIEW_BENCH_OUT=/tmp/multi-review-bench.json \
 ```
 
 Add `MULTI_REVIEW_BENCH_REPORT_ONLY=1` to measure an older build without the
-assertions. The remaining budgets are asserted by focused tests:
+assertions.
+
+That benchmark fakes verification, so it counts verifications but not what
+one costs. The opt-in
+[`multi-review-large-evidence.bench.test.ts`](../../apps/backend/src/core/multi-review-large-evidence.bench.test.ts)
+writes validation artifacts totalling `ORKESTRATOR_MULTI_REVIEW_LARGE_EVIDENCE_MIB`
+MiB into a temporary local worktree (32 MiB per artifact), verifies them twice
+with real streamed SHA-256 as one evidence generation does, checks that one
+changed byte fails, and bounds peak RSS growth. It is skipped without the
+variable:
+
+```bash
+ORKESTRATOR_MULTI_REVIEW_LARGE_EVIDENCE_MIB=512 \
+MULTI_REVIEW_LARGE_EVIDENCE_OUT=/tmp/large-evidence.json \
+  mise exec -- bun test --cwd apps/backend \
+  ./src/core/multi-review-large-evidence.bench.test.ts
+```
+
+On an Apple M5 Pro (internal SSD, Bun 1.4.4, 2026-10-25) 512 MiB in 16
+artifacts verified in about 0.25 s per pass (about 2 GB/s), 0.5 s per
+generation, with peak RSS growing by under 20 MiB; Bun 1.4.2 runs of 512 MiB
+and 1 GiB took 0.36 to 1.2 s per pass. A GiB of evidence costs about two
+seconds per generation on local disk, against reviews that take minutes. Container artifacts are hashed inside the container
+(`stat`, then `sha256sum`) and were not measured. The remaining budgets are asserted by focused tests:
 `review-fanout-efficiency.test.ts` (transcript reads, writes per pass,
 admission, isolation), `multi-review-service-efficiency.test.ts` and
 `multi-review-reviewer-transcript.test.ts` (reviewer-tab snapshots),

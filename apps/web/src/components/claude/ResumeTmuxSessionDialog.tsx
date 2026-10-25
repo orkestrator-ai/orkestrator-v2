@@ -4,7 +4,7 @@
 // the tmux backend, which reads the JSONL transcripts on disk rather than the
 // Agent SDK's session API.
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Clock, Loader2, MessageSquare } from "lucide-react";
 import {
   Dialog,
@@ -36,25 +36,39 @@ export function ResumeTmuxSessionDialog({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchSessions = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const all = await listPreviousSessions(environmentId);
-      setSessions(all);
-    } catch (err) {
-      console.error("[ResumeTmuxSessionDialog] Failed to list sessions:", err);
-      setError(String(err));
-    } finally {
-      setIsLoading(false);
+  // Opening the dialog (or switching workspace while open) starts a fresh fetch.
+  const fetchKey = open ? environmentId : null;
+  const [prevFetchKey, setPrevFetchKey] = useState<string | null>(null);
+  if (prevFetchKey !== fetchKey) {
+    setPrevFetchKey(fetchKey);
+    if (fetchKey !== null) {
+      setSessions([]);
+      setIsLoading(true);
+      setError(null);
     }
-  }, [environmentId]);
+  }
 
   useEffect(() => {
-    if (open) {
-      void fetchSessions();
-    }
-  }, [open, fetchSessions]);
+    if (!open) return;
+    let cancelled = false;
+    listPreviousSessions(environmentId)
+      .then(
+        (sessions) => {
+          if (!cancelled) setSessions(sessions);
+        },
+        (err: unknown) => {
+          if (cancelled) return;
+          console.error("[ResumeTmuxSessionDialog] Failed to list sessions:", err);
+          setError(String(err));
+        },
+      )
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, environmentId]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

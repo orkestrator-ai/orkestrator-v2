@@ -124,6 +124,8 @@ and is unsupported.
 
 Any command may send `expectedRuntimeGeneration`; a replaced runtime answers
 `runtime-changed` instead of connecting the handle to the new container.
+Generations only increase, including when a recovery copy's runtime is
+swapped back in, so a handle bound before a rebuild never matches again.
 
 ## Images
 
@@ -286,9 +288,8 @@ one.
 ## Persistent storage (`volume-v1`)
 
 A new environment — or one whose legacy runtime was explicitly discarded — gets
-a storage set when the image declares `persistent-workspace`, the daemon is
-Engine 26+ (volume sub-path mounts) and `ORKESTRATOR_CONTAINER_STORAGE` is not
-`legacy-layer`. An existing legacy runtime is never migrated by a start, read,
+a storage set when the image declares `persistent-workspace` and the daemon is
+Engine 26+ (volume sub-path mounts), rootful or rootless. An existing legacy runtime is never migrated by a start, read,
 status refresh or UI mount; that is the explicit preserving rebuild below.
 
 | Volume | Mount | Holds |
@@ -341,7 +342,7 @@ re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserve
 | --- | --- | --- |
 | Claude | `claude/projects` → `~/.claude/projects` (SDK transcripts); `claude/file-history` → `~/.claude/file-history` (rewind); `claude/orkestrator` → `~/.claude/orkestrator` (bridge dispatch and steer journals, preferences) | `.credentials.json`, settings, `commands`/`agents`/`plugins`, caches, `~/.claude.json` |
 | Codex | `codex/sessions`, `codex/archived_sessions` (rollouts, fork lineage); `codex/orkestrator-bridge` (session map, dispatch journal, the title index that keeps names set in Orkestrator); `codex/sqlite` at `CODEX_SQLITE_HOME` (every `*_N.sqlite` runtime database: state, thread history, goals, queue, memories, logs) | `session_index.jsonl` (Codex's own thread names, at the home root; only a name set in the Codex CLI itself is lost), `history.jsonl` (prompt recall), `shell_snapshots`, `auth.json`, `config.toml`, caches |
-| OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), legacy `storage/`, the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
+| OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions, console accounts and selected organization) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), `storage/` (the legacy-migration index and each session's saved change list, `session_diff/`), the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
 | Pi | `pi/sessions` → `~/.pi/agent/sessions` (`PI_SESSION_DIR`); `pi/bridge-state` → `/tmp/orkestrator-pi-state` | `auth.json`, `models.json`, settings, extensions, themes |
 | Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor/mcp.json` (a staged input: snapshotted at creation, re-imported on every start), other `~/.cursor` auxiliaries |
 | Grok | `grok/sessions` → `~/.grok/sessions` (per-cwd session directories, which hold everything `session/load` reads, and the rebuildable search index); `grok/bridge-state` → `/tmp/orkestrator-acp-state` | `active_sessions.json` (live-process registry), `worktrees.db` (registry of Grok's own worktrees, which live outside the preserved set), opt-in `memory-v2/`, `auth.json`, configuration |
@@ -393,9 +394,16 @@ commit is the write that completes the operation, so an unresolved one never
 committed. A candidate volume that will not remove is kept as a
 `failed-candidate` retained set rather than orphaned.
 
-Copy policy: bytes, modes, ownership and link targets are preserved and
-verified; sockets are skipped; extended attributes are not preserved; sparse
-files are copied densely. A copied root that is itself a symlink is refused
+Copy policy (`docker/orkestrator-migrate.sh`): bytes, modes, numeric
+ownership, symlink targets and hard links are preserved and verified; FIFOs
+are recreated; device nodes are refused (`unsupported`); sockets are skipped;
+sparse files are copied densely. File capabilities (`security.capability`)
+and `user.*` extended attributes are kept on extraction but not verified. A
+legacy source arrives as a `docker cp` archive, which carries file
+capabilities but not `user.*` attributes; a volume source is archived with
+both. Images built before 2026-10-25 archived a volume source without them,
+so their volume rebuilds dropped file capabilities. Host labels such as
+`security.selinux` are never copied. A copied root that is itself a symlink is refused
 (`root-symlink`) because Docker would otherwise deliver nothing for it. Codex
 databases (`~/.codex/*.sqlite*`) and OpenCode's `opencode.db*` are relocated
 into their state sub-directories; the rest of those homes (configuration,
@@ -453,6 +461,74 @@ new rebuild or migration is refused (`capability-unavailable`) before anything
 runs and the preview reports `admission-paused`. Recovery — listing, restoring
 and discarding copies, reconciling an interrupted operation — is unaffected.
 
+## Rollout switches and legacy runtimes
+
+Persisted capabilities are the compatibility boundary: a runtime created from
+an image without `persistent-workspace`, `staged-inputs` or `network-policy=2`,
+or on an Engine older than 26, keeps the writable layer, host agent-home
+mounts or the shared bridge that image expects. That is one lifecycle engine
+branching on what the image declares, not a second one, and it is not
+retired: an environment leaves it through a preserving rebuild, which always
+uses the current image. No switch makes a capable image behave like an old
+one any more.
+
+| Switch | Status | Effect while set | Owner and removal |
+| --- | --- | --- | --- |
+| `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` | Permanent | New rebuilds and migrations refused; recovery unaffected | Container lifecycle. Kept: it only ever refuses new work |
+| `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Removed 2026-10-25 | Ignored | It kept new runtimes on the writable layer as a fallback until volume storage passed on every platform; the rootless Linux run on 2026-10-25 was the last ([container qualification](../development/container-qualification.md#rootless-linux-host-2026-10-25)). A backend up to 2.30.0-beta still honours it and reports `disabled-by-configuration`, which the protocol and the rebuild section keep for that reason. `scripts/qualify-backend-upgrade-rollback.ts` sets it on its old release (v2.21.0) |
+| `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)) |
+| `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` | Removed 2026-10-25 | Ignored | It bound whole host agent homes read-only and put the Anthropic key in `docker inspect` |
+| `ORKESTRATOR_NETWORK_POLICY=1` | Removed 2026-10-25 | Ignored; a capable image gets at least policy 2 | It joined the shared bridge, where the legacy firewall allows the whole gateway `/24`, siblings included. Exhausted address pools are fixed by widening Docker's `default-address-pools`, as the error says |
+
+What still exists in the legacy shapes, and what handles it:
+
+| Resource | Handled by |
+| --- | --- |
+| Current runtime on the writable layer | "Rebuild (keeps files)" or `orkestrator environment recreate` (a `migrate`); never migrated by a start, read or status refresh |
+| Current runtime with host mounts or policy 1 (an older image, or created while a removed switch was set) | Kept until rebuilt; `get_environment_inputs` reports `host-mounts`, the network status reports the policy. Any rebuild creates the new runtime from the current image |
+| Recovery copy of a legacy runtime | Listed, restored (swapped back as it was) and discarded like any copy; removed with the environment by the cleanup ledger |
+| `legacy-unadopted` container (from before owner labels) | Offered for reattachment in the cleanup review, never removed by it |
+
+There is no host-archive export. A runtime's data leaves the legacy shape only
+as a verified copy into a new storage set on the same daemon, which then
+gets recovery copies, verification and ledger deletion like any other.
+
+### Design constraints
+
+These held through the design and should keep holding:
+
+- Always copy into a new storage set, including for a volume rebuild, so
+  candidate setup can never damage the only pre-rebuild copy. The source is
+  stopped, never restarted, to export it.
+- One revision-checked write moves the runtime and storage pointers together
+  and records the retained copies. Never revert automatically after the
+  commit; prefer forward repair.
+- Recovery copies have no age expiry; the cap blocks another rebuild rather
+  than evicting a copy. Named volumes are persistence, not backup.
+- Never mount all of `/home/node` or the host checkout to get persistence, and
+  never symlink a state path: both weaken the credential destination checks.
+  Credentials, configuration, caches and binaries stay in the container layer.
+- SQLite stores are copied only with their writer stopped, with their `-wal`
+  and `-shm` files. Dispatch journals stay beside their session identity, so
+  an ambiguous dispatch survives reconstruction as unknown; resuming never
+  manufactures a new turn.
+- An interrupted copy discards the candidate and a retry recopies from
+  scratch. A resumable copy journal was rejected: it would need partial-state
+  verification across daemon restarts, the riskiest part of the copy path,
+  and no measured workspace makes a recopy costly. Revisit only with one.
+- Keep the identities distinct (`environmentId`, `runtimeGeneration`,
+  `bootId`, `workspaceGeneration`, `storageSetId`, `operationId`, the lifecycle
+  `revision`). Runtime generations only increase.
+- Provider state is classified per path as preserve (needed to resume, rewind
+  or fork, or a bridge map without which the host session id cannot be
+  resolved), accept losing (user-visible, named in the limitation text, makes
+  the provider `partial`) or drop (credentials, configuration, caches, logs,
+  process registries, host-seeded content). A pinned-version test forces a
+  re-trace on every agent bump
+  ([upgrading agents](../development/upgrade-agents.md#re-trace-preserved-provider-state)).
+- Scope: Docker CLI primitives behind a small backend service; no
+  Kubernetes, no Docker SDK rewrite, no per-agent image matrix.
+
 ## Recovery copies
 
 An environment keeps earlier states as recovery copies (`recovery-copies.ts`,
@@ -466,7 +542,7 @@ layer is the data.
 | Action | Effect |
 | --- | --- |
 | Reset (discard) with `keepRecoveryCopy` | Runtime stopped, not removed; it and its set become a `workspace-reset` copy; new workspace generation. The settings dialog defaults to this. |
-| `restore_recovery_copy` | Current runtime quiesced and kept as a `restore-source` copy in the same commit; a retained runtime still present is swapped back in, otherwise a new runtime mounts the verified set. Then the normal start path runs. |
+| `restore_recovery_copy` | Current runtime quiesced and kept as a `restore-source` copy in the same commit; a retained runtime still present is swapped back in, otherwise a new runtime mounts the verified set. Either way the restored runtime takes a new runtime generation (a swapped-back container keeps the generation label and name it was created with). Then the normal start path runs. |
 | `discard_recovery_copy` | Removes the copy's container and volumes, label-verified, never forced; whatever does not remove stays referenced for a retry. |
 
 Copies are kept indefinitely — no age-based expiry — and capped at 16 per
@@ -513,7 +589,7 @@ Staged per provider (`portableInputSpec`):
 | Provider | Mount | Staged |
 | --- | --- | --- |
 | Claude | `/claude-config`, `/claude-config.json` | `CLAUDE.md`, `settings.local.json`, `.credentials.json` (access-only), `commands`, `agents`, `ide`, `plugins`; `~/.claude.json` |
-| OpenCode | `/opencode-config`, `/opencode-data`, `/opencode-state/model.json` | configuration (except `node_modules`); `auth.json` (access-only), `account.json`, `storage`, `snapshot`; `model.json` |
+| OpenCode | `/opencode-config`, `/opencode-data`, `/opencode-state/model.json` | configuration (except `node_modules`); `auth.json` (access-only); `model.json`. Nothing else from the data directory: OpenCode 1.19.4 stores active console accounts and organizations in SQLite (preserved via `OPENCODE_DB`), not `account.json`. Host `snapshot/` is keyed by the worktree path; of `storage/` only the legacy-migration index is needed and an empty directory recreates it. The automated live data-contract suite runs authenticated active console accounts with and without these host files (`scripts/qualify-opencode-seeded-data.sh`) |
 | Codex | `/codex-home` | `auth.json` (access-only), `config.toml`, `AGENTS.md`, `hooks.json`, `.codex-global-state.json`, model and cloud caches, `rules`, `skills`, `prompts`, `vendor_imports`, `plugins/cache` |
 | Grok | `/grok-home`, `/grok-config` | `xai-api-key`, `auth.json` (access-only), `config.toml`, `trusted_folders.toml`, `agent_id`, `models_cache.json`, `hooks`, `skills`; `~/.config/grok` |
 | Pi | `/pi-config` | `agent/auth.json` (access-only), `models.json`, `settings.json`, `mcp.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills`, `prompts`, `extensions`, `themes` |
@@ -581,16 +657,21 @@ image. Backend code that needs to know checks
   the running container's `~/.claude.json`. Remaining qualification and renewal
   work is tracked in
   [0018-container-network-and-credential-isolation.md](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
-- The Cursor key is no longer in a staged-inputs container's creation
-  environment; the bridge reads the synced owner-only file. The Anthropic API
-  key (when used instead of OAuth) still is, because Claude Code in terminals
-  reads it from the process environment: it is visible to same-user processes
-  and in `docker inspect`.
+- Neither the Cursor key nor the Anthropic API key (when used instead of
+  OAuth) is in a staged-inputs container's creation environment. The bridge
+  reads the synced owner-only Cursor file. The Anthropic key is written to
+  `/claude-config/.orkestrator-anthropic-key` in the staged revision, and
+  `docker/runtime-env.sh` exports it into shells and agent processes, because
+  Claude Code in terminals reads it from the process environment: it is
+  visible to same-user processes, but not in `docker inspect`. Only a
+  container of an image without staged inputs still gets
+  `-e ANTHROPIC_API_KEY` (and `CURSOR_API_KEY`).
 - Older images keep the read-only home mounts their entrypoint expects, and a
   running legacy container keeps them until it is rebuilt; `get_environment_inputs`
   reports that as `host-mounts`, never as narrowed.
-- Credentials (staged inputs, the Anthropic key in the creation environment,
-  the Cursor key and the start-time Claude credential sync) go only to
+- Credentials (staged inputs, the staged Anthropic key, or the creation
+  environment of an image without staged inputs, the Cursor key and the
+  start-time Claude credential sync) go only to
   providers that are enabled, authorized for agent-test profiles and not
   revoked for the environment (`providerCredentialsAllowed`).
 - Enabling a provider later is a rebuild, reported as `missingProviders`.
@@ -752,12 +833,43 @@ probe URL carries no credential. Commands: `get_container_host_reachability`,
 
 ## Resource budgets and usage (`container-resources.ts`)
 
-Budgets are opt-in. `global.containerResourceLimits` (Settings → Container)
-sets a default for new runtimes and `environment.containerResourceLimits`
-overrides it; with neither, a runtime is unrestricted, because a default
-must come from measured workloads, not guesses. The older
-`global.containerResources` slider value was never applied and is no longer
-shown or read.
+A new runtime gets `environment.containerResourceLimits`, else
+`global.containerResourceLimits` (Settings → Container), else the built-in
+default for its daemon (`builtInResourceDefault`,
+`packages/protocol/src/container-resources.ts`). A budget whose limits are
+all `null` is an explicit opt-out ("No limits" in Settings, or blank fields
+on an environment). The budget is resolved only when a runtime is created or
+rebuilt, so an existing container keeps what it was created with until it is
+rebuilt or updated on purpose; its resources panel shows the difference.
+Settings writes the global budget only through `set_container_resource_limits`
+(`setContainerResourceLimits`); `null` removes it and restores the built-in
+default. The older `global.containerResources` slider value was never
+applied and is no longer shown or read.
+
+### Built-in default
+
+| Axis | Default | Why |
+| --- | --- | --- |
+| `cpus` | none | CPU is compressible and Docker shares it fairly; a 2-CPU cap made the browser workload 1.4–1.75× slower on Desktop and builds 1.5× slower on Linux, and protects nothing memory and PID limits do not |
+| `memoryMiB` | 8,192 MiB, capped at 75% of the daemon's memory (rounded down to 256 MiB; never below 512) | Above every measured workload's peak, and a small Docker Desktop VM keeps a quarter for the daemon and other containers. 5,888 MiB on Desktop's default 7.75 GiB VM, 8,192 MiB on a 32 GB Linux host; the preset when the daemon's memory is unknown |
+| `pids` | 4,096 | About 10× the highest measured peak (392; threads count), far below a fork bomb |
+
+`/dev/shm` stays 1 GiB under the default (half of any memory limit of at
+least 2 GiB). The default contains a runaway environment — a leak or a fork
+bomb is killed inside its own cgroup instead of exhausting the VM or host,
+the backend and sibling environments; it is not a packing target, and the
+sum over environments may exceed the daemon. The measurements behind it are
+in [container-qualification.md](../development/container-qualification.md#workload-budgets).
+
+An axis the daemon cannot enforce (support `false`, or unknown on a rootless
+daemon) is left off the default and reported in the policy's `unsupported`
+list and in Settings; the default is never refused, so a rootless daemon
+without delegated controllers still creates runtimes, unrestricted. An
+explicit budget on such a daemon is still refused, below. Docker Desktop
+enforces all three axes inside its VM, whose size is the ceiling.
+`get_docker_capacity` carries the default for that daemon as
+`builtInDefault`; policies report its source as `default`. Older backends
+omit both (and apply no default), which the Settings page shows.
 
 | Axis | Docker | Bounds |
 | --- | --- | --- |
@@ -772,10 +884,11 @@ enforcement (rootless with cgroup driver `none`, or a controller that is not
 delegated) accepts `--cpus`, `--memory` and `--pids-limit`, stores them and
 enforces nothing, so the read-back alone would show them as applied. Every
 create, `update_environment_resources` (stored or applied) and the rebuild
-preflight therefore refuse a budget axis whose support `docker info` reports
-`false`, with `unsupported-topology`, before anything is created or stopped.
-On a rootless daemon whose support is unknown the budget is refused as
-`daemon-unavailable`. `update_environment_resources`
+preflight therefore refuse an explicit (environment or Settings) budget axis
+whose support `docker info` reports `false`, with `unsupported-topology`,
+before anything is created or stopped. On a rootless daemon whose support is
+unknown such a budget is refused as `daemon-unavailable`. The built-in
+default drops those axes instead. `update_environment_resources`
 stores an override and, when asked, applies it to the running container with
 `docker update` as an `update-resources` lifecycle operation; it refuses a
 limit above the daemon's capacity and a memory limit within 10% of current use

@@ -1,7 +1,7 @@
 # Coordinator adapter review validation under shared-host load
 
 - **ID:** 0725
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-24
 - **Snapshot:** `efbe4cf56` after `b86f4039b` on `todo-0026-coordinator-read-only-adapters-d18c30e4bc68`.
 - **Original command:** `mise run test:logged -- --name repository-tests-final -- mise run test`.
@@ -48,3 +48,19 @@ was changed.
 | `apps/backend/src/core/commands-environment-worktree-location.test.ts` | `start uses and persists both explicit and configured roots; generic reads stay within the worktree` | 5039.82ms |
 | `apps/backend/src/core/commands-environment-worktree-location.test.ts` | `retargeting an accepted alias keeps creation and cleanup at the original physical root` | 5197.75ms |
 | `apps/backend/tests/tmux-commands-teardown.test.ts` | `Electron tmux environment teardown > an unlinked live socket retains session attribution, cleanup and startup retry state` | 5316.55ms |
+
+## Triage 2026-10-25
+
+Environmental: load averages reached 124.51/102.99/63.65 on 18 cores. Terminal history (0213) and OpenCode host (0723) passed alone; preview interactive (0672), container Git (0175), Mermaid (0512), agent accounts (0239) and public API (0261) also failed alone at that same load, so those reruns say nothing beyond the host state. The unrerun extras do not establish flakes.
+
+## Worktree alias recurrence during coordinator consistency validation — 2026-10-25
+
+`mise run test:logged -- --name committed-consistency-suite -- mise run test`
+repeated the unchanged alias-retargeting test timeout at 5027.50 ms against its
+five-second deadline. The complete owner then passed unchanged:
+`mise run test:logged -- --name worktree-alias-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-environment-worktree-location.test.ts --parallel=1 --only-failures`
+(exit 0, 7.9 seconds). This establishes an intermittent recurrence for that
+owner; it does not reclassify the other unresolved failures above. No worktree
+implementation, assertion, timeout or skip changed. Evidence is
+`orkestrator-test-run.iEyQ7i/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory after aggregate completion.

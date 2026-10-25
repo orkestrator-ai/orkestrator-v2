@@ -309,6 +309,21 @@ describe("portable input staging", () => {
     expect(expired.providers[0]?.skipped["login-withheld"]).toBeUndefined();
   });
 
+  test("stages only OpenCode's login from its data directory", async () => {
+    const { dataDir, roots, home } = await fixtureHome();
+    const data = path.join(home, ".local", "share", "opencode");
+    await write(path.join(data, "auth.json"), JSON.stringify({ zen: { type: "api", key: "k" } }));
+    // Host state OpenCode never reads in a container (a snapshot directory is
+    // keyed by the host worktree path), plus the host's session database.
+    await write(path.join(data, "account.json"), "{}");
+    await write(path.join(data, "storage", "migration"), "2");
+    await write(path.join(data, "storage", "session_diff", "ses_host.json"), "[]");
+    await write(path.join(data, "snapshot", "project", "worktree", "HEAD"), "ref");
+    await write(path.join(data, "opencode.db"), "db");
+    const staged = await stagePortableInputs(dataDir, "env-opencode", new Set(["opencode"]), roots);
+    expect(await listFiles(path.join(staged.directory, "opencode-data"))).toEqual(["auth.json"]);
+  });
+
   test("stages OpenCode and Pi OAuth logins access-only and keeps their API keys", async () => {
     const { dataDir, roots, home } = await fixtureHome();
     const now = new Date("2026-10-21T12:00:00Z");

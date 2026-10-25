@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { BackendRuntime } from "./backend-runtime.js";
 import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -147,7 +148,7 @@ describe("generateLoopedReviewPackage", () => {
         { path: "untracked.txt", reason: "Left behind." },
       ],
       ["The worktree is not clean."],
-      { storage } as never,
+      { storage, runtime: new BackendRuntime({ emit: () => undefined }) } as never,
     );
     const written = JSON.parse(
       await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
@@ -174,7 +175,7 @@ describe("generateLoopedReviewPackage", () => {
       [validationEntry()],
       [],
       [],
-      { storage } as never,
+      { storage, runtime: new BackendRuntime({ emit: () => undefined }) } as never,
     );
 
     expect(reference.changedFileCount).toBe(2);
@@ -232,7 +233,7 @@ describe("generateLoopedReviewPackage", () => {
       ],
       [],
       [],
-      { storage } as never,
+      { storage, runtime: new BackendRuntime({ emit: () => undefined }) } as never,
     );
 
     const written = JSON.parse(
@@ -261,6 +262,7 @@ describe("generateLoopedReviewPackage", () => {
     await expect(
       generateLoopedReviewPackage("env-1", "package-1", 1, "main", [validationEntry()], [], [], {
         storage,
+        runtime: new BackendRuntime({ emit: () => undefined }),
       } as never),
     ).rejects.toThrow("was not written by preparation");
   });
@@ -281,6 +283,7 @@ describe("generateLoopedReviewPackage", () => {
     await expect(
       generateLoopedReviewPackage("env-1", "package-1", 1, "main", [validationEntry()], [], [], {
         storage,
+        runtime: new BackendRuntime({ emit: () => undefined }),
       } as never),
     ).rejects.toThrow("escapes the environment worktree");
   });
@@ -296,7 +299,7 @@ describe("generateLoopedReviewPackage", () => {
       [],
       [{ path: "source.txt", reason: "Changed since the review snapshot" }],
       [],
-      { storage } as never,
+      { storage, runtime: new BackendRuntime({ emit: () => undefined }) } as never,
     );
     const written = JSON.parse(
       await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
@@ -318,7 +321,7 @@ describe("generateLoopedReviewPackage", () => {
       [],
       [],
       [],
-      { storage } as never,
+      { storage, runtime: new BackendRuntime({ emit: () => undefined }) } as never,
     );
     const written = JSON.parse(
       await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
@@ -344,7 +347,7 @@ describe("generateLoopedReviewPackage", () => {
       [],
       notes,
       [],
-      { storage } as never,
+      { storage, runtime: new BackendRuntime({ emit: () => undefined }) } as never,
     );
     const written = JSON.parse(
       await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
@@ -383,7 +386,7 @@ describe("generateLoopedReviewPackage", () => {
           [validationEntry(overrides)],
           [],
           [],
-          { storage } as never,
+          { storage, runtime: new BackendRuntime({ emit: () => undefined }) } as never,
         ),
       ).rejects.toThrow("Review package failed runtime validation");
     }

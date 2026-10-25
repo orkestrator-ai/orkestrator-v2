@@ -774,13 +774,12 @@ export function BuildLaunchDialog({
     resetLaunchState,
   ]);
 
-  useEffect(() => {
-    if (!dockerAvailable && localEnvironmentAvailable && environmentType === "containerized") {
-      setEnvironmentType("local");
-    } else if (!localEnvironmentAvailable && dockerAvailable && environmentType === "local") {
-      setEnvironmentType("containerized");
-    }
-  }, [dockerAvailable, environmentType, localEnvironmentAvailable]);
+  // Switch to the only available environment type. Converges in one pass.
+  if (!dockerAvailable && localEnvironmentAvailable && environmentType === "containerized") {
+    setEnvironmentType("local");
+  } else if (!localEnvironmentAvailable && dockerAvailable && environmentType === "local") {
+    setEnvironmentType("containerized");
+  }
 
   const resolved = useMemo(() => {
     const entries = BUILD_STEPS.map(({ key }) => {
@@ -936,7 +935,7 @@ export function BuildLaunchDialog({
                         <span className="mt-1 text-[11px] leading-snug text-zinc-500">
                           {disabled
                             ? option.value === "containerized"
-                              ? "Unavailable while Docker is stopped"
+                              ? "Containers unavailable while Docker stopped"
                               : "Unavailable without a local project checkout"
                             : option.description}
                         </span>

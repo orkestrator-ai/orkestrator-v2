@@ -419,14 +419,22 @@ command node.
   environments returns the central region to the window's own workspace,
   whose selection was cleared while another node's was shown.
 - **What crosses between a window and its realm** is a handful of bounded
-  messages: what to show (a project, an environment, the node's Add Project
-  or New Environment dialog), the realm's own selection (for the sidebar's
+  messages: what to show (a project, an environment, or one of the node's
+  dialogs: Add Project, New Environment, Repository Settings, Delete Project
+  or an environment's Settings), the realm's own selection (for the sidebar's
   highlight), the sidebar's open state (the realm's toolbar toggles it),
   requests to open settings (they belong to the command node), and a ready
   handshake so nothing asked while a realm loads is lost.
 - **Creating on another node** opens that node's New Environment dialog in
   its realm, so the node's defaults — the command node's inherited settings
   laid over its own — and start apply as they would there.
+- **Project and environment menus** of another node offer what the node's
+  own sidebar does. Dialogs (Repository Settings, Delete Project, an
+  environment's Settings) open in the node's realm, so they read and write the
+  node's own state and a project is deleted with its environments as there;
+  Fork and Restart are routed commands; Open Repo on GitHub uses the
+  project's repository hint; folders are arranged through the owner's
+  sidebar layout.
 - **The title bar** shows the shown environment's name, host meters and agent
   information trigger. For another node, the realm reports the readings and
   renders the popovers under those triggers. The latest panel request waits

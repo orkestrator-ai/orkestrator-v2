@@ -1,5 +1,13 @@
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { ChevronDown, Loader2, LogIn, X } from "lucide-react";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
@@ -12,6 +20,7 @@ import {
   withResolvedNativeComposerModel,
   resolveReasoningId,
   withoutSuppressedComposerControls,
+  type AgentModelRef,
   type NativeAgentModelSubstitution,
   type NativeAgentNotice,
 } from "@orkestrator/protocol/native-agent";
@@ -61,7 +70,10 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
+import {
+  mergeReorderedFavoriteModels,
+  useAgentModelFavorites,
+} from "@/hooks/useAgentModelFavorites";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useComposerFileSearchFeedback } from "@/hooks/useComposerFileSearchFeedback";
@@ -87,6 +99,7 @@ import {
   writeCoordinatorAttachment,
 } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
+import { beginTabInitialPromptFallback, tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { attachFixPromptEvidence } from "@/lib/chat/fix-prompt-evidence";
@@ -326,11 +339,12 @@ export function SharedNativeAgentController({
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const initialPromptSentRef = useRef(false);
-  const hasConnectedSessionRef = useRef(false);
   // The projection rewrites `data.sessionId` to whatever session the tab ends
   // up connected to, so the id the tab was *asked* to resume has to be captured
-  // before that can happen.
-  const requestedResumeSessionIdRef = useRef(data.sessionId);
+  // before that can happen. Render reads the state; the startup-prompt effect
+  // reads the ref. Neither is ever updated.
+  const [requestedResumeSessionId] = useState(data.sessionId);
+  const requestedResumeSessionIdRef = useRef(requestedResumeSessionId);
   const [optimisticPrompt, setOptimisticPrompt] = useState<{
     text: string;
     attachments: Array<{ path: string; previewUrl?: string; name: string }>;
@@ -607,7 +621,24 @@ export function SharedNativeAgentController({
   const backendOwnsStartupPrompt =
     tabId === "startup-agent" &&
     (environment?.pendingAgentLaunch === true || environment?.startupAgentSession !== undefined);
-  const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
+  const {
+    favorites: allFavorites,
+    toggleFavorite,
+    reorderFavorites: reorderAllFavorites,
+  } = useAgentModelFavorites();
+  // The tab's platform is locked, so a favourite on any other platform is a
+  // model it cannot switch to; hidden, and kept in place when reordering.
+  const favorites = useMemo(
+    () => allFavorites.filter((favorite) => favorite.platform === platform),
+    [allFavorites, platform],
+  );
+  const reorderFavorites = useCallback(
+    (reorderedVisible: AgentModelRef[]) => {
+      const merged = mergeReorderedFavoriteModels(allFavorites, favorites, reorderedVisible);
+      if (merged) reorderAllFavorites(merged);
+    },
+    [allFavorites, favorites, reorderAllFavorites],
+  );
   // An "open full conversation" request parked for this tab outranks the
   // activation policy, whichever effect happens to run first.
   const explicitScrollTargetPending = useConversationScrollTargetStore((state) =>
@@ -1424,9 +1455,13 @@ export function SharedNativeAgentController({
     ],
   );
 
-  useEffect(() => {
+  // An authentication prompt supersedes a send error from before it appeared.
+  const [sawAuthenticationRequired, setSawAuthenticationRequired] =
+    useState(authenticationRequired);
+  if (sawAuthenticationRequired !== authenticationRequired) {
+    setSawAuthenticationRequired(authenticationRequired);
     if (authenticationRequired) setSendError(null);
-  }, [authenticationRequired]);
+  }
 
   useEffect(() => {
     const confirmation = draft.pendingTranscriptConfirmation;
@@ -1447,6 +1482,10 @@ export function SharedNativeAgentController({
     // The new authoritative transcript row is definitive confirmation, so the
     // matching submitted draft must not remain in the composer indefinitely.
     transcriptConfirmedRequestIdRef.current = confirmation.requestId;
+    // Clearing the error depends on the compose-store write just before it, and
+    // the confirmation that write needs is read from the optimistic prompt this
+    // effect then clears, so these updates cannot move into render.
+    // oxlint-disable-next-line react/set-state-in-effect
     if (clearConfirmedDraft(confirmation.requestId)) setSendError(null);
     setOptimisticPrompt(null);
   }, [
@@ -1464,17 +1503,14 @@ export function SharedNativeAgentController({
    * undefined/new pairing is a brand-new session this prompt created, not a
    * replacement of the one it was sent to.
    */
-  useEffect(() => {
-    const submittedSessionId = optimisticPrompt?.sessionId;
-    if (
-      submittedSessionId === undefined ||
-      projection?.sessionId === undefined ||
-      submittedSessionId === projection.sessionId
-    ) {
-      return;
-    }
+  const submittedSessionId = optimisticPrompt?.sessionId;
+  if (
+    submittedSessionId !== undefined &&
+    projection?.sessionId !== undefined &&
+    submittedSessionId !== projection.sessionId
+  ) {
     setOptimisticPrompt(null);
-  }, [optimisticPrompt?.sessionId, projection?.sessionId]);
+  }
 
   /**
    * OpenCode has no conversation-mode list; Plan/Build are primary agents.
@@ -1533,9 +1569,13 @@ export function SharedNativeAgentController({
       requestId?: string,
       preparedPrompt = false,
       modeOverride?: "build" | "plan",
-      submitOptions?: { literal?: boolean },
+      submitOptions?: { literal?: boolean; noQueue?: boolean },
     ) => {
       if (submitInFlightRef.current) return false;
+      // A prompt with a stable id must not be queued: the queue carries no id,
+      // so a copy the backend already sent would run twice. Retried by the
+      // caller once the turn ends and this callback changes.
+      if (submitOptions?.noQueue && canQueue) return false;
       // Claim the intent before validation or dispatch. A remount cannot replay
       // it a second time, and every terminal validation return releases it.
       settleHeldSubmit();
@@ -1800,11 +1840,12 @@ export function SharedNativeAgentController({
         })),
         ...(commandIntent ? { command: commandIntent } : {}),
       };
+      const confirmationSessionId = projection?.sessionId;
       const transcriptConfirmation =
-        dispatchRequestId && projection?.sessionId
+        dispatchRequestId && confirmationSessionId
           ? {
               requestId: dispatchRequestId,
-              sessionId: projection.sessionId,
+              sessionId: confirmationSessionId,
               priorMessageIds: Array.from(visibleAuthoritativeMessageIds),
             }
           : undefined;
@@ -1819,6 +1860,10 @@ export function SharedNativeAgentController({
             : current,
         );
       }
+      const openingFallback =
+        dispatchRequestId === tabInitialPromptRequestId(data.environmentId, tabId)
+          ? beginTabInitialPromptFallback(dispatchRequestId)
+          : undefined;
       let keepTranscriptConfirmation = false;
       // The provider will never run this id: a resend has to mint a new one.
       let requestIdRetired = false;
@@ -1841,6 +1886,10 @@ export function SharedNativeAgentController({
           return true;
         }
         const outcome = await send(prompt, options);
+        if (openingFallback?.backendOwned) {
+          setOptimisticPrompt(null);
+          return true;
+        }
         const transcriptConfirmed =
           dispatchRequestId !== undefined &&
           transcriptConfirmedRequestIdRef.current === dispatchRequestId;
@@ -1877,8 +1926,10 @@ export function SharedNativeAgentController({
         }
       } catch (error) {
         setOptimisticPrompt(null);
+        if (openingFallback?.backendOwned) return true;
         reportSendError(error instanceof Error ? error.message : String(error));
       } finally {
+        openingFallback?.release();
         submitInFlightRef.current = false;
         setIsSubmitting(false);
         if (restoreComposerFocus) {
@@ -2142,11 +2193,15 @@ export function SharedNativeAgentController({
     [handoff.displayMessages, isTurnActive, platform],
   );
   const forkPlanRef = useRef(forkPlan);
-  forkPlanRef.current = forkPlan;
+  useLayoutEffect(() => {
+    forkPlanRef.current = forkPlan;
+  }, [forkPlan]);
 
+  const forkSourceSessionId = projection?.sessionId;
+  const forkSourceTitle = projection?.title;
   const handleFork = useCallback(
     async (messageId: string, kind: MessageForkKind) => {
-      if (forkLatchRef.current || !projection?.sessionId) return;
+      if (forkLatchRef.current || !forkSourceSessionId) return;
       forkLatchRef.current = true;
       setForkInFlight(true);
       try {
@@ -2186,7 +2241,7 @@ export function SharedNativeAgentController({
           {
             id: forkTabId,
             type: "agent-native",
-            displayTitle: outcome?.title ?? `${projection.title ?? label} (fork)`,
+            displayTitle: outcome?.title ?? `${forkSourceTitle ?? label} (fork)`,
             nativeAgentData: {
               ...data,
               platform,
@@ -2204,7 +2259,7 @@ export function SharedNativeAgentController({
         setForkInFlight(false);
       }
     },
-    [data, fork, label, platform, projection?.sessionId, projection?.title, updateDraft],
+    [data, fork, forkSourceSessionId, forkSourceTitle, label, platform, updateDraft],
   );
   const handleForkAction = useCallback(
     (messageId: string, kind: MessageForkKind) => {
@@ -2239,19 +2294,23 @@ export function SharedNativeAgentController({
     latestIsPlanReview &&
     latestAssistantMessage !== undefined &&
     latestAssistantMessage.id !== dismissedPlanReviewId;
+  const latestAssistantMessageId = latestAssistantMessage?.id;
+  const composerModelId = composer?.selectedModelId;
+  const composerReasoningId = composer?.selectedReasoningId;
+  const composerFastModeEnabled = composer?.fastModeEnabled;
   const switchPlanToBuild = useCallback(
     async (implement: boolean) => {
       if (planTransitionPending) return;
       setPlanTransitionPending(true);
       try {
         await updateControls({ mode: "build" });
-        setDismissedPlanReviewId(latestAssistantMessage?.id ?? null);
+        setDismissedPlanReviewId(latestAssistantMessageId ?? null);
         if (implement) {
           const outcome = await send("The plan is approved. Exit plan mode and implement it.", {
-            model: composer?.selectedModelId,
-            reasoningEffort: composer?.selectedReasoningId,
+            model: composerModelId,
+            reasoningEffort: composerReasoningId,
             mode: "build",
-            fastMode: composer?.fastModeEnabled ?? undefined,
+            fastMode: composerFastModeEnabled ?? undefined,
           });
           if (outcome.outcome !== "accepted") {
             throw new Error(outcome.error ?? "Plan implementation dispatch was not confirmed");
@@ -2264,10 +2323,10 @@ export function SharedNativeAgentController({
       }
     },
     [
-      composer?.fastModeEnabled,
-      composer?.selectedModelId,
-      composer?.selectedReasoningId,
-      latestAssistantMessage?.id,
+      composerFastModeEnabled,
+      composerModelId,
+      composerReasoningId,
+      latestAssistantMessageId,
       planTransitionPending,
       send,
       updateControls,
@@ -2297,12 +2356,21 @@ export function SharedNativeAgentController({
       return;
     }
     initialPromptSentRef.current = true;
-    void submit(initialPrompt, `initial-prompt:${data.environmentId}:${tabId}`, true).then(
-      (accepted) => {
-        if (accepted) clearTabInitialPrompt(tabId, data.environmentId);
-        else initialPromptSentRef.current = false;
+    // `noQueue`: the backend queue may already have sent this very prompt under
+    // the same id (`handTabInitialPromptToBackend`), so it waits for idle
+    // rather than joining the queue without an id.
+    void submit(
+      initialPrompt,
+      tabInitialPromptRequestId(data.environmentId, tabId),
+      true,
+      undefined,
+      {
+        noQueue: true,
       },
-    );
+    ).then((accepted) => {
+      if (accepted) clearTabInitialPrompt(tabId, data.environmentId);
+      else initialPromptSentRef.current = false;
+    });
   }, [
     backendOwnsStartupPrompt,
     clearTabInitialPrompt,
@@ -2501,9 +2569,9 @@ export function SharedNativeAgentController({
       });
     };
   }, []);
-  useEffect(() => {
-    if (connectionState === "connected") hasConnectedSessionRef.current = true;
-  }, [connectionState]);
+  // Latched for the rest of the mount once the tab has connected.
+  const [hasConnectedSession, setHasConnectedSession] = useState(false);
+  if (!hasConnectedSession && connectionState === "connected") setHasConnectedSession(true);
   /**
    * Questions and plan reviews are conversational content, so they render as
    * the last transcript row. Command/file/permission approvals stay pinned
@@ -2520,7 +2588,7 @@ export function SharedNativeAgentController({
    * A tab has a session behind it once it was asked to resume one, or once it
    * has connected and actually produced something a user can act on or see:
    * conversation, a pending interaction, or an authentication-required banner.
-   * The created id lands in `data.sessionId` only after the fact, so the ref is
+   * The created id lands in `data.sessionId` only after the fact, so the latch is
    * what covers a tab for the rest of its mount — but a tab that connected and
    * is still completely empty has nothing to protect, and its next connect must
    * stay an establishment wait. A resumed tab is different: its transcript may
@@ -2534,8 +2602,8 @@ export function SharedNativeAgentController({
    * the only control the user can act on while it waits.
    */
   const hasEstablishedSession =
-    Boolean(requestedResumeSessionIdRef.current) ||
-    (hasConnectedSessionRef.current &&
+    Boolean(requestedResumeSessionId) ||
+    (hasConnectedSession &&
       (messages.length > 0 || authenticationRequired || allInteractions.length > 0));
   if (setupPending) {
     return (

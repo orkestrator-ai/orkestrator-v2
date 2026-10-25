@@ -1873,10 +1873,11 @@ app.get("/session/:id/mcp", async (c) => {
         ...(typeof server.pluginId === "string" ? { scope: "plugin" as const } : {}),
         toolCount: tools.length,
         tools,
+        // Redacted before the cut, so a bound never leaves part of a token.
         ...(typeof server.error === "string"
-          ? { error: server.error.slice(0, 1_000) }
+          ? { error: redactSecrets(server.error).slice(0, 1_000) }
           : typeof server.toolsError === "string"
-            ? { error: server.toolsError.slice(0, 1_000) }
+            ? { error: redactSecrets(server.toolsError).slice(0, 1_000) }
             : {}),
         actions: status === "needs-auth" ? ["sign-in" as const] : ["reconnect" as const],
       },

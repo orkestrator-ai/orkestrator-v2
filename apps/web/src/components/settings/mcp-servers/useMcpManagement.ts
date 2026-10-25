@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   MCP_MANAGEMENT_CHANGED_EVENT,
@@ -44,7 +44,9 @@ export function describeMcpError(error: unknown): string {
  */
 function useBackendInvalidation(refresh: () => void, machine: string | null | undefined): void {
   const refreshRef = useRef(refresh);
-  refreshRef.current = refresh;
+  useLayoutEffect(() => {
+    refreshRef.current = refresh;
+  });
   useEffect(() => {
     const online = () => refreshRef.current();
     window.addEventListener("online", online);
@@ -92,15 +94,15 @@ export function useMcpTargets(environmentId: string | null): {
     state: LoadState<McpManagementTarget[]>;
   }>({ environmentId, state: LOADING });
   const generation = useRef(0);
-  const load = useCallback(() => {
+  // A new context starts loading while rendering, so the effect below only
+  // issues the request.
+  const [requestedFor, setRequestedFor] = useState({ environmentId, machine });
+  if (requestedFor.environmentId !== environmentId || requestedFor.machine !== machine) {
+    setRequestedFor({ environmentId, machine });
+    setKeyed((current) => targetsLoading(current, environmentId));
+  }
+  const fetchTargets = useCallback(() => {
     const request = ++generation.current;
-    setKeyed((current) => ({
-      environmentId,
-      state: {
-        status: "loading",
-        data: current.environmentId === environmentId ? dataOf(current.state) : null,
-      },
-    }));
     backend
       .listMcpManagementTargets(environmentId ?? undefined, machine)
       .then((list) => {
@@ -122,9 +124,27 @@ export function useMcpTargets(environmentId: string | null): {
         }));
       });
   }, [environmentId, machine]);
-  useEffect(load, [load]);
+  const load = useCallback(() => {
+    setKeyed((current) => targetsLoading(current, environmentId));
+    fetchTargets();
+  }, [environmentId, fetchTargets]);
+  useEffect(fetchTargets, [fetchTargets]);
   useBackendInvalidation(load, machine);
   return { state: keyed.environmentId === environmentId ? keyed.state : LOADING, reload: load };
+}
+
+/** Loading state for `environmentId`, keeping data only if it was already loaded for it. */
+function targetsLoading(
+  current: { environmentId: string | null; state: LoadState<McpManagementTarget[]> },
+  environmentId: string | null,
+): { environmentId: string | null; state: LoadState<McpManagementTarget[]> } {
+  return {
+    environmentId,
+    state: {
+      status: "loading",
+      data: current.environmentId === environmentId ? dataOf(current.state) : null,
+    },
+  };
 }
 
 function dataOf<T>(state: LoadState<T>): T | null {
@@ -146,18 +166,21 @@ export function useMcpSnapshot(targetId: string | null): {
   const [state, setState] = useState<LoadState<McpManagementSnapshot>>(LOADING);
   const generation = useRef(0);
   const currentTarget = useRef(targetId);
-  currentTarget.current = targetId;
-  const load = useCallback(() => {
+  useLayoutEffect(() => {
+    currentTarget.current = targetId;
+  }, [targetId]);
+  // A new target (or machine) starts loading while rendering, so the effect
+  // below only issues the request.
+  const [requestedFor, setRequestedFor] = useState({ targetId, machine });
+  if (requestedFor.targetId !== targetId || requestedFor.machine !== machine) {
+    setRequestedFor({ targetId, machine });
+    setState((current) => snapshotLoading(current, targetId));
+  }
+  const fetchSnapshot = useCallback(() => {
     const request = ++generation.current;
-    if (!targetId) {
-      setState(LOADING);
-      return;
-    }
-    const sameTarget = (current: LoadState<McpManagementSnapshot>) => {
-      const data = dataOf(current);
-      return data?.target.targetId === targetId ? data : null;
-    };
-    setState((current) => ({ status: "loading", data: sameTarget(current) }));
+    if (!targetId) return;
+    const sameTarget = (current: LoadState<McpManagementSnapshot>) =>
+      sameTargetData(current, targetId);
     backend
       .getMcpManagementSnapshot(targetId, machine)
       .then((snapshot) => {
@@ -177,9 +200,29 @@ export function useMcpSnapshot(targetId: string | null): {
           }));
       });
   }, [targetId, machine]);
-  useEffect(load, [load]);
+  const load = useCallback(() => {
+    setState((current) => snapshotLoading(current, targetId));
+    fetchSnapshot();
+  }, [targetId, fetchSnapshot]);
+  useEffect(fetchSnapshot, [fetchSnapshot]);
   useBackendInvalidation(load, machine);
   return { state, reload: load };
+}
+
+function sameTargetData(
+  current: LoadState<McpManagementSnapshot>,
+  targetId: string,
+): McpManagementSnapshot | null {
+  const data = dataOf(current);
+  return data?.target.targetId === targetId ? data : null;
+}
+
+/** Loading state for `targetId`, keeping the last snapshot only if it is the same target's. */
+function snapshotLoading(
+  current: LoadState<McpManagementSnapshot>,
+  targetId: string | null,
+): LoadState<McpManagementSnapshot> {
+  return targetId ? { status: "loading", data: sameTargetData(current, targetId) } : LOADING;
 }
 
 export function newRequestId(): string {

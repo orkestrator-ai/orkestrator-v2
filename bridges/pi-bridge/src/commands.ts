@@ -22,6 +22,10 @@
  *
  * Nothing private leaves this module: an id is `pi:<kind>:<invocation>`, and
  * the binding revision is a fingerprint of the source path, never the path.
+ *
+ * Before a session attaches, `command-preview.ts` feeds the same builder from
+ * a resource-only loader (no extension runner), so a preview row and the row
+ * an attach publishes for the same template are identical.
  */
 import { randomBytes } from "node:crypto";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -77,6 +81,17 @@ interface Candidate {
   identity: string;
 }
 
+/**
+ * What the builder reads. An attached `AgentSession` is one; the resource-only
+ * read before attach is another, with no extension runner.
+ */
+export interface PiCommandSource {
+  readonly promptTemplates?: AgentSession["promptTemplates"];
+  readonly resourceLoader?: Pick<AgentSession["resourceLoader"], "getSkills">;
+  readonly settingsManager?: Pick<AgentSession["settingsManager"], "getEnableSkillCommands">;
+  readonly extensionRunner?: Pick<AgentSession["extensionRunner"], "getRegisteredCommands">;
+}
+
 export interface BuiltCommandCatalogue {
   commands: NativeAgentSlashCommand[];
   truncated: boolean;
@@ -88,17 +103,17 @@ export interface BuiltCommandCatalogue {
  * `enableSkillCommands` is what hides `/skill:` rows from Pi's terminal
  * autocomplete, so the picker here follows it too. Absent means Pi's default.
  */
-function skillCommandsEnabled(session: AgentSession): boolean {
+function skillCommandsEnabled(source: PiCommandSource): boolean {
   try {
-    return session.settingsManager?.getEnableSkillCommands?.() !== false;
+    return source.settingsManager?.getEnableSkillCommands?.() !== false;
   } catch {
     return true;
   }
 }
 
-function readCandidates(session: AgentSession): Candidate[] {
+function readCandidates(source: PiCommandSource): Candidate[] {
   const candidates: Candidate[] = [];
-  for (const template of session.promptTemplates ?? []) {
+  for (const template of source.promptTemplates ?? []) {
     candidates.push({
       kind: "template",
       invocation: template.name,
@@ -108,8 +123,8 @@ function readCandidates(session: AgentSession): Candidate[] {
       identity: template.filePath ?? template.sourceInfo?.path ?? template.name,
     });
   }
-  if (skillCommandsEnabled(session)) {
-    for (const skill of session.resourceLoader?.getSkills?.().skills ?? []) {
+  if (skillCommandsEnabled(source)) {
+    for (const skill of source.resourceLoader?.getSkills?.().skills ?? []) {
       candidates.push({
         kind: "skill",
         invocation: `skill:${skill.name}`,
@@ -119,7 +134,7 @@ function readCandidates(session: AgentSession): Candidate[] {
       });
     }
   }
-  for (const command of session.extensionRunner?.getRegisteredCommands?.() ?? []) {
+  for (const command of source.extensionRunner?.getRegisteredCommands?.() ?? []) {
     // `invocationName` is Pi's own disambiguation (`name:2` for a second
     // extension registering `name`) and the only spelling `getCommand` finds.
     const invocation = command.invocationName || command.name;
@@ -213,12 +228,13 @@ function toDescriptor(candidate: Candidate): NativeAgentSlashCommand | undefined
 }
 
 /**
- * Read the commands an attached session offers, bounded by the wire contract.
+ * Read the commands a session (or a resource-only loader) offers, bounded by
+ * the wire contract.
  *
  * Throws only if the SDK itself throws; callers keep the previous list then.
  */
-export function buildCommandCatalogue(session: AgentSession): BuiltCommandCatalogue {
-  const candidates = readCandidates(session);
+export function buildCommandCatalogue(source: PiCommandSource): BuiltCommandCatalogue {
+  const candidates = readCandidates(source);
   const winners = new Map<string, PiCommandKind>();
   for (const candidate of candidates) {
     const current = winners.get(candidate.invocation);
@@ -256,19 +272,33 @@ export function buildCommandCatalogue(session: AgentSession): BuiltCommandCatalo
   return { commands, truncated };
 }
 
-/** Adopt a freshly built list; advances the catalogue revision only on change. */
-export function publishCommandCatalogue(state: SessionState, built: BuiltCommandCatalogue): void {
+/**
+ * Adopt a freshly built list; advances the catalogue revision only on change.
+ *
+ * A list from an attached session is `ready`. One from the resource-only read
+ * (`attachPending`) is `stale`: it lacks extension commands, so it must never
+ * claim to be the session's whole inventory.
+ */
+export function publishCommandCatalogue(
+  state: SessionState,
+  built: BuiltCommandCatalogue,
+  options: { attachPending?: boolean } = {},
+): void {
   const current = state.commandCatalogue;
+  const attachPending = options.attachPending === true;
+  const status = attachPending ? "stale" : "ready";
   const changed =
-    current.status !== "ready" ||
+    current.status !== status ||
+    (current.attachPending === true) !== attachPending ||
     (current.truncated === true) !== built.truncated ||
     JSON.stringify(state.slashCommands) !== JSON.stringify(built.commands);
   state.slashCommands = built.commands;
   if (!changed) return;
   state.commandCatalogue = {
-    status: "ready",
+    status,
     revision: current.revision + 1,
     ...(built.truncated ? { truncated: true } : {}),
+    ...(attachPending ? { attachPending: true } : {}),
   };
   state.revision += 1;
 }
@@ -319,6 +349,7 @@ export function commandCatalogueResponse(state: SessionState): BridgeCommandCata
     // Pi pushes no inventory changes; the list is as fresh as its last read.
     freshness: "ttl",
     ...(state.commandCatalogue.truncated ? { truncated: true } : {}),
+    ...(state.commandCatalogue.attachPending ? { attachPending: true } : {}),
     commands: state.slashCommands,
   };
 }

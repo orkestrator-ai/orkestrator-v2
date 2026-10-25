@@ -240,6 +240,94 @@ describe("Electron connection manager", () => {
     ).toBe("");
   });
 
+  describe("startup safe-storage wait", () => {
+    const waitNotice =
+      "[Connections] Waiting for the macOS keychain (safe storage) before opening the first window; answer the keychain prompt to continue";
+
+    function captureWarnings(): { warnings: unknown[][]; restore: () => void } {
+      const originalWarn = console.warn;
+      const warnings: unknown[][] = [];
+      console.warn = ((...args: unknown[]) => {
+        warnings.push(args);
+      }) as typeof console.warn;
+      return { warnings, restore: () => (console.warn = originalWarn) };
+    }
+
+    test("logs once while the keychain check is pending and still uses secure storage when it answers late", async () => {
+      jest.useFakeTimers();
+      const { warnings, restore } = captureWarnings();
+      try {
+        const local = localBackendHarness();
+        const storage = secureStorage();
+        let answer!: (available: boolean) => void;
+        storage.isAsyncEncryptionAvailable = mock(
+          () => new Promise<boolean>((resolve) => (answer = resolve)),
+        );
+        const manager = new ConnectionManager({
+          localBackend: local.backend,
+          secureStorage: storage,
+          platform: "darwin",
+          onEvent: mock(() => undefined),
+        });
+        const initialized = manager.initialize();
+
+        jest.advanceTimersByTime(4_999);
+        expect(warnings).toEqual([]);
+        jest.advanceTimersByTime(1);
+        expect(warnings).toEqual([[waitNotice]]);
+        jest.advanceTimersByTime(60_000);
+        expect(warnings).toHaveLength(1);
+
+        answer(true);
+        await initialized;
+        expect(manager.getList().credentialStorage).toBe("secure");
+        expect(warnings).toHaveLength(1);
+      } finally {
+        restore();
+      }
+    });
+
+    test("stays silent when the keychain answers before the notice delay", async () => {
+      jest.useFakeTimers();
+      const { warnings, restore } = captureWarnings();
+      try {
+        const manager = new ConnectionManager({
+          localBackend: localBackendHarness().backend,
+          secureStorage: secureStorage(),
+          platform: "darwin",
+          onEvent: mock(() => undefined),
+        });
+        await manager.initialize();
+        jest.advanceTimersByTime(60_000);
+        expect(warnings).toEqual([]);
+      } finally {
+        restore();
+      }
+    });
+
+    test("clears the notice and propagates a failed keychain check", async () => {
+      jest.useFakeTimers();
+      const { warnings, restore } = captureWarnings();
+      try {
+        const storage = secureStorage();
+        storage.isAsyncEncryptionAvailable = mock(async () => {
+          throw new Error("keychain unavailable");
+        });
+        const manager = new ConnectionManager({
+          localBackend: localBackendHarness().backend,
+          secureStorage: storage,
+          platform: "darwin",
+          onEvent: mock(() => undefined),
+        });
+        await expect(manager.initialize()).rejects.toThrow("keychain unavailable");
+        jest.advanceTimersByTime(60_000);
+        expect(warnings).toEqual([]);
+      } finally {
+        restore();
+      }
+    });
+  });
+
   test("aborts remote probes at the three-second probe budget", async () => {
     jest.useFakeTimers();
     const local = localBackendHarness({

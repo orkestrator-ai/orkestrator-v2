@@ -12,3 +12,9 @@
 - **Evidence:** host temporary artifacts `orkestrator-test-run.fljCCp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.Aly6dQ/merge-suite-retry.log.gz`.
 - **Context:** merge parents `3b5f889149d8c3603c869cd15b51d67af39c9aa6` and `0014505caeed69395b3cc996dd541fcc6df12c23`; the owning file matches main.
 - **Hypothesis:** subprocess scheduling under aggregate host load; no cause has been established. No assertion, timeout or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** single observation. The case spawns a stub `security` and reads the disk fixture under Bun's default five-second budget. The owner passed alone today (32/32, 1.4 s; Bun 1.4.4).
+- **Next step:** give the case an explicit budget if it recurs; if it does not recur by the next sweep, reclassify it as environmental.

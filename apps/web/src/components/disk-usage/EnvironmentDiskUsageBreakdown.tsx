@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { Container, FolderGit2, HardDrive, Loader2, RefreshCw } from "lucide-react";
 
 import { formatBytes, formatRelativeTime } from "@/components/docker/docker-stats-format";
@@ -26,7 +26,6 @@ export function useEnvironmentDiskUsage(
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
   const usageRef = useRef(usage);
-  usageRef.current = usage;
   const incomingIdentityRef = useRef<string | null>(null);
 
   const load = useCallback(
@@ -52,15 +51,19 @@ export function useEnvironmentDiskUsage(
   );
 
   const initial = options.initial?.environmentId === environmentId ? options.initial : undefined;
-  const initialRef = useRef(initial);
-  initialRef.current = initial;
+  const readInitial = useEffectEvent(() => initial);
+  // The committed usage, for the snapshot comparison below.
   useEffect(() => {
+    usageRef.current = usage;
+  }, [usage]);
+  useEffect(() => {
+    const seeded = readInitial();
     incomingIdentityRef.current = null;
-    usageRef.current = initialRef.current ?? null;
+    usageRef.current = seeded ?? null;
     setUsage(usageRef.current);
     setError(null);
     setLoading(false);
-    if (enabled && !initialRef.current) void load(false);
+    if (enabled && !seeded) void load(false);
     return () => {
       requestRef.current += 1;
     };

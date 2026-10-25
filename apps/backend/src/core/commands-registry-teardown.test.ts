@@ -359,6 +359,54 @@ describe("tab close retains conversation history", () => {
     );
   });
 
+  test("a Codex session the bridge lost is named by the thread it reported while open", async () => {
+    const recordTabSession = mock(async () => 1);
+    const design = { recordTabSession } as unknown as Pick<DesignService, "recordTabSession">;
+    await withTeardown(
+      (call) =>
+        call.method === "POST" ? Response.json({ closed: true, missing: true }) : retained(),
+      async ({ invoke, storage }) => {
+        const key = await mapTab(storage, "codex", "tab-codex", "codex-before-restart");
+        await storage.recordNativeAgentSessionResumeIdentity(
+          key,
+          "codex-before-restart",
+          "thread-reported",
+        );
+        await expect(
+          invoke("teardown_tab", { environmentId: "e1", tabId: "tab-codex", kind: "codex-native" }),
+        ).resolves.toEqual({ completed: true });
+        expect(recordTabSession).toHaveBeenCalledWith({
+          environmentId: "e1",
+          tabId: "tab-codex",
+          platform: "codex",
+          providerSessionId: "thread-reported",
+        });
+        expect(await storage.getNativeAgentSession(key)).toBeNull();
+      },
+      // The restarted bridge no longer has the session, so nothing can be read.
+      { design, resumableSessionId: async () => undefined },
+    );
+
+    recordTabSession.mockClear();
+    await withTeardown(
+      retained,
+      async ({ invoke, storage }) => {
+        const key = await mapTab(storage, "codex", "tab-codex", "codex-live");
+        await storage.recordNativeAgentSessionResumeIdentity(key, "codex-live", "thread-older");
+        await invoke("teardown_tab", {
+          environmentId: "e1",
+          tabId: "tab-codex",
+          kind: "codex-native",
+        });
+        // What the open session reports now wins over what it reported before.
+        expect(recordTabSession).toHaveBeenCalledWith(
+          expect.objectContaining({ providerSessionId: "thread-now" }),
+        );
+      },
+      { design, resumableSessionId: async () => "thread-now" },
+    );
+  });
+
   test("a lost close response journals the thread for reconciliation after restart", async () => {
     const designDir = await fs.mkdtemp(path.join(tmpdir(), "ork-close-response-"));
     const design = new DesignService(designDir, () => undefined, createTestRenderer());

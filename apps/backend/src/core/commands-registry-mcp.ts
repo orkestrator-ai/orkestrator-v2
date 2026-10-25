@@ -19,9 +19,10 @@ import {
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
+import { getLocalServerStatus } from "./commands-servers.js";
 import { runCommandBuffer } from "./shell.js";
 import type { ApplyEnvironment, ApplySession, RuntimeProbe } from "./mcp-management/apply.js";
-import { DOCKER_LABEL_INPUTS_REVISION } from "./constants.js";
+import { DOCKER_LABEL_INPUTS_REVISION, DOCKER_LABEL_NETWORK_POLICY } from "./constants.js";
 import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
 import { containerAllowedDomains, containerNetworkPolicy } from "./container-network.js";
 import { observeContainerBoot } from "./container-readiness.js";
@@ -31,6 +32,7 @@ import type { StagedDefaultsWriter } from "./mcp-management/overlay-service.js";
 import type {
   ContainerBootReader,
   ContainerFileReader,
+  ContainerDirectoryLister,
   ContainerFileWriter,
   ContainerPathProbe,
 } from "./mcp-management/types.js";
@@ -101,6 +103,12 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
           logicalSessionKey: session.logicalSessionKey,
           providerSessionId: session.providerSessionId,
           pendingDispatch: !!session.pendingDispatch,
+          ...(session.pendingDispatch?.requestId
+            ? { pendingDispatchId: session.pendingDispatch.requestId }
+            : {}),
+          ...(session.dispatchedRequestIds?.length
+            ? { lastDispatchId: session.dispatchedRequestIds.at(-1) }
+            : {}),
           coordinator: session.executionPolicy === "coordinator-read-only",
           projectResources: session.policy?.projectResources,
         }));
@@ -117,6 +125,22 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
       // Environment-level and no-spawn: never resolves a session (which a
       // restarted bridge may not have) and never cold-starts app-server.
       return service.reloadMcpConfigurationIfRunning(environmentId, "codex");
+    },
+    async reloadOpenCode(environmentId) {
+      const service = context.nativeAgents;
+      if (!service) return { outcome: "not-running" };
+      // Idle-gated inside the provider too: the directory's instance is
+      // disposed only while no session there is busy and no dispatch is open.
+      const outcome = await service.reloadMcpConfigurationIfRunning(environmentId, "opencode");
+      if (outcome !== "reloaded") return { outcome };
+      // Disposal dropped the runtime-only `orkestrator` entry with the old
+      // instance. Post it again now rather than when its memo expires.
+      context.runtime.localServers.openCodeAgentTools.forget(`local:${environmentId}`);
+      void getLocalServerStatus(environmentId, context, "opencode").catch(() => undefined);
+      return { outcome };
+    },
+    async openCodeMcpServerNames(environmentId) {
+      return context.nativeAgents?.openCodeMcpServerNamesIfRunning(environmentId);
     },
     async mcpConfigEvidence(environmentId, agent, logicalSessionKey) {
       const service = context.nativeAgents;
@@ -280,6 +304,43 @@ export const writeContainerMcpFile: ContainerFileWriter = async (containerId, fi
   }
 };
 
+/** Folder scan fallback, using bounded output and argument-only paths. */
+export const listContainerMcpDirectories: ContainerDirectoryLister = async (containerId, dir) => {
+  try {
+    const { stdout } = await runCommandBuffer(
+      "docker",
+      [
+        "exec",
+        "--user",
+        "node",
+        containerId,
+        "node",
+        "-e",
+        `const fs = require("node:fs"); const path = require("node:path");
+       const dir = process.argv[1]; const result = [];
+       let handle;
+       try { handle = fs.opendirSync(dir); } catch (error) {
+         if (error.code === "ENOENT") { process.stdout.write(JSON.stringify({ directories: [] })); process.exit(0); }
+         throw error;
+       }
+       let incomplete = false;
+       try { let entry; let scanned = 0;
+         while (scanned++ < 1024 && (entry = handle.readSync())) {
+           if (entry.isDirectory()) result.push(path.join(dir, entry.name));
+         }
+         incomplete = scanned > 1024 && handle.readSync() !== null;
+       } finally { handle.closeSync(); }
+       process.stdout.write(JSON.stringify({ directories: result, incomplete }));`,
+        dir,
+      ],
+      { timeoutMs: 10_000 },
+    );
+    return JSON.parse(stdout.toString("utf8")) as Awaited<ReturnType<ContainerDirectoryLister>>;
+  } catch {
+    return { directories: [], incomplete: true };
+  }
+};
+
 /** The container's current boot id; `null` for an image without boot status. */
 export const readContainerBootId: ContainerBootReader = async (containerId) => {
   const observation = await observeContainerBoot(containerId);
@@ -395,11 +456,19 @@ export function containerNetworkView(
     if (!environment || environment.environmentType !== "containerized") return null;
     if (environment.networkAccessMode === "full") return { mode: "full" };
     const config = await context.storage.loadConfig();
-    const imageId = currentRuntimeIdentity(environment, context)?.imageId;
-    const policyVersion = containerNetworkPolicy(
-      (await imageCapabilities(imageId, context))?.["network-policy"] ?? 0,
-      process.env.ORKESTRATOR_NETWORK_POLICY,
-    );
+    const runtime = currentRuntimeIdentity(environment, context);
+    const policyLabel = runtime?.containerId
+      ? await containerLabel(runtime.containerId, DOCKER_LABEL_NETWORK_POLICY)
+      : null;
+    // Kept runtimes retain the policy selected at creation, even when their
+    // image supports a newer policy or the backend override has changed.
+    const policyVersion =
+      policyLabel === "1" || policyLabel === "2" || policyLabel === "3"
+        ? (Number(policyLabel) as 1 | 2 | 3)
+        : containerNetworkPolicy(
+            (await imageCapabilities(runtime?.imageId, context))?.["network-policy"] ?? 0,
+            process.env.ORKESTRATOR_NETWORK_POLICY,
+          );
     return {
       mode: "restricted",
       allowedDomains: containerAllowedDomains(environment, config, policyVersion),
@@ -413,6 +482,7 @@ export function mcpContainerOptions(
   context: Pick<CommandContext, "storage">,
 ): Pick<
   McpManagementServiceOptions,
+  | "listContainerDirectories"
   | "readContainerFile"
   | "writeContainerFile"
   | "readContainerBootId"
@@ -422,6 +492,7 @@ export function mcpContainerOptions(
 > {
   return {
     readContainerFile: readContainerMcpFile,
+    listContainerDirectories: listContainerMcpDirectories,
     writeContainerFile: writeContainerMcpFile,
     readContainerBootId: readContainerBootId,
     stagedDefaults: createStagedDefaultsWriter(context),

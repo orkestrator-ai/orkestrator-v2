@@ -1,4 +1,7 @@
 import * as shared from "./storage-shared.js";
+import { nativeAgentSessionWithControls } from "./native-agent-session-controls.js";
+import { nativeAgentSessionResumeIdentity } from "./models.js";
+import type { NativeAgentControlUpdate } from "@orkestrator/protocol/native-agent";
 import type {
   CoordinatorWorkflowAssociation,
   CoordinatorWorkspace,
@@ -319,6 +322,13 @@ export abstract class StorageNative extends StorageReviews {
     const loaded = await this.loadNativeAgentSessions();
     this.assertReadableNativeAgentSession(loaded, key);
     return loaded.sessions[key] ?? null;
+  }
+
+  /** Teardown must see identity captures already queued behind a provider mutation. */
+  async getNativeAgentSessionAfterMutations(
+    key: string,
+  ): Promise<PersistedNativeAgentSession | null> {
+    return this.enqueueNativeAgentSessionMutation(key, () => this.getNativeAgentSession(key));
   }
 
   /**
@@ -646,7 +656,7 @@ export abstract class StorageNative extends StorageReviews {
   async updateNativeAgentSessionControls(
     key: string,
     expectedProviderSessionId: string,
-    update: import("@orkestrator/protocol/native-agent").NativeAgentControlUpdate,
+    update: NativeAgentControlUpdate,
     applyControls?: () => Promise<void>,
   ): Promise<PersistedNativeAgentSession> {
     if (!isNonBlankString(key) || !isNonBlankString(expectedProviderSessionId)) {
@@ -663,51 +673,7 @@ export abstract class StorageNative extends StorageReviews {
       // Apply provider controls and persist them under the same session lease
       // that guards prompt delivery; neither side may overtake a send.
       await applyControls?.();
-      const modelChanged =
-        update.modelId !== undefined && update.modelId !== existing.controls?.modelId;
-      // Most parameter values are model-scoped and must be cleared when their
-      // model changes. Claude's settings-backed values are session defaults:
-      // unsupported models ignore context1m, and switching back must restore
-      // the value the session started with rather than losing it permanently.
-      const retainedParameterValues = modelChanged
-        ? Object.fromEntries(
-            Object.entries(existing.controls?.parameterValues ?? {}).filter(
-              ([id]) =>
-                existing.agent === "claude" &&
-                (id === "thinking" || id === "context1m" || id === "chrome"),
-            ),
-          )
-        : Object.fromEntries(
-            Object.entries(existing.controls?.parameterValues ?? {}).filter(
-              ([id]) =>
-                (id !== "permissionMode" || update.mode === undefined) &&
-                !(
-                  existing.agent === "claude" &&
-                  id === "ultracode" &&
-                  update.reasoningId !== undefined
-                ),
-            ),
-          );
-      const controls = {
-        ...existing.controls,
-        ...update,
-        ...(update.parameterValues
-          ? {
-              parameterValues: {
-                ...retainedParameterValues,
-                ...update.parameterValues,
-              },
-            }
-          : Object.keys(retainedParameterValues).length > 0
-            ? { parameterValues: retainedParameterValues }
-            : { parameterValues: undefined }),
-      };
-      const updated: PersistedNativeAgentSession = {
-        ...existing,
-        controls,
-        updatedAt: nowIso(),
-      };
-      if (update.modelId !== undefined) delete updated.inferredComposerSelection;
+      const updated = nativeAgentSessionWithControls(existing, update);
       sessions[key] = updated;
       await this.saveNativeAgentSession(key, sessions[key]);
       this.announceNativeAgentRecord(updated);
@@ -760,6 +726,43 @@ export abstract class StorageNative extends StorageReviews {
       await this.saveNativeAgentSession(key, sessions[key]);
       this.announceNativeAgentRecord(updated);
       return updated;
+    });
+  }
+
+  /**
+   * Remember the identity a later resume of this session names, as the
+   * provider reported it while the session was open. Tab teardown falls back
+   * to it when the session can no longer be read (Codex resumes a thread, which
+   * only the open bridge session can name). Writes only when the value
+   * changes, scoped to the provider session it was read from; a mapping that
+   * has moved on is left alone. Backend-only, so nothing is announced.
+   */
+  async recordNativeAgentSessionResumeIdentity(
+    key: string,
+    providerSessionId: string,
+    resumableSessionId: string,
+  ): Promise<boolean> {
+    if (
+      !isNonBlankString(key) ||
+      !isNonBlankString(providerSessionId) ||
+      !isNonBlankString(resumableSessionId)
+    ) {
+      throw new Error("Native agent resume identity is invalid");
+    }
+    resumableSessionId = resumableSessionId.trim();
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      this.assertReadableNativeAgentSession(loaded, key);
+      const existing = loaded.sessions[key];
+      if (!existing || existing.providerSessionId !== providerSessionId) return false;
+      if (nativeAgentSessionResumeIdentity(existing) === resumableSessionId) return false;
+      const updated: PersistedNativeAgentSession = {
+        ...existing,
+        resumeIdentity: { providerSessionId, resumableSessionId },
+        updatedAt: nowIso(),
+      };
+      await this.saveNativeAgentSession(key, updated);
+      return true;
     });
   }
 
@@ -894,6 +897,8 @@ export abstract class StorageNative extends StorageReviews {
       incompleteTurnNotice?: IncompleteTurnNotice | null;
     }>,
     pendingDispatch?: PersistedNativeAgentPendingDispatch,
+    /** Runs after deduplication/conflict checks, under the delivery lease, before journaling. */
+    admit?: (session: PersistedNativeAgentSession) => Promise<NativeAgentControlUpdate | undefined>,
   ): Promise<{
     session: PersistedNativeAgentSession;
     dispatched: boolean;
@@ -936,10 +941,18 @@ export abstract class StorageNative extends StorageReviews {
         return { session, dispatched: false };
       }
 
+      if (pendingDispatch && pendingDispatch.requestId !== requestId) {
+        throw new Error("Pending native agent dispatch request ID mismatch");
+      }
+      const controlUpdate = await admit?.(session);
+      if (controlUpdate) {
+        session = nativeAgentSessionWithControls(session, controlUpdate);
+        sessions[key] = session;
+        await this.saveNativeAgentSession(key, session);
+        this.announceNativeAgentRecord(session);
+      }
+
       if (pendingDispatch || session.pendingDispatch?.mailRefused) {
-        if (pendingDispatch && pendingDispatch.requestId !== requestId) {
-          throw new Error("Pending native agent dispatch request ID mismatch");
-        }
         session = {
           ...session,
           // Even a composer retry with the same ID invalidates prior refusal

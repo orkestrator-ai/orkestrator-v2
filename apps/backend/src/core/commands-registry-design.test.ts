@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { BackendRuntime } from "./backend-runtime.js";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -84,7 +85,11 @@ describe("design command registry", () => {
       order: 1,
     });
     design = new DesignService(dir, () => {}, createTestRenderer());
-    context = { storage, design } as CommandContext;
+    context = {
+      storage,
+      design,
+      runtime: new BackendRuntime({ emit: () => undefined }),
+    } as CommandContext;
     commands = createCommandRegistry();
   });
 

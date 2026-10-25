@@ -1,3 +1,4 @@
+import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 // Type definitions for Claude Bridge Server
 import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
@@ -1149,7 +1150,7 @@ export type SSEEventType =
 export interface McpServerRuntimeStatus {
   name: string;
   status: "connected" | "connecting" | "failed" | "needs-auth" | "disabled" | "unknown";
-  scope?: "user" | "project" | "orkestrator" | "plugin";
+  scope?: NativeAgentMcpServer["scope"];
   transport?: "stdio" | "sse" | "http";
   error?: string;
   tools?: string[];
@@ -1257,8 +1258,6 @@ export interface PromptOptions {
   requestId?: string;
   agentMcp?: { url: string; token: string; design?: boolean; artifacts?: { token: string } };
   parameterValues?: Record<string, string | boolean>;
-  /** Optional backend-owned budget cap for this session. */
-  maxBudgetUsd?: number;
   attachments?: Array<{
     type: "file" | "image";
     path: string;

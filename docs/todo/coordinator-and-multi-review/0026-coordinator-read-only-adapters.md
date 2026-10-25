@@ -34,7 +34,7 @@ advertises.
     on every platform.
   - **Steer** a running inspection turn where the platform has a steer
     adapter. Claude, Codex, Pi and Cursor do; OpenCode and Grok do not (see
-    [0028-coordinator-consistency-gaps.md](0028-coordinator-consistency-gaps.md)).
+    [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md)).
 - The policy names operations, not vendor tools.
   `resolveNativeAgentExecutionPolicy(..., "coordinator")`
   (`apps/backend/src/core/native-agent-execution-policy.ts`) returns
@@ -313,6 +313,13 @@ decisions) is done.
   run). The offline `conformance-coordinator-sandbox-live.test.ts` covers the
   first case on any Linux CI host with bubblewrap. Not run because this node
   has no Linux host.
+  CI evidence (2026-10-25, todo 0030): on GitHub's Ubuntu 26.04 runner the
+  test's positive cases failed on every run, because Ubuntu's
+  `bwrap-userns-restrict` AppArmor profile stops the CLI's nested user
+  namespace, so every sandboxed command fails while the host still reports
+  `enforced`. CI now removes that profile; a stock Ubuntu host is still
+  affected, which is tracked in
+  [0145](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md).
 - [ ] **A research server call on Pi, Cursor and OpenCode, live (rest of item 10).** One
   coordinator turn per platform with the default research setting that
   resolves React's Context7 library ID, as was done for Codex and Claude on
@@ -577,8 +584,9 @@ is the final tier for OpenCode and Cursor).
 
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md): the live
   suite that produces the evidence these decisions need.
-- [0028-coordinator-consistency-gaps.md](0028-coordinator-consistency-gaps.md): steer and
-  the smaller parity gaps.
+- [0028-coordinator-consistency-gaps.md](0028-coordinator-consistency-gaps.md): the
+  smaller parity gaps (all closed); steer is in
+  [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md).
 - [`coordinator.md`](../../architecture/coordinator.md): "Provider qualification"
   and "Changing qualification"; `AGENTS.md` "Coordinator qualification" and
   "Coordinator shell allowlist".

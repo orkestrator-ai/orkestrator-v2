@@ -8,7 +8,11 @@ import type {
   RemoteWorkerState,
   RemoteWorkflowRecord,
 } from "../coordinator-remote.js";
-import { lastAssistantText } from "../coordinator-status-wakes.js";
+import {
+  lastAssistantText,
+  waitingBlocker,
+  type CoordinatorWaitingBlocker,
+} from "../coordinator-status-wakes.js";
 
 /**
  * The command node's reads of coordinator work on the nodes it controls,
@@ -117,6 +121,26 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
     environmentId: string,
     tabId: string,
   ): Promise<string | undefined> {
+    const projection = await this.workerProjection(nodeId, environmentId, tabId, 5);
+    return projection ? lastAssistantText(projection.messages) : undefined;
+  }
+
+  async waitingBlocker(
+    nodeId: string,
+    environmentId: string,
+    tabId: string,
+  ): Promise<CoordinatorWaitingBlocker | undefined> {
+    const projection = await this.workerProjection(nodeId, environmentId, tabId, 1);
+    return projection ? waitingBlocker(projection.interactions) : undefined;
+  }
+
+  /** The worker tab's native projection on its node, or undefined when it cannot be read. */
+  private async workerProjection(
+    nodeId: string,
+    environmentId: string,
+    tabId: string,
+    messageLimit: number,
+  ): Promise<JsonRecord | undefined> {
     const layout = await read<unknown>(this.deps, nodeId, "get_pane_layout", { environmentId });
     if (layout === "unavailable") return undefined;
     const native = nativeTab(layout, tabId);
@@ -125,10 +149,9 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
       environmentId,
       agent: native.agent,
       logicalSessionKey: `env-${environmentId}:${tabId}`,
-      messageLimit: 5,
+      messageLimit,
     });
-    if (projection === "unavailable" || !isRecord(projection)) return undefined;
-    return lastAssistantText(projection.messages);
+    return projection === "unavailable" || !isRecord(projection) ? undefined : projection;
   }
 
   async workflow(

@@ -308,3 +308,38 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - **Owning-file rerun:** `mise run test:logged -- --name watcher-environment-move-owner -- bun test --cwd <checkout>/apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged in 35.3 seconds.
 - **Evidence:** `orkestrator-test-run.iTzv5K/` under the host temporary directory; the full aggregate remains failed. None of these owning files was changed.
 - **Final aggregate counts:** backend 10705 passed, 116 skipped, 20 failed and five between-test errors across 10841 tests (747.20 seconds). Fourteen failures were the unchanged OpenCode conformance expectation for CLI 1.19.0 versus the installed 1.19.4; the other six were the timing cases recorded here and in companion records. The complete repository run exited 1 after 1189.0 seconds, including time queued for shared worker capacity.
+
+## PR monitor shutdown validation recurrence — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name residual-state-suite -- mise run test`, on `todo-0066-residual-module-state-40e8f98a7ef0`, Bun 1.4.4.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 slots, including two isolated backend workers. Workspace admission waited 81.6 seconds for shared host capacity.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` hit the five-second deadline (5069.11 ms), followed by termination of a dangling process.
+- **Owning-file rerun:** `mise run test:logged -- --name environment-move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 21.8 seconds.
+- **Evidence:** `orkestrator-test-run.jMkwTI/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate completion.
+- **Assessment:** recurrence of the existing aggregate deadline failure; this change touches no environment-move source, assertions, deadlines, or skips.
+- **Final aggregate counts:** backend 10968 passed, 84 skipped and one failed across 11053 tests in 638 files (576.56 seconds). The full run exited 1 in 719.6 seconds; its other two failures were the existing Codex bridge cases 0492 and 0800, whose unchanged owners also passed separately. Root/support and protocol validation passed.
+
+## Annotation qualification validation — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name annotation-suite -- mise run test`, with the standard worker leases. The workspace group waited 512.1 seconds for shared host capacity before starting.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded its five-second deadline at 5072.20 ms. Its recursive submodule-status child was terminated with `SIGTERM`, producing an error between tests.
+- **Complete unchanged owner:** `mise run test:logged -- --name annotation-worktree-recovery-check -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 18.7 seconds.
+- **Evidence:** `orkestrator-test-run.N5VXK9/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; the enclosing log is `orkestrator-test-run.gSVRr6/annotation-suite.log.gz`.
+- **Assessment:** recurrence of the known deadline failure. The annotation fixes do not change the move implementation or its tests; no deadline, assertion or skip was changed.
+
+## Design links resume identity validation — 2026-10-25
+
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded its five-second deadline (5062.23 ms), followed by `killed 1 dangling process`.
+- **Original command:** `mise run test` on `todo-0038-design-conversation-links-852aa84d76e8` (commit `f771a8b8c`; native-session resume identity and teardown fallback, no environment-move or Git code changed), Bun 1.4.4, default reservations, host load average 37–52 from other workers.
+- **Aggregate counts:** backend 11,437 passed, 89 skipped, 3 failed across 681 files (796.55 s); the third failure is the new owner case [0930](../backend-services-and-tooling/0930-coordinator-codex-login-renewal-loginless.md).
+- **Owning-file rerun:** `mise exec -- bun test --preload ../../tests/setup-node.ts src/core/environment-move.test.ts` from `apps/backend` passed unchanged twice (37 pass, 0 fail each).
+- **Evidence:** `orkestrator-test-run.ZkIWTS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Changes:** recorded recurrence only; no test, timeout, assertion or skip changed.
+
+## Recurring-work qualification validation — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name full-0048 -- mise run test` on `todo-0048-recurring-work-qualification-dbe14f8256cc` (storage read path, recurring-work harness and scripts only), macOS 27.0 arm64, Bun 1.4.4, standard worker leases.
+- **Failure:** the restart re-link case exceeded its five-second deadline (5059.50 ms); its `git submodule status --recursive` child was terminated with `SIGTERM`.
+- **Owning-file reruns:** `mise run test:logged -- --name owners-0048 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-worktree-signal-install.test.ts ./src/core/coordinator-service.test.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` failed this case again (5090.39 ms, plus an error between tests) with 113 passed across the three files (176.81 s). A second rerun of `environment-move.test.ts` alone (`--name env-move-owner-0048`) at load average 55 failed it and both nested-submodule move cases (34 passed, 3 failed, 3 errors, 62.28 s). Evidence: `orkestrator-test-run.fSNcim/` and `orkestrator-test-run.f5VfI7/`.
+- **Aggregate evidence:** `orkestrator-test-run.VrI5KW/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` (enclosing log `orkestrator-test-run.JFzi7O/full-0048.log.gz`) under the host temporary directory. Backend 11433 passed, 89 skipped and 4 failed across 11526 tests in 680 files (872.95 s); web 9760 passed; root/support, bridges and the Codex protocol lockfile passed. Test groups finished in 942.4 s; the run exited 1.
+- **Assessment:** the host load average was 50 to 55 from other worktrees' suites throughout, so this observation cannot separate load from a defect; it adds to the existing evidence that these submodule fixtures exceed five seconds under heavy load. No environment-move code, assertion, deadline or skip changed.

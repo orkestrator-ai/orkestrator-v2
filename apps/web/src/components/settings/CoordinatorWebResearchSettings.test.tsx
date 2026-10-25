@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type {
   CoordinatorResearchMcpServer,
@@ -14,7 +14,9 @@ let latest: { mode: CoordinatorWebResearch; servers: CoordinatorResearchMcpServe
 function Harness({ initialMode = "search-and-mcp" as CoordinatorWebResearch }) {
   const [mode, setMode] = useState<CoordinatorWebResearch>(initialMode);
   const [servers, setServers] = useState<CoordinatorResearchMcpServer[]>([CONTEXT7]);
-  latest = { mode, servers };
+  useEffect(() => {
+    latest = { mode, servers };
+  });
   return (
     <CoordinatorWebResearchSettings
       mode={mode}

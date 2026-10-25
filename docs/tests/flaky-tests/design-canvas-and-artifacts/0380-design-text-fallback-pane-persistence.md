@@ -39,3 +39,36 @@ The merge parents are feature `3b5f889149d8c3603c869cd15b51d67af39c9aa6` and mai
 This run reached a different assertion in the same owning test: the text-fallback checks passed, but the guided design's `Mock up the sidebar` brief was not visible within five seconds at `design-canvas.spec.ts:287`. `env -u PORT mise run test:logged -- --name main-a566-design -- mise run test:agent:design:isolated` reported one passed and one failed, plus a teardown error because the failed trace exceeded the 16 MiB sanitization bound (46.2 s logged). The sanitizer removed that oversized archive. Profile `qa-browser-d1295004-2eb` was stopped and reset.
 
 After this run's Electron annotation check had closed, the complete unchanged owner was rerun with `env -u PORT mise run test:logged -- --name main-a566-design-alone -- mise run test:agent:design:isolated`. Both cases passed (exit 0, 36.7 s logged); profile `qa-browser-dac7ff70-562` was stopped and reset. This establishes intermittence at the brief-visibility assertion, not a root cause or a new observation of the earlier text-tab failure. No implementation, assertion, timeout or skip changed. The initial result remains failed. Evidence: `orkestrator-test-run.Ju5mb0/main-a566-design.log.gz` under the host temporary directory; profile artifacts remain under `output/agent-testing/qa-browser-d1295004-2eb/browser/` except for the removed oversized trace.
+
+## Keyboard shortcuts review validation — 2026-10-25
+
+`mise run test:logged -- --name design-isolated -- mise run test:agent:design:isolated` repeated the guided-design brief failure at `design-canvas.spec.ts:287`: `Mock up the sidebar` was absent after five seconds. One scenario passed, one failed, and teardown removed the failed trace after it exceeded the 16 MiB sanitization limit (98.3 seconds logged). The runner stopped and reset disposable profile `qa-browser-a7273c35-ebd`. This matches the separately recorded brief-visibility failure above; this observation was not rerun and is not a newly established flake. No design-launch, transcript, assertion or deadline changes were made. Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.5NZ34d/design-isolated.log.gz` and `output/agent-testing/qa-browser-a7273c35-ebd/browser/artifacts/` (excluding the removed oversized trace).
+
+## Local preview discovery review — 2026-10-25
+
+- `mise run test:logged -- --name preview-agent-browser -- mise run test:agent:browser:isolated` ran with one browser worker on disposable credential-free Codex profile `qa-browser-9068b98a-a33`: 31 passed, 58 opt-in skips, one failed (858.8 s including lifecycle). The five-second pane-layout poll at `design-canvas.spec.ts:250` did not contain the overlong text-fallback path `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/overlong.orkdes`; the previous hidden-text tab remained persisted.
+- The complete unchanged owner ran separately with `mise run test:logged -- --name preview-design-owner -- mise run test:agent:design:isolated` on fresh profile `qa-browser-8176c36a-ee6`, one browser worker: one passed, one failed (194.8 s including lifecycle). The same poll instead missed `d1/d2/d3/d4/d5/d6/d7/d8/deep.orkdes`, with the previous overlong-text tab still persisted. Other repository/browser validation continued on the host during both runs.
+- Both isolated runners stopped and reset their profiles. No design implementation, assertion, timeout, or skip changed. This recurrence remains non-green in the owning suite and is not newly classified as a flake. The preview ownership, discovery, terminal-root, chooser, confirmation, and display regressions passed independently.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.BZJbLy/preview-agent-browser.log.gz`, `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.DWuY2z/preview-design-owner.log.gz`, and `output/agent-testing/<profile>/browser/artifacts/` for each profile above.
+
+## Design opening-prompt review — 2026-10-25
+
+- `mise run test:logged -- --name design-isolated -- mise run test:agent:design:isolated`
+  used disposable credential-free Codex profile `qa-browser-8626a8bc-414`.
+  The unchanged file-opening case again lacked
+  `"filePath":".private/hidden.orkdes"` in the persisted pane layout at
+  `design-canvas.spec.ts:250` after five seconds. The run also exposed an
+  insufficient readiness wait in the newly added opening-prompt race test.
+- After giving the new test's provider startup a bounded 30-second wait,
+  `mise run test:logged -- --name design-isolated-rerun -- mise run test:agent:design:isolated`
+  used fresh profile `qa-browser-07f55979-0cc`. The same unchanged hidden-file
+  case failed again; the other two cases passed, including delayed image-brief
+  enqueue acknowledgement across tab unmount and a subsequent failed renderer
+  fallback (195.1 seconds including startup and cleanup).
+- This observation remains non-green in the owning suite and is not newly
+  classified as intermittent. The failing case's assertions, timeouts and
+  implementation were not changed.
+- Evidence: `output/agent-testing/qa-browser-8626a8bc-414/browser/` and
+  `output/agent-testing/qa-browser-07f55979-0cc/browser/`, with compressed logs
+  in host temporary directories `orkestrator-test-run.c9Ge59` and
+  `orkestrator-test-run.hBv8qd`. Both disposable profiles were stopped and reset.

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { detectEnvironmentPullRequest } from "./commands-pr-monitor.js";
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { createEnvironmentCommandRunner, createLocalGhRunner } from "./commands-review.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
 import { setGitHubCliConfigSource } from "./github-credentials.js";
@@ -70,11 +71,14 @@ async function detect() {
 }
 
 function environmentRunner() {
-  return createEnvironmentCommandRunner({
-    id: "env",
-    environmentType: "local",
-    worktreePath: root,
-  } as Environment);
+  return createEnvironmentCommandRunner(
+    {
+      id: "env",
+      environmentType: "local",
+      worktreePath: root,
+    } as Environment,
+    new EnvironmentMutationFence(),
+  );
 }
 
 test("PR detection/check queries and local review/merge/delete runners all use the selected PAT", async () => {

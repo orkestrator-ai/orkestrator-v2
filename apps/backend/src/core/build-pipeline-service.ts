@@ -75,6 +75,7 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
       dispatchPending: (...args) => this.stageSupervisor.dispatchPending(...args),
       assertValidationWorktreeUnchanged: (...args) =>
         this.stageSupervisor.assertValidationWorktreeUnchanged(...args),
+      remindMissingStageResult: (...args) => this.stageSupervisor.remindMissingStageResult(...args),
     });
     this.interactions = new BuildPipelineInteractions(this.context, this.agents, this.recovery);
     this.stageSupervisor = new BuildPipelineSupervisor(

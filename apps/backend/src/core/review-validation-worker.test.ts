@@ -669,12 +669,53 @@ test("artifact verification rejects a same-size log replacement", async () => {
   const result = await completed(root, run);
   const environment = { environmentType: "local", worktreePath: root } as Environment;
   const runner = async () => "";
-  await verifyValidationArtifacts(environment, runner, result.results);
+  expect(await verifyValidationArtifacts(environment, runner, result.results)).toEqual({
+    artifacts: 2,
+    bytes: 5,
+  });
   const artifact = path.join(root, result.results[0]!.stdoutPath!);
   await chmod(artifact, 0o600);
   await writeFile(artifact, "other");
   expect(verifyValidationArtifacts(environment, runner, result.results)).rejects.toThrow(
     "SHA-256 changed",
+  );
+});
+
+test("container artifact verification hashes at the source and reports sizes", async () => {
+  const environment = { environmentType: "containerized" } as Environment;
+  const digest = "a".repeat(64);
+  const entries = [
+    { stdoutPath: "out.log", stderrPath: null, stdoutSha256: digest },
+    { stdoutPath: null, stderrPath: "err.log", stderrSha256: digest },
+  ];
+  const calls: string[][] = [];
+  const sizes: Record<string, string> = {
+    "/workspace/out.log": "12\n",
+    "/workspace/err.log": "30",
+  };
+  const runner = async (command: string, args: string[]) => {
+    calls.push([command, ...args]);
+    const target = args.at(-1)!;
+    if (command === "realpath") return `${target}\n`;
+    if (command === "stat") return sizes[target]!;
+    return `${digest}  ${target}\n`;
+  };
+  expect(await verifyValidationArtifacts(environment, runner, entries)).toEqual({
+    artifacts: 2,
+    bytes: 42,
+  });
+  expect(calls.map((call) => call[0])).toEqual([
+    "realpath",
+    "stat",
+    "sha256sum",
+    "realpath",
+    "stat",
+    "sha256sum",
+  ]);
+  // The validation worker's per-stream bound holds in containers too.
+  sizes["/workspace/out.log"] = String(32 * 1024 * 1024 + 1);
+  await expect(verifyValidationArtifacts(environment, runner, entries)).rejects.toThrow(
+    "exceeds its limit",
   );
 });
 
@@ -1089,15 +1130,16 @@ test("a command that expires while queued keeps no stale queue explanation", asy
   });
   const blocker = scheduler.enqueue({ owner: "b".repeat(64), workers: 1, memoryMiB: 64 });
   try {
-    await control(root, run, "start", { ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS: "6000" });
-    // The reason is written by the worker's heartbeat, not by the enqueue that
-    // first reports "queued", so wait for the explanation itself.
-    let queued = await waitUntilQueued(root, run);
-    const explained = Date.now() + 3000;
-    while (!queued.results[0]!.queueReason && Date.now() < explained) {
-      await Bun.sleep(50);
-      queued = await control(root, run, "status");
-    }
+    // The worker publishes "queued" together with its reason, and the test reads
+    // that state file directly (no control process per poll), so seeing it needs
+    // only a few 20 ms polls; 3 s of queueing leaves wide margin before expiry.
+    await control(root, run, "start", { ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS: "3000" });
+    const queued = await observeUntil(
+      root,
+      run,
+      (next) => next.results[0]?.status === "queued" && next.results[0].queueReason !== undefined,
+      3000,
+    );
     expect(queued.results[0]!.queueReason).toContain("worker slots");
     let done = await control(root, run, "status");
     const deadline = Date.now() + 12000;

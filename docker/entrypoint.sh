@@ -537,7 +537,7 @@ copy_agent_directory() {
 }
 
 # User-authored extension directories (Claude's commands/agents/ide/plugins,
-# OpenCode's storage/snapshot) copy per-entry rather than all-or-nothing.
+# Grok's hooks/skills) copy per-entry rather than all-or-nothing.
 # A dotfiles manager symlinking one file into ~/.claude/commands is ordinary;
 # the strict directory helper above would reject the whole directory over that
 # single link and silently drop every custom command. This walker copies each
@@ -903,27 +903,16 @@ if [ -d /opencode-config ]; then
 fi
 
 if [ -d /opencode-data ]; then
-    # This directory is dominated by opencode.db — the host's session database,
-    # which reaches multiple GB and is not portable state a fresh container needs.
-    # The previous `find -maxdepth 1 -type f` copied every top-level file, so that
-    # database (and its -wal/-shm siblings) was copied on every single start.
-    # Allowlist the portable inputs instead, and route them through the shared
-    # copy helpers so OpenCode gets the same symlink, size and entry-count
-    # bounds. The data directories copy per-entry so a symlinked or oversized
-    # record in one cannot drop the whole storage tree.
-    for file in \
-        auth.json \
-        account.json
-    do
-        copy_agent_file /opencode-data "$HOME/.local/share/opencode" "$file" OpenCode
-    done
-
-    for dir in \
-        storage \
-        snapshot
-    do
-        copy_agent_directory_entries /opencode-data "$HOME/.local/share/opencode" "$dir" OpenCode
-    done
+    # Only the login is portable. The host's opencode.db (its session database,
+    # often several GB) is never copied; nor are snapshot/, storage/ or
+    # account.json. OpenCode 1.19.4 keeps console accounts and the selected
+    # organization in SQLite (preserved via OPENCODE_DB), not account.json.
+    # scripts/qualify-opencode-seeded-data.sh exercises an active account
+    # against an authenticated local console with and without the host seed.
+    # Snapshots are keyed by the worktree path; of storage/ only the legacy
+    # migration index is needed, and an empty storage/ recreates it. Copying
+    # the host seed cost bytes on every start and offered nothing a container uses.
+    copy_agent_file /opencode-data "$HOME/.local/share/opencode" auth.json OpenCode
 
     chmod 600 "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true
     restrict_imported_login "$HOME/.local/share/opencode/auth.json" opencode OpenCode /opencode-data auth.json

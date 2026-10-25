@@ -75,7 +75,7 @@ export const runCommands: CommandSpec[] = [
       if (!receipt) throw new CliError("response-invalid", "run.get returned no receipt");
       return {
         action: "run.get",
-        result: null,
+        result: receipt.result ?? null,
         receipt,
         connection: session.identity,
         ids: [receipt.operationId],
@@ -112,7 +112,7 @@ export const runCommands: CommandSpec[] = [
       const failure = receiptFailure(final);
       return {
         action: "run.wait",
-        result: null,
+        result: final.result ?? null,
         receipt: final,
         connection: session.identity,
         ids: [final.operationId],

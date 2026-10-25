@@ -25,6 +25,7 @@ import {
 } from "@/constants/terminal";
 import { MobileTerminalKeyBar } from "@/components/terminal/MobileTerminalKeyBar";
 import { publishTerminalGeometryIfOwned } from "@/lib/terminal-geometry-owner";
+import { isKeyboardShortcutsShortcut } from "@/lib/keyboard-shortcuts";
 
 const INTERACTIVE_RECOVERY_MAX_ATTEMPTS = 2;
 
@@ -212,6 +213,7 @@ export function ClaudeTmuxInteractiveTerminal({
       if (key === "w" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
         return false;
       }
+      if (isKeyboardShortcutsShortcut(event)) return false;
 
       if (key === "enter" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();

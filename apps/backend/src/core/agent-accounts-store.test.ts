@@ -23,4 +23,17 @@ describe("parseAgentAccountStore", () => {
     ]);
     expect(parsed.active).toEqual({});
   });
+
+  test("keeps a valid preferred email per platform and drops anything else", () => {
+    expect(
+      parseAgentAccountStore({
+        accounts: [],
+        active: {},
+        preferred: { claude: "  work@example.com ", codex: "not an email", grok: "x@example.com" },
+      }).preferred,
+    ).toEqual({ claude: "work@example.com" });
+    expect(parseAgentAccountStore({ accounts: [], active: {}, preferred: "x" })).not.toHaveProperty(
+      "preferred",
+    );
+  });
 });

@@ -170,7 +170,7 @@ export function AgentDefaultsPane({
   );
   const storedForAgent = tier?.platforms?.[effectiveAgent];
   const resolvedForAgent = resolveAgentPlatformSettings(tiers, effectiveAgent);
-  const models = modelsForAgent(catalog, effectiveAgent);
+  const models = useMemo(() => modelsForAgent(catalog, effectiveAgent), [catalog, effectiveAgent]);
   const selectedModel = storedForAgent?.model
     ? models.find(
         (model) =>

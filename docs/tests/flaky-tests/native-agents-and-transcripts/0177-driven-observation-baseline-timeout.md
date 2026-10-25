@@ -1,7 +1,7 @@
 # driven native observation baseline (step 07) > is deterministic, content-free, and sharing drops reads without losing edges
 
 - **ID:** 0177
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-02
 - **Test:** `driven native observation baseline (step 07) > is deterministic, content-free, and sharing drops reads without losing edges`
 - **File:** `apps/backend/tests/recurring-baseline.test.ts:94`
@@ -87,3 +87,59 @@ After the full aggregate ended, `mise run test:logged -- --name merge2-after-agg
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-recurring-baseline-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/recurring-baseline.test.ts --parallel=1 --only-failures` also failed at 5000.36 ms, with four passes, one failure and 66 expectations (27.0 s logged).
 - **Evidence:** `orkestrator-test-run.BDDGcj/merge-backend-complete.log.gz` after finalization and `orkestrator-test-run.GJ6mlD/merge-recurring-baseline-owner.log.gz` under the host temporary directory. Aggregate counts are in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#mixed-version-compatibility-main-merge--2026-10-24).
 - **Assessment:** remains unresolved on this host; the isolated failure does not establish a new flake. No owning implementation, assertion, timeout or skip changed.
+
+## Composer model admission validation — 2026-10-25
+
+Recurred in `mise run test:logged -- --name review-tests -- mise run test`
+on `todo-0004-composer-model-params-803868a90fcb`, Bun 1.4.4 on the shared
+macOS host. The unchanged case exceeded its five-second deadline
+(5047.64 ms). The backend aggregate reported 11318 passed,
+84 skipped, two failed and one between-tests error across 670 files.
+
+The complete unchanged owner passed alone (exit 0, 10.0 seconds):
+
+```sh
+mise run test:logged -- --name observation-baseline-recheck -- bun test --cwd apps/backend ./tests/recurring-baseline.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: `orkestrator-test-run.T3LqzB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory. The original aggregate remains failed.
+No owning implementation, assertion, deadline or skip was changed.
+
+## Reconnect freshness qualification — 2026-10-25
+
+The default two-worker backend aggregate repeated this failure while validating
+renderer-only test changes at `33b96fb48`. The complete owners were rerun with one
+isolated Bun worker; exact commands, failures, durations, counts and evidence are
+recorded in [0826](../aggregate-validation-runs/0826-reconnect-freshness-validation.md).
+The baseline exceeded five seconds in both the aggregate (5025.31 ms) and
+owning-file rerun (5215.64 ms). This observation remains unresolved.
+
+## Resolution — 2026-10-25
+
+Investigated for
+[0048](../../../todo/transcripts-and-observation/0048-recurring-work-qualification.md)
+("Needs verification"). The timeout is load-only: the case does no hidden
+work and has no hang.
+
+- **Cost on this host (macOS 27.0 arm64, Bun 1.4.2):** one
+  `runNativeObservationBaseline` call took 480 to 544 ms of wall time and
+  200 to 343 ms of CPU over four runs. The case makes two calls (four modes),
+  about 1 s. `bun test … -t "sharing drops reads"` reported 1284 to 1347 ms
+  per run, process start included. That is a fifth of the 5 s budget.
+- **Where the wall time went:** each of the 120 ticks per mode awaited
+  `setTimeout(resolve, 0)` to let the OpenCode first-idle check settle. Bun
+  clamps that timer, so 480 timer waits were about half the wall time, and
+  under host load each wait stretches further. Under synthetic load (30 CPU
+  spinners and 8 `fsync` writers on 18 cores, load average 25 to 28) a call
+  took 784 to 1242 ms.
+- **Fix:** the tick now yields with `setImmediate`, which still runs after
+  every pending microtask. Both the 4-minute test fixture and the default
+  10-minute fixture produce counts identical to the `setTimeout(0)` version.
+  A call now takes about 370 ms idle (default fixture 1167 → 384 ms) and 656 to
+  872 ms under the same synthetic load. The case reports 785 to 881 ms.
+- **Budget:** the case now carries an explicit 30 s timeout, as the workflow
+  baseline beside it (60 s) already did, with a comment. Its assertions
+  (determinism, read counts, discovery budgets on the manual clock) are
+  unchanged, so a logic regression still fails it; only host scheduling time
+  is no longer judged against 5 s.

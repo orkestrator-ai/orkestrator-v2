@@ -8,6 +8,9 @@ Outstanding work: [0017-cli-command-surface.md](../todo/cli-and-slash-commands/0
 [0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md) (with the evidence log).
 Contract source: [`packages/protocol/src/public-api.ts`](../../packages/protocol/src/public-api.ts)
 and [`public-api-resources.ts`](../../packages/protocol/src/public-api-resources.ts).
+Public agent summary: [orkestrator.dev/skill.md](https://orkestrator.dev/skill.md)
+(`apps/web-public/public/skill.md`); keep its connection steps in step with
+this guide.
 
 ## Invocation modes
 
@@ -151,8 +154,9 @@ not advertise at its version before sending it.
 | `project list/get` | `project.list/get` | storage snapshot | read |
 | `project add --remote/--path` | `project.add` | `addExistingProject` (locks, duplicate/symlink guards, clone rollback) | metadata, filesystem |
 | `project create --path P --github-private` | `project.create` | `createProjectFromScratch`: `git init`, **private GitHub repository**, push | metadata, filesystem, external |
+| `project init --path P` | `project.init` | `initLocalProject`: `git init -b main`, one empty commit, **no remote** | metadata, filesystem |
 | `project update ID` | `project.update` | revision-checked storage patch | metadata only — no directory move, no `.git/config` rewrite |
-| `project remove ID` | `project.remove` | removal fence + `cleanupProjectForRemoval` | registration only; refused with environments (no cascade) |
+| `project remove ID [--cascade [--wait]]` | `project.remove` | `delete_environment` per environment (cascade), then removal fence + `cleanupProjectForRemoval` | registration only, plus the environments with `--cascade`; refused with environments otherwise |
 | `project config get/set/unset` | `project.config.get/set` | config lock, content revision | metadata |
 | `environment list/get` | `environment.list/get` | environment snapshot (no Docker sync) | read |
 | `environment create` | `environment.create` | `create_environment` (control request ID + fingerprint) | metadata |
@@ -163,8 +167,10 @@ not advertise at its version before sending it.
 | `environment exec ID -- ARGV…` | `environment.exec` | environment-side exec worker | filesystem, process |
 | `agent options` | `agent.options` | model catalogues (`--refresh` asks providers) | read |
 | `session list/get` | `session.list/get` | pane layout + native-session records (metadata only) | read |
-| `session start` | `session.start` | `launch_native_agent_job` (durable job tab, exactly-once first prompt) | provider |
-| `session prompt SESSION` | `session.prompt` | `dispatch_native_agent_intent` | provider |
+| `session start [--literal] [--attach F]` | `session.start` | `launch_native_agent_job` (durable job tab, exactly-once first prompt) | provider |
+| `session prompt SESSION [--literal] [--enqueue] [--attach F]` | `session.prompt` | `dispatch_native_agent_intent`; with `--enqueue`, the native prompt queue (`enqueuePromptQueueMessageIfAbsent`, drained by `drainPromptQueue`) | provider |
+| `session commands SESSION [--refresh]` | `session.commands` | the session's cached command catalogue (`refresh_native_agent_commands` with `--refresh`) | read |
+| `session command SESSION --command ID\|NAME [-- ARGS]` | `session.command` | `dispatch_native_agent_intent` with `{ kind: "selected" }` intent (or the queue with `--enqueue`) | provider |
 | `session stop/steer` | `session.stop/steer` | `stop_native_agent_session`, steer session action | provider |
 | `session config get/set` | `session.config.get/set` | live composer controls | provider |
 | `session history/resume/fork` | `session.history/resume/fork` | resumable sessions; fork adopts into a new tab | provider |
@@ -190,6 +196,8 @@ not advertise at its version before sending it.
 | `host image update [--wait]` | `host.image.update` | `docker pull` of the matching release image, then retag | filesystem |
 | `host gh latest/pinned [--wait]` | `host.gh.update` | checksum-verified newest `gh`, or back to the pin (unqualified) | filesystem |
 | `service install/uninstall/status` | local | launchd or systemd user service running versioned releases through the launcher | filesystem, process |
+| `toolchain install [--tool T] [--dry-run]` | local | pinned toolchain installer into `<data-dir>/toolchains` (see [`packages/cli/README.md`](../../packages/cli/README.md) and [upgrade-agents.md](../development/upgrade-agents.md)) | filesystem |
+| `completion bash\|zsh\|fish` | local | completion script generated from this build's command table (nouns, verbs, flags; never IDs, never a backend) | none |
 
 The shared discovery, tab resolution, catalogue and launch-validation helpers
 live in [`control-shared-actions.ts`](../../apps/backend/src/core/control-shared-actions.ts)
@@ -212,7 +220,8 @@ Control MCP's `describe_action` reports as each action's CLI equivalent.
 does.
 
 Paths passed to project commands are on the **backend** host. Prompt, patch,
-stdin and credential files are read on the machine running the client.
+stdin, attachment and credential files are read on the machine running the
+client.
 
 ## Request keys and receipts
 
@@ -241,7 +250,12 @@ nothing runs.
 
 Operations persist their resource IDs as soon as they are known, their stage,
 dispatch and execution state, and a small content-free result. `run get OP`
-or `run get --request-id KEY --action ACTION` reads them;
+or `run get --request-id KEY --action ACTION` reads them. Receipts include the
+bounded current/final `result`, including partial cascade outcomes; `run get`,
+`run wait`, and `project remove --wait` expose the latest counts and per-environment
+results. Cascade details use a byte budget and report `truncated` and `omitted`
+when rows cannot fit; aggregate totals remain available.
+
 `not-found` and `history-expired` are distinct and neither is evidence that
 nothing ran.
 
@@ -263,13 +277,16 @@ Keys belong to a **namespace** (`ns-<created ms>-<random>`), published in
 are retained until its fence (created + 7 + 30 days) and longer while any of
 its operations is active (a permanently `unknown` record with nothing left to
 recover no longer pins it past the fence). After the fence the namespace is
-retired: its files are deleted and any request or lookup naming it is refused
+retired: its records are deleted and any request or lookup naming it is refused
 with `namespace-expired` / `history-expired`, never re-executed. Limits: 5,000
 records and 16 MiB per namespace, 8 KiB per record; a full namespace refuses
 new work (`store-capacity`) rather than evicting history. A corrupted store
-refuses admission instead of being treated as empty. Durability is the atomic
-temp-file + rename (+ fsync) the other stores use: a process crash or kill,
-not a claim of power-loss durability.
+refuses admission instead of being treated as empty. Each namespace is the
+logical SQLite store `public-operations/<namespace>` (with the index in
+`public-operations/index`) in the backend database: WAL with
+`synchronous = FULL`, so a committed admission survives a process crash; see
+[storage.md](storage.md). "Never delete `public-operations/`" below means those
+logical stores.
 
 ### After a restart
 
@@ -284,6 +301,8 @@ A reconciler (startup pass, environment change events, 15 s sweep, and every
 | start not yet running, stop, other in-flight | `interrupted` — the effect is not confirmed and nothing re-runs |
 | delete | Succeeds when the environment is gone; keeps observing a re-admitted deletion |
 | prompt runs | Request-specific observation (below); unknown dispatch stays parked |
+| queued prompt runs (`--enqueue`) | Still settled from the durable queue and dispatch journal; one restarted before its item was written is `interrupted` |
+| project removal | Succeeds when the project is gone; otherwise its fence is lifted and it is `interrupted` (environments a cascade already deleted stay deleted) |
 | exec | The worker survives; its recorded exit status settles the run |
 
 ## Environments
@@ -344,9 +363,67 @@ never replaced.
 
 - `session start` creates an independent conversation in its own tab (not
   focused) and sends one first prompt. `session prompt` continues an **idle**
-  session; a busy one is refused (`busy`, exit 8) — use `session steer` where
-  supported. Prompt text comes from `--prompt-file`, `--prompt-stdin` or
-  `--prompt` (mutually exclusive; UTF-8; 100,000 characters / 400,000 bytes).
+  session; a busy one is refused (`busy`, exit 8) unless `--enqueue` is given —
+  use `session steer` to redirect a running turn. Prompt text comes from
+  `--prompt-file`, `--prompt-stdin` or `--prompt` (mutually exclusive; UTF-8;
+  100,000 characters / 400,000 bytes).
+- **Prompt text is typed intent by default.** Sessions the CLI starts are
+  ordinary native tabs, so a prompt whose first word names a provider command
+  (`/review …`) runs that command, exactly as typing it in the composer would.
+  `--literal` (on `session start` and `session prompt`) sends the text with
+  provider commands disabled (`{ kind: "literal" }`, which the planner maps to
+  `allowProviderCommands: false`). A provider that interprets a leading
+  command itself and cannot be told otherwise (Claude, for a known command)
+  refuses the literal prompt (`operation-failed`, nothing sent) rather than
+  running the command.
+- **Selected slash commands.** `session commands SESSION` lists the session's
+  catalogue as the backend holds it — ID, name, aliases, availability, argument
+  and busy policy, and an opaque `bindingRevision`; never the private binding
+  (skill paths, template files). `--refresh` asks the provider again.
+  `session command SESSION --command ID|NAME [-- ARGS]` submits
+  `{ kind: "selected", commandId, bindingRevision }` through the same dispatch
+  path the composer uses. An ID matches exactly; a name (with or without its
+  `/` or `$`) must match exactly one available command. Refused before
+  admission, with nothing sent: no such command (`not-found`, exit 3), a
+  shared name (`ambiguous-target`, exit 3, candidate IDs in `details`), a
+  changed command (`--expected-binding-revision` mismatch, `revision-conflict`,
+  exit 8), an unavailable one (`capability-unavailable`, exit 8), wrong
+  arguments for its policy (`invalid-input`, exit 2), or an idle-only command
+  on a busy session (`busy`). A command that changes between admission and
+  dispatch fails the run (`operation-failed`); a selection is never downgraded
+  to prompt text. `/steer` is not listed: `session steer` is its public form.
+- **Durable enqueue.** `--enqueue` (on `session prompt` and `session command`)
+  appends the prompt to the tab's backend-owned prompt queue — the same queue
+  the composer uses — under the run's own operation ID, so the queued item, the
+  dispatch request and the run share one identity and a replay finds the same
+  item. The backend drainer sends it, FIFO, when the session is free; no client
+  needs to stay connected. The run is `running` with `dispatch: pending`
+  (stage `queued`) until then, and is observed like any other run afterwards. A
+  provider that refuses the queued prompt (Pi answers 409 to a literal
+  follow-up it would read as a command) fails the run with the provider's
+  reason, and the item stays in the tab's queue with its error for the user to
+  retry or remove; a retry from the app sends it outside this run. An item
+  removed before it was sent cancels the run (`dispatch: not-sent`).
+  Providers without a queue (`capabilities.providers.<agent>.queue`) refuse
+  `--enqueue` (`capability-unavailable`). A busy prompt is never turned into a
+  steer, and a prompt without `--enqueue` is never queued.
+- **Attachments.** `--attach FILE` (repeatable, on `session start` and
+  `session prompt`) reads files on the client machine and sends each file's
+  name and bytes inside the request: at most 8 files and 256 KiB in total, so
+  that they fit the 1 MiB request with the prompt. Images (PNG, JPEG, GIF,
+  WebP by signature) are sent as images, anything else as files; a provider
+  that cannot take one kind refuses (`capability-unavailable`). The backend
+  writes them, after admission and before dispatch, to
+  `.orkestrator/prompt-attachments/<operation ID>/` in the environment
+  workspace (the directory the composer stages into) and attaches those
+  workspace paths. They live with the workspace and go when the environment is
+  deleted. A durable staging checkpoint records the session and request identity
+  before any writes. A restart at that checkpoint settles the run as interrupted
+  with `dispatch: not-sent`; it never queues or dispatches it automatically.
+  Names carrying directories are refused, and no input field accepts
+  a backend host path. Each attachment's name, type, size and SHA-256 are part
+  of the request fingerprint (the bytes never are, and never reach a receipt),
+  so a replay with different files conflicts.
 - `environment launch` is one backend-owned flow: create, start, setup, then
   exactly one initial prompt under the stable request ID
   `initial-prompt:<environment>:startup-agent`. Setup failure leaves the prompt
@@ -475,7 +552,13 @@ isolated backends started through the packaged launcher (disposable data and
 worktree roots, argv-only driver, owned cleanup, private manifest under
 `output/cli-scenarios/<run>/`). Credential-free by default:
 `read-only`, `local-lifecycle`, `retry-and-retention`, `setup-failure`,
-`client-exit`, `exec`, `wrong-profile`. Options: `--scenario NAME` (repeat),
+`client-exit`, `exec`, `wrong-profile`, `project-cascade` (a started and a
+stopped environment deleted by `project remove --cascade`; checkout and origin
+kept) and `project-init` (local only: no remote, a local environment starts
+from the repository's own `main`). `live-session` also lists the session's
+commands, checks that an unknown and a changed command are refused, runs a
+selected command (Claude's built-in `/context`), and sends `--literal`,
+`--attach` and an `--enqueue` prompt behind a running turn. Options: `--scenario NAME` (repeat),
 `--list`, `--keep-on-failure`, `--environment-type container
 --docker-image TAG` (a worktree-owned image from `mise run docker:build:dev`;
 the shared `latest` tag is refused), and `--provider NAME` for the
@@ -528,10 +611,23 @@ Which test proves each scenario class is listed in
 
 ## Limitations and rollout
 
-- Not provided: local-only project initialization, cascade project removal,
-  prompt attachments, selected slash commands, durable enqueue, declarative
-  apply, shell completion, worker-scoped credentials. `capabilities.features`
-  reports these as unavailable.
+- `capabilities.features` reports `projectCascadeRemove`, `localProjectInit`,
+  `promptAttachments`, `selectedSlashCommands` and `enqueue` as `true`; a
+  client must treat a missing or `false` entry (an older backend) as
+  unavailable. `transcriptFollow` stays `poll`.
+- Cascade removal is operator-only: a Control MCP credential, even one holding
+  `projects`, is refused (`capability-unavailable`), because deleting
+  environments is a separate destructive grant.
+- A `project init` project has no remote and records its checkout path as
+  `gitUrl`. Its local environments start from its own branch
+  (`resolveRemoteWorktreeStartPoint` uses `refs/heads/<branch>` only for such a
+  project while it has no `origin`; any other checkout without an origin still
+  fails). Container environments cannot clone it and pull requests are
+  unavailable until a remote is added (`git remote add` in the checkout, then
+  `project update --remote`).
+- Not provided: event-stream following (`--follow` polls snapshots),
+  worker-scoped CLI credentials, declarative `apply`, and backend auto-start;
+  see [0017-cli-command-surface.md](../todo/cli-and-slash-commands/0017-cli-command-surface.md).
 - Container lifecycle and exec are qualified on Linux Docker and macOS Docker
   Desktop with worktree-owned images. The 2026-10-18 macOS evidence also records
   live Claude, Codex and OpenCode container passes. Remaining gaps include Pi,

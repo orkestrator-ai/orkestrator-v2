@@ -237,8 +237,10 @@ export async function readProviderStatus(
     return observation;
   } catch (error) {
     if (error instanceof ProviderSessionFailedError) {
+      const settled = requestId ? await provider.settleTurn?.(sessionId, requestId) : undefined;
       return {
         status: "error",
+        ...(settled !== undefined ? { turnSettled: settled } : {}),
         error: error.detail,
         ...(error.interruption ? { interruption: error.interruption } : {}),
       };
@@ -786,9 +788,11 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
   /**
    * Bridge-level MCP configuration reload that never starts an agent process:
    * `not-running` when nothing is running to reload, `unsupported` when the
-   * bridge predates the route. Session-free, so it survives a bridge restart.
+   * bridge predates the route, `busy` when the provider itself refused
+   * because work is running (OpenCode's directory instance is only disposed
+   * while idle). Session-free, so it survives a bridge restart.
    */
-  reloadMcpConfiguration?(): Promise<"reloaded" | "not-running" | "unsupported">;
+  reloadMcpConfiguration?(): Promise<"reloaded" | "not-running" | "unsupported" | "busy">;
   authStatus?(): Promise<NativeAgentAuthStatus>;
   /**
    * `deviceCode` asks for a flow without a loopback callback, for a browser
@@ -880,6 +884,8 @@ export interface ProviderCommandCatalogue {
   revision?: number;
   generation?: string;
   freshness?: "push" | "ttl";
+  /** A `stale` list the provider completes when its session attaches. */
+  attachPending?: boolean;
 }
 
 export interface ProviderCommandRefreshResult {

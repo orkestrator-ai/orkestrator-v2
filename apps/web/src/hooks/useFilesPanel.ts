@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, useState } from "react";
+import { useEffect, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores";
@@ -344,7 +344,10 @@ export function useFilesPanel() {
   const loadingChangesRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
   const loadingTreeRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
   const activeSnapshotKeyRef = useRef(environmentSnapshotKey);
-  activeSnapshotKeyRef.current = environmentSnapshotKey;
+  // Published at commit, before any effect below starts a read for the new key.
+  useLayoutEffect(() => {
+    activeSnapshotKeyRef.current = environmentSnapshotKey;
+  }, [environmentSnapshotKey]);
   const [fileActionPending, setFileActionPending] = useState<string | null>(null);
   // Owner stamps of the list and tree the panel last applied (state, so an
   // announcement that raced an in-flight read is re-checked when it lands).

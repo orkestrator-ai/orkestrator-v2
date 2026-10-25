@@ -64,6 +64,11 @@ export function MarkdownEditorTab({
     handledNavigationRequestIdRef.current = navigationRequestId;
     if (!lineNumber || mode === "raw") return;
     editorRef.current?.flushPendingChanges();
+    // The switch must follow the flush above, which pushes the rich editor's
+    // pending edit into the store while that editor is still mounted. Switching
+    // while rendering would unmount it first, so the raw editor would open on
+    // stale text and navigate before the late flush replaced it.
+    // oxlint-disable-next-line react/set-state-in-effect
     setMode("raw");
   }, [lineNumber, mode, navigationRequestId]);
 

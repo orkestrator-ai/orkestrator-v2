@@ -125,6 +125,16 @@ element's top relative to the viewport.
   page merging calls in front, live calls behind), so they are not renamed and
   remounted. Projections parsed afresh on every read (reviewers) pass a
   caller-owned alias map, pruned to the projection.
+- A held place is only as exact as the scroll range allows. A long tool-only
+  conversation folds into one group, so its whole transcript (prompt, folded
+  group, answer) can be shorter than the viewport once the last page lands.
+  The rows the page put above the held row then push it down, and the
+  controller ends `clamped` at the top. Nothing can hold that place without
+  inventing blank space below the transcript. With room to scroll the same
+  page converges to the pixel (`TranscriptPaging.spec.ts`, the folded-group
+  cases). Checks of a held place therefore compare the list's position with
+  the position that holds the row, limited to the scroll range, rather than
+  the row's offset alone.
 
 ## Activation and persistence
 

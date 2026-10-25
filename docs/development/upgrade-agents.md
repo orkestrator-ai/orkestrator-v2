@@ -357,7 +357,7 @@ Update the traced version only after doing the steps below.
    | --- | --- | --- |
    | Claude | The "Application data" table in the Claude Code docs (`claude-directory`); `strings` on the binary for the directory names | Transcripts are under `~/.claude/projects` and rewind snapshots under `~/.claude/file-history`. Anything new the docs list as needed for "resume, continue, and rewind" must be preserved |
    | Codex | `strings "$BIN" \| grep -E '_[0-9]+\.sqlite\|session_index\|archived_sessions\|CODEX_SQLITE_HOME'` | Rollouts are under `sessions/` and `archived_sessions/`. `CODEX_SQLITE_HOME` is still honoured, and every runtime database it relocates matches the `.codex/*.sqlite*` selection in `replacementCopyPlan`. Note any new versioned database name; `thread_history_1` and `goals_1` are examples |
-   | OpenCode | `strings "$BIN" \| grep -E 'OPENCODE_DB\|opencode\.db\|snapshot'` | `OPENCODE_DB` is still a full database path (`OPENCODE_DB_PATH`), sessions live only in that database, and `snapshot/` is still revert history rather than session state |
+   | OpenCode | `strings "$BIN" \| grep -E 'OPENCODE_DB\|opencode\.db\|snapshot'`, then `scripts/qualify-opencode-seeded-data.sh <dev image>` once the image is built | `OPENCODE_DB` is still a full database path (`OPENCODE_DB_PATH`), sessions live only in that database, and `snapshot/` is still revert history rather than session state. The script must still pass: a turn, diff and revert work with nothing seeded from the host data directory but `auth.json`, and nothing opens a host's `snapshot/` or `account.json` |
    | Pi | The pinned bundle's own docs: `sessions.md` and `environment-variables.md` under its `docs` directory | Sessions default to `~/.pi/agent/sessions`. The bridge passes `PI_SESSION_DIR` to `SessionManager` itself |
    | Cursor | `JsonlLocalAgentStore` and `getDefaultSdkStateRoot` in the bundled SDK | The store writes only under the root `cursor-bridge/src/sdk-runtime.ts` passes it, which sits under `CURSOR_BRIDGE_STATE_DIR` |
    | Grok | The help docs the CLI writes to `~/.grok/docs` (sessions and storage chapters), `CHANGELOG.md`, and `strings` for `GROK_HOME` | `session/load` needs only `~/.grok/sessions/<cwd>/<id>/` (`updates.jsonl` is authoritative). `active_sessions.json` lists live processes only and `worktrees.db` tracks only Grok's own worktrees |
@@ -380,8 +380,7 @@ Update the traced version only after doing the steps below.
      (`apps/backend/tests/container-live-replacement.test.ts`).
 
    Never mount a whole provider home, and never symlink a state path; see the
-   constraints in
-   [0021-container-rebuild-state-preservation.md](../todo/containers-and-environments/0021-container-rebuild-state-preservation.md).
+   [design constraints](../architecture/container-lifecycle.md#design-constraints).
 4. Set the provider's entry in `PROVIDER_STATE_TRACED_VERSIONS` to the new
    version and update the "Traced against" line under "Provider state".
 
@@ -409,6 +408,16 @@ both lists, or its container copy signs out when its short access token
 expires. Also check that `expires` is still in milliseconds and the refresh
 window (Pi refreshes five minutes early, OpenCode's xAI two) still fits inside
 `PROVIDER_AUTH_MIN_VALIDITY_MS`.
+
+On every Codex bump, run `bun scripts/codex-access-only-auth-probe.ts --codex
+<pinned binary>`. It hands the pinned Codex the access-only `auth.json` a
+coordinator home or container receives, built from a synthetic login against
+a local server, and reports every refresh attempt. On 0.164.0: no refresh for
+an access token more than five minutes from its `exp`, whatever
+`last_refresh` says; inside those five minutes, or after a 401, one attempt
+with the blank refresh token that fails and leaves the file untouched. A
+change there (a refresh before the window, or a rewritten file) needs
+`restrictCodexAuthSnapshot` and `TOKEN_REPLACEMENT_LEAD_MS` re-read.
 
 ## Claude
 
@@ -550,6 +559,20 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    `CLAUDE_CLI_PATH` pointing at the managed one. If its `bare` case fails, the
    CLI now unloads launch servers by itself; the restatement is then harmless,
    but update the module's header to say so.
+
+   Re-prove the MCP editor's Claude plugin rules (`enabledPlugins` for the
+   `@inline` plugins the bridge passes, `.mcp.json` before the manifest's
+   `mcpServers`, the `plugin:<plugin>:<server>` names and the live panel's
+   plugin layer). This starts the real CLI three times in a temporary home,
+   with no credentials and no prompt:
+
+   ```bash
+   mise run verify:claude:plugin-mcp-live
+   ```
+
+   A failure means the CLI changed one of the rules recorded under "Claude
+   plugins" in `docs/architecture/mcp-management.md`; re-derive it from the
+   binary and update `packages/protocol/src/node/claude-plugin-set.ts`.
 7. Rebuild the vendored bridge and verify it:
 
    ```bash
@@ -935,6 +958,22 @@ the two calls together.
    isolated XDG directories, verifies that CLI health reports the same version as the SDK
    pin, constructs the real v2 client, and lists sessions. It does not call a
    model or spend credits.
+
+   Then re-prove what MCP apply relies on, also without credentials:
+
+   ```bash
+   OPENCODE_CLI_PATH=/absolute/path/to/new/opencode \
+     mise run verify:opencode:mcp-live
+   ```
+
+   It checks that `instance.dispose` rebuilds a worktree's MCP servers from
+   its project file, stops the old server processes, drops runtime-added
+   entries and keeps sessions, and that the user files in
+   `$XDG_CONFIG_HOME/opencode` stay cached until the server restarts. If the
+   second test fails because the user file is reloaded, plan `opencode:user-*`
+   sources for the in-place reload too (`apply.ts`); if the first fails, MCP
+   apply's OpenCode reload no longer works. See
+   [`mcp-management.md`](../architecture/mcp-management.md) ("OpenCode reload").
 7. Smoke-test both UI native chat and a build-pipeline OpenCode phase. Exercise
    streaming, question and permission rehydration, abort, resume, and session
    status because those use different portions of the v2 client.
@@ -1230,6 +1269,10 @@ trusting a green result.
 6. Smoke-test sign-in through the bridge's `--login` child, run a turn with tool
    calls and a diff, switch model and effort, cancel mid-turn, and check the
    inactive-environment path.
+   `src/login-no-open-browser.test.ts` runs the pinned SDK's login with a fake
+   system opener and fails if `NO_OPEN_BROWSER` no longer stops the launch: a
+   sign-in started from another machine's Settings relies on it (checked on
+   1.0.40).
 7. [Re-trace preserved provider state](#re-trace-preserved-provider-state):
    confirm the SDK's local agent store still writes only under the root
    `cursorSdkStateDirectoryPath()` hands it. (1.0.40 added an OS-temp

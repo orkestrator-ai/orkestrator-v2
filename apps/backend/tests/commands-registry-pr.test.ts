@@ -1572,7 +1572,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       const verify = commands.get("verify_looped_review_package")!;
       await expect(
         verify({ environmentId: environment.id, reviewPackage: first }, context),
-      ).resolves.toEqual({ valid: true });
+      ).resolves.toMatchObject({ valid: true });
       await fs.chmod(path.join(worktreePath, String(first.filePath)), 0o600);
       await fs.appendFile(path.join(worktreePath, String(first.filePath)), "tampered");
       await expect(

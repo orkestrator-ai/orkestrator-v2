@@ -26,6 +26,7 @@ import { readStoredValue, seedStore, writeLegacyStore } from "./storage-test-sup
 import { runCommand } from "./shell.js";
 import { prepareCoordinatorCodexHome } from "./commands-servers.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
@@ -192,6 +193,227 @@ describe("project coordinator", () => {
     );
     expect(mains).toHaveLength(1);
     expect(mains[0]!.id).not.toBe(main.id);
+  });
+
+  test("a new conversation closes the unused empty side agents its caller names", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const initial = await service.ensure(project.id);
+    const workspaceId = initial.workspace.id;
+    const main = initial.workspace.conversations[0]!;
+    const side = async () =>
+      (await service.createConversation(project.id)).workspace.selectedConversationId!;
+    const empty = await side();
+    const drafted = await side();
+    const metadataOnly = await side();
+    const owning = await side();
+    const assigned = await side();
+    const snapshot = (await service.get(project.id))!;
+    const byId = new Map(snapshot.workspace.conversations.map((item) => [item.id, item]));
+    const draftKey = (id: string) =>
+      `agent-native:${coordinatorRuntimeId(workspaceId, id)}:${encodeURIComponent(
+        `${coordinatorRuntimeId(workspaceId, id)}:${byId.get(id)!.tabId}`,
+      )}`;
+    await storage.saveComposeDraft(
+      draftKey(drafted),
+      "environment",
+      coordinatorRuntimeId(workspaceId, drafted),
+      { text: "Half-written plan", mentions: [], attachments: [], annotations: [] },
+    );
+    // A platform picked but nothing written is still an empty composer.
+    await storage.saveComposeDraft(
+      draftKey(metadataOnly),
+      "environment",
+      coordinatorRuntimeId(workspaceId, metadataOnly),
+      {
+        text: "  ",
+        mentions: [],
+        attachments: [],
+        annotations: [],
+        metadata: { platform: "codex" },
+      },
+    );
+    await storage.saveCoordinatorWorkflowAssociation({
+      id: "work-of-owning",
+      projectId: project.id,
+      coordinatorId: workspaceId,
+      conversationId: owning,
+      kind: "environment",
+      resourceId: "env-somewhere",
+      requestId: "request-owning",
+      createdAt: new Date().toISOString(),
+    });
+    await service.assignConversationAgent(project.id, assigned, "claude");
+
+    const created = await service.createConversation(project.id, undefined, {
+      closeUnused: [empty, drafted, metadataOnly, owning, assigned, main.id, "missing"],
+    });
+    const open = new Set(
+      created.workspace.conversations.filter((item) => !item.closedAt).map((item) => item.id),
+    );
+    expect(open.has(empty)).toBe(false);
+    expect(open.has(metadataOnly)).toBe(false);
+    // Text, owned work, an assigned provider and the main coordinator all stay.
+    expect(open.has(drafted)).toBe(true);
+    expect(open.has(owning)).toBe(true);
+    expect(open.has(assigned)).toBe(true);
+    expect(open.has(main.id)).toBe(true);
+    expect(open.has(created.workspace.selectedConversationId!)).toBe(true);
+    // Without names, nothing is closed.
+    const again = await service.createConversation(project.id);
+    expect(again.workspace.conversations.filter((item) => !item.closedAt)).toHaveLength(
+      open.size + 1,
+    );
+  });
+
+  test("a draft committed after candidate inspection keeps its conversation open", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    await service.ensure(project.id);
+    const before = await service.createConversation(project.id);
+    const id = before.workspace.selectedConversationId!;
+    const runtimeId = coordinatorRuntimeId(before.workspace.id, id);
+    const inspected = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const original = storage.listComposeDrafts.bind(storage);
+    const read = spyOn(storage, "listComposeDrafts").mockImplementation(async (...args) => {
+      const drafts = await original(...args);
+      if (args[1] === runtimeId) {
+        inspected.resolve();
+        await resume.promise;
+      }
+      return drafts;
+    });
+    const creation = service.createConversation(project.id, undefined, { closeUnused: [id] });
+    try {
+      await inspected.promise;
+      // A separate storage instance represents another window's committed save.
+      const other = new StorageService(path.join(root, "data"));
+      try {
+        await other.init();
+        await other.saveComposeDraft("concurrent-draft", "environment", runtimeId, {
+          text: "Keep this plan",
+        });
+      } finally {
+        other.close();
+      }
+    } finally {
+      resume.resolve();
+      read.mockRestore();
+    }
+    const after = await creation;
+    expect(after.workspace.conversations.find((item) => item.id === id)?.closedAt).toBeUndefined();
+    expect((await storage.getComposeDraft("concurrent-draft"))?.value).toEqual({
+      text: "Keep this plan",
+    });
+  });
+
+  test.each([
+    "missing",
+    "storage-error",
+    "mail",
+    "provider-session",
+    "assigned-during-inspection",
+    "session-during-inspection",
+  ] as const)("unused cleanup preserves usage and fails closed: %s", async (usage) => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    await service.ensure(project.id);
+    const before = await service.createConversation(project.id);
+    const id = before.workspace.selectedConversationId!;
+    if (usage === "provider-session") {
+      await storage.mutateCoordinatorWorkspace(project.id, (current) => ({
+        ...current!,
+        conversations: current!.conversations.map((item) =>
+          item.id === id ? { ...item, providerSessionId: "session" } : item,
+        ),
+      }));
+    }
+    const mailbox = spyOn(storage, "getAgentMailMailbox").mockImplementation(async () => {
+      if (usage === "assigned-during-inspection" || usage === "session-during-inspection") {
+        await storage.mutateCoordinatorWorkspace(project.id, (current) => ({
+          ...current!,
+          conversations: current!.conversations.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  ...(usage === "assigned-during-inspection"
+                    ? { agent: "codex" as const }
+                    : { providerSessionId: "late-session" }),
+                }
+              : item,
+          ),
+        }));
+      }
+      if (usage === "storage-error") throw new Error("Malformed mail store");
+      if (usage === "mail")
+        return { total: 1 } as Awaited<ReturnType<StorageService["getAgentMailMailbox"]>>;
+      throw new AgentMailError("recipient-not-found", "Mailbox not found");
+    });
+    try {
+      const after = await service.createConversation(project.id, undefined, { closeUnused: [id] });
+      expect(Boolean(after.workspace.conversations.find((item) => item.id === id)?.closedAt)).toBe(
+        usage === "missing",
+      );
+      if (usage === "missing") {
+        await expect(
+          storage.saveComposeDraft(
+            "too-late",
+            "environment",
+            coordinatorRuntimeId(before.workspace.id, id),
+            { text: "late" },
+          ),
+        ).rejects.toThrow("conversation is closed");
+      }
+    } finally {
+      mailbox.mockRestore();
+    }
+  });
+
+  test("closing unused composers makes room at the open-conversation limit", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    await service.ensure(project.id);
+    const sides: string[] = [];
+    for (let index = 0; index < 15; index += 1) {
+      sides.push((await service.createConversation(project.id)).workspace.selectedConversationId!);
+    }
+    await expect(service.createConversation(project.id)).rejects.toThrow(
+      "Coordinator conversation limit reached",
+    );
+    const created = await service.createConversation(project.id, undefined, {
+      closeUnused: sides,
+    });
+    expect(created.workspace.conversations.filter((item) => !item.closedAt)).toHaveLength(2);
+    expect(
+      created.workspace.conversations.find(
+        (item) => item.id === created.workspace.selectedConversationId,
+      ),
+    ).toMatchObject({ sideOrdinal: 1, title: "Side 1" });
   });
 
   test("ensure and createConversation persist the renderer's canonical session keys", async () => {

@@ -1,9 +1,12 @@
 import {
+  normalizePreferredEmail,
   parseHostAgentSignIns,
   parseAgentAccountsSnapshot,
+  type AgentAccountPlatform,
   type HostAgentSignIns,
   type MachineAgentAccounts,
   type MachineAgentAccountsResult,
+  type PreferredAgentIdentities,
 } from "@orkestrator/protocol/agent-accounts";
 
 import type { CommandContext } from "./commands-context.js";
@@ -37,12 +40,14 @@ export async function listMachineAgentAccounts(
   options: { timeoutMs?: number; readSignIns?: () => Promise<HostAgentSignIns> } = {},
 ): Promise<MachineAgentAccountsResult> {
   const timeoutMs = options.timeoutMs ?? MACHINE_ACCOUNTS_TIMEOUT_MS;
-  const [profile, selfId, snapshot, signIns] = await Promise.all([
+  const [profile, selfId, snapshot, signIns, store] = await Promise.all([
     context.storage.getBackendProfile(),
     context.nodes?.selfIdentity().catch(() => null) ?? Promise.resolve(null),
     listAgentAccounts(context),
     (options.readSignIns ?? readHostAgentSignIns)(),
+    context.storage.loadAgentAccounts(),
   ]);
+  const preferred = store.preferred ? { preferred: { ...store.preferred } } : {};
   const self: MachineAgentAccounts = {
     nodeId: selfId ?? "self",
     name: profile.displayName,
@@ -54,7 +59,7 @@ export async function listMachineAgentAccounts(
   };
   const nodes = context.nodes;
   const portal = context.nodePortal;
-  if (!nodes || !portal || nodes.isLeaf()) return { machines: [self] };
+  if (!nodes || !portal || nodes.isLeaf()) return { machines: [self], ...preferred };
 
   const { nodes: views } = await nodes.listNodes();
   const others = await Promise.all(
@@ -106,5 +111,29 @@ export async function listMachineAgentAccounts(
         }
       }),
   );
-  return { machines: [self, ...others] };
+  return { machines: [self, ...others], ...preferred };
+}
+
+/**
+ * Record (or, with `email` null, clear) the login the user wants every
+ * machine on for a platform. Kept by this machine, the one whose overview
+ * asks; it switches nothing and is never sent to another machine.
+ */
+export async function setPreferredAgentIdentity(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+  email: string | null,
+): Promise<PreferredAgentIdentities> {
+  const normalized = email === null ? undefined : normalizePreferredEmail(email);
+  if (email !== null && !normalized) throw new Error("A preferred login needs a valid email");
+  return context.storage.mutateAgentAccounts((store) => {
+    const next: PreferredAgentIdentities = { ...store.preferred };
+    if (normalized) next[platform] = normalized;
+    else delete next[platform];
+    const { preferred: _previous, ...rest } = store;
+    return {
+      store: Object.keys(next).length ? { ...rest, preferred: next } : rest,
+      result: next,
+    };
+  });
 }

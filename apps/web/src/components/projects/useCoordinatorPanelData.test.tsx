@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import type { CoordinatorSnapshot, ProjectGitStatus } from "@orkestrator/protocol/coordinator";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
@@ -122,8 +123,12 @@ let latest: CoordinatorPanelData;
 let renders = 0;
 
 function Harness({ projectId }: { projectId: string }) {
-  latest = useCoordinatorPanelData(projectId);
-  renders += 1;
+  const data = useCoordinatorPanelData(projectId);
+  // Recorded per commit: every render of this harness commits.
+  useLayoutEffect(() => {
+    latest = data;
+    renders += 1;
+  });
   return null;
 }
 
@@ -350,5 +355,30 @@ describe("useCoordinatorPanelData", () => {
     expect(fake.count("get_project_coordinator")).toBe(2);
     expect(latest.snapshot?.workspace.conversations[0]?.title).toBe("legacy poll");
     expect(fake.count("get_project_coordinator_view")).toBe(1);
+  });
+
+  test("probes the view command again after a server switch within the same mount", async () => {
+    reads.coordinator.setConnection("older-server");
+    fake.legacy = true;
+    render(<Harness projectId="p1" />);
+    await settle();
+    await waitFor(() => expect(latest.snapshot).not.toBeNull());
+    await announce("p1");
+    expect(fake.count("get_project_coordinator_view")).toBe(1);
+    expect(fake.count("get_project_coordinator")).toBe(1);
+    // Legacy is remembered for this server: the safety cadence skips it.
+    act(() => requestViewSafetyChecks("interval"));
+    await settle();
+    expect(fake.count("get_project_coordinator")).toBe(1);
+
+    // The window switches to a current server; the mount survives.
+    fake.legacy = false;
+    fake.bodies.set("p1", coordinator("p1", "current server"));
+    act(() => reads.coordinator.setConnection("current-server"));
+    await settle(1_000);
+    await waitFor(() => expect(fake.count("get_project_coordinator_view")).toBe(2));
+    await settle();
+    expect(fake.count("get_project_coordinator")).toBe(1);
+    expect(latest.snapshot?.workspace.conversations[0]?.title).toBe("current server");
   });
 });

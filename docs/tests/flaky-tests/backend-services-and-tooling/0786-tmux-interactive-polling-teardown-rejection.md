@@ -13,3 +13,9 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name refresh-0043-tmux-teardown-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/tmux-commands-teardown.test.ts --parallel=1 --only-failures` passed (exit 0, 4.0 s).
 - **Evidence:** `orkestrator-test-run.fqu9cJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** confirms an intermittent cleanup rejection; no narrower root cause has been established. No implementation, assertion, deadline or skip changed. The aggregate result remains failed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** same file and same `claude-tmux cleanup incomplete` rejection as [0236](0236-tmux-teardown-cleanup-rejection.md), and close to [0245](0245-tmux-orphan-hook-restore.md); probably one cause. The throw at `tmux-commands.ts:189` follows a `cleanupComplete = false` path that logs a `[tmux] ... failed during environment cleanup` warning. The owner passed alone today (15/15, 3.9 s; Bun 1.4.4).
+- **Next step:** on recurrence, read the warning just before the throw to see which cleanup step failed, and handle 0236, 0245 and 0786 together.

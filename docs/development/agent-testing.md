@@ -219,12 +219,19 @@ platform by default, taking its selection from the launcher rather than from the
 durable per-installation choice — an isolated run never inherits or rewrites
 your real one.
 
-This matters most for Cursor and Grok. Claude, Codex and OpenCode fall back to a
-PATH lookup, so they run in a profile that provisioned nothing; Cursor and Grok
-resolve **only** through the managed toolchain, by design (`cursor` on PATH is
-the desktop editor, not the ACP agent). A profile without them reports
-`Cursor Agent is enabled but not installed yet` when a session is created,
-which reads like a broken install rather than a missing selection.
+An agent-test profile runs only the agents its own toolchain holds. Outside a
+profile, Claude, Codex, OpenCode and Pi fall back to a PATH lookup when no
+managed copy exists; inside one they do not, so availability reporting
+(`checkHostTool`) and spawning agree: a platform the profile did not provision
+reports as unavailable, and a launch requested directly through the backend
+fails with `<Agent> is not installed in this agent-test profile's toolchain`
+rather than running whatever version the host has on PATH. Cursor and Grok
+resolve **only** through the managed toolchain everywhere, by design (`cursor`
+on PATH is the desktop editor, not the ACP agent). A profile without them
+reports `Cursor Agent is enabled but not installed yet` when a session is
+created, which reads like a broken install rather than a missing selection.
+A terminal tab is a shell, not a backend launch: a command typed there still
+resolves through the shell's PATH, with the managed directories first.
 
 The launcher's selection is also written into the profile's own state, so the
 platforms it provisions are the platforms the app offers. Without that, a run
@@ -384,12 +391,13 @@ if it is absent, and removes only the marker it created during cleanup. This
 does not authenticate Claude or modify the host's configuration.
 
 The live OpenCode spec (`e2e/agent-testing/opencode-live.spec.ts`) has its own
-opt-in and uses the host's OpenCode credentials. It also requires a pinned
-model, written as `<provider>/<model>`, from a provider your OpenCode login has
-connected. The build-pipeline case also needs a model that emits reasoning.
-The spec still requires the pin even though no fixed default model ships any
-more; making it optional is tracked in
-[0031-live-provider-and-platform-qualification.md](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md).
+opt-in and uses the host's OpenCode credentials. No fixed default model ships,
+so without a pin the native-tab case starts on the default your connected
+providers resolve and reads that model back from the projection.
+`ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL`, written as `<provider>/<model>` from a
+connected provider, pins the native tab. The build-pipeline case asserts
+thinking rows, so it needs a pinned model that emits reasoning and is skipped
+without one.
 
 ```bash
 mise run dev:test --profile qa-opencode-live --fixture --credential-source opencode --agent-platforms opencode
@@ -404,10 +412,12 @@ mise run dev:reset --profile qa-opencode-live
 
 The native-tab case sends a real turn and switches environments while it
 runs. It then checks the transcript after returning and after a hard reload.
-It also checks Agent Info usage metrics, undo, redo, compact and fork. The
-build-pipeline case starts an OpenCode build on the pinned model. It checks
-that the served transcript has no raw `{ info, parts }` envelopes, then checks
-that thinking and timed tool rows render before and after reload. Each case
+It also checks Agent Info usage metrics, undo (the reverted reply leaves the
+transcript), redo, compact and fork (the fork tab keeps the source's model and
+reasoning profile before its first prompt). The build-pipeline case starts an
+OpenCode build on the pinned model. It checks that the served transcript has
+no raw `{ info, parts }` envelopes, then checks that thinking and timed tool
+rows render before and after reload. Each case
 removes its pipeline and environments during cleanup. The spec never presses
 **Share…**, which would publish the conversation. Without the opt-in, every
 case is skipped and no profile is needed.
@@ -755,11 +765,16 @@ in a disposable host worktree (`projectResources: true`), then checks the `/`
 menu against the real provider: one group header per run of a source, in the
 catalogue's order; arrow keys following the rendered order across groups and
 clamping at both ends; a command file added on disk appearing after a refresh;
-and the new row surviving a hard reload. It sends no prompt. On Pi, whose
-session lists nothing until it attaches, it first presses the menu's "Refresh
-commands", which attaches it (todo 0069). It needs
+and the new row surviving a hard reload. It sends no prompt. On Pi it first
+checks that the planted templates are listed before the session attaches,
+with no refresh and no turn, as a `stale` list marked `attachPending` whose
+picker says more commands load when the session starts (todo 0069). It needs
 `ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1`; `ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS`
 picks from `claude` (default), `pi` and `grok`.
+`ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT=container` runs it in a
+containerized environment instead (a profile started with
+`--fixture-environments local,container`), writing the commands into the
+container's `/workspace` through `docker exec` with no policy override.
 
 ```bash
 mise run dev:test --profile qa-picker --fixture --credential-source claude \
@@ -931,6 +946,25 @@ conversation** reopens it in a `design-resume-…` tab with the same user turns
 and nothing sent. The design MCP call count, failed calls and response bytes are
 attached as `design-mcp-usage`. A content-free heartbeat runs every minute for
 the whole case, including approval waits and cleanup, and is cleared in `finally`.
+
+`e2e/agent-testing/design-resume-clients-live.spec.ts` is the short companion
+for two clients resuming one design conversation at once
+(`ORKESTRATOR_AGENT_TEST_LIVE_DESIGN_RESUME=1`; providers from
+`ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS`, default `claude`). It launches a
+design workspace with a one-word brief, closes the conversation's tab, then has
+two separately signed-in browser contexts press **Resume conversation**
+together. The requests must overlap in flight; a serialized run fails. For
+Codex, the bridge is restarted (with a verified new process) before the tab
+closes, so the close/resume lifecycle is exercised across a bridge restart.
+Both `design_session_resume` answers must name the same
+`design-resume-…` tab and live session, the shared layout must hold that one
+tab, and the transcript must keep its user turns:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-design-live ORKESTRATOR_AGENT_TEST_LIVE_DESIGN_RESUME=1 \
+  mise run test:logged -- --name design-resume-clients -- mise run test:agent:browser -- \
+  e2e/agent-testing/design-resume-clients-live.spec.ts
+```
 
 Never press Escape to clear a sidebar tooltip in a live spec: with nothing
 focused, Escape stops the active tab's running turn (`useEscapeToStop`). A
@@ -1216,9 +1250,35 @@ both fixed and Notes-offset views, at natural DPR and forced DPR 1 and 2 with
 scale without reduction. The Window-menu test always checks the selected label;
 its OS-focus predicate runs only when the host exposes a key window (and an
 active app on macOS).
+The annotation spec also checks pins and Show on page for an offscreen target,
+a target in an open and a closed modal, and a late web font (fixture routes
+`/dialogs` and `/fonts`), result-capture stability and comparison labels
+(`/motion`, `/fonts`, an expired `/account` sign-in), and records client
+selection-to-saved timing in its `baselines` case. Pages still loading are
+probed through `mainFrame.executeJavaScript`: `webContents.executeJavaScript`
+waits for the load event, which a late font holds.
 The opt-in Docker suite verifies the seeded container and proves that a direct
 container command is rejected for an otherwise valid Orkestrator container
-owned by another profile.
+owned by another profile. Its two annotation cases write evidence into the
+fixture container, check paths inside it and wait (up to about 5 minutes, one
+garbage-collection period) for settled-evidence cleanup; the live one needs
+`ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1`.
+
+`web-annotations-approval-live.spec.ts` (opt-in
+`ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATION_DISRUPTION=1`, provider from
+`ORKESTRATOR_AGENT_TEST_ANNOTATION_AGENT`, default Claude) raises a live
+approval, then switches environments in the client, reloads, drops the event
+stream and restarts the profile gracefully and by `SIGKILL`. It stops and
+starts the profile, so run it alone against a profile you started:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=annotation-qa ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATION_DISRUPTION=1 \
+mise run test:logged -- --name annotation-disruption -- mise run test:agent:browser -- \
+  e2e/agent-testing/web-annotations-approval-live.spec.ts
+```
+
+`ORKESTRATOR_AGENT_TEST_BROWSER=webkit` runs a browser-config spec in WebKit
+(Safari's engine, the iOS wrapper's `WKWebView`) instead of Chromium.
 
 Artifacts are written below `output/agent-testing/<profile-or-run-id>/`, with
 traces and screenshots retained on failure and a JSON result summary. Browser

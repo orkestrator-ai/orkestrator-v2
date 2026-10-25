@@ -4,15 +4,20 @@
  * prompt definitely did not run and can be sent again afterwards.
  */
 import { describe, expect, test } from "bun:test";
-import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 
 describe("native agent dispatch during a runtime replacement", () => {
   test("is refused without sending or parking, and accepted once the replacement ends", async () => {
     const stub = createProviderStub("cursor");
+    const fence = new EnvironmentMutationFence();
     await withService(
-      { prefix: "orkestrator-native-fence-", provider: async () => stub.provider },
+      {
+        prefix: "orkestrator-native-fence-",
+        provider: async () => stub.provider,
+        environmentFence: fence,
+      },
       async ({ service, storage }) => {
         const base = {
           environmentId: "env-1",
@@ -21,7 +26,7 @@ describe("native agent dispatch during a runtime replacement", () => {
           prompt: "Do the work",
         };
         let release!: () => void;
-        const replacement = withEnvironmentReplacement(
+        const replacement = fence.withReplacement(
           "env-1",
           () => new Promise<void>((resolve) => (release = resolve)),
         );

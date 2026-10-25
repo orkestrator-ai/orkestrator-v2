@@ -2033,6 +2033,71 @@ describe("TerminalContainer", () => {
       });
     });
 
+    test("opens an agent's loopback link as an agent-link intent beside its agent tab", async () => {
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "split",
+            id: "split",
+            direction: "horizontal",
+            sizes: [50, 50],
+            depth: 1,
+            children: [
+              {
+                kind: "leaf",
+                id: "left",
+                tabs: [{ id: "agent-tab", type: "agent-native" }],
+                activeTabId: "agent-tab",
+              },
+              {
+                kind: "leaf",
+                id: "right",
+                tabs: [{ id: "right-tab", type: "plain" }],
+                activeTabId: "right-tab",
+              },
+            ],
+          },
+          activePaneId: "right",
+          containerId: "container-visible",
+        }),
+      }));
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+
+      const visibleEnvironment = useEnvironmentStore.getState().getEnvironmentById("env-visible");
+      const expected = visibleEnvironment
+        ? formatPreviewIntentUri({
+            environmentId: "env-visible",
+            source: "agent-link",
+            url: "http://localhost:5173/",
+          })
+        : "http://localhost:5173/";
+      act(() => {
+        requestTerminalBrowserTab({
+          environmentId: "env-visible",
+          sourceTabId: "agent-tab",
+          url: "http://localhost:5173/",
+          origin: "agent",
+        });
+      });
+
+      await waitFor(() => {
+        const left = usePaneLayoutStore.getState().getPane("left", "env-visible");
+        expect(left?.tabs.find((tab) => tab.type === "browser")?.browserData).toEqual({
+          url: expected,
+        });
+      });
+    });
+
     test("opens a native preview link in a browser tab beside its source preview", async () => {
       let openLinkListener: ((event: { tabId: string; url: string }) => void) | undefined;
       window.orkestrator = {

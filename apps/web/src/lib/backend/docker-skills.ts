@@ -666,7 +666,7 @@ export async function getContainerUsage(): Promise<ContainerUsageSnapshot> {
   return invoke<ContainerUsageSnapshot>("get_container_usage");
 }
 
-/** Default budget for new containers; `null` means unrestricted. */
+/** `null` clears the stored budget and selects the built-in default; all-null limits are unrestricted. */
 export async function setContainerResourceLimits(
   limits: ContainerResourceLimits | null,
   machine?: AccountMachine,

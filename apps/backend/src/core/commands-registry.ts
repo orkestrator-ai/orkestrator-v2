@@ -22,7 +22,6 @@ import {
   assertDockerContainerOwned,
   enqueueEnvironmentLifecycleOperation,
   renameEnvironmentFromPrompt,
-  syncPrMonitorTracking,
 } from "./commands-helpers.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
 import { assertRuntimeGeneration } from "./container-lifecycle-service.js";
@@ -174,7 +173,7 @@ export function createCommandRegistry(
           // branch inside an environment that can no longer accept the prompt.
           if (!prompt || environment?.status !== "running") return;
           await renameEnvironmentFromPrompt(environmentId, prompt, context, prompt);
-          await syncPrMonitorTracking(context);
+          await context.runtime.prMonitor.sync(context);
         }),
       )
       .then(() => {

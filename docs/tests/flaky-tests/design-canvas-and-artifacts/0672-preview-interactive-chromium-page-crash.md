@@ -14,3 +14,16 @@
 - **Hypothesis:** none established. A Chromium renderer crash on a four-core
   runner under the backend package's load is plausible but unproven; the other
   red runs since 2026-10-20 did not repeat it.
+
+## CI recurrences, 2026-10-24 and 2026-10-25
+
+- CI `main` runs 40081231733 (2026-10-24) and 40189950916
+  (#1248, 2026-10-25) failed the same case with `setContent: Page crashed` at
+  `preview-interactive.test.ts:364` (14.8 s and 22.9 s). That is 2 of the 44
+  failing `main` runs from 2026-10-23 to 2026-10-25; the same backend package
+  passed it in the others.
+- The runner image is now Ubuntu 26.04 (kernel 7.0, four cores, 16 GB), seen
+  in the todo 0030 probe run 40193653132, where this case passed.
+- **Next step:** unchanged. Capture Chromium's crash reason (Playwright
+  `page.on("crash")` plus the browser's stderr) in the test's failure output so
+  the next recurrence says why.

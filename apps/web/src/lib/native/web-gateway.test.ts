@@ -13,8 +13,11 @@ import {
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "./events";
 import {
   decodeTerminalBinaryFrame,
+  encodeTerminalBinaryFrame,
   TERMINAL_BINARY_FRAME_TYPE,
 } from "@orkestrator/protocol/terminal-websocket";
+
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
@@ -178,6 +181,8 @@ function subscribeTerminalSocket(
   sessionId: string,
   recovery: "current" | "snapshot-required" = "snapshot-required",
   channelId = 1,
+  generation = 1,
+  revision = 0,
 ): number {
   const request = sentControlFrames(socket).findLast(
     (frame) => frame.type === "subscribe" && frame.sessionId === sessionId,
@@ -192,10 +197,10 @@ function subscribeTerminalSocket(
       sessionId,
       channelId,
       recovery,
-      baseGeneration: recovery === "snapshot-required" ? null : 1,
-      baseRevision: recovery === "snapshot-required" ? null : 0,
-      targetGeneration: 1,
-      targetRevision: 0,
+      baseGeneration: recovery === "snapshot-required" ? null : generation,
+      baseRevision: recovery === "snapshot-required" ? null : revision,
+      targetGeneration: generation,
+      targetRevision: revision,
     }),
   );
   return channelId;
@@ -1541,6 +1546,331 @@ describe("web gateway browser API", () => {
     stopFirst();
     stopSecond();
   });
+
+  test.each(["direct", "same-origin"] as const)(
+    "recovers multiple terminals through %s SSE after backpressure and outage without reordering input",
+    async (transport) => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const happyWindow = window as unknown as { happyDOM: { setURL(url: string): void } };
+      const previousUrl = window.location.href;
+      happyWindow.happyDOM.setURL("http://localhost:1420/");
+      const socketRetry = installControlledTimeout(1_234);
+      const streamRetry = installControlledTimeout(4_321, { maxPending: 2 });
+      type DirectStream = {
+        event: string;
+        signal: AbortSignal;
+        controller: ReadableStreamDefaultController<Uint8Array>;
+      };
+      const directStreams: DirectStream[] = [];
+      const snapshots = new Map([
+        ["a", { generation: 1, revision: 4, data: "snapshot-a" }],
+        ["b", { generation: 2, revision: 3, data: "snapshot-b" }],
+      ]);
+      const httpWrites: Array<{ sessionId: string; data: string }> = [];
+      let releaseHttp: (() => void) | undefined;
+      globalThis.fetch = mock(async (input, init) => {
+        if (String(input).includes("/__orkestrator/events?")) {
+          const event = new URL(String(input)).searchParams.get("includeEvents")!;
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                directStreams.push({ event, controller, signal: init!.signal! });
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        const { command, args } = JSON.parse(String(init?.body));
+        if (command === "get_terminal_output_snapshot") {
+          return new Response(JSON.stringify({ result: snapshots.get(args.sessionId) }), {
+            status: 200,
+          });
+        }
+        expect(command).toBe("terminal_write");
+        httpWrites.push(args);
+        if (args.sessionId === "a")
+          await new Promise<void>((resolve) => {
+            releaseHttp = resolve;
+          });
+        return new Response(JSON.stringify({ result: {} }), { status: 200 });
+      }) as unknown as typeof fetch;
+      const api = createBrowserGatewayApi({
+        ...(transport === "direct" ? { baseUrl: "http://localhost:4319" } : {}),
+        terminalTransport: "websocket",
+        terminalWebSocketReconnectDelayMs: 1_234,
+        eventReconnectDelayMs: 4_321,
+        eventReconnectRandom: () => 1,
+        terminalWebSocketFactory: (url, protocols) =>
+          new MockWebSocket(url, protocols) as unknown as WebSocket,
+      });
+      type RecoveryPayload = {
+        generation?: number;
+        revision?: number;
+        bytes?: Uint8Array;
+        bytesBase64?: string;
+        desynced?: boolean;
+      };
+      const payloads = { a: [] as RecoveryPayload[], b: [] as RecoveryPayload[] };
+      const stops = (["a", "b"] as const).map((session) =>
+        api.listen<RecoveryPayload>(`terminal-output-${session}`, (payload) => {
+          payloads[session].push(payload);
+        }),
+      );
+      const browserStream = () => MockEventSource.instances.at(-1)!;
+      const activeFallbacks = () =>
+        transport === "direct"
+          ? directStreams.filter((stream) => !stream.signal.aborted).length
+          : MockEventSource.instances.filter((source) => source.readyState !== EVENT_SOURCE_CLOSED)
+              .length;
+      const output = (
+        socket: MockWebSocket,
+        channelId: number,
+        generation: number,
+        revision: number,
+        text: string,
+      ) =>
+        socket.receive(
+          encodeTerminalBinaryFrame({
+            type: TERMINAL_BINARY_FRAME_TYPE.output,
+            channelId,
+            generation,
+            revision,
+            bytes: new TextEncoder().encode(text),
+          }),
+        );
+      const applySnapshot = async (sessionId: string) => {
+        const snapshot = await api.invoke<{ generation: number; revision: number }>(
+          "get_terminal_output_snapshot",
+          { sessionId },
+        );
+        await api.invoke("terminal_snapshot_applied", { sessionId, ...snapshot });
+      };
+      const binaries = (socket: MockWebSocket) =>
+        socket.sent
+          .filter((frame) => typeof frame !== "string")
+          .map((frame) => decodeSentBinaryFrame(frame as ArrayBufferLike | ArrayBufferView));
+      const acknowledge = (
+        socket: MockWebSocket,
+        frame: ReturnType<typeof decodeTerminalBinaryFrame>,
+      ) =>
+        socket.receive(
+          JSON.stringify({
+            type: "operation-result",
+            operation: "input",
+            channelId: frame.channelId,
+            operationId: frame.revision,
+            ok: true,
+          }),
+        );
+      try {
+        await waitForCondition(
+          () => activeFallbacks() === (transport === "direct" ? 2 : 1),
+          "Initial fallback streams did not start",
+        );
+        if (transport === "same-origin") browserStream().open();
+        const first = MockWebSocket.instances[0]!;
+        openTerminalSocket(first);
+        subscribeTerminalSocket(first, "a", "current", 1);
+        subscribeTerminalSocket(first, "b", "current", 2);
+        await waitForCondition(
+          () => activeFallbacks() === 0,
+          "Healthy channels did not retire their fallbacks",
+        );
+        output(first, 1, 1, 1, "a-one");
+        output(first, 2, 1, 1, "b-one");
+        await waitForCondition(
+          () =>
+            payloads.a.some((p) => p.revision === 1) && payloads.b.some((p) => p.revision === 1),
+          "Initial output did not reach both terminals",
+        );
+
+        // Server output backpressure desynchronizes only its slow channel.
+        first.receive(
+          JSON.stringify({
+            type: "desync",
+            channelId: 1,
+            generation: 1,
+            revision: 4,
+            reason: "slow-consumer",
+          }),
+        );
+        await waitForCondition(
+          () => activeFallbacks() === 1,
+          "Slow channel did not start fallback",
+        );
+        if (transport === "same-origin") browserStream().open();
+        output(first, 2, 1, 2, "b-two");
+        await waitForCondition(
+          () => payloads.b.some((p) => p.revision === 2),
+          "Slow channel blocked its healthy sibling",
+        );
+        expect(payloads.a.at(-1)).toMatchObject({ desynced: true });
+        await applySnapshot("a");
+        await waitForCondition(
+          () =>
+            sentControlFrames(first).filter((f) => f.type === "subscribe" && f.sessionId === "a")
+              .length === 2,
+          "Snapshot did not resubscribe the slow channel",
+        );
+        expect(
+          sentControlFrames(first).findLast((f) => f.type === "subscribe" && f.sessionId === "a"),
+        ).toMatchObject({ knownGeneration: 1, knownRevision: 4 });
+        subscribeTerminalSocket(first, "a", "current", 3, 1, 4);
+        await waitForCondition(
+          () => activeFallbacks() === 0,
+          "Recovered channel did not retire fallback",
+        );
+
+        first.close(1006, "backend outage");
+        expect(socketRetry.pendingCount()).toBe(1);
+        await waitForCondition(
+          () => activeFallbacks() === (transport === "direct" ? 2 : 1),
+          "Socket outage did not activate all fallbacks",
+        );
+        if (transport === "same-origin") browserStream().open();
+        const desyncCounts = {
+          a: payloads.a.filter((p) => p.desynced).length,
+          b: payloads.b.filter((p) => p.desynced).length,
+        };
+        // The fallback itself drops under load and reopens; every terminal
+        // receives a snapshot hint, independently of the socket retry.
+        if (transport === "direct") {
+          for (const stream of directStreams.filter((s) => !s.signal.aborted))
+            stream.controller.close();
+        } else browserStream().fail();
+        await waitForCondition(
+          () => streamRetry.pendingCount() === (transport === "direct" ? 2 : 1),
+          "Failed fallbacks did not arm their retries",
+        );
+        const previousStreamCount = directStreams.length;
+        const previousBrowserStreamCount = MockEventSource.instances.length;
+        streamRetry.advance();
+        if (transport === "direct")
+          await waitForCondition(
+            () => directStreams.length === previousStreamCount + 2,
+            "Direct fallbacks did not reopen",
+          );
+        else {
+          await waitForCondition(
+            () => MockEventSource.instances.length === previousBrowserStreamCount + 1,
+            "Browser fallback did not reopen",
+          );
+          browserStream().open();
+        }
+        await waitForCondition(
+          () =>
+            (["a", "b"] as const).every(
+              (id) => payloads[id].filter((p) => p.desynced).length > desyncCounts[id],
+            ),
+          "Reopened fallbacks did not announce desync to both terminals",
+        );
+
+        // Output continues through each fallback while the socket is down.
+        for (const session of ["a", "b"] as const) {
+          const event = `terminal-output-${session}`;
+          const frame = JSON.stringify({
+            event,
+            payload: {
+              generation: session === "a" ? 1 : 2,
+              revision: session === "a" ? 6 : 2,
+              bytesBase64: session === "a" ? "YQ==" : "Yg==",
+            },
+          });
+          if (transport === "direct") {
+            directStreams
+              .findLast((stream) => stream.event === event && !stream.signal.aborted)!
+              .controller.enqueue(new TextEncoder().encode(`data: ${frame}\n\n`));
+          } else browserStream().onmessage!(new MessageEvent("message", { data: frame }));
+        }
+        await waitForCondition(
+          () => payloads.a.some((p) => p.bytesBase64) && payloads.b.some((p) => p.bytesBase64),
+          "Fallback output did not reach both terminals",
+        );
+        expect(payloads.a.filter((p) => p.bytesBase64)).toEqual([
+          { generation: 1, revision: 6, bytesBase64: "YQ==" },
+        ]);
+        expect(payloads.b.filter((p) => p.bytesBase64)).toEqual([
+          { generation: 2, revision: 2, bytesBase64: "Yg==" },
+        ]);
+
+        snapshots.set("a", { generation: 1, revision: 7, data: "snapshot-a-recovered" });
+        await applySnapshot("a");
+        await applySnapshot("b");
+        const during = api.invoke("terminal_write", { sessionId: "a", data: "during-outage" });
+        await waitForCondition(() => releaseHttp !== undefined, "Outage input did not reach HTTP");
+        await api.invoke("terminal_write", { sessionId: "b", data: "other-terminal" });
+        expect(httpWrites).toEqual([
+          { sessionId: "a", data: "during-outage" },
+          { sessionId: "b", data: "other-terminal" },
+        ]);
+
+        socketRetry.advance();
+        const second = MockWebSocket.instances[1]!;
+        openTerminalSocket(second);
+        for (const [sessionId, snapshot] of snapshots) {
+          expect(
+            sentControlFrames(second).find(
+              (f) => f.type === "subscribe" && f.sessionId === sessionId,
+            ),
+          ).toMatchObject({
+            knownGeneration: snapshot.generation,
+            knownRevision: snapshot.revision,
+          });
+        }
+        subscribeTerminalSocket(second, "a", "current", 11, 1, 7);
+        subscribeTerminalSocket(second, "b", "current", 12, 2, 3);
+        await waitForCondition(
+          () => activeFallbacks() === 0,
+          "Recovered socket did not retire fallbacks",
+        );
+        const after = ["after-1", "after-2"].map((data) =>
+          api.invoke("terminal_write", { sessionId: "a", data }),
+        );
+        const independent = api.invoke("terminal_write", { sessionId: "b", data: "independent" });
+        await waitForCondition(
+          () => binaries(second).some((f) => f.channelId === 12),
+          "Pending HTTP input blocked another terminal",
+        );
+        expect(binaries(second).filter((f) => f.channelId === 11)).toHaveLength(0);
+        acknowledge(
+          second,
+          binaries(second).find((f) => f.channelId === 12)!,
+        );
+        await independent;
+        releaseHttp!();
+        await during;
+        await waitForCondition(
+          () => binaries(second).filter((f) => f.channelId === 11).length === 2,
+          "Recovered input did not follow the HTTP write",
+        );
+        const ordered = binaries(second).filter((f) => f.channelId === 11);
+        expect(ordered.map((f) => new TextDecoder().decode(f.bytes))).toEqual([
+          "after-1",
+          "after-2",
+        ]);
+        for (const frame of ordered) acknowledge(second, frame);
+        await Promise.all(after);
+        expect(httpWrites).toHaveLength(2);
+        output(second, 11, 1, 8, "a-eight");
+        output(second, 12, 2, 4, "b-four");
+        await waitForCondition(
+          () =>
+            payloads.a.some((p) => p.revision === 8) && payloads.b.some((p) => p.revision === 4),
+          "Recovered output did not reach both terminals",
+        );
+        expect(payloads.a.filter((p) => p.bytes).map((p) => p.revision)).toEqual([1, 8]);
+        expect(payloads.b.filter((p) => p.bytes).map((p) => p.revision)).toEqual([1, 2, 4]);
+        expect(socketRetry.pendingCount()).toBe(0);
+        expect(streamRetry.pendingCount()).toBe(0);
+      } finally {
+        releaseHttp?.();
+        for (const stop of stops) stop();
+        streamRetry.restore();
+        socketRetry.restore();
+        happyWindow.happyDOM.setURL(previousUrl);
+      }
+    },
+  );
 
   test("retains fallback and retries a channel when its snapshot fails", async () => {
     let fallbackSignal: AbortSignal | undefined;

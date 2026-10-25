@@ -63,6 +63,14 @@ import type { DesignFrameBridge } from "./frame-bridge";
 const NEW_FRAME_HTML =
   "<!doctype html><html><head><style>body{margin:0;font-family:system-ui;padding:48px;background:#fff;color:#18181b}</style></head><body><h1>Your next idea</h1><p>Ask your agent to design here.</p></body></html>";
 const NARROW_WIDTH = 640;
+/**
+ * Below this height (about 400% zoom) the wrapped toolbar would take half the
+ * pane and squeeze Layers and the inspector to a sliver (WCAG 1.4.10), so the
+ * tools collapse into one menu.
+ */
+const SHORT_HEIGHT = 400;
+/** How long a layer chosen in a frame that has not rendered waits for it. */
+const PENDING_ELEMENT_MS = 10_000;
 
 function isTextEditingTarget(target: EventTarget | null): boolean {
   return (
@@ -99,7 +107,10 @@ export function DesignCanvasTab({
   const restored = useRef(false);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [workspaceWidth, setWorkspaceWidth] = useState(1024);
+  const [workspaceHeight, setWorkspaceHeight] = useState(900);
   const narrow = workspaceWidth < NARROW_WIDTH;
+  // Zero means not laid out yet (or hidden), not short.
+  const compact = workspaceHeight > 0 && workspaceHeight < SHORT_HEIGHT;
   const narrowRef = useRef(narrow);
   const [selection, setSelection] = useState<DesignSelection | null>(null);
   /** A whole frame (board) selected from its title; exclusive with an element selection. */
@@ -125,6 +136,7 @@ export function DesignCanvasTab({
   const [pinned, setPinned] = useState<ReadonlySet<string>>(new Set());
   const [renderedVersion, setRenderedVersion] = useState(0);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState("");
   const bridges = useRef(new Map<string, DesignFrameBridge>());
   // The same bridges as state, for what rendering hands to the inspector.
   const [bridgeMap, setBridgeMap] = useState<ReadonlyMap<string, DesignFrameBridge>>(
@@ -138,7 +150,6 @@ export function DesignCanvasTab({
   const selectionRef = useRef(selection);
   const selectedFrameRef = useRef(selectedFrameId);
   const projectionRef = useRef(projection);
-  const [announcement, setAnnouncement] = useState("");
 
   const canvas = projection?.canvas ?? null;
   const metas = projection?.workspace?.frames ?? {};
@@ -186,6 +197,7 @@ export function DesignCanvasTab({
     const measure = () => {
       setSize({ width: target.clientWidth, height: target.clientHeight });
       setWorkspaceWidth(root.clientWidth);
+      setWorkspaceHeight(root.clientHeight);
       const maximum = Math.max(120, Math.min(400, Math.floor(root.clientWidth * 0.45)));
       setLayersMaxWidth(maximum);
       setLayersWidth((width) => Math.min(width, maximum));
@@ -508,15 +520,63 @@ export function DesignCanvasTab({
     editableRef.current = editable;
     frameActionRef.current = frameAction;
   });
+  // A layer chosen in the Layers tree before its frame rendered: the frame is
+  // brought into view and inspected when it renders. Keep the request identity
+  // through inspection so same-frame row focus preserves it, while structural
+  // changes and competing selections cancel it.
+  const pendingElement = useRef<{
+    frameId: string;
+    selector: string;
+    revision: number;
+    structureId: string | undefined;
+    generation: number;
+    inspecting: boolean;
+    timer?: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const cancelPendingElement = useCallback(() => {
+    if (pendingElement.current?.timer) clearTimeout(pendingElement.current.timer);
+    pendingElement.current = null;
+  }, []);
+  useEffect(() => cancelPendingElement, [cancelPendingElement]);
+  const validatePendingElement = useCallback(() => {
+    const pending = pendingElement.current;
+    if (!pending) return false;
+    const latest = projectionRef.current;
+    const frame = latest?.canvas?.frames.find((candidate) => candidate.id === pending.frameId);
+    const structureId = latest?.workspace?.frames[pending.frameId]?.structureId;
+    if (
+      frame &&
+      (pending.structureId !== undefined
+        ? pending.structureId === structureId
+        : structureId === undefined && pending.revision === frame.revision)
+    )
+      return true;
+    cancelPendingElement();
+    selectionGeneration.current++;
+    setAnnouncement(
+      frame
+        ? "The frame structure changed; select the layer again"
+        : "The frame was removed; nothing was selected",
+    );
+    return false;
+  }, [cancelPendingElement]);
+  useEffect(() => {
+    validatePendingElement();
+  }, [projection, validatePendingElement]);
+  const resumePendingElementRef = useRef<() => void>(() => undefined);
   const actions = useMemo<DesignCanvasActions>(
     () => ({
       controller,
       environmentId,
       canvasId,
-      beginSelection: () => ++selectionGeneration.current,
+      beginSelection: () => {
+        cancelPendingElement();
+        return ++selectionGeneration.current;
+      },
       select: (next, generation) => {
         if (generation !== undefined && generation !== selectionGeneration.current) return false;
         selectionGeneration.current++;
+        cancelPendingElement();
         setSelection(next);
         selectedFrameRef.current = null;
         setSelectedFrameId(null);
@@ -555,6 +615,8 @@ export function DesignCanvasTab({
       frameRendered: (frameId) => {
         setRenderedVersion((value) => value + 1);
         refreshSelection(frameId);
+        const pending = pendingElement.current;
+        if (pending?.frameId === frameId && !pending.inspecting) resumePendingElementRef.current();
       },
       pin: (frameId, value) =>
         setPinned((current) => {
@@ -568,7 +630,10 @@ export function DesignCanvasTab({
       // Through a ref so viewport/frame changes don't give every frame new props.
       frameAction: (frameId, action) => frameActionRef.current(frameId, action),
       focusFrame: (frameId) => {
-        selectionGeneration.current++;
+        if (pendingElement.current?.frameId !== frameId) {
+          selectionGeneration.current++;
+          cancelPendingElement();
+        }
         setFocusedFrame(frameId);
         if (selectedFrameRef.current && selectedFrameRef.current !== frameId) {
           selectedFrameRef.current = null;
@@ -577,6 +642,7 @@ export function DesignCanvasTab({
       },
       selectFrame: (frameId) => {
         selectionGeneration.current++;
+        cancelPendingElement();
         selectedFrameRef.current = frameId;
         setSelectedFrameId(frameId);
         setFocusedFrame(frameId);
@@ -586,12 +652,85 @@ export function DesignCanvasTab({
     [
       applyStyles,
       canvasId,
+      cancelPendingElement,
       controller,
       environmentId,
       refreshSelection,
       reportError,
       submitGeometry,
     ],
+  );
+
+  const resumePendingElement = useCallback(() => {
+    if (!validatePendingElement()) return;
+    const entry = pendingElement.current!;
+    if (entry.inspecting) return;
+    const { frameId, selector, generation } = entry;
+    const latest = projectionRef.current!;
+    const frame = latest.canvas!.frames.find((candidate) => candidate.id === frameId)!;
+    const meta = latest.workspace?.frames[frameId];
+    const bridge = bridges.current.get(frameId);
+    const key = meta?.contentId ?? `revision:${frame.revision}`;
+    if (!bridge || bridge.renderedContentId !== key) return;
+    if (entry.timer) clearTimeout(entry.timer);
+    entry.timer = undefined;
+    entry.inspecting = true;
+    void bridge
+      .ask<DesignElement>({ op: "inspectElement", selector })
+      .then((element) => {
+        if (pendingElement.current !== entry || !validatePendingElement()) return;
+        if (bridge.renderedContentId !== key) {
+          cancelPendingElement();
+          return;
+        }
+        actions.select(
+          {
+            frameId,
+            revision: frame.revision,
+            element,
+            ...(meta ? { structureId: meta.structureId, contentId: meta.contentId } : {}),
+          },
+          generation,
+        );
+      })
+      .catch((error) => {
+        if (pendingElement.current !== entry) return;
+        cancelPendingElement();
+        reportError(error);
+      });
+  }, [actions, cancelPendingElement, reportError, validatePendingElement]);
+  useLayoutEffect(() => {
+    resumePendingElementRef.current = resumePendingElement;
+  }, [resumePendingElement]);
+
+  const selectElement = useCallback(
+    (frameId: string, selector: string) => {
+      const latest = projectionRef.current;
+      const frame = latest?.canvas?.frames.find((candidate) => candidate.id === frameId);
+      if (!frame) return;
+      actions.focusFrame(frameId);
+      const generation = actions.beginSelection();
+      const entry: NonNullable<typeof pendingElement.current> = {
+        frameId,
+        selector,
+        revision: frame.revision,
+        structureId: latest?.workspace?.frames[frameId]?.structureId,
+        generation,
+        inspecting: false,
+      };
+      pendingElement.current = entry;
+      resumePendingElement();
+      if (entry.inspecting) return;
+      entry.timer = setTimeout(() => {
+        if (pendingElement.current !== entry) return;
+        cancelPendingElement();
+        selectionGeneration.current++;
+        setAnnouncement(`${frame.name} did not finish loading; nothing was selected`);
+      }, PENDING_ELEMENT_MS);
+      fitFrame(frameId);
+      setAnnouncement(`Loading ${frame.name}; the layer is selected when it appears`);
+    },
+    [actions, cancelPendingElement, fitFrame, resumePendingElement],
   );
 
   const restoreHistory = useCallback(
@@ -772,8 +911,15 @@ export function DesignCanvasTab({
       if (!inside || editing || modifier) return;
       if (event.key === "Escape") {
         if (mode === "preview") setMode("inspect");
-        else if (selectionRef.current || selectedFrameRef.current) actions.select(null);
-        else if (propertiesFrame) setPropertiesFrame(null);
+        else if (selectionRef.current || selectedFrameRef.current || pendingElement.current) {
+          const pendingLayer = pendingElement.current !== null;
+          actions.select(null);
+          if (pendingLayer && narrow) {
+            setLayersOpen(false);
+            setInspectorOpen(false);
+            layersToggle.current?.focus();
+          }
+        } else if (propertiesFrame) setPropertiesFrame(null);
         else if (narrow && (layersOpen || inspectorOpen)) {
           setLayersOpen(false);
           setInspectorOpen(false);
@@ -910,6 +1056,7 @@ export function DesignCanvasTab({
         className="design-workspace absolute inset-0 flex min-h-0 flex-col bg-background"
         aria-label="Design canvas"
         data-narrow={narrow || undefined}
+        data-short={compact || undefined}
         onFocus={(event) => {
           // Portalled dialogs bubble here too; they restore their own focus.
           if (event.currentTarget.contains(event.target)) lastFocus.current = event.target;
@@ -925,6 +1072,7 @@ export function DesignCanvasTab({
           zoom={viewport.zoom}
           mode={mode}
           narrow={narrow}
+          compact={compact}
           layersOpen={showLayers}
           inspectorOpen={showInspector}
           historyOpen={historyOpen}
@@ -1033,38 +1181,7 @@ export function DesignCanvasTab({
                     fitFrame(frameId);
                   }}
                   onFocusRow={(frameId) => actions.focusFrame(frameId)}
-                  onSelectElement={(frameId, selector) => {
-                    const bridge = bridges.current.get(frameId);
-                    const frame = committedById.get(frameId);
-                    const meta = metas[frameId];
-                    const key = meta?.contentId ?? `revision:${frame?.revision}`;
-                    if (!frame) return;
-                    actions.focusFrame(frameId);
-                    if (!bridge || bridge.renderedContentId !== key) {
-                      // Bring the frame into view first; hit testing needs a live, current render.
-                      fitFrame(frameId);
-                      return;
-                    }
-                    const generation = actions.beginSelection();
-                    void bridge
-                      .ask<DesignElement>({ op: "inspectElement", selector })
-                      .then((element) => {
-                        if (bridge.renderedContentId !== key) return;
-                        const selected = actions.select(
-                          {
-                            frameId,
-                            revision: frame.revision,
-                            element,
-                            ...(meta
-                              ? { structureId: meta.structureId, contentId: meta.contentId }
-                              : {}),
-                          },
-                          generation,
-                        );
-                        if (selected && narrow) setInspectorOpen(true);
-                      })
-                      .catch(reportError);
-                  }}
+                  onSelectElement={selectElement}
                   onFrameAction={frameAction}
                 />
                 <div

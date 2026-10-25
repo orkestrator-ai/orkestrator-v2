@@ -807,7 +807,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
 
   return (
     <nav aria-label="Design hierarchy" className="flex min-w-0 flex-1 flex-col p-2 text-xs">
-      <h3 className="mb-2 text-muted-foreground">Layers</h3>
+      <h3 className="design-hierarchy-note mb-2 text-muted-foreground">Layers</h3>
       <input
         type="search"
         value={filter}
@@ -820,7 +820,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
       />
       <p
         id={`${canvasId}-layer-filter-scope`}
-        className="mb-1 text-[10px] text-muted-foreground"
+        className="design-hierarchy-note mb-1 text-[10px] text-muted-foreground"
         aria-live="polite"
       >
         {filtered

@@ -10,7 +10,6 @@ import type { CommandContext } from "./commands-context.js";
 import { withShortLivedBridge, __testing as refreshTesting } from "./host-model-catalog-refresh.js";
 import { HOST_ACP_MODEL_FETCH_TIMEOUT_MS } from "./commands-servers.js";
 import { openCodeSdkFetch } from "./http-bridge-transport.js";
-import { acquireOpenCodeHostStart } from "./opencode-host-start.js";
 import { spawnCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
 
@@ -261,6 +260,9 @@ describe("host model catalogue refresh", () => {
     );
     process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
     process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = configDir;
+    // An agent-test profile spawns only the Claude its own toolchain holds.
+    await fs.mkdir(path.join(appRoot, "bin"), { recursive: true });
+    await fs.writeFile(path.join(appRoot, "bin", "claude"), "");
     const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
     const profileConfigDir = path.join(appRoot, "profile-claude");
     process.env.CLAUDE_CONFIG_DIR = profileConfigDir;
@@ -282,6 +284,7 @@ describe("host model catalogue refresh", () => {
     }
     // Read for the login only: the probe keeps the profile's own config dir.
     expect(spawns[0]?.env.CLAUDE_CONFIG_DIR).toBe(profileConfigDir);
+    expect(spawns[0]?.env.CLAUDE_CLI_PATH).toBe(path.join(appRoot, "bin", "claude"));
     expect(spawns[0]?.env.ANTHROPIC_AUTH_TOKEN).toBe("host-oauth-token");
     expect(children[0]?.exited).toBe(true);
   });
@@ -386,7 +389,7 @@ describe("OpenCode probe host-start ownership", () => {
           async () => undefined,
         ),
       ).rejects.toThrow("spawn refused");
-      const release = await acquireOpenCodeHostStart();
+      const release = await runtime.localServers.openCodeHostStart.acquire();
       release();
       expect(runtime.localServers.processCount()).toBe(0);
     },
@@ -417,7 +420,7 @@ describe("OpenCode probe host-start ownership", () => {
       expect(children[0]?.exited).toBe(true);
       expect(read).not.toHaveBeenCalled();
       expect(runtime.localServers.processCount()).toBe(0);
-      const release = await acquireOpenCodeHostStart();
+      const release = await runtime.localServers.openCodeHostStart.acquire();
       release();
     },
   );
@@ -425,7 +428,7 @@ describe("OpenCode probe host-start ownership", () => {
   test.each(["catalog-refresh", "provider-sign-in"] as const)(
     "%s refuses a spawn and releases its queued turn after shutdown",
     async (purpose) => {
-      const release = await acquireOpenCodeHostStart();
+      const release = await runtime.localServers.openCodeHostStart.acquire();
       let queued = false;
       const spawn = mock(() => {
         throw new Error("must not spawn");
@@ -462,7 +465,7 @@ describe("OpenCode probe host-start ownership", () => {
       expect(((await outcome) as Error).message).toContain("shutting down");
       expect(spawn).not.toHaveBeenCalled();
       expect(read).not.toHaveBeenCalled();
-      const releaseNext = await acquireOpenCodeHostStart();
+      const releaseNext = await runtime.localServers.openCodeHostStart.acquire();
       releaseNext();
       expect(runtime.localServers.processCount()).toBe(0);
     },

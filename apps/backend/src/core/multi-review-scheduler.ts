@@ -227,18 +227,3 @@ export class WorkflowDueScheduler {
     }
   }
 }
-
-/**
- * Stable per-workflow jitter in `[0, spreadMs)`, so workflows restored together
- * after a restart do not all poll their providers in the same instant. The
- * identifier is only hashed locally; it never leaves this function.
- */
-export function stableJitterMs(workflowId: string, spreadMs: number): number {
-  if (spreadMs <= 0) return 0;
-  let hash = 2166136261;
-  for (let index = 0; index < workflowId.length; index++) {
-    hash ^= workflowId.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0) % Math.floor(spreadMs);
-}

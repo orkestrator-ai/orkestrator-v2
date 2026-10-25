@@ -356,4 +356,29 @@ describe("useCoordinatorPanelData", () => {
     expect(latest.snapshot?.workspace.conversations[0]?.title).toBe("legacy poll");
     expect(fake.count("get_project_coordinator_view")).toBe(1);
   });
+
+  test("probes the view command again after a server switch within the same mount", async () => {
+    reads.coordinator.setConnection("older-server");
+    fake.legacy = true;
+    render(<Harness projectId="p1" />);
+    await settle();
+    await waitFor(() => expect(latest.snapshot).not.toBeNull());
+    await announce("p1");
+    expect(fake.count("get_project_coordinator_view")).toBe(1);
+    expect(fake.count("get_project_coordinator")).toBe(1);
+    // Legacy is remembered for this server: the safety cadence skips it.
+    act(() => requestViewSafetyChecks("interval"));
+    await settle();
+    expect(fake.count("get_project_coordinator")).toBe(1);
+
+    // The window switches to a current server; the mount survives.
+    fake.legacy = false;
+    fake.bodies.set("p1", coordinator("p1", "current server"));
+    act(() => reads.coordinator.setConnection("current-server"));
+    await settle(1_000);
+    await waitFor(() => expect(fake.count("get_project_coordinator_view")).toBe(2));
+    await settle();
+    expect(fake.count("get_project_coordinator")).toBe(1);
+    expect(latest.snapshot?.workspace.conversations[0]?.title).toBe("current server");
+  });
 });

@@ -1,7 +1,7 @@
 # CLI command surface validation
 
 - **ID:** 0810
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-25
 - **Change under test:** todo 0017, the post-release CLI command surface (public API protocol, `apps/backend/src/core/public-api/*`, `commands-files.ts`, `commands-environment.ts`, `commands-projects.ts`, `commands-registry-control.ts`, `packages/cli`).
 - **Original command:** `mise run test` (default reservations; other worktrees validating concurrently on the same host, 17–18 of 18 slots reserved).
@@ -15,3 +15,7 @@
 - **Evidence:** `orkestrator-test-run.rS8Pfu/` under the host temporary directory.
 
 No assertion, timeout or skip was changed for these tests. Shared-host contention is a possible contributor, not an established cause.
+
+## Triage 2026-10-25
+
+Resolved: run record only. The registry-environments failure was a branch defect fixed in the change. Terminal history is [0213](../backend-services-and-tooling/0213-terminal-history-aggregate-timeout.md), coordinator service [0165](../coordinator-and-multi-review/0165-coordinator-bound-discard-timeout.md), Pi cancel [0500](0500-agent-mail-main-merge-validation.md), and the digest, including its failing-alone `Unable to read current working directory` runs, is [0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md). The Codex catalogue case `its first answer is stale until a settling re-read confirms the plugin skills` is a sibling of [0791](../agent-bridges/0791-codex-command-catalogue-stale-race.md) and [0800](../agent-bridges/0800-codex-command-catalogue-armed-delay-race.md) in the same `describe`; the lead should fold it into 0791.

@@ -7,6 +7,11 @@ and other MCP clients through a local Streamable HTTP server. Every public
 action the `orkestrator` CLI can run is reachable through it, under the same
 request keys, receipts and error codes ([public-cli.md](public-cli.md)).
 
+Outside agents get a short public summary of this guide and the CLI at
+[orkestrator.dev/skill.md](https://orkestrator.dev/skill.md), linked from
+`/llms.txt` (`apps/web-public/public/`). Update it when the port, the
+Settings labels or the credential rules change.
+
 ## Connect a client
 
 1. Keep Orkestrator running.

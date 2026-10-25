@@ -40,6 +40,17 @@ describe("CI workflow contracts", () => {
     for (const context of contexts) expect(jobNames).toContain(context);
   });
 
+  test("the test job installs every tool a host-gated test needs", () => {
+    // These tests skip on a host without the tool, so CI must provide it or
+    // they pass vacuously: the CLI completion tests (zsh, fish) and the Claude
+    // Linux sandbox qualification (bubblewrap, socat).
+    const source = read(".github/workflows/ci.yml");
+    const install = source.match(/apt-get install --yes --no-install-recommends ([^\n]+)/);
+    expect(install?.[1]?.split(/\s+/)).toEqual(
+      expect.arrayContaining(["bubblewrap", "socat", "zsh", "fish"]),
+    );
+  });
+
   test("the scheduled live job runs every opt-in live container suite", () => {
     const source = read(".github/workflows/container-live-qualification.yml");
     const suites = readdirSync(join(import.meta.dir, "..", "..", "apps/backend/tests")).filter(

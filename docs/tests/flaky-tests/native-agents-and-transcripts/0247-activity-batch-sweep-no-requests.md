@@ -162,3 +162,21 @@ passed all four groups (exit 0, 442.9 seconds logged); root/support passed in
 - **Owning-file change:** the test's `observed()` helper now reads `observedSessionActivity` through the new `NativeAgentLaunchActivityReconciler` test accessor instead of a cast on the service; the sweep, the fake bridge and the assertions are unchanged.
 - **Owning-file rerun:** `bun test ./src/core/native-agent-service-activity-batch.test.ts` from `apps/backend` passed three times in a row; the same 49-file parallel command then passed twice.
 - **Assessment:** same empty-request symptom under parallel load; no activity-sweep assertion, timeout or skip changed.
+
+## Coordinator consistency gaps (todo 0028) — 2026-10-25
+
+- **Change:** branch `todo-0028-coordinator-consistency-b1b98c1981f1` (coordinator status wakes, mail drain batching, coordinator panel); nothing in the native activity sweep or this test.
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test` on macOS arm64, Bun 1.4.4.
+- **Failure:** `activity sweep over the batch route > a restarted bridge re-detects the batch route` timed out after 5000.05 ms, after `Activity reconciliation for env-1 failed: ProviderUnreachableError`.
+- **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts src/core/native-agent-service-activity-batch.test.ts` from `apps/backend` passed, 7 of 7.
+- **Aggregate counts:** backend 11,077 passed, 84 skipped, 2 failed across 658 files (698.8 s); web 9,665 passed; root/support 3,418 passed; bridges and protocol passed. The other failure was 0507.
+- **Assessment:** recurrence of the same parallel-load symptom; no implementation, assertion, timeout or skip changed.
+
+## Voice qualification review fixes — 2026-10-25
+
+- **Change:** `9b1b42be8`; no activity-sweep implementation or test changed.
+- **Original command:** `mise run test:logged -- --name voice-suite -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1, with other worktrees active.
+- **Failure:** the 100-session case expected `[64, 36]` but recorded `[]` (82.69 ms); reconciliation logged `SyntaxError`.
+- **Complete unchanged owner:** `mise run test:logged -- --name activity-batch-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed, exit 0 in 2.8 seconds logged.
+- **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Backend totals: 11,431 passed and four failed; web had one failure. Root/support, bridges and protocol passed. The aggregate exited 1 in 1099.1 seconds logged.
+- **Assessment:** recurrence of the empty-request symptom; cause unproven. No assertion, deadline or skip changed.

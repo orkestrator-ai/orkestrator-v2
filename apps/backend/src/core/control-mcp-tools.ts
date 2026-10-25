@@ -377,6 +377,37 @@ function mailboxFingerprint(page: JsonRecord): string {
   );
 }
 
+/**
+ * What a worker-status poll would be watching for. `lastActivityAt` moves on
+ * every turn event, so it is left out: a coordinator re-listing while a worker
+ * is still `working` asks the same question each time.
+ */
+function environmentListFingerprint(result: {
+  environments: JsonRecord[];
+  otherNodes?: JsonRecord[];
+}): string {
+  return JSON.stringify([
+    result.environments.map((environment) => [
+      environment.id,
+      environment.nodeId ?? null,
+      environment.status,
+      environment.setupPhase ?? null,
+      environment.lifecycleOperation ?? null,
+      environment.agentActivityState ?? null,
+      environment.prState ?? null,
+    ]),
+    (result.otherNodes ?? []).map((node) => [
+      node.nodeId,
+      node.available,
+      (Array.isArray(node.environments) ? node.environments : []).map((environment: JsonRecord) => [
+        environment.environmentId,
+        environment.status,
+        environment.activity ?? null,
+      ]),
+    ]),
+  ]);
+}
+
 /** The worker's half of the contract: one report, at the end, then stop. */
 function workerAsyncContract(): string {
   return (
@@ -710,11 +741,17 @@ export async function createControlMcp(
               })
               .catch(() => [])
           : [];
-      return toolResult({
+      const result = {
         environments,
         total: environments.length,
         ...(otherNodes.length > 0 ? { otherNodes } : {}),
-      });
+      };
+      // A coordinator re-listing unchanged environments is polling its workers.
+      const guidance = pollGuard?.(
+        `list_environments:${JSON.stringify({ projectId, status, nodeId })}`,
+        environmentListFingerprint(result),
+      );
+      return toolResult(guidance ? { ...result, ...guidance } : result);
     },
   );
 

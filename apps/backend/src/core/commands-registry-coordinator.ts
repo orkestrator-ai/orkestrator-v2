@@ -149,13 +149,23 @@ export function registerCoordinatorCommands(
     const id = asNonBlankString(args.projectId, "projectId");
     return coordinatorViews.read(id, args, () => coordinators.get(id));
   });
-  register("create_coordinator_conversation", async ({ projectId, title }, context) => {
-    if (!context.coordinators) throw new Error("Coordinator service is unavailable");
-    return context.coordinators.createConversation(
-      asNonBlankString(projectId, "projectId"),
-      typeof title === "string" ? title : undefined,
-    );
-  });
+  register(
+    "create_coordinator_conversation",
+    async ({ projectId, title, closeUnused }, context) => {
+      if (!context.coordinators) throw new Error("Coordinator service is unavailable");
+      return context.coordinators.createConversation(
+        asNonBlankString(projectId, "projectId"),
+        typeof title === "string" ? title : undefined,
+        {
+          closeUnused: Array.isArray(closeUnused)
+            ? closeUnused
+                .filter((id): id is string => typeof id === "string" && id.length > 0)
+                .slice(0, 64)
+            : [],
+        },
+      );
+    },
+  );
   register(
     "assign_coordinator_conversation_agent",
     async ({ projectId, conversationId, agent }, context) => {

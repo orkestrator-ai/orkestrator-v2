@@ -1,8 +1,9 @@
 # MCP server management
 
 Status: living. Outstanding work is in
-[0039-mcp-management.md](../todo/mcp/0039-mcp-management.md) and
-[0040-mcp-environment-delivery.md](../todo/mcp/0040-mcp-environment-delivery.md).
+[0039-mcp-management.md](../todo/mcp/0039-mcp-management.md),
+[0040-mcp-environment-delivery.md](../todo/mcp/0040-mcp-environment-delivery.md) and
+[0121-claude-plugin-mcp-servers.md](../todo/mcp/0121-claude-plugin-mcp-servers.md).
 
 Users add, edit, rename, remove and (where the provider has a saved switch)
 enable or disable the MCP servers each agent platform connects to, without
@@ -24,6 +25,7 @@ and "Control MCP").
 | Service | `mcp-management/service.ts` | Targets, snapshots, preview, locked conflict-checked writes, idempotency, apply scheduling, crash recovery |
 | Targets | `mcp-management/targets.ts` | Opaque target ids (`mcp1~<provider>~backend~<backend hash>`, `mcp1~<provider>~env~<id>~<incarnation>`) |
 | Sources | `mcp-management/providers.ts`, `native-policy.ts` | Per-provider source paths, precedence, trust (Codex/Grok trust files, Grok compatibility switches), capabilities, apply strategy |
+| Claude plugins | `mcp-management/claude-plugins.ts`, `packages/protocol/src/node/claude-plugin-set.ts` | Read-only plugin sources from the bridge's own plugin set (the shared merge both use), the pinned CLI's `enabledPlugins` and MCP declaration rules |
 | Catalog | `mcp-management/catalog.ts`, `references.ts` | Passive reads, effective/shadowed computation (including the Pi bridge's load and merge rules), public summaries, rename reference warnings |
 | Rollout | `mcp-management/rollout.ts` | Kill switch and per-provider write/apply gate from `global.mcpManagement` |
 | Evidence | `mcp-management/evidence.ts`, `apps/backend/src/core/http-bridge-mcp-evidence.ts` | Proof that a runtime loaded the saved bytes |
@@ -71,6 +73,7 @@ described below. Higher precedence wins for a same-name entry.
 | Grok | Compatibility | Claude `~/.claude.json` (user and private local) > Cursor `~/.cursor/mcp.json` and project `.cursor/mcp.json` > project `.mcp.json` | JSON | 1–5 | never | Claude/Cursor imports honour `GROK_*_MCPS_ENABLED`, then `requirements.toml`, user `config.toml`, `managed_config.toml` `[compat.*] mcps`; the project config is never read for it |
 | Pi | Backend user | `$PI_CODING_AGENT_DIR` or `~/.pi/agent`, `mcp.json` | JSON `mcpServers`, or a bare map (bridge only; labelled) | 10 | yes | — |
 | Pi | Project | `<worktree>/.pi/mcp.json` | same | 20 | yes | **excluded** on host, unless the environment's execution policy turns project resources on |
+| Claude | Plugin | each plugin the Claude bridge passes: its `.mcp.json`, then `mcpServers` in `.claude-plugin/plugin.json` (an inline map, or a path to a JSON file inside the plugin) | JSON `mcpServers` or a bare map; servers named `plugin:<plugin>:<server>` | 100+ | never | follows `enabledPlugins` (below) |
 | all | Orkestrator | injected at launch | runtime | 1000 | never | — |
 
 Injected names (`orkestrator`, `orkestrator-design`,
@@ -172,12 +175,66 @@ is not permission to execute. The editor never changes an execution policy.
 - **Grok saved enable.** `enabled = false` and the top-level
   `disabled_mcp_servers` list are shown as disabled. The editor does not offer
   the switch (unverified) and never writes `enabled`.
-- **Plugin, team and remote layers are not modelled.** Claude plugins, Cursor
-  plugins and team settings, OpenCode remote/org configuration and Codex
-  profiles are not file sources this editor can read (or Orkestrator never
-  selects them, as with Codex `--profile`). A server they add is visible only
-  in the live panel, and the effective row shown here can differ from what such
-  a layer overrides.
+- **Claude plugins** (todo 0121, rules read from the pinned CLI 2.1.309 and
+  proven on it by `mise run verify:claude:plugin-mcp-live`):
+  - The plugin set is the bridge's (`getPluginsForSdk`): `plugins` in
+    `~/.claude.json`, `installed_plugins.json` remapped onto the local plugins
+    folder (or, without it, the folders under `~/.claude/plugins` holding
+    `.claude-plugin/plugin.json`), then, only when sessions load project
+    resources, `projects[<worktree>].plugins` and `<worktree>/.claude/plugins.json`;
+    de-duplicated by resolved path, missing folders dropped. The bridge and
+    the editor build it with the same function
+    (`@orkestrator/protocol/node/claude-plugin-set`), each with its own reads,
+    and `claude-plugin-mcp-parity.test.ts` runs both over the same files. A
+    container lists the plugins in its own home, including the folder scan
+    through a bounded directory listing. An unreadable or oversized
+    `~/.claude.json` produces a discovery notice and an incomplete snapshot;
+    global and project plugin layers may be missing.
+  - The bridge passes every plugin as a `--plugin-dir` plugin, whose id is
+    `<name>@inline` (name from `plugin.json`, else the folder). The CLI skips
+    one when the first loaded settings layer (local, then project, then user)
+    whose `enabledPlugins` names that id, without case, sets it to `false`;
+    with no entry, the manifest's `defaultEnabled: false` skips it. User
+    settings are `$CLAUDE_CONFIG_DIR/settings.json` when the backend has
+    `CLAUDE_CONFIG_DIR` set (as the CLI reads them), else
+    `~/.claude/settings.json`; a per-account config directory chosen for a
+    session is not modelled. Sessions
+    load user settings, project settings only with project resources (off by
+    default on the host), and local settings only with "Include local
+    settings"; the row is disabled for the default and the source notes when
+    local settings would change it. A marketplace id (`<name>@<marketplace>`)
+    never applies to the copy the bridge passes, so turning a plugin off in
+    Claude Code does not turn it off for Orkestrator's sessions; the source
+    says so and names the `@inline` key (bridge follow-up:
+    [0151](../todo/mcp/0151-claude-bridge-plugin-settings.md)). When the `@inline` copy is off, an
+    installed copy whose exact id is `true` still loads (noted, kept in use).
+    Managed (policy) settings are not modelled.
+  - The CLI reads `.mcp.json` first and the manifest's `mcpServers` after it;
+    a later same-name server replaces the earlier one, so the manifest's row
+    wins. MCPB bundles, inline maps inside an `mcpServers` list and files
+    outside the plugin folder are named in the source's note, not listed.
+  - Rows are read-only ("Managed by Claude Code's plugin settings") and their
+    values are shown as written: `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`
+    and environment references are references, never resolved. A plugin's SSE
+    server is in use (the CLI loads it, not the bridge's inline set).
+  - Plugin names are namespaced, so a plugin row never shadows or is
+    shadowed by a file entry. Not modelled: the CLI suppressing a plugin
+    server whose expanded command or URL duplicates a manually configured
+    server or an earlier plugin's (modelling it would need the expanded
+    values this editor never resolves), and which of two plugins with the
+    same name it keeps (noted). Reads are bounded at 1 MiB per plugin file
+    and 64 plugin sources per snapshot, with at most eight per plugin. Duplicate
+    declaration paths keep their final merge position. When a limit omits
+    sources, the final declarations are retained, omissions are counted and
+    the snapshot is incomplete. Unsupported declaration reasons are deduplicated
+    and summarized; plugin display text is capped before source metadata is
+    fitted to one third of the response budget. Plugin rows sort after file
+    rows, so a trimmed snapshot drops them first.
+- **Team and remote layers are not modelled.** Cursor plugins and team
+  settings, OpenCode remote/org configuration and Codex profiles are not file
+  sources this editor can read (or Orkestrator never selects them, as with
+  Codex `--profile`). A server they add is visible only in the live panel, and
+  the effective row shown here can differ from what such a layer overrides.
 
 ## Capabilities by provider
 
@@ -664,7 +721,10 @@ environment, exact name, a source of the live layer, then the effective row;
 Pi's sanitized spelling is matched by the bridge's rule), highlights only that
 row, says when other rows share the name or when the server is injected, from
 a plugin or from no file it reads, and shows the session's newest apply
-outcome. The section reads that intent
+outcome. A Claude plugin server joins its read-only plugin row by the CLI's
+exact `plugin:<plugin>:<server>` name; the bridge labels it with the `plugin`
+layer from the server's `source`, because `mcpServerStatus()` reports its
+`scope` as `dynamic`. The section reads that intent
 during render and clears it only after it mounts, so a render React discards
 (the settings page is lazy) cannot lose it. Drafts live only in the open
 dialog and are never persisted.
@@ -684,6 +744,7 @@ worktrees; nothing reads or writes the operator's configuration):
 | Commands | `commands-registry-mcp.test.ts` (correlation ids, rollout commands, reload probe), `http-bridge-mcp-reload.test.ts`, `storage-config-mcp-rollout.test.ts`, `apps/backend/tests/gateway-base.test.ts` (body cap) |
 | Bridges | Pi `mcp.test.ts`, `mcp-config.test.ts`, `mcp-config-upstream.test.ts`, `mcp-lifecycle.test.ts`, `agent-session.test.ts`, `http.test.ts`; Cursor `agent-session.test.ts`, `agent-session-mcp-reattach.test.ts`, `http.test.ts`, `persistence.test.ts`; Claude `mcp-config-scope.test.ts`, `session-manager-prompt-mcp.test.ts`, `runtime-health-body.test.ts`; ACP `acp-mcp-inventory.test.ts`; Codex `mcp-reload-route.test.ts`, `process-supervisor.test.ts` |
 | Apply (2026-10-25) | `service-apply.test.ts` (OpenCode idle-gated rebuild, its listing check, user files and containers kept on restart; Codex turn evidence, the open dispatch excluded, not-running, the evidence window), `commands-registry-mcp.test.ts` (OpenCode reload probe re-posts `orkestrator`), `opencode-capabilities.test.ts` (sign-in guidance, error redaction), `http-bridge-mcp-inventory.test.ts` (relay redaction), `apps/backend/tests/opencode-mcp-reload-live.test.ts` (`mise run verify:opencode:mcp-live`: the pinned OpenCode 1.19.4, credential-free) |
+| Claude plugins (2026-10-25) | `packages/protocol/src/node/claude-plugin-set.test.ts` (merge, remap, names, `enabledPlugins`, declarations), `service-claude-plugins.test.ts` (sources, names, precedence, disabled reasons, notes, values as written, refused writes, bounds, container), `claude-plugin-mcp-parity.test.ts` (the bridge's `getPluginsForSdk` and the catalogue over the same files), Claude bridge `mcp-runtime-status.test.ts` (plugin layer), `mcp-live-join.test.ts`, `McpStatusAndStates.test.tsx`; `apps/backend/tests/claude-plugin-mcp-live.test.ts` (`mise run verify:claude:plugin-mcp-live`: the pinned CLI 2.1.309, credential-free, editor rows = live rows = join across user, project and local settings, including the enabled installed marketplace copy with its inline copy disabled); `apps/backend/tests/claude-plugin-mcp-container.test.ts` (`RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1`, optional `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE`): real production container reader and directory listing with installed, absent and invalid installation state; bounded metadata, declaration omissions and merge winners, oversized manifests and discovery files, duplicate IDs, and rendered settings-now-off notice are regression-tested |
 | UI | `mcp-live-join.test.ts`, `mcp-draft.test.ts`, `mcp-local-validation.test.ts`, `ProviderMcpSettings.test.tsx`, `McpEditorFlows.test.tsx`, `McpEntryFlows.test.tsx`, `McpStatusAndStates.test.tsx`, `AgentInfoMcpSection.test.tsx`, `FullscreenSettingsLayout.test.tsx`, `ActionBar.test.tsx` — focus return, keyboard-only flows, conflict reload, discard prompt, rollout gate, empty/offline/partial states |
 | Container reader | Manual smoke against a throwaway container: ok, absent, oversized, offline, shell-metacharacter path |
 | Environment overlay | `overlay.test.ts` (merge, rebase, tombstones, conflicts, divergence, import, server-map rewrite), `service-overlay.test.ts` (private save, host file unchanged, backend restart, stop/start and rebuild reapply, pending restart, conflicts and both resolutions, divergence blocks edits, import, reapply, reset, unreadable record, defaults refresh and stale token, persistent project writes, container apply plan, network and `localhost` warnings, path audit, sign-in) |

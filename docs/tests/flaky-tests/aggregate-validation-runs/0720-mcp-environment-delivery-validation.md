@@ -1,7 +1,7 @@
 # MCP environment delivery (0040) validation under aggregate load
 
 - **ID:** 0720
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-23.
 - **Baseline:** `062971245`, with the todo 0040 environment-overlay changes in the working tree.
 - **Original command:** `mise run test` (default aggregate allocation). A
@@ -51,3 +51,7 @@ root and agent-support, and Codex protocol lockfile groups passed.
 | `apps/backend/src/core/transcript-artifacts/content-server.engines.test.ts` | `executable document policy in firefox > popups, new-window links and top navigation reach the sink zero times`: Firefox fetched `GET /favicon.ico` from the sink. | **Not a flake.** It fails alone every time (38 pass, 1 fail), and fails the same way on a clean checkout of `origin/main` (`cda435fc9`). This branch does not touch `transcript-artifacts`. It is recorded here only so the aggregate exit is explained. |
 
 The original aggregate exit remains failed.
+
+## Triage 2026-10-25
+
+Environmental: the first aggregate shared the host with Docker qualification, image builds and other suites, and failed six unrelated owners that all passed alone (owner cases 0179, 0259, 0291, 0212; the two desktop shutdown-deadline cases sit beside [0712](../electron-and-desktop/0712-application-logging-flush-deadline-under-load.md) and 0350). The post-review run failed only on the coordinator digest ([0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md)) and the Firefox favicon ([0697](../design-canvas-and-artifacts/0697-artifact-engine-firefox-favicon-sink-hit.md)).

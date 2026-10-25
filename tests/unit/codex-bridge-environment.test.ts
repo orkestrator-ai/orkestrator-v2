@@ -41,7 +41,9 @@ describe("codex bridge process environment", () => {
     expect(commands).toContain('export ORKESTRATOR_VERSION="${APP_VERSION}"');
 
     const desktopMain = read("apps/desktop/electron/main.ts");
-    expect(desktopMain).toContain("appVersion: app.getVersion()");
+    expect(desktopMain).toContain("appVersion: desktopApplicationVersion(app)");
+    // A packaged app reports its own version; a dev run the desktop package's.
+    expect(read("apps/desktop/electron/app-version.ts")).toContain("app.getVersion()");
   });
 
   test("both spawn paths forward the configured concurrent thread limit", () => {

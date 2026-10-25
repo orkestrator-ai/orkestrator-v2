@@ -118,7 +118,14 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
     setError(null);
   }
   const ready = readyProject === projectId;
-  const legacyRef = useRef(false);
+  /**
+   * The read-coordinator connection generation on which the backend proved it
+   * has no view command, or null. Capability belongs to a server, not to this
+   * mount: after a server switch the next read probes the view command again.
+   */
+  const legacyRef = useRef<number | null>(null);
+  /** Connection generation of the latest read, for the safety-check gate. */
+  const connectionGenerationRef = useRef(0);
   const stampRef = useRef<ViewRevisionStamp | null>(null);
   const directSeqRef = useRef(0);
   const gitRef = useRef<ProjectGitStatus | null>(null);
@@ -172,11 +179,12 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
       intervalMs: LEGACY_COORDINATOR_POLL_INTERVAL_MS,
       priority: "standard",
     },
-    read: async () => {
+    read: async (context) => {
       const pid = projectId;
       const sent = stampRef.current;
       const directSeq = directSeqRef.current;
-      if (!legacyRef.current) {
+      connectionGenerationRef.current = context.connectionGeneration;
+      if (legacyRef.current !== context.connectionGeneration) {
         try {
           const answer = await backend.getProjectCoordinatorView(pid, sent);
           const classified = classifyViewSnapshotResponse(answer, isCoordinatorSnapshot);
@@ -207,7 +215,7 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
           return { projectId: pid, snapshot: outcome.snapshot, stamp, directSeq, legacy: false };
         } catch (cause) {
           if (!isUnknownViewCommandError(cause, backend.COORDINATOR_VIEW_COMMAND)) throw cause;
-          legacyRef.current = true;
+          legacyRef.current = context.connectionGeneration;
         }
       }
       const full = await backend.getProjectCoordinator(pid);
@@ -268,7 +276,7 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
     // Provider availability is derived from configuration.
     const offConfig = onResourceChanged("config", () => requestViewRead());
     const offSafety = onViewSafetyCheck(() => {
-      if (!legacyRef.current) requestViewRead();
+      if (legacyRef.current !== connectionGenerationRef.current) requestViewRead();
     });
     return () => {
       offCoordinator();

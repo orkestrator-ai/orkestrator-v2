@@ -2,7 +2,12 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { registerTmuxBackendCommands } from "./tmux.js";
 import { claudeStateSignalInstaller } from "./claude-state-signal.js";
-import type { Environment, NativeAgentProvider } from "./models.js";
+import {
+  nativeAgentSessionResumeIdentity,
+  type Environment,
+  type NativeAgentProvider,
+  type PersistedNativeAgentSession,
+} from "./models.js";
 import {
   assertOnlyKeys,
   asNonBlankString,
@@ -13,7 +18,6 @@ import {
 } from "./commands-helpers.js";
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
-import { deleteTerminalHistories } from "./terminal-history.js";
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 import {
   fenceRetainingCloseSessionId,
@@ -211,7 +215,7 @@ export function registerTeardownCommands(
       }
       for (const sessionId of sessionIds)
         context.runtime.terminals.explicitlyCloseSession(sessionId);
-      await deleteTerminalHistories({
+      await context.runtime.terminals.history.deleteHistories({
         dataDir: context.storage.getDataDir(),
         environmentId: environment.id,
         tabId: intent.tabId,
@@ -320,7 +324,7 @@ export function registerTeardownCommands(
       async () => {
         // Re-read under the lock: a concurrent teardown of this tab may already
         // have retired the mapping, or rebound it to another provider session.
-        const current = await context.storage.getNativeAgentSession(storageKey);
+        const current = await context.storage.getNativeAgentSessionAfterMutations(storageKey);
         if (current?.providerSessionId !== providerSessionId) return;
         // A session another tab shares, or a Multi Review owns, only loses this
         // tab's mapping. Of two tabs closed together, the second one under the
@@ -339,7 +343,7 @@ export function registerTeardownCommands(
           latestIntent?.createdAt === intent.createdAt
             ? latestIntent.resumableSessionId
             : resumable;
-        resumable ??= await resumableSessionId(context, environment.id, agent, providerSessionId);
+        resumable ??= await resumableSessionId(context, environment.id, agent, current);
         if (resumable) {
           // Persist before close: the provider may remove the session and lose
           // its response. Reconciliation must not need that live session again.
@@ -629,21 +633,27 @@ export function registerTeardownCommands(
 
 /**
  * The identity a later resume of a closing tab's conversation names: the
- * provider's own (Codex's thread id) read from the still-open session, or the
+ * provider's own (Codex's thread id) read from the still-open session, else
+ * the one the provider last reported while the session was open (kept on the
+ * mapping, for a close that lands after the bridge lost the session), else the
  * session id for providers that resume by it. `undefined` rather than a guess
- * when a Codex thread cannot be read.
+ * when a Codex thread cannot be named.
  */
 async function resumableSessionId(
   context: CommandContext,
   environmentId: string,
   agent: NativeAgentProvider,
-  providerSessionId: string,
+  session: PersistedNativeAgentSession,
 ): Promise<string | undefined> {
   if (!context.design) return undefined;
   const read = await context.nativeAgents
-    ?.resumableSessionIdIfRunning?.(environmentId, agent, providerSessionId)
+    ?.resumableSessionIdIfRunning?.(environmentId, agent, session.providerSessionId)
     .catch(() => undefined);
-  return read ?? (agent === "codex" ? undefined : providerSessionId);
+  return (
+    read ??
+    nativeAgentSessionResumeIdentity(session) ??
+    (agent === "codex" ? undefined : session.providerSessionId)
+  );
 }
 
 /**

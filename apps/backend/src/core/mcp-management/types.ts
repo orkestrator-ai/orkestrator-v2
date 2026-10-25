@@ -99,6 +99,20 @@ export interface SourceSpec {
    * from a file. Always read-only; may carry secrets and is never logged.
    */
   inlineText?: string;
+  /**
+   * Prefix the provider puts before every server name in this source (Claude
+   * plugins: `plugin:<plugin>:`). Read-only sources only: entries are matched
+   * to the file by their unprefixed key.
+   */
+  entryNamePrefix?: string;
+  /** Every entry is disabled by a setting outside this file (a plugin turned off). */
+  disabledReason?: string;
+  /** Shown with the source: how something outside the file affects what it declares. */
+  note?: string;
+  /** Listed for its note and state only; its servers are not read (an unmodelled declaration). */
+  noEntries?: boolean;
+  /** Discovery omitted declarations or could not read a plugin layer. */
+  discoveryIncomplete?: boolean;
 }
 
 /** Bounded read of one file inside a container. Never runs a shell over the path. */
@@ -143,3 +157,15 @@ export type ContainerPathProbe = (
   containerId: string,
   paths: readonly string[],
 ) => Promise<Map<string, "file" | "directory" | "absent"> | null>;
+
+export interface PluginDirectoryListing {
+  directories: string[];
+  /** The scan hit its bound or could not finish. */
+  incomplete?: boolean;
+}
+
+/** Bounded subdirectory listing inside a container for plugin folder discovery. */
+export type ContainerDirectoryLister = (
+  containerId: string,
+  dir: string,
+) => Promise<PluginDirectoryListing>;

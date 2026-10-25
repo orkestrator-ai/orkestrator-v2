@@ -5,11 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import {
-  discoverHostPiModelCatalog,
-  resetPiModelCatalogSeedingState,
-  PI_CATALOG_EMPTY_PROBE_BACKOFF_MS,
-} from "./pi-model-catalog-seeding.js";
+import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
+import { PI_CATALOG_EMPTY_PROBE_BACKOFF_MS } from "./pi-catalog-probes.js";
 import {
   acpModelFetchTimeoutMs,
   fetchAcpNormalizedModelsAtResult,
@@ -46,6 +43,8 @@ let children: FakeChild[] = [];
 let runtime: BackendRuntime;
 let spawnImpl: typeof spawnCommand = spawnCommand;
 let terminateImpl: typeof terminateProcessTree = terminateProcessTree;
+/** The runtime's clock; a test moves it to cross the empty-probe backoff. */
+let now = 0;
 
 function createFakeChild(): FakeChild {
   const emitter = new EventEmitter() as unknown as FakeChild;
@@ -136,7 +135,7 @@ beforeEach(async () => {
   spawns = [];
   servers = [];
   children = [];
-  resetPiModelCatalogSeedingState();
+  now = Date.now();
   spawnImpl = spawnCommand;
   terminateImpl = mock(async (child: { pid?: number }) => {
     const target = children.find((candidate) => candidate.pid === child.pid);
@@ -148,6 +147,7 @@ beforeEach(async () => {
     localServers: {
       spawn: (...args) => spawnImpl(...args),
       terminateProcessTree: (...args) => terminateImpl(...args),
+      piCatalog: { now: () => now },
     },
   });
 });
@@ -156,7 +156,6 @@ afterEach(async () => {
   for (const server of servers) await new Promise((resolve) => server.close(resolve));
   expect(runtime.localServers.hasEnvironmentOperations()).toBe(false);
   runtime.shutdown();
-  resetPiModelCatalogSeedingState();
   await fs.rm(appRoot, { recursive: true, force: true });
 });
 
@@ -331,16 +330,44 @@ describe("discoverHostPiModelCatalog", () => {
     expect(spawns).toHaveLength(0);
   });
 
-  test("probes again once the backoff is cleared", async () => {
+  test("probes again once the backoff has elapsed", async () => {
     stubBridgeSpawn(async (spawned) =>
       listenAsBridge(Number(spawned.env.PORT), spawned.env.PI_BRIDGE_TOKEN ?? "", []),
     );
 
     await discoverHostPiModelCatalog(context());
-    resetPiModelCatalogSeedingState();
+    now += PI_CATALOG_EMPTY_PROBE_BACKOFF_MS - 1;
+    await discoverHostPiModelCatalog(context());
+    expect(spawns).toHaveLength(1);
+    now += 1;
     await discoverHostPiModelCatalog(context());
 
     expect(spawns).toHaveLength(2);
+  });
+
+  test("each backend keeps its own backoff and probe generations", async () => {
+    stubBridgeSpawn(async (spawned) =>
+      listenAsBridge(Number(spawned.env.PORT), spawned.env.PI_BRIDGE_TOKEN ?? "", []),
+    );
+    const first = runtime;
+    await discoverHostPiModelCatalog(context());
+    const second = new BackendRuntime({
+      emit: () => undefined,
+      localServers: {
+        spawn: (...args) => spawnImpl(...args),
+        terminateProcessTree: (...args) => terminateImpl(...args),
+      },
+    });
+    try {
+      // The first backend's empty result does not suppress the second's probe,
+      // and the second's empty result is its own.
+      await discoverHostPiModelCatalog(context({ runtime: second }));
+      expect(spawns).toHaveLength(2);
+      expect(await discoverHostPiModelCatalog(context({ runtime: first }))).toEqual([]);
+      expect(spawns).toHaveLength(2);
+    } finally {
+      second.shutdown();
+    }
   });
 
   test("refuses to admit a probe once shutdown has been requested", async () => {

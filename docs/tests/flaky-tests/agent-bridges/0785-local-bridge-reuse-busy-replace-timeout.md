@@ -11,3 +11,9 @@
 - **Suite counts:** the aggregate finished in 926.5 s; the workspace group also failed on known load timeouts and on the pre-existing OpenCode version expectation in `conformance-execution-policy.test.ts`.
 - **Isolated rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts tests/commands-local-bridge-reuse.test.ts` passed the unchanged owner (9 of 9, 12.0 s).
 - **Hypothesis:** the case waits out a real unresponsive-bridge grace period and replacement spawn inside the generic five-second budget, which aggregate load can exceed. The branch touches neither local bridge reuse nor this test (its parent-watchdog change sets how often a bridge checks its parent, not how the backend replaces a busy one). No assertion, timeout or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Correction:** the case does not wait out a real grace period. It back-dates the unresponsive mark with `markLocalServerUnresponsiveSince(..., Date.now() - 3 * 60_000)` (`commands-local-bridge-reuse.test.ts:284`), then spawns a real replacement bridge. So two real bridge starts and a stall request run inside Bun's generic five-second budget; the file has no explicit budget.
+- **Next step:** give this case an explicit budget sized for two bridge starts, or measure how long each start takes under aggregate load. Single observation so far.

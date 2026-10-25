@@ -118,6 +118,33 @@ ORKESTRATOR_MCP_TOKEN=YOUR_TOKEN \
 ```
 
 It spends one short prompt on a real provider; use a disposable environment of
-a test profile. Misresolved spoken targets and session-handle copy errors need
-a speaking model and a person, so a full qualification also runs the same
-script through a real voice runtime.
+a test profile. Host and container sessions approve commands automatically by
+default, so to exercise the approval step set the environment's **Settings →
+Execution policy → Approvals** to **Ask** first and pass `--expect-approval`:
+the harness then exits 1 unless a command or file approval was raised,
+confirmed (`confirmation-required`, then the call with `confirmToken`) and
+answered.
+
+Misresolved spoken targets and session-handle copy errors need a speaking
+model and a person. To count them, put
+[`packages/cli/examples/voice-mcp-relay.ts`](../../packages/cli/examples/voice-mcp-relay.ts)
+between the voice runtime and Control MCP, speak the script, then score the
+recording:
+
+```bash
+bun packages/cli/examples/voice-mcp-relay.ts --record voice.jsonl
+# Give the runtime http://127.0.0.1:34199/mcp and its usual Authorization header.
+bun packages/cli/examples/voice-qualify.ts --score voice.jsonl --environment ENV_ID
+```
+
+The relay listens on loopback only, forwards each request with the runtime's
+own header (it holds no token) and records, per call, only the tool, latency,
+outcome, the IDs it targeted and the IDs its result returned; prompts, answers
+and result text are not written. Scoring assumes the script's single
+environment and the latest session `start_work` started in it, so one
+recording can hold several repeats: a targeted ID that no
+earlier result returned (or a malformed `ses_` handle) is a copy error, and a
+returned ID that is not the script's environment, project or session is a
+misresolution. The scripted harness writes the same recording with `--record`
+and reports its own score as `selfCheck`, which is zero because it copies
+handles exactly.

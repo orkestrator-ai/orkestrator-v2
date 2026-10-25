@@ -10,7 +10,7 @@ import { runCommand } from "../src/core/shell";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { resetContainerOwnershipCache } from "../src/core/container-lifecycle-service";
 
-const { createCommandRegistry, shutdownPrMonitorTracking } = await import("../src/core/commands");
+const { createCommandRegistry } = await import("../src/core/commands");
 const { BackendRuntime } = await import("../src/core/backend-runtime");
 const runtimes: Array<InstanceType<typeof BackendRuntime>> = [];
 
@@ -211,7 +211,6 @@ beforeEach(async () => {
 
 afterEach(() => {
   for (const runtime of runtimes.splice(0)) runtime.shutdown();
-  shutdownPrMonitorTracking();
   mock.restore();
 });
 

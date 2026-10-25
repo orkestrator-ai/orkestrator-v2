@@ -16,3 +16,13 @@
 ## Cross-service read policy validation recurrence — 2026-10-23
 
 `mise run test` with the 0054 change (no bridge source changes) failed this case and three neighbouring `at-most-once dispatch` cases at host load about 43. The unchanged owning file passed alone in 10.6 s (`codex-runtime-prompt-alone`). Details in [0696](../aggregate-validation-runs/0696-cross-service-reads-validation.md). No assertion, timeout or skip changed.
+
+## PR monitor shutdown validation recurrence — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name residual-state-suite -- mise run test`, on `todo-0066-residual-module-state-40e8f98a7ef0`, Bun 1.4.4.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 slots; one isolated Bun worker per bridge package. Bridges waited 90.8 seconds for shared host capacity.
+- **Failure:** the same pending response returned 503 with `Unknown app-server thread handle: thread-1` instead of 404 (87.00 ms).
+- **Package counts:** Codex reported 2355 passed, 40 skipped and two failed across 2397 tests in 88 files; the other failure was [0800](0800-codex-command-catalogue-armed-delay-race.md).
+- **Owning-file rerun:** `mise run test:logged -- --name codex-prompt-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/app-server-runtime-prompt.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 7.1 seconds.
+- **Evidence:** `orkestrator-test-run.jMkwTI/bridges.log.gz` under the host temporary directory after aggregate completion.
+- **Assessment:** recurrence of the existing intermittent failure; this change touches no bridge source or assertions.

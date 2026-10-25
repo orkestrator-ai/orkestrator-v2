@@ -1,4 +1,5 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { __testing as __seedTesting } from "./host-model-catalog-seed.js";
+import { describe, expect, jest, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,7 +17,6 @@ import {
   getPrMonitorDetectionRequest,
   parsePrMonitorCheckResponse,
   parsePrMonitorDetectionResponse,
-  shutdownPrMonitorTracking,
   toClientEnvironment,
   type CommandContext,
 } from "./commands.js";
@@ -662,6 +662,38 @@ describe("native agent model catalogue command", () => {
     });
   });
 
+  test("seeds enabled host catalogues when the startup cache read requests it", async () => {
+    __seedTesting.reset();
+    const refresh = mock(async () => ({
+      agent: "codex" as const,
+      models: [
+        {
+          id: "gpt-5.4",
+          name: "GPT-5.4",
+          reasoningEfforts: ["high"],
+          defaultReasoningEffort: "high",
+        },
+      ],
+    }));
+    await withCommands(
+      async (invoke, storage) => {
+        const config = await storage.loadConfig();
+        await storage.updateGlobalConfig({
+          ...config.global,
+          enabledAgentPlatforms: ["codex"],
+        });
+
+        const cache = (await invoke("get_agent_model_catalog_cache", { seed: true })) as {
+          codex?: { models: { id: string }[] };
+        };
+
+        expect(refresh).toHaveBeenCalledTimes(1);
+        expect(cache.codex?.models.map((model) => model.id)).toEqual(["gpt-5.4"]);
+      },
+      { modelCatalogRefresh: refresh as never },
+    );
+  });
+
   test("starts a requested bridge once when its durable catalogue is missing", async () => {
     await withCommands(async (invoke, storage, _dataDir, commands) => {
       const awaitReady = mock(async () => ({
@@ -707,9 +739,9 @@ describe("native agent model catalogue command", () => {
       await expect(
         invoke("get_native_agent_model_catalog", {
           environmentId: "e1",
-          ensureAgent: "claude",
+          ensureAgent: "bogus",
         }),
-      ).rejects.toThrow("ensureAgent must be one of: cursor, grok, pi");
+      ).rejects.toThrow("ensureAgent must be one of: claude, codex, opencode, cursor, grok, pi");
     });
   });
 
@@ -725,6 +757,89 @@ describe("native agent model catalogue command", () => {
 
       expect(awaitReady).not.toHaveBeenCalled();
     });
+  });
+
+  test("downloads a missing Claude catalogue on first use and then serves it from the cache", async () => {
+    __seedTesting.reset();
+    const refresh = mock(async () => ({
+      agent: "claude" as const,
+      models: [{ id: "sonnet", name: "Sonnet", resolvedModel: "claude-sonnet" }],
+    }));
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        const awaitReady = mock(async () => ({ status: "ready" as const }));
+        commands.set("await_bridge_ready", awaitReady);
+
+        const first = (await invoke("get_native_agent_model_catalog", {
+          environmentId: "e1",
+          ensureAgent: "claude",
+        })) as { models: { platform: string; id: string }[]; status: string };
+        expect(first.status).toBe("ready");
+        expect(first.models.some((m) => m.platform === "claude" && m.id === "sonnet")).toBe(true);
+        expect((await storage.getAgentModelCatalogCache()).claude?.models).toHaveLength(1);
+
+        await invoke("get_native_agent_model_catalog", {
+          environmentId: "e1",
+          ensureAgent: "claude",
+        });
+        expect(refresh).toHaveBeenCalledTimes(1);
+        // The host-wide probe is used, not an environment bridge.
+        expect(awaitReady).not.toHaveBeenCalled();
+      },
+      { modelCatalogRefresh: refresh as never },
+    );
+  });
+
+  test("reports a failed Claude first-use download so the picker can retry", async () => {
+    __seedTesting.reset();
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const refresh = mock(async () => {
+      throw new Error("not signed in");
+    });
+    try {
+      await withCommands(
+        async (invoke) => {
+          const result = (await invoke("get_native_agent_model_catalog", {
+            environmentId: "e1",
+            ensureAgent: "claude",
+          })) as { status: string };
+          expect(result.status).toBe("failed");
+        },
+        { modelCatalogRefresh: refresh as never },
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("bounds a host seed that does not settle and lets it finish in the background", async () => {
+    __seedTesting.reset();
+    let refreshStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      refreshStarted = resolve;
+    });
+    const refresh = mock(async () => {
+      refreshStarted();
+      return await new Promise<never>(() => undefined);
+    });
+    jest.useFakeTimers();
+    try {
+      await withCommands(
+        async (invoke) => {
+          const response = invoke("get_native_agent_model_catalog", {
+            environmentId: "e1",
+            ensureAgent: "opencode",
+          });
+          await started;
+          jest.advanceTimersByTime(FIRST_USE_CATALOG_BUDGET_MS);
+          await expect(response).resolves.toMatchObject({ status: "failed" });
+        },
+        { modelCatalogRefresh: refresh as never },
+      );
+    } finally {
+      jest.useRealTimers();
+      __seedTesting.reset();
+    }
   });
 
   test("records why a first-use bridge did not become ready", async () => {
@@ -5807,275 +5922,252 @@ describe("set_environment_unread", () => {
 });
 
 describe("pr monitor commands", () => {
-  // The module-level PR monitor service outlives each temporary storage
-  // directory; dropping its entries keeps one test's watch requests (and any
-  // scheduled polls) from leaking into the next.
+  // Each `withCommands` builds its own runtime and shuts it down afterwards,
+  // which drops the PR monitor's entries and scheduled polls with it.
   test("pr_monitor_watch validates its arguments", async () => {
     await withCommands(async (invoke) => {
-      try {
-        await expect(
-          invoke("pr_monitor_watch", {
-            environmentId: "e1",
-            mode: "idle",
-          }),
-        ).rejects.toThrow("mode must be normal, create-pending, or merge-pending");
-        await expect(
-          invoke("pr_monitor_watch", {
-            environmentId: 42,
-            mode: "merge-pending",
-          }),
-        ).rejects.toThrow("Expected environmentId to be a string");
-        await expect(
-          invoke("pr_monitor_watch", {
-            environmentId: "missing",
-            mode: "merge-pending",
-          }),
-        ).rejects.toThrow("Environment not found: missing");
-      } finally {
-        shutdownPrMonitorTracking();
-      }
+      await expect(
+        invoke("pr_monitor_watch", {
+          environmentId: "e1",
+          mode: "idle",
+        }),
+      ).rejects.toThrow("mode must be normal, create-pending, or merge-pending");
+      await expect(
+        invoke("pr_monitor_watch", {
+          environmentId: 42,
+          mode: "merge-pending",
+        }),
+      ).rejects.toThrow("Expected environmentId to be a string");
+      await expect(
+        invoke("pr_monitor_watch", {
+          environmentId: "missing",
+          mode: "merge-pending",
+        }),
+      ).rejects.toThrow("Environment not found: missing");
     });
   });
 
   test("watch requests are durable in the authoritative snapshot", async () => {
     await withCommands(async (invoke) => {
-      try {
-        const empty = await invoke("get_pr_monitor_state", {});
-        expect(isPrMonitorSnapshot(empty)).toBe(true);
-        expect((empty as { entries: unknown[] }).entries).toEqual([]);
+      const empty = await invoke("get_pr_monitor_state", {});
+      expect(isPrMonitorSnapshot(empty)).toBe(true);
+      expect((empty as { entries: unknown[] }).entries).toEqual([]);
 
-        await invoke("pr_monitor_watch", { environmentId: "e1", mode: "create-pending" });
+      await invoke("pr_monitor_watch", { environmentId: "e1", mode: "create-pending" });
 
-        // A later snapshot — the rehydration path a freshly mounted client
-        // uses — still carries the pending request; nothing about it lived in
-        // the client that asked.
-        const snapshot = (await invoke("get_pr_monitor_state", {})) as {
-          entries: Array<Record<string, unknown>>;
-        };
-        expect(isPrMonitorSnapshot(snapshot)).toBe(true);
-        expect(snapshot.entries).toHaveLength(1);
-        expect(snapshot.entries[0]).toMatchObject({
-          environmentId: "e1",
-          mode: "create-pending",
-          prUrl: null,
-          consecutiveErrors: 0,
-        });
+      // A later snapshot — the rehydration path a freshly mounted client
+      // uses — still carries the pending request; nothing about it lived in
+      // the client that asked.
+      const snapshot = (await invoke("get_pr_monitor_state", {})) as {
+        entries: Array<Record<string, unknown>>;
+      };
+      expect(isPrMonitorSnapshot(snapshot)).toBe(true);
+      expect(snapshot.entries).toHaveLength(1);
+      expect(snapshot.entries[0]).toMatchObject({
+        environmentId: "e1",
+        mode: "create-pending",
+        prUrl: null,
+        consecutiveErrors: 0,
+      });
 
-        await expect(
-          invoke("pr_monitor_refresh", { environmentId: "e1" }),
-        ).resolves.toBeUndefined();
-      } finally {
-        shutdownPrMonitorTracking();
-      }
+      await expect(invoke("pr_monitor_refresh", { environmentId: "e1" })).resolves.toBeUndefined();
     });
   });
 
   test("snapshot reads are stamped and answer compact conditional reads", async () => {
     await withCommands(async (invoke) => {
-      try {
-        await invoke("pr_monitor_watch", { environmentId: "e1", mode: "create-pending" });
-        const stamped = (await invoke("get_pr_monitor_state", {})) as {
-          entries: Array<Record<string, unknown>>;
-          generation: string;
-          revision: number;
-        };
-        expect(isPrMonitorSnapshot(stamped)).toBe(true);
-        expect(typeof stamped.generation).toBe("string");
-        expect(stamped.revision).toBeGreaterThan(0);
+      await invoke("pr_monitor_watch", { environmentId: "e1", mode: "create-pending" });
+      const stamped = (await invoke("get_pr_monitor_state", {})) as {
+        entries: Array<Record<string, unknown>>;
+        generation: string;
+        revision: number;
+      };
+      expect(isPrMonitorSnapshot(stamped)).toBe(true);
+      expect(typeof stamped.generation).toBe("string");
+      expect(stamped.revision).toBeGreaterThan(0);
 
-        await expect(
-          invoke("get_pr_monitor_state", {
-            knownGeneration: stamped.generation,
-            knownRevision: stamped.revision,
-          }),
-        ).resolves.toEqual({
-          status: "unchanged",
-          generation: stamped.generation,
-          revision: stamped.revision,
-        });
-
-        await invoke("pr_monitor_watch", { environmentId: "e1", mode: "merge-pending" });
-        const changed = (await invoke("get_pr_monitor_state", {
+      await expect(
+        invoke("get_pr_monitor_state", {
           knownGeneration: stamped.generation,
           knownRevision: stamped.revision,
-        })) as { status: string; revision: number; snapshot: { entries: unknown[] } };
-        expect(changed.status).toBe("snapshot");
-        expect(changed.revision).toBeGreaterThan(stamped.revision);
-        expect(changed.snapshot.entries).toEqual([
-          expect.objectContaining({ environmentId: "e1", mode: "merge-pending" }),
-        ]);
+        }),
+      ).resolves.toEqual({
+        status: "unchanged",
+        generation: stamped.generation,
+        revision: stamped.revision,
+      });
 
-        await expect(
-          invoke("get_pr_monitor_state", { knownGeneration: "stale", knownRevision: 1 }),
-        ).resolves.toMatchObject({ status: "reset", reason: "generation" });
-        await expect(
-          invoke("get_pr_monitor_state", { knownGeneration: stamped.generation }),
-        ).resolves.toMatchObject({ status: "reset", reason: "invalid-request" });
-      } finally {
-        shutdownPrMonitorTracking();
-      }
+      await invoke("pr_monitor_watch", { environmentId: "e1", mode: "merge-pending" });
+      const changed = (await invoke("get_pr_monitor_state", {
+        knownGeneration: stamped.generation,
+        knownRevision: stamped.revision,
+      })) as { status: string; revision: number; snapshot: { entries: unknown[] } };
+      expect(changed.status).toBe("snapshot");
+      expect(changed.revision).toBeGreaterThan(stamped.revision);
+      expect(changed.snapshot.entries).toEqual([
+        expect.objectContaining({ environmentId: "e1", mode: "merge-pending" }),
+      ]);
+
+      await expect(
+        invoke("get_pr_monitor_state", { knownGeneration: "stale", knownRevision: 1 }),
+      ).resolves.toMatchObject({ status: "reset", reason: "generation" });
+      await expect(
+        invoke("get_pr_monitor_state", { knownGeneration: stamped.generation }),
+      ).resolves.toMatchObject({ status: "reset", reason: "invalid-request" });
     });
   });
 
   test("conflict-resolution refresh intent is durable and backend-only", async () => {
     await withCommands(async (invoke, storage) => {
-      try {
-        await storage.updateEnvironment("e1", {
-          prUrl: "https://github.com/acme/repo/pull/7",
-          prState: "open",
-          hasMergeConflicts: true,
-        });
+      await storage.updateEnvironment("e1", {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
 
-        const armedAt = (await invoke("arm_pr_refresh_after_agent_completion", {
-          environmentId: "e1",
-        })) as string;
+      const armedAt = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      })) as string;
 
-        const armed = await storage.getEnvironment("e1");
-        expect(armed?.prRecheckAfterAgentCompletionArmedAt).toEqual(expect.any(String));
-        expect(armed?.prRecheckAfterAgentCompletionArmedAt).toBe(armedAt);
-        expect(toClientEnvironment(armed!)).not.toHaveProperty(
-          "prRecheckAfterAgentCompletionArmedAt",
-        );
+      const armed = await storage.getEnvironment("e1");
+      expect(armed?.prRecheckAfterAgentCompletionArmedAt).toEqual(expect.any(String));
+      expect(armed?.prRecheckAfterAgentCompletionArmedAt).toBe(armedAt);
+      expect(toClientEnvironment(armed!)).not.toHaveProperty(
+        "prRecheckAfterAgentCompletionArmedAt",
+      );
 
-        // A backend completion edge schedules the monitor but does not consume
-        // the intent before GitHub confirms the conflict is actually gone.
-        await invoke("pr_monitor_agent_turn_completed", { environmentId: "e1" });
-        expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
-          armed?.prRecheckAfterAgentCompletionArmedAt,
-        );
+      // A backend completion edge schedules the monitor but does not consume
+      // the intent before GitHub confirms the conflict is actually gone.
+      await invoke("pr_monitor_agent_turn_completed", { environmentId: "e1" });
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        armed?.prRecheckAfterAgentCompletionArmedAt,
+      );
 
-        // GitHub's indeterminate result must not consume the durable request.
-        await invoke("set_environment_pr", {
-          environmentId: "e1",
-          prUrl: "https://github.com/acme/repo/pull/7",
-          prState: "open",
-          hasMergeConflicts: null,
-        });
-        expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
-          armedAt,
-        );
+      // GitHub's indeterminate result must not consume the durable request.
+      await invoke("set_environment_pr", {
+        environmentId: "e1",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: null,
+      });
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        armedAt,
+      );
 
-        await invoke("set_environment_pr", {
-          environmentId: "e1",
-          prUrl: "https://github.com/acme/repo/pull/7",
-          prState: "open",
-          hasMergeConflicts: false,
-        });
-        expect(
-          (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
-        ).toBeUndefined();
+      await invoke("set_environment_pr", {
+        environmentId: "e1",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: false,
+      });
+      expect(
+        (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
 
-        const refusedArm = await invoke("arm_pr_refresh_after_agent_completion", {
-          environmentId: "e1",
-        });
-        expect(refusedArm).toBeNull();
-        expect(
-          (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
-        ).toBeUndefined();
+      const refusedArm = await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      });
+      expect(refusedArm).toBeNull();
+      expect(
+        (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
 
-        await storage.updateEnvironment("e1", {
-          prState: "open",
-          hasMergeConflicts: true,
-        });
-        await invoke("arm_pr_refresh_after_agent_completion", { environmentId: "e1" });
-        await invoke("set_environment_pr", {
-          environmentId: "e1",
-          prUrl: "https://github.com/acme/repo/pull/7",
-          prState: "merged",
-          hasMergeConflicts: null,
-        });
-        expect(
-          (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
-        ).toBeUndefined();
+      await storage.updateEnvironment("e1", {
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      await invoke("arm_pr_refresh_after_agent_completion", { environmentId: "e1" });
+      await invoke("set_environment_pr", {
+        environmentId: "e1",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "merged",
+        hasMergeConflicts: null,
+      });
+      expect(
+        (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
 
-        await storage.updateEnvironment("e1", {
-          prState: "open",
-          hasMergeConflicts: true,
-        });
-        const disappearanceArm = (await invoke("arm_pr_refresh_after_agent_completion", {
-          environmentId: "e1",
-        })) as string;
-        const knownRequest = getPrMonitorDetectionRequest({
-          environmentId: "e1",
-          branch: "main",
-          kind: "local",
-          worktreePath: "/tmp/worktree",
-          ready: true,
-          prUrl: "https://github.com/acme/repo/pull/7",
-          prState: "open",
-          hasMergeConflicts: true,
-        });
-        expect(() => parsePrMonitorDetectionResponse(knownRequest, "not-json")).toThrow(
-          "Failed to parse gh pr view output",
-        );
-        expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
-          disappearanceArm,
-        );
+      await storage.updateEnvironment("e1", {
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const disappearanceArm = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      })) as string;
+      const knownRequest = getPrMonitorDetectionRequest({
+        environmentId: "e1",
+        branch: "main",
+        kind: "local",
+        worktreePath: "/tmp/worktree",
+        ready: true,
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      expect(() => parsePrMonitorDetectionResponse(knownRequest, "not-json")).toThrow(
+        "Failed to parse gh pr view output",
+      );
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        disappearanceArm,
+      );
 
-        // The monitor's upstream-disappearance effect uses the same clear.
-        await invoke("clear_environment_pr", { environmentId: "e1" });
-        expect(
-          (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
-        ).toBeUndefined();
-      } finally {
-        shutdownPrMonitorTracking();
-      }
+      // The monitor's upstream-disappearance effect uses the same clear.
+      await invoke("clear_environment_pr", { environmentId: "e1" });
+      expect(
+        (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
     });
   });
 
   test("set_environment_pr validates required metadata without clearing an arm", async () => {
     await withCommands(async (invoke, storage) => {
-      try {
-        await storage.updateEnvironment("e1", {
-          prUrl: "https://github.com/acme/repo/pull/7",
-          prState: "open",
-          hasMergeConflicts: true,
-        });
-        const armedAt = (await invoke("arm_pr_refresh_after_agent_completion", {
-          environmentId: "e1",
-        })) as string;
+      await storage.updateEnvironment("e1", {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const armedAt = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      })) as string;
 
-        for (const [args, message] of [
-          [
-            { environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "open" },
-            "Expected hasMergeConflicts to be a boolean or null",
-          ],
-          [
-            {
-              environmentId: "e1",
-              prUrl: "https://github.com/acme/repo/pull/7",
-              prState: "draft",
-              hasMergeConflicts: false,
-            },
-            "Expected prState to be open, merged, or closed",
-          ],
-          [
-            {
-              environmentId: "e1",
-              prUrl: "https://github.com/acme/repo/pull/7",
-              prState: "open",
-              hasMergeConflicts: "no",
-            },
-            "Expected hasMergeConflicts to be a boolean or null",
-          ],
-          [
-            {
-              environmentId: "e1",
-              prUrl: "https://github.com/acme/repo/pull/7",
-              prState: "open",
-              hasMergeConflicts: false,
-              extra: true,
-            },
-            "Unexpected arguments field: extra",
-          ],
-        ] as const) {
-          await expect(invoke("set_environment_pr", args)).rejects.toThrow(message);
-          expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
-            armedAt,
-          );
-        }
-      } finally {
-        shutdownPrMonitorTracking();
+      for (const [args, message] of [
+        [
+          { environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "open" },
+          "Expected hasMergeConflicts to be a boolean or null",
+        ],
+        [
+          {
+            environmentId: "e1",
+            prUrl: "https://github.com/acme/repo/pull/7",
+            prState: "draft",
+            hasMergeConflicts: false,
+          },
+          "Expected prState to be open, merged, or closed",
+        ],
+        [
+          {
+            environmentId: "e1",
+            prUrl: "https://github.com/acme/repo/pull/7",
+            prState: "open",
+            hasMergeConflicts: "no",
+          },
+          "Expected hasMergeConflicts to be a boolean or null",
+        ],
+        [
+          {
+            environmentId: "e1",
+            prUrl: "https://github.com/acme/repo/pull/7",
+            prState: "open",
+            hasMergeConflicts: false,
+            extra: true,
+          },
+          "Unexpected arguments field: extra",
+        ],
+      ] as const) {
+        await expect(invoke("set_environment_pr", args)).rejects.toThrow(message);
+        expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+          armedAt,
+        );
       }
     });
   });
@@ -6111,125 +6203,112 @@ describe("pr monitor commands", () => {
         loadSpy.mockRestore();
       } finally {
         warning.mockRestore();
-        shutdownPrMonitorTracking();
       }
     });
   });
 
   test("token-safe disarm cannot clear a newer Resolve request", async () => {
     await withCommands(async (invoke, storage) => {
-      try {
-        await storage.updateEnvironment("e1", {
-          prUrl: "https://github.com/acme/repo/pull/7",
-          prState: "open",
-          hasMergeConflicts: true,
-        });
-        const first = (await invoke("arm_pr_refresh_after_agent_completion", {
-          environmentId: "e1",
-        })) as string;
-        const second = (await invoke("arm_pr_refresh_after_agent_completion", {
-          environmentId: "e1",
-        })) as string;
-        expect(second).not.toBe(first);
+      await storage.updateEnvironment("e1", {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const first = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      })) as string;
+      const second = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      })) as string;
+      expect(second).not.toBe(first);
 
-        await invoke("disarm_pr_refresh_after_agent_completion", {
+      await invoke("disarm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+        armedAt: first,
+      });
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        second,
+      );
+
+      await expect(
+        invoke("disarm_pr_refresh_after_agent_completion", {
           environmentId: "e1",
-          armedAt: first,
-        });
-        expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
-          second,
-        );
-
-        await expect(
-          invoke("disarm_pr_refresh_after_agent_completion", {
-            environmentId: "e1",
-          }),
-        ).rejects.toThrow("Expected armedAt to be a string");
-        await expect(
-          invoke("disarm_pr_refresh_after_agent_completion", {
-            environmentId: "e1",
-            armedAt: 123,
-          }),
-        ).rejects.toThrow("Expected armedAt to be a string");
-        await expect(
-          invoke("disarm_pr_refresh_after_agent_completion", {
-            environmentId: "e1",
-            armedAt: second,
-            extra: true,
-          }),
-        ).rejects.toThrow("Unexpected arguments field: extra");
-        await expect(
-          invoke("arm_pr_refresh_after_agent_completion", {
-            environmentId: "e1",
-            extra: true,
-          }),
-        ).rejects.toThrow("Unexpected arguments field: extra");
-        expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
-          second,
-        );
-
-        await invoke("disarm_pr_refresh_after_agent_completion", {
+        }),
+      ).rejects.toThrow("Expected armedAt to be a string");
+      await expect(
+        invoke("disarm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+          armedAt: 123,
+        }),
+      ).rejects.toThrow("Expected armedAt to be a string");
+      await expect(
+        invoke("disarm_pr_refresh_after_agent_completion", {
           environmentId: "e1",
           armedAt: second,
-        });
-        expect(
-          (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
-        ).toBeUndefined();
-      } finally {
-        shutdownPrMonitorTracking();
-      }
+          extra: true,
+        }),
+      ).rejects.toThrow("Unexpected arguments field: extra");
+      await expect(
+        invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+          extra: true,
+        }),
+      ).rejects.toThrow("Unexpected arguments field: extra");
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        second,
+      );
+
+      await invoke("disarm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+        armedAt: second,
+      });
+      expect(
+        (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
     });
   });
 
   test("a refused arm never returns a token owned by an earlier Resolve request", async () => {
     await withCommands(async (invoke, storage) => {
-      try {
-        await storage.updateEnvironment("e1", {
-          prUrl: "https://github.com/acme/repo/pull/7",
-          prState: "open",
-          hasMergeConflicts: true,
-        });
-        const first = (await invoke("arm_pr_refresh_after_agent_completion", {
-          environmentId: "e1",
-        })) as string;
-        await storage.updateEnvironment("e1", { hasMergeConflicts: false });
+      await storage.updateEnvironment("e1", {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const first = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      })) as string;
+      await storage.updateEnvironment("e1", { hasMergeConflicts: false });
 
-        expect(
-          await invoke("arm_pr_refresh_after_agent_completion", {
-            environmentId: "e1",
-          }),
-        ).toBeNull();
-        expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
-          first,
-        );
-      } finally {
-        shutdownPrMonitorTracking();
-      }
+      expect(
+        await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        }),
+      ).toBeNull();
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        first,
+      );
     });
   });
 
   test("snapshot reconciliation tracks environments with a stored PR", async () => {
     await withCommands(async (invoke, storage) => {
-      try {
-        await storage.updateEnvironment("e1", {
-          prUrl: "https://github.com/acme/repo/pull/7",
-          prState: "open",
-          hasMergeConflicts: false,
-        });
+      await storage.updateEnvironment("e1", {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: false,
+      });
 
-        const snapshot = (await invoke("get_pr_monitor_state", {})) as {
-          entries: Array<Record<string, unknown>>;
-        };
-        expect(snapshot.entries).toHaveLength(1);
-        expect(snapshot.entries[0]).toMatchObject({
-          environmentId: "e1",
-          mode: "normal",
-          prUrl: "https://github.com/acme/repo/pull/7",
-          prState: "open",
-        });
-      } finally {
-        shutdownPrMonitorTracking();
-      }
+      const snapshot = (await invoke("get_pr_monitor_state", {})) as {
+        entries: Array<Record<string, unknown>>;
+      };
+      expect(snapshot.entries).toHaveLength(1);
+      expect(snapshot.entries[0]).toMatchObject({
+        environmentId: "e1",
+        mode: "normal",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+      });
     });
   });
 

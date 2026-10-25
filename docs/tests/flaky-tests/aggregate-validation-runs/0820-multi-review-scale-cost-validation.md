@@ -1,7 +1,7 @@
 # Multi Review scale-and-cost validation: aggregate five-second timeouts
 
 - **ID:** 0820
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-25
 - **Change under test:** todo 0027 (Multi Review rollback gates, reviewer-transcript fallback, Build Pipeline result reminders, fan-out interleaving tests, verification byte measurement, Codex `<environment_context>` rollout filter) on `todo-0027-multi-review-scale-cost-8f6bdb86aee0`, based on `ba7cc8d4`.
 - **Original command:** `mise run test:logged -- --name full-suite -- mise run test` (default reservations; other worktrees validating on the same host, load average 47 to 98 on 18 cores).
@@ -14,3 +14,7 @@
 - **Evidence:** `orkestrator-test-run.5eWCG0/` under the host temporary directory.
 
 No assertion, timeout or skip was changed for these tests. Shared-host load is the likely contributor, not an established cause.
+
+## Triage 2026-10-25
+
+Environmental: load was 47 to 98 on 18 cores. Pi cancel and environment move passed alone; the digest ([0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md)) and coordinator service ([0165](../coordinator-and-multi-review/0165-coordinator-bound-discard-timeout.md)) still exceeded five seconds alone at that load and passed with a 30-second deadline, so the failures are host slowness.

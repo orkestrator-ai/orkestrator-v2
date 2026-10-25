@@ -209,14 +209,6 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
     test.setTimeout(1_500_000);
     page.setDefaultTimeout(15_000);
     await page.setViewportSize(DESKTOP_VIEWPORT);
-    // A dev profile's backend reports the Electron version as its own, so every
-    // event-stream reconnect (this case forces one) raises this reminder.
-    await page.addLocatorHandler(
-      page.getByText("Reload to use the matching version."),
-      async (reminder) => {
-        await reminder.click();
-      },
-    );
 
     const status = profileStatus();
     expect(status.profile, "dev:status answered for a different profile").toBe(profile);

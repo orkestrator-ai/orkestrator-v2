@@ -1,7 +1,9 @@
 # Recurring work qualification
 
-Checked against `main` at `b83ae534` (2026-10-22). Live evidence from macOS
-on 2026-10-22; see [Live evidence](#live-evidence-2026-10-22-macos).
+Checked against `main` at `00a0cb82` (2026-10-25). Live evidence from macOS
+on 2026-10-22 and 2026-10-25; see
+[Live evidence](#live-evidence-2026-10-22-macos) and
+[Live soak](#live-soak-2026-10-25-macos).
 
 #852 changed how often the app collects and reads facts: shared worktree
 snapshots, a container fetch policy, lifecycle-aware PR monitoring, the client
@@ -11,7 +13,11 @@ credential-free idle A/B run. The instrumentation fixes are done and a
 credential-free macOS idle A/B with freshness probes has run. What remains is
 the busy live profile, the GitHub, provider, iOS, suspend and soak runs, the
 measured-candidate decisions those runs feed, and then removing the rollback
-drivers.
+drivers. On 2026-10-25 the feature-planning keyed row read landed (the one
+candidate the deterministic harness could decide), keyed row reads began
+reusing a warm row cache, `stableJitterMs` moved out of the rollback-only
+file, the live A/B script gained a lifecycle soak, flake 0177 was resolved,
+and the decisions below were recorded.
 
 ## Current state
 
@@ -32,6 +38,12 @@ drivers.
   (`observeFetch`), so a cache miss shows bytes beside its read and a
   cache-served read shows none. Terminal session buffers and Kanban images
   are blob files: `file-read`s with bytes, not storage reads.
+- Keyed row reads (2026-10-25): feature planning's per-record pass reads its
+  plan as one row (`getFeaturePlan` uses `loadStoreRow`, `storage-kanban.ts`),
+  not the whole feature-plan store. `StorageDatabase.readStoreRow` takes the
+  row from the connection's row cache when that cache holds the committed
+  revision, so a warm keyed read fetches nothing; a miss fetches the one row
+  and leaves the cache alone. Looped and Multi Review row reads gain the same.
 - OpenCode SDK clients fetch through `openCodeSdkFetch`
   (`http-bridge-transport.ts`): the provider's default client
   (`createOpenCodeSdkClient`, `opencode-sdk-client.ts`), the host catalogue
@@ -56,13 +68,22 @@ drivers.
   The workflows block drives feature planning, build pipelines, looped review
   and multi review (its rollback is the real `WorkflowDueScheduler`, on the
   harness's manual clock since 2026-10-25). It reports `storageReads`
-  beside `storageStats`, and the test holds each attempt to a per-domain
+  beside `storageStats` and `storageBytes` (what those reads fetched from
+  SQLite, since 2026-10-25), and the test holds each attempt to a per-domain
   storage budget (`STORAGE_PER_ATTEMPT`). The harness now closes each
   temporary `StorageService` before deleting its directory. Before that fix a
   run logged `Hourly database snapshot failed: disk I/O error` and its process
   stayed alive for minutes after the work finished.
 - Live idle A/B: `scripts/recurring-live-ab.ts`, documented in
-  [testing-guide.md](../../development/testing-guide.md#live-idle-ab).
+  [testing-guide.md](../../development/testing-guide.md#live-idle-ab). Since
+  2026-10-25 `--soak-cycles N --soak-environments local,container` adds a
+  lifecycle soak: each cycle creates, starts to `ready`, stops, restarts and
+  deletes one environment per kind through the CLI. It compares a
+  content-free footprint (scheduler keys per owner and kind, admission
+  leases, fetch and signal records, running jobs, event-stream and terminal
+  subscribers) before and after, counts guard lines, and exits 1 on a failed
+  step, a leaked gauge or a guard line (`soakFootprint`, `soakLeaks` in
+  `recurring-live-ab-summary.ts`).
 - Rollback switches, each read once at startup and let through the desktop
   environment allowlist in `apps/desktop/electron/backend-process.ts`:
   - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`KEYED_SCHEDULING_ROLLBACK_ENV`,
@@ -86,6 +107,41 @@ drivers.
   `DEFAULT_WORKFLOW_DISCOVERY_MS` (30 s) and `NATIVE_QUIET_BACKOFF_TRIAL_MS`.
 - `HostSuspendDetector` re-times every live scheduler after a host sleep so
   overdue keys run once.
+- `stableJitterMs` lives in `multi-review-scheduling.ts` (moved 2026-10-25),
+  which the keyed driver and the `WorkflowDueScheduler` rollback share, so
+  removing `multi-review-scheduler.ts` no longer touches the keyed path.
+- Container fetch reach (found 2026-10-25): every new container records its
+  creation commit before setup (`establishCreatedFromCommit`,
+  `commands-local-server-lifecycle.ts`), and `resolveComparisonRef`
+  (`packages/protocol/src/diff-stats.ts`) prefers that commit. A container's
+  diff baseline is therefore a full commit SHA, which the status script
+  classifies as `commit` and the policy never fetches. The routine fetch
+  policy reaches only environments with no `createdFromCommit` (older records,
+  or a start whose capture failed). Missing-baseline recovery and explicit
+  refreshes still fetch.
+
+### Harness effect (2026-10-25)
+
+`--compare` against an artifact generated from the same tree before the
+storage changes (with the new `storageBytes` field, so only real changes
+show) moved five counters, all bytes; every count, read and stat is
+unchanged. Default fixture (200 completed, 2 active, 10 min), rollback/keyed
+`storageBytes`:
+
+| Domain | Before | After |
+| --- | --- | --- |
+| Feature planning | 0 / 0 | 0 / 0 |
+| Build pipelines | 25,844 / 25,844 | 25,844 / 19,383 |
+| Looped review | 14,134,620 / 14,157,570 | 3,128,420 / 3,665,450 |
+| Multi review | 7,723,120 / 8,532,320 | 1,435,470 / 1,630,630 |
+
+Feature planning fetched nothing before or after because its row cache is
+warm, but a cached whole-store read still parsed every plan. A direct
+benchmark over 202 small plans with a warm cache measured `getFeaturePlan`
+at 3.9 to 4.3 µs per pass against 80.0 to 81.9 µs for the whole-store read and
+find it replaced (three runs of 2,000 passes each), so a pass now costs one
+row. Looped and Multi Review row reads now come from the warm cache instead
+of a SQLite query, a 4 to 5 times drop in bytes fetched.
 
 ### Harness effect (2026-10-22)
 
@@ -159,6 +215,42 @@ mean of three repeats (every repeat within ±0.1):
   `container-git-fetch` policy held no records. The fetch policy and its
   failure ladder are therefore still unqualified live.
 
+### Live soak (2026-10-25, macOS)
+
+Host: macOS 27.0 arm64, Docker Desktop 29.9.2, Bun 1.4.4, a `dev:test` build
+of this branch on a shared host (load average 12 to 15 from other work).
+Command:
+
+```bash
+mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --settle-ms 60000 --window-ms 60000 --sample-ms 30000 --freshness-probes 0 \
+  --soak-cycles 10 --soak-environments local,container --profile-prefix rw-soak \
+  --out output/benchmarks/recurring-soak-2026-10-25.json
+```
+
+- The profile was ready after 46 s with the fixture's local and container
+  environments. Ten cycles each created, started to `ready`, stopped,
+  restarted and deleted one local and one container environment: 20
+  environments, 100 CLI steps, 310 s. No step failed.
+- Every footprint gauge returned to its baseline exactly: 8 schedulers and
+  3 admission pools registered; scheduler keys 2 (agent observation), 11
+  (maintenance) and 6 (workflows) with none settling; no admission lease
+  active or waiting; container fetch 0 records and 1 container, signal
+  sources 1 container each (the fixture's); no recorded job running; one
+  event stream (the Electron window) and no terminal sockets. `soakLeaks`
+  reported none.
+- Zero `Unhandled promise rejection (continuing)` guard lines in the profile's
+  four logs.
+- Backend RSS was 175 MiB before the cycles and 238 MiB after the settle, one
+  reading each. RSS is not a leak gauge here (Bun's heap grows and does not
+  return memory promptly); a long soak has to show whether it plateaus.
+- The script's final `dev:stop` exited non-zero although the profile had
+  stopped (`dev:status`: `stopped`, nothing live), so it skipped the reset
+  and left the fixture container running. `dev:reset` run by hand then
+  removed one exact-owner container, two volumes and one network. The soak
+  numbers are unaffected. If it recurs it needs its own todo against
+  `dev:stop`.
+
 ## Outstanding work
 
 ### Qualification
@@ -180,8 +272,14 @@ credentials or a platform CI lacks are batched in
     have;
   - change-to-visible as a client sees it (the script stops at backend
     detection), for every row of the latency budgets;
-  - a container with a branch baseline, so the container fetch policy runs
-    (the fixture's immutable baselines never fetch);
+  - the container fetch policy live. Narrowed 2026-10-25: a "branch-baseline
+    container" cannot come from normal creation, because every new container
+    records its creation commit and compares against it (see "Container fetch
+    reach" above). What is still owed: a missing-baseline recovery fetch and an
+    explicit refresh on a real container, and the routine policy on an
+    environment without `createdFromCommit` (an older record, or a start
+    whose capture failed). Whether the routine policy should stay at all is a
+    decision for that run (see "Assumptions and decisions");
   - container app wiring: the Files panel open on a container, a merge from
     the UI and an inactive-environment switch.
 - Live GitHub: terminal discovery cadence, replacement and reopen discovery,
@@ -198,7 +296,12 @@ credentials or a platform CI lacks are batched in
   cache counts return to baseline, and profile logs hold zero
   `Unhandled promise rejection (continuing)` guard lines. The ten idle
   profile lifecycles of 2026-10-22 had zero guard lines each; that is not a
-  soak.
+  soak. 2026-10-25: the driver exists (`--soak-cycles`, see Current state)
+  and a first 10-cycle local and container soak ran (see
+  [Live soak](#live-soak-2026-10-25-macos)). Still owed: a long soak (at least
+  50 cycles over an hour or more, with agent sessions open), and cache
+  counts the footprint cannot see yet (worktree snapshot and row caches have
+  no diagnostics gauge).
 - Two clients with one disconnected; backend and bridge restarts at durable
   transition boundaries; an older backend.
 - Real-browser QA of the Files panel (inactive-environment switch, two
@@ -210,8 +313,11 @@ credentials or a platform CI lacks are batched in
 Decide each from the live data; change nothing without evidence. The
 2026-10-22 idle A/B decides none of them. It has no PRs, no GitHub, no
 fetching container, a single client, no design canvas, no validation output
-and no interactive terminal, so every candidate below is still open. The
-container fetch failure ladder needs a branch-baseline container first.
+and no interactive terminal, so every candidate below except the
+feature-planning row read (decided from the deterministic harness on
+2026-10-25) is still open. The container fetch failure ladder needs the
+routine policy to run first, which new containers never do (see "Container
+fetch reach").
 
 - Settled check-rollup backoff (`pr-check-rollup`, 60 s).
 - A container-scoped PR cooldown. It is per entry today because container
@@ -234,29 +340,36 @@ container fetch failure ladder needs a branch-baseline container first.
 - Splitting the validation worker's 500 ms liveness write from changed-result
   writes (B20, `review-validation-worker.ts`), only with cross-process
   crash-recovery and cancellation proof.
-- A keyed row read for feature planning's per-record pass. `getFeaturePlan`
-  (`storage-kanban.ts`) decodes the whole feature-plan store on every pass, so
-  a pass costs O(plans) rather than O(row); the workflows block shows one
-  whole-store read per keyed attempt.
+- ~~A keyed row read for feature planning's per-record pass.~~ Done
+  2026-10-25: `getFeaturePlan` reads one row, and a warm keyed read is served
+  from the row cache. Evidence: harness counts unchanged, bytes in "Harness
+  effect (2026-10-25)", 3.9 to 4.3 µs against 80.0 to 81.9 µs per pass over
+  202 plans, and `storage-read-accounting.test.ts` ("a feature-planning pass
+  reads its plan's row, not the whole store").
 
 ### Code: after soak
 
-Not started. The idle A/B on macOS shows the keyed drivers starting no more
-often than the rollback drivers, with the same freshness and no guard lines.
-But the busy profile, live GitHub, providers and soak above have not run, so
-the rollback drivers stay.
+Removal not started; its preparation is done (2026-10-25: `stableJitterMs`
+moved, the metrics switch decided). The idle A/B on macOS shows the keyed
+drivers starting no more often than the rollback drivers, with the same
+freshness and no guard lines, and a 10-cycle lifecycle soak left no leaked
+footprint. But the busy profile, live GitHub, providers and a long soak have
+not run, so the rollback drivers stay.
 
 - Remove `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the whole-store drivers
   domain by domain, with the desktop allowlist entry. Remove the
   `multi-review` domain together with `WorkflowDueScheduler`
   (`multi-review-scheduler.ts` and its test). Since 2026-10-25 nothing else in
-  Multi Review depends on it; `stableJitterMs` lives in that file and the
-  keyed path still uses it, so move it first.
+  Multi Review depends on it, and `stableJitterMs` has moved to
+  `multi-review-scheduling.ts` (done 2026-10-25; its test moved with it), so
+  deleting the file is now self-contained. Waits for the busy live profile
+  (see "Assumptions and decisions").
 - Remove `ORKESTRATOR_NATIVE_OBSERVATION_SHARING` and its allowlist entry.
-- Decide whether `ORKESTRATOR_RECURRING_METRICS` stays as a permanent off
-  switch. On the 2026-10-22 idle A/B the recorder's cost did not show above
-  run-to-run spread (backend CPU 245 to 262 ms/min with it on, 245 to 292 with
-  it off).
+- ~~Decide whether `ORKESTRATOR_RECURRING_METRICS` stays as a permanent off
+  switch.~~ Decided 2026-10-25: it stays, as a permanent diagnostic kill
+  switch rather than a rollback driver (see "Assumptions and decisions"). On
+  the 2026-10-22 idle A/B the recorder's cost did not show above run-to-run
+  spread (backend CPU 245 to 262 ms/min with it on, 245 to 292 with it off).
 - Update the affected `RECURRING_JOB_CATALOGUE` entries in the same change.
 
 ## Constraints and rationale
@@ -375,18 +488,114 @@ Storage accounting, settled at `9906db30`:
 
 ## Open questions
 
-- Are about three weeks of soak since #852 (2.19.x to 2.20.0) enough to retire
-  the rollback drivers, or does retirement wait for the live profile?
-- Should the Claude terminal-state poll (B18, in
-  [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md)) be
-  measured first, since it dominates remaining container idle cost? On the
-  macOS idle A/B it was 59.9 of 63.9 `docker exec` calls per minute, in both
-  arms.
+Both questions were answered on 2026-10-25; see "Assumptions and decisions".
+
+- ~~Are about three weeks of soak since #852 enough to retire the rollback
+  drivers, or does retirement wait for the live profile?~~ It waits for the
+  busy live profile.
+- ~~Should the Claude terminal-state poll (B18) be measured first?~~ Yes, in
+  [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md),
+  which owns B18. On the macOS idle A/B it was 59.9 of 63.9 `docker exec`
+  calls per minute, in both arms.
 
 ## Needs verification
 
-- Whether open flake [0177](../../tests/flaky-tests/native-agents-and-transcripts/0177-driven-observation-baseline-timeout.md)
-  (`recurring-baseline.test.ts` timeout) is load-only.
+- ~~Whether open flake 0177 (`recurring-baseline.test.ts` timeout) is
+  load-only.~~ Verified 2026-10-25: load-only, and resolved. The case costs
+  about 1 s on this host; half its wall time was 480 clamped `setTimeout(0)`
+  waits, which stretch under load. The tick now yields with `setImmediate`
+  (identical counts on both fixtures, 1284 to 1347 ms → 785 to 881 ms per
+  run) and the case has an explicit 30 s timeout. Evidence in
+  [0177](../../tests/flaky-tests/native-agents-and-transcripts/0177-driven-observation-baseline-timeout.md#resolution--2026-10-25).
+
+## Assumptions and decisions
+
+Recorded 2026-10-25 by the worker that implemented this file's code items.
+
+1. **Rollback driver retirement.** Options: retire now on about three weeks
+   of production use since #852; or wait for the busy live profile (live
+   GitHub, providers, a long soak). Chosen: wait. Why: the only live data is
+   an idle, credential-free profile and a 10-cycle soak. Neither exercises an
+   active turn, a workflow completion or PR monitoring, which are exactly
+   the obligations the keyed drivers must keep, and the constraints below say
+   to roll back one policy at a time with evidence. Pros: the switch stays a
+   one-variable rollback if a busy-profile bug appears. Cons: two code paths
+   per domain stay, and the rollback drivers keep needing upkeep. To make the
+   eventual removal cheap, `stableJitterMs` moved now.
+2. **`ORKESTRATOR_RECURRING_METRICS`.** Options: delete it with the rollback
+   drivers; or keep it as a permanent off switch. Chosen: keep. Why: it is a
+   kill switch for diagnostics, not a scheduling rollback. It costs one
+   startup read and a branch per record, and its recorder cost was not
+   measurable above run-to-run spread on the idle A/B. If the recorder ever
+   faults or costs more on a busy profile, it is the only way to rule it out
+   without a rebuild. Pros: a cheap safety valve; A/B arms stay possible.
+   Cons: one more environment variable in the desktop allowlist, and a path
+   (metrics off) that only the A/B exercises.
+3. **B18 first.** Options: measure the Claude terminal-state poll before
+   the other candidates; or keep it in queue order. Chosen: measure it first,
+   in its owning file 0020. Why: it was 59.9 of 63.9 `docker exec` calls per
+   minute per idle container in both arms, far above everything this file
+   still lists. Pros: the largest remaining idle cost is decided first.
+   Cons: none here; the work belongs to 0020.
+4. **Feature-planning keyed read without live data.** The measured
+   candidates say "change nothing without evidence". Options: wait for a busy
+   live profile; or take the harness and a benchmark as the evidence.
+   Chosen: implement. Why: the change is a read-path optimisation with no
+   cadence or policy change, so it has no latency budget to hold. The
+   deterministic harness proves its counts are unchanged, and the benchmark
+   proves the per-pass cost (one row against every plan). Pros: O(row)
+   passes. Cons: none measured; a keyed read takes a SQLite query when the
+   cache is cold, which is the cost every other keyed read already pays.
+5. **Keyed row reads from a warm cache.** Options: always query the one row;
+   or take it from the connection's row cache when that cache holds the
+   committed revision. Chosen: the cache when warm, and a one-row query
+   otherwise that does not fill the cache. Why: without it, moving
+   `getFeaturePlan` to a row read would have turned zero bytes fetched per
+   pass (warm whole-store cache) into one row per pass. The revision is read
+   in the same transaction as the cache check, and every write path already
+   clears or replaces the cache, so correctness is unchanged; the accounting
+   rule (a read is a read, bytes only for fetched content) still holds.
+   Pros: looped and Multi Review passes fetch 4 to 5 times fewer bytes. Cons:
+   a keyed read's bytes now depend on whether some other reader warmed the
+   cache, as whole-store reads already did.
+6. **Container fetch policy qualification.** The "branch-baseline
+   container" sub-item assumed the fixture could make one. Every new
+   container compares against its creation commit, so it cannot. Options:
+   add a fixture hack that clears `createdFromCommit`; narrow the item to
+   what real environments can reach; or remove the routine policy. Chosen:
+   narrow it, and leave removing or keeping the routine policy to the run
+   that qualifies it. Why: clearing a durable field through a side door would
+   qualify a state users only reach by an old record or a failed capture, and
+   removing a policy needs the evidence this file asks for. Pros: no test-only
+   backend surface. Cons: the routine path stays unqualified live.
+7. **Soak driver placement.** Options: a new script; or a phase of
+   `recurring-live-ab.ts`. Chosen: a phase (`--soak-cycles`). Why: the A/B
+   script already owns the profile lifecycle, the ownership checks before any
+   destructive command, the signal handling and the guard-line count; a
+   second script would copy all of it. Pros: one tested lifecycle. Cons: the
+   script grows, and a soak always runs after an (optionally short) sampling
+   window.
+8. **Soak leak rule.** Options: compare single samples; or compare the
+   highest of three readings before against the lowest of three after a
+   settle. Chosen: the latter. Why: running jobs, due keys and admission
+   leases move every few seconds, so a single sample would report a job that
+   happens to be running as a leak. A real leak survives every reading.
+   Pros: no false alarms from transient work. Cons: a leak smaller than the
+   baseline's own swing is hidden until it grows; a long soak shows it.
+9. **Flake 0177 timeout.** Options: only remove the timer clamp; only raise
+   the timeout; or both. Chosen: both. Why: the clamp was a real share of the
+   wall time and its removal keeps the counts identical, but the case still
+   spins up four real on-disk stores, and isolated failures happened at load
+   averages this host reaches routinely. Its sibling workflow baseline
+   already carries 60 s for the same reason. Pros: no more load-only
+   failures; assertions are unchanged. Cons: a real hang now takes 30 s to
+   fail instead of 5.
+10. **Provenance comments.** The "recurring-processes step NN" comments that
+    point at deleted plans span about 60 sites in web, backend and test
+    files. Options: sweep them now; or leave them. Chosen: leave them, except
+    in the files this change already touched. Why: they are harmless, and a
+    cross-area sweep collides with parallel work for no behaviour change.
+    Pros: a small, reviewable diff. Cons: the drift stays.
 
 ## Related
 

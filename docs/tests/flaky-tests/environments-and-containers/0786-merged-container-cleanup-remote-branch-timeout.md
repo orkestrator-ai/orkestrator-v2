@@ -10,3 +10,9 @@
 - **Failure:** Bun's five-second generic budget at 5003.45 ms. The aggregate took 1255.1 s; the same run hit the known firewall and OpenCode-version failures.
 - **Isolated rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts tests/commands-registry-environments.test.ts` passed the unchanged owner (68 of 68, 31.4 s).
 - **Hypothesis:** the case drives real Git and fake-Docker shims inside the generic budget, like the resolved fixture-shim cases 0130 and 0194; aggregate host load can exceed it. The branch does not touch environment deletion or its fixtures. No assertion, timeout or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** single observation. The case uses Bun's default five seconds, while the same file already applies `ASYNC_TEST_BUDGET_MS` to its other real-shim cases (the fix pattern from [0130](0130-electron-command-registry-fixture-shim-timeouts.md)).
+- **Next step:** give the case the same explicit budget.

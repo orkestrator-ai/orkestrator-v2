@@ -799,6 +799,9 @@ describe("BuildLaunchDialog", () => {
     const local = within(environment).getByRole("radio", { name: /^Local/ });
     await waitFor(() => expect((local as HTMLInputElement).checked).toBe(true));
     expect((container as HTMLInputElement).disabled).toBe(true);
+    expect(
+      within(environment).getByText("Containers unavailable while Docker stopped"),
+    ).toBeTruthy();
 
     submit();
     expect(onConfirm.mock.calls[0]![0].environmentType).toBe("local");

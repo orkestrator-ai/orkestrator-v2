@@ -5,11 +5,7 @@ import path from "node:path";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { PR_MONITOR_CHANGED_EVENT } from "@orkestrator/protocol/pr-monitor";
 import type { BuildPipelineProvider, ProviderStatus } from "./build-pipeline-provider.js";
-import {
-  createCommandRegistry,
-  shutdownPrMonitorTracking,
-  type CommandContext,
-} from "./commands.js";
+import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { StorageService } from "./storage.js";
@@ -56,6 +52,7 @@ printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","baseR
   process.env.FAKE_GH_LOG = ghLogPath;
 
   const storage = new StorageService(dataDir);
+  const runtime = new BackendRuntime({ emit: () => undefined });
   let nativeAgents: NativeAgentService | undefined;
   try {
     await storage.init();
@@ -85,7 +82,7 @@ printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","baseR
       resourceRoot: "",
       toolchainBinDir: "",
       environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime,
     } as CommandContext;
     const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
       const handler = commands.get(command);
@@ -155,7 +152,7 @@ printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","baseR
     expect((await reloadedStorage.getEnvironment("env-1"))?.prBaseBranch).toBe("release/2.0");
   } finally {
     await nativeAgents?.shutdown().catch(() => undefined);
-    shutdownPrMonitorTracking();
+    runtime.shutdown();
     if (originalPath === undefined) delete process.env.PATH;
     else process.env.PATH = originalPath;
     if (originalFakeGhLog === undefined) delete process.env.FAKE_GH_LOG;
@@ -266,6 +263,7 @@ async function withProbeHarness(
   process.env.FAKE_GH_LOG = ghLogPath;
 
   const storage = new StorageService(dataDir);
+  let runtime: BackendRuntime | undefined;
   try {
     await storage.init();
     await storage.addEnvironment({
@@ -288,6 +286,7 @@ async function withProbeHarness(
 
     const events: Array<{ event: string; payload: unknown }> = [];
     const commands = createCommandRegistry();
+    runtime = new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) });
     const context = {
       storage,
       emit: (event: string, payload: unknown) => events.push({ event, payload }),
@@ -295,7 +294,7 @@ async function withProbeHarness(
       resourceRoot: "",
       toolchainBinDir: "",
       environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-      runtime: new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
+      runtime,
     } as CommandContext;
     const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
       const handler = commands.get(command);
@@ -310,7 +309,7 @@ async function withProbeHarness(
       ghLog: () => fs.readFile(ghLogPath, "utf8").catch(() => ""),
     });
   } finally {
-    shutdownPrMonitorTracking();
+    runtime?.shutdown();
     if (originalPath === undefined) delete process.env.PATH;
     else process.env.PATH = originalPath;
     if (originalFakeGhLog === undefined) delete process.env.FAKE_GH_LOG;

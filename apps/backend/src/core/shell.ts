@@ -30,6 +30,7 @@ export type ExecBufferResult = {
  * empty because the child is killed before it can explain itself.
  */
 export class CommandFailedError extends Error {
+  readonly stdout: string;
   readonly timedOut: boolean;
   readonly executableMissing: boolean;
   readonly exitCode: number | null;
@@ -38,6 +39,7 @@ export class CommandFailedError extends Error {
   constructor(
     message: string,
     details: {
+      stdout?: string;
       timedOut?: boolean;
       executableMissing?: boolean;
       exitCode?: number | null;
@@ -46,6 +48,7 @@ export class CommandFailedError extends Error {
   ) {
     super(message);
     this.name = "CommandFailedError";
+    this.stdout = details.stdout ?? "";
     this.timedOut = details.timedOut ?? false;
     this.executableMissing = details.executableMissing ?? false;
     this.exitCode = details.exitCode ?? null;
@@ -322,7 +325,10 @@ async function runCommandBytes(
       const stderr = withOutput.stderr?.toString() ?? "";
       const stdout = withOutput.stdout?.toString() ?? "";
       const message = (stderr || stdout || withOutput.message || "Command failed").trim();
-      throw new CommandFailedError(redactCommandValues(message, options.redactValues), outcome);
+      throw new CommandFailedError(redactCommandValues(message, options.redactValues), {
+        ...outcome,
+        stdout: redactCommandValues(stdout, options.redactValues),
+      });
     }
     if (options.redactValues?.some((value) => typeof value === "string" && value.length > 0)) {
       const message = error instanceof Error ? error.message : String(error);

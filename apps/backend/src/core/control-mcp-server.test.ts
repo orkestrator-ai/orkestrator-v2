@@ -2123,6 +2123,110 @@ describe("Orkestrator control MCP server", () => {
       error: "Control MCP request body is too large",
     });
   });
+  test("a coordinator re-listing unchanged environments is told it is polling", async () => {
+    let worker: Record<string, unknown> = {
+      id: "env-worker",
+      projectId: "project-1",
+      name: "worker",
+      status: "running",
+      agentActivityState: "working",
+      lastActivityAt: "2026-10-25T10:00:00.000Z",
+    };
+    overrides.set("get_environment_snapshots", () => [worker]);
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          {
+            id: "conversation-list",
+            tabId: "coordinator-tab",
+            mailboxIncarnationId: "incarnation-1",
+          },
+        ],
+      },
+    }));
+    let remoteActivity = "working";
+    let remoteAvailable = true;
+    overrides.set("get_node_status", () => ({
+      nodeId: "bk_self",
+      mode: "command",
+      controllers: [],
+    }));
+    overrides.set("get_node_summaries", () => ({
+      selfId: "bk_self",
+      nodes: [
+        {
+          nodeId: "bk_leaf",
+          available: remoteAvailable,
+          view: { displayName: "Build box" },
+          projects: [
+            {
+              ref: { backendId: "bk_leaf", projectId: "p-leaf" },
+              repositoryHint: "example.invalid/secret/repo",
+            },
+          ],
+          environments: [
+            {
+              ref: { environmentId: "remote-worker" },
+              projectId: "p-leaf",
+              name: "Remote worker",
+              status: "running",
+              activity: remoteActivity,
+            },
+          ],
+        },
+      ],
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-list",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery", "environments"],
+    });
+    const list = async (args: Record<string, unknown> = {}) =>
+      (
+        await rpc(credential.url, credential.token, "tools/call", {
+          name: "list_environments",
+          arguments: args,
+        })
+      ).body.result?.structuredContent as Record<string, unknown> | undefined;
+
+    // A worker still working moves its activity timestamp; that is not news.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      worker = { ...worker, lastActivityAt: `2026-10-25T10:00:0${attempt + 1}.000Z` };
+      expect(await list()).not.toHaveProperty("repeatedRead");
+    }
+    const polled = await list();
+    expect(polled).toMatchObject({
+      total: 1,
+      environments: [{ id: "env-worker", agentActivityState: "working" }],
+      otherNodes: [
+        {
+          nodeId: "bk_leaf",
+          available: true,
+          environments: [{ environmentId: "remote-worker", activity: "working" }],
+        },
+      ],
+      repeatedRead: true,
+    });
+    expect(String(polled?.instruction)).toContain("Do not wait, sleep, poll");
+
+    // A different question is not the same poll, and a real change clears it.
+    expect(await list({ status: "running" })).not.toHaveProperty("repeatedRead");
+    remoteActivity = "waiting";
+    expect(await list()).not.toHaveProperty("repeatedRead");
+    for (let attempt = 0; attempt < 2; attempt += 1)
+      expect(await list()).not.toHaveProperty("repeatedRead");
+    expect(await list()).toHaveProperty("repeatedRead", true);
+    remoteAvailable = false;
+    expect(await list()).not.toHaveProperty("repeatedRead");
+    worker = { ...worker, agentActivityState: "idle" };
+    expect(await list()).not.toHaveProperty("repeatedRead");
+  });
+
   test("coordinator delegation tools promise a wake and refuse a poll loop", async () => {
     overrides.set("get_project_coordinator", () => ({
       workspace: {

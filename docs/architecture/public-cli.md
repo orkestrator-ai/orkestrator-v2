@@ -8,6 +8,9 @@ Outstanding work: [0017-cli-command-surface.md](../todo/cli-and-slash-commands/0
 [0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md) (with the evidence log).
 Contract source: [`packages/protocol/src/public-api.ts`](../../packages/protocol/src/public-api.ts)
 and [`public-api-resources.ts`](../../packages/protocol/src/public-api-resources.ts).
+Public agent summary: [orkestrator.dev/skill.md](https://orkestrator.dev/skill.md)
+(`apps/web-public/public/skill.md`); keep its connection steps in step with
+this guide.
 
 ## Invocation modes
 

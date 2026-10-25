@@ -15,7 +15,6 @@ import {
   asRequiredBoolean,
   asString,
   assertOnlyKeys,
-  requestPrMonitorRefresh,
   requireGitHubProject,
   requireGitHubToken,
 } from "./commands-helpers.js";
@@ -142,7 +141,10 @@ async function withGitHubToken<T>(
 export function refreshMonitoredPullRequest(
   ref: GitHubPullRequestRef,
   context: CommandContext,
-  refresh: typeof requestPrMonitorRefresh = requestPrMonitorRefresh,
+  refresh: (environmentId: string, context: CommandContext) => Promise<void> = (
+    environmentId,
+    context,
+  ) => context.runtime.prMonitor.requestRefresh(environmentId, context),
 ): Promise<void> {
   const key = gitHubPullRequestKey(ref);
   return (async () => {

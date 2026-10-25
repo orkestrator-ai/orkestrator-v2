@@ -577,6 +577,33 @@ describe("AgentNativeTab commands", () => {
     });
   });
 
+  test("a list read before the session started says more commands arrive with it", async () => {
+    projectionOptions = {
+      commands: [
+        {
+          name: "/review",
+          id: "pi:template:review",
+          source: "template",
+          executionKind: "provider-prompt",
+          bindingRevision: "rev-review",
+        },
+        COMPACT,
+      ],
+      catalogue: { status: "stale", revision: 2, enhanced: true, attachPending: true },
+    };
+    const tabId = "tab-attach-pending";
+    const { input } = await renderTab(tabId);
+    await type(input, tabId, "/");
+    expect(
+      await screen.findByText(
+        /More commands load when the session starts; refresh to load them now\./,
+      ),
+    ).toBeTruthy();
+    // The rows read so far are usable now; refresh is how to get the rest.
+    expect(screen.getByRole("option", { name: /review/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Refresh commands" })).toBeTruthy();
+  });
+
   test("typing after the sigil filters a maximal list without fetching, refreshing or scanning", async () => {
     // A wire-maximum inventory: the menu filters it in memory on every key.
     const rows: NativeAgentSlashCommand[] = Array.from({ length: 512 }, (_, index) => ({

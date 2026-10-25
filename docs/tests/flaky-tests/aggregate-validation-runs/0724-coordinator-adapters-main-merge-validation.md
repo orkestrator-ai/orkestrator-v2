@@ -1,7 +1,7 @@
 # Coordinator adapters main merge validation
 
 - **ID:** 0724
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-24
 - **Merge parents:** feature `8e7b0149c2a3fcf881ea5a04eea0d5c9393d6125` and main `0014505caeed69395b3cc996dd541fcc6df12c23`.
 - **Common ancestor:** `a5d78cfcd54907a13973463d4bd08497fd025c90`.
@@ -119,3 +119,7 @@ All run directories below are under the host temporary directory:
 Passing logs are removed by the logged runner. The exact owner rerun labels and
 results above preserve their outcomes. Existing cases 0192, 0259, 0160, 0082,
 0352, 0227, 0507 and the CLI deadline case 0692 carry related history.
+
+## Triage 2026-10-25
+
+Environmental: one load snapshot was 110.60/133.49/96.04 on 18 cores and the outer runner hit its 1,800-second deadline. Fifteen unchanged failing owners passed alone. The firewall owner's failures are the mbp3 host condition recorded in [0632](../environments-and-containers/0632-firewall-policy-probe-budget.md); preview latency is tracked in 0771.

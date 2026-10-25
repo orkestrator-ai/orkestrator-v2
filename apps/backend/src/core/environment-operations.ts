@@ -1,5 +1,6 @@
 import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { ClientEnvironment, Environment } from "./models.js";
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 
 export type EnvironmentSetupSession = {
   environmentId: string;
@@ -26,14 +27,18 @@ export type ClientEnvironmentSetupStartResult = Omit<EnvironmentSetupStartResult
 /**
  * In-flight environment work of one backend instance: setup sessions, the
  * start/setup/baseline dedupe tasks, the per-environment lifecycle queue and
- * the delete and merge guards. Owned by `BackendRuntime` and reached through
- * `context.runtime.environments` at call time.
+ * the delete and merge guards, and the replacement and move fence (`fence`).
+ * Owned by `BackendRuntime` and reached through `context.runtime.environments`
+ * at call time.
  *
  * `EnvironmentLifecycleTaskTracker` stays separate: it decides whether work
  * may be admitted at all and drains it on shutdown, while this class decides
  * how admitted work for one environment is ordered and deduplicated.
  */
 export class EnvironmentOperations {
+  /** Replacement, move and mutation admission (`environment-replacement-fence.ts`). */
+  readonly fence = new EnvironmentMutationFence();
+
   private readonly setupSessions = new Map<string, EnvironmentSetupSession>();
   private readonly setupTasks = new Map<string, Promise<Environment>>();
   private readonly setupStartTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();

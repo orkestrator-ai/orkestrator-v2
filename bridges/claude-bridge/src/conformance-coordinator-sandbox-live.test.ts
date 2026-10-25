@@ -166,11 +166,14 @@ async function qualify(scenario: Scenario) {
     );
     expect(toolResults).toHaveLength(1);
     const written = existsSync(join(cwd, "out.txt"));
+    // A command that should succeed reports why it failed, not only that it did.
+    const commandFailure = (block: (typeof toolResults)[number]) =>
+      block.is_error === true ? JSON.stringify(block.content) : undefined;
     if (scenario === "default-sandbox-writes") {
-      expect(toolResults[0]!.is_error).not.toBe(true);
+      expect(commandFailure(toolResults[0]!)).toBeUndefined();
       expect(written).toBe(true);
     } else if (scenario === "coordinator-sandbox-reads") {
-      expect(toolResults[0]!.is_error).not.toBe(true);
+      expect(commandFailure(toolResults[0]!)).toBeUndefined();
       expect(JSON.stringify(toolResults[0]!.content)).toContain("a\\na\\nb");
     } else {
       expect(toolResults[0]!.is_error).toBe(true);

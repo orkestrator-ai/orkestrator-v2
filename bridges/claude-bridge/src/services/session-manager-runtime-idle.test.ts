@@ -498,14 +498,16 @@ describe("launch-only changes on a warm CLI", () => {
     await firstPrompt;
   });
 
-  test("a changed launch budget replaces an idle CLI", async () => {
+  test("changing prompt suggestions replaces an idle CLI", async () => {
     controlIdleWindow();
-    const { session, call, input } = await idleAfterOneTurn("budget toggle", { maxBudgetUsd: 1 });
-    const next = sendPrompt(session.id, "new budget", { maxBudgetUsd: 2 });
+    const { session, call, input } = await idleAfterOneTurn("suggestions toggle", {
+      promptSuggestions: false,
+    });
+    const next = sendPrompt(session.id, "with suggestions", { promptSuggestions: true });
     expect(await input.next()).toEqual({ done: true, value: undefined });
     call.finish();
     const relaunched = await nextQueryCall();
-    expect(relaunched.options.maxBudgetUsd).toBe(2);
+    expect(relaunched.options.promptSuggestions).toBe(true);
     relaunched.push({ type: "result", subtype: "success" });
     await next;
     relaunched.finish();

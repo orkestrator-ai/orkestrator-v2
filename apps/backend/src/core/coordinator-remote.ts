@@ -1,4 +1,5 @@
 import type { AgentTabState } from "@orkestrator/protocol/agent-registry";
+import type { CoordinatorWaitingBlocker } from "./coordinator-status-wakes.js";
 
 /**
  * How the coordinator reads work it started on another node.
@@ -45,6 +46,12 @@ export interface CoordinatorRemoteAccess {
     environmentId: string,
     tabId: string,
   ): Promise<string | undefined>;
+  /** What the worker's pending interactions block it on, best effort. */
+  waitingBlocker?(
+    nodeId: string,
+    environmentId: string,
+    tabId: string,
+  ): Promise<CoordinatorWaitingBlocker | undefined>;
   workflow(
     nodeId: string,
     kind: "build-pipeline" | "multi-review",

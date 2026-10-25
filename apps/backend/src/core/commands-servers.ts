@@ -6,7 +6,6 @@ import {
   coordinatorWebResearchSetting,
   normalizeCoordinatorResearchMcpServers,
 } from "@orkestrator/protocol/coordinator-web-research";
-import { assertEnvironmentNotMoving } from "./environment-replacement-fence.js";
 import {
   formatContainerLifecycleError,
   parseContainerLifecycle,
@@ -19,10 +18,8 @@ import { stopEnvironmentReviewValidation } from "./review-validation-service.js"
 import { removeOpenCodeCommandChangeJournals } from "./opencode-command-changes.js";
 import {
   OPENCODE_STARTUP_STDERR_TAIL_BYTES,
-  acquireOpenCodeHostStart,
   isOpenCodeDatabaseLockedError,
   openCodeDatabaseLockedError,
-  openCodeLockedStartRetryDelayMs,
   openCodeStderrReportsLockedDatabase,
 } from "./opencode-host-start.js";
 import {
@@ -72,18 +69,12 @@ import {
   LOCAL_SERVER_KINDS,
 } from "./local-server-runtime.js";
 import {
-  prMonitorService,
-  invalidatePendingPrMonitorSync,
-  setMergeCleanupScheduler,
-} from "./commands-pr-monitor.js";
-import {
   resolveCodexBinary,
   resolveOpenCodeBinary,
   resolveClaudeBinary,
   resolveManagedAcpBinary,
   resolveBunBinary,
 } from "./commands-agent-support.js";
-import { deleteTerminalHistories } from "./terminal-history.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 import { environmentCleanupLedger } from "./environment-cleanup-ledger.js";
 import { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } from "./environment-cleanup.js";
@@ -642,7 +633,7 @@ export async function startLocalServerUnlocked(
       // A failed attempt has already stopped its server and cleared its
       // fields, so the next one starts clean.
       const delayMs = isOpenCodeDatabaseLockedError(error)
-        ? openCodeLockedStartRetryDelayMs(attempt)
+        ? context.runtime.localServers.openCodeHostStart.lockedStartRetryDelayMs(attempt)
         : undefined;
       if (delayMs === undefined || context.runtime.localServers.isShuttingDown()) throw error;
       console.warn(
@@ -658,7 +649,7 @@ async function startLocalServerAttempt(
   context: CommandContext,
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
-  assertEnvironmentNotMoving(environmentId);
+  context.runtime.environments.fence.assertNotMoving(environmentId);
   const key = `${kind}:${environmentId}`;
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
   const researchConfig = coordinatorId ? (await context.storage.loadConfig()).global : undefined;
@@ -1101,7 +1092,7 @@ async function startLocalServerAttempt(
       : [bridgeEntrypoint];
   // Held from spawn until healthy or failed; see `opencode-host-start.ts`.
   const releaseOpenCodeHostStart =
-    kind === "opencode" ? await acquireOpenCodeHostStart() : () => undefined;
+    kind === "opencode" ? await localServers.openCodeHostStart.acquire() : () => undefined;
   let child: ChildProcessWithoutNullStreams;
   try {
     // Shutdown may have begun while this start waited for the host's turn.
@@ -1395,7 +1386,7 @@ export async function deleteEnvironment(
           "Terminal process trees are still running; environment deletion can be retried",
         );
       }
-      await deleteTerminalHistories({
+      await context.runtime.terminals.history.deleteHistories({
         dataDir: storage.getDataDir(),
         environmentId,
       });
@@ -1541,7 +1532,7 @@ export async function deleteEnvironment(
       // storage or filesystem I/O during the first sweep. Close anything that
       // became visible before deletion completed.
       context.runtime.terminals.cleanupSessionsForEnvironment(environmentId);
-      await deleteTerminalHistories({
+      await context.runtime.terminals.history.deleteHistories({
         dataDir: storage.getDataDir(),
         environmentId,
       });
@@ -1552,8 +1543,8 @@ export async function deleteEnvironment(
       context.runtime.diffStats.service.untrack(environmentId);
       // The PR belonged to a branch whose environment is gone; polling it would
       // resurrect state for an id no client can display.
-      invalidatePendingPrMonitorSync();
-      prMonitorService.untrack(environmentId);
+      context.runtime.prMonitor.invalidatePendingSync();
+      context.runtime.prMonitor.service.untrack(environmentId);
       if (environment?.worktreePath)
         context.runtime.diffStats.gitFetchScheduler.forget(environment.worktreePath);
       // Its clone is gone; a fetch still running for it can no longer stamp.
@@ -1609,22 +1600,21 @@ export function deleteEnvironmentTask(
   }
 }
 
+// tmux cannot import the account modules without a cycle; the owner registers.
+setLocalClaudeConfigDirectoryProvider(
+  async (context) => (await activeAgentAccountShellEnvironment(context)).CLAUDE_CONFIG_DIR,
+);
+
 /**
  * Resumes only the unambiguous follow-up half of a persisted merge-and-cleanup
  * workflow. A backend restart must never resubmit an ambiguous GitHub merge;
  * exact-URL PR monitoring first establishes `prState: "merged"`, then this
  * continuation can safely retry deletion.
+ *
+ * The PR monitor observes merges but cannot import this module (it would be a
+ * cycle), so the backend passes this function to `BackendRuntime` as
+ * `prMonitor.scheduleMergeCleanup` (`index.ts`, `tests/command-fixtures.ts`).
  */
-// Registered at module scope: the PR monitor observes merges and hands them
-// back here, without importing this module.
-// tmux cannot import the account modules without a cycle; the owner registers.
-setLocalClaudeConfigDirectoryProvider(
-  async (context) => (await activeAgentAccountShellEnvironment(context)).CLAUDE_CONFIG_DIR,
-);
-setMergeCleanupScheduler((environmentId, context) =>
-  scheduleMergeCleanupRecovery(environmentId, context),
-);
-
 export function scheduleMergeCleanupRecovery(environmentId: string, context: CommandContext): void {
   context.runtime.environments.scheduleMergeCleanupRecovery(environmentId, () =>
     (async () => {

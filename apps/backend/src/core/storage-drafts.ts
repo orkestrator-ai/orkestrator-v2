@@ -1,3 +1,7 @@
+import {
+  coordinatorIdFromRuntimeId,
+  coordinatorConversationIdFromRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 import * as shared from "./storage-shared.js";
 import {
   exists,
@@ -195,6 +199,14 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
     return this.enqueueComposeDraftMutation(async () => {
       if (ownerType === "environment") {
         await this.assertEnvironmentAcceptsBackgroundState(ownerId, "Compose draft");
+        const coordinatorId = coordinatorIdFromRuntimeId(ownerId);
+        const conversationId = coordinatorConversationIdFromRuntimeId(ownerId);
+        if (coordinatorId && conversationId) {
+          const workspace = await this.getCoordinatorWorkspaceById(coordinatorId);
+          const conversation = workspace?.conversations.find((item) => item.id === conversationId);
+          if (!conversation || conversation.closedAt)
+            throw new Error("Compose draft conversation is closed");
+        }
       } else if (!(await this.getProject(ownerId))) {
         throw new Error(`Compose draft project not found: ${ownerId}`);
       }

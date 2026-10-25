@@ -10,8 +10,10 @@ export async function waitForLiveAnnotationRequest(options: {
   agent: string;
   profile: string;
   testInfo: TestInfo;
+  /** Keep waiting through `needs-input` (an interaction already answered). */
+  throughInput?: boolean;
 }): Promise<WebAnnotationRequest["state"]> {
-  const { readRequest, agent, profile, testInfo } = options;
+  const { readRequest, agent, profile, testInfo, throughInput = false } = options;
   const startedAt = Date.now();
   let lastProgressAt = startedAt;
   let latest: RequestState | undefined;
@@ -32,7 +34,7 @@ export async function waitForLiveAnnotationRequest(options: {
           "failed",
           "cancelled",
           "unconfirmed",
-          "needs-input",
+          ...(throughInput ? [] : ["needs-input"]),
         ].includes(latest.state);
       },
       { timeout: 840_000, intervals: [5_000] },

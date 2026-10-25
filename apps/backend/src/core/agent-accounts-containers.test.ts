@@ -1363,8 +1363,9 @@ const running = ${JSON.stringify(runningFile)};
 const failure = ${JSON.stringify(options.failure ?? null)};
 const failedMarkerWrite = ${JSON.stringify(failedMarkerWrite)};
 if (command === "inspect") {
-  const format = args[1];
-  if (format.includes(".State.Running")) console.log(readFileSync(running, "utf8"));
+  const format = args.includes("--format") ? args[args.indexOf("--format") + 1] : args[1];
+  if (format.includes(".HostConfig.NetworkMode")) console.log("bridge");
+  else if (format.includes(".State.Running")) console.log(readFileSync(running, "utf8"));
   else if (format.includes("orkestrator-owner")) console.log(${JSON.stringify(dockerOwnerNamespace(storage.getDataDir()))} + "\\trunning\\torkestrator-v2\\t" + ${JSON.stringify(fullId)});
   else if (format.includes("orkestrator-inputs-revision")) console.log(${JSON.stringify(revision)});
   else process.exit(1);
@@ -2330,7 +2331,7 @@ describe("buildMergeContainerProviderAuthCommand", () => {
       const at = new Date(Date.now() - ageMs);
       await fs.utimes(`${file}.lock`, at, at);
       expect(merge(file, { logins: { c: { type: "api", key: "c" } }, accessOnly: [] }).status).toBe(
-        0,
+        75,
       );
       expect(Object.keys(JSON.parse(await fs.readFile(file, "utf8")))).toEqual(["b"]);
       expect((await fs.stat(`${file}.lock`)).isDirectory()).toBe(true);

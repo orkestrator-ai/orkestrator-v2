@@ -302,6 +302,8 @@ export async function createDockerContainer(
     // and with an egress gateway the gateway holds the capability instead, so
     // nothing in the workload, root included, can change its rules.
     ...(enforcement === "container" ? ["--cap-add", "NET_ADMIN"] : []),
+    // Packet sockets bypass namespace OUTPUT filtering, even without NET_ADMIN.
+    ...(enforcement === "gateway" ? ["--cap-drop", "NET_RAW"] : []),
     // The image ships Chromium for Playwright, and Chromium puts its renderer
     // shared memory in /dev/shm. Docker's 64MB default is far below what a real
     // page needs, and the failure mode is a renderer crash mid-run ("Target

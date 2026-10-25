@@ -17,7 +17,7 @@ function environment(id: string, overrides: Partial<Environment> = {}): Environm
 
 function harness(options: { environments: Environment[]; leaseHeld?: boolean }) {
   const synced: string[] = [];
-  const hooks: { afterSync?: () => void } = {};
+  const hooks: { afterSync?: () => void | string } = {};
   const context = {
     runtimeFlavor: "agent-test",
     credentialSources: new Set(["grok", "opencode", "pi"]),
@@ -34,7 +34,7 @@ function harness(options: { environments: Environment[]; leaseHeld?: boolean }) 
   const watcher = new ContainerLoginFileWatcher(context, {
     syncContainer: async (provider, containerId) => {
       synced.push(`${provider}:${containerId}`);
-      hooks.afterSync?.();
+      return hooks.afterSync?.();
     },
     timers: {
       setTimeout: (callback) => {
@@ -44,7 +44,7 @@ function harness(options: { environments: Environment[]; leaseHeld?: boolean }) 
       clearTimeout: () => undefined,
     },
   });
-  return { watcher, synced, scheduled, hooks };
+  return { watcher, synced, scheduled, hooks, context };
 }
 
 const grokAuth = () => path.join(root, "host-home", ".grok", "auth.json");
@@ -82,8 +82,9 @@ describe("ContainerLoginFileWatcher", () => {
         environment("b"),
       ],
     });
-    // Nothing on the host yet: nothing to push or take back.
-    expect(await run.watcher.tick()).toEqual([]);
+    // Initial absence still reconciles imported Grok logins.
+    expect(await run.watcher.tick()).toEqual(["grok"]);
+    run.synced.length = 0;
     await write(grokAuth(), "{}");
     expect(await run.watcher.tick()).toEqual(["grok"]);
     expect(run.synced).toEqual(["grok:container-a", "grok:container-b"]);
@@ -118,8 +119,55 @@ describe("ContainerLoginFileWatcher", () => {
   test("a backend without the writer lease leaves containers to the writer", async () => {
     const run = harness({ environments: [environment("a")], leaseHeld: false });
     await write(grokAuth(), "{}");
-    expect(await run.watcher.tick()).toEqual(["grok"]);
+    expect(await run.watcher.tick()).toEqual([]);
     expect(run.synced).toEqual([]);
+  });
+
+  test("retries only failed targets for an unchanged file", async () => {
+    const run = harness({ environments: [environment("a"), environment("b")] });
+    await write(grokAuth(), "{}");
+    let attempts = 0;
+    run.hooks.afterSync = () => {
+      if (++attempts === 1) throw new Error("temporary transport failure");
+    };
+    await run.watcher.tick();
+    run.synced.length = 0;
+    expect(await run.watcher.tick()).toEqual(["grok"]);
+    expect(run.synced).toEqual(["grok:container-a"]);
+    expect(await run.watcher.tick()).toEqual([]);
+  });
+
+  test("failed and skipped outcomes stay pending, and a storage failure loses no delivery", async () => {
+    const run = harness({ environments: [environment("a")] });
+    await write(grokAuth(), "{}");
+    for (const outcome of ["failed", "skipped"]) {
+      run.hooks.afterSync = () => outcome;
+      expect(await run.watcher.tick()).toEqual(["grok"]);
+    }
+    run.hooks.afterSync = undefined;
+    expect(await run.watcher.tick()).toEqual(["grok"]);
+    expect(await run.watcher.tick()).toEqual([]);
+    const { watcher, synced, context } = harness({ environments: [environment("b")] });
+    // Fingerprints must not be acknowledged before config/storage is readable.
+    const load = context.storage.loadConfig;
+    context.storage.loadConfig = async () => {
+      throw new Error("storage unavailable");
+    };
+    await watcher.tick();
+    context.storage.loadConfig = load;
+    expect(await watcher.tick()).toEqual(["grok"]);
+    expect(synced).toEqual(["grok:container-b"]);
+  });
+
+  test("initial absence reaches existing containers and newly running targets reconcile unchanged files", async () => {
+    const environments = [environment("a")];
+    const run = harness({ environments });
+    expect(await run.watcher.tick()).toEqual(["grok"]);
+    expect(run.synced).toEqual(["grok:container-a"]);
+    environments.push(environment("b"));
+    run.synced.length = 0;
+    await run.watcher.tick();
+    expect(run.synced).toEqual(["grok:container-b"]);
   });
 
   test("stop cancels the schedule and cuts a pass short before its next container", async () => {

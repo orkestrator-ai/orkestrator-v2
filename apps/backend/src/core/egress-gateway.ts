@@ -359,12 +359,13 @@ export async function prepareEgressGatewayForStart(
       "This environment's egress gateway is missing, so its container cannot start with its network policy. Rebuild the environment to create a new one.",
     );
   }
-  if (!gateway.running) {
-    await runCommand("docker", ["start", gatewayId], { timeoutMs: 60_000 }).catch(
-      (error: unknown) => {
-        throw startError(error);
-      },
-    );
+  const retryFailed = gateway.running && (await gatewayFirewallState(gatewayId)) === "failed";
+  if (!gateway.running || retryFailed) {
+    await runCommand("docker", [retryFailed ? "restart" : "start", gatewayId], {
+      timeoutMs: 60_000,
+    }).catch((error: unknown) => {
+      throw startError(error);
+    });
   }
   await waitForEgressGatewayFirewall(gatewayId, options);
   const { stdout } = await runCommand(
@@ -412,8 +413,8 @@ export async function stopRuntimeContainer(containerId: string): Promise<void> {
  * Removes a runtime container and then its gateway. The gateway is found
  * before the runtime goes (its network mode names it) and removed only when
  * it carries this registry's owner and gateway role. Errors from removing
- * the runtime propagate unchanged; a gateway that will not remove is left to
- * the orphan sweep.
+ * the runtime propagate unchanged except confirmed absence. A failed gateway
+ * removal retains the cached ownership link so an admitted retry can finish.
  */
 export async function removeRuntimeContainer(
   containerId: string,
@@ -422,16 +423,20 @@ export async function removeRuntimeContainer(
   options: { force?: boolean } = {},
 ): Promise<void> {
   const gatewayId = await egressGatewayOf(containerId);
+  const gateway = gatewayId ? await inspectGateway(gatewayId) : null;
   // Without `force`, Docker refuses a runtime that is running, which callers
   // rely on to lose a race against a start.
   await run("docker", ["rm", ...(options.force === false ? [] : ["-f"]), containerId], {
     timeoutMs: 60_000,
+  }).catch((error: unknown) => {
+    if (!isMissing(error)) throw error;
   });
+  if (gatewayId && gateway && gateway !== "missing" && isGatewayOf(gateway, owner)) {
+    await run("docker", ["rm", "-f", gatewayId], { timeoutMs: 60_000 }).catch((error: unknown) => {
+      if (!isMissing(error)) throw error;
+    });
+  }
   forgetNetworkOwner(containerId);
-  if (!gatewayId) return;
-  const gateway = await inspectGateway(gatewayId).catch(() => null);
-  if (!gateway || gateway === "missing" || !isGatewayOf(gateway, owner)) return;
-  await run("docker", ["rm", "-f", gatewayId], { timeoutMs: 60_000 }).catch(() => undefined);
 }
 
 type CommandRunner = (

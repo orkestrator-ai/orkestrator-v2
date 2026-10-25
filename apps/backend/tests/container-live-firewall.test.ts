@@ -564,6 +564,133 @@ describe("policy 3 kernel tuple qualification", () => {
         expect(await echoProbe(containerId, "udp", 18080)).toBe(0);
         expect(await echoProbe(containerId, "udp", 18081)).toBe(1);
         expect(await echoProbe(containerId, "tcp", 18082)).toBe(1);
+        if (firewall !== containerId) {
+          // Positive control: this image can create AF_PACKET sockets as root.
+          const rawSocket = 'socket(my $s, 17, 3, 0x0300) or die "$!";';
+          expect(await dockerStatus(["exec", "-u", "root", peer, "perl", "-e", rawSocket])).toBe(0);
+          const denied =
+            'socket(my $s, 17, 3, 0x0300) and die "AF_PACKET permitted"; $!{EPERM} or die "$!";';
+          expect(
+            await dockerStatus(["exec", "-u", "root", containerId, "perl", "-e", denied]),
+          ).toBe(0);
+          expect(
+            await docker(["inspect", "-f", "{{json .HostConfig.CapDrop}}", containerId]),
+          ).toContain("NET_RAW");
+
+          const peerAddress = await docker([
+            "inspect",
+            "-f",
+            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+            peer,
+          ]);
+          // A real forged loopback DNS server; answer every A query with the
+          // controlled peer's otherwise-blocked address.
+          const dns = `
+const fs = require("fs"), udp = require("dgram").createSocket("udp4");
+let count = 0;
+udp.on("message", (query, remote) => {
+  fs.writeFileSync("/tmp/forged-dns-queries", String(++count));
+  const header = Buffer.from(query.subarray(0, 12));
+  header.writeUInt16BE(0x8180, 2); header.writeUInt16BE(1, 6);
+  header.writeUInt16BE(0, 8); header.writeUInt16BE(0, 10);
+  let end = 12;
+  while (query[end]) end += query[end] + 1;
+  end += 5; // zero label, QTYPE and QCLASS, excluding EDNS additional records
+  const answer = Buffer.from([192,12,0,1,0,1,0,0,1,44,0,4,..."${peerAddress}".split(".").map(Number)]);
+  udp.send(Buffer.concat([header, query.subarray(12, end), answer]), remote.port, remote.address);
+});
+udp.bind(53, "127.0.0.1", () => fs.writeFileSync("/tmp/forged-dns-ready", "ready"));`;
+          await docker(["exec", "-d", "-u", "root", containerId, "node", "-e", dns]);
+          for (let attempt = 0; attempt < 50; attempt++) {
+            if (
+              (await dockerStatus(["exec", containerId, "test", "-f", "/tmp/forged-dns-ready"])) ===
+              0
+            )
+              break;
+            await Bun.sleep(100);
+          }
+          expect(
+            await docker(["exec", containerId, "dig", "@127.0.0.1", "+short", "poisoned.test"]),
+          ).toBe(peerAddress);
+          await docker([
+            "exec",
+            "-u",
+            "root",
+            containerId,
+            "bash",
+            "-ec",
+            `
+cp /etc/resolv.conf /tmp/resolv.before
+cp /etc/hosts /tmp/hosts.before
+printf 'nameserver 127.0.0.1\\n' > /etc/resolv.conf
+printf '${peerAddress} host.docker.internal\\n' >> /etc/hosts
+`,
+          ]);
+          try {
+            await docker([
+              "exec",
+              "-u",
+              "root",
+              firewall,
+              "/usr/local/bin/update-firewall.sh",
+              "--add",
+              "poisoned.test:18082",
+            ]);
+            await docker([
+              "exec",
+              "-u",
+              "root",
+              firewall,
+              "/usr/local/bin/update-firewall.sh",
+              "--refresh",
+            ]);
+            expect(
+              await dockerStatus([
+                "exec",
+                "-u",
+                "root",
+                firewall,
+                "ipset",
+                "test",
+                "allowed-domains",
+                `${peerAddress},tcp:18082`,
+              ]),
+            ).toBe(1);
+            await docker([
+              "exec",
+              "-u",
+              "root",
+              firewall,
+              "/usr/local/bin/update-firewall.sh",
+              "--host-ports",
+              "18082",
+            ]);
+            const hostRules = await docker([
+              "exec",
+              "-u",
+              "root",
+              firewall,
+              "iptables",
+              "-S",
+              "ORK_HOST_SERVICES",
+            ]);
+            expect(hostRules).not.toContain(peerAddress);
+            // Only the explicit positive-control query reached the forged server.
+            expect(await docker(["exec", containerId, "cat", "/tmp/forged-dns-queries"])).toBe("1");
+          } finally {
+            await docker([
+              "exec",
+              "-u",
+              "root",
+              containerId,
+              "bash",
+              "-ec",
+              "cat /tmp/resolv.before > /etc/resolv.conf; cat /tmp/hosts.before > /etc/hosts",
+            ]);
+          }
+          expect(await echoProbe(containerId, "tcp", 18082)).toBe(1);
+          expect(await echoProbe(containerId, "tcp", 18080)).toBe(0);
+        }
         await heldEcho(containerId, 18080, "tuple-revoked");
         await heldEcho(containerId, 18081, "tuple-kept");
         await context.storage.updateEnvironment(environment.id, {

@@ -84,7 +84,11 @@ Users and isolation:
   runtime's egress gateway: the same image, run as root with `NET_ADMIN` and a
   tmpfs `/run`, records the policy (`network-policy-entrypoint.sh
   --record-only`), applies the unchanged `init-firewall.sh` and idles. The
-  runtime joins its namespace with no added capability; the runtime's root
+  runtime joins its namespace with `NET_RAW` dropped, preventing packet sockets
+  from bypassing OUTPUT filtering. Before admitting a workload, the gateway
+  snapshots trusted resolver and host-service addresses on its private filesystem;
+  all firewall lookups and updates use those snapshots across restarts, since
+  Docker's shared network files can be modified by workload root. The runtime's root
   entrypoint then only verifies that the gateway rejects an unlisted
   destination (`egress-unverified` / `egress-gateway-unavailable` boot
   failures otherwise).

@@ -4,6 +4,7 @@ import path from "node:path";
 import { getHostPort } from "../src/core/commands-container-exec";
 import { parseNetworkModeOwner, resetNetworkOwnerCache } from "../src/core/container-network-owner";
 import {
+  createEgressGateway,
   egressEnforcement,
   egressGatewayCreateArguments,
   egressGatewayName,
@@ -38,6 +39,8 @@ async function fakeDaemon(options: {
   gatewayStartedAt?: string;
   workloadStartedAt?: string;
   gatewayOwner?: string;
+  inspectFailsOnce?: boolean;
+  firewallAfterRestart?: string;
 }): Promise<string> {
   const dir = await tempDir("ork-egress-daemon-");
   cleanup.push(dir);
@@ -50,15 +53,23 @@ async function fakeDaemon(options: {
   return `#!/bin/bash
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$*" in
-  *"{{.HostConfig.NetworkMode}} wl") printf 'container:${GATEWAY}\\n' ;;
+  *"{{.HostConfig.NetworkMode}} wl")
+    if [ "${options.inspectFailsOnce ?? false}" = true ] && [ ! -e ${dir}/inspected ]; then
+      touch ${dir}/inspected; echo 'daemon transport failed' >&2; exit 1
+    fi
+    printf 'container:${GATEWAY}\\n' ;;
   *"{{.HostConfig.NetworkMode}}"*) printf 'bridge\\n' ;;
   "inspect --type container --format {{.State.Running}}"*" wl") printf '%s\\t${options.workloadStartedAt ?? "2026-10-25T11:00:00Z"}\\n' "$(cat ${dir}/wl-running)" ;;
   *"--format {{.Id}}"*) ${gatewayInspect} ;;
   "start ${GATEWAY}") printf true > ${dir}/gw-running ;;
+  "restart ${GATEWAY}") printf true > ${dir}/gw-running; touch ${dir}/restarted ;;
   "stop ${GATEWAY}") printf false > ${dir}/gw-running ;;
   "stop wl") printf false > ${dir}/wl-running ;;
   "exec ${GATEWAY} sh -c"*)
-    if [ "$(cat ${dir}/gw-running)" = true ]; then printf '%s' '${options.firewall ?? '{"state":"applied"}'}'; fi ;;
+    if [ "$(cat ${dir}/gw-running)" = true ]; then
+      if [ -e ${dir}/restarted ]; then printf '%s' '${options.firewallAfterRestart ?? options.firewall ?? '{"state":"applied"}'}';
+      else printf '%s' '${options.firewall ?? '{"state":"applied"}'}'; fi
+    fi ;;
   "port ${GATEWAY} 4097/tcp") printf '127.0.0.1:49200\\n' ;;
   "port wl 4097/tcp") ;;
 esac
@@ -165,6 +176,22 @@ describe("starting a runtime behind its gateway", () => {
     });
   });
 
+  test("a new start restarts a failed running gateway once and waits for a fresh report", async () => {
+    await withDockerScript(
+      await fakeDaemon({
+        gatewayRunning: true,
+        firewall: '{"state":"failed"}',
+        firewallAfterRestart: '{"state":"applied"}',
+      }),
+      async (log) => {
+        expect(await prepareEgressGatewayForStart("wl", { pollMs: 1 })).toBe("ready");
+        expect(
+          (await log.read()).split("\n").filter((line) => line === `restart ${GATEWAY}`),
+        ).toHaveLength(1);
+      },
+    );
+  });
+
   test("a missing gateway needs a rebuild rather than an unrestricted start", async () => {
     await withDockerScript(await fakeDaemon({ gateway: "missing" }), async (log) => {
       await expect(prepareEgressGatewayForStart("wl")).rejects.toThrow(
@@ -227,6 +254,51 @@ describe("stopping and removing a runtime with its gateway", () => {
     });
   });
 
+  for (const operation of ["stop", "remove"] as const) {
+    test(`${operation} propagates a cold-cache inspect failure, then retries gateway teardown`, async () => {
+      await withDockerScript(
+        await fakeDaemon({ gatewayRunning: true, inspectFailsOnce: true }),
+        async (log) => {
+          const teardown = () =>
+            operation === "stop" ? stopRuntimeContainer("wl") : removeRuntimeContainer("wl", OWNER);
+          await expect(teardown()).rejects.toThrow("daemon transport failed");
+          expect(await log.read()).not.toContain(
+            `${operation === "stop" ? "stop" : "rm -f"} ${GATEWAY}`,
+          );
+          if (operation === "remove") expect(await log.read()).not.toContain("rm -f wl");
+          await teardown();
+          expect(await log.read()).toContain(
+            `${operation === "stop" ? "stop" : "rm -f"} ${GATEWAY}`,
+          );
+        },
+      );
+    });
+  }
+
+  test("a failed gateway removal retains ownership for a retry after the workload is gone", async () => {
+    await withDockerScript(await fakeDaemon({}), async (log) => {
+      let workloadRemoved = false;
+      let attempts = 0;
+      const run = async (_command: string, args: string[]) => {
+        if (args.at(-1) === "wl") {
+          if (workloadRemoved) throw new Error("No such container: wl");
+          workloadRemoved = true;
+        } else if (++attempts === 1) {
+          throw new Error("daemon transport failed");
+        }
+        return { stdout: "", stderr: "" };
+      };
+      await expect(removeRuntimeContainer("wl", OWNER, run)).rejects.toThrow(
+        "daemon transport failed",
+      );
+      await removeRuntimeContainer("wl", OWNER, run);
+      expect(attempts).toBe(2);
+      expect(
+        (await log.read()).split("\n").filter((line) => line.includes("HostConfig.NetworkMode")),
+      ).toHaveLength(1);
+    });
+  });
+
   test("published ports are read from the gateway", async () => {
     await withDockerScript(await fakeDaemon({ gatewayRunning: true }), async () => {
       expect(await getHostPort("wl", 4097)).toBe(49200);
@@ -259,4 +331,55 @@ exit 0
       },
     );
   });
+});
+
+describe("same-name gateway recovery", () => {
+  for (const scenario of [
+    "foreign",
+    "workload-present",
+    "interrupted",
+    "ambiguous",
+    "inspect-error",
+  ] as const) {
+    test(scenario, async () => {
+      const dir = await tempDir("ork-gateway-conflict-");
+      cleanup.push(dir);
+      const script = `#!/bin/bash
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$*" in
+  create*)
+    if [ ! -e ${dir}/created ]; then touch ${dir}/created; echo 'name already in use' >&2; exit 1; fi
+    echo ${GATEWAY} ;;
+  *"--format {{.Id}}"*" gw")
+    ${scenario === "inspect-error" ? "echo 'transport failed' >&2; exit 1" : `printf '${GATEWAY}\\tfalse\\t2026-10-25T10:00:00Z\\t${scenario === "foreign" ? "foreign" : OWNER}\\tegress-gateway\\twl-name\\tenv\\n'`} ;;
+  *" wl-name")
+    ${scenario === "interrupted" ? "echo 'No such container' >&2; exit 1" : scenario === "ambiguous" ? "echo 'transport failed' >&2; exit 1" : `echo ${"b".repeat(64)}`} ;;
+esac
+`;
+      await withDockerScript(script, async (log) => {
+        const create = () =>
+          createEgressGateway({
+            name: "gw",
+            workloadName: "wl-name",
+            environmentId: "env",
+            owner: OWNER,
+            image: "image",
+            network: "network",
+            publishArguments: [],
+            addHostGateway: false,
+            githubSeed: null,
+            policyEnvironment: {},
+            limits: { memory: false, pids: false },
+            logArguments: [],
+          });
+        if (scenario === "interrupted") {
+          expect(await create()).toBe(GATEWAY);
+          expect(await log.read()).toContain(`rm -f ${GATEWAY}`);
+        } else {
+          await expect(create()).rejects.toThrow();
+          expect(await log.read()).not.toContain("rm ");
+        }
+      });
+    });
+  }
 });

@@ -83,14 +83,18 @@ fi
 # backend sees the current boot `initializing` while the firewall runs. The
 # node entrypoint keeps this boot id (ORKESTRATOR_BOOT_ID) and owns the record
 # from then on, so nothing is opened in a directory node could not write.
+FIREWALL_RESULT_DIR=/run/orkestrator-network
+install -d -o root -g root -m 0755 "$FIREWALL_RESULT_DIR"
 BOOT_STATUS_DIR=/run/orkestrator
 if [ -d "$BOOT_STATUS_DIR" ] && setpriv --reuid=node --regid=node --init-groups test -w "$BOOT_STATUS_DIR"; then
     rm -f /tmp/.environment-ready /tmp/.entrypoint-complete "$BOOT_STATUS_DIR/boot-status.json"
     ORKESTRATOR_BOOT_ID="$(cat /proc/sys/kernel/random/uuid)"
-    boot_record="$BOOT_STATUS_DIR/boot-status.json.root.tmp"
+    # Exclusively create in root's directory. Never open or chmod a path
+    # planted by node, including a symlink or a directory at the destination.
+    boot_record=$(mktemp "$FIREWALL_RESULT_DIR/boot-status.XXXXXXXXXX")
     printf '{"version":1,"bootId":"%s","pid1Start":"%s","phase":"initializing","failureCode":null,"updatedAt":"%s"}\n' \
         "$ORKESTRATOR_BOOT_ID" "$(awk '{print $22}' /proc/1/stat)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        > "$boot_record" && chmod 0644 "$boot_record" && mv -f "$boot_record" "$BOOT_STATUS_DIR/boot-status.json"
+        > "$boot_record" && chmod 0644 "$boot_record" && mv -fT -- "$boot_record" "$BOOT_STATUS_DIR/boot-status.json"
     export ORKESTRATOR_BOOT_ID
 fi
 
@@ -101,8 +105,6 @@ fi
 #   full, full-failed                        full mode (the firewall only reports)
 #   gateway, gateway-unverified, gateway-unavailable
 #                                            the egress gateway's firewall
-FIREWALL_RESULT_DIR=/run/orkestrator-network
-install -d -o root -g root -m 0755 "$FIREWALL_RESULT_DIR"
 rm -f "$FIREWALL_RESULT_DIR/firewall-boot"
 network_mode=""
 egress=container

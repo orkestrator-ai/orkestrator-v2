@@ -194,6 +194,7 @@ function buildDropImportedLoginCommand(file: string, kind: "codex" | "grok"): st
   const script = `
 const fs = require("fs");
 const path = require("path");
+// With node -e, argv[1] is the first argument after -- (no script path).
 const [file, kind] = process.argv.slice(1);
 let login;
 try {
@@ -236,7 +237,7 @@ if (empty) {
   }
 }
 process.stdout.write("removed");`;
-  return `node -e ${quoteShell(script)} ${quoteShell(file)} ${kind}`;
+  return `node -e ${quoteShell(script)} -- ${quoteShell(file)} ${kind}`;
 }
 
 export const DROP_IMPORTED_LOGIN_COMMAND = {
@@ -565,6 +566,7 @@ export function buildMergeContainerProviderAuthCommand(file: string): string {
   const script = `
 const fs = require("fs");
 const path = require("path");
+// Eval has no script-path argument: the target after -- is argv[1].
 const file = process.argv[1];
 const payload = JSON.parse(fs.readFileSync(0, "utf8"));
 const lock = file + ".lock";
@@ -578,7 +580,7 @@ for (let attempt = 0; attempt < 20 && !locked; attempt++) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   }
 }
-if (!locked) process.exit(0);
+if (!locked) process.exit(75);
 try {
   let current = {};
   try {
@@ -606,7 +608,7 @@ try {
 }`;
   return `set -e
 umask 077
-node -e ${quoteShell(script)} ${quoteShell(file)}
+node -e ${quoteShell(script)} -- ${quoteShell(file)}
 `;
 }
 
@@ -627,12 +629,14 @@ node -e ${quoteShell(script)} ${quoteShell(file)}
  * host's rotating providers (`providerAuthMergePayload`). Also run by
  * `ContainerLoginFileWatcher` whenever the host's file changes.
  */
+export type ContainerLoginSyncOutcome = "applied" | "skipped" | "failed";
+
 export async function syncContainerLogin(
   context: CommandContext,
   provider: PushedLoginProvider,
   containerId: string,
   runners: ContainerRunners = defaultRunners,
-): Promise<void> {
+): Promise<ContainerLoginSyncOutcome> {
   const operationId = await containerBridgeOperationId(context, containerId);
   return enqueueContainerBridgeOperation(context, provider, operationId, () =>
     syncContainerLoginUnlocked(context, provider, containerId, runners),
@@ -645,17 +649,17 @@ export async function syncContainerLoginUnlocked(
   provider: PushedLoginProvider,
   containerId: string,
   runners: ContainerRunners = defaultRunners,
-): Promise<void> {
+): Promise<ContainerLoginSyncOutcome> {
   const login = PUSHED_LOGINS[provider];
   try {
     const environment = (await context.storage.loadEnvironments()).find(
       (candidate) =>
         candidate.containerId && containerIdMatches(candidate.containerId, containerId),
     );
-    if (!environment) return;
+    if (!environment) return "skipped";
     const { global } = await context.storage.loadConfig();
     if (!providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, provider)) {
-      return;
+      return "skipped";
     }
     const source = login.hostFile(context);
     const host = source ? await readHostLoginFile(source) : { kind: "absent" as const };
@@ -674,9 +678,12 @@ export async function syncContainerLoginUnlocked(
     ) {
       if (payload) await runners.pipe(containerId, login.command, payload);
       else await runners.exec(containerId, DROP_IMPORTED_LOGIN_COMMAND.grok);
+      return "applied";
     }
+    return "skipped";
   } catch (error) {
     logFailure(`Failed to sync the ${login.label} login into the container`, error);
+    return "failed";
   }
 }
 
@@ -775,6 +782,7 @@ export function buildMergeContainerClaudeCredentialCommand(
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+// Eval has no script-path argument: the target after -- is argv[1].
 const file = process.argv[1];
 const payload = JSON.parse(fs.readFileSync(0, "utf8"));
 const next = payload && payload.login;
@@ -803,7 +811,7 @@ try {
 }`;
   return `set -e
 umask 077
-node -e ${quoteShell(script)} ${quoteShell(file)}
+node -e ${quoteShell(script)} -- ${quoteShell(file)}
 `;
 }
 
@@ -837,7 +845,8 @@ export function buildRestrictContainerClaudeCredentialCommand(
   if [ -f "$credential_file" ] && [ ! -L "$credential_file" ]; then
     node -e '
       const fs = require("fs");
-      const file = process.argv[1];
+      // Eval has no script-path argument: the target after -- is argv[1].
+const file = process.argv[1];
       const login = JSON.parse(fs.readFileSync(file, "utf8"));
       if (!login || typeof login !== "object" || Array.isArray(login)) process.exit(1);
       let changed = false;
@@ -853,7 +862,7 @@ export function buildRestrictContainerClaudeCredentialCommand(
       const temporary = file + "." + process.pid + ".tmp";
       fs.writeFileSync(temporary, JSON.stringify(login), { mode: 0o600, flag: "wx" });
       fs.renameSync(temporary, file);
-    ' "$credential_file" 2>/dev/null || rm -f "$credential_file" "$credential_file".*.tmp
+    ' -- "$credential_file" 2>/dev/null || rm -f "$credential_file" "$credential_file".*.tmp
   fi
   true
 `;

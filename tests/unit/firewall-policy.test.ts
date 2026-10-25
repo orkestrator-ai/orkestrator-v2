@@ -40,6 +40,38 @@ describe("container firewall policy", () => {
     expect(activeLines.some((line) => line.includes("--dport 22"))).toBe(false);
   });
 
+  test("gateway DNS and host lookups use private snapshots instead of shared network files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ork-trusted-dns-"));
+    try {
+      fixtureScript(dir, "update-firewall.sh");
+      const trusted = join(dir, "policy", "trusted-network");
+      const bin = join(dir, "bin");
+      mkdirSync(trusted, { recursive: true });
+      mkdirSync(bin);
+      writeFileSync(join(trusted, "resolv.conf"), "nameserver 203.0.113.53\n");
+      writeFileSync(join(trusted, "host-addresses"), "192.0.2.10\n");
+      writeStub(bin, "dig", `printf '%s\\n' "$*" >> "${join(dir, "lookups")}"; echo 192.0.2.20`);
+      writeStub(bin, "getent", "exit 99");
+      const result = Bun.spawnSync({
+        cmd: [
+          "bash",
+          "-ec",
+          `source '${join(dir, "lib", "firewall-domains.sh")}'; ork_dig +short A allowed.test; ork_host_addresses`,
+        ],
+        env: { ...process.env, PATH: `${bin}:${gnuToolPath}` },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toString()).toBe("192.0.2.20\n192.0.2.10\n");
+      expect(readFileSync(join(dir, "lookups"), "utf8")).toBe(
+        "-r @203.0.113.53 +short A allowed.test\n",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("does not let node override firewall policy through sudo", () => {
     const dockerfile = read("docker/Dockerfile");
     const wrapper = read("docker/run-root-setup.sh");
@@ -895,9 +927,11 @@ esac`,
       const bin = join(dir, "bin");
       mkdirSync(bin);
       const script = join(dir, "gateway.sh");
+      mkdirSync(join(dir, "policy"));
       writeFileSync(
         script,
         read("docker/orkestrator-egress-gateway.sh")
+          .replaceAll("/etc/orkestrator", join(dir, "policy"))
           .replaceAll("/usr/local/bin/network-policy-entrypoint.sh", join(dir, "record.sh"))
           .replaceAll("/usr/local/bin/init-firewall.sh", join(dir, "init-firewall.sh"))
           .replaceAll("/run/orkestrator-firewall", join(dir, "run-firewall")),

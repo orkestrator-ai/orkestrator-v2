@@ -21,6 +21,16 @@
 set -euo pipefail
 
 /usr/local/bin/network-policy-entrypoint.sh --record-only
+# Docker shares network files with containers joining this namespace. Snapshot
+# trusted data once, before a workload can start, and retain it across boots.
+# Workload root may edit the shared files but cannot edit this filesystem.
+if [ ! -d /etc/orkestrator/trusted-network ]; then
+    trusted=$(mktemp -d /etc/orkestrator/trusted-network.XXXXXXXXXX)
+    cp /etc/resolv.conf "$trusted/resolv.conf"
+    getent ahostsv4 host.docker.internal | awk '{print $1}' | sort -u > "$trusted/host-addresses" || true
+    chmod 0700 "$trusted"
+    mv -T "$trusted" /etc/orkestrator/trusted-network
+fi
 if ! /usr/local/bin/init-firewall.sh; then
     # init-firewall.sh closes the namespace and reports `failed` itself; a
     # script that is missing or died before its trap did neither.

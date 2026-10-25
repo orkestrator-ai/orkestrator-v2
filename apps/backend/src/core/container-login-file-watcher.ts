@@ -22,8 +22,9 @@ import { providerCredentialsAllowed } from "./portable-input-status.js";
  *
  * It polls each file's identity (inode, size, mtime) instead of watching it:
  * the CLIs replace the file by rename, which a watch on the file loses, and a
- * watch on the parent directory sees every unrelated write. Nothing is read
- * unless the identity changed. A file that disappears is a change too: a host
+ * watch on the parent directory sees every unrelated write. Delivery is retried
+ * until each target acknowledges the identity. A file that disappears is a
+ * change too: a host
  * signed out of Grok has the container's imported copy removed.
  *
  * Pi reloads its auth file and OpenCode's OAuth plugins re-read theirs on
@@ -75,7 +76,8 @@ async function fileFingerprint(file: string): Promise<string> {
 export class ContainerLoginFileWatcher {
   private readonly intervalMs: number;
   private readonly timers: NonNullable<ContainerLoginFileWatcherOptions["timers"]>;
-  private readonly seen = new Map<PushedLoginProvider, string>();
+  /** Acknowledge each target only after successful delivery. */
+  private readonly delivered = new Map<string, string>();
   private handle: unknown = null;
   private running: Promise<void> | null = null;
   private stopped = true;
@@ -105,7 +107,7 @@ export class ContainerLoginFileWatcher {
     this.handle = null;
   }
 
-  /** One pass; never throws. Returns the providers whose file changed. */
+  /** One pass; never throws. Returns the providers needing delivery or reconciliation. */
   async tick(): Promise<PushedLoginProvider[]> {
     try {
       return await this.pass();
@@ -131,32 +133,35 @@ export class ContainerLoginFileWatcher {
 
   private async pass(): Promise<PushedLoginProvider[]> {
     const changed: PushedLoginProvider[] = [];
-    for (const provider of PUSHED_LOGIN_PROVIDERS) {
-      const file = pushedLoginHostFile(this.context, provider);
-      if (!file) continue;
-      const fingerprint = await (this.options.fingerprint ?? fileFingerprint)(file);
-      const previous = this.seen.get(provider);
-      this.seen.set(provider, fingerprint);
-      // An unreadable file says nothing about the login, and a first look at
-      // a missing one has nothing to take back.
-      if (fingerprint === previous || fingerprint === "unreadable") continue;
-      if (previous === undefined && fingerprint === "absent") continue;
-      changed.push(provider);
-    }
-    if (changed.length === 0) return changed;
-    // A second backend on this data directory leaves containers to the writer.
+    // Do not acknowledge files while this backend cannot deliver them.
     if (this.context.registryWriterLease?.isHeld() === false) return changed;
     const { global } = await this.context.storage.loadConfig();
     const environments = (await this.context.storage.loadEnvironments()).filter(
       (environment) => environment.containerId && environment.status === "running",
     );
+    const active = new Set(
+      environments.flatMap((environment) =>
+        PUSHED_LOGIN_PROVIDERS.map((provider) => `${provider}:${environment.containerId}`),
+      ),
+    );
+    for (const key of Array.from(this.delivered.keys())) {
+      if (!active.has(key)) this.delivered.delete(key);
+    }
     const sync =
       this.options.syncContainer ??
       ((provider: PushedLoginProvider, containerId: string) =>
         syncContainerLogin(this.context, provider, containerId));
-    for (const provider of changed) {
+    for (const provider of PUSHED_LOGIN_PROVIDERS) {
+      const file = pushedLoginHostFile(this.context, provider);
+      if (!file) continue;
+      const fingerprint = await (this.options.fingerprint ?? fileFingerprint)(file);
+      if (fingerprint === "unreadable") continue;
+      // Only Grok has a host sign-out removal path. Reconcile absence on the
+      // first pass too: existing containers may outlive a backend restart.
+      if (fingerprint === "absent" && provider !== "grok") continue;
       for (const environment of environments) {
         if (this.halted) return changed;
+        const key = `${provider}:${environment.containerId}`;
         if (
           !providerCredentialsAllowed(
             this.context,
@@ -165,10 +170,17 @@ export class ContainerLoginFileWatcher {
             provider,
           )
         ) {
+          this.delivered.delete(key);
           continue;
         }
-        // `syncContainerLogin` logs its own failures without the payload.
-        await sync(provider, environment.containerId!).catch(() => undefined);
+        if (this.delivered.get(key) === fingerprint) continue;
+        if (!changed.includes(provider)) changed.push(provider);
+        // Storage/transport failures and lock contention leave this target
+        // pending. Successful siblings need not receive the same file again.
+        const outcome = await sync(provider, environment.containerId!).catch(() => "failed");
+        if (outcome !== "failed" && outcome !== "skipped") {
+          this.delivered.set(key, fingerprint);
+        }
       }
     }
     return changed;

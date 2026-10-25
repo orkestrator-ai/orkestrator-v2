@@ -30,16 +30,13 @@ export function parseNetworkModeOwner(networkMode: string): string | null {
 export async function egressGatewayOf(containerId: string): Promise<string | null> {
   const cached = networkOwners.get(containerId);
   if (cached !== undefined) return cached === containerId ? null : cached;
-  let stdout: string;
-  try {
-    ({ stdout } = await runCommand(
-      "docker",
-      ["inspect", "--type", "container", "--format", "{{.HostConfig.NetworkMode}}", containerId],
-      { timeoutMs: 10_000 },
-    ));
-  } catch {
-    return null;
-  }
+  // Only successful inspection proves absence. Daemon/transport failures
+  // must keep start and teardown retryable, especially after a backend restart.
+  const { stdout } = await runCommand(
+    "docker",
+    ["inspect", "--type", "container", "--format", "{{.HostConfig.NetworkMode}}", containerId],
+    { timeoutMs: 10_000 },
+  );
   const gateway = parseNetworkModeOwner(stdout);
   if (networkOwners.size >= MAX_NETWORK_OWNERS) {
     const oldest = networkOwners.keys().next().value;

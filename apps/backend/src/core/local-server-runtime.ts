@@ -138,6 +138,19 @@ export class LocalServerRuntime {
     return this.processes.size;
   }
 
+  /** Live local agent bridges and the environment each serves (`<kind>:<environmentId>` keys). */
+  localProcessRoots(): Array<{ environmentId: string; pid: number }> {
+    const roots: Array<{ environmentId: string; pid: number }> = [];
+    for (const [key, child] of this.processes) {
+      const separator = key.indexOf(":");
+      const pid = child.pid;
+      if (separator <= 0 || !pid || pid <= 1 || child.exitCode !== null) continue;
+      if (!LOCAL_SERVER_KINDS.includes(key.slice(0, separator) as LocalServerKind)) continue;
+      roots.push({ environmentId: key.slice(separator + 1), pid });
+    }
+    return roots;
+  }
+
   /**
    * Records a spawned bridge as owned by this backend. Short-lived probe
    * processes pass no launch facts.

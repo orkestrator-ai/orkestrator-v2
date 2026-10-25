@@ -757,6 +757,57 @@ describe("service browser tabs", () => {
     });
   });
 
+  test("a dev server on the next free port is offered as a move of its service, never moved on its own", async () => {
+    useEnvironmentStore.setState((state) => ({
+      environments: state.environments.map((environment) => ({
+        ...environment,
+        environmentType: "local",
+        containerId: null,
+      })),
+    }));
+    const app = fixturePreviewService({
+      definition: { label: "app", targetKind: "worktree", applicationPort: 3000 },
+    });
+    installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [app],
+      resolution: {
+        kind: "unregistered",
+        path: "/",
+        bindHint: false,
+        suggestion: { targetKind: "worktree", applicationPort: 3001, scheme: "http" },
+      },
+    });
+    seedTab(
+      formatPreviewIntentUri({
+        environmentId: FIXTURE_ENVIRONMENT_ID,
+        source: "worktree-terminal",
+        url: "http://localhost:3001/",
+      }),
+    );
+    renderTab();
+
+    const move = await screen.findByRole("button", { name: "Move app from port 3000 to 3001" });
+    expect(invokeMock).not.toHaveBeenCalledWith("update_preview_service", expect.anything());
+    fireEvent.click(move);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "update_preview_service",
+        expect.objectContaining({
+          serviceId: app.definition.serviceId,
+          expectedRevision: app.definition.definitionRevision,
+          patch: { applicationPort: 3001 },
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(parsePreviewTabTarget(tabUrl())).toMatchObject({
+        kind: "service",
+        ref: { serviceId: app.definition.serviceId },
+      }),
+    );
+  });
+
   test("older backends keep the original link behaviour", async () => {
     installBackend({ capabilities: null, services: [] });
     seedTab(

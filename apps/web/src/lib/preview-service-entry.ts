@@ -5,10 +5,9 @@ import {
   type PreviewUrlSource,
 } from "@orkestrator/protocol/preview-services";
 
+import { isLoopbackUrl } from "@/lib/terminal-links";
 import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
 import type { Environment } from "@/types";
-
-const LOOPBACK_URL = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?([/?#]|$)/i;
 
 /**
  * Target for the environment's browser button: the registered entry service
@@ -49,7 +48,7 @@ export function linkBrowserTarget(
   url: string,
   origin: "terminal" | "agent" = "terminal",
 ): string {
-  if (!environment || !LOOPBACK_URL.test(url.trim())) return url;
+  if (!environment || !isLoopbackUrl(url)) return url;
   ensurePreviewServiceSync();
   if (usePreviewServiceStore.getState().status === "unsupported") return url;
   const source: PreviewUrlSource =

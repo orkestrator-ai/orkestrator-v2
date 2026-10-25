@@ -51,9 +51,12 @@ tombstones so clients can detect deletions they missed.
 
 ## Registering services
 
-Services are generated automatically from an environment's entry port and TCP
-port mappings (`mapping:<port>` keys). Others are registered in **Environment
-settings → Preview services** or with `register_preview_service`.
+Services are generated automatically from an environment's entry port and,
+for containers, its TCP port mappings (`mapping:<port>` keys). A local
+environment gets only its entry port, as a `worktree` service (see
+**Local environments** below). Others are registered in **Environment
+settings → Preview services** or with `register_preview_service`. Nothing is
+ever generated from a port scan.
 
 | Target kind | Where the application runs | Port meaning |
 | --- | --- | --- |
@@ -68,6 +71,59 @@ servers (4096–4101) are refused with `forbidden`. Container targets are reache
 only through Docker's loopback binding for that exact application port, and
 manual targets are backend-loopback only: an arbitrary remote host is never a
 target.
+
+### Local environments
+
+Every local environment of a project carries the same entry port (copied from
+the repository config at creation), and they all share the backend host's
+loopback, so an open port proves nothing about whose server it is. Loopback
+targets (`worktree`, `backend-host`) are resolved with a listener check
+(`preview-listener-ownership.ts`):
+
+1. `lsof -nP -a -i4TCP:<port> -sTCP:LISTEN -Fp` (or `-i6`) for the one port the
+   definition names, never a range. Linux hosts without `lsof` use
+   `ss -H -ltnp -4|-6 "sport = :<port>"`.
+2. `ps -A -o pid=,ppid=,lstart=`, then the listener's parent chain up to a
+   *managed process root*: a local terminal shell (`TerminalRuntime`) or a local
+   agent bridge (`LocalServerRuntime`) this backend started for an environment.
+   A dev server run in an Orkestrator terminal, or started by an agent's shell
+   tool, descends from one.
+
+The answer is the endpoint's `listener` field: `this-environment`,
+`other-environment`, `unattributed` (no managed ancestor: another terminal app,
+another user, a system service), `none`, or `unchecked` (neither `lsof` nor
+`ss`, a timeout, or a platform other than macOS and Linux).
+
+| Listener | Generated `worktree` service | User `worktree` service | `backend-host` service |
+| --- | --- | --- | --- |
+| `this-environment` | `managed-process` | `managed-process` | `managed-process` |
+| `other-environment` | refused | refused | `user-registered` |
+| `unattributed`, `none`, `unchecked` | refused until confirmed | `user-registered` | `user-registered` |
+
+Refusals are `target-unverified`. `managed-process` means "started under this
+backend's terminal or agent for that environment", not cryptographic proof.
+Its binding key includes a digest of the listener's pid and start time, so a
+restarted server on the same port gets a new endpoint generation and old
+attachments are revoked. A `user-registered` target shows whatever listens on
+the port, and route details say so.
+
+A generated local service waits for its own server. While refused for
+`none`, `unattributed` or `other-environment` it is re-resolved on the
+readiness backoff schedule (1, 2, 4, 8, 16, 30 s), and **Retry** restarts it.
+**Show any process** (an empty `update_preview_service` patch) confirms it:
+any edit flips `userOverride`, which makes it the user's own registration.
+
+**Port increments.** When a dev server finds its port taken and moves to the
+next one, open the address it prints (⌘⇧-click in the terminal). The link
+resolves in that environment; an unregistered port offers **Move `<service>`
+from port A to B** for nearby services of the same kind and scheme, next to
+**Register**. Nothing moves without that click.
+
+**Agent links.** In an environment's agent tab, ⌘⇧-click (Ctrl+Shift-click) on
+a loopback link opens a preview tab with the `agent-link` intent, resolved in
+that environment like a terminal link. A plain click still opens the system
+browser. Coordinator and mail transcripts have no environment and keep the
+plain behaviour.
 
 **Automatic host ports.** A port mapping with **Auto** (`hostPortMode: "auto"`,
 `hostPort: 0`) is published as `127.0.0.1::<port>` so Docker chooses a free
@@ -393,7 +449,12 @@ Readiness in the picker and in environment settings distinguishes these cases:
 - the connection is refused;
 - TLS failed;
 - headers timed out;
-- the backend is unavailable.
+- the backend is unavailable;
+- a local port is served by another environment's process;
+- a generated local service is waiting for this environment's server.
+
+Route details name the owner: owned container, started in this environment,
+or user-registered (any process listening on the port is shown).
 
 ## Limits
 
@@ -427,6 +488,12 @@ Liveness pings stop once the tunnel starts closing, so an unanswered ping
 cannot cut off the drain.
 
 ## Framework configuration
+
+Route details → **Framework setup hints** shows the points below for one
+service as copyable, version-labelled snippets (Vite, Auth.js v5, NextAuth v4,
+Next.js, Express, OAuth providers), with the service's private origin filled
+in when it is published (`apps/web/src/lib/preview-framework-hints.ts`). They
+are text to copy; Orkestrator never edits the project.
 
 New routes do not rewrite response bodies. Upstream requests carry
 `Host: localhost:<application port>` (with default ports omitted). A same-service
@@ -515,5 +582,12 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   the `Origin` check. See
   [0054-preview-cross-service-reads.md](../todo/previews-and-annotations/0054-preview-cross-service-reads.md).
 - The relay needs `node` or `bun` in the image, and the `node` user.
+- Local listener attribution needs `ps` and `lsof` (or, on Linux, `ss`) on the
+  backend host. Without them every loopback check is `unchecked`, and
+  generated local services wait for confirmation. A listener owned by another
+  OS user cannot be attributed. Servers started through `orkestrator environment exec` run
+  under detached exec workers, which are not managed roots, so they are
+  `unattributed`. An attribution is reused for the 5-second verification
+  window, as container bindings are.
 - Only HTTP/1.1 and WebSockets are carried. HTTP/2-only features, HTTP/3,
   WebTransport, and UDP are not.

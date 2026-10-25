@@ -55,6 +55,7 @@ import { openServiceExternally } from "@/lib/preview-external";
 import {
   diagnoseService,
   parseServiceAddressInput,
+  relocationCandidates,
   serviceDisplayUrl,
   serviceReadiness,
   type DiagnosisAction,
@@ -591,9 +592,23 @@ function ServicePreview({
         case "use-relay":
           void retry();
           return;
+        case "confirm-association":
+          if (!service) return;
+          void backend
+            .confirmPreviewService(
+              service.definition.serviceId,
+              service.definition.definitionRevision,
+            )
+            .then(() => retry())
+            .catch((error: unknown) =>
+              toast.error("Could not confirm the service", {
+                description: previewErrorFromUnknown(error)?.message ?? errorMessage(error),
+              }),
+            );
+          return;
       }
     },
-    [environmentId, openExternally, retry],
+    [environmentId, openExternally, retry, service],
   );
 
   const diagnosis = backendMismatch
@@ -953,6 +968,7 @@ function PreviewIntentChooser({
   const [resolution, setResolution] = useState<backend.PreviewTargetResolution | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [registering, setRegistering] = useState(false);
+  const [moving, setMoving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -1009,6 +1025,29 @@ function PreviewIntentChooser({
 
   const path = resolution?.path ?? "/";
   const container = target.source === "container-terminal";
+  const relocations =
+    resolution?.kind === "unregistered"
+      ? relocationCandidates(services, resolution.suggestion)
+      : [];
+  // Port increments are explicit: the user picks which service moved.
+  const move = (candidate: PreviewServiceSnapshot, applicationPort: number) => {
+    setMoving(true);
+    setError(null);
+    void backend
+      .updatePreviewService(
+        candidate.definition.serviceId,
+        candidate.definition.definitionRevision,
+        { applicationPort },
+      )
+      .then(() => {
+        void refreshEnvironment(target.environmentId, { force: true });
+        bind(candidate.definition.serviceId, path);
+      })
+      .catch((failure: unknown) =>
+        setError(previewErrorFromUnknown(failure)?.message ?? errorMessage(failure)),
+      )
+      .finally(() => setMoving(false));
+  };
   return (
     <div
       className={cn(
@@ -1066,6 +1105,29 @@ function PreviewIntentChooser({
                 </Button>
               )}
             </div>
+            {relocations.length > 0 && (
+              <div className="space-y-1 pt-2">
+                <p className="text-xs text-muted-foreground">
+                  If a server moved here because its usual port was taken, move its service to port{" "}
+                  {resolution.suggestion.applicationPort}:
+                </p>
+                {relocations.map((candidate) => (
+                  <Button
+                    key={candidate.definition.serviceId}
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="w-full justify-start gap-2"
+                    disabled={moving}
+                    onClick={() => move(candidate, resolution.suggestion.applicationPort)}
+                  >
+                    Move {candidate.definition.label} from port{" "}
+                    {candidate.definition.applicationPort} to{" "}
+                    {resolution.suggestion.applicationPort}
+                  </Button>
+                ))}
+              </div>
+            )}
             {services.length > 0 && (
               <div className="space-y-1 pt-2">
                 <p className="text-xs text-muted-foreground">Or open a registered service:</p>

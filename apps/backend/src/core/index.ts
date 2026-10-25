@@ -354,6 +354,11 @@ export class OrkestratorBackend {
       storage,
       emit: options.emit,
       strictDockerOwner: options.strictDockerOwner ?? false,
+      // Read at call time: `this.runtime` is assigned below.
+      managedProcessRoots: () => [
+        ...this.runtime.terminals.localProcessRoots(),
+        ...this.runtime.localServers.localProcessRoots(),
+      ],
     });
     this.agentTools =
       options.agentTools ?? new AgentToolsServer(storage, "0.0.0.0", this.workflowResults, design);

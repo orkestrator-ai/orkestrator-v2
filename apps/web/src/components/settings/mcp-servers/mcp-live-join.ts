@@ -39,8 +39,17 @@ export type McpLiveJoin =
   | { kind: "other-target" }
   /** Orkestrator's own connection, injected at launch and never saved. */
   | { kind: "injected"; entryId?: string }
-  /** A plugin server: plugin layers are not modelled in this editor. */
-  | { kind: "plugin" }
+  /**
+   * A plugin server. `entryId` is its read-only plugin row when this target
+   * lists the plugin (Claude); absent when no plugin row has the name.
+   */
+  | {
+      kind: "plugin";
+      entryId?: string;
+      sourceLabel?: string;
+      /** Set when the row says the provider does not load the plugin. */
+      disabledReason?: string;
+    }
   /** No saved row in this target has that name. */
   | { kind: "not-found" }
   | {
@@ -89,8 +98,32 @@ export function joinLiveMcpServer(
   ) {
     return { kind: "other-target" };
   }
-  if (ref.scope === "plugin") return { kind: "plugin" };
   const sources = new Map(snapshot.sources.map((source) => [source.sourceId, source]));
+  if (ref.scope === "plugin") {
+    // Plugin rows carry the provider's own namespaced name, so only an exact
+    // name in a plugin source is the same server.
+    const row = snapshot.definitions
+      .filter(
+        (definition) =>
+          definition.name === ref.serverName &&
+          sources.get(definition.sourceId)?.scope === "plugin",
+      )
+      .sort(
+        (left, right) =>
+          STATUS_RANK[left.status] - STATUS_RANK[right.status] ||
+          (sources.get(right.sourceId)?.precedence ?? 0) -
+            (sources.get(left.sourceId)?.precedence ?? 0),
+      )[0];
+    if (!row) return { kind: "plugin" };
+    return {
+      kind: "plugin",
+      entryId: row.entryId,
+      sourceLabel: sources.get(row.sourceId)?.label ?? "a plugin",
+      ...(row.status === "disabled" && row.statusReason
+        ? { disabledReason: row.statusReason }
+        : {}),
+    };
+  }
   let named = snapshot.definitions.filter((definition) => definition.name === ref.serverName);
   let loadedAs: string | undefined;
   if (!named.length && ref.provider === "pi") {

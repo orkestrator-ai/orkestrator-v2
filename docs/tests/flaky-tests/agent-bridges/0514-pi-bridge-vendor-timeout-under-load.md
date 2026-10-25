@@ -152,6 +152,15 @@ The final-source retry, `mise run test:logged -- --name final-complete-tests -- 
 
 `mise run test:logged -- --name merge-suite -- mise run test` used the default 4/1/2/1 workspace/root/bridge/protocol plan alongside browser suites and other validating worktrees. Root/support ran with one worker after waiting 953.5 s: 3,369 passed, twelve failed and one error across 3,381 tests in 161 files (609.28 s execution). Evidence: host temporary artifact `orkestrator-test-run.BJKk4l/root-and-agent-support-tests.log` (compressed at aggregate completion). `loads Pi's supported SDK from the staged runtime closure` timed out at 30002.44 ms. `mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (26.0 s logged). This confirms a recurrence; no assertion, deadline or skip changed.
 
+## Claude plugin MCP review fixes — 2026-10-25
+
+- **Implementation:** `590dfd99b` (bounded plugin discovery and regression coverage).
+- **Aggregate:** `mise run test:logged -- --name repository-tests -- mise run test`, using the default shared host scheduler. Root/support ran with one worker; workspace and bridge groups waited for capacity alongside other worktrees.
+- **Failure:** `loads Pi's supported SDK from the staged runtime closure` timed out at 30004.50 ms. Root/support finished with 3,417 passed and this single failure across 3,418 tests in 162 files (616.63 seconds executing).
+- **Complete unchanged owner:** `mise run test:logged -- --name pi-vendor-isolation -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed (exit 0, 19.2 seconds logged).
+- **Evidence:** host temporary artifact `orkestrator-test-run.tDtn5i/root-and-agent-support-tests.log` (compressed after aggregate finalization); outer run `orkestrator-test-run.8bhwAk`.
+- **Assessment:** confirmed recurrence. No Pi implementation, assertion, deadline or skip changed. Concurrent host contention remains a possible contributor.
+
 ## Design opening-prompt review — 2026-10-25
 
 - `mise run test:logged -- --name review-tests -- mise run test` ran alongside

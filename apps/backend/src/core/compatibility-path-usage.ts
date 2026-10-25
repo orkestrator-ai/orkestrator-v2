@@ -33,8 +33,6 @@ export const COMPATIBILITY_PATH_IDS = [
   "mcp-report.unmarked-config",
   /** An MCP apply outcome was decided by the older-bridge rule. */
   "mcp-report.older-bridge-outcome",
-  /** A Multi Review reviewer transcript was read through the compatibility read (`fallback: true`). */
-  "multi-review.reviewer-transcript-fallback",
   /** A request used the legacy `/__orkestrator/browser/loopback/<port>/` preview route. */
   "preview.legacy-loopback-route",
   /** An expired prompt-queue claim, which only older backends write now, was restored to the head. */

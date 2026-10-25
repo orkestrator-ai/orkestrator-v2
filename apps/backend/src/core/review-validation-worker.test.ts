@@ -669,12 +669,53 @@ test("artifact verification rejects a same-size log replacement", async () => {
   const result = await completed(root, run);
   const environment = { environmentType: "local", worktreePath: root } as Environment;
   const runner = async () => "";
-  await verifyValidationArtifacts(environment, runner, result.results);
+  expect(await verifyValidationArtifacts(environment, runner, result.results)).toEqual({
+    artifacts: 2,
+    bytes: 5,
+  });
   const artifact = path.join(root, result.results[0]!.stdoutPath!);
   await chmod(artifact, 0o600);
   await writeFile(artifact, "other");
   expect(verifyValidationArtifacts(environment, runner, result.results)).rejects.toThrow(
     "SHA-256 changed",
+  );
+});
+
+test("container artifact verification hashes at the source and reports sizes", async () => {
+  const environment = { environmentType: "containerized" } as Environment;
+  const digest = "a".repeat(64);
+  const entries = [
+    { stdoutPath: "out.log", stderrPath: null, stdoutSha256: digest },
+    { stdoutPath: null, stderrPath: "err.log", stderrSha256: digest },
+  ];
+  const calls: string[][] = [];
+  const sizes: Record<string, string> = {
+    "/workspace/out.log": "12\n",
+    "/workspace/err.log": "30",
+  };
+  const runner = async (command: string, args: string[]) => {
+    calls.push([command, ...args]);
+    const target = args.at(-1)!;
+    if (command === "realpath") return `${target}\n`;
+    if (command === "stat") return sizes[target]!;
+    return `${digest}  ${target}\n`;
+  };
+  expect(await verifyValidationArtifacts(environment, runner, entries)).toEqual({
+    artifacts: 2,
+    bytes: 42,
+  });
+  expect(calls.map((call) => call[0])).toEqual([
+    "realpath",
+    "stat",
+    "sha256sum",
+    "realpath",
+    "stat",
+    "sha256sum",
+  ]);
+  // The validation worker's per-stream bound holds in containers too.
+  sizes["/workspace/out.log"] = String(32 * 1024 * 1024 + 1);
+  await expect(verifyValidationArtifacts(environment, runner, entries)).rejects.toThrow(
+    "exceeds its limit",
   );
 });
 

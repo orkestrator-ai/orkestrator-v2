@@ -374,6 +374,11 @@ export function isPipelineTranscriptReference(
 export interface PipelineSession {
   /** One durable continuation after a provider restart cut the turn short. */
   restartContinuationSent?: boolean;
+  /**
+   * The one automatic reminder to submit a missing tool-mode result was
+   * already spent, so a stage that ignores it fails instead of looping.
+   */
+  resultReminderSent?: boolean;
   phase: PipelineSessionPhase;
   /**
    * The harness this session was created on.
@@ -1114,6 +1119,7 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.structuredWaitStartedAt === undefined || isIsoDate(value.structuredWaitStartedAt)) &&
     (value.restartContinuationSent === undefined ||
       typeof value.restartContinuationSent === "boolean") &&
+    (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
     (value.structuredReportRepairAttempts === undefined ||
       isNonNegativeInteger(value.structuredReportRepairAttempts)) &&
     (value.interactionSummary === undefined ||

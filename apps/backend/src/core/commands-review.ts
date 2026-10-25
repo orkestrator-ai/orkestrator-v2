@@ -740,11 +740,22 @@ export function waitForContainerReviewPackageWrite(
   });
 }
 
+/**
+ * A review package check. A valid one also says how many validation artifacts
+ * it hashed and their bytes, beside the package's own `bytes`.
+ */
+export interface ReviewPackageVerification {
+  valid: boolean;
+  reason?: string;
+  artifacts?: number;
+  artifactBytes?: number;
+}
+
 export async function verifyEnvironmentReviewPackage(
   environmentId: string,
   reference: ReviewPackageReference,
   context: CommandContext,
-): Promise<{ valid: boolean; reason?: string }> {
+): Promise<ReviewPackageVerification> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   const runner = createEnvironmentCommandRunner(environment);
@@ -762,8 +773,8 @@ export async function verifyEnvironmentReviewPackage(
       return { valid: false, reason: "Review package SHA-256 changed" };
     }
     const pkg = JSON.parse(contents.toString("utf8")) as ReviewPackage;
-    await verifyValidationArtifacts(environment, runner, pkg.validation);
-    return { valid: true };
+    const artifacts = await verifyValidationArtifacts(environment, runner, pkg.validation);
+    return { valid: true, artifacts: artifacts.artifacts, artifactBytes: artifacts.bytes };
   } catch (error) {
     return {
       valid: false,

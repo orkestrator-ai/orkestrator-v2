@@ -58,3 +58,36 @@ Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run
 The recurrence on an unrelated bundler change is consistent with an app-side
 timing issue rather than a toolchain regression. No assertion, timeout or skip was
 changed.
+
+## Transcript arrival validation — 2026-10-25
+
+A different failure in the same owner occurred during
+`mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+(one browser worker, alongside repository and component checks). The assigned
+Grok draft case timed out at `native-draft-attachments.spec.ts:304` waiting for
+the app shell after a reload. Its screenshot was entirely blank, without the
+startup-error banner. This does not establish the same cause as the older
+mobile chip failure or the recorded dev-module-fetch errors.
+
+The full application run reported 28 passed, 55 opt-in skips and two failures
+in 550.1 s. The other failure was the previously recorded narrow Repository
+Settings picker (0224). The unchanged native-draft owner finished with four passes and two existing
+assigned-tab skips in 182.4 s in a fresh credential-free Codex fixture profile, using the existing
+`runIsolatedBrowser` lifecycle with a temporary config selecting only
+`native-draft-attachments.spec.ts` and one worker. Both profiles were stopped
+and reset, and the temporary config was removed. No assertion, timeout or skip
+changed. Renderer startup or reload timing under concurrent validation remains
+an unproven hypothesis.
+
+Evidence: host temporary artifacts
+`orkestrator-test-run.Fnh8OD/isolated-browser.log.gz` and
+`orkestrator-test-run.bL02my/summary.json`; browser reports under
+`output/agent-testing/qa-browser-7e580128-dac/browser/` and
+`output/agent-testing/qa-browser-27da3a8d-f8d/browser/`.
+
+Exact isolated owner command (the temporary config extended the normal browser
+config with `testMatch: "native-draft-attachments.spec.ts"`):
+
+```bash
+mise run test:logged -- --name draft-owner -- bun --eval 'import { runIsolatedBrowser } from "./apps/desktop/scripts/dev/isolated-browser.ts"; process.exitCode = await runIsolatedBrowser({ suite: { label: "draft attachment owner", config: "e2e/agent-testing/playwright.arrival-owner.tmp.config.ts" } });'
+```

@@ -449,6 +449,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           messages={messages}
           computeItemKey={(_index, message) => message.id}
           highlightedItemKey={highlightedMessageId}
+          animateArrivals
           resolvePreviousMessage={findPreviousNativeMessage}
           renderMessage={(_index, message, previous) => (
             <NativeMessage

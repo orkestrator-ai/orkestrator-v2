@@ -727,19 +727,18 @@ describe("useVirtuosoScrollState", () => {
         act(() => result.current.scrollProps.scrollerRef(scroller));
 
         expect(harness.resizeObserved).toContain(directChild);
-        expect(harness.mutationObserveCalls).toEqual([
-          {
-            target: scroller,
-            // Style attributes too: Virtuoso keeps rows in place with a list
-            // margin and a deferred scroll, which resize nothing observed.
-            options: {
-              childList: true,
-              subtree: true,
-              attributes: true,
-              attributeFilter: ["style"],
-            },
-          },
-        ]);
+        expect(harness.mutationObserveCalls).toHaveLength(1);
+        // Compare the target by identity so a mismatch in options never asks
+        // the assertion formatter to recursively print a DOM tree.
+        expect(harness.mutationObserveCalls[0]!.target).toBe(scroller);
+        expect(harness.mutationObserveCalls[0]!.options).toEqual({
+          childList: true,
+          subtree: true,
+          attributes: true,
+          // Virtuoso's positioning styles and the tool group's fold state can
+          // change layout without resizing an observed element immediately.
+          attributeFilter: ["style", "data-state"],
+        });
         expect(harness.mutationCallback).toBeDefined();
 
         act(() => {

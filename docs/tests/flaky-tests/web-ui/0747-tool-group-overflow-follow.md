@@ -31,3 +31,17 @@
   `orkestrator-test-run.3eBrrh/browser-suite.log.gz` and
   `orkestrator-test-run.r0ASNK/browser-failure-owners.log.gz`.
   The separate public-site browser suite passed (11.1 s).
+
+## Transcript arrival validation — 2026-10-25
+
+- `ORKESTRATOR_E2E_PORT=1462 mise run test:logged -- --name arrival-final-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptArrival.spec.ts e2e/ToolGroupFold.spec.ts --workers=2 --output output/playwright/arrival-final`
+  ran 62 cases: 61 passed and this mobile case failed in 105.9 s. At
+  `ToolGroupFold.spec.ts:471`, inner `scrollTop` was 704 instead of zero after
+  the reader left the end of the virtualized body. All 24 arrival cases passed.
+- The complete unchanged owning file passed all 38 cases in 116.1 s:
+  `ORKESTRATOR_E2E_PORT=1462 mise run test:logged -- --name fold-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1 --output output/playwright/fold-owner`.
+- Evidence: host temporary artifacts `orkestrator-test-run.A2vguk/arrival-final-browser.log.gz`
+  and `orkestrator-test-run.sbeXTO/summary.json`; browser failure artifacts are
+  under `output/playwright/arrival-final/`. Repository and isolated application
+  suites were also running. Timing or follow-state interaction under load
+  remains a hypothesis. No owner assertion, timeout or skip changed.

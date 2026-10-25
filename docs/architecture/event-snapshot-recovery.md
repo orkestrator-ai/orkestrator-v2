@@ -6,7 +6,7 @@ client hydration. Recurring work that feeds these views is described in
 
 An event-led view is a live event stream folded over an authoritative snapshot:
 the PR monitor mirror, environment diff statistics, the worktree snapshot
-revisions behind the Files panel (step 03), and the coordinator
+revisions behind the Files panel, and the coordinator
 view. This note defines which ordering each consumer may rely on, the
 additive wire contract for revisioned snapshots, and
 the client helper every such view uses to stay bounded while it converges.
@@ -26,9 +26,9 @@ compare revisions from two generations of the same row.
 | Resource manifest generation / snapshot revisions | Persistent storage snapshots; opaque 128-bit hex digests | `get_resource_revision_manifest`, scoped manifests, conditional resource snapshots | Equality only. Covers persistent resources, not ephemeral views. |
 | View owner generation | One lifetime of the service that owns a view (for PR/diff: one `PrMonitorService` / `DiffStatsService` instance, a random UUID) | `generation` on view events and snapshots | Equality only. A different value means the owner was replaced (backend restart, transport switch, retarget to a different lineage): reset the view. |
 | View domain revision | Per owner generation; integer that increases by exactly one per announced event (`packages/protocol/src/view-sync.ts`) | `revision` on view events and snapshots | Order events against a snapshot, drop duplicates, detect a missed event as a gap. Revision `0` = nothing announced yet (snapshots only). |
-| Native observation generation + revision (step 07) | One `NativeAgentObservationBroker` lifetime (`native-agent-observation.ts`); revision advances by exactly one per announced session activity transition | `generation`/`revision` on `native-agent-session-activity`, plus `agent`/`logical_session_key`; current position in `get_native_agent_sync_capabilities.observation` | `apps/web/src/lib/native-observation-events.ts` only: invalidation, never state. A gap or new generation re-reads every mounted native view. |
-| Target generation (worktree snapshots, step 03) | One tracked environment's lineage inside a `DiffStatsService` generation (worktree path or container, comparison ref); a service-unique integer, new on retarget, resume from pause, or re-track | `targetGeneration` on worktree snapshot states and on file-list/tree read stamps | Equality only. A different value means the file list and tree describe a different target: re-read, never compare its revisions with the old lineage's. An untracked environment is announced as a removal. |
-| File-list / tree revision (step 03) | Per target lineage; advances on every semantic change of the changed-file list (paths, original paths, statuses, line counts, truncation) or of the bounded tree | `fileListRevision` / `treeRevision` in worktree snapshot states; `view.revision` on read responses | Decide whether the list or tree the client shows is older than the announced one. Never a content revision. |
+| Native observation generation + revision | One `NativeAgentObservationBroker` lifetime (`native-agent-observation.ts`); revision advances by exactly one per announced session activity transition | `generation`/`revision` on `native-agent-session-activity`, plus `agent`/`logical_session_key`; current position in `get_native_agent_sync_capabilities.observation` | `apps/web/src/lib/native-observation-events.ts` only: invalidation, never state. A gap or new generation re-reads every mounted native view. |
+| Target generation (worktree snapshots) | One tracked environment's lineage inside a `DiffStatsService` generation (worktree path or container, comparison ref); a service-unique integer, new on retarget, resume from pause, or re-track | `targetGeneration` on worktree snapshot states and on file-list/tree read stamps | Equality only. A different value means the file list and tree describe a different target: re-read, never compare its revisions with the old lineage's. An untracked environment is announced as a removal. |
+| File-list / tree revision | Per target lineage; advances on every semantic change of the changed-file list (paths, original paths, statuses, line counts, truncation) or of the bounded tree | `fileListRevision` / `treeRevision` in worktree snapshot states; `view.revision` on read responses | Decide whether the list or tree the client shows is older than the announced one. Never a content revision. |
 
 ## Transport recovery — one contract for every client
 
@@ -162,9 +162,10 @@ to `native-event-stream-connected` (→ `onReconnect()`), registers with
    exceeding it requests reconciliation.
 
 Status (`HydrationStatus`) is mirrored into the owning store (`syncStatus` in
-`prMonitorStore` and `environmentDiffStore`): `idle`, `hydrating`, `current`,
-`stale`, `degraded`, `unsupported`. `getDiagnostics()` reports read counts per
-trigger, overflows, dropped notifications and peak buffer sizes.
+`prMonitorStore`, `environmentDiffStore` and `worktreeSnapshotStore`): `idle`,
+`hydrating`, `current`, `stale`, `degraded`, `unsupported`. `getDiagnostics()`
+reports read counts per trigger, overflows, dropped notifications and peak
+buffer sizes. How the UI shows it is in "Freshness in the UI" below.
 
 ## Safety cadence
 
@@ -210,9 +211,9 @@ State convergence and notifications are separate contracts.
 | Client | Backend | Result |
 | --- | --- | --- |
 | Current | Current | Revisioned hydration, gap detection, compact safety checks. |
-| Current | Before step 11 | `legacy`: reconnect hydration with bounded buffering; no periodic reads. |
+| Current | Without view revision stamps | `legacy`: reconnect hydration with bounded buffering; no periodic reads. |
 | Current | Without the snapshot command | `unsupported`: live events only until a reconnect. |
-| Before step 11 | Current | Extra optional fields are ignored; the unconditional snapshot shape is unchanged. |
+| Without view revision stamps | Current | Extra optional fields are ignored; the unconditional snapshot shape is unchanged. |
 
 ## Native observation invalidations
 
@@ -268,7 +269,7 @@ announcements in the stamp sequence),
 discovery and catalogue renewals, stale-only flips and drift stay silent). The
 live per-provider run is `e2e/agent-testing/idle-observation-live.spec.ts`.
 
-## Worktree snapshot revisions (step 03)
+## Worktree snapshot revisions
 
 `DiffStatsService` owns, per tracked environment, the diff counts, the
 changed-file list and (through `WorktreeTreeSnapshots`) the bounded file tree.
@@ -301,7 +302,7 @@ are invalidations only; the file list and tree are re-read with
   owner generation or target lineage differs. A hidden document defers to the
   read coordinator's return reconcile. The 5 s coordinated poll remains; for a
   quiet watched worktree the backend answers it from valid watched state.
-- Container states carry an optional `remote` (step 04):
+- Container states carry an optional `remote`:
   `{ state: not-required | current | stale | unknown, lastSuccessAt?,
   failure? }` from the container fetch policy (`container-git-fetch.ts`).
   Container status scans read local refs only; a background fetch that moves
@@ -323,7 +324,7 @@ are invalidations only; the file list and tree are re-read with
   target then holds the environment's own commits. Containers still measure
   from the creation commit.
 
-## Coordinator view (step 09)
+## Coordinator view
 
 The coordinator panel is invalidation-led, not event-folded: it subscribes to
 scoped `coordinator` (and `config`) `resource-changed` events before
@@ -334,14 +335,15 @@ hydrating and re-reads through `get_project_coordinator_view`
 comes from one process-wide counter, so it is never reused for another body.
 It is an equality/ordering token, not an event sequence — clients do not
 gap-detect it. Recovery rides `onViewSafetyCheck`, reconnect reconciliation
-and a guarded focus probe; an older backend keeps a 60 s full poll. The
-project's Git status is a separate probe and is not part of this view's
-freshness (see step 09's completion notes).
+and a guarded focus probe; an older backend keeps a 60 s full poll. The panel
+remembers that a backend lacks the view command per read-coordinator
+connection generation, so a server switch within one mount probes the command
+again. The project's Git status is a separate probe and is not part of this
+view's freshness.
 
 ## Adopting the contract
 
-For a new event-led view (step 07 activity observations, step 09 coordinator;
-step 03's worktree snapshots above are a worked example):
+For a new event-led view (the worktree snapshots above are a worked example):
 
 1. Give the owner a `generation` and a contiguous `revision`, stamp every
    event, and return snapshots via a synchronous `{ entries, generation,
@@ -357,5 +359,55 @@ step 03's worktree snapshots above are a worked example):
    notification as the `notify` argument of `receive` and deduplicate it with
    its own bounded key.
 5. Keep the existing polling for `legacy`/`unsupported` peers. A polling
-   reduction may rely on this contract only after its own fault tests (see the
-   plan's recovery coverage list) pass for that view.
+   reduction may rely on this contract only after it cites the fault coverage
+   below and adds rows for its own view.
+
+Recovery fault coverage today:
+
+- `apps/web/src/lib/bounded-hydration.test.ts`: event before subscription,
+  event during a snapshot, repeated reconnects during a snapshot, a late older
+  snapshot, duplicates, out-of-order gaps, generation reset, a lost final
+  event, replay expiry, filtered stream cursors, deletion and recreation,
+  buffer overflow, invalid payloads, snapshot timeouts, unsupported
+  capability and transport switch;
+- `apps/web/src/hooks/usePrMonitorService.test.tsx` and
+  `useEnvironmentDiffStats.test.tsx`: the same at hook level, a revision gap
+  turning into one conditional read, and PR transitions toasting once;
+- `apps/web/src/lib/resource-sync.test.ts`: the safety-check cadence;
+- `apps/backend/tests/view-revisions.test.ts` and
+  `apps/backend/src/core/commands-state-sync.test.ts`: backend stamping and
+  compact conditional reads.
+
+## Freshness in the UI
+
+Views keep showing the last data they received; freshness indicators say so
+without implying a new measurement (stale data keeps its original
+observation time). Texts live in `apps/web/src/lib/view-freshness.ts`.
+
+- **Connection.** `apps/web/src/lib/transport-connectivity.ts` combines two
+  owners: the browser gateway's main stream (`eventStreamConnection` on the
+  gateway API: `idle`, `connecting`, `connected`, `disconnected`) and, in
+  Electron, the active connection in the connection list (a remote
+  `reconnecting` or `unreachable`, or Local no longer available). Any owner
+  down means disconnected: the read coordinator's `setDisconnected` pauses
+  automatic reads and reconciles once when it clears, and
+  `ConnectionStatusBanner` shows one app-wide notice after 4 s, so a blip that
+  recovers on the first retry stays silent. Browser `offline` is not an owner.
+- **Per view**, only failures specific to that view: `stale`, `degraded` and
+  `unsupported` mark the View PR action (its tooltip adds the last successful
+  check time) and the legacy diff badge (the change projection carries its
+  own quality). The Files panel polls every 5 s, so its revision feed only
+  speeds updates up: it shows `stale`/`degraded` as delayed announcements and
+  says nothing for `unsupported`. `hydrating` is never shown, and a safety
+  check that answers `unchanged` never leaves `current`, so neither flickers.
+- **Container remote freshness.** On the Changes tab, `remote.state` `stale`
+  reads "Base may be behind remote": the changes are exact against the
+  clone's refs, which may be behind; it never means the list is unusable.
+  `unknown` reads "Base not fetched yet". `current` and `not-required` show
+  nothing.
+
+Coverage: `transport-connectivity.test.ts`, `view-freshness.test.ts`,
+`ConnectionStatusBanner.test.tsx`, `worktreeSnapshotStore.test.ts`, the
+freshness cases in `ActionBar.test.tsx`, `EnvironmentItem.test.tsx` and
+`FilesPanel.test.tsx`, and the connection-state cases in
+`web-gateway-reconnect.test.ts`.

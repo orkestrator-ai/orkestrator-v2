@@ -5,14 +5,17 @@ import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
  * Rehydrate model pickers from disk before React mounts. When Pi has no durable
  * entry yet, the backend may use a short-lived, environment-free bridge to seed
  * it; startup still bounds this call and lets the stores update when it settles.
+ * `seed` also downloads any enabled platform's missing catalogue (a first run).
  */
-export async function hydrateAgentModelCatalogCache(): Promise<void> {
+export async function hydrateAgentModelCatalogCache(
+  options: { seed?: boolean } = {},
+): Promise<void> {
   const claudeModelsBeforeRead = useAgentModelCatalogStore.getState().claudeModels;
   const codexModelsBeforeRead = useAgentModelCatalogStore.getState().codexModels;
   const cursorModelsBeforeRead = useAgentModelCatalogStore.getState().cursorModels;
   const grokModelsBeforeRead = useAgentModelCatalogStore.getState().grokModels;
   const piModelsBeforeRead = useAgentModelCatalogStore.getState().piModels;
-  const cache = await getAgentModelCatalogCache();
+  const cache = await getAgentModelCatalogCache(undefined, options);
   if (
     cache.claude?.models.length &&
     useAgentModelCatalogStore.getState().claudeModels === claudeModelsBeforeRead

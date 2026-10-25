@@ -122,10 +122,42 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["get_message", "mail"],
   ["get_message_status", "mail"],
   ["ack_message", "mail"],
+  ["create_schedule", "schedules"],
+  ["list_schedules", "schedules"],
+  ["cancel_schedule", "schedules"],
   ...NODE_TOOL_CAPABILITIES,
   ...NODE_FILE_TOOL_CAPABILITIES,
 ]);
 export const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
+
+/**
+ * What a conversation's credential may do. A side agent reads the project,
+ * talks to the main coordinator and schedules its own reminders; it launches
+ * nothing, so every worker reports to one place.
+ */
+export function coordinatorRoleCapabilities(role: "main" | "side"): string[] {
+  return role === "side"
+    ? ["discovery", "mail", "schedules"]
+    : [
+        "discovery",
+        "tickets",
+        "environments",
+        "jobs",
+        "build-pipelines",
+        "multi-review",
+        "mail",
+        "schedules",
+      ];
+}
+
+/** Whether a coordinator scope may call `tool` (listed and granted). */
+export function coordinatorToolGranted(
+  scope: Pick<CoordinatorControlScope, "capabilities">,
+  tool: string,
+): boolean {
+  const required = COORDINATOR_TOOL_CAPABILITY.get(tool);
+  return Boolean(required && scope.capabilities.includes(required));
+}
 
 export type CoordinatorControlScope = {
   role: "coordinator";
@@ -343,6 +375,37 @@ function mailboxFingerprint(page: JsonRecord): string {
       isRecord(message) ? [message.id, message.placement, message.ackedAt ?? null] : message,
     ),
   );
+}
+
+/**
+ * What a worker-status poll would be watching for. `lastActivityAt` moves on
+ * every turn event, so it is left out: a coordinator re-listing while a worker
+ * is still `working` asks the same question each time.
+ */
+function environmentListFingerprint(result: {
+  environments: JsonRecord[];
+  otherNodes?: JsonRecord[];
+}): string {
+  return JSON.stringify([
+    result.environments.map((environment) => [
+      environment.id,
+      environment.nodeId ?? null,
+      environment.status,
+      environment.setupPhase ?? null,
+      environment.lifecycleOperation ?? null,
+      environment.agentActivityState ?? null,
+      environment.prState ?? null,
+    ]),
+    (result.otherNodes ?? []).map((node) => [
+      node.nodeId,
+      node.available,
+      (Array.isArray(node.environments) ? node.environments : []).map((environment: JsonRecord) => [
+        environment.environmentId,
+        environment.status,
+        environment.activity ?? null,
+      ]),
+    ]),
+  ]);
 }
 
 /** The worker's half of the contract: one report, at the end, then stop. */
@@ -678,11 +741,17 @@ export async function createControlMcp(
               })
               .catch(() => [])
           : [];
-      return toolResult({
+      const result = {
         environments,
         total: environments.length,
         ...(otherNodes.length > 0 ? { otherNodes } : {}),
-      });
+      };
+      // A coordinator re-listing unchanged environments is polling its workers.
+      const guidance = pollGuard?.(
+        `list_environments:${JSON.stringify({ projectId, status, nodeId })}`,
+        environmentListFingerprint(result),
+      );
+      return toolResult(guidance ? { ...result, ...guidance } : result);
     },
   );
 

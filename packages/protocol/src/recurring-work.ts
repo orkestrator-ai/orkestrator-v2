@@ -56,6 +56,7 @@ export const RECURRING_JOB_KINDS = [
   "activity-lease-expiry",
   "tab-cleanup",
   "node-summary-reconcile",
+  "scheduled-job-tick",
   // Backend: workflows.
   "build-supervisor-tick",
   "looped-review-tick",
@@ -317,6 +318,17 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     60_000,
     "trailing-rerun",
     "snapshot-rehydrate",
+    false,
+  ),
+  // One timer armed for the earliest due fire, capped at 30 s so schedules
+  // written by another backend sharing the data directory are picked up.
+  "scheduled-job-tick": backend(
+    "B27",
+    "interval",
+    "progress",
+    30_000,
+    "skip-while-running",
+    "storage-reconcile",
     false,
   ),
   "tab-cleanup": backend("B13", "interval", "maintenance", 60_000, "join", "storage-reconcile"),

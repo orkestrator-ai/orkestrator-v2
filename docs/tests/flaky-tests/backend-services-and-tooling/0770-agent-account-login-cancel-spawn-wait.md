@@ -11,3 +11,9 @@
 - **Evidence:** host temporary artifact `orkestrator-test-run.iAgzh8/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Hypothesis:** the ~100 ms spawn wait is shorter than login startup under heavy host contention; the test and `agent-accounts.ts` arrived with `main` (#1213) and are untouched by this branch. No implementation, assertion, timeout or skip changed.
 - **Other failures in the same aggregate:** the existing OpenCode CLI version mismatch (mbp3 has 1.19.4, the conformance test expects 1.19.0) and four `tests/unit/firewall-policy.test.ts` timeouts already tracked as 0192/0632.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** the bounded poll `for (let n = 0; n < 100 && !child; n += 1) await Bun.sleep(1);` is still at `agent-accounts.test.ts:296`. The failure took 905 ms, so all 100 sleeps ran out before the spawn. The owner passed alone today (38/38, 5.4 s; Bun 1.4.4).
+- **Next step:** resolve a promise from `spawnImpl` and await it with a bounded deadline, instead of counting sleeps.

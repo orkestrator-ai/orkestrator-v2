@@ -139,7 +139,7 @@ import {
   type EvidencePermitPhase,
 } from "./review-evidence-permits.js";
 import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
-import { WorkflowDueScheduler, stableJitterMs } from "./multi-review-scheduler.js";
+import { WorkflowDueScheduler } from "./multi-review-scheduler.js";
 import { systemRecurringTimers } from "./recurring-scheduler.js";
 import {
   isSupervisedPhase,
@@ -149,6 +149,7 @@ import {
   needsInteractiveFixObservation,
   needsPausedStopReconciliation,
   reviewSession,
+  stableJitterMs,
   supervisionDemand,
   type MultiReviewObligation,
 } from "./multi-review-scheduling.js";
@@ -590,8 +591,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private readonly scheduler: WorkflowDueScheduler;
   private stopped = false;
   /**
-   * Selected once (step 08): the keyed driver, else the adaptive due
-   * scheduler (its rollback). Never both.
+   * Selected once: the keyed driver, else the adaptive due scheduler (its
+   * rollback). Never both.
    */
   private readonly keyed: boolean;
   private supervisor: KeyedWorkflowSupervisor<MultiReviewObligation> | null = null;
@@ -2158,7 +2159,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   /**
-   * The keyed driver (step 08). Same due-time policy as the adaptive
+   * The keyed driver. Same due-time policy as the adaptive
    * scheduler it replaces (`nextDueAt`: 1 s for boundaries, 3 s plus a stable
    * spread while simply observing a provider, address-handoff backoff), but
    * on the shared primitive with obligation-aware discovery, scoped wakeups,
@@ -4929,7 +4930,6 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             return createBuildPipelineProvider(connection, {
               ...this.options.providerDependencies,
               workflowResults: this.options.workflowResults,
-              autoAnswerRequests: false,
             });
           })();
       const managed = managedProvider(provider);

@@ -280,9 +280,13 @@ bridge exists to make that survivable:
   did not run; anything else reconciles against persisted turns via
   `sessions/dispatch-journal.ts`, which is what makes prompt dispatch
   at-most-once.
-- **A circuit breaker,** rather than restarting forever, plus an environment
-  fingerprint that forces a controlled restart when the developer's `PATH`
-  changes.
+- **A circuit breaker,** rather than restarting forever: five start failures
+  within 60 s open it. After a quiet 5-minute cooldown the next demand gets
+  one probe start (half-open, no retries behind it); success closes the
+  breaker, failure re-opens it with the cooldown doubled up to 30 minutes.
+  The backoff sleep between start attempts wakes on `stop()`, so shutdown
+  never waits it out. Plus an environment fingerprint that forces a
+  controlled restart when the developer's `PATH` changes.
 - **A pidfile and process-group termination,** so orphaned children cannot
   outlive the bridge and race over the same `CODEX_HOME`.
 
@@ -337,6 +341,26 @@ picker and the run on the same model:
   The renderer keeps that row when a later discovery update replaces the
   composer's models with the bare catalogue
   (`withRetainedSelectedModelRow` in `useNativeAgentSession.ts`).
+- **A dispatch that names another model.** A `dispatch_native_agent_prompt`
+  or Control MCP `model` that differs from the session's stored model is
+  applied the way a model pick is, a control update persisted under the session
+  lease and sent to the bridge, before anything is journaled
+  (`native-agent-dispatch-model.ts`, keyed on the platform policy's
+  `runsSessionHeldModel`). A model the live `model/list` positively does not
+  offer is refused with the draft kept, naming a model to pick instead. An
+  inherited default (`modelSource: "default"`) never changes the session.
+
+The bridge's `POST /session/:id/config` replaces the whole session config: a
+field left out resets (mode to Build, fast tier off). The backend therefore
+reads the current config and restates every field a control update leaves
+alone (`updateCodexSessionConfig` in `http-bridge-codex-config.ts`). A model
+change without an effort drops the old model's effort, so Codex applies the
+new model's default.
+
+Codex's reasoning summary (`summary`) and `personality` are not offered.
+`model/list` reports no summary support, and upstream deprecated
+`personality` (`supportsPersonality` is always false). Codex's own
+`config.toml` still applies to both.
 
 `session-titles.ts` is the one deliberate exception to all of the above — it
 still spawns a hermetic `codex exec` with a custom model catalog, a read-only
@@ -664,6 +688,14 @@ one applied (`promptThreadConfig`), and the next build turn reloads it back. A
 coordinator, which already denies `network`, keeps its research mode on a
 read-only turn, as Claude's does under process authority.
 
+Claude, Cursor and Grok also report the fixed read-only policy, not the
+session's, while it applies, so Agent Info does not understate the turn: Claude
+while a turn started with `readOnly` is running (`claudeReportedPolicy`), Cursor
+and Grok while the session's `readOnly` flag is set, which the next prompt
+clears (`cursorAppliedPolicy` in `execution-policy.ts`,
+`acpSessionReportedPolicy`). The reported policy carries
+`READ_ONLY_TURN_POLICY_NOTE` so the summary says why it differs.
+
 ### Approval modes
 
 Within that policy, Claude and Codex sessions also carry a per-session
@@ -691,10 +723,53 @@ between asking and non-asking modes needs a new CLI and is refused while
 background work holds the current one. Codex `on-request` and `auto-review` only
 ask when the agent leaves its sandbox, so on an unsandboxed host they narrow
 `danger-full-access` to `workspace-write`; a container keeps its own boundary.
+There, under `auto-approve`, `on-request` therefore never asks and
+`auto-review` never consults its reviewer, and the composer says so
+(`nativeAgentApprovalModes` with the policy's `sandbox`) rather than mapping
+the pick to `untrusted`; under `ask` the bridge already runs `on-request` as
+`untrusted`.
 
-Legacy bridge environment variables remain accepted temporarily as deprecated
-compatibility overrides. Launchers no longer use them for normal sessions; the
-backend policy is the source of truth.
+No bridge reads the old per-bridge policy environment variables
+(`CURSOR_BRIDGE_SANDBOX`, `PI_BRIDGE_REQUIRE_APPROVAL` and the rest); the
+backend policy is the only source.
+
+### Interaction deadlines and pausing
+
+Every question, approval and elicitation a bridge parks has a deadline after
+which it is denied, cancelled or declined, never approved. The countdown on its
+card can be paused: clicking the timer holds the deadline where it is enforced
+and clicking again restarts a fresh window.
+
+- Bridge timers are `InteractionDeadline`s
+  (`packages/protocol/src/agent-interaction-deadline.ts`). A pause re-arms one
+  at `AGENT_INTERACTION_HOLD_CEILING_MS` (24 h) or the provider's sooner limit,
+  so an unanswered request still ends. Bridges publish `hold`
+  (`AgentInteractionHold`) beside `expiresAt` and serve
+  `POST /session/:id/{family}/:requestId/hold`; the backend reaches it through
+  `holdInteraction` and the `hold_native_agent_interaction` command. A bridge
+  that publishes no `hold` is shown as `bridge-outdated`.
+- Provider limits: Grok stops its turn clock while a request is held (see
+  `bridges/acp-bridge/AGENTS.md`, "Parked request deadlines") but honours an
+  `ask_user_question` timeout the user configured; Pi pauses until its turn
+  budget; a Codex question with `autoResolutionMs` until then; MCP prompts
+  pause but warn that their server may stop waiting first. OpenCode publishes
+  no deadline, so there is nothing to pause.
+- Claude in tmux mode pauses through its hook script: the blocking hooks run
+  as `hook.sh <Kind> hold-v1` with a 48 h hook `timeout`, and the script's wait
+  loop consumes a hold request file and rewrites its timing file
+  (`tmux-hooks.ts`, command `claude_tmux_hold_hook`). A hook without
+  `hold-v1` (an older install, or a CLI started before the upgrade) keeps an
+  unpausable countdown (`hook-outdated`).
+- The public CLI lists `hold` and pauses or resumes a countdown
+  (`session interactions hold`, action `session.interaction.hold`; see
+  [public-cli.md](public-cli.md)).
+
+Claude AskUserQuestion option previews are requested as Markdown
+(`toolConfig.askUserQuestion.previewFormat`) and shown verbatim in a monospace
+block on the question card (`AgentInteractionOption.preview`, bounded per
+option and per request). Codex questions reach the card because interactive
+threads turn on `default_mode_request_user_input`; pipeline threads keep
+Codex's Default-mode refusal.
 
 ## Cursor Agent
 

@@ -34,7 +34,6 @@ import {
 } from "./agent-accounts-last-usage.js";
 import { contextUsageWithPlanUsage, sharedPlanUsageCache } from "./plan-usage-cache.js";
 import { StorageService } from "./storage.js";
-import { terminalAccountHomes } from "./terminal-account-usage.js";
 
 let root: string;
 let context: CommandContext;
@@ -181,14 +180,12 @@ beforeEach(async () => {
     emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
   } as unknown as CommandContext;
   resetAgentAccountLoginForTests();
-  terminalAccountHomes.clear();
 });
 
 afterEach(async () => {
   sharedPlanUsageCache.clear();
   cancelAgentAccountLogin();
   resetAgentAccountLoginForTests();
-  terminalAccountHomes.clear();
   context.runtime.shutdown();
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key];
@@ -472,6 +469,33 @@ describe("agent accounts", () => {
       await expect(
         fs.stat(path.join(context.storage.agentAccountsDirectory(), "last-usage.json")),
       ).rejects.toThrow();
+    });
+
+    test("keeps successful reauthentication non-fatal when post-login catalogue lookup fails", async () => {
+      const accountId = await addActiveClaudeAccount("claude-cache-failure");
+      let cacheReads = 0;
+      context.storage.getAgentModelCatalogCache = async () => {
+        cacheReads += 1;
+        throw new Error("catalogue storage unavailable");
+      };
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        await startAgentAccountLogin(context, "claude", {
+          reauthenticate: true,
+          executable: "claude",
+          spawnImpl: fakeClaudeLogin("claude-cache-failure"),
+        });
+
+        await expect(settledLogin()).resolves.toMatchObject({
+          state: "succeeded",
+          accountId,
+          mode: "reauthenticate",
+        });
+        await Promise.resolve();
+        expect(cacheReads).toBe(1);
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     test("a failed sign-in keeps the account it was renewing", async () => {
@@ -838,10 +862,10 @@ describe("agent accounts", () => {
   test("a running terminal retains its account home until it exits", async () => {
     const { accountId } = await addCodexAccount("terminal@example.com", "terminal");
     const home = path.join(root, "data", "agent-accounts", "codex", accountId!);
-    terminalAccountHomes.set("terminal-1", home);
+    context.runtime.terminals.recordAccountHome("terminal-1", home);
     await expect(removeAgentAccount(context, "codex", accountId!)).rejects.toThrow("terminal");
     expect((await fs.stat(home)).isDirectory()).toBe(true);
-    terminalAccountHomes.delete("terminal-1");
+    context.runtime.terminals.forgetAccountHome("terminal-1");
     await removeAgentAccount(context, "codex", accountId!);
   });
 

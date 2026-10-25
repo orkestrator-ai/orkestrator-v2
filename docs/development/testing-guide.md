@@ -399,6 +399,33 @@ ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE=orkestrator-v2:latest \
   ./src/core/design/export-container.test.ts
 ```
 
+The same export into a container Orkestrator created (its network-policy
+entrypoint, cloned workspace and lifecycle) is the Docker fixture case
+`e2e/agent-testing/design-container-export.spec.ts`: round trip, a container
+stopped outside Orkestrator, then an Orkestrator restart and a fingerprinted
+replace. It runs with the other Docker fixture specs, or alone:
+
+```bash
+mise run dev:test --profile <p> --fixture --fixture-environments local,container
+ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_DOCKER=1 \
+  mise run test:logged -- --name design-container-export -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts design-container-export.spec.ts
+```
+
+Design canvases across a published backend and this checkout (upgrade, a
+legacy `.orkdes` migration, the downgrade fence and the export-then-import
+downgrade path, a future record version and a corrupt record) run against the
+real `orkestrator` npm package on a private temporary data directory:
+
+```bash
+mise run test:logged -- --name design-mixed-versions -- bun scripts/qualify-design-mixed-versions.ts \
+  --old-version 2.22.3 --report output/agent-testing/design-mixed-versions/report.json
+```
+
+`e2e/DesignCanvas.spec.ts` takes `ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE=<rate>`
+(CDP `Emulation.setCPUThrottlingRate`, Chromium only) to slow the page instead
+of loading the host when chasing a timing flake.
+
 ### CLI scenarios
 
 The published client has targeted scenarios that start isolated backends
@@ -524,7 +551,8 @@ Generate the reference before making the change; no artifact is committed
   multi review its `WorkflowDueScheduler` (15 s reconciliation scan,
   per-workflow due passes). Each domain reports `storageReads` (store content
   decoded, cached or not, and uncached row queries) beside `storageStats`
-  (reuse of already-decoded records). The test holds every attempt to a
+  (reuse of already-decoded records) and `storageBytes` (what those reads
+  fetched from SQLite; cache-served reads fetch nothing). The test holds every attempt to a
   per-domain budget (`STORAGE_PER_ATTEMPT` in `recurring-baseline.test.ts`),
   so one extra read per pass fails it.
 
@@ -581,6 +609,24 @@ auth file and sends it only as a loopback request header. Stdout is a Markdown
 summary. Measured limits: the Electron window is a client (its renderer
 polls), bridges and Docker are not in the CPU/RSS totals, and detection is
 backend-side, a lower bound on change-to-visible.
+
+`--soak-cycles N` adds a lifecycle soak to every arm, after the window and the
+freshness probes. Each cycle creates, starts (to `ready`), stops, restarts and
+deletes one environment of each `--soak-environments` kind (`local` by
+default, `local,container` for both) through the CLI; a failed step still
+deletes its environment. Before and after the soak it reads the live
+footprint three times, 5 s apart: scheduler keys per owner and job kind,
+admission leases, container fetch and signal records, running recorded jobs,
+and event-stream and terminal subscribers. A gauge is a leak when its lowest
+reading after the settle is above its highest reading before the cycles. The
+run exits 1 when a soak step failed, a gauge leaked or the profile's logs hold
+a guard line.
+
+```bash
+mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --window-ms 60000 --freshness-probes 0 --soak-cycles 20 \
+  --soak-environments local,container --out output/benchmarks/recurring-soak.json
+```
 
 For transcript, projection and storage cost, use the
 [efficiency harness](efficiency-harness.md) (`mise run efficiency:baseline`).
@@ -692,10 +738,11 @@ mise run test:logged -- --name long-diagnostic -- command arg
 ```
 
 Do not make a larger limit the normal configuration. The deadline exists to
-catch a wedged run, not a slow one: the slowest group measured on the reference
-host is the workspace group at roughly four minutes on a cold cache. A default
-`mise run test` that gets anywhere near thirty minutes needs investigation
-rather than a raised limit.
+catch a wedged run, not a slow one. The slowest group is the workspace group:
+roughly four minutes cold on the 18-core reference host, and 20–22 minutes on
+GitHub's four-core runner (see the reference timings below), which is the
+closest any group comes to the limit. A default `mise run test` that gets
+anywhere near thirty minutes needs investigation rather than a raised limit.
 
 If an interrupted manual command leaves a process behind, identify it by its
 exact command, working directory, PID, or owned port before stopping it. Never
@@ -944,9 +991,18 @@ shared across worktrees.
 
 When comparing performance, record whether the run was cold or warm, the commit,
 the host's logical core count, and whether a development profile or another
-focused suite was active. On the 18-core reference machine, the measured
-post-change runs were about 188 seconds cold and 75 seconds warm; these are
-diagnostic reference points, not fixed pass criteria.
+focused suite was active. These are diagnostic reference points, not fixed
+pass criteria:
+
+- **18-core reference machine** (2026-09, before the backend and desktop
+  suites moved into their packages): about 188 seconds cold and 75 seconds
+  warm.
+- **GitHub's `ubuntu-latest` runner** (Ubuntu 26.04, four cores, 16 GB;
+  `mise run test:full`, `main` runs of 2026-10-25): workspace group
+  1,215–1,296 s, with the backend package 700–755 s and web 377–407 s, which
+  run one after the other at one worker each on four cores; root and
+  agent-support 199–214 s; bridges 145–191 s, of which ACP is 140–152 s. The
+  test job takes about 21 minutes.
 
 ## Parallel isolation and Bun module mocks
 

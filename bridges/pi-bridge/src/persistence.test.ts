@@ -531,3 +531,30 @@ test("drops restored command rows that do not name a Pi binding", async () => {
     "pi:template:review",
   ]);
 });
+
+test("a preview's rows restore still marked as waiting for the attach", async () => {
+  const state = newSessionState();
+  state.slashCommands = [
+    {
+      name: "/review",
+      id: "pi:template:review",
+      executionKind: "provider-prompt",
+      source: "template",
+    },
+  ];
+  state.commandCatalogue = { status: "stale", revision: 1, attachPending: true };
+  sessions.set(state.id, state);
+  schedulePersist();
+  await drainPersistence();
+  const entry = (await readState()).sessions.find((session) => session.id === state.id);
+  expect(entry?.commandsAttachPending).toBe(true);
+
+  sessions.clear();
+  await loadPersistedState();
+  // Restored rows still lack extension commands, so the picker keeps saying so.
+  expect(sessions.get(state.id)?.commandCatalogue).toEqual({
+    status: "stale",
+    revision: 0,
+    attachPending: true,
+  });
+});

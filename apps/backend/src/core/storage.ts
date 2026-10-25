@@ -14,6 +14,7 @@ import {
 } from "@orkestrator/protocol/coordinator";
 
 import { StoragePublicOperations } from "./storage-public-operations.js";
+import { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import { parseAgentAccountStore, type AgentAccountStore } from "./agent-accounts-store.js";
 
@@ -21,6 +22,20 @@ const MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS = 2_000;
 const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
 
 export class StorageService extends StoragePublicOperations {
+  private scheduledJobStoreInstance: ScheduledJobStore | null = null;
+
+  /**
+   * Scheduled jobs: their own database store, one row per schedule, written
+   * only through single-row transactions (see `scheduled-jobs/store.ts`).
+   */
+  scheduledJobStore(): ScheduledJobStore {
+    this.scheduledJobStoreInstance ??= new ScheduledJobStore({
+      database: () => this.database,
+      announce: (scheduleId) => this.announce("scheduled-job", scheduleId),
+    });
+    return this.scheduledJobStoreInstance;
+  }
+
   override async init(): Promise<void> {
     await super.init();
     await this.migrateConfigSchema();
@@ -191,6 +206,20 @@ export class StorageService extends StoragePublicOperations {
   }> {
     const store = await this.loadCoordinatorStore();
     return { workspaces: Object.values(store.workspaces), workflows: store.workflows };
+  }
+
+  /** Keep the draft snapshot stable through the coordinator write. Lock order is drafts, then coordinator. */
+  async mutateCoordinatorWorkspaceWithComposeDrafts(
+    projectId: string,
+    mutate: (
+      current: CoordinatorWorkspace | null,
+      drafts: Awaited<ReturnType<StorageService["listComposeDrafts"]>>,
+    ) => CoordinatorWorkspace | null,
+  ): Promise<CoordinatorWorkspace | null> {
+    return this.enqueueComposeDraftMutation(async () => {
+      const drafts = Object.values(await this.loadComposeDrafts());
+      return this.mutateCoordinatorWorkspace(projectId, (current) => mutate(current, drafts));
+    });
   }
 
   async mutateCoordinatorWorkspace(
@@ -556,8 +585,9 @@ export class StorageService extends StoragePublicOperations {
    * Serialized read-modify-write of one association's bookkeeping.
    *
    * `mutate` edits the stored record in place and returns whether it changed;
-   * nothing is written otherwise. Status-wake bookkeeping is backend-only, so
-   * this does not announce a coordinator change to clients.
+   * nothing is written otherwise. Most status-wake bookkeeping is backend-only
+   * and is not announced. A waiting episode starting or ending is: the
+   * coordinator panel marks that worker as needing a person.
    */
   async updateCoordinatorWorkflowAssociation(
     associationId: string,
@@ -567,9 +597,13 @@ export class StorageService extends StoragePublicOperations {
       const store = await this.loadCoordinatorStore();
       const association = store.workflows.find((item) => item.id === associationId);
       if (!association) return null;
+      const waitingBefore = association.delegation?.waiting?.since;
       if (!mutate(association)) return association;
       store.revision += 1;
       await this.saveSensitiveJson(this.coordinatorsFile(), store);
+      if (association.delegation?.waiting?.since !== waitingBefore) {
+        this.announce("coordinator", association.projectId, association.projectId);
+      }
       return association;
     });
   }

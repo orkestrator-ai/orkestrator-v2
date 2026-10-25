@@ -10,24 +10,13 @@ import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 import { cn } from "@/lib/utils";
 
 /**
- * A request's published hold, or the terminal-mode case: tmux cards are driven
- * by a hook script that cannot pause yet, and they say so rather than show a
- * countdown that looks clickable.
+ * A request's published hold, or the terminal-mode case of a tmux prompt
+ * raised by a hook script (or a Claude Code process) that predates pausing:
+ * it says so rather than show a countdown that looks clickable.
  */
 export type PromptDeadlineHold =
   | AgentInteractionHold
-  | { available: false; reason: "terminal-mode" };
-
-export const TERMINAL_MODE_DEADLINE_HOLD: PromptDeadlineHold = {
-  available: false,
-  reason: "terminal-mode",
-};
-
-/** The deadline control every Claude-in-tmux card shows. */
-export const TMUX_PROMPT_DEADLINE = {
-  hold: TERMINAL_MODE_DEADLINE_HOLD,
-  provider: "claude",
-} as const satisfies Omit<PromptDeadlineProps, "expiresAt">;
+  | { available: false; reason: "hook-outdated" };
 
 const AGENT_NAMES: Record<AgentInteractionProvider, string> = {
   claude: "Claude",
@@ -75,8 +64,8 @@ function explanation(
   if (!hold) return undefined;
   if (!hold.available) {
     switch (hold.reason) {
-      case "terminal-mode":
-        return "Pausing the countdown isn't available in terminal mode yet.";
+      case "hook-outdated":
+        return `This prompt came from a terminal hook that predates pausing. Prompts after ${agent} restarts can be paused.`;
       case "bridge-outdated":
         return "Pausing needs a newer agent bridge. Restart this environment to update it.";
       case "no-extension":

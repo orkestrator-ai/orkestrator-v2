@@ -122,6 +122,53 @@ describe("the prompt deadline a paused request is capped by", () => {
       jest.useRealTimers();
     }
   });
+
+  test("runs on a pausable clock when the request can move its timeout", async () => {
+    const start = 1_800_000_000_000;
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(start));
+    try {
+      const moves: number[] = [];
+      let settle!: (value: unknown) => void;
+      const child = {
+        request: (
+          _method: string,
+          _params: unknown,
+          _timeoutMs: number,
+          _signal: AbortSignal | undefined,
+          onTimeoutArmed?: (rearm: (timeoutAt: number) => void) => void,
+        ) => {
+          onTimeoutArmed?.((timeoutAt) => moves.push(timeoutAt));
+          return new Promise((answer) => {
+            settle = answer;
+          });
+        },
+      } as unknown as AcpProcess;
+      const state = {
+        messages: [],
+        approvals: new Map(),
+        interactions: new Map(),
+      } as unknown as SessionState;
+
+      const answered = requestPromptWithRetriableProviderRetries(
+        state,
+        child,
+        { sessionId: "vendor-session", prompt: [] },
+        1,
+        undefined,
+      );
+      expect(state.promptTurnClock).toBeDefined();
+      expect(state.promptDeadlineAt).toBe(start + PROMPT_TIMEOUT_MS);
+      // Nothing is held, so the timeout the request armed is left alone.
+      expect(moves).toEqual([]);
+      settle({ stopReason: "end_turn" });
+      await answered;
+      expect(state.promptTurnClock).toBeUndefined();
+      expect(state.promptDeadlineAt).toBeUndefined();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
 
 describe("ACP bridge", () => {
@@ -845,69 +892,181 @@ describe("ACP bridge", () => {
     expect((await fs.readFile(lifecycleFile, "utf8")).match(/^load:/gm)).toHaveLength(1);
   });
 
-  test("rejects a second composer patch that races one already applying", async () => {
+  /**
+   * Spawns a bridge whose fake agent holds every composer RPC until the test
+   * creates `release`, and logs each one it receives to `requests`. A race
+   * between a patch and another request then always overlaps: two loopback
+   * requests sent together are not guaranteed to, so the patch could finish
+   * before the bridge even reads the other one.
+   */
+  async function spawnHeldConfigBridge(name: string) {
     const directory = await temporaryDirectory();
-    const lifecycleFile = resolve(directory, "config-race-lifecycle.log");
+    const requestFile = resolve(directory, `${name}-config-requests.log`);
+    const releaseFile = resolve(directory, `${name}-release-config`);
+    const promptFile = resolve(directory, `${name}-prompts.log`);
     const { base, headers } = await spawnBridge({
       env: {
-        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_CONFIG_REQUEST_FILE: requestFile,
+        FAKE_ACP_HOLD_CONFIG_FILE: releaseFile,
+        FAKE_ACP_COUNTER_FILE: promptFile,
       },
     });
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
+    const session = `${base}/session/${created.id}`;
+    const readLog = (file: string) => fs.readFile(file, "utf8").catch(() => "");
+    return {
+      session,
+      headers,
+      patch: (body: { modelId?: string; reasoningId?: string }) =>
+        nativeFetch(`${session}/config`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        }),
+      prompt: (requestId: string) =>
+        nativeFetch(`${session}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "hello", requestId }),
+        }),
+      composer: async () =>
+        (await nativeFetch(`${session}/config`, { headers }).then((response) =>
+          response.json(),
+        )) as { selectedModelId?: string; selectedReasoningId?: string },
+      configRequests: async () =>
+        (await readLog(requestFile)).split("\n").filter((line) => line.length > 0),
+      // Resolves once the agent holds exactly one composer RPC, which proves
+      // the bridge has claimed the session and is awaiting the agent.
+      whenConfigHeld: () =>
+        waitFor(
+          () => readLog(requestFile),
+          (contents) => contents.split("\n").filter((line) => line.length > 0).length === 1,
+        ),
+      prompts: () => readLog(promptFile),
+      releaseConfig: () => fs.writeFile(releaseFile, "release\n"),
+    };
+  }
+
+  test("rejects a second composer patch that races one already applying", async () => {
+    const bridge = await spawnHeldConfigBridge("patch-race");
+    const before = await bridge.composer();
+    expect(before.selectedModelId).toBe("composer-2.5");
+    expect(before.selectedReasoningId).toBe("medium");
 
     // `applyComposerPatch` yields on every RPC. Without a claim taken before
     // the first await, both patches plan against the same stale sessionConfig
     // and the loser silently overwrites the winner's result.
-    const patch = (modelId: string) =>
-      nativeFetch(`${base}/session/${created.id}/config`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ modelId }),
-      });
-    const [first, second] = await Promise.all([patch("gpt-5.5"), patch("composer-2.5")]);
-    const statuses = [first.status, second.status].sort();
-    expect(statuses).toEqual([200, 409]);
+    const first = bridge.patch({ modelId: "gpt-5.5" });
+    await bridge.whenConfigHeld();
+    const second = await bridge.patch({ reasoningId: "high" });
+    expect(second.status).toBe(409);
+    expect(await second.json()).toEqual({ error: "Session is already running" });
+    // The refused patch never reached the agent.
+    const held = await bridge.configRequests();
+    expect(held).toHaveLength(1);
+    expect(held[0]).toContain('"gpt-5.5"');
+    expect(await bridge.composer()).toEqual(before);
 
-    const winner = first.status === 200 ? "gpt-5.5" : "composer-2.5";
-    const config = (await nativeFetch(`${base}/session/${created.id}/config`, { headers }).then(
-      (response) => response.json(),
-    )) as { selectedModelId?: string };
-    expect(config.selectedModelId).toBe(winner);
+    await bridge.releaseConfig();
+    const applied = await first;
+    expect(applied.status).toBe(200);
+    expect(await applied.json()).toMatchObject({
+      selectedModelId: "gpt-5.5",
+      selectedReasoningId: "medium",
+    });
+    expect(await bridge.composer()).toMatchObject({
+      selectedModelId: "gpt-5.5",
+      selectedReasoningId: "medium",
+    });
+    expect(await bridge.configRequests()).toEqual(held);
   });
 
   test("rejects a prompt that races an in-flight composer patch", async () => {
-    const { base, headers } = await spawnBridge();
+    const bridge = await spawnHeldConfigBridge("patch-then-prompt");
+
+    const config = bridge.patch({ modelId: "gpt-5.5" });
+    await bridge.whenConfigHeld();
+    // A composer patch and a turn would otherwise interleave their RPCs on one
+    // agent, so the prompt is refused while the patch holds the session.
+    const prompt = await bridge.prompt("race-1");
+    expect(prompt.status).toBe(409);
+    expect(await prompt.json()).toEqual({ error: "Session is already running" });
+    expect(await bridge.prompts()).toBe("");
+
+    await bridge.releaseConfig();
+    expect((await config).status).toBe(200);
+    expect((await bridge.composer()).selectedModelId).toBe("gpt-5.5");
+
+    // The refused turn was never journaled, so the same requestId is a fresh
+    // turn now: not a duplicate, and not one still "preparing".
+    const retried = await bridge.prompt("race-1");
+    expect(retried.status).toBe(202);
+    expect(await retried.json()).toEqual({ accepted: true });
+    await waitFor(bridge.prompts, (contents) => contents.trim() === "prompt");
+  });
+
+  test("rejects a composer patch that races a running turn", async () => {
+    const directory = await temporaryDirectory();
+    const requestFile = resolve(directory, "turn-then-patch-config-requests.log");
+    const holdTurnFile = resolve(directory, "release-turn");
+    const { base, headers } = await spawnBridge({
+      env: {
+        FAKE_ACP_CONFIG_REQUEST_FILE: requestFile,
+        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
+      },
+    });
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
       (response) => response.json(),
     )) as { id: string };
-
-    const [config, prompt] = await Promise.all([
-      nativeFetch(`${base}/session/${created.id}/config`, {
+    const session = `${base}/session/${created.id}`;
+    const patch = () =>
+      nativeFetch(`${session}/config`, {
         method: "POST",
         headers,
         body: JSON.stringify({ modelId: "gpt-5.5" }),
-      }),
-      nativeFetch(`${base}/session/${created.id}/prompt`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ prompt: "hello", requestId: "race-1" }),
-      }),
-    ]);
-    // Whichever request the server reads first claims the session; the point is
-    // that they can never both proceed, because a composer patch and a turn
-    // would otherwise interleave their RPCs on one agent.
-    expect([config.status, prompt.status].filter((status) => status === 409)).toHaveLength(1);
-    if (prompt.status === 409) {
-      // The refused turn was never journaled, so the same requestId can retry.
-      const retried = await nativeFetch(`${base}/session/${created.id}/prompt`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ prompt: "hello", requestId: "race-1" }),
       });
-      expect(retried.status).toBe(202);
-    }
+    const sessionStatus = async () =>
+      (
+        (await nativeFetch(session, { headers }).then((response) => response.json())) as {
+          status: string;
+        }
+      ).status;
+    const selectedModelId = async () =>
+      (
+        (await nativeFetch(`${session}/config`, { headers }).then((response) =>
+          response.json(),
+        )) as { selectedModelId?: string }
+      ).selectedModelId;
+    const before = await selectedModelId();
+    expect(before).not.toBe("gpt-5.5");
+
+    expect(
+      (
+        await nativeFetch(`${session}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORTASKHELD: run", requestId: "turn-held-1" }),
+        })
+      ).status,
+    ).toBe(202);
+    await waitFor(sessionStatus, (value) => value === "running");
+
+    const refused = await patch();
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "Session is already running" });
+    expect(await fs.readFile(requestFile, "utf8").catch(() => "")).toBe("");
+    expect(await selectedModelId()).toBe(before);
+    // The turn is still the one holding the session.
+    expect(await sessionStatus()).toBe("running");
+
+    await fs.writeFile(holdTurnFile, "release\n");
+    await waitFor(sessionStatus, (value) => value === "idle");
+    const applied = await patch();
+    expect(applied.status).toBe(200);
+    expect(await selectedModelId()).toBe("gpt-5.5");
+    expect(await fs.readFile(requestFile, "utf8")).toContain("gpt-5.5");
   });
 
   test("fails an oversized structured turn rather than parsing a cut answer", async () => {

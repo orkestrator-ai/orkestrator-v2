@@ -1,7 +1,9 @@
 # Agent interactions and permissions
 
 Checked against `main` at `2459b05c` (2026-10-15); items 2, 4 and 6 and the
-capability half of item 13 updated on `b83ae534` (2026-10-22).
+capability half of item 13 updated on `b83ae534` (2026-10-22). Every code
+item, the open questions and the verification items worked through on
+`00a0cb82` (2026-10-25); what is left needs a live provider or a person.
 
 Every question, approval, elicitation and dialog a provider raises should either
 reach the user through the shared interaction contract and its one generic card,
@@ -9,9 +11,12 @@ or be resolved by backend policy. The backend execution policy, not the bridges,
 decides what a session may do without asking. The contract, the capability bit,
 the unattended policy and the execution policy are in place, and the
 per-bridge environment overrides that predated the execution policy are gone.
-What is left is durable "always allow" rules, Grok loading a trusted
-checkout's resources whatever the policy says, Codex questions, and the
-countdown pause gaps.
+Since 2026-10-25 Codex questions reach the card, every countdown (Claude tmux
+included) can be paused, the CLI can pause one, and Agent Info describes a
+read-only turn truthfully. What is left is Grok loading a trusted
+checkout's resources whatever the policy says (no switch exists on the
+pinned Grok 1.0.67), and live qualification runs that need a provider login
+or a person.
 
 ## Current state
 
@@ -24,8 +29,8 @@ countdown pause gaps.
 - Capability bit: `NativeAgentCapabilities.interactions.kinds`, set per platform
   in `nativeAgentCapabilities()` (`packages/protocol/src/native-agent.ts`).
   - Cursor reports `[]`.
-  - Codex does not claim `question`: no Orkestrator turn can raise one
-    (item 13). The bridge still parks one that arrives.
+  - Codex claims `question` again (item 13): interactive threads turn on
+    `default_mode_request_user_input`; pipeline threads do not.
   - Pi reports its live gate through `publicInteractionKinds`
     (`bridges/pi-bridge/src/public.ts`). The backend prefers that answer over
     the table (`interactionKinds` in `http-bridge-provider.ts`).
@@ -75,7 +80,11 @@ countdown pause gaps.
   - Under `auto-approve` a tool that reaches `canUseTool` runs.
   - An approval never returns the SDK's permission `suggestions`, because no
     revoke surface exists and returning them "would silently widen permissions
-    after an allow-once decision". `approve-for-session` is refused.
+    after an allow-once decision". `approve-for-session` is refused. Decided
+    on 2026-10-25 (item 1): Claude offers no "always allow".
+  - AskUserQuestion option previews: the query sets
+    `toolConfig.askUserQuestion.previewFormat: "markdown"`, and the question
+    card shows an option's `preview` verbatim in a monospace block (item 3).
   - Denials are recorded on the tool row or as a status row
     (`handlePermissionDenied`, `session-manager-prompt-handlers/system.ts`).
     `NativeAgentContextUsage` carries `permissionDenials` and
@@ -90,11 +99,9 @@ countdown pause gaps.
   `file-approval` and `permission`. While any request is held, `/activity` answers
   `waiting`. Plan approvals and questions use the separate
   `x.ai/exit_plan_mode` and `x.ai/ask_user_question` reverse requests.
-- OpenCode: every production owner creates the provider with
-  `autoAnswerRequests: false`, so OpenCode interactions go through the same
-  journaled path as everyone else. The `OpenCodeProvider` auto-reject branch
-  (`autoAnswerRequests: true`) is reached only from
-  `agent-provider-test-support.ts`.
+- OpenCode: `OpenCodeProvider` never answers a permission or question
+  itself; every OpenCode interaction goes through the same journaled path as
+  everyone else (item 5 removed the auto-reject branch and its option).
 - Execution policy:
   - Resolved once per session by `resolveNativeAgentExecutionPolicy`
     (`apps/backend/src/core/native-agent-execution-policy.ts`).
@@ -114,7 +121,9 @@ countdown pause gaps.
     say why in `note` (`withoutProviderSandbox`, `acpReportedPolicy`,
     `effectiveOpenCodePolicy`). Codex honours project resources off with a
     per-thread untrusted pin and disabled repo skills (item 6), so it reports
-    the policy unchanged.
+    the policy unchanged. While a read-only turn applies, Claude, Cursor and
+    Grok report the read-only policy with `READ_ONLY_TURN_POLICY_NOTE`
+    (item 7).
   - Held to the adapters by the execution-policy conformance suite
     (`tests/conformance/execution-policy/`). For each platform and ten policy
     shapes it captures the options the SDK or CLI receives, decodes them into
@@ -133,12 +142,19 @@ countdown pause gaps.
     calls it through `holdInteraction` (`http-bridge-interactions.ts`) and the
     `hold_native_agent_interaction` command. A bridge that publishes no `hold`
     is mapped to `bridge-outdated`: the countdown shows but is not clickable.
-  - Limits: Grok pauses only until its turn deadline (`ACP_PROMPT_TIMEOUT_MS`)
-    and, for questions, its own `ask_user_question` timeout; Pi until its turn
+  - Limits: Grok stops its turn clock while a request is held, so a pause
+    runs to the hold ceiling (item 10), but a question still ends at a
+    `ask_user_question` timeout the user configured for Grok, which the card
+    shows as the provider limit; Pi until its turn
     budget; a Codex question with `autoResolutionMs` until then; MCP prompts
     pause but warn that their server may stop waiting first. OpenCode publishes
     no deadline, so there is nothing to pause.
-  - Claude in tmux shows the countdown as not pausable yet (item 9).
+  - Claude in tmux pauses through a hold sidecar its hook script honours
+    (`claude_tmux_hold_hook`, item 9). A hook installed by an older backend,
+    or a Claude CLI started before the upgrade, keeps an unpausable
+    countdown (`hook-outdated`).
+  - The public CLI and API list `hold` and pause or resume a countdown
+    (`session interactions hold`, `session.interaction.hold`; item 11).
   - Qualified live on Claude (question and command approval), Codex (command
     approval), OpenCode (question and permission) and Pi (command approval):
     each was left pending for 11 minutes, then answered after a reload, and its
@@ -153,15 +169,16 @@ countdown pause gaps.
 
 ### Code
 
-1. **"Always allow" and saved rules.** Codex execpolicy and network amendments
-   are the only path to a persistent rule today. Decide whether Claude offers
-   `permission-grant` amendments built from `canUseTool` `suggestions`. If it
-   does, add a read and revoke surface first. None of these exist yet:
-   - `NativeAgentPermissionRule` (`id`, `label`, `scope`, `source`);
-   - `GET /session/:id/permission-rules` and `DELETE /session/:id/permission-rules/:ruleId`;
-   - `listPermissionRules?` / `removePermissionRule?` on `NativeAgentRuntimeProvider`.
-
-   Bridges with no saved rules answer an empty list, not 404.
+1. **"Always allow" and saved rules.** Done 2026-10-25 (decision). Claude
+   does not offer `permission-grant` amendments: an approval still never
+   returns the SDK's `suggestions`, and `approve-for-session` stays refused,
+   so nothing Claude approves outlives the call (decision 1 below). That
+   leaves Codex's exec-policy and network amendments as the only path to a
+   saved rule. Orkestrator cannot list or revoke those, so the read and
+   revoke surface (`NativeAgentPermissionRule`, the `permission-rules`
+   routes, `listPermissionRules?` / `removePermissionRule?`) moved to
+   [0160-codex-saved-rules-list-and-revoke.md](0160-codex-saved-rules-list-and-revoke.md),
+   which also weighs dropping the amendment options instead.
 2. **Grok approval kind.** Done 2026-10-22. The bridge derives the kind from
    the ACP `toolCall.kind` (or the kind it recorded for the same call, or a
    known tool name such as `bash`, reading through Grok's `use_tool`
@@ -175,9 +192,22 @@ countdown pause gaps.
    against a live Grok request (the host Grok login was expired); the Grok
    live qualification below should confirm that real `execute` and `edit`
    requests arrive as command and file approvals.
-3. **Claude question previews.** Set `toolConfig.askUserQuestion.previewFormat`
-   once the question card's rendering mode (plain or html) is decided. Nothing
-   sets it today.
+3. **Claude question previews.** Done 2026-10-25. Every Claude turn sets
+   `toolConfig: { askUserQuestion: { previewFormat: "markdown" } }`
+   (`session-manager-prompt-query.ts`; `html` refused, decision 2). An
+   option's `preview` is carried as `AgentInteractionOption.preview` (new,
+   optional, bounded like a description), at most 4,096 characters each and
+   32,768 per request; past that the request keeps its options and drops every
+   preview, so a long preview can never push a question over the snapshot
+   bound (`withinClaudePreviewBudget` in `http-bridge-interactions.ts`). Both
+   cards show it verbatim in a monospace block, never as Markdown or HTML
+   (`NativeAgentQuestionCard`, `NativeAgentInteractionCard`). Older clients
+   ignore the field; only the backend validates options strictly. Tests:
+   `session-manager-parked-interactions.test.ts` ("asks for question previews
+   as Markdown"), `agent-provider-interactions.test.ts` ("Claude question
+   previews are carried within their budget"), `NativeAgentQuestionCard.test.tsx`
+   ("shows an option's preview verbatim"). Not checked against a live model:
+   whether Claude actually emits previews for a plain question.
 4. **Retire the deprecated policy env overrides.** Done 2026-10-22. Cursor
    and Pi read only the session's policy (`sandboxEnabled`,
    `resolveCursorSettingSources`, `approvalsEnabled` and
@@ -190,11 +220,22 @@ countdown pause gaps.
    `AGENTS.md` files and `platform-inconsistencies.md` are updated, and no
    source file outside tests names any of the five variables. Tests that set
    them now check they change nothing.
-5. **Delete the unused OpenCode auto-answer branch.** No production caller sets
-   `autoAnswerRequests: true`. Remove the branch in `OpenCodeProvider`
-   (`registerSession`, the reconcile hook and the `permission.asked` /
-   `question.asked` replies) and move the tests that use it onto the journaled
-   path. If a future owner wants provider-side answering, it should follow
+5. **Delete the unused OpenCode auto-answer branch.** Done 2026-10-25. The
+   `autoAnswerRequests` option is gone from `ProviderCommonDependencies` and
+   `OpenCodeProviderDependencies`, and with it the `permission.asked` /
+   `question.asked` replies, the pending-request reconciliation in
+   `registerSession` and on stream start, and the `blockedSessions`,
+   `failedQuestionSessions` and `answeringRequestIds` state they fed. The
+   provider-level `onInteractionObservation` hook fired only from that
+   branch, so it went too, along with its wiring through the build pipeline,
+   looped review and `index.ts` and the tracker's provider-reported
+   observation path (`recordProviderInteractionObservation`,
+   `providerReportedInteractions`, `PROVIDER_REPORTED_INTERACTION_GRACE_MS`).
+   The interaction monitor now sees only what its sweep reads. Tests that
+   drove the branch were deleted; "leaves OpenCode permissions and questions
+   pending for the journaled path" (`opencode-provider-lifecycle.test.ts`)
+   checks that even an unattended registration gets no provider-side reply.
+   A future owner that wants provider-side answering should follow
    `agentInteractionPolicyAction` instead of always rejecting.
 6. **Codex project resources.** Done 2026-10-22. With project resources off,
    every `thread/start`, `thread/resume` and `thread/fork` carries
@@ -219,63 +260,153 @@ countdown pause gaps.
      disabled one, but that dispatch was not checked.
    - Hooks were not probed separately. They live in the same `.codex` layer
      the pin drops, which the config-layer and MCP canaries prove.
-7. **Read-only turns.** Claude, Cursor and Grok run a `readOnly` turn under the
-   coordinator policy but keep reporting the session's. Agent Info then
-   understates the turn's restrictions (never overstates them).
-8. **Codex `on-request` in a container.** Under an `auto-approve` policy a user
-   who picks `on-request` in a container gets a mode that never asks, because
-   Codex asks only at the edge of a sandbox the container keeps off. Under
-   `ask` the bridge now runs it as `untrusted`; decide whether the composer
-   should do the same, or describe the mode honestly there.
+7. **Read-only turns.** Done 2026-10-25. Claude, Cursor and Grok now report
+   the read-only policy while it applies, marked with
+   `READ_ONLY_TURN_POLICY_NOTE` (`readOnlyTurnReportedPolicy` in
+   `native-agent-policy-effects.ts`): Claude while a turn started with
+   `readOnly` is running (`claudeReportedPolicy`, from
+   `commandDiscoveryInputs.readOnly`), Cursor and Grok while the session's
+   `readOnly` flag is set, which a later prompt clears (`cursorAppliedPolicy`
+   in the new `cursor-bridge/src/execution-policy.ts`, shared with `attach`;
+   `acpSessionReportedPolicy`). Tests: `claude-query-config.reported-policy.test.ts`,
+   `public-policy.test.ts` (Cursor), `acp-reported-policy.test.ts`.
+8. **Codex `on-request` in a container.** Done 2026-10-25 (decision 4).
+   The composer describes the mode honestly rather than mapping it to
+   `untrusted`: in a container under `auto-approve`, `on-request` reads
+   "…so this never asks; choose Untrusted to approve commands" and
+   `auto-review` says its reviewer is never consulted; under `ask` it says it
+   asks like Untrusted, which is what `codexApprovalConfig` runs
+   (`CODEX_CONTAINER_APPROVAL_DESCRIPTIONS` in `native-agent.ts`; the launcher
+   passes the policy's `sandbox`, `AgentNativeTab.helpers.tsx`). Tests:
+   `native-agent.test.ts`, `AgentNativeTab.test.tsx`.
 
-9. **Pause in Claude tmux mode.** The deadline there is the `sleep` in the hook
-   script (`tmux-hooks.ts` `hookScript`), and Claude Code kills a command hook
-   after its own 600 s default. Pausing needs: a hold sidecar the script's wait
-   loop honours (re-arming on resume), a `timeout` on the PreToolUse,
-   PermissionRequest and Elicitation hooks above the hold ceiling,
-   `parseBlockingHookTiming` accepting a moved deadline, a backend command, and
-   re-emitting the hook event (blocking ids are emitted once today). Cards then
-   drop `TMUX_PROMPT_DEADLINE`. Detect an installed script that predates the
-   sidecar and keep its countdown unpausable.
-10. **Pause Grok past its own limits.** A Grok pause ends at the 30-minute turn
-    deadline, and a question also at Grok's `ask_user_question` timeout. Lifting
-    that means pausing the bridge's `session/prompt` timeout while a request is
-    held and raising Grok's question timeout to match; the bridge also does not
-    read Grok's `config.toml` `[toolset.ask_user_question]`, so a shorter value
-    set there is not reflected in the published limit.
-11. **Pause from the public CLI and API.** `session interactions list` shows the
-    moved `expiresAt` but not `hold`, and there is no hold action. Add `hold` to
-    the listing and a `session.interaction.hold` action that calls
-    `hold_native_agent_interaction`.
-12. **Grok project resources off.** When the policy turns project resources on,
-    the ACP bridge launches Grok with `GROK_FOLDER_TRUST=0`
-    (`acp-provider-config.ts`). When it is off, which is the host default, Grok
-    still loads the AGENTS.md, skills, commands, hooks and MCP servers of a
-    checkout whose main repository the user trusted in Grok, and
-    `acpReportedPolicy` reports the axis as on. No switch forces Grok's gate
-    closed: an empty `GROK_HOME` would also drop the login. Find one on the
-    pinned build (or ask xAI), then honour `false` and drop the note, as item 6
-    did for Codex. A search of the 1.0.52 binary on 2026-10-22 found only
-    switches that open the gate (`GROK_FOLDER_TRUST=0`, `--trust`,
-    `[folder_trust] enabled = false`) and no other `GROK_*TRUST*` variable or
-    trust-store path override. `GROK_AUTH_PATH` exists, so a throwaway
-    `GROK_HOME` with the login pointed back at the real auth file might keep
-    the login, but it would also drop the user's config, skills, MCP servers
-    and session store; not tried, and it needs a live Grok login to qualify.
-13. **Codex questions never reach the card.** The capability table and the
-    bridge's `item/tool/requestUserInput` path claim Codex questions, but no
-    real Codex turn can raise one. The bridge never sets a collaboration mode
-    on `turn/start`, so every turn, Orkestrator Plan included (a prompt
-    reminder, not Codex's Plan mode), runs in Codex's Default mode. Codex
-    0.162.1 there answers `request_user_input` with "request_user_input is
-    unavailable in Default mode", and the model falls back to asking in plain
-    text (seen live on 2026-10-21, see the live pause record). Either run
-    Orkestrator Plan turns in Codex's Plan collaboration mode, or turn on
-    Codex's `default_mode_request_user_input` feature for interactive
-    sessions only (unattended owners would then decline the question by
-    policy). `question` is out of the Codex row in `nativeAgentCapabilities()` since
-    2026-10-22; put it back with the fix. Then add the Codex question case to
-    `paused-interactions-live.spec.ts`.
+9. **Pause in Claude tmux mode.** Code done 2026-10-25; live check open.
+   - The three blocking hooks (PreToolUse, PermissionRequest, Elicitation)
+     run as `bash hook.sh <Kind> hold-v1` with `timeout: 172800` (two hold
+     ceilings), so Claude Code no longer kills them at 600 s.
+   - With `hold-v1` the script writes a version-2 timing file (`startedAt`,
+     `expiresAt`, `limitAt` = start + 172,740 s, `heldAt` while paused) and
+     its wait loop consumes `<session>/hold/<Kind>-<id>.json`: a pause moves
+     the deadline to the earlier of now + 24 h and `limitAt`, a resume to a
+     fresh five-minute window. Without the argument it writes the old shape,
+     which stays unpausable (`hook-outdated`): an installed script that
+     predates the sidecar, or a CLI started before the upgrade.
+   - `parseBlockingHookTiming` accepts a moved deadline only when it is
+     consistent with `startedAt`/`heldAt` and `limitAt`.
+   - Command `claude_tmux_hold_hook` writes the request, waits up to 5 s for
+     the script to rewrite the timing, then re-emits the same `hook` frame
+     with the new `expires_at` and `hold`. If the script does not answer, it
+     withdraws the request and the prompt keeps its old deadline (fail
+     closed). Answering, expiry and the drain remove the hold file.
+   - Cards use `usePromptHold`; `TMUX_PROMPT_DEADLINE` is gone.
+   - Tests: `apps/backend/tests/tmux-hook-hold.test.ts` runs the generated
+     script (pause, resume, answer, expiry after resume, unpausable without
+     the argument); web store, client, card and tab tests.
+   - Still owed: a real Claude CLI honouring a 172,800 s hook `timeout`
+     without clamping it, and a paused PermissionRequest surviving past 600 s
+     (no documented maximum was found; a clamped hook is killed, which stops
+     the tool call, so it still fails closed). See Qualification.
+10. **Pause Grok past its own limits.** Done 2026-10-25 in code and against
+    the pinned binary; the live pause through the app is owed (Qualification).
+    - The `session/prompt` timeout is now a clock that stops while any parked
+      request is held and restarts with the time it had left when the last
+      hold ends or the held request settles (`acp-prompt-clock.ts`,
+      `syncPromptTurnClock`; `AcpProcess.request` takes an `onTimeoutArmed`
+      callback so the timeout can move). A resumed request always gets at
+      least its fresh five-minute window. While stopped, a backstop sits at
+      time left + 24 h, after any held request must have expired. A held
+      approval or plan approval therefore runs to the 24 h ceiling instead of
+      the turn deadline.
+    - Grok's own question timeout is resolved at spawn in Grok's order
+      (`/etc/grok/requirements.toml`, then the environment, then
+      `$GROK_HOME/config.toml` `[toolset.ask_user_question]`;
+      `acp-question-timeout.ts`). When nothing sets it, the child gets
+      `GROK_ASK_USER_QUESTION_TIMEOUT_SECS=86400` and the bridge's deadline
+      decides; a value or off switch the user set is left alone and
+      published as the card's provider limit (decision 13).
+      `managed_config.toml` is not read: Grok syncs it from the team and
+      deleted a hand-written copy in the probe.
+    - Tests: `acp-prompt-clock.test.ts`, `acp-question-timeout.test.ts`,
+      `acp-request-rearm.test.ts` (a real `AcpProcess` timeout moved earlier
+      and later against an agent that never answers), `acp-context.test.ts`
+      (the spawned child's environment), `acp-prompt.test.ts`.
+    - Evidence: Grok 1.0.67 (`2fe064390d07`, the pin) against a loopback
+      model in a throwaway `GROK_HOME`, no credentials: the ask arrives as
+      `_x.ai/ask_user_question` with no timeout in it; Grok abandoned it at
+      8 s with the environment set to 8, at 5 s with the user config set to
+      5, and at 9 s with environment 9 over config 5; with 86400 it was still
+      pending at 1,950 s, past the 1,800 s default. Longer was not run.
+11. **Pause from the public CLI and API.** Done 2026-10-25. Each item in
+    `session.interactions` carries an optional `hold` (`available`,
+    `heldAt` while paused, `reason`), and `session interactions list` prints
+    whether each countdown is paused, pausable or not and why. The new
+    `session.interaction.hold` action (`held: true|false`; CLI
+    `orkestrator session interactions hold SESSION INTERACTION [--resume]`)
+    calls `hold_native_agent_interaction`. It refuses before any provider call
+    when the interaction is missing or expired (`interaction-stale`), has no
+    countdown, or its pause is unavailable (`unsupported`, with
+    `details.reason`, `bridge-outdated` when no `hold` is published); asking
+    for the state it is already in returns applied. Request keys are scoped
+    like resolve's, the intent is `{held}`, and no `expectedRevision` is
+    required (decision 6). Control MCP reaches it through `run_action` (no
+    voice confirmation: a pause approves nothing). Tests:
+    `public-api-interaction-hold.test.ts`; docs in `public-cli.md` and
+    `cli-testing.md`.
+12. **Grok project resources off.** Open: blocked on xAI. When the policy
+    turns project resources on, the ACP bridge launches Grok with
+    `GROK_FOLDER_TRUST=0` (`acp-provider-config.ts`). When it is off, which is
+    the host default, Grok still loads the AGENTS.md, skills, commands, hooks
+    and MCP servers of a checkout whose main repository the user trusted in
+    Grok, and `acpReportedPolicy` reports the axis as on with a note. No
+    switch forces Grok's gate closed.
+    - 2026-10-22, Grok 1.0.52: a search of the binary found only switches
+      that open the gate (`GROK_FOLDER_TRUST=0`, `--trust`,
+      `[folder_trust] enabled = false`).
+    - 2026-10-25, Grok 1.0.67 (the pin), isolated `GROK_HOME`, loopback model:
+      `_x.ai/hooks/list` reports `projectTrusted` without a model turn. A
+      repo granted with `--trust` reports `true`, and so does a `git
+      worktree` of it with no grant of its own (the leak); a never-granted
+      repo reports `false`. On the trusted worktree it stayed `true` with
+      `GROK_FOLDER_TRUST=1`, with `_meta {"x.ai/folderTrust": …}` (`false`,
+      `true`, `"untrusted"`, `{trusted:false}`, `{enabled:true,
+      trusted:false}`) on `session/new` and `false`/`true` on `initialize`,
+      and with a `trusted = false` entry for the worktree in
+      `trusted_folders.toml` (a store write the bridge must not make
+      anyway). `strings` of `grok-native` shows `GROK_FOLDER_TRUST` as the
+      only `GROK_*` trust variable; the `GROK_CONFIG` overlay is documented as
+      unable to "elevate trust" and covers only models, features, toolset and
+      part of the shell policy; untrusting (`/hooks-untrust`,
+      `x.ai/hooks/action`) rewrites the user's `~/.grok/trusted_folders.toml`.
+    - The only mechanism that works is a throwaway `GROK_HOME`, which drops
+      the user's config, skills, MCP servers and the session store
+      `session/load` reads. Not shipped (decision 14).
+    - To close: xAI adds a per-process "never trust" switch (an environment
+      variable or a `session/new` meta key), or a live qualification of a
+      throwaway `GROK_HOME` with `GROK_AUTH_PATH` pointed at the real login,
+      with resume checked. Then honour `false` and drop the note, as item 6
+      did for Codex.
+13. **Codex questions never reach the card.** Done 2026-10-25 in code and
+    against the pinned binary; a real-model run is owed (Qualification).
+    Every `thread/start`, `thread/resume` and `thread/fork` of a session with
+    a policy other than `pipeline` sets
+    `features.default_mode_request_user_input = true`
+    (`codexRequestUserInputConfig` in `codex-config.ts`), so Default mode no
+    longer refuses `request_user_input` and the call parks as a question card.
+    Pipeline threads keep the refusal (decision 3). `question` is back in the
+    Codex row of `nativeAgentCapabilities()`, and
+    `paused-interactions-live.spec.ts` has a `codex-question` case. Evidence:
+    `live-request-user-input.test.ts` (`RUN_LIVE_CODEX_APP_SERVER=1`, the
+    managed Codex 0.164.0 against a loopback Responses endpoint, no
+    credentials) passes twice over: an interactive-host thread's call parks
+    as `item/tool/requestUserInput`, can be paused, and the answer reaches the
+    model as the tool output with no resample in between; the `pipeline`
+    control still gets "unavailable in Default mode". With the config
+    removed the first case fails, so the test is not passing by accident.
+    Codex sends these questions with `isBlocking: false`, so the session does
+    not show as waiting while one is pending; tracked in
+    [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md).
+    `upgrade-agents.md` now runs the live test on every Codex bump, because
+    the feature is marked under development and could be renamed.
 
 ### Qualification
 
@@ -285,7 +416,10 @@ countdown pause gaps.
   The 2026-10-21 run skipped Grok because the host Grok login had expired, and
   a profile may never refresh it. Claude, Codex, OpenCode and Pi passed. The
   same run should confirm that a Grok command and edit now reach the card as a
-  command and a file approval (item 2).
+  command and a file approval (item 2), and, since item 10, that a paused
+  Grok request outlives the 30-minute turn deadline (pause it, wait past
+  30 minutes, answer, and check the turn finishes). Needs a valid Grok login
+  on the host.
 
 - Browser: raise an MCP elicitation (Codex or Claude), answer it, reload
   mid-question, and confirm it rehydrates from `/session/:id/interactions`. On
@@ -294,7 +428,26 @@ countdown pause gaps.
   CLI. On one set to `deny`, confirm a tool outside the allow list is refused
   without a card while a question still appears. Run a real coordinator turn
   that delegates and asks a question.
-- `mise run test:agent:docker` for the container cells on Cursor and Pi.
+- `mise run test:agent:docker` for the container cells on Cursor and Pi
+  (needs a `dev:test` profile started with `--fixture-environments
+  container`, and Cursor and Pi logins). Not run on 2026-10-25.
+- Live Codex question (item 13): in a disposable profile with Codex signed in,
+  `ORKESTRATOR_AGENT_TEST_PROFILE=<profile>
+  ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1
+  ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=codex mise run test:logged -- --name
+  paused-codex-question -- mise run test:agent:paused-interactions`. The
+  `codex-question` case must raise a card, stay pending past ten minutes
+  while paused, and finish with the chosen codeword after a reload. It also
+  shows whether Codex has its own timeout on a held question (0161).
+- Live Claude tmux pause (item 9): in a Claude tmux tab of a disposable
+  profile, raise a PermissionRequest (a Bash `touch`), pause it from the card,
+  wait past ten minutes (Claude Code's default 600 s hook limit), then
+  approve. Pass: the hook is still alive, the marker file appears only after
+  approval. A Claude CLI that clamps the 172,800 s hook `timeout` would show
+  as the tool call failing at the clamp instead.
+- Live Claude question preview (item 3): ask a Claude session to "use
+  AskUserQuestion with a preview for each option" and confirm the previews
+  appear verbatim in monospace on the card.
 - On a real Claude CLI, confirm that a provider-sandboxed auto-approve session
   can neither leave the sandbox (`allowUnsandboxedCommands: false`) nor reach a
   domain off its allowlist when the network is restricted (`strictAllowlist`).
@@ -498,36 +651,162 @@ enabled pause button fixed it before the successful qualification above.
 
 ## Open questions
 
-- Pi, Grok and OpenCode have no sandbox of their own, so a `provider` sandbox
-  or a restricted network on a host runs unsandboxed with full network access,
-  reported as such with a note. Should the backend refuse such a session, as
-  Cursor refuses `deny`, rather than run it?
+All answered on 2026-10-25; the reasoning is in the decisions below.
 
-- Should Orkestrator expose "always allow" at all, given there is no revoke UI
-  yet?
-- `previewFormat`: plain or html?
-- Claude MCP OAuth: the bridge's `authenticate` MCP action reconnects the server
-  and expects the sign-in URL through `onElicitation`
-  (`session-manager-catalog.ts`). With a live CLI that URL now arrives as a
-  parked `mcp-url` card. With no live CLI the action runs on a `createProbe()`
-  query that has no `onElicitation`, so the link never reaches anyone. Is the
-  parked `mcp-url` card the intended route for that sign-in, or should MCP
-  management own a separate flow? Decide with
-  [0039-mcp-management.md](../mcp/0039-mcp-management.md).
+- ~~Pi, Grok and OpenCode have no sandbox of their own, so a `provider`
+  sandbox or a restricted network on a host runs unsandboxed with full
+  network access, reported as such with a note. Should the backend refuse such
+  a session, as Cursor refuses `deny`, rather than run it?~~ No (decision 5).
+- ~~Should Orkestrator expose "always allow" at all, given there is no revoke
+  UI yet?~~ Not for Claude (decision 1). Codex's existing amendment options
+  stay until [0160](0160-codex-saved-rules-list-and-revoke.md) either adds a
+  revoke surface or removes them.
+- ~~`previewFormat`: plain or html?~~ `markdown`, shown verbatim (decision 2).
+- ~~Claude MCP OAuth: is the parked `mcp-url` card the intended route for
+  that sign-in, or should MCP management own a separate flow?~~ The parked
+  card, while a Claude CLI is live; with none, the sign-in action is refused
+  with a message rather than reconnecting on a probe whose link reaches no
+  one (decision 7, `performSessionMcpAction`; `mcp-management.md` "Claude MCP
+  sign-in").
 
 ## Needs verification
 
-- Whether every bridge has per-kind tests for park, render, resolve and
-  fail-closed timeout. Codex and Pi have `interactions.test.ts` and Claude has
-  `session-manager-parked-interactions.test.ts`; the full matrix was not
-  confirmed.
-- Whether the Cursor SDK also loads `.cursor/mcp.json` itself when
-  `settingSources` includes `project`. `cursorMcpServers` now passes it
-  explicitly whenever the policy turns project resources on (item 4), so the
-  servers arrive either way; a duplicate load was not checked.
+- ~~Whether every bridge has per-kind tests for park, render, resolve and
+  fail-closed timeout.~~ Checked 2026-10-25. Every provider has park,
+  render, resolve and timeout tests for its main kinds; the cells without one
+  (kinds that share another kind's timer, `mcp-url` expiry, some backend
+  mapping fixtures and bridge-route listings, OpenCode abort) are in
+  [0162-interaction-test-matrix-gaps.md](0162-interaction-test-matrix-gaps.md).
+  The audit also found OpenCode's capability row claiming `command-approval`
+  and `file-approval`, which it never emits; the row now says `question` and
+  `permission`.
+- ~~Whether the Cursor SDK also loads `.cursor/mcp.json` itself when
+  `settingSources` includes `project`.~~ Yes. In the pinned `@cursor/sdk`
+  1.0.40 the MCP adapter is built with `includeProjectMcp:
+  settingSources.includes("project")` and then loads
+  `<project>/.cursor/mcp.json` beside the inline set. The bridge already
+  avoids a duplicate: with project settings loaded, `cursorInlineMcpServers`
+  passes only the backend-owned `orkestrator` and artifact servers inline.
+  New tests in `mcp.test.ts` ("cursorInlineMcpServers") pin that.
+
+## Assumptions and decisions
+
+Decisions made on 2026-10-25 while working through the file.
+
+1. **"Always allow" for Claude (item 1).** Options: (a) offer
+   `permission-grant` amendments built from `canUseTool` `suggestions`, with
+   a new list and revoke surface; (b) offer none. Chose (b). Claude's
+   suggestions write rules into the user's Claude settings, which outlive the
+   session and Orkestrator, and the constraint here forbids that without a
+   revoke surface. Pros: no allow-once decision can widen permissions; no new
+   surface to maintain. Cons: a user who wants a tool always allowed must
+   use an `auto-approve` policy or edit Claude's settings. The Codex
+   amendments that already ship are split into 0160.
+2. **Question preview format (item 3).** Options: leave it unset (the SDK
+   default, `markdown`, but the card dropped previews), set `markdown` and
+   show it as plain monospace text, or set `html` and render it. Chose
+   `markdown`, shown verbatim. Pros: matches the CLI's own monospace box;
+   model-written text is never parsed as Markdown or HTML, so there is no new
+   injection surface; explicit, so an SDK default change cannot surprise the
+   card. Cons: Markdown emphasis in a preview shows as literal characters.
+   Previews are bounded (4,096 characters each, 32,768 per request) and
+   dropped rather than letting a question exceed the snapshot bound.
+3. **Codex questions (item 13).** Options: run Orkestrator Plan turns in
+   Codex's Plan collaboration mode, or turn on
+   `default_mode_request_user_input` for watched sessions. Chose the feature
+   flag, on every non-`pipeline` thread (the coordinator included, because it
+   is a conversation with the user). Pros: every interactive turn can ask,
+   not only Plan; one thread-scoped setting; proven on the pinned binary.
+   Cons: Codex marks the feature as under development, so it may be renamed;
+   the live test runs on every bump to catch that. Plan mode would have
+   needed an experimental API and changes the model's instructions.
+4. **Codex `on-request` in a container (item 8).** Options: run it as
+   `untrusted` under `auto-approve` too, or describe it honestly. Chose the
+   description. Under `auto-approve` the pick is the user's own narrowing,
+   and the picker already offers Untrusted, so remapping would make two
+   options identical. Pros: no behaviour change; the UI no longer misleads.
+   Cons: the text describes Build turns; a Plan turn's read-only sandbox can
+   still ask.
+5. **Provider sandbox on agents without one (open question).** Options:
+   refuse the session, as Cursor refuses `deny`, or run it and report the
+   truth with a note. Chose to keep running and reporting. The policy comes
+   from an environment override that applies to every agent in the
+   environment; refusing would break Pi, Grok and OpenCode tabs in an
+   environment whose override was meant for Claude or Codex. Cursor refuses
+   `deny` because it cannot express that axis at all, which is different
+   from an agent without a sandbox. Pros: mixed-agent environments keep
+   working; Agent Info states exactly what runs. Cons: a user who never
+   opens Agent Info may assume the sandbox applies.
+6. **Pausing from the public API (item 11).** No `expectedRevision`: a pause
+   answers nothing and keeps the request ID, and requiring the revision would
+   make each pause refuse the next. No voice confirmation: a pause cannot
+   approve anything and still ends at the bridge's limit. One action with
+   `held`, not two, mirroring the backend command. The API refuses up front
+   when the bridge reports the pause unavailable, so the error carries the
+   reason and no provider call is made.
+7. **Claude MCP sign-in without a live CLI (open question).** Options: keep
+   reconnecting on a probe (the link reaches no one), refuse with a message,
+   or build a separate MCP-management sign-in flow. Chose to refuse with a
+   message pointing at the parked card. Pros: honest and small; the card
+   route already works with a live CLI. Cons: one extra step (send a message
+   first). A separate flow stays possible under
+   [0039-mcp-management.md](../mcp/0039-mcp-management.md).
+8. **Claude tmux pause (item 9).**
+   - Who enforces it: a request file the hook script consumes, with the
+     script writing the new timing back. The script stays the only owner of
+     its deadline and nothing runs per tick; the backend polls up to 5 s for
+     the change.
+   - Old installs: detected by a `hold-v1` argument in the hook command
+     rather than a script version, because Claude Code snapshots hook
+     settings at start; the argument proves the running CLI also took the
+     matching `timeout`. A CLI started before the upgrade stays unpausable
+     until it restarts, and the card says so.
+   - Hook timeout: two hold ceilings (48 h) with the script stopping 60 s
+     before, so the first pause always gets its full day.
+   - Command: `claude_tmux_hold_hook`, not `hold_native_agent_interaction`,
+     because tmux prompts are not native interactions and every other tmux
+     action is a `claude_tmux_*` command. The same `hook` frame is re-emitted
+     with the new deadline, so older clients just deduplicate it.
+9. **OpenCode auto-answer removal (item 5).** The provider-level
+   `onInteractionObservation` hook and the tracker's provider-reported
+   observation path were removed with the branch, because nothing else fed
+   them. Leaving them would have kept a public method and a grace-period
+   sweep that production can never reach.
+10. **Read-only reporting (item 7).** Claude reports per turn (while a
+    read-only turn runs); Cursor and Grok report while the session's
+    `readOnly` flag is set, because that is when their agent is built under
+    the read-only policy, until a later prompt clears it. A shared note
+    explains the difference in Agent Info.
+11. **Lifting Grok's turn cap (item 10).** Options: pause the turn clock,
+    extend the turn deadline to the latest hold, or drop the turn timeout
+    while anything is parked. Chose pausing, keeping the time the turn had
+    left. Pros: the turn's budget is unchanged and a forgotten request is
+    still cancelled within 24 h. Cons: a turn whose requests keep being
+    re-held can run past 30 minutes of wall time.
+12. **A resumed Grok countdown against the turn (item 10).** The turn runs at
+    least as long as a resumed countdown, rather than capping the countdown
+    at the turn deadline. Pro: the card never shows more time than Grok will
+    give. Con: up to five extra minutes on the turn.
+13. **Grok's question timeout (item 10).** Options: always force it to the
+    ceiling, raise it only when nothing sets it, or leave it and publish what
+    is configured. Chose raising only the default and honouring a value the
+    user set, which the card then shows. Con: a user's short value still ends
+    a pause early, as the card says.
+14. **Grok project resources (item 12).** Options: ship a throwaway
+    `GROK_HOME` (with `GROK_AUTH_PATH` for the login), write untrust entries
+    into the user's trust store, or keep reporting the truth and wait for an
+    upstream switch. Chose to wait: the first drops the user's own Grok
+    configuration and session store and is unqualified, the second
+    permanently changes the user's Grok settings. Pro: nothing breaks. Con:
+    the host default still loads a trusted checkout's resources, which Agent
+    Info states.
 
 ## Related
 
+- [0160-codex-saved-rules-list-and-revoke.md](0160-codex-saved-rules-list-and-revoke.md),
+  [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md),
+  [0162-interaction-test-matrix-gaps.md](0162-interaction-test-matrix-gaps.md)
+  (split out on 2026-10-25).
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) (MCP OAuth and `mcp-url` sign-in).
 - [0026-coordinator-read-only-adapters.md](../coordinator-and-multi-review/0026-coordinator-read-only-adapters.md)
   (coordinator safety tiers, `coordinator-providers.ts`).

@@ -1,7 +1,7 @@
 # Container rebuild state preservation validation
 
 - **ID:** 0815
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-25
 - **Change under test:** todo 0021: OpenCode host seeding narrowed to `auth.json` (`docker/entrypoint.sh`, `portable-inputs.ts`), the `host-mounts` and policy-1 opt-outs removed (`commands-containers.ts`, `container-network.ts`), a new runtime generation on restore (`recovery-copies.ts`), and xattrs on the volume copy producer (`docker/orkestrator-migrate.sh`).
 - **Original command:** `mise run test:logged -- --name full-test -- mise run test` (default reservations). The live Docker replacement and rebuild-fault suites ran on the same daemon at the same time, and other worktrees were validating; host load average was 54–65.
@@ -21,3 +21,7 @@
 - **Evidence:** `orkestrator-test-run.ZzOknn/` under the host temporary directory.
 
 No assertion, timeout or skip was changed. Shared-host contention, made heavier by the concurrent live Docker suites, is a possible contributor, not an established cause. The aggregate exit stays failed.
+
+## Triage 2026-10-25
+
+Environmental: load was 54 to 65 on 18 cores and the live Docker replacement and rebuild-fault suites ran on the same daemon. Seven owners passed alone (environment move on its second rerun); the coordinator digest ([0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md)) still timed out alone at load 54 and passed with `--timeout 30000`.

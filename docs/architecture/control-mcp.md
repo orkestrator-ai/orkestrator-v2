@@ -7,6 +7,11 @@ and other MCP clients through a local Streamable HTTP server. Every public
 action the `orkestrator` CLI can run is reachable through it, under the same
 request keys, receipts and error codes ([public-cli.md](public-cli.md)).
 
+Outside agents get a short public summary of this guide and the CLI at
+[orkestrator.dev/skill.md](https://orkestrator.dev/skill.md), linked from
+`/llms.txt` (`apps/web-public/public/`). Update it when the port, the
+Settings labels or the credential rules change.
+
 ## Connect a client
 
 1. Keep Orkestrator running.
@@ -77,7 +82,8 @@ existing Codex and Claude Code setups kept working unchanged.
 
 Capabilities group public actions (`discovery`, `sessions.read`,
 `sessions.control`, `interactions`, `environments.lifecycle`,
-`environments.destructive`, `exec`, `projects`, `settings`, `tickets`, `mail`);
+`environments.destructive`, `exec`, `projects`, `settings`, `tickets`, `mail`,
+`schedules`);
 each action's group is in `PUBLIC_ACTION_INPUTS`
 (`packages/protocol/src/public-api-inputs.ts`). `host` (updating Orkestrator
 itself) is never granted to an MCP credential. A voice credential may be
@@ -93,8 +99,9 @@ development profiles request an ephemeral loopback port so they can run
 alongside an installed Orkestrator instance; the selected URL is published in
 the profile's readiness and descriptor data.
 
-With the full profile the default credential lists 82 tools, about 76 KB of
-`tools/list` (measured 2026-10-24); clients that defer or search tool
+With the full profile the default credential lists 93 tools, eight of them
+the `schedule.*` direct tools (measured 2026-10-25; 82 tools and about 76 KB of
+`tools/list` on 2026-10-24); clients that defer or search tool
 definitions handle that well. A client that loads every tool up front is
 better served by a `voice` or `custom` credential.
 
@@ -187,8 +194,12 @@ reconciler always runs as the operator.
 
 Everything the public CLI can do except `host.*`, subject to its credential:
 projects, environments, settings, agent sessions, interactions, transcripts,
-changes, runs, exec, Kanban tickets (`ticket.*`), agent mail (`mail.*`) and the
-attention feed (`attention.list`). The original tools remain:
+changes, runs, exec, Kanban tickets (`ticket.*`), agent mail (`mail.*`),
+scheduled jobs (`schedule.*`) and the attention feed (`attention.list`).
+A schedule a credential creates runs as that credential: the action is
+re-checked against its current capabilities at every fire, a revoked
+credential pauses it, and a credential sees only its own schedules; see
+[scheduled-jobs.md](scheduled-jobs.md#authority). The original tools remain:
 
 - See projects, environments, tabs, tab state, and bounded transcripts.
 - Create and update Kanban tickets and add comments.
@@ -286,7 +297,10 @@ backend commands, change application settings, merge/delete the root checkout,
 or mint credentials. Repository branch switching and synchronization are UI-only
 backend actions and are not MCP tools.
 
-In addition to the ordinary discovery tools, a coordinator can start/stop
+In addition to the ordinary discovery tools, a coordinator can schedule
+actions for later (`create_schedule`, `list_schedules`, `cancel_schedule`,
+capability `schedules`, granted to the main and side roles; see
+[scheduled-jobs.md](scheduled-jobs.md)), start/stop
 workers, launch a job, start and control a structured build pipeline, start/get/
 cancel/address a multi-review, and use durable mailbox read/send/ack operations.
 `launch_multi_review` and `start_multi_review` take optional `autoFix` and

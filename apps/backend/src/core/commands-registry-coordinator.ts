@@ -149,13 +149,23 @@ export function registerCoordinatorCommands(
     const id = asNonBlankString(args.projectId, "projectId");
     return coordinatorViews.read(id, args, () => coordinators.get(id));
   });
-  register("create_coordinator_conversation", async ({ projectId, title }, context) => {
-    if (!context.coordinators) throw new Error("Coordinator service is unavailable");
-    return context.coordinators.createConversation(
-      asNonBlankString(projectId, "projectId"),
-      typeof title === "string" ? title : undefined,
-    );
-  });
+  register(
+    "create_coordinator_conversation",
+    async ({ projectId, title, closeUnused }, context) => {
+      if (!context.coordinators) throw new Error("Coordinator service is unavailable");
+      return context.coordinators.createConversation(
+        asNonBlankString(projectId, "projectId"),
+        typeof title === "string" ? title : undefined,
+        {
+          closeUnused: Array.isArray(closeUnused)
+            ? closeUnused
+                .filter((id): id is string => typeof id === "string" && id.length > 0)
+                .slice(0, 64)
+            : [],
+        },
+      );
+    },
+  );
   register(
     "assign_coordinator_conversation_agent",
     async ({ projectId, conversationId, agent }, context) => {
@@ -221,6 +231,10 @@ export function registerCoordinatorCommands(
     }
     const snapshot = await context.coordinators.closeConversation(id, conversation);
     await context.storage.synchronizeAgentMailboxes();
+    // A side agent's schedules end with it; the main's move to the next main.
+    if (item.role === "side") {
+      context.scheduledJobs?.coordinatorConversationClosed(current.workspace.id, conversation);
+    }
     return snapshot;
   });
   register("pause_project_coordinator", ({ projectId }, context) => {
@@ -239,10 +253,14 @@ export function registerCoordinatorCommands(
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     return context.projectGit.fetch(asNonBlankString(projectId, "projectId"), force === true);
   });
-  register("get_project_base_branch_tip", async ({ projectId }, context) => {
+  register("get_project_base_branch_tip", async ({ projectId, branch }, context) => {
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     const project = asNonBlankString(projectId, "projectId");
-    // The same default a normal environment launch branches from.
+    // A named branch (a scheduled launch resolving its base at fire time), else
+    // the same default a normal environment launch branches from.
+    if (typeof branch === "string" && branch.trim()) {
+      return context.projectGit.baseBranchTip(project, branch.trim());
+    }
     const { defaultBranch } = await context.storage.getRepositoryConfig(project);
     return context.projectGit.baseBranchTip(project, defaultBranch?.trim() || "main");
   });

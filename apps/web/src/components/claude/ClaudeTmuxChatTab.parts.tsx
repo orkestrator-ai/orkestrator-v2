@@ -18,7 +18,8 @@ import { Button } from "@/components/ui/button";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
-import { TMUX_PROMPT_DEADLINE } from "@/components/chat/PromptDeadline";
+import type { PromptHoldHandler } from "@/hooks/usePromptHold";
+import { useTmuxPromptDeadline } from "./tmux-prompt-deadline";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import {
   DropdownMenu,
@@ -56,6 +57,7 @@ import {
   type TmuxPendingPermission,
   type TmuxPendingPlan,
   type TmuxPendingQuestion,
+  type TmuxPromptTiming,
   type TmuxInfoEvent,
   type TmuxAttachment,
   type TmuxQueuedMessage,
@@ -268,11 +270,14 @@ export function TmuxPlanCard({
   plan,
   sessionKey,
   onRespond,
+  onHold,
 }: {
   plan: TmuxPendingPlan;
   sessionKey: string;
   onRespond: (approved: boolean, feedback?: string) => Promise<void> | void;
+  onHold?: PromptHoldHandler;
 }) {
+  const { deadline, error: holdError } = useTmuxPromptDeadline(plan, onHold);
   // The feedback draft survives the tab unmounting (environment switches) by
   // living in the prompt-draft store; claudeTmuxStore clears it when the plan
   // request resolves or is withdrawn.
@@ -297,7 +302,8 @@ export function TmuxPlanCard({
     <BlockingPromptCard
       title="Plan ready for review"
       expiresAt={plan.expiresAt}
-      deadline={TMUX_PROMPT_DEADLINE}
+      deadline={deadline}
+      error={holdError}
       state={submitting ? "submitting" : "pending"}
       aria-label="Claude plan ready for review"
       arrivalAnnouncement="Claude is waiting for a plan decision."
@@ -349,10 +355,13 @@ export function TmuxPlanCard({
 export function TmuxPermissionCard({
   permission,
   onRespond,
+  onHold,
 }: {
   permission: TmuxPendingPermission;
   onRespond: (allow: boolean, updatedPermissions?: unknown[]) => Promise<void> | void;
+  onHold?: PromptHoldHandler;
 }) {
+  const { deadline, error: holdError } = useTmuxPromptDeadline(permission, onHold);
   const [submitting, setSubmitting] = useState(false);
   const respond = async (allow: boolean, updatedPermissions?: unknown[]) => {
     if (submitting) return;
@@ -367,7 +376,8 @@ export function TmuxPermissionCard({
     <BlockingPromptCard
       title="Claude needs permission"
       expiresAt={permission.expiresAt}
-      deadline={TMUX_PROMPT_DEADLINE}
+      deadline={deadline}
+      error={holdError}
       state={submitting ? "submitting" : "pending"}
       aria-label="Claude needs permission"
       arrivalAnnouncement="Claude is waiting for a permission decision."
@@ -409,6 +419,7 @@ export function TmuxElicitationCard({
   elicitation,
   sessionKey,
   onRespond,
+  onHold,
 }: {
   elicitation: TmuxPendingElicitation;
   sessionKey: string;
@@ -416,7 +427,9 @@ export function TmuxElicitationCard({
     action: "accept" | "decline" | "cancel",
     content?: Record<string, string>,
   ) => Promise<void> | void;
+  onHold?: PromptHoldHandler;
 }) {
+  const { deadline, error: holdError } = useTmuxPromptDeadline(elicitation, onHold);
   const fields = useMemo(
     () => elicitationSchemaFields(elicitation.requestedSchema),
     [elicitation.requestedSchema],
@@ -469,7 +482,8 @@ export function TmuxElicitationCard({
       description={elicitation.message}
       meta={elicitation.mcpServerName}
       expiresAt={elicitation.expiresAt}
-      deadline={TMUX_PROMPT_DEADLINE}
+      deadline={deadline}
+      error={holdError}
       state={submitting ? "submitting" : "pending"}
       aria-label="Claude MCP input request"
       arrivalAnnouncement="Claude is waiting for MCP input."
@@ -565,13 +579,11 @@ export function pendingSnapshotFromHooks(hooks: TmuxPendingHook[], infoEvents?: 
   return { approvals, questions, plans, permissions, elicitations, infoEvents };
 }
 
-export function hookTiming(hook: TmuxPendingHook): {
-  requestedAt?: number;
-  expiresAt?: number;
-} {
+export function hookTiming(hook: TmuxPendingHook): TmuxPromptTiming {
   return {
     ...(hook.requestedAt !== undefined ? { requestedAt: hook.requestedAt } : {}),
     ...(hook.expiresAt !== undefined ? { expiresAt: hook.expiresAt } : {}),
+    ...(hook.hold !== undefined ? { hold: hook.hold } : {}),
   };
 }
 
@@ -1501,16 +1513,18 @@ export function ApprovalCard({
   approval,
   onApprove,
   onDeny,
+  onHold,
 }: {
   approval: {
     eventId: string;
     toolName: string;
     toolInput: Record<string, unknown>;
-    expiresAt?: number;
-  };
+  } & TmuxPromptTiming;
   onApprove: () => Promise<void> | void;
   onDeny: () => Promise<void> | void;
+  onHold?: PromptHoldHandler;
 }) {
+  const { deadline, error: holdError } = useTmuxPromptDeadline(approval, onHold);
   const [submitting, setSubmitting] = useState(false);
   const respond = async (action: () => Promise<void> | void) => {
     if (submitting) return;
@@ -1525,7 +1539,8 @@ export function ApprovalCard({
     <BlockingPromptCard
       title="Claude wants to use a tool"
       expiresAt={approval.expiresAt}
-      deadline={TMUX_PROMPT_DEADLINE}
+      deadline={deadline}
+      error={holdError}
       state={submitting ? "submitting" : "pending"}
       aria-label={`Claude wants to use ${approval.toolName}`}
       arrivalAnnouncement="Claude is waiting for a tool decision."

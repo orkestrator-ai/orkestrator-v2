@@ -12,7 +12,6 @@ import { ManualTime } from "./recurring-test-support.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { createEnvironment, StorageService } from "./storage.js";
-import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { interactionInternals } from "./native-agent-service-test-collaborators.js";
 import type { NativeAgentService } from "./native-agent-service.js";
 
@@ -257,106 +256,10 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
       effectiveAdoption: false,
     });
     const internals = observeOnly as unknown as {
-      buildPipelines: {
-        options: {
-          onInteractionObservation(event: {
-            environmentId: string;
-            provider: "opencode";
-            sessionId: string;
-            interactionId: string;
-            kind: "permission";
-            registration: {
-              origin: "build-pipeline";
-              interactionPolicy: typeof UNATTENDED_AGENT_INTERACTION_POLICY;
-              phase: string;
-            };
-            state: "detected" | "withdrawn";
-            providerState?: "running";
-          }): Promise<void>;
-        };
-      };
-      loopedReviews: {
-        options: {
-          onInteractionObservation(event: {
-            environmentId: string;
-            provider: "opencode";
-            sessionId: string;
-            interactionId: string;
-            kind: "permission";
-            registration: {
-              origin: "looped-review";
-              interactionPolicy: typeof UNATTENDED_AGENT_INTERACTION_POLICY;
-              phase: string;
-            };
-            state: "detected" | "withdrawn";
-            providerState?: "running";
-          }): Promise<void>;
-        };
-      };
       context: { loopedReviews: unknown };
-      nativeAgents: {
-        getInteractionObservations(): Array<Record<string, unknown>>;
-      };
+      loopedReviews: unknown;
     };
-    const event = {
-      environmentId: "env-1",
-      provider: "opencode" as const,
-      sessionId: "session-1",
-      interactionId: "permission-1",
-      kind: "permission" as const,
-      registration: {
-        origin: "build-pipeline" as const,
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        phase: "build",
-      },
-    };
-    await internals.buildPipelines.options.onInteractionObservation({
-      ...event,
-      state: "detected",
-    });
-    await internals.buildPipelines.options.onInteractionObservation({
-      ...event,
-      state: "withdrawn",
-      providerState: "running",
-    });
-    const reviewEvent = {
-      ...event,
-      sessionId: "session-2",
-      interactionId: "permission-2",
-      registration: {
-        origin: "looped-review" as const,
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        phase: "discovery",
-      },
-    };
-    await internals.loopedReviews.options.onInteractionObservation({
-      ...reviewEvent,
-      state: "detected",
-    });
-    await internals.loopedReviews.options.onInteractionObservation({
-      ...reviewEvent,
-      state: "withdrawn",
-      providerState: "running",
-    });
     expect(internals.context.loopedReviews).toBe(internals.loopedReviews);
-    expect(internals.nativeAgents.getInteractionObservations()).toEqual([
-      expect.objectContaining({
-        provider: "opencode",
-        kind: "permission",
-        workflowSurface: "build-pipeline",
-        phase: "pipeline",
-        count: 1,
-        eventualOutcome: "withdrawn",
-      }),
-      expect.objectContaining({
-        provider: "opencode",
-        kind: "permission",
-        workflowSurface: "looped-review",
-        phase: "discovery",
-        count: 1,
-        eventualOutcome: "withdrawn",
-      }),
-    ]);
   } finally {
     if (previousObserve === undefined) delete process.env[observeKey];
     else process.env[observeKey] = previousObserve;
@@ -2074,3 +1977,51 @@ test("production excerpt wiring looks up the exact session and falls back within
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }, 10_000);
+
+test("production waiting-blocker wiring reads the worker's pending interactions", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worker-blocker-"));
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    agentTools: fakeAgentTools(),
+  });
+  const internal = backend as unknown as {
+    context: { storage: StorageService };
+    nativeAgents: {
+      getProjection: (input: unknown) => Promise<{ messages: unknown[]; interactions: unknown[] }>;
+    };
+    coordinators: {
+      options: {
+        waitingBlocker: (environmentId: string, tabId: string) => Promise<string | undefined>;
+      };
+    };
+  };
+  const sessions = spyOn(internal.context.storage, "listNativeAgentSessions").mockResolvedValue([
+    { environmentId: "e", logicalSessionKey: "env-e:tab", agent: "claude" },
+  ] as Awaited<ReturnType<StorageService["listNativeAgentSessions"]>>);
+  const projection = spyOn(internal.nativeAgents, "getProjection").mockResolvedValue({
+    messages: [],
+    interactions: [{ kind: "command-approval", state: "pending" }],
+  });
+  try {
+    const blocker = internal.coordinators.options.waitingBlocker;
+    expect(await blocker("e", "missing")).toBeUndefined();
+    expect(await blocker("e", "tab")).toBe("approval");
+    expect(projection).toHaveBeenLastCalledWith({
+      environmentId: "e",
+      logicalSessionKey: "env-e:tab",
+      agent: "claude",
+      messageLimit: 1,
+    });
+    projection.mockRejectedValueOnce(new Error("bridge offline"));
+    expect(await blocker("e", "tab")).toBeUndefined();
+  } finally {
+    sessions.mockRestore();
+    projection.mockRestore();
+    await backend.shutdown();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

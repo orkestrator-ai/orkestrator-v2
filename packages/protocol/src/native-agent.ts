@@ -125,7 +125,24 @@ export function resolveReasoningId(
   return fallbackReasoningId(ids, advertisedDefault);
 }
 
-/** Provider-neutral model catalog entry consumed by renderer presentation. */
+/**
+ * Provider-neutral model catalog entry consumed by renderer presentation.
+ *
+ * Reasoning and speed stay first-class fields (`reasoning`,
+ * `defaultReasoningId`, `supportsSpeed`) rather than moving onto
+ * {@link AgentModelParameter} descriptors. Every provider has both axes, so
+ * they are not provider-only controls, and they are read far beyond the
+ * session composer: launch dialogs, Build and Multi Review stages, settings
+ * defaults, the public API and coordinator launch defaults all pick an effort
+ * and a speed before any session (and so any backend composer state) exists,
+ * and they persist the choice as `reasoningId` / `fastMode`, not as a
+ * parameter value. Each provider maps its own vocabulary onto them (OpenCode
+ * variants and Grok effort onto `reasoning`; Cursor's `fast` parameter onto
+ * `supportsSpeed`), and the renderer renders the two fields without branching
+ * on which provider or axis it is. `parameters` carries the axes only some
+ * providers have; those render generically and are filtered only through
+ * {@link isSuppressedComposerParameter}.
+ */
 export interface AgentModel {
   platform: AgentPlatform;
   id: string;
@@ -133,8 +150,10 @@ export interface AgentModel {
   /** Provider label shown beneath the model name; defaults to the platform. */
   providerLabel?: string;
   description?: string;
+  /** The model's reasoning/effort axis, shared by every provider. */
   reasoning?: AgentReasoningOption[];
   defaultReasoningId?: string;
+  /** The model's speed (fast-mode) axis, shared by every provider. */
   supportsSpeed?: boolean;
   supportsMode?: boolean;
   /** Provider context-window size, used by the shared usage meter. */
@@ -632,19 +651,55 @@ const NATIVE_AGENT_APPROVAL_MODES: Readonly<
 });
 
 /**
+ * What Codex's sandbox-edge modes do in a container, where the vendor sandbox
+ * is off on purpose and there is no edge to ask at. Under an `ask` policy the
+ * bridge runs `on-request` as `untrusted` so the policy still holds
+ * (`codexApprovalConfig`); under `auto-approve` the pick is the user's own
+ * narrowing and runs as Codex defines it, which never asks there. The text
+ * says so rather than quietly turning one mode into another the picker
+ * already offers.
+ */
+const CODEX_CONTAINER_APPROVAL_DESCRIPTIONS: Readonly<
+  Record<"ask" | "auto-approve", Readonly<Record<string, string>>>
+> = Object.freeze({
+  ask: {
+    "on-request":
+      "Codex has no sandbox of its own in a container, so this asks before any command Codex does not trust, like Untrusted",
+  },
+  "auto-approve": {
+    "on-request":
+      "Codex has no sandbox of its own in a container, so this never asks; choose Untrusted to approve commands",
+    "auto-review":
+      "Codex has no sandbox of its own in a container, so the reviewer is never consulted and everything runs",
+  },
+});
+
+/**
  * The approval modes a session can choose from, or none when its policy leaves
  * no choice. `deny` already refuses everything, and an `ask` policy keeps a
- * person in the loop, so only the asking modes stay selectable under it.
+ * person in the loop, so only the asking modes stay selectable under it. A
+ * Codex session in a container describes the modes that only ask at a sandbox
+ * edge as what they do there.
  */
 export function nativeAgentApprovalModes(
   agent: AgentPlatform,
-  policy: Pick<NativeAgentExecutionPolicy, "approvals"> | undefined,
+  policy:
+    | (Pick<NativeAgentExecutionPolicy, "approvals"> &
+        Partial<Pick<NativeAgentExecutionPolicy, "sandbox">>)
+    | undefined,
 ): NativeAgentApprovalModeOption[] {
   const modes = NATIVE_AGENT_APPROVAL_MODES[agent];
   if (!modes || policy?.approvals === "deny") return [];
-  return modes.map((mode) =>
-    policy?.approvals === "ask" && mode.kind !== "ask" ? { ...mode, disabled: true } : { ...mode },
-  );
+  const containerDescriptions =
+    agent === "codex" && policy?.sandbox === "container"
+      ? CODEX_CONTAINER_APPROVAL_DESCRIPTIONS[policy.approvals === "ask" ? "ask" : "auto-approve"]
+      : undefined;
+  return modes.map((mode) => {
+    const description = containerDescriptions?.[mode.id] ?? mode.description;
+    return policy?.approvals === "ask" && mode.kind !== "ask"
+      ? { ...mode, description, disabled: true }
+      : { ...mode, description };
+  });
 }
 
 /**
@@ -897,8 +952,9 @@ export type NativeAgentComposerControl = NativeAgentSelectControl | NativeAgentT
  * compact input bar must not show.
  *
  * Claude's thinking and context choices are settings-backed session defaults,
- * Codex's reasoning summary is configured outside the input bar, and Cursor's
- * variant is a retired pre-combined parameter cross product.
+ * and Cursor's variant is a retired pre-combined parameter cross product. An
+ * entry needs a descriptor that actually produces it: a suppression for a
+ * control nothing advertises is removed rather than kept "just in case".
  *
  * This table is the single definition of that policy. Every projection path
  * and every renderer filters through {@link isSuppressedComposerParameter} so
@@ -1109,8 +1165,11 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
       // No `share`: OpenCode 1.19.1 discontinued session sharing upstream.
       actions: { compact: true, undo: true, redo: true },
       // `permission.asked` and the v2-only `question.asked`. No MCP
-      // elicitation surface on the v1 wire this repo uses.
-      interactions: { kinds: ["question", "permission", "command-approval", "file-approval"] },
+      // elicitation surface on the v1 wire this repo uses. Every OpenCode
+      // permission, a bash or edit approval included, is mapped as
+      // `permission` (`opencode-interactions.ts`), so the command and file
+      // kinds are not claimed.
+      interactions: { kinds: ["question", "permission"] },
     };
   }
   if (agent === "pi") {
@@ -1139,15 +1198,15 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
     // Codex binds its collaboration mode to the thread and persists it.
     composer: { ...capabilities.composer, modeScope: "session" },
     actions: { compact: true, steer: true, review: true, rewindMessages: true },
-    // Codex: MCP elicitations in both form and url modes, and command/file
-    // approvals through `item/permissions/requestApproval`. Not `question`:
-    // the bridge sets no collaboration mode, so every turn runs in Codex's
-    // Default mode, where `request_user_input` is refused and the model asks
-    // in plain text instead. The bridge still parks an
-    // `item/tool/requestUserInput` that does arrive (a user's own Codex config
-    // can turn `default_mode_request_user_input` on).
+    // Codex: questions (`request_user_input`), MCP elicitations in both form
+    // and url modes, and command/file approvals through
+    // `item/permissions/requestApproval`. Every turn runs in Codex's Default
+    // collaboration mode, which refuses `request_user_input` unless the
+    // thread turns on `default_mode_request_user_input`; the bridge does for
+    // every session someone watches (`codexRequestUserInputConfig`), never for
+    // a pipeline.
     interactions: {
-      kinds: ["command-approval", "file-approval", "permission", "mcp-form", "mcp-url"],
+      kinds: ["question", "command-approval", "file-approval", "permission", "mcp-form", "mcp-url"],
     },
   };
 }
@@ -2170,6 +2229,12 @@ export interface NativeAgentCommandCatalogueState {
   freshness?: "push" | "ttl";
   fetchedAt?: string;
   truncated?: boolean;
+  /**
+   * The provider lists more commands once its session attaches (first turn
+   * or an explicit refresh); the rows are what it could read before that.
+   * Only ever set on a `stale` list.
+   */
+  attachPending?: boolean;
   error?: { code: NativeAgentCommandCatalogueErrorCode; message?: string };
   lastRefresh?: { outcome: NativeAgentCommandRefreshOutcome; at: string; message?: string };
 }

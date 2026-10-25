@@ -15,8 +15,11 @@
  * rather than which commands exist.
  */
 import type { SettingSource } from "@anthropic-ai/claude-agent-sdk";
-import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import type { PermissionMode, PromptOptions } from "../types/index.js";
+import {
+  readOnlyTurnReportedPolicy,
+  type NativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
+import type { PermissionMode, PromptOptions, SessionState } from "../types/index.js";
 import { getPluginsForSdk, type SdkPluginConfig } from "./plugin-config.js";
 import { effectiveExecutionPolicy, isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
 
@@ -57,6 +60,22 @@ export function claudeTurnPolicy(
   return effectiveExecutionPolicy(
     readOnly ? structuredClone(READ_ONLY_TURN_POLICY) : sessionPolicy,
   );
+}
+
+/**
+ * The policy Agent Info should describe now. While a `readOnly` turn runs it
+ * is that turn's policy, not the session's: reporting the session's would
+ * understate what the running turn may do. `commandDiscoveryInputs` records
+ * the inputs of the query the running turn started.
+ */
+export function claudeReportedPolicy(
+  session: Pick<SessionState, "executionPolicy" | "status" | "commandDiscoveryInputs">,
+): NativeAgentExecutionPolicy | undefined {
+  if (session.status === "running" && session.commandDiscoveryInputs?.readOnly === true) {
+    const turnPolicy = claudeTurnPolicy(session.executionPolicy, true);
+    if (turnPolicy) return readOnlyTurnReportedPolicy(turnPolicy);
+  }
+  return session.executionPolicy;
 }
 
 /**

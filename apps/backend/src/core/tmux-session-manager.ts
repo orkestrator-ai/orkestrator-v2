@@ -39,7 +39,7 @@ import {
 } from "./tmux-shared.js";
 import { TmuxBackend } from "./tmux-backend.js";
 import { transcriptToolDiffs } from "./tmux-transcript-tool-diffs.js";
-import { terminalAccountHomes } from "./terminal-account-usage.js";
+import type { TerminalRuntime } from "./terminal-runtime.js";
 import {
   TMUX_INFO_EVENT_LIMIT,
   TranscriptTail,
@@ -55,6 +55,7 @@ import {
   preToolUseResponse,
   probeThinkingDisplaySupport,
   replyToHook,
+  requestHookHold,
   sessionHookPaths,
   uninstallWorkspaceHooks,
   workspaceHookPaths,
@@ -180,6 +181,12 @@ export class TmuxSession {
   private forceNextObservation = false;
   private observationInFlight: Promise<void> | undefined;
   private readonly inputMutex = new AsyncMutex();
+  /**
+   * The backend's terminal runtime that recorded this session's account home
+   * at launch. `stop()` has no command context, so the session keeps the owner
+   * it recorded with to forget the home again.
+   */
+  private accountHomeOwner: TerminalRuntime | null = null;
   private readonly pollTick: (intervalMs: number) => Promise<void>;
   private readonly now: () => number;
   private readonly sleep: (delayMs: number) => Promise<void>;
@@ -413,7 +420,8 @@ export class TmuxSession {
         ]);
         if (out.status !== 0) throw new Error(`tmux new-session failed: ${out.stderr}`);
         if (accountDirectory) {
-          terminalAccountHomes.set(`tmux:${this.environmentId}:${this.tabId}`, accountDirectory);
+          this.accountHomeOwner = context.runtime.terminals;
+          this.accountHomeOwner.recordAccountHome(this.accountHomeKey(), accountDirectory);
         }
       } catch (error) {
         if (agentMcpConfigPath) {
@@ -713,7 +721,7 @@ export class TmuxSession {
               if (await this.tmuxAlive().catch(() => false)) return;
               removed = tmuxManager.removeIfSame(this.environmentId, this.tabId, this);
               if (!removed) return;
-              terminalAccountHomes.delete(`tmux:${this.environmentId}:${this.tabId}`);
+              this.accountHomeOwner?.forgetAccountHome(this.accountHomeKey());
               this.setBusyState(false);
               await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
               if (tmuxManager.sessionsInEnvironment(this.environmentId) === 0) {
@@ -821,6 +829,10 @@ export class TmuxSession {
         this.infoEvents.splice(0, this.infoEvents.length - TMUX_INFO_EVENT_LIMIT);
       }
     }
+    this.emitHookFrame(context, event, emittedPayload);
+  }
+
+  private emitHookFrame(context: CommandContext, event: PendingHookEvent, payload: unknown): void {
     context.emit(CLAUDE_TMUX_EVENT, {
       kind: "hook",
       tab_id: this.tabId,
@@ -828,9 +840,10 @@ export class TmuxSession {
       session_id: this.sessionId,
       event_id: event.id,
       event_kind: event.kind,
-      payload: emittedPayload,
+      payload,
       requested_at: event.requestedAt,
       expires_at: event.expiresAt,
+      ...(event.hold ? { hold: event.hold } : {}),
     });
   }
 
@@ -1289,8 +1302,30 @@ export class TmuxSession {
     await replyToHook(this.backend, this.sessionHookPaths, kind, id, response);
   }
 
+  /**
+   * Pause or resume a blocking hook's countdown. A moved deadline is
+   * re-emitted as the same hook event, so every listener updates the card it
+   * already shows; blocking hooks are otherwise emitted once.
+   */
+  async holdHook(
+    kind: string,
+    id: string,
+    held: boolean,
+    context: CommandContext,
+  ): Promise<Awaited<ReturnType<typeof requestHookHold>>> {
+    const outcome = await requestHookHold(this.backend, this.sessionHookPaths, kind, id, held);
+    if (outcome.result === "applied" && outcome.hook) {
+      this.emitHookFrame(context, outcome.hook, outcome.hook.payload);
+    }
+    return outcome;
+  }
+
   async answerPreToolUse(id: string, decision: string, reason?: string): Promise<void> {
     await this.replyHook("PreToolUse", id, preToolUseResponse(decision, reason));
+  }
+
+  private accountHomeKey(): string {
+    return `tmux:${this.environmentId}:${this.tabId}`;
   }
 
   async stop(): Promise<boolean> {
@@ -1303,7 +1338,7 @@ export class TmuxSession {
         (await confirmTmuxSessionGone(result.stderr, (args) => this.backend.exec(args)))),
     );
     if (!stopped) return false;
-    terminalAccountHomes.delete(`tmux:${this.environmentId}:${this.tabId}`);
+    this.accountHomeOwner?.forgetAccountHome(this.accountHomeKey());
     this.stopRequested = true;
     await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
     return true;

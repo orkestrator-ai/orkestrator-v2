@@ -1,13 +1,14 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
   __testing,
   countGuardLines,
   measureFreshness,
+  measureSoak,
   parseOptions,
   runArm,
   type Status,
@@ -332,6 +333,43 @@ describe("live benchmark lifecycle", () => {
     expect(h.commands.map((args) => args[0])).toEqual(["dev:stop"]);
   });
 
+  test("a failed stop for an already stopped owned profile still resets its resources", async () => {
+    const dir = temporary();
+    const resources = path.join(dir, "owned-resources");
+    mkdirSync(resources);
+    for (const resource of ["container", "volume-1", "volume-2", "network"])
+      writeFileSync(path.join(resources, resource), "fixture");
+    const h = harness();
+    const mise = h.runtime.mise;
+    h.runtime.mise = ((args) => {
+      const result = mise(args);
+      if (args[0] === "dev:stop") return { ...result, status: 1 };
+      if (args[0] === "dev:reset") rmSync(resources, { recursive: true });
+      return result;
+    }) as typeof mise;
+    const result = await runArm(
+      options(),
+      "candidate",
+      1,
+      "/stub",
+      undefined,
+      "stopped",
+      h.runtime,
+    );
+    expect(result.error).toBeUndefined();
+    expect(h.commands.map((args) => args[0])).toEqual(["dev:stop", "dev:reset"]);
+    expect(existsSync(resources)).toBe(false);
+  });
+
+  test("a failed stop for a live profile prevents reset", async () => {
+    const mise = mock(() => ({ status: 1 }));
+    const h = harness({ mise: mise as never });
+    const result = await runArm(options(), "candidate", 1, "/stub", undefined, "live", h.runtime);
+    expect(result.error).toContain("Owned profile stop failed");
+    expect(mise).toHaveBeenCalledTimes(1);
+    expect(mise).toHaveBeenCalledWith(["dev:stop", "--profile", result.profile]);
+  });
+
   test("probe results include unusable counts and percentiles", async () => {
     const probe = mock(async () => [
       { environment: "local" as const, latenciesMs: [10, 30], timeouts: 1, unusable: 1 },
@@ -514,3 +552,313 @@ test.each(["SIGTERM", "SIGINT"] as const)(
   },
   10_000,
 );
+
+test.each(["SIGTERM", "SIGINT"] as const)(
+  "%s interrupts an in-progress soak CLI before later cycles and awaits cleanup",
+  async (signal) => {
+    const dir = temporary();
+    const script = path.join(dir, "soak-signal.ts");
+    const events = path.join(dir, "events");
+    const cliDir = path.join(dir, "packages/cli/bin");
+    mkdirSync(cliDir, { recursive: true });
+    writeFileSync(
+      path.join(cliDir, "orkestrator.js"),
+      `
+      import { appendFileSync } from "node:fs";
+      const args = process.argv.slice(2);
+      const verb = args[args.indexOf("environment") + 1];
+      const record = (event) => appendFileSync(${JSON.stringify(events)}, event + "\\n");
+      record(verb);
+      if (verb === "list") console.log(JSON.stringify({ result: { items: [{ projectId: "fixture" }] } }));
+      else if (verb === "create") console.log(JSON.stringify({ result: { environment: { id: "env-1" } } }));
+      else if (verb === "start") {
+        // Force the runner's bounded SIGKILL escalation as well as OS delivery.
+        process.on("SIGTERM", () => record("cli-terminated"));
+        record("start-waiting");
+        setInterval(() => {}, 1000);
+      }
+    `,
+    );
+    writeFileSync(
+      script,
+      `
+      import { EventEmitter } from "node:events";
+      import { appendFileSync } from "node:fs";
+      import { __testing, measureSoak, parseOptions, runArm, withTerminationSignals } from ${JSON.stringify(path.resolve(import.meta.dir, "../../scripts/recurring-live-ab.ts"))};
+      const record = (event) => appendFileSync(${JSON.stringify(events)}, event + "\\n");
+      let status = { status: "missing" };
+      const child = Object.assign(new EventEmitter(), { pid: 123456, kill: () => true });
+      const runtime = { ...__testing.armRuntime,
+        readStatus: () => status,
+        startProfile: () => { status = { status: "ready", startedAt: "owned", processStartTimes: { launcher: 100 }, pids: { launcher: child.pid }, live: { launcher: true } }; return child; },
+        gatewayFor: () => ({ metrics: async () => ({ recurringWork: {} }) }),
+        processSamples: () => ({}),
+        measureSoak: (gateway, cli, options, rss, signal) => measureSoak(gateway, cli, options, rss, signal, { ...__testing.soakRuntime, sleep: async () => {} }),
+        mise: (args) => { record(args[0]); if (args[0] === "dev:stop") setTimeout(() => { record("launcher-exited"); child.emit("exit", 0); }, 30); return { status: 0 }; },
+      };
+      process.exitCode = await withTerminationSignals(async (signal) => {
+        const result = await runArm({ ...parseOptions([]), settleMs: 0, windowMs: 0, freshnessProbes: 0, soakCycles: 5 }, "candidate", 1, "/stub", signal, "soak-signal", runtime);
+        record("done"); return result.error ? 1 : 0;
+      });
+    `,
+    );
+    const child = spawn(process.execPath, [script], { cwd: dir, stdio: "ignore" });
+    const done = new Promise<number | null>((resolve, reject) => {
+      child.once("exit", resolve);
+      child.once("error", reject);
+    });
+    try {
+      for (let attempt = 0; attempt < 300; attempt += 1) {
+        try {
+          if (readFileSync(events, "utf8").includes("start-waiting")) break;
+        } catch {}
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(readFileSync(events, "utf8")).toContain("start-waiting");
+      const interruptedAt = performance.now();
+      child.kill(signal);
+      const timeout = setTimeout(() => child.kill("SIGKILL"), 5_000);
+      try {
+        expect(await done).toBe(signal === "SIGTERM" ? 143 : 130);
+        expect(performance.now() - interruptedAt).toBeLessThan(5_000);
+      } finally {
+        clearTimeout(timeout);
+      }
+      expect(readFileSync(events, "utf8").trim().split("\n")).toEqual([
+        "list",
+        "create",
+        "start",
+        "start-waiting",
+        "cli-terminated",
+        "dev:stop",
+        "launcher-exited",
+        "dev:reset",
+        "done",
+      ]);
+    } finally {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await done;
+    }
+  },
+  15_000,
+);
+
+describe("soak", () => {
+  const footprint = (keys: number, records: number) => ({
+    stream: { open: 1 },
+    recurringWork: {
+      metrics: { kinds: {} },
+      schedulers: [{ owner: "backend-activity", keys, settling: 0, byKind: {} }],
+      admission: [],
+      fetchPolicies: [{ name: "container-git-fetch", status: { records, containers: records } }],
+      signals: [],
+    },
+  });
+
+  function soakHarness(
+    responses: Array<ReturnType<typeof footprint> | null>,
+    failing: string[] = [],
+  ) {
+    let now = 0;
+    const calls: string[][] = [];
+    const cli = (async (args: string[]) => {
+      calls.push(args);
+      const verb = `${args[0]} ${args[1]}`;
+      const status = failing.includes(verb) ? 1 : 0;
+      const stdout =
+        verb === "environment create"
+          ? JSON.stringify({ result: { environment: { id: `env-${calls.length}` } } })
+          : "{}";
+      return { status, stdout, stderr: "" };
+    }) as never;
+    const gateway = {
+      metrics: mock(async () => (responses.length > 1 ? responses.shift()! : responses[0]!)),
+    };
+    const runtime = {
+      ...__testing.soakRuntime,
+      now: () => now,
+      sleep: async (ms: number) => {
+        now += ms;
+      },
+      fixtureProjectId: async () => "project-1",
+    };
+    return { cli, calls, gateway, runtime };
+  }
+
+  test("parses soak options", () => {
+    expect(parseOptions([]).soakCycles).toBe(0);
+    const parsed = parseOptions(["--soak-cycles", "5", "--soak-environments", "local,container"]);
+    expect(parsed.soakCycles).toBe(5);
+    expect(parsed.soakEnvironments).toEqual(["local", "container"]);
+    expect(() => parseOptions(["--soak-environments", "vm"])).toThrow();
+    expect(() => parseOptions(["--soak-cycles", "1.5"])).toThrow();
+  });
+
+  test("cycles every kind through create, start, stop, restart and delete", async () => {
+    const h = soakHarness([footprint(4, 0)]);
+    const result = await measureSoak(
+      h.gateway,
+      h.cli,
+      { soakCycles: 2, soakEnvironments: ["local", "container"], settleMs: 1_000 },
+      () => 2048,
+      undefined,
+      h.runtime,
+    );
+    expect(result.cyclesCompleted).toBe(2);
+    expect(result.failures).toEqual([]);
+    expect(result.leaks).toEqual([]);
+    expect(__testing.resultExitCode([{ soak: result, guardLines: 0 }])).toBe(0);
+    expect(result.baseline?.["scheduler:backend-activity:keys"]).toBe(4);
+    expect(result.backendRssKiB).toEqual({ baseline: 2048, final: 2048 });
+    const verbs = h.calls.map(
+      (args) => args.slice(0, 2).join(" ") + (args[3] ? ` ${args[3]}` : ""),
+    );
+    expect(verbs.slice(0, 5)).toEqual([
+      "environment create project-1",
+      "environment start --wait",
+      "environment stop --wait",
+      "environment start --wait",
+      "environment delete --wait",
+    ]);
+    expect(h.calls.filter((args) => args[1] === "create")).toHaveLength(4);
+    expect(h.calls.find((args) => args[1] === "create")).toContain("local");
+    expect(h.calls.filter((args) => args[1] === "create")[1]).toContain("container");
+    expect(h.calls.slice(1, 5)).toEqual([
+      ["environment", "start", "env-1", "--wait", "ready", "--timeout", "10m", "--json"],
+      ["environment", "stop", "env-1", "--wait", "stopped", "--timeout", "10m", "--json"],
+      ["environment", "start", "env-1", "--wait", "running", "--timeout", "10m", "--json"],
+      ["environment", "delete", "env-1", "--wait", "deleted", "--timeout", "10m", "--json"],
+    ]);
+  });
+
+  test("a gauge above its baseline after the settle is a leak; a transient one is not", async () => {
+    // Before: 4 keys at most. After: one sample still at 6 while a job
+    // settles, but the lowest settled reading is 5 with one fetch record.
+    const h = soakHarness([
+      footprint(4, 0),
+      footprint(3, 0),
+      footprint(4, 0),
+      footprint(6, 1),
+      footprint(5, 1),
+      footprint(5, 1),
+    ]);
+    const result = await measureSoak(
+      h.gateway,
+      h.cli,
+      { soakCycles: 1, soakEnvironments: ["local"], settleMs: 1_000 },
+      () => null,
+      undefined,
+      h.runtime,
+    );
+    expect(result.leaks).toEqual([
+      { gauge: "fetch:container-git-fetch:containers", baseline: 0, final: 1 },
+      { gauge: "fetch:container-git-fetch:records", baseline: 0, final: 1 },
+      { gauge: "scheduler:backend-activity:keys", baseline: 4, final: 5 },
+    ]);
+    expect(__testing.resultExitCode([{ soak: result, guardLines: 0 }])).toBe(1);
+  });
+
+  test("a failed step still deletes the environment and is reported", async () => {
+    const h = soakHarness([footprint(4, 0)], ["environment stop"]);
+    const result = await measureSoak(
+      h.gateway,
+      h.cli,
+      { soakCycles: 1, soakEnvironments: ["local"], settleMs: 0 },
+      () => null,
+      undefined,
+      h.runtime,
+    );
+    expect(result.failures).toEqual([{ cycle: 1, kind: "local", step: "stop" }]);
+    expect(h.calls.map((args) => args[1])).toEqual(["create", "start", "stop", "delete"]);
+    expect(__testing.resultExitCode([{ soak: result, guardLines: 0 }])).toBe(1);
+  });
+
+  test.each(["baseline", "final"] as const)(
+    "an unreadable %s fails the run and summary",
+    async (missing) => {
+      const valid = footprint(4, 0);
+      const h = soakHarness(
+        missing === "baseline"
+          ? [null, null, null, valid, valid, valid]
+          : [valid, valid, valid, null, null, null],
+      );
+      const soak = await measureSoak(
+        h.gateway,
+        h.cli,
+        { soakCycles: 1, soakEnvironments: ["local"], settleMs: 0 },
+        () => null,
+        undefined,
+        h.runtime,
+      );
+      expect(soak[missing]).toBeNull();
+      expect(soak.failures).toEqual([]);
+      const run = {
+        arm: "candidate" as const,
+        repeat: 1,
+        profile: "fixture",
+        readyAfterMs: 0,
+        summary: null,
+        freshness: [],
+        soak,
+        guardLines: 0,
+      };
+      expect(__testing.resultExitCode([run])).toBe(1);
+      const output = spyOn(console, "log").mockImplementation(() => undefined);
+      try {
+        __testing.printSummary([run]);
+        expect(output.mock.calls[0]?.[0]).toContain(`${missing} unavailable`);
+        expect(output.mock.calls[0]?.[0]).toContain("| unmeasured |");
+      } finally {
+        output.mockRestore();
+      }
+    },
+  );
+
+  test.each([1, null])("guard count %s fails an otherwise clean soak", async (guardLines) => {
+    const h = soakHarness([footprint(4, 0)]);
+    const soak = await measureSoak(
+      h.gateway,
+      h.cli,
+      { soakCycles: 1, soakEnvironments: ["local"], settleMs: 0 },
+      () => null,
+      undefined,
+      h.runtime,
+    );
+    expect(__testing.resultExitCode([{ soak, guardLines }])).toBe(1);
+  });
+
+  test("runArm soaks only when cycles are requested", async () => {
+    const soak = mock(async () => ({
+      cyclesRequested: 1,
+      cyclesCompleted: 1,
+      durationMs: 0,
+      failures: [],
+      baseline: {},
+      final: {},
+      leaks: [],
+      backendRssKiB: { baseline: null, final: null },
+    }));
+    const h = harness({
+      measureSoak: soak,
+      asyncCliRunner: () => async () => ({ status: 0, stdout: "{}" }),
+    });
+    const skipped = await runArm(options(), "candidate", 1, "/stub", undefined, "a", h.runtime);
+    expect(skipped.soak).toBeUndefined();
+    expect(soak).not.toHaveBeenCalled();
+    const h2 = harness({
+      measureSoak: soak,
+      asyncCliRunner: () => async () => ({ status: 0, stdout: "{}" }),
+    });
+    const soaked = await runArm(
+      { ...options(), soakCycles: 1 },
+      "candidate",
+      1,
+      "/stub",
+      undefined,
+      "b",
+      h2.runtime,
+    );
+    expect(soaked.error).toBeUndefined();
+    expect(soaked.soak?.cyclesCompleted).toBe(1);
+  });
+});

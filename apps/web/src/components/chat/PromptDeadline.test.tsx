@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { PromptDeadline, TERMINAL_MODE_DEADLINE_HOLD } from "./PromptDeadline";
+import { PromptDeadline } from "./PromptDeadline";
 
 afterEach(cleanup);
 
@@ -92,7 +92,10 @@ describe("PromptDeadline", () => {
         { available: false, reason: "no-extension" } as const,
         "Codex stops waiting at this deadline itself, so it can't be paused.",
       ],
-      [TERMINAL_MODE_DEADLINE_HOLD, "Pausing the countdown isn't available in terminal mode yet."],
+      [
+        { available: false, reason: "hook-outdated" } as const,
+        "This prompt came from a terminal hook that predates pausing. Prompts after Codex restarts can be paused.",
+      ],
     ] as const;
     for (const [hold, text] of cases) {
       render(<PromptDeadline expiresAt={inFourMinutes()} hold={hold} provider="codex" />);

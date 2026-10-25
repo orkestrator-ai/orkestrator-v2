@@ -476,3 +476,163 @@ test("private canvases survive reload and can be retired to recover quota", asyn
     await invoke("delete_environment", { environmentId: env.id }).catch(() => undefined);
   }
 });
+
+test("an image brief drains after enqueue acknowledgement and fallback failure while inactive", async ({
+  page,
+}) => {
+  const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
+  const status = JSON.parse(
+    spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], { encoding: "utf8" })
+      .stdout,
+  );
+  const login = JSON.parse(
+    spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], { encoding: "utf8" })
+      .stdout,
+  );
+  let allowEnqueue!: () => void;
+  let allowAck!: () => void;
+  let failFallback!: () => void;
+  let queueDurable!: () => void;
+  const enqueueGate = new Promise<void>((resolve) => {
+    allowEnqueue = resolve;
+  });
+  const ackGate = new Promise<void>((resolve) => {
+    allowAck = resolve;
+  });
+  const fallbackGate = new Promise<void>((resolve) => {
+    failFallback = resolve;
+  });
+  const durable = new Promise<void>((resolve) => {
+    queueDurable = resolve;
+  });
+  let tabDispatches = 0;
+  let agentTabId: string | undefined;
+  await page.route("**/__orkestrator/invoke", async (route) => {
+    const request = route.request().postDataJSON();
+    if (request?.command === "check_claude_cli") await route.fulfill({ json: { result: false } });
+    else if (request?.command === "enqueue_prompt_queue_message") {
+      agentTabId = String(request.args.message.requestId).split(":").at(-1);
+      // Hydrate and flush the tab before allowing the durable hand-off.
+      await enqueueGate;
+      const response = await route.fetch();
+      queueDurable();
+      await ackGate;
+      await route.fulfill({ response });
+    } else if (
+      request?.command === "dispatch_native_agent_intent" &&
+      String(request.args?.requestId ?? "").startsWith("initial-prompt:")
+    ) {
+      tabDispatches += 1;
+      // Fail only after queue ownership has been acknowledged off screen.
+      await fallbackGate;
+      await route.abort();
+    } else await route.continue();
+  });
+  await page.goto(login.loginUrl);
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+    const response = await page.request.post(
+      new URL("/__orkestrator/invoke", status.browserUrl).href,
+      { data: { command, args } },
+    );
+    expect(response.ok(), command).toBe(true);
+    return (await response.json()).result;
+  };
+  const projects =
+    await invoke<Array<{ id: string; name: string; localPath: string }>>("get_projects");
+  const project = projects.find((project) => project.localPath === status.testProject)!;
+  const create = (name: string) =>
+    invoke<{ id: string; name: string }>("create_environment", {
+      projectId: project.id,
+      name,
+      environmentType: "local",
+      networkAccessMode: "restricted",
+    });
+  const env = await create("design-brief-inactive");
+  const other = await create("design-brief-elsewhere");
+  const select = async (target: { name: string }) => {
+    await ensureProjectExpanded(page, project.name);
+    await page.getByText(target.name, { exact: true }).first().click();
+  };
+  try {
+    await invoke("start_environment", { environmentId: env.id });
+    await invoke("start_environment", { environmentId: other.id });
+    await page.reload();
+    await select(env);
+    await page.getByRole("button", { name: "New design workspace" }).click();
+    await page.getByRole("textbox", { name: "Name", exact: true }).fill("Inactive brief");
+    await page.getByRole("combobox", { name: "Design agent", exact: true }).click();
+    await page.getByRole("option", { name: "Codex", exact: true }).click();
+    const brief = page.getByRole("textbox", { name: "Design brief" });
+    await brief.fill("Mock up the header");
+    await brief.evaluate(async (input) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 8;
+      const blob = await new Promise<Blob>((resolve) =>
+        canvas.toBlob((blob) => resolve(blob!), "image/png"),
+      );
+      const data = new DataTransfer();
+      data.items.add(new File([blob], "header.png", { type: "image/png" }));
+      input.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, clipboardData: data }));
+    });
+    await expect(page.getByRole("list", { name: "Attached images" }).locator("img")).toHaveCount(1);
+    await page.getByRole("button", { name: "Create design workspace", exact: true }).click();
+    // A freshly created provider session can take longer than the default UI poll.
+    await expect.poll(() => tabDispatches, { timeout: 30_000 }).toBe(1);
+    const draftKey = () => `codex:${env.id}:${encodeURIComponent(`env-${env.id}:${agentTabId}`)}`;
+    const readDraft = () =>
+      invoke<{ value: { text: string; attachments: unknown[] } } | null>("get_compose_draft", {
+        draftKey: draftKey(),
+      });
+    await expect.poll(async () => (await readDraft())?.value.attachments.length).toBe(1);
+    await select(other);
+    allowEnqueue();
+    await durable;
+    const queueKey = `codex\u0000env-${env.id}:${agentTabId}`;
+    expect(await invoke("get_prompt_queue", { queueKey })).toMatchObject({
+      messages: [expect.objectContaining({ id: `initial-prompt:${env.id}:${agentTabId}` })],
+    });
+    allowAck();
+    await expect.poll(async () => (await readDraft())?.value.attachments.length ?? 0).toBe(0);
+    failFallback();
+
+    await expect
+      .poll(async () => {
+        const layout = await invoke<{ root: unknown } | null>("get_pane_layout", {
+          environmentId: env.id,
+        });
+        agentTabId = /"id":"(design-agent-[^"]+)"/.exec(JSON.stringify(layout?.root ?? {}))?.[1];
+        return agentTabId;
+      })
+      .toBeTruthy();
+    await expect
+      .poll(
+        async () =>
+          JSON.stringify(
+            await invoke("get_native_agent_projection", {
+              environmentId: env.id,
+              agent: "codex",
+              logicalSessionKey: `env-${env.id}:${agentTabId}`,
+            }),
+          ),
+        { timeout: 30_000 },
+      )
+      .toContain("Mock up the header");
+
+    await select(env);
+    await expect(page.getByText("Mock up the header", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Use the orkestrator-design MCP server", { exact: false }),
+    ).toHaveCount(0);
+    expect(tabDispatches).toBe(1);
+    expect((await readDraft())?.value.text ?? "").toBe("");
+    expect((await readDraft())?.value.attachments ?? []).toEqual([]);
+  } finally {
+    allowEnqueue();
+    allowAck();
+    failFallback();
+    for (const target of [env, other]) {
+      await invoke("stop_environment", { environmentId: target.id }).catch(() => undefined);
+      await invoke("delete_environment", { environmentId: target.id }).catch(() => undefined);
+    }
+  }
+});

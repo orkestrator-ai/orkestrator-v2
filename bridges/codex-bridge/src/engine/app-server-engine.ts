@@ -77,6 +77,7 @@ import {
   codexNetworkDeniedSearchMode,
   codexProjectSkillsConfig,
   codexProjectTrustConfig,
+  codexRequestUserInputConfig,
   codexToolHistoryGaps,
 } from "../codex-config.js";
 import { findTranscriptPath, listTranscriptPaths } from "../history/rollout.js";
@@ -1584,6 +1585,9 @@ export class AppServerEngine implements CodexEngine {
       // Project resources off: this thread does not load the checkout's own
       // `.codex` configuration, even where the user trusts it in Codex.
       ...codexProjectTrustConfig(config.policy, cwd),
+      // A watched session may ask the user a question; Default mode refuses
+      // `request_user_input` without this.
+      ...codexRequestUserInputConfig(config.policy),
       ...extraConfig,
       ...(config.agentMcp
         ? {
@@ -1654,7 +1658,6 @@ export class AppServerEngine implements CodexEngine {
       // than the global default, and `bindThread` adopts the model app-server
       // reports, so the transcript labels what the next turn runs.
       ...(config.model ? { model: config.model } : {}),
-      ...(config.personality ? { personality: config.personality } : {}),
       // `null` clears a previously set tier; `undefined` would leave it in place.
       serviceTier: config.serviceTier ?? null,
       ...(Object.keys(threadConfig).length > 0 ? { config: threadConfig } : {}),
@@ -2578,8 +2581,6 @@ export class AppServerEngine implements CodexEngine {
         ? { serviceTier: options.config.serviceTier }
         : {}),
       ...(options.config.reasoningEffort ? { effort: options.config.reasoningEffort } : {}),
-      ...(options.config.reasoningSummary ? { summary: options.config.reasoningSummary } : {}),
-      ...(options.config.personality ? { personality: options.config.personality } : {}),
       // turn/start takes a resolved policy object, not the mode string.
       ...(options.config.permissionProfile
         ? {}

@@ -1,6 +1,5 @@
 import { gitHubCli } from "./github-cli-binary.js";
 import { gitHubCliEnv } from "./github-credentials.js";
-import { PrMonitorService } from "./pr-monitor.js";
 import { runCommand } from "./shell.js";
 import type { Environment } from "./models.js";
 import type { PrDetection, PrMonitorKanbanTask, PrMonitorTarget } from "./pr-monitor.js";
@@ -15,84 +14,8 @@ import {
 } from "./commands-review.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { WorkAdmissionPool } from "./work-admission.js";
 import type { PrDetectionResult } from "./commands-review.js";
-import type { CommandContext, BackendEmit } from "./commands-context.js";
-import {
-  readCheckoutBranch,
-  refreshProjectHomeBranch,
-  reconcileProjectHomeEnvironment,
-} from "./project-home-environment.js";
-
-/**
- * Merge cleanup is owned by `commands-servers` (it ends in
- * `deleteEnvironmentTask`), but it is triggered here, when the monitor first
- * observes a merged PR. Importing it directly made this module a back-edge into
- * `commands-servers`, which imports the monitor service in turn.
- *
- * `commands-servers` registers the scheduler at its own module scope, so the
- * only window in which one can arrive unregistered is before that module has
- * finished evaluating. Requests in that window are held and replayed on
- * registration rather than dropped - `scheduleMergeCleanupRecovery` already
- * de-duplicates per environment, so a replay is a no-op if it also ran later.
- */
-type MergeCleanupScheduler = (environmentId: string, context: CommandContext) => void;
-
-let mergeCleanupScheduler: MergeCleanupScheduler | undefined;
-/** Keyed by environment id, so a repeated observation cannot grow this. */
-const deferredMergeCleanups = new Map<string, CommandContext>();
-const MAX_DEFERRED_MERGE_CLEANUPS = 256;
-
-export function setMergeCleanupScheduler(scheduler: MergeCleanupScheduler): void {
-  mergeCleanupScheduler = scheduler;
-  const deferred = [...deferredMergeCleanups];
-  deferredMergeCleanups.clear();
-  for (const [environmentId, context] of deferred) scheduler(environmentId, context);
-}
-
-export function requestMergeCleanupRecovery(environmentId: string, context: CommandContext): void {
-  if (mergeCleanupScheduler) {
-    mergeCleanupScheduler(environmentId, context);
-    return;
-  }
-  if (
-    deferredMergeCleanups.size >= MAX_DEFERRED_MERGE_CLEANUPS &&
-    !deferredMergeCleanups.has(environmentId)
-  ) {
-    console.warn(
-      "[pr-monitor] Dropping merge cleanup request: no scheduler registered and the deferred set is full",
-    );
-    return;
-  }
-  deferredMergeCleanups.set(environmentId, context);
-}
-
-/** Test seam: forget the registration so a suite can observe the deferred path. */
-export function resetMergeCleanupSchedulerForTesting(): void {
-  mergeCleanupScheduler = undefined;
-  deferredMergeCleanups.clear();
-}
-
-export function deferredMergeCleanupCountForTesting(): number {
-  return deferredMergeCleanups.size;
-}
-
-export let prMonitorEmit: BackendEmit | undefined;
-export let prMonitorStorage: StorageService | undefined;
-export let prMonitorContext: CommandContext | undefined;
-export let prMonitorSyncGeneration = 0;
-export let prMonitorSyncQueue: Promise<void> = Promise.resolve();
-
-export function setPrMonitorRuntime(context: CommandContext): void {
-  prMonitorEmit = context.emit;
-  prMonitorStorage = context.storage;
-  prMonitorContext = context;
-}
-
-export function requirePrMonitorStorage(): StorageService {
-  if (!prMonitorStorage) throw new Error("PR monitor storage is not initialised");
-  return prMonitorStorage;
-}
+import { readCheckoutBranch, reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 
 export type StoredKanbanTask = Awaited<ReturnType<StorageService["getKanbanTasks"]>>[number];
 
@@ -315,22 +238,23 @@ export function prMonitorCooldownScope(target: PrMonitorTarget): string | null {
   }
 }
 
-/**
- * Aggregate bound on backend PR detections: 2 concurrent, 1 per environment,
- * user intent before quiet discovery, starvation cap 8 (`work-admission.ts`).
- */
-export const prMonitorAdmission = new WorkAdmissionPool({ name: "external-pr" });
-
 /** Runs immutable lookup for known PRs and branch discovery for unknown PRs. */
 export async function detectEnvironmentPullRequest(
   target: PrMonitorTarget,
-  options: { includeCheckSummary?: boolean } = {},
+  options: {
+    includeCheckSummary?: boolean;
+    /**
+     * Rereads a project home's durable record first, so a lookup follows the
+     * home's current checkout rather than the target captured when it was queued.
+     */
+    storage?: StorageService;
+  } = {},
 ): Promise<PrDetection | null> {
   if (target.projectHome) {
-    if (prMonitorStorage) {
-      const current = await prMonitorStorage.getEnvironment(target.environmentId);
+    if (options.storage) {
+      const current = await options.storage.getEnvironment(target.environmentId);
       if (!current) return null;
-      target = await projectHomePrTarget(current, prMonitorStorage);
+      target = await projectHomePrTarget(current, options.storage);
     }
     if (!target.ready) return null;
     const branch = target.worktreePath ? await readCheckoutBranch(target.worktreePath) : "";
@@ -418,62 +342,6 @@ export async function detectEnvironmentPullRequest(
   }
 }
 
-export const prMonitorService = new PrMonitorService({
-  emit: (event, payload) => prMonitorEmit?.(event, payload),
-  admission: prMonitorAdmission,
-  cooldownScope: prMonitorCooldownScope,
-  effects: {
-    detect: (target, options) => detectEnvironmentPullRequest(target, options),
-    persistPr: async (environmentId, detection) => {
-      await requirePrMonitorStorage().updateEnvironment(environmentId, {
-        prUrl: detection.url,
-        prBaseBranch: detection.baseBranch ?? null,
-        prState: detection.state,
-        hasMergeConflicts: detection.hasMergeConflicts,
-        ...(detection.state !== "open" || detection.hasMergeConflicts === false
-          ? { prRecheckAfterAgentCompletionArmedAt: undefined }
-          : {}),
-      });
-    },
-    readTarget: async (environmentId) => {
-      const environment = await requirePrMonitorStorage().getEnvironment(environmentId);
-      return environment ? projectHomePrTarget(environment, requirePrMonitorStorage()) : null;
-    },
-    // Called once the terminal state is persisted and the linked task is
-    // reconciled, so a cleanup deletion can no longer orphan the task comment.
-    // `scheduleMergeCleanupRecovery` reads the durable cleanup intent itself
-    // and de-duplicates per environment, so repeating this is harmless.
-    resumeTerminalEffects: (environmentId, observation) => {
-      if (observation.state === "merged" && prMonitorContext) {
-        requestMergeCleanupRecovery(environmentId, prMonitorContext);
-      }
-    },
-    clearPr: async (environmentId) => {
-      await requirePrMonitorStorage().updateEnvironment(environmentId, {
-        prUrl: null,
-        prBaseBranch: null,
-        prState: null,
-        hasMergeConflicts: null,
-        prRecheckAfterAgentCompletionArmedAt: undefined,
-      });
-    },
-    findTaskForEnvironment: (environmentId) =>
-      findKanbanTaskForEnvironment(requirePrMonitorStorage(), environmentId),
-    moveTaskToReview: async (taskId) => {
-      await requirePrMonitorStorage().updateKanbanTask(taskId, { status: "review" });
-    },
-    addTaskComment: async (taskId, text) => {
-      await requirePrMonitorStorage().addKanbanComment(taskId, text);
-    },
-    updateTaskPrMetadata: async (taskId, updates) => {
-      await requirePrMonitorStorage().updateKanbanTask(taskId, updates);
-    },
-  },
-  onWarning: (message, error) => {
-    console.warn(`[pr-monitor] ${message}:`, error instanceof Error ? error.message : error);
-  },
-});
-
 export function environmentToPrMonitorTarget(environment: Environment): PrMonitorTarget {
   const kind =
     environment.environmentType === "local" ? ("local" as const) : ("container" as const);
@@ -519,107 +387,6 @@ export async function projectHomePrTarget(
     ready: eligible,
     ...(!eligible ? { prUrl: null, prState: null } : {}),
   };
-}
-
-/**
- * Agent-completion edge for PR monitoring. Fire on the working → idle
- * transition (never per idle reading). Resets the due time of a monitored
- * environment — including a quiet merged/closed one — and gives an unmonitored
- * environment one provisional discovery that leaves no trace if it finds
- * nothing.
- */
-export async function wakePrMonitorForCompletion(
-  environmentId: string,
-  context: CommandContext,
-): Promise<void> {
-  setPrMonitorRuntime(context);
-  const stored = await context.storage.getEnvironment(environmentId);
-  if (!stored) return;
-  // A turn in the project home may have switched the checkout's branch (a PR
-  // session branches off the base before pushing); follow it first.
-  const environment = await refreshProjectHomeBranch(stored, context.storage, readCheckoutBranch);
-  prMonitorService.wakeForCompletion(await projectHomePrTarget(environment, context.storage));
-}
-
-/**
- * Runs a check now for a monitored environment: an explicit user refresh
- * (`interactive`, bypasses quiet cadence and rate-limit cooldown) or an armed
- * agent-completion recheck (`completion`). No-op for unmonitored or paused
- * environments.
- */
-export async function requestPrMonitorRefresh(
-  environmentId: string,
-  context: CommandContext,
-  reason: "interactive" | "completion" = "interactive",
-): Promise<void> {
-  await syncPrMonitorTracking(context);
-  prMonitorService.requestCheck(environmentId, reason);
-}
-
-export function invalidatePendingPrMonitorSync(): void {
-  prMonitorSyncGeneration += 1;
-}
-
-export async function syncPrMonitorTracking(context: CommandContext): Promise<void> {
-  prMonitorEmit = context.emit;
-  prMonitorStorage = context.storage;
-  prMonitorContext = context;
-  const generation = prMonitorSyncGeneration;
-  const operation = prMonitorSyncQueue
-    .catch(() => undefined)
-    .then(async () => {
-      const environments = await context.storage.loadEnvironments();
-      // A stop, delete, shutdown, or newer reconciliation may have happened
-      // while storage was loading; applying this older snapshot would recreate
-      // a poller the later lifecycle action deliberately removed.
-      if (generation !== prMonitorSyncGeneration) return;
-      const targets = await Promise.all(
-        environments.map(async (environment) => {
-          try {
-            return await projectHomePrTarget(environment, context.storage);
-          } catch {
-            return {
-              ...environmentToPrMonitorTarget(environment),
-              ready: false,
-              prUrl: null,
-              prState: null,
-            };
-          }
-        }),
-      );
-      if (generation !== prMonitorSyncGeneration) return;
-      prMonitorService.sync(targets);
-    });
-  prMonitorSyncQueue = operation;
-  await operation;
-}
-
-export async function reconcileConfirmedMerge(
-  environment: Environment,
-  context: CommandContext,
-): Promise<void> {
-  if (!environment.prUrl) return;
-  prMonitorEmit = context.emit;
-  prMonitorStorage = context.storage;
-  prMonitorContext = context;
-  const confirmedEnvironment: Environment = {
-    ...environment,
-    prState: "merged",
-    hasMergeConflicts: false,
-  };
-  await prMonitorService.reconcileTerminal(environmentToPrMonitorTarget(confirmedEnvironment), {
-    url: environment.prUrl,
-    state: "merged",
-    hasMergeConflicts: false,
-    checkSummary: null,
-    checkSummaryStatus: "skipped",
-  });
-}
-
-/** Releases every PR polling timer; called on backend shutdown. */
-export function shutdownPrMonitorTracking(): void {
-  invalidatePendingPrMonitorSync();
-  prMonitorService.shutdown();
 }
 
 /** Untracked files whose lines are counted at once during a local git status. */

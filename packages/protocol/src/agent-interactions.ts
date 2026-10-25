@@ -189,6 +189,12 @@ export interface AgentInteractionOption {
   /** Exact value supplied to the provider by its adapter; never inferred from label. */
   providerValue: string;
   description?: string;
+  /**
+   * Plain-text preview of what the option would produce (a Claude
+   * AskUserQuestion option's `preview`, Markdown/ASCII). Shown verbatim in a
+   * monospace block; never rendered as Markdown or HTML.
+   */
+  preview?: string;
   amendment?: AgentInteractionAmendment;
 }
 
@@ -567,7 +573,14 @@ const QUESTION_KEYS = new Set([
   "allowFreeText",
   "options",
 ]);
-const OPTION_KEYS = new Set(["id", "label", "providerValue", "description", "amendment"]);
+const OPTION_KEYS = new Set([
+  "id",
+  "label",
+  "providerValue",
+  "description",
+  "preview",
+  "amendment",
+]);
 const AMENDMENT_KEYS = new Set(["kind", "detail"]);
 const ANSWER_KEYS = new Set(["version", "interactionId", "sessionId", "answers"]);
 const QUESTION_ANSWER_KEYS = new Set(["questionId", "optionIds", "freeText"]);
@@ -652,6 +665,7 @@ function presentationTextLength(presentation: AgentInteractionPresentation): num
         option.label.length +
         option.providerValue.length +
         (option.description?.length ?? 0) +
+        (option.preview?.length ?? 0) +
         (option.amendment?.detail.length ?? 0);
     }
   }
@@ -689,6 +703,7 @@ function isOption(value: unknown): value is AgentInteractionOption {
     isBoundedString(value.label) &&
     isBoundedString(value.providerValue, AGENT_INTERACTION_LIMITS.maxProviderValueLength) &&
     isOptionalBoundedString(value.description) &&
+    isOptionalBoundedString(value.preview) &&
     (value.amendment === undefined || isAmendment(value.amendment))
   );
 }

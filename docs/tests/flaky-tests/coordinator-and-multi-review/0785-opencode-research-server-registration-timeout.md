@@ -14,6 +14,18 @@
 - **Evidence:** `orkestrator-test-run.fqu9cJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** an aggregate-specific timeout, confirmed by the unchanged complete owner pass. No narrower root cause has been established. No implementation, assertion, deadline or skip changed.
 
+## Recurrence 2026-10-25 (scheduled jobs)
+
+- **Run:** `mise run test` on the scheduled-jobs branch (parent main `ba7cc8d4`), workspace group.
+- **Failure:** the same 40-second outer deadline (40,000.72 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name research-live-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/opencode-coordinator-research-live.test.ts --parallel=1 --only-failures` passed (1.9 s). Without the `setup-node.ts` preload the file also times out alone, so isolated reruns must use it.
+
+Recurred again in the same branch's `mise run test` after rebasing onto main
+`eda21487` (40,001.15 ms). One logged isolated rerun with the preload failed
+immediately afterwards; the next isolated rerun with the same command passed
+(1 of 1, 1.81 s). The isolated failure suggests a startup race in the live
+`opencode serve` fixture rather than aggregate load alone.
+
 ## Recurrence — 2026-10-25
 
 - Command: `mise run test:logged -- --name full-test-2 -- mise run test` on branch `todo-0054-design-a11y-findings-ec88681caf58` (`ba7cc8d4` plus the design-canvas accessibility working tree, which touches only `apps/web/src/components/design/`, its tests and two `e2e/` specs, not this test's code), macOS 27.0 arm64, default `mise run test` groups, host load average 55 to 66. The same suite's first run on this branch, an hour earlier, passed the workspace group.
@@ -21,3 +33,9 @@
 - Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.MUtdn0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - Complete unchanged owner: `mise run test:logged -- --name opencode-research-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/opencode-coordinator-research-live.test.ts --parallel=1 --only-failures` passed (exit 0, 6.2 s).
 - Assessment: a second aggregate-only timeout under heavy load. Still open; no implementation, assertion, deadline or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** recurred on 2026-10-25 in [0801](../aggregate-validation-runs/0801-per-machine-accounts-validation.md) at 40,002.06 ms, and the owner passed alone. Two failures at exactly the 40 s deadline, against 1.5 s alone, suggest a hang during startup rather than slow work.
+- **Next step:** on timeout, print the `opencode serve` output and the last registration step reached. Check whether the start waits on the shared OpenCode database lock (see [0723](../backend-services-and-tooling/0723-opencode-host-shutdown-retry-race.md)).

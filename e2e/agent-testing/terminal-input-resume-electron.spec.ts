@@ -1,4 +1,7 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { closeElectronWithin } from "./design-electron-cleanup";
+import { expect, test } from "./electron-fixtures";
+import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -130,6 +133,7 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
         VITE_ORKESTRATOR_PROFILE: profile.id,
       },
     });
+    ownProcessGroup(vite);
     await waitForUrl(rendererUrl);
     app = await electron.launch({
       executablePath: electronExecutable,
@@ -344,12 +348,8 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
       await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
     }
   } finally {
-    await app?.close().catch(() => undefined);
-    if (vite?.pid) {
-      try {
-        process.kill(-vite.pid, "SIGTERM");
-      } catch {}
-    }
+    await closeElectronWithin(app).catch(() => undefined);
+    if (vite) await stopProcessGroup(vite).catch(() => undefined);
     await rm(temporaryRoot, { recursive: true, force: true });
   }
 });

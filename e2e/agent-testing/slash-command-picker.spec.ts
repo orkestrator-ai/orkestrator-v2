@@ -9,18 +9,23 @@
  * sessions on the host's credentials. `ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS`
  * picks from `claude`, `pi` and `grok` (default `claude`). The checks are
  * metadata only: no case sends a prompt, so no model turn is spent. A new Pi
- * tab lists no provider commands until its session attaches (catalogue reads
- * never attach; tracked in
- * docs/todo/cli-and-slash-commands/0069-pi-commands-before-first-turn.md), so
- * on Pi the case first uses the picker's own "Refresh commands", which does. Commands
+ * tab lists its templates and skills before its session attaches, from a
+ * resource-only read that runs no extension code, as a `stale` list marked
+ * `attachPending` (extension commands arrive on attach); on Pi the case checks
+ * that state first, with no refresh and no turn
+ * (docs/todo/cli-and-slash-commands/0069-pi-commands-before-first-turn.md). Commands
  * are planted in a disposable host worktree created with the
  * execution-policy override `projectResources: true` (never this repository,
- * never a provider home).
+ * never a provider home), or, with `ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT=container`
+ * on a profile started with `--fixture-environments local,container`, in a
+ * containerized environment's own `/workspace` through `docker exec` (no
+ * override: a container loads project resources by default).
  */
 import { expect, test, type Locator } from "@playwright/test";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   authenticatedInvoke,
+  containerWorkspace,
   hostWorkspace,
   profileStatus,
   sidebarNavigator,
@@ -32,7 +37,12 @@ type Row = { name: string; insertText?: string; source?: string; executionKind?:
 type Projection = {
   messages?: Array<{ role?: unknown }>;
   slashCommands?: Row[];
-  slashCommandCatalogue?: { status: string; error?: unknown; lastRefresh?: unknown };
+  slashCommandCatalogue?: {
+    status: string;
+    error?: unknown;
+    lastRefresh?: unknown;
+    attachPending?: boolean;
+  };
 } | null;
 
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
@@ -40,11 +50,15 @@ const LIVE_OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_LIVE_SLASH === "1";
 
 /** Where each provider reads a project command file. */
 const PROVIDERS = {
-  claude: { commandFile: (name: string) => `.claude/commands/${name}.md`, listsBeforeTurn: true },
-  pi: { commandFile: (name: string) => `.pi/prompts/${name}.md`, listsBeforeTurn: false },
+  claude: {
+    commandFile: (name: string) => `.claude/commands/${name}.md`,
+    partialBeforeTurn: false,
+  },
+  // Templates and skills before attach; extension commands only after it.
+  pi: { commandFile: (name: string) => `.pi/prompts/${name}.md`, partialBeforeTurn: true },
   // Grok lists `.grok/commands/*.md` as skills once the folder is trusted,
   // which the bridge arranges when project resources are on.
-  grok: { commandFile: (name: string) => `.grok/commands/${name}.md`, listsBeforeTurn: true },
+  grok: { commandFile: (name: string) => `.grok/commands/${name}.md`, partialBeforeTurn: false },
 } as const;
 type Provider = keyof typeof PROVIDERS;
 
@@ -60,6 +74,21 @@ const SOURCE_LABELS: Record<string, string> = {
   extension: "Extensions",
   unknown: "Other",
 };
+
+const ENVIRONMENT_KINDS = ["local", "container"] as const;
+type EnvironmentKind = (typeof ENVIRONMENT_KINDS)[number];
+
+function selectedEnvironmentKind(): EnvironmentKind {
+  const raw = process.env.ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT?.trim() || "local";
+  if (!(ENVIRONMENT_KINDS as readonly string[]).includes(raw)) {
+    throw new Error(
+      `ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT: unsupported environment "${raw}" ` +
+        `(supported: ${ENVIRONMENT_KINDS.join(", ")})`,
+    );
+  }
+  return raw as EnvironmentKind;
+}
+const ENVIRONMENT_KIND: EnvironmentKind = LIVE_OPT_IN ? selectedEnvironmentKind() : "local";
 
 function selectedProviders(): Provider[] {
   const raw = process.env.ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS?.trim() || "claude";
@@ -118,21 +147,17 @@ async function renderedGroups(picker: Locator) {
 for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provider[])) {
   const spec = PROVIDERS[provider];
 
-  test.describe(`live slash-command picker (${provider})`, () => {
+  test.describe(`live slash-command picker in a ${ENVIRONMENT_KIND} environment (${provider})`, () => {
     test.skip(!LIVE_OPT_IN, "opt-in live provider sessions on the isolated fixture");
 
     test("groups by source, moves in list order, and shows an edited command after refresh and reload", async ({
       page,
     }, testInfo) => {
-      test.setTimeout(600_000);
+      const container = ENVIRONMENT_KIND === "container";
+      // A container's first start clones the workspace and runs its setup.
+      test.setTimeout(container ? 1_200_000 : 600_000);
       page.setDefaultTimeout(15_000);
       await page.setViewportSize({ width: 1440, height: 1600 });
-      await page.addLocatorHandler(
-        page.getByText("Reload to use the matching version."),
-        async (reminder) => {
-          await reminder.click();
-        },
-      );
 
       const status = profileStatus(profile);
       expect(status.profile, "dev:status answered for a different profile").toBe(profile);
@@ -150,15 +175,44 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
           projectId: fixture!.id,
           name: `picker-${provider}-${Date.now()}`,
           networkAccessMode: "restricted",
-          environmentType: "local",
-          agentSettings: { executionPolicy: { projectResources: true } },
+          ...(container
+            ? { environmentType: "containerized" }
+            : {
+                environmentType: "local",
+                agentSettings: { executionPolicy: { projectResources: true } },
+              }),
         });
         await invoke("start_environment", { environmentId: environment.id });
-        const started = await invoke<Environment>("get_environment", {
+        let started = await invoke<Environment>("get_environment", {
           environmentId: environment.id,
         });
-        expect(started.worktreePath).toBeTruthy();
-        const workspace = hostWorkspace(started.worktreePath!);
+        if (container) {
+          // Start returns once setup is launched; the clone lands later.
+          await expect
+            .poll(
+              async () => {
+                started = await invoke<Environment>("get_environment", {
+                  environmentId: environment!.id,
+                });
+                return (
+                  started.status === "running" &&
+                  !!started.containerId &&
+                  started.setupPhase !== "pending" &&
+                  started.setupPhase !== "running"
+                );
+              },
+              { timeout: 300_000, intervals: [2_000], message: "the container never started" },
+            )
+            .toBe(true);
+          expect(started.environmentType).toBe("containerized");
+          expect(started.setupPhase, "container setup failed").not.toBe("failed");
+        } else {
+          expect(started.worktreePath).toBeTruthy();
+        }
+        const containerId = container ? started.containerId! : null;
+        const workspace = containerId
+          ? containerWorkspace(containerId)
+          : hostWorkspace(started.worktreePath!);
         const tag = `pq${Math.floor(100_000 + Math.random() * 900_000)}`;
         const first = `${tag}-alpha`;
         const second = `${tag}-beta`;
@@ -180,7 +234,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
           expectedRevision: layout?.revision ?? 0,
           layout: {
             version: PANE_LAYOUT_VERSION,
-            containerId: null,
+            containerId,
             activePaneId: "pane-picker",
             root: {
               kind: "leaf",
@@ -192,8 +246,9 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
                   type: "agent-native",
                   nativeAgentData: {
                     environmentId: environment.id,
+                    ...(containerId ? { containerId } : {}),
                     platform: provider,
-                    isLocal: true,
+                    isLocal: !container,
                   },
                 },
               ],
@@ -223,27 +278,34 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
         await page.goto(status.browserUrl!);
         await openEnvironment(environment.name);
 
-        if (!spec.listsBeforeTurn) {
-          await test.step("before it attaches the session lists no provider commands; the picker's refresh attaches it", async () => {
-            await expect
-              .poll(async () => (await projection())?.slashCommandCatalogue?.status, {
-                timeout: 120_000,
-              })
-              .toBe("stale");
-            expect(await listed(first)).toBe(false);
-            const before = await rows();
-            expect(before.every((row) => row.executionKind === "session-action")).toBe(true);
-            // The stale picker offers a refresh, and a refresh attaches.
-            await typeIntoComposer("/");
-            await expect(picker).toBeVisible({ timeout: 30_000 });
-            await page.getByRole("button", { name: "Refresh commands" }).click();
+        if (spec.partialBeforeTurn) {
+          await test.step("before it attaches the session lists its templates, marked attach-pending, without a refresh", async () => {
             await expect
               .poll(async () => (await listed(first)) && (await listed(second)), {
                 timeout: 120_000,
-                message: "a refresh never attached the session and listed its commands",
+                message: "the planted templates were not listed before the session attached",
               })
-              .toBe(true);
+              .toBe(true)
+              .catch(async (error: unknown) => {
+                const current = await projection();
+                throw new Error(
+                  `${String(error)}\ncatalogue: ${JSON.stringify(current?.slashCommandCatalogue)}\n` +
+                    `rows: ${JSON.stringify((current?.slashCommands ?? []).map(display))}`,
+                );
+              });
+            expect((await projection())?.slashCommandCatalogue).toMatchObject({
+              status: "stale",
+              attachPending: true,
+            });
+            // Nothing was sent: the list came from a read, not a turn.
             expect((await projection())?.messages ?? []).toEqual([]);
+            await typeIntoComposer("/");
+            await expect(picker).toBeVisible({ timeout: 30_000 });
+            await expect(
+              page.getByText(
+                /More commands load when the session starts; refresh to load them now\./,
+              ),
+            ).toBeVisible({ timeout: 30_000 });
             await input.press("Escape");
             await input.fill("");
           });

@@ -14,8 +14,7 @@ import {
   terminalOutputPayload,
   trimOrphanedLowSurrogate,
 } from "./commands-terminal.js";
-import { terminalAccountHomes } from "./terminal-account-usage.js";
-import { appendTerminalHistory, disposeTerminalHistory } from "./terminal-history.js";
+import { TerminalHistory, type TerminalHistoryOptions } from "./terminal-history.js";
 
 export type TerminalSessionConfig = (
   | {
@@ -65,14 +64,18 @@ export const TERMINAL_COMPLETION_NOTIFY_RETRY_DELAYS_MS = [100, 250, 500] as con
 export type TerminalRuntimeOptions = {
   /** How long an exited one-shot session's output stays readable. Tests shorten it. */
   outputRetentionMs?: number;
+  /** Durable terminal history; tests pass hooks and a smaller directory bound. */
+  history?: TerminalHistoryOptions;
 };
 
 /**
- * The PTYs, replay buffers, stable tab identities and activity tracking of one
- * backend instance. Owned by `BackendRuntime` and reached through
- * `context.runtime.terminals` at call time.
+ * The PTYs, replay buffers, stable tab identities, activity tracking, durable
+ * history and launched account homes of one backend instance. Owned by
+ * `BackendRuntime` and reached through `context.runtime.terminals` at call time.
  */
 export class TerminalRuntime {
+  /** Durable terminal history and restorable state (`terminal-history.ts`). */
+  readonly history: TerminalHistory;
   private readonly processes = new Map<string, PtyProcess>();
   private readonly sessionConfigs = new Map<string, TerminalSessionConfig>();
   private readonly outputBuffers = new Map<string, TerminalOutputBuffer>();
@@ -91,10 +94,17 @@ export class TerminalRuntime {
   private readonly activityCompletions = new Map<string, number>();
   private readonly activityCompletionStates = new Map<number, TerminalActivityCompletionState>();
   private lastActivityGeneration = 0;
+  /**
+   * Agent account homes running terminals were launched with, keyed by
+   * `<sessionId>:<home>` for PTYs and `tmux:<environmentId>:<tabId>` for tmux
+   * agent sessions. An account cannot be removed while one of these uses it.
+   */
+  private readonly accountHomes = new Map<string, string>();
   private readonly outputRetentionMs: number;
 
   constructor(options: TerminalRuntimeOptions = {}) {
     this.outputRetentionMs = options.outputRetentionMs ?? TERMINAL_OUTPUT_RETENTION_MS;
+    this.history = new TerminalHistory(options.history);
   }
 
   // Processes
@@ -113,6 +123,18 @@ export class TerminalRuntime {
 
   processCount(): number {
     return this.processes.size;
+  }
+
+  /** Live local terminal shells and the environment each was opened for. */
+  localProcessRoots(): Array<{ environmentId: string; pid: number }> {
+    const roots: Array<{ environmentId: string; pid: number }> = [];
+    for (const [id, process] of this.processes) {
+      const config = this.sessionConfigs.get(id);
+      if (config?.kind === "local" && process.pid > 1) {
+        roots.push({ environmentId: config.environmentId, pid: process.pid });
+      }
+    }
+    return roots;
   }
 
   registerProcess(id: string, process: PtyProcess): void {
@@ -264,7 +286,7 @@ export class TerminalRuntime {
   emitOutput(sessionId: string, data: string | Buffer, emit: BackendEmit): void {
     const revision = this.appendOutput(sessionId, data);
     const generation = this.outputGenerations.get(sessionId) ?? 1;
-    appendTerminalHistory(
+    this.history.append(
       sessionId,
       Buffer.isBuffer(data) ? data.toString("utf8") : data,
       revision,
@@ -410,8 +432,8 @@ export class TerminalRuntime {
     this.activityCompletions.delete(id);
     if (options.explicit) this.cancelTrackedCompletions(id);
     this.processes.delete(id);
-    for (const key of Array.from(terminalAccountHomes.keys())) {
-      if (key.startsWith(`${id}:`)) terminalAccountHomes.delete(key);
+    for (const key of Array.from(this.accountHomes.keys())) {
+      if (key.startsWith(`${id}:`)) this.accountHomes.delete(key);
     }
     const stableKey = this.stableKeysBySessionId.get(id);
     const retainStableState =
@@ -450,7 +472,7 @@ export class TerminalRuntime {
   explicitlyCloseSession(id: string): void {
     this.processes.get(id)?.kill();
     this.cleanupSession(id, { explicit: true });
-    disposeTerminalHistory(id);
+    this.history.dispose(id);
   }
 
   private sessionIdsForEnvironment(environmentId: string): Set<string> {
@@ -500,6 +522,33 @@ export class TerminalRuntime {
       if (!survivors.includes(id)) this.explicitlyCloseSession(id);
     }
     return survivors;
+  }
+
+  // Launched account homes
+
+  /**
+   * Records that a running terminal uses an agent account home. `key` is
+   * `<sessionId>:<home>` for a PTY, pruned when the session is cleaned up, or
+   * `tmux:<environmentId>:<tabId>` for a tmux agent session, forgotten when it
+   * stops.
+   */
+  recordAccountHome(key: string, home: string): void {
+    this.accountHomes.set(key, home);
+  }
+
+  forgetAccountHome(key: string): void {
+    this.accountHomes.delete(key);
+  }
+
+  /** Whether any running terminal was launched with this account home. */
+  isAccountHomeInUse(home: string): boolean {
+    for (const used of this.accountHomes.values()) if (used === home) return true;
+    return false;
+  }
+
+  /** The home recorded under `key`; for tests and diagnostics. */
+  accountHome(key: string): string | undefined {
+    return this.accountHomes.get(key);
   }
 
   // Environment activity tracking
@@ -724,5 +773,6 @@ export class TerminalRuntime {
       for (const timer of state.retryTimers) clearTimeout(timer);
     }
     this.activityCompletionStates.clear();
+    this.history.shutdown();
   }
 }

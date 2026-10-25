@@ -1,7 +1,7 @@
 # Agent accounts and sign-in (0003) validation
 
 - **ID:** 0740
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-24, node mbp3
 - **Scope:** todo 0003 branch (`todo-0003-accounts-sign-in-cf5acbb74387`) after merging `origin/main` at `71227437`.
 
@@ -168,3 +168,7 @@ above. These original aggregate exits remain failed, with their private
 compressed logs retained. Final formatting, lint, typechecking and relative
 documentation-link checks pass. No required check was skipped because the
 conflicts included documentation.
+
+## Triage 2026-10-25
+
+Environmental. OpenCode part: the OpenCode `1.19.0` vs `1.19.4` assertions are fixed by #1217 (`95c9cb46a`): `apps/backend/src/core/conformance-execution-policy.test.ts:143` now compares with `PINNED_TOOLCHAIN_VERSIONS.opencode`; on 2026-10-25 the owner passed 70 of 70 alone with Bun 1.4.4 on macOS. Firewall part: a host condition on mbp3; [0632](../environments-and-containers/0632-firewall-policy-probe-budget.md) records the owner failing alone there and on clean `main` under load. The test-diagnostics finding was a branch defect fixed in the change. Container-server startup is [0750](../environments-and-containers/0750-container-server-startup-aggregate-timeout.md), environment move 0291, usage browser [0749](../web-ui/0749-agent-usage-browser-startup-timeout.md); native branch selection is the deterministic failure in [0493](0493-component-browser-aggregate-timeout-cluster.md). The Electron native-focus failures (annotation and `workspace-realm-electron.spec.ts:409`) reproduce alone and have no owner case; they are reported to the lead.

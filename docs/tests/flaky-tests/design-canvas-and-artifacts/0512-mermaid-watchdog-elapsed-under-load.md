@@ -123,3 +123,20 @@ passed alone earlier the same day at load 2.8 (30.7 s). Evidence and the
 co-occurring boundary-test case are in
 [0841](0841-mermaid-boundary-render-deadline-under-load.md). The watchdog
 implementation, assertion, deadline and skip were unchanged.
+
+## Recurrence 2026-10-25 (scheduled jobs)
+
+`mermaid rendering > enforces source bytes, edges and SVG limits at and over the boundary` returned `render_timeout` (5000 ms parse/layout watchdog) instead of `package_size_exceeded` in the scheduled-jobs `mise run test` aggregate (8084 ms). The complete unchanged 13-test owner passed alone (`bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts`).
+Recurred after rebasing onto main `eda21487` (8347.60 ms aggregate); the unchanged owner passed alone (`mise run test:logged -- --name mermaid-owner -- bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1`, 24.1 s).
+
+## Local preview discovery review — 2026-10-25
+
+`mise run test:logged -- --name preview-repository -- mise run test` measured 8314 ms against the current `< 5000 ms` bound at `mermaid-render.test.ts:210` (8959.74 ms test duration). The backend used two isolated Bun workers alongside repository/browser validation on the shared host. The complete unchanged owner ran separately with `mise run test:logged -- --name preview-mermaid-owner -- bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures`: 12 passed, one failed (59.3 s), measuring 6109 ms against the same bound (6351.60 ms test duration). This recurrence remains non-green in the owner and is not newly classified as a flake. No Mermaid implementation, assertion, deadline or skip changed. Evidence: `orkestrator-test-run.0vNQwf/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.Wv984c/preview-mermaid-owner.log.gz` under the host temporary directory.
+
+## Coordinator consistency validation — 2026-10-25
+
+- **Command:** `mise run test:logged -- --name committed-consistency-suite -- mise run test`, with two isolated backend workers and concurrent worktree validations.
+- **Failure:** the watchdog test measured 5772 ms against `< 5000 ms` at line 210 (test duration 6078.47 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name mermaid-watchdog-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` passed, exit 0 in 42.9 seconds.
+- **Evidence:** `orkestrator-test-run.iEyQ7i/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** another intermittent elapsed-time failure, confirmed by the unchanged owner's isolated pass. No artifact implementation, assertion, timeout or skip changed.

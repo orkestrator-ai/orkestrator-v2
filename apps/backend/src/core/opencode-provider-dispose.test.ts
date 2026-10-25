@@ -101,7 +101,7 @@ describe("OpenCode provider dispose", () => {
         },
         // No injected client: the real SDK client and its real SSE reader are
         // the subject of this test.
-        { autoAnswerRequests: false, monitorRetryMs: 1 },
+        { monitorRetryMs: 1 },
       );
 
       // Let the subscription connect and park mid-read before disposing.
@@ -133,7 +133,7 @@ describe("OpenCode provider dispose", () => {
           authToken: "test-token",
           directory: "/workspace",
         },
-        { autoAnswerRequests: false, monitorRetryMs: 1 },
+        { monitorRetryMs: 1 },
       );
       const deadline = Date.now() + 5_000;
       while (harness.connections === 0 && Date.now() < deadline) {

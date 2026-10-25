@@ -348,9 +348,6 @@ export function claudeQueryOptions(
     // opt-in, and a coordinator's read-only boundary always excludes
     // driving the user's signed-in browser.
     extraArgs: effectiveClaudeChrome(policy, options) ? { chrome: null } : { "no-chrome": null },
-    ...(typeof options?.maxBudgetUsd === "number" && options.maxBudgetUsd > 0
-      ? { maxBudgetUsd: options.maxBudgetUsd }
-      : {}),
     includePartialMessages: true,
     // Preserve the full nested transcript. Every forwarded subagent block
     // carries parent_tool_use_id and is rendered inside its Agent card.
@@ -449,6 +446,11 @@ export function claudeQueryOptions(
     // events a failed lifecycle hook would silently leave task or
     // compaction projection stale.
     includeHookEvents: true,
+    // AskUserQuestion option previews arrive as Markdown/ASCII, which the
+    // question card shows verbatim in a monospace block. Not `html`: the card
+    // would have to render model-written HTML. Explicit, so an SDK whose
+    // default changes cannot start sending a format the card does not expect.
+    toolConfig: { askUserQuestion: { previewFormat: "markdown" } },
     // Pinned against @anthropic-ai/claude-agent-sdk 0.3.309: although the
     // SDK warns that bypassPermissions shadows canUseTool for ordinary
     // tool permission checks, AskUserQuestion is a special case. A live

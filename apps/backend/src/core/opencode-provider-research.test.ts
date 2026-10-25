@@ -25,7 +25,6 @@ function harness() {
     },
     {
       openCodeClient: fake.client,
-      autoAnswerRequests: true,
       coordinatorResearchToolIds: () => tools,
       invalidateCoordinatorResearch: () => {
         tools = [];

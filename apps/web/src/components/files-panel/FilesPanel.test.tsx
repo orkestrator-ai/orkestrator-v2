@@ -77,3 +77,58 @@ test("two board file opens wait for home creation and retain their order", async
     "home-1",
   ]);
 });
+
+test("shows delayed announcements and a container's remote freshness without hiding the lists", async () => {
+  const { useWorktreeSnapshotStore } = await import("@/stores/worktreeSnapshotStore");
+  useUIStore.setState({ selectedEnvironmentId: "env-1", selectedProjectId: "project-1" });
+  useFilesPanelStore.setState({ isOpen: false, activeTab: "changes" });
+  useWorktreeSnapshotStore.setState({
+    syncStatus: "current",
+    entries: new Map([
+      [
+        "env-1",
+        {
+          environmentId: "env-1",
+          targetGeneration: 1,
+          comparisonRef: "origin/main",
+          fileListRevision: 1,
+          treeRevision: 1,
+          freshness: "current",
+          watched: false,
+          remote: { state: "current" },
+        },
+      ],
+    ]),
+  });
+  try {
+    render(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
+    expect(document.querySelector("[data-freshness]") === null).toBe(true);
+
+    act(() => {
+      useWorktreeSnapshotStore.getState().setSyncStatus("degraded");
+      useWorktreeSnapshotStore.getState().applyChange({
+        ...useWorktreeSnapshotStore.getState().entries.get("env-1")!,
+        remote: { state: "stale", failure: "network" },
+      });
+    });
+    expect(document.querySelector('[data-freshness="degraded"]')?.textContent).toContain(
+      "periodic re-read",
+    );
+    const remote = document.querySelector('[data-freshness="remote-stale"]');
+    expect(remote?.textContent).toContain("origin/main");
+    expect(remote?.textContent).toContain("exact");
+
+    // The remote baseline belongs to the Changes tab only.
+    act(() => useFilesPanelStore.setState({ activeTab: "all-files" }));
+    expect(document.querySelector('[data-freshness="remote-stale"]') === null).toBe(true);
+
+    act(() => useWorktreeSnapshotStore.getState().setSyncStatus("current"));
+    expect(document.querySelector("[data-freshness]") === null).toBe(true);
+  } finally {
+    useWorktreeSnapshotStore.setState({ entries: new Map(), generation: null, syncStatus: "idle" });
+  }
+});

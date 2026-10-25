@@ -8,10 +8,20 @@ import { AGENT_MAIL_MAX_LIST_LIMIT } from "@orkestrator/protocol/agent-mail";
 import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
 import { WORKFLOW_RESULT_MCP_SERVER_NAME } from "@orkestrator/protocol/workflow-results";
 import type { KanbanStatus, KanbanTask, StorageService } from "./storage.js";
+import type { ScheduleOwner } from "@orkestrator/protocol/scheduled-jobs";
 import {
+  assertCallerMailbox,
   registerAgentMessagingTools,
   type AgentMessagingRateLimitKind,
 } from "./agent-tools-messaging.js";
+import {
+  callToolInProcess,
+  listToolsInProcess,
+  type InProcessToolInfo,
+  type InProcessToolResult,
+} from "./mcp-in-process.js";
+import type { ScheduledJobService } from "./scheduled-jobs/service.js";
+import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-jobs/tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
   registerWorkflowResultBrokerTools,
@@ -304,6 +314,7 @@ async function createAgentToolServer(
   webAnnotations?: { host: WebAnnotationToolHost; limiter: WebAnnotationToolLimiter } | null,
   provisionalFindings?: ProvisionalFindingSink | null,
   artifacts?: TranscriptArtifactToolHost | null,
+  schedules?: ScheduledJobService | null,
 ): Promise<McpServer> {
   if (scope.workflowResultBroker) {
     const server = new McpServer(
@@ -398,6 +409,11 @@ async function createAgentToolServer(
 
   if (messagingScope)
     registerAgentMessagingTools(server, storage, messagingScope, consumeRateLimit);
+  // Every action an agent can schedule is mail, so the schedule tools come
+  // with messaging. They act as the caller's own mailbox tab.
+  if (messagingScope && schedules) {
+    registerScheduleTools(server, "agent", () => agentScheduleBackend(storage, scope, schedules));
+  }
   if (annotationTools) {
     registerWebAnnotationTools(
       server,
@@ -469,6 +485,7 @@ async function createAgentToolServer(
       title: "Create a Kanban ticket",
       description: "Create a Kanban ticket in the current project. New tickets default to backlog.",
       inputSchema: z.object({
+        requestId: z.string().trim().min(1).max(256).optional(),
         title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
         description: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
         acceptanceCriteria: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
@@ -481,10 +498,11 @@ async function createAgentToolServer(
         openWorldHint: false,
       },
     },
-    async ({ title, description, acceptanceCriteria, status }) => {
+    async ({ title, description, acceptanceCriteria, status, requestId }) => {
       const ticket = await storage.addKanbanTask(scope.projectId, title, description, {
         acceptanceCriteria,
         status,
+        requestId,
       });
       return ticketResult(ticket);
     },
@@ -532,6 +550,7 @@ async function createAgentToolServer(
       title: "Comment on a Kanban ticket",
       description: "Add a durable comment to a Kanban ticket in the current project.",
       inputSchema: z.object({
+        requestId: z.string().trim().min(1).max(256).optional(),
         ticketId: z.string().trim().min(1).max(200),
         text: z.string().trim().min(1).max(MAX_COMMENT_LENGTH),
       }),
@@ -542,9 +561,9 @@ async function createAgentToolServer(
         openWorldHint: false,
       },
     },
-    async ({ ticketId, text }) => {
+    async ({ ticketId, text, requestId }) => {
       await scopedTicket(storage, scope.projectId, ticketId);
-      const ticket = await storage.addKanbanComment(ticketId, text, scope.projectId);
+      const ticket = await storage.addKanbanComment(ticketId, text, scope.projectId, requestId);
       const commentOffset = Math.max(0, ticket.comments.length - DEFAULT_COMMENT_LIMIT);
       return ticketResult(ticket, commentOffset);
     },
@@ -611,6 +630,7 @@ export class AgentToolsServer {
   private readonly webAnnotationToolLimiter = new WebAnnotationToolLimiter();
   private provisionalFindingSink: ProvisionalFindingSink | null = null;
   private transcriptArtifactToolHost: TranscriptArtifactToolHost | null = null;
+  private scheduledJobs: ScheduledJobService | null = null;
 
   constructor(
     private readonly storage: StorageService,
@@ -821,6 +841,47 @@ export class AgentToolsServer {
    */
   setTranscriptArtifactToolHost(host: TranscriptArtifactToolHost | null): void {
     this.transcriptArtifactToolHost = host;
+  }
+
+  /** Installs the scheduler behind the agents' schedule tools. */
+  setScheduledJobs(service: ScheduledJobService | null): void {
+    this.scheduledJobs = service;
+  }
+
+  private toolServerFor(scope: AgentToolScope) {
+    return () =>
+      createAgentToolServer(
+        this.storage,
+        scope,
+        (kind) => this.consumeMailRateLimit(scope, kind),
+        this.workflowResults,
+        null,
+        null,
+        null,
+        this.scheduledJobs,
+      );
+  }
+
+  /**
+   * Runs one agent tool in-process for a scheduled job, as the tab that
+   * created the schedule: the same scope object an HTTP request with that
+   * tab's credential resolves to, with that tab's mail rate limits.
+   */
+  callToolAs(
+    scope: { environmentId: string; projectId: string; tabId: string },
+    tool: string,
+    args: Record<string, unknown>,
+  ): Promise<InProcessToolResult> {
+    return callToolInProcess(this.toolServerFor({ ...scope }), tool, args);
+  }
+
+  async listToolsAs(scope: {
+    environmentId: string;
+    projectId: string;
+    tabId: string;
+  }): Promise<InProcessToolInfo[]> {
+    await assertCallerMailbox(this.storage, scope);
+    return listToolsInProcess(this.toolServerFor({ ...scope }));
   }
 
   hasTranscriptArtifactTools(): boolean {
@@ -1060,6 +1121,7 @@ export class AgentToolsServer {
                   : null,
                 this.provisionalFindingSink,
                 this.transcriptArtifactToolHost,
+                this.scheduledJobs,
               ),
         { legacy: "stateless" },
       );
@@ -1072,4 +1134,36 @@ export class AgentToolsServer {
       if (isDesign) this.designRequests--;
     }
   }
+}
+
+/**
+ * Schedules created through the agent tools belong to the caller's mailbox
+ * tab, resolved exactly as `send_message` resolves its sender.
+ */
+function agentScheduleBackend(
+  storage: StorageService,
+  scope: AgentToolScope,
+  service: ScheduledJobService,
+): ScheduleToolBackend {
+  const owner = async (tabId?: string): Promise<Extract<ScheduleOwner, { kind: "agent" }>> => {
+    const { identity } = await assertCallerMailbox(storage, scope, tabId);
+    return {
+      kind: "agent",
+      projectId: scope.projectId,
+      environmentId: scope.environmentId,
+      tabId: identity.tabId,
+    };
+  };
+  return {
+    async create(input, requestId, tabId) {
+      const { job, replayed } = await service.create(await owner(tabId), input, requestId);
+      return { schedule: job, replayed };
+    },
+    async list(tabId) {
+      return service.list(await owner(tabId));
+    },
+    async cancel(scheduleId, tabId) {
+      return service.delete(await owner(tabId), scheduleId);
+    },
+  };
 }

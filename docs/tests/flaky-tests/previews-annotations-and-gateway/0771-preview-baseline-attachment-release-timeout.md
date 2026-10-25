@@ -11,3 +11,9 @@
 - **Failure:** `get_preview_services: timed out` from the local HTTP request timeout (246.05 ms test duration).
 - **Unchanged owner:** `mise run test:logged -- --name merge-owner-preview-baseline -- bun test ./tests/unit/preview-latency-baseline.test.ts --parallel=1 --only-failures` passed (exit 0, 2.2 seconds logged).
 - **Hypothesis:** shared-host scheduling contention may delay the local fixture response; the isolated pass confirms intermittence but does not establish the mechanism. No implementation, assertion, timeout or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** the test passes `--timeout-ms 100` to the baseline (`preview-latency-baseline.test.ts:634`), so a local request slower than 100 ms under load fails with `get_preview_services: timed out`. The case checks release after a handoff failure, not timeouts.
+- **Next step:** give this fixture a larger request timeout (for example 2,000 ms).

@@ -13,103 +13,21 @@ import {
   waitForLocalServerStartup,
 } from "./commands-servers.js";
 
-/** One host-wide first-use catalogue probe at a time. */
-let piCatalogDiscovery: Promise<AgentModel[]> | null = null;
-/** A user-requested follow-up probe, shared by concurrent manual refreshes. */
-let piCatalogForcedDiscovery: Promise<AgentModel[]> | null = null;
-
-/**
- * When the last probe produced no catalogue, as epoch milliseconds.
- *
- * A probe that yields nothing is the expensive case, not the cheap one: it
- * still spawns a bridge and pays the full health budget before answering. Pi
- * fronts the user's own providers, so "no models" is a perfectly ordinary
- * steady state for an installation that has never run `/login` — without this,
- * every launch and every open of the new-environment dialog would repeat that
- * cost and store nothing to show for it.
- */
-let piCatalogEmptyProbeAt: number | null = null;
-
-/** How long an empty or failed probe suppresses the next one. */
-export const PI_CATALOG_EMPTY_PROBE_BACKOFF_MS = 5 * 60_000;
-
-/** Distinguishes concurrent probe generations in the ownership registry. */
-let piCatalogProbeSequence = 0;
-
-/**
- * Drops the single-flight promise, the empty-result backoff and the generation
- * counter. Test-only: the counter exists to keep a probe that is still
- * terminating from releasing its successor's ownership entry, so nothing in
- * production may rewind it while a child is registered.
- */
-export function resetPiModelCatalogSeedingState(): void {
-  piCatalogDiscovery = null;
-  piCatalogForcedDiscovery = null;
-  piCatalogEmptyProbeAt = null;
-  piCatalogProbeSequence = 0;
-}
-
 /**
  * Seed Pi's host-wide model catalogue before an environment exists.
  *
  * The ordinary Pi bridge is environment-scoped because sessions need a
  * workspace and durable session directories. Model discovery needs neither, so
  * this starts the same bridge from its trusted package directory, reads only
- * `/global/models`, and always tears the process down before returning.
+ * `/global/models`, and always tears the process down before returning. The
+ * single-flight and backoff state is the backend's own
+ * (`context.runtime.localServers.piCatalog`).
  */
 export function discoverHostPiModelCatalog(
   context: CommandContext,
   force = false,
 ): Promise<AgentModel[]> {
-  if (force) {
-    piCatalogEmptyProbeAt = null;
-    if (piCatalogForcedDiscovery) return piCatalogForcedDiscovery;
-    const preceding = piCatalogDiscovery;
-    const forced = (preceding ? preceding.catch(() => []) : Promise.resolve([]))
-      .then(() => {
-        // State may have changed while the earlier automatic probe was running;
-        // a manual refresh always starts a new generation after it settles.
-        piCatalogEmptyProbeAt = null;
-        return trackedDiscovery(context);
-      })
-      .finally(() => {
-        if (piCatalogForcedDiscovery === forced) piCatalogForcedDiscovery = null;
-        if (piCatalogDiscovery === forced) piCatalogDiscovery = null;
-      });
-    piCatalogForcedDiscovery = forced;
-    // Ordinary cache-first callers arriving while the forced refresh is queued
-    // join it instead of opening a third bridge between the two generations.
-    piCatalogDiscovery = forced;
-    return forced;
-  }
-  if (
-    piCatalogEmptyProbeAt !== null &&
-    Date.now() - piCatalogEmptyProbeAt < PI_CATALOG_EMPTY_PROBE_BACKOFF_MS
-  ) {
-    return Promise.resolve([]);
-  }
-  if (piCatalogDiscovery) return piCatalogDiscovery;
-  const discovery = trackedDiscovery(context).finally(() => {
-    if (piCatalogDiscovery === discovery) piCatalogDiscovery = null;
-  });
-  piCatalogDiscovery = discovery;
-  return discovery;
-}
-
-function trackedDiscovery(context: CommandContext): Promise<AgentModel[]> {
-  return runDiscovery(context).then(
-    (models) => {
-      if (models.length === 0) piCatalogEmptyProbeAt = Date.now();
-      return models;
-    },
-    (error: unknown) => {
-      // A probe that could not run is as expensive to repeat as one that ran
-      // and found nothing, so it arms the same backoff. The error still
-      // reaches this caller; only the retries within the window are dropped.
-      piCatalogEmptyProbeAt = Date.now();
-      throw error;
-    },
-  );
+  return context.runtime.localServers.piCatalog.discover(force, () => runDiscovery(context));
 }
 
 async function runDiscovery(context: CommandContext): Promise<AgentModel[]> {
@@ -145,11 +63,9 @@ async function runDiscovery(context: CommandContext): Promise<AgentModel[]> {
   delete env.PI_BRIDGE_STATE_DIR;
   delete env.PI_SESSION_DIR;
 
-  piCatalogProbeSequence += 1;
-  // Never an environment id, so this cannot collide with a real Pi bridge in
-  // `peekLocalAgentBridge`, and a generation counter keeps a probe that is
-  // still terminating from releasing its successor's entry.
-  const key = `pi:catalog-seed:${piCatalogProbeSequence}`;
+  // A fresh generation per probe keeps one that is still terminating from
+  // releasing its successor's entry.
+  const key = localServers.piCatalog.nextProbeKey();
   const child = localServers.spawn(resolveBunBinary(context), [entrypoint], {
     cwd,
     env,

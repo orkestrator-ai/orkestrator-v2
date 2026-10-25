@@ -8,11 +8,17 @@ type McpServerRuntimeStatus = Pick<
 /**
  * Live layer of a server as the live panel names it. The SDK reports a
  * config scope (`user`, `project`, `local`, ...) on `mcpServerStatus()` and a
- * `source` on the init message; both spell plugins with `plugin`.
+ * `source` on both `mcpServerStatus()` and the init message. A plugin's
+ * server has `source: "plugin"` but `scope: "dynamic"` (pinned CLI 2.1.309),
+ * so the source decides when there is one.
  */
-export function mcpScope(scope: string | undefined, name: string): NativeAgentMcpServer["scope"] {
+export function mcpScope(
+  scope: string | undefined,
+  name: string,
+  source?: string,
+): NativeAgentMcpServer["scope"] {
   if (name === "orkestrator") return "orkestrator";
-  if (scope?.includes("plugin")) return "plugin";
+  if (source?.includes("plugin") || scope?.includes("plugin")) return "plugin";
   if (scope === "project" || scope === "local") return scope;
   return "user";
 }

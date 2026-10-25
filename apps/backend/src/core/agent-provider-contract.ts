@@ -1,7 +1,6 @@
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type {
   AgentInteractionApplyOutcome,
-  AgentInteractionKind,
   AgentInteractionOrigin,
   AgentInteractionPolicy,
   AgentInteractionProvider,
@@ -109,15 +108,6 @@ export interface ProviderSessionRegistration {
   workflowId?: string;
   provider?: ProviderAgent;
   fence?: string | number;
-}
-
-export interface ProviderInteractionObservationEvent {
-  sessionId: string;
-  interactionId: string;
-  kind: AgentInteractionKind;
-  registration: ProviderSessionRegistration;
-  state: "detected" | "withdrawn";
-  providerState?: "running" | "error";
 }
 
 export interface AgentInteractionProviderCapability {
@@ -884,6 +874,8 @@ export interface ProviderCommandCatalogue {
   revision?: number;
   generation?: string;
   freshness?: "push" | "ttl";
+  /** A `stale` list the provider completes when its session attaches. */
+  attachPending?: boolean;
 }
 
 export interface ProviderCommandRefreshResult {
@@ -912,8 +904,6 @@ export interface BridgeConnection {
 
 export interface ProviderCommonDependencies {
   stageImages?: (images: readonly ProviderPromptImage[]) => Promise<PromptAttachment[]>;
-  autoAnswerRequests?: boolean;
-  onInteractionObservation?: (event: ProviderInteractionObservationEvent) => void | Promise<void>;
   /**
    * Content-free hint that an owned session's activity or pending input may
    * have changed (`sessionId`), or that the event stream lost continuity

@@ -22,7 +22,6 @@ import {
   assertDockerContainerOwned,
   enqueueEnvironmentLifecycleOperation,
   renameEnvironmentFromPrompt,
-  syncPrMonitorTracking,
 } from "./commands-helpers.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
 import { assertRuntimeGeneration } from "./container-lifecycle-service.js";
@@ -45,6 +44,7 @@ import { registerGitHubCommands } from "./commands-registry-github.js";
 import { registerGitHubPullRequestCommands } from "./commands-registry-github-pull-requests.js";
 import { registerKanbanCommands } from "./commands-registry-kanban.js";
 import { registerAgentMailCommands } from "./commands-registry-mail.js";
+import { registerScheduledJobCommands } from "./commands-registry-scheduled-jobs.js";
 import { registerDiskUsageCommands } from "./commands-registry-disk-usage.js";
 import { registerUsageCommands } from "./commands-registry-usage.js";
 import {
@@ -173,7 +173,7 @@ export function createCommandRegistry(
           // branch inside an environment that can no longer accept the prompt.
           if (!prompt || environment?.status !== "running") return;
           await renameEnvironmentFromPrompt(environmentId, prompt, context, prompt);
-          await syncPrMonitorTracking(context);
+          await context.runtime.prMonitor.sync(context);
         }),
       )
       .then(() => {
@@ -319,6 +319,7 @@ export function createCommandRegistry(
   registerPullRequestCommands(register, dependencies);
   registerKanbanCommands(register, dependencies);
   registerAgentMailCommands(register);
+  registerScheduledJobCommands(register);
   registerDiskUsageCommands(register);
   registerUsageCommands(register);
   registerAgentAccountCommands(register, dependencies);

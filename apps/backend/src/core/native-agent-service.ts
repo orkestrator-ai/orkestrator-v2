@@ -23,7 +23,6 @@ import type {
   StorageService,
   BridgeConnection,
   NativeAgentRuntimeProvider,
-  ProviderInteractionObservationEvent,
   PromptAttachment,
   CommandInvoker,
   EnsureNativeAgentSessionInput,
@@ -161,10 +160,7 @@ import {
   planCommandDispatch,
   type CommandDispatchPlan,
 } from "./native-agent-command-dispatch.js";
-import {
-  assertEnvironmentAcceptsAgentWork,
-  beginEnvironmentAgentWork,
-} from "./environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { beginChangeTrackingTurn } from "./native-agent-change-tracking.js";
 import {
   beginArtifactDispatchTurn,
@@ -172,6 +168,10 @@ import {
 } from "./workflow-artifact-turns.js";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
+import {
+  sessionHeldDispatchModelUpdate,
+  unofferedDispatchModelMessage,
+} from "./native-agent-dispatch-model.js";
 /**
  * An ensured session, plus the model substitution its creation made. The
  * substitution is reported to the caller only and is never persisted.
@@ -246,6 +246,8 @@ export class NativeAgentService {
 
   /** Cached runtime providers, their bridge generations and their retirement. */
   private readonly providerRegistry: ProviderRegistry;
+  /** Admits each prompt against a replacement or move of its environment. */
+  private readonly environmentFence: NonNullable<NativeAgentServiceOptions["environmentFence"]>;
 
   getTranscriptUpdate(
     input: NativeAgentTranscriptUpdateInput,
@@ -448,16 +450,6 @@ export class NativeAgentService {
     return this.interactions.getInteractionObservations();
   }
 
-  /** Close the polling race for a provider that applies an immediate legacy response. */
-  recordProviderInteractionObservation(
-    event: ProviderInteractionObservationEvent & {
-      environmentId: string;
-      provider: BuildPipelineAgent;
-    },
-  ): void {
-    return this.interactions.recordProviderInteractionObservation(event);
-  }
-
   /**
    * Reconcile provider-owned pending requests without applying policy.
    *
@@ -476,6 +468,7 @@ export class NativeAgentService {
     private readonly invoke: CommandInvoker,
     private readonly options: NativeAgentServiceOptions = {},
   ) {
+    this.environmentFence = options.environmentFence ?? new EnvironmentMutationFence();
     this.catalogs = new NativeAgentCatalogCache({
       invoke,
       now: () => this.now(),
@@ -497,10 +490,6 @@ export class NativeAgentService {
         this.observeBridgeConnection(agent, environment),
       createProvider: (connection, environmentId, cacheKey) =>
         createNativeAgentProvider(connection, {
-          // Interactive sessions belong to a tab that renders approvals and
-          // questions. Answering them here would run a command the user never saw
-          // and cancel the card that exists to answer it.
-          autoAnswerRequests: false,
           onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
@@ -1137,6 +1126,32 @@ export class NativeAgentService {
     return modelSubstitution && session.controls?.modelId === modelSubstitution.modelId
       ? { ...session, modelSubstitution }
       : session;
+  }
+
+  /**
+   * Apply a dispatch's explicit model to a runtime whose prompts carry none
+   * (`runsSessionHeldModel`), the way a model pick is applied: through a
+   * control update under the admission/delivery lease, after replay and
+   * conflict checks and before anything is journaled. A model the login's live
+   * catalogue positively does not offer is refused here with the draft intact,
+   * rather than reaching the runtime and failing there.
+   * See `native-agent-dispatch-model.ts`.
+   */
+  private async applySessionHeldDispatchModel(
+    input: DispatchNativeAgentPromptInput,
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<NativeAgentControlUpdate | undefined> {
+    const update = sessionHeldDispatchModelUpdate(input, session);
+    if (!update?.modelId) return undefined;
+    const availability = await this.resolveDefaultModel(provider, update.modelId);
+    if (availability?.substitution) {
+      throw new PromptRejectedError(
+        unofferedDispatchModelMessage(session.agent, update.modelId, availability.substitution),
+      );
+    }
+    await provider.updateInteractiveControls?.(session.providerSessionId, update);
+    return update;
   }
 
   private async resolveDefaultModel(
@@ -3178,7 +3193,7 @@ export class NativeAgentService {
     persistAmbiguousDispatch = false,
     mailInject = false,
   ): Promise<PersistedNativeAgentSession> {
-    const releaseAgentWork = beginEnvironmentAgentWork(input.environmentId);
+    const releaseAgentWork = this.environmentFence.beginAgentWork(input.environmentId);
     try {
       return await this.promptQueues.withSessionMutationFence(input, () =>
         this.dispatchAdmittedPrompt(input, prepare, persistAmbiguousDispatch, mailInject),
@@ -3222,13 +3237,13 @@ export class NativeAgentService {
         await reconcileProjectHomeEnvironment(home!, this.storage);
       this.assertAcceptingWork();
       // A rebuild or reset of this environment's runtime is in progress.
-      assertEnvironmentAcceptsAgentWork(input.environmentId);
+      this.environmentFence.assertAcceptsAgentWork(input.environmentId);
       const hasAttachments =
         (input.images?.length ?? 0) > 0 || (input.attachments?.length ?? 0) > 0;
       if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {
         throw new Error("Native agent prompt or attachment and request ID must not be blank");
       }
-      const session = await this.ensureSession(input);
+      const session: PersistedNativeAgentSession = await this.ensureSession(input);
       // Freeze the effective inherited choice before preparing and journaling
       // dispatch. Retries replay this concrete model, never a stale default.
       if (input.modelSource === "default" || !input.model) {
@@ -3341,25 +3356,16 @@ export class NativeAgentService {
       await this.assertEnvironmentLive(input.environmentId);
       this.providerRegistry.beginDispatch(provider);
       try {
+        let preparation: PromptDispatchPreparation = { dispatch: true };
         const result = await this.storage.dispatchNativeAgentPromptOnce(
           session.key,
           input.requestId,
           async (durable) => {
-            const preparation = prepare
-              ? await prepare(durable, provider)
-              : { dispatch: true as const };
             if (!preparation.dispatch) {
               return {
                 dispatched: false as const,
                 ...(preparation.notice ? { incompleteTurnNotice: preparation.notice } : {}),
               };
-            }
-            // The storage session lease also serializes durable control updates.
-            // Recheck after provider preparation, immediately before delivery.
-            if (input.requireSessionMode && durable.controls?.mode !== input.requireSessionMode) {
-              throw new PromptRejectedError(
-                "The session is no longer in Plan mode, so this read-only prompt was not sent. Switch the session back to Plan and retry, or cancel it.",
-              );
             }
             // Reuse the credential resolved for the warm-up attach when it
             // succeeded; otherwise resolve it here, inside the at-most-once
@@ -3457,6 +3463,18 @@ export class NativeAgentService {
           persistAmbiguousDispatch && (session.origin === "interactive-native" || mailInject)
             ? this.persistedPendingDispatch({ ...input, command: commandPlan.persistedIntent })
             : undefined,
+          async (durable) => {
+            preparation = prepare ? await prepare(durable, provider) : { dispatch: true };
+            if (!preparation.dispatch) return undefined;
+            // The storage session lease also serializes durable control updates.
+            // Recheck after provider preparation, immediately before delivery.
+            if (input.requireSessionMode && durable.controls?.mode !== input.requireSessionMode) {
+              throw new PromptRejectedError(
+                "The session is no longer in Plan mode, so this read-only prompt was not sent. Switch the session back to Plan and retry, or cancel it.",
+              );
+            }
+            return this.applySessionHeldDispatchModel(input, durable, provider);
+          },
         );
         if (
           result.dispatched &&
@@ -3771,7 +3789,6 @@ export class NativeAgentService {
       } else {
         this.assertAcceptingWork();
         provider = createNativeAgentProvider(connection, {
-          autoAnswerRequests: false,
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
         });
@@ -3815,7 +3832,7 @@ export class NativeAgentService {
           const cached = this.providerRegistry.cachedForConnection(key, identity);
           if (cached) provider = cached;
           else {
-            provider = createNativeAgentProvider(connection, { autoAnswerRequests: false });
+            provider = createNativeAgentProvider(connection, {});
             this.providerRegistry.cache(key, provider, identity);
           }
         }

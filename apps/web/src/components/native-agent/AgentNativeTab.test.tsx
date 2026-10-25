@@ -5875,7 +5875,7 @@ describe("AgentNativeTab", () => {
 
     expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
     expect(screen.getByText(/Effort: Medium/)).toBeTruthy();
-    expect(screen.queryByText(/Reasoning summary: Automatic/)).toBeNull();
+    expect(screen.queryByText(/Reasoning summary: Automatic/) === null).toBe(true);
   });
 
   test("renders model parameters supplied for a non-Claude platform", async () => {

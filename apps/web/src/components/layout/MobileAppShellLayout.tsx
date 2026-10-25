@@ -136,8 +136,13 @@ export function MobileAppShellLayout({
     [],
   );
 
-  useEffect(() => {
+  // A new title closes its tooltip and forgets the pointer that opened it.
+  const [tooltipTitle, setTooltipTitle] = useState(title);
+  if (tooltipTitle !== title) {
+    setTooltipTitle(title);
     setTitleTooltipOpen(false);
+  }
+  useEffect(() => {
     titlePointerTypeRef.current = null;
     titleTooltipWasOpenOnPointerDownRef.current = false;
   }, [title]);

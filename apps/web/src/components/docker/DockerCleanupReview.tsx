@@ -75,13 +75,21 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CleanupExecuteResult | null>(null);
 
+  // Each opening reviews a fresh preview.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) {
+      setPreview(null);
+      setResult(null);
+      setError(null);
+      setLoading(true);
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setPreview(null);
-    setResult(null);
-    setError(null);
-    setLoading(true);
     const load = async () => {
       try {
         const next = await backend.previewDockerCleanup();

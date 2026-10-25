@@ -472,7 +472,10 @@ export function UnassignedNativeAgentComposer({
   // not re-apply the original create-dialog model onto the new provider.
   const seededInitialPreselectRef = useRef(false);
   const configuredFastModeRef = useRef(configured.fastMode);
-  configuredFastModeRef.current = configured.fastMode;
+  // Declared before the seeding effect so it runs first in the same commit.
+  useLayoutEffect(() => {
+    configuredFastModeRef.current = configured.fastMode;
+  }, [configured.fastMode]);
   useLayoutEffect(() => {
     if (seededInitialPreselectRef.current) return;
     const hasInitialPreselect = Boolean(

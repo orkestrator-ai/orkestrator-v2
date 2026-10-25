@@ -28,29 +28,34 @@ export function useThreadHistory(environmentId: string, data: WebAnnotationGetRe
   const [pagedNewer, setPagedNewer] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The note a page request belongs to; read after its response arrives. */
   const annotationRef = useRef(annotationId);
-  const pagedOlderRef = useRef(pagedOlder);
-  pagedOlderRef.current = pagedOlder;
-  const pagedNewerRef = useRef(pagedNewer);
-  pagedNewerRef.current = pagedNewer;
-
   useEffect(() => {
-    if (annotationRef.current !== annotationId) {
-      annotationRef.current = annotationId;
+    annotationRef.current = annotationId;
+  }, [annotationId]);
+
+  // Each snapshot is merged while rendering; a different note starts again.
+  const [historyFor, setHistoryFor] = useState(annotationId);
+  const [mergedData, setMergedData] = useState<WebAnnotationGetResult | null>(null);
+  if (annotationId !== historyFor || data !== mergedData) {
+    if (annotationId !== historyFor) {
+      setHistoryFor(annotationId);
       setKnown(new Map());
       setPagedOlder(false);
       setPagedNewer(false);
       setError(null);
     }
-    if (!data) return;
-    setKnown((current) => {
-      const next = new Map(current);
-      for (const entry of data.entries) next.set(entry.id, entry);
-      return bound(next);
-    });
-    if (!pagedOlderRef.current) setOlderCursor(data.previousEntrySequence ?? null);
-    if (!pagedNewerRef.current) setNewerCursor(data.nextEntrySequence);
-  }, [annotationId, data]);
+    setMergedData(data);
+    if (data) {
+      setKnown((current) => {
+        const next = new Map(current);
+        for (const entry of data.entries) next.set(entry.id, entry);
+        return bound(next);
+      });
+      if (!pagedOlder) setOlderCursor(data.previousEntrySequence ?? null);
+      if (!pagedNewer) setNewerCursor(data.nextEntrySequence);
+    }
+  }
 
   const loadPage = useCallback(
     async (direction: "older" | "newer") => {

@@ -4,6 +4,9 @@ import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { ensureProjectHomeInStore, isProjectHomeDeletionInProgress } from "@/hooks/useFilesPanel";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 
+const CLEANUP_IN_PROGRESS_MESSAGE =
+  "Project home cleanup is in progress. Retry after cleanup finishes.";
+
 /** Keep toolbar targeting on Home while board panels can obscure its panes. */
 export function useProjectHomeActivation() {
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
@@ -46,15 +49,20 @@ export function useProjectHomeActivation() {
   }, []);
   const selectionKey = `${selectedProjectId}\0${selectionRevision}`;
   const key = `${selectionKey}\0${checkoutPath}\0${attempt}`;
+  const cleanupInProgress = Boolean(selectedProjectId) && (projectDeleting || homeDeleting);
+  // Recorded while rendering so the message stays for this key after the
+  // deletion signal goes away; the layout effect below suppresses the ensure.
+  if (
+    cleanupInProgress &&
+    (failure?.key !== key || failure.message !== CLEANUP_IN_PROGRESS_MESSAGE)
+  ) {
+    setFailure({ key, message: CLEANUP_IN_PROGRESS_MESSAGE });
+  }
 
   useLayoutEffect(() => {
     if (!selectedProjectId) return;
     if (projectDeleting || homeDeleting) {
       suppressedSelection.current = selectionKey;
-      setFailure({
-        key,
-        message: "Project home cleanup is in progress. Retry after cleanup finishes.",
-      });
       return;
     }
     // Deletion can remove its final signal along with the record. Do not turn

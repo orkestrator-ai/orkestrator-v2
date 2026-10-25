@@ -5,7 +5,7 @@ import {
   type ReviewValidationResult,
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { knownValidationOutput, mergeValidationOutput } from "./validation-output-merge";
 import { Copy, Loader2, RefreshCw, Square, SquareTerminal } from "lucide-react";
@@ -162,6 +162,17 @@ function ValidationOutputModal({
     [environmentId, hasArtifacts, loadOutput, open, resultId, run.id],
   );
 
+  // Closing forgets the output; the effect below retires its reads.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (!open) {
+      setOutput(null);
+      setError(null);
+      setLoading(false);
+    }
+  }
+
   // Opening and every status change (including the final one) read once.
   useEffect(() => {
     if (!open) {
@@ -169,9 +180,6 @@ function ValidationOutputModal({
       inFlightRequestRef.current = null;
       rerunRef.current = false;
       outputRef.current = null;
-      setOutput(null);
-      setError(null);
-      setLoading(false);
       return;
     }
     void refresh();
@@ -306,7 +314,7 @@ const UNSETTLED_RESULT_STATUSES: ReadonlySet<ReviewValidationResult["status"]> =
 export function ReviewValidationStatus({
   environmentId,
   run,
-  now = Date.now(),
+  now: liveNow,
   loadOutput = getReviewValidationOutput,
   stopCommand = stopReviewValidationCommand,
   onStop,
@@ -326,6 +334,9 @@ export function ReviewValidationStatus({
   onStop?: () => void;
   stopping?: boolean;
 }) {
+  // Without a parent clock, times are measured from when this mounted.
+  const [mountedAt] = useState(Date.now);
+  const now = liveNow ?? mountedAt;
   const validationElapsedMs = reviewValidationElapsedMs(run, now);
   const notes = run.plan.limitations;
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
@@ -337,9 +348,22 @@ export function ReviewValidationStatus({
     resultIds: ReadonlySet<string>;
   }>({ runId: run.id, resultIds: new Set() });
   const currentRunId = useRef(run.id);
-  currentRunId.current = run.id;
+  useLayoutEffect(() => {
+    currentRunId.current = run.id;
+  }, [run.id]);
   const stoppingResultIds = pendingStops.runId === run.id ? pendingStops.resultIds : new Set();
-  useEffect(() => {
+  // Each new snapshot drops the stops it settled.
+  const [settledFrom, setSettledFrom] = useState({
+    runId: run.id,
+    results: run.results,
+    runActive,
+  });
+  if (
+    settledFrom.runId !== run.id ||
+    settledFrom.results !== run.results ||
+    settledFrom.runActive !== runActive
+  ) {
+    setSettledFrom({ runId: run.id, results: run.results, runActive });
     setPendingStops((current) => {
       if (current.runId !== run.id) return { runId: run.id, resultIds: new Set() };
       if (current.resultIds.size === 0) return current;
@@ -351,7 +375,7 @@ export function ReviewValidationStatus({
       );
       return next.size === current.resultIds.size ? current : { ...current, resultIds: next };
     });
-  }, [run.id, run.results, runActive]);
+  }
   const requestStopCommand = useCallback(
     async (result: ReviewValidationResult) => {
       if (!stopCommand) return;

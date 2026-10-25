@@ -113,7 +113,7 @@ function RenameField({
 }
 
 export function DesignToolbar(props: DesignToolbarProps) {
-  const { projection } = props;
+  const { projection, layersButtonRef } = props;
   const history = projection?.workspace?.history;
   const canvas = projection?.canvas;
   const busyExport = projection?.busy.export ?? false;
@@ -124,7 +124,7 @@ export function DesignToolbar(props: DesignToolbarProps) {
       aria-label="Design tools"
     >
       <Button
-        ref={props.layersButtonRef}
+        ref={layersButtonRef}
         variant="ghost"
         size="icon"
         aria-label="Toggle layers"

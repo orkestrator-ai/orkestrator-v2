@@ -943,9 +943,11 @@ function BackgroundTaskActivitySlot({
    * provider accepted but did not honour from disabling the only way to ask
    * again. A tab remounted mid-stop starts from the snapshot, never this flag.
    */
-  useEffect(() => {
+  const [stoppingFor, setStoppingFor] = useState({ status, taskId });
+  if (stoppingFor.status !== status || stoppingFor.taskId !== taskId) {
+    setStoppingFor({ status, taskId });
     setStopping(false);
-  }, [status, taskId]);
+  }
 
   const label = backgroundTaskLabel(task);
   const stop = useCallback(async () => {
@@ -1086,9 +1088,11 @@ export function BackgroundTaskCard({
 
   // The failure belongs to the attempt, not the task: a later status change
   // means the question the message answered is no longer being asked.
-  useEffect(() => {
+  const [stopErrorStatus, setStopErrorStatus] = useState(task.status);
+  if (stopErrorStatus !== task.status) {
+    setStopErrorStatus(task.status);
     setStopError(null);
-  }, [task.status]);
+  }
 
   return (
     <Collapsible
@@ -1386,9 +1390,12 @@ export function TaskGroupPart({
     backgroundTask && isTaskTool(part.task.toolName) ? backgroundTask : undefined;
   const standaloneBackgroundTask =
     backgroundTask && !backgroundAgentTask ? backgroundTask : undefined;
-  useEffect(() => {
+  // A stop failure belongs to the attempt: a later status change clears it.
+  const [stopErrorStatus, setStopErrorStatus] = useState(backgroundTask?.status);
+  if (stopErrorStatus !== backgroundTask?.status) {
+    setStopErrorStatus(backgroundTask?.status);
     setStopError(null);
-  }, [backgroundTask?.status]);
+  }
   const toolLabel =
     getToolTitleDisplayName(part.task.toolTitle, part.task.toolName, part.task.content) ||
     getToolDisplayName(part.task.toolName, "Agent");

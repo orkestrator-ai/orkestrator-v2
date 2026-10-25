@@ -135,24 +135,23 @@ function WorkspaceFilePickerDialog({
   );
   const safeSelectedIndex = Math.min(selectedIndex, Math.max(results.length - 1, 0));
 
-  useEffect(() => {
-    if (!open) {
-      setQuery("");
-      setSelectedIndex(0);
-      return;
-    }
-
+  // Opening (or a new file source) starts at the top; closing also clears the
+  // query. Reset while rendering so the effect below only refreshes.
+  const [openedFor, setOpenedFor] = useState({ open, refresh });
+  if (openedFor.open !== open || openedFor.refresh !== refresh) {
+    setOpenedFor({ open, refresh });
+    if (!open) setQuery("");
     setSelectedIndex(0);
+  }
+
+  useEffect(() => {
+    if (!open) return;
     void Promise.resolve()
       .then(() => refresh())
       .catch(() => {
         // The file-search owner exposes refresh failures through `error`.
       });
   }, [open, refresh]);
-
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [query]);
 
   useEffect(() => {
     selectedItemRef.current?.scrollIntoView({ block: "nearest" });
@@ -214,7 +213,10 @@ function WorkspaceFilePickerDialog({
           <Input
             ref={inputRef}
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setSelectedIndex(0);
+            }}
             onKeyDown={handleInputKeyDown}
             placeholder="Type a file name or path"
             aria-label="Search workspace files"
@@ -295,11 +297,15 @@ export function NativeAttachmentMenu({
   const [menuOpen, setMenuOpen] = useState(false);
   const [picker, setPicker] = useState<"attach" | "mention" | null>(null);
 
-  useEffect(() => {
-    if (!disabled) return;
-    setMenuOpen(false);
-    setPicker(null);
-  }, [disabled]);
+  // Becoming disabled closes the menu and any open picker.
+  const [wasDisabled, setWasDisabled] = useState(disabled);
+  if (wasDisabled !== disabled) {
+    setWasDisabled(disabled);
+    if (disabled) {
+      setMenuOpen(false);
+      setPicker(null);
+    }
+  }
 
   const openPicker = (kind: "attach" | "mention") => {
     setMenuOpen(false);

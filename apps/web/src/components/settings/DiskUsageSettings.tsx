@@ -332,19 +332,28 @@ function EnvironmentUsage() {
     [machine],
   );
 
+  // Switching machine clears the previous machine's failure before it reloads;
+  // Refresh clears it itself.
+  const [loadedMachine, setLoadedMachine] = useState(machine);
+  if (loadedMachine !== machine) {
+    setLoadedMachine(machine);
+    setLoadError(null);
+  }
+
   const load = useCallback(
-    async (refresh: boolean) => {
+    (refresh: boolean) => {
       const generation = ++generationRef.current;
-      setLoadError(null);
-      try {
-        const list = await backend.listDiskUsageEnvironments(machine);
-        if (generation !== generationRef.current) return;
-        setEnvironments(list);
-        await measureAll(list, refresh, generation);
-      } catch (error) {
-        if (generation === generationRef.current)
-          setLoadError(error instanceof Error ? error.message : String(error));
-      }
+      return backend
+        .listDiskUsageEnvironments(machine)
+        .then(async (list) => {
+          if (generation !== generationRef.current) return;
+          setEnvironments(list);
+          await measureAll(list, refresh, generation);
+        })
+        .catch((error: unknown) => {
+          if (generation === generationRef.current)
+            setLoadError(error instanceof Error ? error.message : String(error));
+        });
     },
     [machine, measureAll],
   );
@@ -409,7 +418,10 @@ function EnvironmentUsage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => void load(true)}
+          onClick={() => {
+            setLoadError(null);
+            void load(true);
+          }}
           disabled={environments === null || measuring}
         >
           {measuring ? (

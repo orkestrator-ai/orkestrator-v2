@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -77,12 +77,9 @@ export function AddProjectDialog({
   const validationRequestRef = useRef(0);
   const submissionInFlightRef = useRef(false);
   const lastInspectedPathRef = useRef<string | null>(null);
-  const validateGitUrlRef = useRef(validateGitUrl);
-  validateGitUrlRef.current = validateGitUrl;
+  const validateLatestGitUrl = useEffectEvent((url: string) => validateGitUrl(url));
 
-  const resetForm = useCallback(() => {
-    validationRequestRef.current += 1;
-    lastInspectedPathRef.current = null;
+  const resetFormFields = () => {
     setPickedPath(null);
     setSource("existing");
     setIsBrowsingGitHub(false);
@@ -91,6 +88,12 @@ export function AddProjectDialog({
     setNewProjectPath("");
     setError(null);
     setIsValidUrl(null);
+  };
+
+  const resetForm = useCallback(() => {
+    validationRequestRef.current += 1;
+    lastInspectedPathRef.current = null;
+    resetFormFields();
   }, []);
 
   const handleOpenChange = useCallback(
@@ -102,10 +105,20 @@ export function AddProjectDialog({
     [onOpenChange, resetForm],
   );
 
-  useEffect(() => {
+  // Closing, however the parent does it, starts the next opening from a blank form.
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (wasOpen !== isOpen) {
+    setWasOpen(isOpen);
+    if (!isOpen) resetFormFields();
+  }
+  // Retires in-flight lookups in the same commit, so none lands on the blank form.
+  useLayoutEffect(() => {
     dialogGenerationRef.current += 1;
-    if (!isOpen) resetForm();
-  }, [isOpen, resetForm]);
+    if (!isOpen) {
+      validationRequestRef.current += 1;
+      lastInspectedPathRef.current = null;
+    }
+  }, [isOpen]);
 
   const handleSourceChange = useCallback((value: string) => {
     setSource(value as ProjectSource);
@@ -187,7 +200,7 @@ export function AddProjectDialog({
           }
           let valid: boolean;
           try {
-            valid = await validateGitUrlRef.current(remoteUrl);
+            valid = await validateLatestGitUrl(remoteUrl);
           } catch (validationError) {
             if (fromPicker && isCurrent()) {
               validationRequestRef.current += 1;

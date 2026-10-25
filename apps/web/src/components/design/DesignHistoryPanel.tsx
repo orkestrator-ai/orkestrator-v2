@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Loader2, Redo2, ShieldCheck, Undo2, X } from "lucide-react";
 import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
 import type {
@@ -94,7 +94,8 @@ export function DesignHistoryPanel({
 }) {
   const [entries, setEntries] = useState<DesignHistoryEntrySummary[]>([]);
   const [page, setPage] = useState<Omit<DesignHistoryPage, "entries"> | null>(null);
-  const [loading, setLoading] = useState(false);
+  // The first page starts loading as soon as the panel mounts.
+  const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<DesignFailure | null>(null);
   const [filterFrame, setFilterFrame] = useState<string | null>(focusFrameId);
@@ -111,27 +112,43 @@ export function DesignHistoryPanel({
   const epoch = useRef(0);
   const loadedCount = useRef(0);
   const target = useRef({ environmentId, canvasId });
-  target.current = { environmentId, canvasId };
+  useLayoutEffect(() => {
+    target.current = { environmentId, canvasId };
+  }, [environmentId, canvasId]);
 
-  useEffect(() => setFilterFrame(focusFrameId), [focusFrameId]);
+  const [prevFocusFrameId, setPrevFocusFrameId] = useState(focusFrameId);
+  if (prevFocusFrameId !== focusFrameId) {
+    setPrevFocusFrameId(focusFrameId);
+    setFilterFrame(focusFrameId);
+  }
 
-  useEffect(() => {
-    // A different canvas starts a clean list.
-    epoch.current++;
-    loadedCount.current = 0;
+  // A different canvas starts a clean list.
+  const [listTarget, setListTarget] = useState({ environmentId, canvasId });
+  if (listTarget.environmentId !== environmentId || listTarget.canvasId !== canvasId) {
+    setListTarget({ environmentId, canvasId });
     setEntries([]);
     setPage(null);
     setInspecting(null);
     setCheckpoint(null);
     setSubmitted(null);
+  }
+  useEffect(() => {
+    epoch.current++;
+    loadedCount.current = 0;
   }, [environmentId, canvasId]);
 
+  // Every change below reloads the list; a refresh supersedes any in-flight
+  // "Load more".
+  const refresh = [api, environmentId, canvasId, projection.revision, projection.statusVersion];
+  const [prevRefresh, setPrevRefresh] = useState(refresh);
+  if (refresh.some((value, index) => !Object.is(value, prevRefresh[index]))) {
+    setPrevRefresh(refresh);
+    setLoading(true);
+    setLoadingMore(false);
+  }
   useEffect(() => {
     const requestEpoch = ++epoch.current;
     const limit = Math.min(MAX_REFRESH, Math.max(PAGE_SIZE, loadedCount.current));
-    setLoading(true);
-    // A refresh supersedes any in-flight "Load more".
-    setLoadingMore(false);
     api.history(environmentId, canvasId, 0, limit).then(
       (result) => {
         if (requestEpoch !== epoch.current) return;
@@ -189,11 +206,18 @@ export function DesignHistoryPanel({
   // Mode switches (preview/compare) reuse the loaded checkpoint.
   const inspectEntry = inspecting?.entryId;
   const inspectSide = inspecting?.side;
+  const inspected = [api, canvasId, environmentId, inspectEntry, inspectSide];
+  const [prevInspected, setPrevInspected] = useState(inspected);
+  if (inspected.some((value, index) => !Object.is(value, prevInspected[index]))) {
+    setPrevInspected(inspected);
+    if (inspectEntry && inspectSide) {
+      setCheckpoint(null);
+      setCheckpointError(null);
+    }
+  }
   useEffect(() => {
     if (!inspectEntry || !inspectSide) return;
     let active = true;
-    setCheckpoint(null);
-    setCheckpointError(null);
     api.checkpoint(environmentId, canvasId, inspectEntry, inspectSide).then(
       (result) => active && setCheckpoint(result),
       (reason: unknown) => active && setCheckpointError(failureOf(reason)),

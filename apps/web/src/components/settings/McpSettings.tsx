@@ -270,16 +270,22 @@ export function McpSettings() {
 
   // Fetch only: the initial state is already loading, and Try again resets
   // it itself, so the mount effect never sets state synchronously.
-  const fetchSettings = useCallback(async () => {
-    try {
-      setSettings(await backend.getControlMcpSettings());
-      setLoadError(null);
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const fetchSettings = useCallback(
+    () =>
+      backend
+        .getControlMcpSettings()
+        .then(
+          (loaded) => {
+            setSettings(loaded);
+            setLoadError(null);
+          },
+          (error: unknown) => {
+            setLoadError(error instanceof Error ? error.message : String(error));
+          },
+        )
+        .finally(() => setLoading(false)),
+    [],
+  );
 
   useEffect(() => {
     void fetchSettings();

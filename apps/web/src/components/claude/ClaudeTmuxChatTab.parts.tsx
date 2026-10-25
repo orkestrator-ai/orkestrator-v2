@@ -922,14 +922,32 @@ export function TmuxComposeBar({
     );
   }, [value]);
 
-  // Open/close the menu based on whether the input *currently* looks like
-  // the start of a slash command (no space yet → still typing the command
-  // name; space typed → user has moved on to arguments, hide the menu).
-  useEffect(() => {
-    if (fileMentionMenuOpen) {
-      setSlashMenuOpen(false);
+  // An opening file mention menu takes over from the slash menu. Then
+  // open/close the slash menu based on whether the input *currently* looks
+  // like the start of a slash command (no space yet → still typing the
+  // command name; space typed → user has moved on to arguments, hide the
+  // menu). Both also run on the first render.
+  const slashCommandCount = filteredSlashCommands.length;
+  const [slashMenuInputs, setSlashMenuInputs] = useState<{
+    value: string;
+    slashCommandCount: number;
+    fileMentionMenuOpen: boolean;
+  } | null>(null);
+  const fileMentionMenuChanged = slashMenuInputs?.fileMentionMenuOpen !== fileMentionMenuOpen;
+  const slashInputChanged =
+    slashMenuInputs?.value !== value || slashMenuInputs.slashCommandCount !== slashCommandCount;
+  if (fileMentionMenuChanged || slashInputChanged) {
+    setSlashMenuInputs({ value, slashCommandCount, fileMentionMenuOpen });
+    if (fileMentionMenuChanged && fileMentionMenuOpen) setSlashMenuOpen(false);
+    if (slashInputChanged) {
+      if (!value.startsWith("/") || value.indexOf(" ") !== -1) {
+        setSlashMenuOpen(false);
+      } else {
+        setSlashMenuOpen(true);
+        setSlashSelectedIndex((prev) => (prev < slashCommandCount ? prev : 0));
+      }
     }
-  }, [fileMentionMenuOpen]);
+  }
 
   useEffect(() => {
     if (fileSearchError) {
@@ -954,20 +972,6 @@ export function TmuxComposeBar({
     textarea.setSelectionRange(cursorPosition, cursorPosition);
     pendingCursorPositionRef.current = null;
   }, [value]);
-
-  useEffect(() => {
-    if (!value.startsWith("/")) {
-      setSlashMenuOpen(false);
-      return;
-    }
-    const hasSpace = value.indexOf(" ") !== -1;
-    if (hasSpace) {
-      setSlashMenuOpen(false);
-      return;
-    }
-    setSlashMenuOpen(true);
-    setSlashSelectedIndex((prev) => (prev < filteredSlashCommands.length ? prev : 0));
-  }, [value, filteredSlashCommands.length]);
 
   // Auto-grow textarea, bounded.
   useEffect(() => {

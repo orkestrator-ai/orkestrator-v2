@@ -21,11 +21,14 @@ export function DesignEnvironmentDeletionNotice({
   open: boolean;
 }) {
   const [summary, setSummary] = useState<Summary | null>(null);
+  // Closing forgets the summary, so reopening never shows a stale count.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (prevOpen !== open) {
+    setPrevOpen(open);
+    if (!open) setSummary(null);
+  }
   useEffect(() => {
-    if (!open) {
-      setSummary(null);
-      return;
-    }
+    if (!open) return;
     let active = true;
     void (async () => {
       try {

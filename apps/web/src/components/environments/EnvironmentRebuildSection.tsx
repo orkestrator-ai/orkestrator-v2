@@ -95,13 +95,13 @@ export function EnvironmentRebuildSection({
   const [cancelling, setCancelling] = useState(false);
   const running = activeRebuild(snapshot);
 
-  const refreshSnapshot = useCallback(async () => {
-    try {
-      setSnapshot(await backend.getContainerLifecycleSnapshot(environment.id));
-    } catch {
-      // The section stays usable; the backend re-checks everything anyway.
-    }
-  }, [environment.id]);
+  const refreshSnapshot = useCallback(
+    () =>
+      backend.getContainerLifecycleSnapshot(environment.id).then(setSnapshot, () => {
+        // The section stays usable; the backend re-checks everything anyway.
+      }),
+    [environment.id],
+  );
 
   useEffect(() => {
     void refreshSnapshot();

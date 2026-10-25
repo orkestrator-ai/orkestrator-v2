@@ -1,7 +1,3 @@
-import {
-  beginEnvironmentMove,
-  endEnvironmentMove,
-} from "../src/core/environment-replacement-fence";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   type ControlledTimeout,
@@ -3784,7 +3780,7 @@ test("a terminal suspended in account preparation cannot spawn after move cleanu
         throw new Error("Terminal spawned before account preparation");
       }),
     ]);
-    expect(beginEnvironmentMove(environment.id)).toBe(true);
+    expect(context.runtime.environments.fence.beginMove(environment.id)).toBe(true);
     await commands.get("close_local_terminal_session")!({ sessionId }, context);
     gate.resolve();
     await expect(starting).rejects.toThrow("being moved");
@@ -3795,7 +3791,7 @@ test("a terminal suspended in account preparation cannot spawn after move cleanu
   } finally {
     gate.resolve();
     accounts.mockRestore();
-    endEnvironmentMove(environment.id);
+    context.runtime.environments.fence.endMove(environment.id);
   }
 });
 
@@ -3821,13 +3817,13 @@ test("terminal creation rechecks a move admitted during its environment read", a
   void creating.catch(() => undefined);
   try {
     await entered.promise;
-    expect(beginEnvironmentMove(environment.id)).toBe(true);
+    expect(context.runtime.environments.fence.beginMove(environment.id)).toBe(true);
     gate.resolve();
     await expect(creating).rejects.toThrow("being moved");
   } finally {
     gate.resolve();
     read.mockRestore();
-    endEnvironmentMove(environment.id);
+    context.runtime.environments.fence.endMove(environment.id);
   }
 });
 

@@ -606,6 +606,7 @@ export class OrkestratorBackend {
       {
         changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
         localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
+        environmentFence: this.runtime.environments.fence,
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",

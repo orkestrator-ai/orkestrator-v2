@@ -3,11 +3,6 @@ import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
 import { gitDockerScanPool } from "./git-docker-scan-pool.js";
-import {
-  assertEnvironmentNotMoving,
-  beginEnvironmentMutation,
-  beginWorktreeMutation,
-} from "./environment-replacement-fence.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
@@ -139,7 +134,7 @@ async function withLocalFileMutation<T>(
   environmentId: string,
   action: (environment: Environment) => Promise<T>,
 ): Promise<T> {
-  const releaseMutation = beginEnvironmentMutation(environmentId);
+  const releaseMutation = context.runtime.environments.fence.beginMutation(environmentId);
   let release: (() => void) | undefined;
   try {
     const stored = await context.storage.getEnvironment(environmentId);
@@ -672,11 +667,11 @@ export function registerTerminalCommands(
       const resolvedEnvironmentId = asString(environmentId, "environmentId");
       runtime.environments.assertNotDeleting(resolvedEnvironmentId);
       // A shell opened in the folder being moved would be left behind in it.
-      assertEnvironmentNotMoving(resolvedEnvironmentId);
+      runtime.environments.fence.assertNotMoving(resolvedEnvironmentId);
       const environment = await storage.getEnvironment(resolvedEnvironmentId);
       runtime.environments.assertNotDeleting(resolvedEnvironmentId);
       assertEnvironmentDeletionNotRequested(environment, resolvedEnvironmentId);
-      assertEnvironmentNotMoving(resolvedEnvironmentId);
+      runtime.environments.fence.assertNotMoving(resolvedEnvironmentId);
       const stableKey = stableTerminalKey(
         "local",
         resolvedEnvironmentId,
@@ -737,7 +732,7 @@ export function registerTerminalCommands(
     runtime.environments.assertNotDeleting(environmentId);
     const currentEnvironment = await storage.getEnvironment(environmentId);
     runtime.environments.assertNotDeleting(environmentId);
-    assertEnvironmentNotMoving(environmentId);
+    context.runtime.environments.fence.assertNotMoving(environmentId);
     assertEnvironmentDeletionNotRequested(currentEnvironment, environmentId);
     if (!currentEnvironment?.worktreePath || currentEnvironment.worktreePath !== env.worktreePath) {
       throw new Error("Local environment worktree is no longer available");
@@ -755,7 +750,7 @@ export function registerTerminalCommands(
     await resumeTerminalHistory(id);
     const launchTarget = await storage.getEnvironment(environmentId);
     runtime.environments.assertNotDeleting(environmentId);
-    assertEnvironmentNotMoving(environmentId);
+    context.runtime.environments.fence.assertNotMoving(environmentId);
     assertEnvironmentDeletionNotRequested(launchTarget, environmentId);
     if (
       launchTarget?.worktreePath !== currentEnvironment.worktreePath ||
@@ -931,7 +926,7 @@ export function registerTerminalCommands(
   });
   register("write_local_file", async ({ worktreePath, filePath, base64Data }, context) => {
     const root = asString(worktreePath, "worktreePath");
-    const release = beginWorktreeMutation(root);
+    const release = context.runtime.environments.fence.beginWorktreeMutation(root);
     try {
       const canonical = canonicalWorktreePath(root);
       const environments = (await context.storage.loadEnvironments?.()) ?? [];
@@ -1100,7 +1095,7 @@ export function registerTerminalCommands(
     if (!environment) throw new Error("Environment not found");
     const wantFingerprint =
       fingerprint === undefined ? false : asRequiredBoolean(fingerprint, "fingerprint");
-    const runner = createEnvironmentCommandRunner(environment);
+    const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
     // The container image ships Node; a local worktree runs on the user's own
     // machine, where the backend's inherited PATH is whatever the OS handed
     // Electron and need not contain any Node at all. Use the same managed Bun
@@ -1537,7 +1532,9 @@ export function registerTerminalCommands(
     }
   };
   register("write_initial_prompt_attachments", (args, context) => {
-    const release = beginEnvironmentMutation(asString(args.environmentId, "environmentId"));
+    const release = context.runtime.environments.fence.beginMutation(
+      asString(args.environmentId, "environmentId"),
+    );
     return writeInitialPromptAttachments(args, context).finally(release);
   });
 }

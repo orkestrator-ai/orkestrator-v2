@@ -1,4 +1,5 @@
 import { DiffStatsTracking } from "./diff-stats-tracking.js";
+import { DockerContainerStateCache } from "./docker-container-state-cache.js";
 import { EnvironmentOperations } from "./environment-operations.js";
 import { LocalServerRuntime, type LocalServerRuntimeOptions } from "./local-server-runtime.js";
 import { TerminalRuntime, type TerminalRuntimeOptions } from "./terminal-runtime.js";
@@ -32,6 +33,8 @@ export class BackendRuntime {
   readonly terminals: TerminalRuntime;
   readonly localServers: LocalServerRuntime;
   readonly environments: EnvironmentOperations;
+  /** The short-lived `docker ps` snapshot shared by status reads. */
+  readonly containerStates = new DockerContainerStateCache();
   /**
    * Backend change tracking (docs/architecture/change-tracking.md). Attached
    * by the backend once storage exists; absent in lightweight command

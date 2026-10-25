@@ -1,4 +1,3 @@
-import { resetOpenCodeHostStartForTests } from "./opencode-host-start.js";
 import { terminalHistoryTesting } from "./terminal-history.js";
 import {
   ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
@@ -25,7 +24,6 @@ import {
   environmentLifecycleErrorMessage,
   getClaudeOAuthAccessToken,
   getHostClaudeCredentials,
-  invalidateDockerContainerStateCache,
   parseContainerGitStatusResponse,
   parseContainerUntrackedStats,
   parseDockerByteSize,
@@ -65,11 +63,6 @@ export const __testing = {
   runEnvironmentAgentSkills,
   environmentLifecycleErrorMessage,
   scrubLifecycleLogDetail,
-  resetDockerContainerStateCache(): void {
-    // The cache is private to the environment status helpers; their invalidator
-    // keeps the ownership and fetch bookkeeping in that module.
-    invalidateDockerContainerStateCache();
-  },
   parseGitFileChanges,
   parseContainerUntrackedStats,
   parseContainerGitStatusResponse,
@@ -97,7 +90,6 @@ export const __testing = {
   waitForHttpServerExit,
   waitForUnhealthy,
   // Module state outside `BackendRuntime` that fixtures reset between tests.
-  resetOpenCodeHostStart: resetOpenCodeHostStartForTests,
   resetTerminalHistory(): void {
     terminalHistoryTesting.clear();
   },

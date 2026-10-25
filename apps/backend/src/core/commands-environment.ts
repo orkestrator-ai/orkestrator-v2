@@ -2,7 +2,6 @@ import {
   assertWorktreePathUnlinked,
   captureWorktreePathIdentity,
 } from "@orkestrator/protocol/node/worktree-paths";
-import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
 import {
   getWorktreeBaseDir,
   resolveEnvironmentWorktreeRoot,
@@ -80,15 +79,12 @@ import { addLocalWorkspaceArtifactsToGitExclude } from "./commands-files.js";
 import { setupTerminalSessionId, isSetupTerminalSessionId } from "./commands-terminal.js";
 import {
   CONTAINER_AGENT_TOOLS_HOST,
-  DOCKER_CONTAINER_STATE_CACHE_MS,
   DOCKER_DESKTOP_GATEWAY_HOST,
-  dockerContainerStateCache,
   dockerExec,
   getDockerStatus,
   getHostPort,
   isContainerRunning,
   parseDockerStatus,
-  setDockerContainerStateCache,
 } from "./commands-container-exec.js";
 import { copyConfiguredProjectFilesToDirectory } from "./commands-project-files.js";
 import { seedFilesDir } from "./nodes/node-files.js";
@@ -336,23 +332,16 @@ export async function listOrkestratorContainerStates(
   }
 }
 
+/** One backend's shared `docker ps` snapshot (`runtime.containerStates`). */
 export function getOrkestratorContainerStates(
-  context?: Pick<CommandContext, "storage" | "strictDockerOwner">,
+  context: Pick<CommandContext, "storage" | "strictDockerOwner" | "runtime">,
 ): Promise<Map<string, EnvironmentStatus> | null> {
-  const now = Date.now();
-  const ownershipKey = context?.strictDockerOwner
+  const ownershipKey = context.strictDockerOwner
     ? dockerOwnerNamespace(context.storage.getDataDir())
     : "legacy";
-  if (
-    dockerContainerStateCache &&
-    dockerContainerStateCache.ownershipKey === ownershipKey &&
-    now - dockerContainerStateCache.fetchedAt < DOCKER_CONTAINER_STATE_CACHE_MS
-  ) {
-    return dockerContainerStateCache.states;
-  }
-  const states = listOrkestratorContainerStates(context);
-  setDockerContainerStateCache({ fetchedAt: now, ownershipKey, states });
-  return states;
+  return context.runtime.containerStates.read(ownershipKey, () =>
+    listOrkestratorContainerStates(context),
+  );
 }
 
 export async function syncStoredEnvironmentStatus(
@@ -1869,7 +1858,7 @@ export async function recreateEnvironmentOnce(
   invalidateDiscovery: (environmentId: string) => void,
 ): Promise<EnvironmentSetupStartResult | undefined> {
   // No agent prompt reaches this environment while its runtime is replaced.
-  return withEnvironmentReplacement(request.environmentId, () =>
+  return context.runtime.environments.fence.withReplacement(request.environmentId, () =>
     recreateEnvironmentOnceUnfenced(request, context, schedulePendingRename, invalidateDiscovery),
   );
 }

@@ -6,7 +6,6 @@ import {
   coordinatorWebResearchSetting,
   normalizeCoordinatorResearchMcpServers,
 } from "@orkestrator/protocol/coordinator-web-research";
-import { assertEnvironmentNotMoving } from "./environment-replacement-fence.js";
 import {
   formatContainerLifecycleError,
   parseContainerLifecycle,
@@ -19,10 +18,8 @@ import { stopEnvironmentReviewValidation } from "./review-validation-service.js"
 import { removeOpenCodeCommandChangeJournals } from "./opencode-command-changes.js";
 import {
   OPENCODE_STARTUP_STDERR_TAIL_BYTES,
-  acquireOpenCodeHostStart,
   isOpenCodeDatabaseLockedError,
   openCodeDatabaseLockedError,
-  openCodeLockedStartRetryDelayMs,
   openCodeStderrReportsLockedDatabase,
 } from "./opencode-host-start.js";
 import {
@@ -641,7 +638,7 @@ export async function startLocalServerUnlocked(
       // A failed attempt has already stopped its server and cleared its
       // fields, so the next one starts clean.
       const delayMs = isOpenCodeDatabaseLockedError(error)
-        ? openCodeLockedStartRetryDelayMs(attempt)
+        ? context.runtime.localServers.openCodeHostStart.lockedStartRetryDelayMs(attempt)
         : undefined;
       if (delayMs === undefined || context.runtime.localServers.isShuttingDown()) throw error;
       console.warn(
@@ -657,7 +654,7 @@ async function startLocalServerAttempt(
   context: CommandContext,
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
-  assertEnvironmentNotMoving(environmentId);
+  context.runtime.environments.fence.assertNotMoving(environmentId);
   const key = `${kind}:${environmentId}`;
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
   const researchConfig = coordinatorId ? (await context.storage.loadConfig()).global : undefined;
@@ -1111,7 +1108,7 @@ async function startLocalServerAttempt(
       : [bridgeEntrypoint];
   // Held from spawn until healthy or failed; see `opencode-host-start.ts`.
   const releaseOpenCodeHostStart =
-    kind === "opencode" ? await acquireOpenCodeHostStart() : () => undefined;
+    kind === "opencode" ? await localServers.openCodeHostStart.acquire() : () => undefined;
   let child: ChildProcessWithoutNullStreams;
   try {
     // Shutdown may have begun while this start waited for the host's turn.

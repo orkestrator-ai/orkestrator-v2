@@ -1517,8 +1517,6 @@ exit 0
       // against a fixture worktree later in the run.
       shutdownPrMonitorTracking();
       resetLocalServerHooks();
-      commandTesting.resetOpenCodeHostStart();
-      commandTesting.resetDockerContainerStateCache();
       commandTesting.resetTerminalHistory();
       await Promise.all(
         tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),

@@ -10,7 +10,7 @@ import type { StorageService } from "./storage.js";
 
 /**
  * Two backends in one process own separate state: whatever one registers is
- * invisible to the other (docs/todo/backend-structure/0011).
+ * invisible to the other (docs/todo/backend-structure/0011 and 0066).
  */
 
 const runtimes: BackendRuntime[] = [];
@@ -169,5 +169,100 @@ describe("two BackendRuntimes in one process", () => {
     expect(second.environments.hasLifecycleWork("env-1")).toBe(false);
     release();
     await queued;
+  });
+
+  test("the replacement and move fence is per backend", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const commands = createCommandRegistry();
+
+    let finishReplacement!: () => void;
+    const replacement = first.environments.fence.withReplacement(
+      "env-1",
+      () => new Promise<void>((resolve) => (finishReplacement = resolve)),
+    );
+    expect(() => first.environments.fence.beginAgentWork("env-1")).toThrow("being rebuilt");
+    second.environments.fence.beginAgentWork("env-1")();
+    finishReplacement();
+    await replacement;
+    first.environments.fence.beginAgentWork("env-1")();
+
+    expect(first.environments.fence.beginMove("env-1")).toBe(true);
+    expect(() => first.environments.fence.beginMutation("env-1")).toThrow("being moved");
+    second.environments.fence.beginMutation("env-1")();
+    // The command surface reads the fence of the backend it runs in: a shell
+    // in the moving folder is refused by the first backend only.
+    const open = (runtime: BackendRuntime) =>
+      commands.get("create_local_terminal_session")!(
+        { environmentId: "env-1" },
+        {
+          ...contextFor(runtime),
+          storage: { getEnvironment: async () => null } as unknown as StorageService,
+        },
+      );
+    await expect(open(first)).rejects.toThrow("being moved");
+    await expect(open(second)).rejects.not.toThrow("being moved");
+    first.environments.fence.endMove("env-1");
+    expect(second.environments.fence.beginMove("env-1")).toBe(true);
+    second.environments.fence.endMove("env-1");
+  });
+
+  test("host OpenCode starts take turns within one backend only", async () => {
+    const first = createRuntime({
+      emit: () => undefined,
+      localServers: { openCodeLockedStartRetryDelaysMs: [1] },
+    });
+    const second = createRuntime();
+
+    const releaseFirst = await first.localServers.openCodeHostStart.acquire();
+    // The other backend's turn is not held behind this one.
+    const releaseSecond = await second.localServers.openCodeHostStart.acquire();
+    let queued = false;
+    const next = first.localServers.openCodeHostStart.acquire().then((release) => {
+      queued = true;
+      return release;
+    });
+    await Bun.sleep(5);
+    expect(queued).toBe(false);
+    releaseFirst();
+    (await next)();
+    releaseSecond();
+
+    expect(first.localServers.openCodeHostStart.lockedStartRetryDelayMs(0)).toBe(1);
+    expect(first.localServers.openCodeHostStart.lockedStartRetryDelayMs(1)).toBeUndefined();
+    expect(second.localServers.openCodeHostStart.lockedStartRetryDelayMs(1)).toBe(2_000);
+  });
+
+  test("Pi catalogue probes and the container-state snapshot are per backend", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+
+    let probes = 0;
+    const emptyProbe = async () => {
+      probes += 1;
+      return [];
+    };
+    expect(await first.localServers.piCatalog.discover(false, emptyProbe)).toEqual([]);
+    // The first backend backs off after its empty probe; the second still probes.
+    expect(await first.localServers.piCatalog.discover(false, emptyProbe)).toEqual([]);
+    expect(probes).toBe(1);
+    await second.localServers.piCatalog.discover(false, emptyProbe);
+    expect(probes).toBe(2);
+    expect(first.localServers.piCatalog.nextProbeKey()).toBe("pi:catalog-seed:1");
+    expect(second.localServers.piCatalog.nextProbeKey()).toBe("pi:catalog-seed:1");
+
+    let fetches = 0;
+    const fetchStates = async () => {
+      fetches += 1;
+      return new Map();
+    };
+    const snapshot = first.containerStates.read("legacy", fetchStates);
+    expect(first.containerStates.read("legacy", fetchStates)).toBe(snapshot);
+    expect(fetches).toBe(1);
+    expect(second.containerStates.read("legacy", fetchStates)).not.toBe(snapshot);
+    expect(fetches).toBe(2);
+    second.containerStates.invalidate();
+    expect(first.containerStates.read("legacy", fetchStates)).toBe(snapshot);
+    expect(fetches).toBe(2);
   });
 });

@@ -13,11 +13,7 @@ import {
   recoverInterruptedEnvironmentMoves,
 } from "./environment-move.js";
 import { claudeProjectSlug, codexCwdHash } from "./environment-move-sessions.js";
-import {
-  assertEnvironmentAcceptsAgentWork,
-  beginEnvironmentMove,
-  endEnvironmentMove,
-} from "./environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
@@ -545,24 +541,25 @@ describe("move_environment", () => {
     ).rejects.toThrow("Only a local environment");
     await storage.updateEnvironment(environment.id, { environmentType: "local" });
 
-    expect(beginEnvironmentMove(environment.id)).toBe(true);
+    expect(context.runtime.environments.fence.beginMove(environment.id)).toBe(true);
     try {
       await expect(
         moveEnvironmentTask(environment.id, path.join(root, "elsewhere"), context),
       ).rejects.toThrow("already being moved");
     } finally {
-      endEnvironmentMove(environment.id);
+      context.runtime.environments.fence.endMove(environment.id);
     }
   });
 
   test("agent prompts are refused while a move is in progress", () => {
-    expect(beginEnvironmentMove("env-fenced")).toBe(true);
+    const fence = new EnvironmentMutationFence();
+    expect(fence.beginMove("env-fenced")).toBe(true);
     try {
-      expect(() => assertEnvironmentAcceptsAgentWork("env-fenced")).toThrow("being moved");
+      expect(() => fence.assertAcceptsAgentWork("env-fenced")).toThrow("being moved");
     } finally {
-      endEnvironmentMove("env-fenced");
+      fence.endMove("env-fenced");
     }
-    expect(() => assertEnvironmentAcceptsAgentWork("env-fenced")).not.toThrow();
+    expect(() => fence.assertAcceptsAgentWork("env-fenced")).not.toThrow();
   });
 
   test("is exposed as a registry command returning the client environment", async () => {
@@ -1162,8 +1159,7 @@ test("a paused copy refuses file writers and new workers before deleting the sou
 test("move admission waits for already admitted mutations to settle", async () => {
   const { root, context, startLocal } = await setup();
   const environment = await startLocal();
-  const { beginEnvironmentMutation } = await import("./environment-replacement-fence.js");
-  const release = beginEnvironmentMutation(environment.id);
+  const release = context.runtime.environments.fence.beginMutation(environment.id);
   try {
     await expect(
       moveEnvironmentTask(environment.id, path.join(root, "moved"), context),
@@ -1215,7 +1211,9 @@ test("Cursor read failure retains recovery until the store can follow the destin
   expect(moved.lifecycleError).toContain("Cursor");
   expect(moved.worktreeMove?.phase).toBe("committed");
   expect(await exists(environment.worktreePath!)).toBe(true);
-  expect(() => assertEnvironmentAcceptsAgentWork(environment.id)).toThrow("recovery is pending");
+  expect(() => context.runtime.environments.fence.assertAcceptsAgentWork(environment.id)).toThrow(
+    "recovery is pending",
+  );
   await expect(
     moveEnvironmentTask(environment.id, path.join(root, "again"), context),
   ).rejects.toThrow("recovery is pending");
@@ -1223,7 +1221,9 @@ test("Cursor read failure retains recovery until the store can follow the destin
   expect(JSON.parse(await fs.readFile(file, "utf8")).cwd).toBe(moved.worktreePath);
   expect((await storage.getEnvironment(environment.id))?.worktreeMove).toBeUndefined();
   expect(await exists(environment.worktreePath!)).toBe(false);
-  expect(() => assertEnvironmentAcceptsAgentWork(environment.id)).not.toThrow();
+  expect(() =>
+    context.runtime.environments.fence.assertAcceptsAgentWork(environment.id),
+  ).not.toThrow();
 });
 
 test("an acknowledged native turn with persisted idle prevents move before quiescing", async () => {

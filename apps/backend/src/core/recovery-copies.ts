@@ -1,4 +1,3 @@
-import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
 import {
   MAX_RETAINED_STORAGE_SETS,
   parseContainerLifecycle,
@@ -417,7 +416,7 @@ export async function restoreRecoveryCopy(
   context: CommandContext,
 ): Promise<{ containerId: string } | undefined> {
   // No agent prompt reaches this environment while its runtime is replaced.
-  return withEnvironmentReplacement(request.environmentId, () =>
+  return context.runtime.environments.fence.withReplacement(request.environmentId, () =>
     restoreRecoveryCopyUnfenced(request, context),
   );
 }

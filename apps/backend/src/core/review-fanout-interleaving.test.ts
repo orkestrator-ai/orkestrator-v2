@@ -199,10 +199,15 @@ describe("review fan-out interleavings", () => {
     test("a takeover mid-continuation does not count the old restart twice", async () => {
       for (const seed of [861, 1251]) {
         const result = await runInterleaving(planScenario(seed, "fence-loss"));
+        let continued = 0;
         for (const plan of result.scenario.reviewers) {
-          if (plan.script !== "restartOnce" || result.ledgers[plan.id]!.staleObservations === 0) {
+          if (
+            plan.script !== "restartOnce" ||
+            result.ledgers[plan.id]!.accepted.continuation === 0
+          ) {
             continue;
           }
+          continued += 1;
           const reviewer = result.committed.reviewers.find(({ id }) => id === plan.id)!;
           expect({
             seed,
@@ -214,6 +219,7 @@ describe("review fan-out interleavings", () => {
             status: "completed",
           });
         }
+        expect(continued).toBeGreaterThan(0);
       }
     });
   });

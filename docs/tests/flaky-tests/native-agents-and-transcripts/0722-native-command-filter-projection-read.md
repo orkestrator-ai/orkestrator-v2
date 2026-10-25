@@ -66,3 +66,12 @@ The combined merge repeated a failure in this owner during `mise run test:logged
 - **Disposition:** open.
 - **Evidence:** at least seven recurrences from 2026-10-24 to 2026-10-25, including [0815](../aggregate-validation-runs/0815-container-rebuild-state-validation.md), and one failure alone (three reads, 21.11 s), so it is not only load. The test takes its baseline count right after the listbox appears (`AgentNativeTab.commands.test.tsx:596`); one more projection read lands while it types 20 keystrokes.
 - **Next step:** find what issues the extra `getNativeAgentProjection` call (a mount-time or periodic re-read), and wait for it to settle before taking the baseline, or stub it.
+
+## Voice qualification review fixes — 2026-10-25
+
+- **Change:** `9b1b42be8`; only CLI voice examples and their tests changed.
+- **Original command:** `mise run test:logged -- --name voice-suite -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1, with other worktrees validating on the same host.
+- **Failure:** The maximal-list filtering test expected one projection read and received two (2030.05 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name native-command-rerun -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit 0 in 9.4 seconds logged.
+- **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** recurrence of this tracked intermittent failure. No implementation, assertion, timeout or skip changed in the owner; the aggregate result is not made green by the isolated pass.

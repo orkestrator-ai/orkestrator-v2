@@ -8,6 +8,7 @@ import type { BrowserAnnotationsController } from "./useBrowserAnnotations";
 
 /** Toolbar control: open-note count for the current logical page. */
 export function AnnotationsButton({ annotations }: { annotations: BrowserAnnotationsController }) {
+  const { buttonRef } = annotations;
   const count = annotations.openCount;
   const unsaved = annotations.unsavedCaptures;
   const unavailable = !annotations.available;
@@ -18,7 +19,7 @@ export function AnnotationsButton({ annotations }: { annotations: BrowserAnnotat
       }`;
   return (
     <Button
-      ref={annotations.buttonRef}
+      ref={buttonRef}
       type="button"
       variant={annotations.view.open ? "secondary" : "ghost"}
       size="sm"
@@ -119,14 +120,12 @@ export function AnnotatedPreviewArea({
   annotations: BrowserAnnotationsController;
   children: ReactNode;
 }) {
+  const { containerRef } = annotations;
   const open = annotations.view.open && annotations.available;
   const narrow = annotations.narrow;
   const showNotes = !narrow || annotations.surface === "notes";
   return (
-    <div
-      ref={annotations.containerRef}
-      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
-    >
+    <div ref={containerRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {open && narrow && (
         <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border/70 px-2 py-1">
           <div role="tablist" aria-label="Preview or notes" className="flex gap-1">

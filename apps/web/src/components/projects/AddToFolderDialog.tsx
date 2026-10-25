@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -52,12 +52,16 @@ export function AddToFolderDialog({
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    setValue(currentFolder ?? "");
-    setError(null);
-    setIsSaving(false);
-  }, [open, currentFolder]);
+  // Opening (or the project's folder changing while open) starts from its current folder.
+  const [shown, setShown] = useState({ open: false, currentFolder });
+  if (shown.open !== open || shown.currentFolder !== currentFolder) {
+    setShown({ open, currentFolder });
+    if (open) {
+      setValue(currentFolder ?? "");
+      setError(null);
+      setIsSaving(false);
+    }
+  }
 
   const normalized = normalizeProjectFolderName(value);
   const matchesExisting =

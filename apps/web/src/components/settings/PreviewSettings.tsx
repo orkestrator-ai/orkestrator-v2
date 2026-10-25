@@ -126,35 +126,48 @@ export function PreviewSettings() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const { machine } = useAccountMachine();
 
+  // Switching machine clears the previous machine's failure before it reloads.
+  const [loadedMachine, setLoadedMachine] = useState(machine);
+  if (loadedMachine !== machine) {
+    setLoadedMachine(machine);
+    setLoadError(null);
+  }
+
   // Failures become visible, retryable state; a capabilities failure resolves
   // null rather than throwing, so it is read back from the store.
-  const load = useCallback(async () => {
+  const fetchState = useCallback(
+    () =>
+      (isWindowMachine(machine) ? loadWindowCapabilities() : loadMachineCapabilities(machine)).then(
+        async (loaded) => {
+          if (!loaded.capabilities) {
+            setUnsupported(loaded.unsupported);
+            if (loaded.error) setLoadError(loaded.error);
+            return;
+          }
+          setCapabilities(loaded.capabilities);
+          try {
+            const [nextSettings, nextDiagnostics] = await Promise.all([
+              backend.getPreviewSettings(machine),
+              backend.getPreviewDiagnostics(machine),
+            ]);
+            setSettings(nextSettings);
+            setPublication(nextSettings.stored.publication);
+            setDiagnostics(nextDiagnostics);
+          } catch (error) {
+            setLoadError(message(error));
+          }
+        },
+      ),
+    [machine],
+  );
+  const load = () => {
     setLoadError(null);
-    const loaded = isWindowMachine(machine)
-      ? await loadWindowCapabilities()
-      : await loadMachineCapabilities(machine);
-    if (!loaded.capabilities) {
-      setUnsupported(loaded.unsupported);
-      if (loaded.error) setLoadError(loaded.error);
-      return;
-    }
-    setCapabilities(loaded.capabilities);
-    try {
-      const [nextSettings, nextDiagnostics] = await Promise.all([
-        backend.getPreviewSettings(machine),
-        backend.getPreviewDiagnostics(machine),
-      ]);
-      setSettings(nextSettings);
-      setPublication(nextSettings.stored.publication);
-      setDiagnostics(nextDiagnostics);
-    } catch (error) {
-      setLoadError(message(error));
-    }
-  }, [machine]);
+    return fetchState();
+  };
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchState();
+  }, [fetchState]);
 
   const save = async (update: Parameters<typeof backend.updatePreviewSettings>[0]) => {
     setSaving(true);

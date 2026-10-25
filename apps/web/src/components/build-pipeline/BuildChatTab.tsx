@@ -1,6 +1,14 @@
 import { ReviewValidationStatus } from "../review/ReviewValidationStatus";
 import { WorkflowResultStatus } from "../review/WorkflowResultStatus";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { flushSync } from "react-dom";
 import {
   AlertCircle,
@@ -283,6 +291,29 @@ export function reviewIterationLabels(
   return labels;
 }
 
+const NO_CLOCK_SUBSCRIPTION = () => {};
+
+/**
+ * The wall clock behind the tab's live durations, as an external store: it is
+ * re-read when a subscription starts and on every one-second tick, and holds
+ * still in between so the snapshot is stable.
+ */
+function createDisplayClock() {
+  let now = Date.now();
+  return {
+    getSnapshot: () => now,
+    subscribe: (onChange: () => void) => {
+      const tick = () => {
+        now = Date.now();
+        onChange();
+      };
+      tick();
+      const interval = window.setInterval(tick, 1_000);
+      return () => window.clearInterval(interval);
+    },
+  };
+}
+
 /** Matches the elapsed/token line used by each standalone Multi Review reviewer tile. */
 export function pipelineReviewRuntimeSummary(
   session: Pick<PipelineSession, "status" | "startedAt" | "completedAt" | "tokenCount">,
@@ -312,7 +343,10 @@ export function BuildChatTab({
   const [controlPending, setControlPending] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendPending, setSendPending] = useState(false);
-  const [displayNow, setDisplayNow] = useState(() => Date.now());
+  const [displayClock] = useState(createDisplayClock);
+  // Stands in for messages that carry no time of their own when the stage has
+  // no start time either; fixed so their rows do not drift on every update.
+  const [transcriptFallbackCreatedAt] = useState(() => new Date().toISOString());
   const validationStageId = pipeline?.validationRun
     ? `validation:${pipeline.validationRun.id}`
     : null;
@@ -327,7 +361,7 @@ export function BuildChatTab({
   // Distinguishes "the user picked this stage" from "we auto-followed the
   // pipeline". Without it the first automatic pick — the build stage — pins the
   // transcript there for the rest of the run, because it stays a valid session.
-  const pinnedSessionRef = useRef(false);
+  const [selectionPinned, setSelectionPinned] = useState(false);
   const hydrationAttemptedFor = useRef<string | null>(null);
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     // Switching to the stage list on a phone hides the transcript as
@@ -358,7 +392,7 @@ export function BuildChatTab({
 
   const pinSession = useCallback(
     (sessionId: string) => {
-      pinnedSessionRef.current = true;
+      setSelectionPinned(true);
       setViewedSessionId(data.pipelineId, sessionId);
     },
     [data.pipelineId, setViewedSessionId],
@@ -412,27 +446,33 @@ export function BuildChatTab({
   // The stage rail's phase durations and elapsed footer count up while the
   // pipeline works, so they share this clock with the reviewer timers.
   const pipelineRunning = pipeline ? isActiveBuildPhase(pipeline.phase) : false;
-  useEffect(() => {
-    if (!isActive || (!hasRunningValidation && !hasRunningReview && !pipelineRunning)) return;
-    setDisplayNow(Date.now());
-    const interval = window.setInterval(() => setDisplayNow(Date.now()), 1_000);
-    return () => window.clearInterval(interval);
-  }, [hasRunningReview, hasRunningValidation, isActive, pipelineRunning]);
+  const subscribeDisplayClock = useCallback(
+    (onChange: () => void) =>
+      !isActive || (!hasRunningValidation && !hasRunningReview && !pipelineRunning)
+        ? NO_CLOCK_SUBSCRIPTION
+        : displayClock.subscribe(onChange),
+    [displayClock, hasRunningReview, hasRunningValidation, isActive, pipelineRunning],
+  );
+  const displayNow = useSyncExternalStore(subscribeDisplayClock, displayClock.getSnapshot);
+
+  const selectionExists =
+    selectedSessionId !== null &&
+    Boolean(
+      pipeline?.sessions.some((session) => session.sdkSessionId === selectedSessionId) ||
+      selectedSessionId === validationStageId,
+    );
+  // A pinned selection that vanished from the snapshot is no longer a choice
+  // the user can hold on to, so release the pin and follow the pipeline again.
+  if (selectionPinned && (!pipeline?.sessions.length || !selectionExists)) {
+    setSelectionPinned(false);
+  }
 
   useEffect(() => {
     if (!pipeline?.sessions.length) {
       setViewedSessionId(data.pipelineId, null);
-      pinnedSessionRef.current = false;
       return;
     }
-    const selectionExists =
-      selectedSessionId !== null &&
-      (pipeline.sessions.some((session) => session.sdkSessionId === selectedSessionId) ||
-        selectedSessionId === validationStageId);
-    // A pinned selection that vanished from the snapshot is no longer a choice
-    // the user can hold on to, so release the pin and follow the pipeline again.
-    if (!selectionExists) pinnedSessionRef.current = false;
-    if (selectionExists && pinnedSessionRef.current) return;
+    if (selectionExists && selectionPinned) return;
     const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     const following =
       validationStageId && isReviewPackagePreparationSession(currentSession, pipeline)
@@ -445,6 +485,8 @@ export function BuildChatTab({
     pipeline?.currentSessionIndex,
     pipeline?.sessions,
     selectedSessionId,
+    selectionExists,
+    selectionPinned,
     setViewedSessionId,
     validationStageId,
   ]);
@@ -507,7 +549,12 @@ export function BuildChatTab({
     },
     [],
   );
-  const reportSession = pipeline ? reviewReportSession(pipeline) : undefined;
+  // Memoized on the snapshot so the stage it returns is read-only from here
+  // on, as `pipeline` is; the transcript memo below depends on both.
+  const reportSession = useMemo(
+    () => (pipeline ? reviewReportSession(pipeline) : undefined),
+    [pipeline],
+  );
   const fanoutReviewerBySessionKey = useMemo(
     () =>
       new Map(
@@ -564,7 +611,7 @@ export function BuildChatTab({
     const transcript = toPipelineTranscript(
       selectedSession?.messages,
       agentType,
-      selectedSession?.startedAt ?? new Date().toISOString(),
+      selectedSession?.startedAt ?? transcriptFallbackCreatedAt,
       selectedSession?.interactionTranscript,
     );
     if (selectedSession?.label === REVIEW_PACKAGE_SESSION_LABEL) {
@@ -609,6 +656,7 @@ export function BuildChatTab({
     selectedSession?.interactionTranscript,
     selectedSession?.label,
     structuredResultAccepted,
+    transcriptFallbackCreatedAt,
   ]);
   /*
    * The stage session's own key owns what its agent publishes, in the
@@ -639,16 +687,23 @@ export function BuildChatTab({
   // virtualized list — that would lose the reader's place and, with
   // the "latest" activation policy, jump them to the bottom on return.
   // The rows and the conversation their artifact cards resolve in stay together.
-  const lastListViewRef = useRef({ messages, scope: stageScope });
-  const lastListReportRef = useRef(selectedReviewReport);
-  if (!validationSelected) {
-    lastListViewRef.current = { messages, scope: stageScope };
-    lastListReportRef.current = selectedReviewReport;
+  // Recorded while rendering, and only when one of them changes.
+  const [lastListView, setLastListView] = useState({
+    messages,
+    scope: stageScope,
+    reviewReport: selectedReviewReport,
+  });
+  if (
+    !validationSelected &&
+    (lastListView.messages !== messages ||
+      lastListView.scope !== stageScope ||
+      lastListView.reviewReport !== selectedReviewReport)
+  ) {
+    setLastListView({ messages, scope: stageScope, reviewReport: selectedReviewReport });
   }
-  const listView = validationSelected ? lastListViewRef.current : { messages, scope: stageScope };
-  const listMessages = listView.messages;
-  const listScope = listView.scope;
-  const listReviewReport = validationSelected ? lastListReportRef.current : selectedReviewReport;
+  const listMessages = validationSelected ? lastListView.messages : messages;
+  const listScope = validationSelected ? lastListView.scope : stageScope;
+  const listReviewReport = validationSelected ? lastListView.reviewReport : selectedReviewReport;
 
   /** The accepted report a stage produced, as its stage badge and the rail's review chip read it. */
   const stageReportFor = (session: PipelineSession) =>
@@ -668,7 +723,7 @@ export function BuildChatTab({
     timeline?.groups.find((group) => group.current)?.key,
     selectedSessionId,
     selectedSessionId ? groupKeyByStageId.get(selectedSessionId) : undefined,
-    pinnedSessionRef.current,
+    selectionPinned,
   );
 
   const runControl = async (action: "pause" | "resume" | "cancel"): Promise<void> => {
@@ -698,7 +753,7 @@ export function BuildChatTab({
       replacePipeline(await backend.restartBuildPipelineCurrentStep(pipeline.id));
       // The restart opens a new session; follow it rather than leaving the
       // user on whichever stage they were reading.
-      pinnedSessionRef.current = false;
+      setSelectionPinned(false);
       toast.success(`${restartCurrentStageLabel?.replace(/^Restart /, "") ?? "Stage"} restarted`);
     } catch (error) {
       toast.error("Failed to restart the stage", {
@@ -715,7 +770,7 @@ export function BuildChatTab({
     try {
       const updated = await backend.retryBuildPipelineStage(pipeline.id);
       replacePipeline(updated);
-      pinnedSessionRef.current = false;
+      setSelectionPinned(false);
       if (updated.phase === "failed") {
         toast.error("Failed to restart the stage", {
           description: updated.error ?? "The stage failed again before it could restart",
@@ -738,7 +793,7 @@ export function BuildChatTab({
     try {
       const updated = await backend.restartBuildPipelineStep(pipeline.id, stageId);
       replacePipeline(updated);
-      pinnedSessionRef.current = false;
+      setSelectionPinned(false);
       toast.success("Stage restarted");
     } catch (error) {
       toast.error("Failed to restart the stage", {

@@ -11,8 +11,12 @@ export function useFileSearch(
   worktreePath: string | undefined,
   enabled = true,
 ) {
+  // Determine if environment is available
+  const isAvailable = !!(containerId || worktreePath);
+
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  // The mount effect starts a load at once when it can.
+  const [isLoading, setIsLoading] = useState(() => enabled && isAvailable);
   const [error, setError] = useState<string | null>(null);
   const requestGenerationRef = useRef(0);
   const activeRequestRef = useRef<{
@@ -21,20 +25,9 @@ export function useFileSearch(
     promise: Promise<void>;
   } | null>(null);
 
-  // Determine if environment is available
-  const isAvailable = !!(containerId || worktreePath);
-
-  // Load file tree from environment
-  const loadFileTree = useCallback((): Promise<void> => {
-    if (!isAvailable) {
-      requestGenerationRef.current += 1;
-      activeRequestRef.current = null;
-      setFileTree([]);
-      setIsLoading(false);
-      setError(null);
-      return Promise.resolve();
-    }
-
+  // Starts (or joins) a read of the current environment's tree. Callers own
+  // the synchronous loading state; only the settled read writes state here.
+  const requestFileTree = useCallback((): Promise<void> => {
     const requestKey = worktreePath ? `worktree:${worktreePath}` : `container:${containerId}`;
     const activeRequest = activeRequestRef.current;
     if (activeRequest?.key === requestKey) {
@@ -43,8 +36,6 @@ export function useFileSearch(
 
     const requestGeneration = requestGenerationRef.current + 1;
     requestGenerationRef.current = requestGeneration;
-    setIsLoading(true);
-    setError(null);
 
     const promise = Promise.resolve().then(async () => {
       try {
@@ -82,24 +73,54 @@ export function useFileSearch(
       promise,
     };
     return promise;
-  }, [isAvailable, containerId, worktreePath]);
+  }, [containerId, worktreePath]);
+
+  // Load file tree from environment (explicit refresh)
+  const loadFileTree = useCallback((): Promise<void> => {
+    if (!isAvailable) {
+      requestGenerationRef.current += 1;
+      activeRequestRef.current = null;
+      setFileTree([]);
+      setIsLoading(false);
+      setError(null);
+      return Promise.resolve();
+    }
+    const requestKey = worktreePath ? `worktree:${worktreePath}` : `container:${containerId}`;
+    if (activeRequestRef.current?.key !== requestKey) {
+      setIsLoading(true);
+      setError(null);
+    }
+    return requestFileTree();
+  }, [isAvailable, containerId, worktreePath, requestFileTree]);
+
+  // The state half of the effect below, applied while rendering when the
+  // environment or enablement changes: an unavailable environment has no
+  // tree, a new one is loading, and disabling abandons the read in flight.
+  const loadScope = JSON.stringify([enabled, containerId ?? null, worktreePath ?? null]);
+  const [renderedLoadScope, setRenderedLoadScope] = useState(loadScope);
+  if (renderedLoadScope !== loadScope) {
+    setRenderedLoadScope(loadScope);
+    if (!enabled) {
+      setIsLoading(false);
+    } else if (!isAvailable) {
+      setFileTree([]);
+      setIsLoading(false);
+      setError(null);
+    } else {
+      setIsLoading(true);
+      setError(null);
+    }
+  }
 
   // Load file tree on mount and when environment changes
   useEffect(() => {
-    if (!enabled) {
-      requestGenerationRef.current += 1;
-      activeRequestRef.current = null;
-      setIsLoading(false);
-      return;
-    }
-
-    void loadFileTree();
+    if (enabled && isAvailable) void requestFileTree();
 
     return () => {
       requestGenerationRef.current += 1;
       activeRequestRef.current = null;
     };
-  }, [enabled, loadFileTree]);
+  }, [enabled, isAvailable, requestFileTree]);
 
   // Flatten hierarchical file tree into searchable array of files and directories
   const flatFiles = useMemo((): FileCandidate[] => {

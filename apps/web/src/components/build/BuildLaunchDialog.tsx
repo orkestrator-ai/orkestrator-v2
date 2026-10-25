@@ -774,13 +774,12 @@ export function BuildLaunchDialog({
     resetLaunchState,
   ]);
 
-  useEffect(() => {
-    if (!dockerAvailable && localEnvironmentAvailable && environmentType === "containerized") {
-      setEnvironmentType("local");
-    } else if (!localEnvironmentAvailable && dockerAvailable && environmentType === "local") {
-      setEnvironmentType("containerized");
-    }
-  }, [dockerAvailable, environmentType, localEnvironmentAvailable]);
+  // Switch to the only available environment type. Converges in one pass.
+  if (!dockerAvailable && localEnvironmentAvailable && environmentType === "containerized") {
+    setEnvironmentType("local");
+  } else if (!localEnvironmentAvailable && dockerAvailable && environmentType === "local") {
+    setEnvironmentType("containerized");
+  }
 
   const resolved = useMemo(() => {
     const entries = BUILD_STEPS.map(({ key }) => {

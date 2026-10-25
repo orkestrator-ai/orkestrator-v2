@@ -266,14 +266,18 @@ export function AgentAccountsSection({
     };
   }, []);
 
-  const reload = useCallback(async () => {
-    try {
-      const next = await listAgentAccounts(machine);
-      if (mounted.current) setSnapshot(next);
-    } catch (cause) {
-      if (mounted.current) setError(messageOf(cause));
-    }
-  }, [machine]);
+  const reload = useCallback(
+    () =>
+      listAgentAccounts(machine).then(
+        (loaded) => {
+          if (mounted.current) setSnapshot(loaded);
+        },
+        (cause: unknown) => {
+          if (mounted.current) setError(messageOf(cause));
+        },
+      ),
+    [machine],
+  );
 
   useEffect(() => {
     void reload();

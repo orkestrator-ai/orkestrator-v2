@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { ChevronDown, RotateCcw, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -89,8 +89,13 @@ export function DesignStyleField({
   const stateId = `${id}-state`;
   const scope = scopeKey ?? property.name;
   const [customScope, setCustomScope] = useState<string | null>(null);
+  // Leaving a scope forgets custom mode, so returning to it starts from the list.
+  const [prevScope, setPrevScope] = useState(scope);
+  if (prevScope !== scope) {
+    setPrevScope(scope);
+    setCustomScope(null);
+  }
   const custom = customScope === scope;
-  useEffect(() => setCustomScope(null), [scope]);
   // The picker starts from what the user sees: the draft/inline value, else the cascade.
   const colorBase = value || computed || "";
   const color = useMemo(

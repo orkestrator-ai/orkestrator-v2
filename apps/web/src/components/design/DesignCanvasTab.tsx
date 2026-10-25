@@ -96,13 +96,11 @@ export function DesignCanvasTab({
   const prefs = useMemo(() => loadViewPrefs(controller.key), [controller.key]);
   const [viewport, setViewport] = useState<DesignViewport>(prefs.viewport ?? DEFAULT_VIEWPORT);
   const viewportRef = useRef(viewport);
-  viewportRef.current = viewport;
   const restored = useRef(false);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [workspaceWidth, setWorkspaceWidth] = useState(1024);
   const narrow = workspaceWidth < NARROW_WIDTH;
   const narrowRef = useRef(narrow);
-  narrowRef.current = narrow;
   const [selection, setSelection] = useState<DesignSelection | null>(null);
   /** A whole frame (board) selected from its title; exclusive with an element selection. */
   const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
@@ -128,17 +126,19 @@ export function DesignCanvasTab({
   const [renderedVersion, setRenderedVersion] = useState(0);
   const [localError, setLocalError] = useState<string | null>(null);
   const bridges = useRef(new Map<string, DesignFrameBridge>());
+  // The same bridges as state, for what rendering hands to the inspector.
+  const [bridgeMap, setBridgeMap] = useState<ReadonlyMap<string, DesignFrameBridge>>(
+    () => new Map(),
+  );
   const viewportElement = useRef<HTMLElement>(null);
   const workspace = useRef<HTMLDivElement>(null);
   const layersToggle = useRef<HTMLButtonElement>(null);
   const layersResize = useRef<{ x: number; width: number } | null>(null);
   const panStart = useRef<{ x: number; y: number; origin: DesignViewport } | null>(null);
   const selectionRef = useRef(selection);
-  selectionRef.current = selection;
   const selectedFrameRef = useRef(selectedFrameId);
-  selectedFrameRef.current = selectedFrameId;
   const projectionRef = useRef(projection);
-  projectionRef.current = projection;
+  const [announcement, setAnnouncement] = useState("");
 
   const canvas = projection?.canvas ?? null;
   const metas = projection?.workspace?.frames ?? {};
@@ -150,7 +150,6 @@ export function DesignCanvasTab({
   );
   const editable = projection?.snapshot === "current" || projection?.snapshot === "stale";
   const editableRef = useRef(editable);
-  editableRef.current = editable;
   const legacy = projection?.legacy ?? false;
 
   // Persist small view preferences only.
@@ -168,9 +167,16 @@ export function DesignCanvasTab({
   useEffect(() => {
     if (restored.current || !canvas || size.width === 0) return;
     restored.current = true;
+    // Restore after the first commit at the default view, not during render: that
+    // commit is what marks the visible frames live, so small canvases auto-expand
+    // them in the layer tree before the saved view moves them.
+    // oxlint-disable-next-line react/set-state-in-effect
     setViewport(restoreViewport(prefs.viewport, canvas.frames, size));
-    if (prefs.frameId && !canvas.frames.some((frame) => frame.id === prefs.frameId))
+    if (prefs.frameId && !canvas.frames.some((frame) => frame.id === prefs.frameId)) {
+      // Same restore step as above: a saved focus on a missing frame is dropped with it.
+      // oxlint-disable-next-line react/set-state-in-effect
       setFocusedFrame(null);
+    }
   }, [canvas, prefs, size]);
 
   useEffect(() => {
@@ -492,7 +498,16 @@ export function DesignCanvasTab({
   );
 
   const frameActionRef = useRef(frameAction);
-  frameActionRef.current = frameAction;
+  // Handlers and effects read the latest committed values through these refs.
+  useLayoutEffect(() => {
+    viewportRef.current = viewport;
+    narrowRef.current = narrow;
+    selectionRef.current = selection;
+    selectedFrameRef.current = selectedFrameId;
+    projectionRef.current = projection;
+    editableRef.current = editable;
+    frameActionRef.current = frameAction;
+  });
   const actions = useMemo<DesignCanvasActions>(
     () => ({
       controller,
@@ -529,6 +544,13 @@ export function DesignCanvasTab({
       registerBridge: (frameId, bridge) => {
         if (bridge) bridges.current.set(frameId, bridge);
         else bridges.current.delete(frameId);
+        setBridgeMap((current) => {
+          if ((current.get(frameId) ?? null) === bridge) return current;
+          const next = new Map(current);
+          if (bridge) next.set(frameId, bridge);
+          else next.delete(frameId);
+          return next;
+        });
       },
       frameRendered: (frameId) => {
         setRenderedVersion((value) => value + 1);
@@ -683,36 +705,49 @@ export function DesignCanvasTab({
     }
   }, [environmentId, reportError]);
 
-  const [announcement, setAnnouncement] = useState("");
-  useEffect(() => {
-    if (projection?.notice) setAnnouncement(projection.notice.text);
-  }, [projection?.notice]);
+  const notice = projection?.notice;
+  // Starts unset so a notice already present on mount is announced too.
+  const [announcedNotice, setAnnouncedNotice] = useState<typeof notice>(undefined);
+  if (announcedNotice !== notice) {
+    setAnnouncedNotice(notice);
+    if (notice) setAnnouncement(notice.text);
+  }
 
-  useEffect(() => {
-    if (!projection || pendingDeletes.length === 0) return;
-    const resolved = pendingDeletes.filter(({ intentId, frameId }) => {
-      const intent = projection.intents.find((candidate) => candidate.id === intentId);
-      return (
-        intent?.phase === "settled" ||
-        (!intent &&
-          projection.snapshot === "current" &&
-          !projection.canvas?.frames.some((frame) => frame.id === frameId))
-      );
-    });
-    if (resolved.length === 0) return;
-    for (const { intentId, frameId, name } of resolved) {
-      const intent = projection.intents.find((candidate) => candidate.id === intentId);
-      if (intent?.outcome !== "committed" && intent !== undefined) continue;
-      if (selectedFrameRef.current === frameId) {
-        selectedFrameRef.current = null;
-        setSelectedFrameId(null);
+  // Settle deletes as the projection reports them.
+  const [deletesSeen, setDeletesSeen] = useState({ pendingDeletes, projection });
+  if (deletesSeen.pendingDeletes !== pendingDeletes || deletesSeen.projection !== projection) {
+    setDeletesSeen({ pendingDeletes, projection });
+    const resolved = projection
+      ? pendingDeletes.filter(({ intentId, frameId }) => {
+          const intent = projection.intents.find((candidate) => candidate.id === intentId);
+          return (
+            intent?.phase === "settled" ||
+            (!intent &&
+              projection.snapshot === "current" &&
+              !projection.canvas?.frames.some((frame) => frame.id === frameId))
+          );
+        })
+      : [];
+    if (projection && resolved.length > 0) {
+      let frameSelection = selectedFrameId;
+      let elementSelectionFrame = selection?.frameId;
+      for (const { intentId, frameId, name } of resolved) {
+        const intent = projection.intents.find((candidate) => candidate.id === intentId);
+        if (intent?.outcome !== "committed" && intent !== undefined) continue;
+        if (frameSelection === frameId) {
+          frameSelection = null;
+          setSelectedFrameId(null);
+        }
+        if (elementSelectionFrame === frameId) {
+          elementSelectionFrame = undefined;
+          setSelection(null);
+        }
+        setAnnouncement(`Deleted ${name}. Undo with Ctrl/⌘ + Z`);
       }
-      if (selectionRef.current?.frameId === frameId) setSelection(null);
-      setAnnouncement(`Deleted ${name}. Undo with Ctrl/⌘ + Z`);
+      const resolvedIds = new Set(resolved.map((entry) => entry.intentId));
+      setPendingDeletes((pending) => pending.filter((entry) => !resolvedIds.has(entry.intentId)));
     }
-    const resolvedIds = new Set(resolved.map((entry) => entry.intentId));
-    setPendingDeletes((pending) => pending.filter((entry) => !resolvedIds.has(entry.intentId)));
-  }, [pendingDeletes, projection]);
+  }
 
   // Escape priority: gesture (frame-level) → preview → selection → drawers/panels.
   useEffect(() => {
@@ -1197,7 +1232,7 @@ export function DesignCanvasTab({
                 validity={validity}
                 frame={selectedFrame}
                 meta={selectedMeta}
-                bridge={bridges.current.get(selection.frameId)}
+                bridge={bridgeMap.get(selection.frameId)}
                 legacy={legacy}
                 status={{
                   pending: Boolean(selectionIntent && selectionIntent.phase !== "settled"),

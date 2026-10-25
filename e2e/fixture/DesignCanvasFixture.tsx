@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { DesignCanvasTab } from "../../apps/web/src/components/design/DesignCanvasTab";
 
-export function DesignCanvasFixture() {
-  const [active, setActive] = useState(true);
-  const canvasId = new URLSearchParams(window.location.search).get("canvasId")!;
+/** Installed before the fixture renders. */
+export function installDesignCanvasFixture() {
   window.orkestrator = {
     invoke: (command: string, args: unknown) =>
       (
@@ -16,6 +15,11 @@ export function DesignCanvasFixture() {
       return () => window.removeEventListener(eventName, listener);
     },
   } as unknown as typeof window.orkestrator;
+}
+
+export function DesignCanvasFixture() {
+  const [active, setActive] = useState(true);
+  const canvasId = new URLSearchParams(window.location.search).get("canvasId")!;
   return (
     <div className="h-screen bg-background text-foreground">
       <button onClick={() => setActive((value) => !value)}>Switch tab</button>

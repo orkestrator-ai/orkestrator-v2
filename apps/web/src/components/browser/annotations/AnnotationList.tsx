@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import {
   WEB_ANNOTATION_REQUEST_STATE_LABELS,
@@ -81,9 +81,13 @@ export function AnnotationList({
 }) {
   // Cursor stack: index 0 is the first page.
   const [cursors, setCursors] = useState<Array<string | null>>([null]);
-  const filterKey = JSON.stringify(filter);
-  const pageKey = currentPage?.pageKey ?? null;
-  useEffect(() => setCursors([null]), [filterKey, pageKey]);
+  // A new filter or page starts again at page one.
+  const resetKey = JSON.stringify([filter, currentPage?.pageKey ?? null]);
+  const [cursorsFor, setCursorsFor] = useState(resetKey);
+  if (resetKey !== cursorsFor) {
+    setCursorsFor(resetKey);
+    setCursors([null]);
+  }
   const cursor = cursors[cursors.length - 1] ?? null;
   // Registration is keyed by the query's value, so a new object per render is fine.
   const query = listQueryFor(filter, currentPage, cursor);
@@ -93,15 +97,17 @@ export function AnnotationList({
 
   // A cursor from an older snapshot can be rejected: sync has already
   // refetched page one, so restart there.
-  useEffect(() => {
-    if (state?.status === "error" && state.error === "stale-cursor") setCursors([null]);
-  }, [state?.error, state?.status]);
+  if (state?.status === "error" && state.error === "stale-cursor" && cursors.length > 1) {
+    setCursors([null]);
+  }
 
   // Viewport labels come from the small capture records (never images),
   // loaded for the visible page only; rows render without waiting for them.
   const captureKey = items.map((item) => item.currentCaptureId).join("|");
   const itemsRef = useRef(items);
-  itemsRef.current = items;
+  useLayoutEffect(() => {
+    itemsRef.current = items;
+  });
   useEffect(() => {
     // Keyed by the visible capture ids, not the (per-render) item array.
     for (const item of itemsRef.current) {

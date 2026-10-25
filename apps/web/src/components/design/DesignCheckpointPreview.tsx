@@ -40,10 +40,15 @@ export function DesignCheckpointPreview({
   }, [bridge]);
 
   const content = frame?.html;
+  // A new bridge or new content starts a fresh render.
+  const [rendered, setRendered] = useState({ bridge, content });
+  if (rendered.bridge !== bridge || rendered.content !== content) {
+    setRendered({ bridge, content });
+    if (bridge && content !== undefined) setState("rendering");
+  }
   useEffect(() => {
     if (!bridge || content === undefined) return;
     let active = true;
-    setState("rendering");
     bridge
       .ask({ op: "render", html: content })
       .then(() => active && setState("ready"))

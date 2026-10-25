@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 
 import {
@@ -279,9 +279,12 @@ export function McpServerForm({
   const hasAdvancedError = errors.some(
     (error) => error.field === "advanced" || error.field.startsWith("advanced."),
   );
-  useEffect(() => {
+  // A newly reported advanced-field error opens the section so it is visible.
+  const [shownAdvancedError, setShownAdvancedError] = useState(false);
+  if (shownAdvancedError !== hasAdvancedError) {
+    setShownAdvancedError(hasAdvancedError);
     if (hasAdvancedError) setAdvancedOpen(true);
-  }, [hasAdvancedError]);
+  }
   return (
     <div className="space-y-5">
       <div className="space-y-1.5">

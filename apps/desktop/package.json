@@ -26,8 +26,8 @@
     "@types/node": "^24.19.2",
     "@types/ws": "8.18.2",
     "builder-util-runtime": "9.7.0",
-    "electron": "^44.7.0",
-    "electron-updater": "6.8.10",
+    "electron": "^45.0.0",
+    "electron-updater": "6.8.11",
     "happy-dom": "^21.0.1",
     "typescript": "~7.0.2",
     "ws": "8.22.0"

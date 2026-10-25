@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -136,7 +136,9 @@ export function McpServerEditor({
   // deliberate reload re-pins it. Edits pin `definition.sourceRevision`.
   const pinnedRevisions = useRef<Record<string, string | null>>({});
   const draftRef = useRef(draft);
-  draftRef.current = draft;
+  useLayoutEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
   const backToForm = () => {
     requestIds.current = {};
     setStep("form");
@@ -203,7 +205,9 @@ export function McpServerEditor({
       : !!definition &&
         !isEmptyPatch(patchFromDraft(definition, draft, capabilities.fields.advanced));
   const onDirtyChangeRef = useRef(onDirtyChange);
-  onDirtyChangeRef.current = onDirtyChange;
+  useLayoutEffect(() => {
+    onDirtyChangeRef.current = onDirtyChange;
+  }, [onDirtyChange]);
   useEffect(() => {
     onDirtyChangeRef.current?.(dirty);
   }, [dirty]);

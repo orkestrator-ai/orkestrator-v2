@@ -34,13 +34,19 @@ export function ContainerLogViewer({ containerId }: { containerId: string }) {
     });
   }, []);
 
+  // A new container or "Follow again" starts the view from an empty log.
+  const [followed, setFollowed] = useState({ containerId, generation });
+  if (followed.containerId !== containerId || followed.generation !== generation) {
+    setFollowed({ containerId, generation });
+    setLines([]);
+    setGaps(0);
+    setState({ kind: "connecting" });
+  }
+
   useEffect(() => {
     let cancelled = false;
     let subscriptionId: string | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    setLines([]);
-    setGaps(0);
-    setState({ kind: "connecting" });
 
     const poll = async (sourceId: string, cursor: number) => {
       if (cancelled || !subscriptionId) return;

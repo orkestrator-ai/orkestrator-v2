@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import {
   WEB_ANNOTATION_LIMITS,
@@ -132,7 +132,9 @@ export function BatchReviewTray({
   const remaining = Math.max(0, limit - included.length);
   const captureKey = items.map((item) => item.currentCaptureId).join("|");
   const itemsRef = useRef(items);
-  itemsRef.current = items;
+  useLayoutEffect(() => {
+    itemsRef.current = items;
+  });
   useEffect(() => {
     // Small capture records only; images are never fetched for the tray.
     for (const item of itemsRef.current) {

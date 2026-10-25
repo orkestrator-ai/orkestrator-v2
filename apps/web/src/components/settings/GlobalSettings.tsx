@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
@@ -455,11 +455,26 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
   }, [global]);
 
-  const refreshWebClientStatus = useCallback(async () => {
+  // Entering the web-client section starts a fresh status load, and entering
+  // the debug section (or switching machine while on it) a fresh log storage
+  // walk. Their loading state is set here, while rendering, so the effects
+  // below only start the requests.
+  const [loadedSection, setLoadedSection] = useState<string | null>(null);
+  const [loadedMachine, setLoadedMachine] = useState(machine);
+  if (loadedSection !== activeSection || (activeSection === "debug" && loadedMachine !== machine)) {
+    setLoadedSection(activeSection);
+    setLoadedMachine(machine);
+    if (activeSection === "web-client") {
+      setIsLoadingWebClientStatus(true);
+      setIsLoadingGatewayToken(true);
+      setGatewayTokenLoadError(null);
+    } else if (activeSection === "debug") {
+      setIsLoadingLogStorage(true);
+    }
+  }
+
+  const refreshWebClientStatus = useCallback(() => {
     const requestId = ++webClientStatusRequestRef.current;
-    setIsLoadingWebClientStatus(true);
-    setIsLoadingGatewayToken(true);
-    setGatewayTokenLoadError(null);
 
     const statusRequest = backend
       .getWebClientStatus()
@@ -501,7 +516,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         if (requestId === webClientStatusRequestRef.current) setIsLoadingGatewayToken(false);
       });
 
-    await Promise.all([statusRequest, tokenRequest]);
+    return Promise.all([statusRequest, tokenRequest]);
   }, []);
 
   useEffect(() => {
@@ -516,18 +531,22 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   // join on the backend and stays cheap enough to fetch eagerly. Walks and
   // cleanups share one generation so a slower earlier request cannot replace
   // newer stats or clear the spinner while a later walk is still in flight.
-  const refreshLogStorage = useCallback(async () => {
+  const fetchLogStorage = useCallback(() => {
     const requestId = ++logStorageRequestRef.current;
-    setIsLoadingLogStorage(true);
-    const [directory, stats] = await Promise.allSettled([
+    return Promise.allSettled([
       backend.getLogDirectory(machine),
       backend.getLogStorageStats(machine),
-    ]);
-    if (requestId !== logStorageRequestRef.current) return;
-    if (directory.status === "fulfilled") setLogDirectory(directory.value);
-    setLogStorageStats(stats.status === "fulfilled" ? stats.value : null);
-    setIsLoadingLogStorage(false);
+    ]).then(([directory, stats]) => {
+      if (requestId !== logStorageRequestRef.current) return;
+      if (directory.status === "fulfilled") setLogDirectory(directory.value);
+      setLogStorageStats(stats.status === "fulfilled" ? stats.value : null);
+      setIsLoadingLogStorage(false);
+    });
   }, [machine]);
+  const refreshLogStorage = useCallback(() => {
+    setIsLoadingLogStorage(true);
+    return fetchLogStorage();
+  }, [fetchLogStorage]);
 
   useEffect(() => {
     backend
@@ -537,11 +556,11 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   }, [machine]);
 
   useEffect(() => {
-    if (activeSection === "debug") void refreshLogStorage();
+    if (activeSection === "debug") void fetchLogStorage();
     return () => {
       logStorageRequestRef.current += 1;
     };
-  }, [activeSection, refreshLogStorage]);
+  }, [activeSection, fetchLogStorage]);
 
   const handleCleanupLogs = useCallback(async () => {
     const requestId = ++logStorageRequestRef.current;
@@ -648,15 +667,13 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const storedCoreSignature = useMemo(() => JSON.stringify(storedCoreFields(global)), [global]);
   const coreHasChanges =
     localCoreSignature !== storedCoreSignature || githubCredentialPropagationPending;
-  coreSignatureRef.current = localCoreSignature;
 
   // Latest-value mirrors for the unmount flush. Its effect must run once, so it
   // cannot depend on state that changes on every render; the refs carry the
-  // current values into the cleanup instead.
+  // current values into the cleanup instead. They are written after each commit
+  // (see the layout effect below the save blocker).
   const coreHasChangesRef = useRef(coreHasChanges);
-  coreHasChangesRef.current = coreHasChanges;
   const isSavingRef = useRef(isSaving);
-  isSavingRef.current = isSaving;
   const saveBlockerRef = useRef<{ section: string; message: string } | null>(null);
 
   // Validate domains on change
@@ -1221,13 +1238,18 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     sshAgentSocketPathValidationError,
     defaultProjectsDirectoryValidationError,
   ]);
-  saveBlockerRef.current = saveBlocker;
+  useLayoutEffect(() => {
+    coreSignatureRef.current = localCoreSignature;
+    coreHasChangesRef.current = coreHasChanges;
+    isSavingRef.current = isSaving;
+    saveBlockerRef.current = saveBlocker;
+    persistCoreRef.current = persistCore;
+  });
 
   // Debounced auto-save. `coreHasChanges` flips as the form diverges from the
   // persisted config. The effect depends on the local signature, so every edit
   // clears and re-arms the timer and only the final value is written. A rejected
   // signature is not retried until the value changes again.
-  persistCoreRef.current = persistCore;
   useEffect(() => {
     if (!coreHasChanges || isSaving || saveBlocker) return;
     if (failedCoreSignatureRef.current === localCoreSignature) return;

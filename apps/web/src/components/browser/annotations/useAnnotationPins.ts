@@ -11,7 +11,7 @@
  * Every result carries the document generation it was resolved against, and
  * only results of the tab's newest document are kept.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   BROWSER_PREVIEW_CAPTURE_EVENT,
   type BrowserPreviewAnchorQuery,
@@ -186,14 +186,27 @@ export function useAnnotationPins({
   );
   const lastPinsRef = useRef<BrowserPreviewAnchorQuery[]>([]);
   const wantedRef = useRef(wanted);
-  wantedRef.current = wanted;
   const selectedRef = useRef(selectedId);
-  selectedRef.current = selectedId;
   const itemsRef = useRef(items);
-  itemsRef.current = items;
+  useLayoutEffect(() => {
+    wantedRef.current = wanted;
+    selectedRef.current = selectedId;
+    itemsRef.current = items;
+  });
   const pinKey = items
     .map((item) => `${item.id}:${item.currentCaptureId}:${item.state}:${item.hidden ? 1 : 0}`)
     .join("|");
+  // While pins are not wanted the effect below clears them from the page each
+  // time it reruns; their results are dropped at the same points, while
+  // rendering.
+  const unwantedKey = wanted
+    ? null
+    : JSON.stringify([tabId, environmentId, currentPage?.pageKey ?? null, pinKey, selectedId]);
+  const [clearedFor, setClearedFor] = useState(unwantedKey);
+  if (unwantedKey !== clearedFor) {
+    setClearedFor(unwantedKey);
+    if (unwantedKey !== null) setPinResults(new Map());
+  }
 
   const buildPins = useCallback(async () => {
     const visible = itemsRef.current
@@ -238,7 +251,6 @@ export function useAnnotationPins({
     if (!api) return;
     if (!wanted) {
       lastPinsRef.current = [];
-      setPinResults(new Map());
       void api.clearPins(tabId).catch(() => undefined);
       return;
     }

@@ -76,7 +76,9 @@ export function TerminalHistoryPanel({
     [sessionId],
   );
   const loadRef = useRef(load);
-  loadRef.current = load;
+  useLayoutEffect(() => {
+    loadRef.current = load;
+  }, [load]);
 
   useEffect(() => {
     loadingRef.current = false;

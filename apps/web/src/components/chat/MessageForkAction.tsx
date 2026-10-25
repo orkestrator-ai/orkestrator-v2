@@ -64,23 +64,37 @@ export function useMessageForkAction(options: {
   onFork: (messageId: string, kind: MessageForkKind) => void;
 }): (messageId: string, kind: MessageForkKind) => ReactNode {
   const { agentLabel, disabled, onFork } = options;
-  return useMemo(() => {
-    const cache = new Map<string, ReactNode>();
-    return (messageId: string, kind: MessageForkKind): ReactNode => {
-      const cacheKey = `${kind}:${messageId}`;
-      const cached = cache.get(cacheKey);
-      if (cached !== undefined) return cached;
-      const element = (
-        <MessageForkAction
-          messageId={messageId}
-          kind={kind}
-          label={`Fork ${agentLabel} session from this ${kind}`}
-          disabled={disabled}
-          onFork={onFork}
-        />
-      );
-      cache.set(cacheKey, element);
-      return element;
-    };
-  }, [agentLabel, disabled, onFork]);
+  return useMemo(
+    () => createMessageForkActionFactory(agentLabel, disabled, onFork),
+    [agentLabel, disabled, onFork],
+  );
+}
+
+/**
+ * The factory behind `useMessageForkAction`: one element per message id and
+ * kind, memoised in a cache private to this factory. Looking an element up is
+ * idempotent, so calling the factory while rendering is safe.
+ */
+function createMessageForkActionFactory(
+  agentLabel: string,
+  disabled: boolean,
+  onFork: (messageId: string, kind: MessageForkKind) => void,
+): (messageId: string, kind: MessageForkKind) => ReactNode {
+  const cache = new Map<string, ReactNode>();
+  return (messageId, kind) => {
+    const cacheKey = `${kind}:${messageId}`;
+    const cached = cache.get(cacheKey);
+    if (cached !== undefined) return cached;
+    const element = (
+      <MessageForkAction
+        messageId={messageId}
+        kind={kind}
+        label={`Fork ${agentLabel} session from this ${kind}`}
+        disabled={disabled}
+        onFork={onFork}
+      />
+    );
+    cache.set(cacheKey, element);
+    return element;
+  };
 }

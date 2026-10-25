@@ -113,8 +113,8 @@ function RenameField({
   );
 }
 
-export function DesignToolbar({ layersButtonRef, ...props }: DesignToolbarProps) {
-  const { projection } = props;
+export function DesignToolbar(props: DesignToolbarProps) {
+  const { projection, layersButtonRef } = props;
   const history = projection?.workspace?.history;
   const canvas = projection?.canvas;
   const busyExport = projection?.busy.export ?? false;

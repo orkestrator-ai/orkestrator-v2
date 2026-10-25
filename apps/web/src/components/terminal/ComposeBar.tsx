@@ -81,7 +81,16 @@ export function ComposeBar({
   const clearComposeDraft = useTerminalSessionStore((state) => state.clearComposeDraft);
 
   const [isSending, setIsSending] = useState(false);
-  const [backendDraftHydrated, setBackendDraftHydrated] = useState(false);
+  // A draft is not hydrated until its backend read settles (or local edits
+  // win); without an environment there is nothing to read. Reset while
+  // rendering when the draft changes.
+  const [backendDraftHydrated, setBackendDraftHydrated] = useState(!environmentId);
+  const hydrationKey = JSON.stringify([environmentId ?? null, sessionKey]);
+  const [hydrationFor, setHydrationFor] = useState(hydrationKey);
+  if (hydrationKey !== hydrationFor) {
+    setHydrationFor(hydrationKey);
+    setBackendDraftHydrated(!environmentId);
+  }
   const [pendingPasteCount, setPendingPasteCount] = useState(0);
   const [previewImage, setPreviewImage] = useState<ImageAttachment | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -114,11 +123,7 @@ export function ComposeBar({
     let readSucceeded = false;
     let locallyChanged = false;
     let applyingHydration = false;
-    setBackendDraftHydrated(false);
-    if (!environmentId) {
-      setBackendDraftHydrated(true);
-      return;
-    }
+    if (!environmentId) return;
     const key = composeDraftKey("terminal", environmentId, sessionKey);
     const unsubscribe = useTerminalSessionStore.subscribe((state, previous) => {
       if (applyingHydration) return;

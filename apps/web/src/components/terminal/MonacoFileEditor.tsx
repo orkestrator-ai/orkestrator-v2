@@ -92,7 +92,6 @@ export function MonacoFileEditor({
   useEffect(() => {
     if (monacoReady) return;
     let cancelled = false;
-    setMonacoFailed(false);
     void ensureMonacoConfigured().then(
       () => {
         if (!cancelled) setMonacoReady(true);
@@ -106,7 +105,7 @@ export function MonacoFileEditor({
     };
   }, [monacoAttempt, monacoReady]);
 
-  const handleEditorWillMount: BeforeMount = useCallback(disableMonacoFileDiagnostics, []);
+  const handleEditorWillMount: BeforeMount = disableMonacoFileDiagnostics;
 
   const handleEditorMount: OnMount = useCallback(
     (editor, monaco) => {
@@ -147,7 +146,10 @@ export function MonacoFileEditor({
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => setMonacoAttempt((attempt) => attempt + 1)}
+          onClick={() => {
+            setMonacoFailed(false);
+            setMonacoAttempt((attempt) => attempt + 1);
+          }}
         >
           Retry
         </Button>

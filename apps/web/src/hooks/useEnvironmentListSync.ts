@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 
 /**
@@ -27,8 +27,11 @@ export function useEnvironmentListSync(
   const inFlightProjectIdsRef = useRef(new Set<string>());
   const rerunProjectIdsRef = useRef(new Set<string>());
 
-  projectIdsRef.current = projectIds;
-  refreshProjectRef.current = refreshProject;
+  // Latest inputs for the long-lived subscription below, published at commit.
+  useLayoutEffect(() => {
+    projectIdsRef.current = projectIds;
+    refreshProjectRef.current = refreshProject;
+  });
 
   useEffect(() => {
     let disposed = false;

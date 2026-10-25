@@ -8,7 +8,7 @@ import {
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
 import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
@@ -420,8 +420,25 @@ export function EnvironmentSettingsDialog({
     JSON.stringify(agentSettings) !==
     JSON.stringify(normalizeAgentSettings(environment.agentSettings));
 
-  // Reset state when dialog opens
-  useEffect(() => {
+  // Reset state when dialog opens. Both resets also run on the first render.
+  const resetInputs = {
+    open,
+    name: environment.name,
+    allowedDomains: environment.allowedDomains,
+    portMappings: environment.portMappings,
+    agentSettings: environment.agentSettings,
+    globalDomains,
+  };
+  const [resetFor, setResetFor] = useState<typeof resetInputs | null>(null);
+  if (
+    resetFor?.open !== open ||
+    resetFor.name !== resetInputs.name ||
+    resetFor.allowedDomains !== resetInputs.allowedDomains ||
+    resetFor.portMappings !== resetInputs.portMappings ||
+    resetFor.agentSettings !== resetInputs.agentSettings ||
+    resetFor.globalDomains !== globalDomains
+  ) {
+    setResetFor(resetInputs);
     if (open) {
       // Reset name
       setName(environment.name);
@@ -448,71 +465,95 @@ export function EnvironmentSettingsDialog({
       setAgentSettings(normalizeAgentSettings(environment.agentSettings));
       setActiveExtensionAgent("claude");
     }
-  }, [
-    open,
-    environment.name,
-    environment.allowedDomains,
-    environment.portMappings,
-    environment.agentSettings,
-    globalDomains,
-  ]);
+  }
 
   // Update custom domains when toggling to global
-  useEffect(() => {
+  const [globalSyncFor, setGlobalSyncFor] = useState<{
+    useGlobalDefaults: boolean;
+    globalDomains: string[];
+  } | null>(null);
+  if (
+    globalSyncFor?.useGlobalDefaults !== useGlobalDefaults ||
+    globalSyncFor.globalDomains !== globalDomains
+  ) {
+    setGlobalSyncFor({ useGlobalDefaults, globalDomains });
     if (useGlobalDefaults) {
       setCustomDomains(globalDomains.join("\n"));
       setDomainErrors([]);
       setTestResults(null);
     }
-  }, [useGlobalDefaults, globalDomains]);
+  }
 
-  // Clear extensions data when dialog closes to prevent stale data flash
-  useEffect(() => {
-    if (!open) {
-      // Abandon any in-flight load too. This dialog instance is shared across
-      // environments, so a late response would repopulate the panel after it
-      // was cleared and surface one environment's extensions under the next.
-      extensionLoadSeq.current += 1;
+  // Clear extensions data when dialog closes to prevent stale data flash, and
+  // show each environment's first load as loading.
+  const [extensionsFor, setExtensionsFor] = useState({
+    open: false,
+    environmentId: environment.id,
+  });
+  if (extensionsFor.open !== open || extensionsFor.environmentId !== environment.id) {
+    setExtensionsFor({ open, environmentId: environment.id });
+    if (open) {
+      setIsLoadingExtensions(true);
+      setExtensionsError(null);
+    } else {
       setExtensionCatalogs(emptyExtensionCatalogs());
       setExtensionsError(null);
       setIsLoadingExtensions(false);
       setHasLoadedExtensions(false);
     }
+  }
+  // Abandon any in-flight load too, in the same commit. This dialog instance
+  // is shared across environments, so a late response would repopulate the
+  // panel after it was cleared and surface one environment's extensions under
+  // the next.
+  useLayoutEffect(() => {
+    if (!open) extensionLoadSeq.current += 1;
   }, [open]);
 
-  const loadExtensions = useCallback(
-    async (options: { refresh?: boolean } = {}) => {
+  /** Loads without marking the load as started; `loadExtensions` does both. */
+  const fetchExtensions = useCallback(
+    (options: { refresh?: boolean } = {}) => {
       const seq = ++extensionLoadSeq.current;
       const isCurrent = () => seq === extensionLoadSeq.current;
-      setIsLoadingExtensions(true);
-      setExtensionsError(null);
-      try {
-        const catalogs = await backend.getEnvironmentExtensions(environment.id, options);
-        if (!isCurrent()) return;
-        setExtensionCatalogs(orderExtensionCatalogs(catalogs));
-      } catch (err) {
-        if (!isCurrent()) return;
-        console.error("[EnvironmentSettingsDialog] Failed to fetch extensions:", err);
-        setExtensionCatalogs(emptyExtensionCatalogs());
-        setExtensionsError(
-          "Extension settings could not be loaded. Check that the environment is available and try again.",
-        );
-      } finally {
-        if (isCurrent()) {
-          setIsLoadingExtensions(false);
-          setHasLoadedExtensions(true);
-        }
-      }
+      return backend
+        .getEnvironmentExtensions(environment.id, options)
+        .then(
+          (catalogs) => {
+            if (!isCurrent()) return;
+            setExtensionCatalogs(orderExtensionCatalogs(catalogs));
+          },
+          (err: unknown) => {
+            if (!isCurrent()) return;
+            console.error("[EnvironmentSettingsDialog] Failed to fetch extensions:", err);
+            setExtensionCatalogs(emptyExtensionCatalogs());
+            setExtensionsError(
+              "Extension settings could not be loaded. Check that the environment is available and try again.",
+            );
+          },
+        )
+        .finally(() => {
+          if (isCurrent()) {
+            setIsLoadingExtensions(false);
+            setHasLoadedExtensions(true);
+          }
+        });
     },
     [environment.id],
   );
 
+  const loadExtensions = (options: { refresh?: boolean } = {}) => {
+    setIsLoadingExtensions(true);
+    setExtensionsError(null);
+    return fetchExtensions(options);
+  };
+
   // The backend owns discovery so this snapshot remains correct even if no
   // agent chat tab is mounted or its live events were missed while inactive.
+  // Opening already marked the load as started.
   useEffect(() => {
     if (!open) return;
-    void loadExtensions();
-  }, [open, loadExtensions]);
+    void fetchExtensions();
+  }, [open, fetchExtensions]);
 
   // Validate name
   const validateName = (value: string): boolean => {

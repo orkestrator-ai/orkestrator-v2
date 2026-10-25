@@ -57,12 +57,14 @@ export function RequestFollowUp({
   const [candidates, setCandidates] = useState<WebAnnotationFollowUpCandidates | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [continuing, setContinuing] = useState(false);
+  // Loading until the candidates for this request (and environment) settle.
+  const candidatesKey = `${environmentId}\0${request.id}`;
+  const [settledKey, setSettledKey] = useState<string | null>(null);
+  const loading = settledKey !== candidatesKey;
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     void webAnnotationCommand(WEB_ANNOTATION_COMMANDS.requestFollowUp, {
       environmentId,
       requestId: request.id,
@@ -76,12 +78,12 @@ export function RequestFollowUp({
         if (!cancelled) setError(describeWebAnnotationError(caught));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setSettledKey(candidatesKey);
       });
     return () => {
       cancelled = true;
     };
-  }, [environmentId, request.id]);
+  }, [candidatesKey, environmentId, request.id]);
 
   const title = (annotationId: string, reference: number) => {
     const summary = cache.summaries.get(annotationId);

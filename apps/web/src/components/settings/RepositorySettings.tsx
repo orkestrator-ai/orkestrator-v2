@@ -104,8 +104,13 @@ export function RepositorySettings({
   const [isSaving, setIsSaving] = useState(false);
 
   // Reset form when project changes or dialog opens
-  useEffect(() => {
-    if (open) {
+  const formResetKey = open
+    ? JSON.stringify([project.id, project.name, project.gitUrl, project.localPath])
+    : null;
+  const [formFor, setFormFor] = useState(formResetKey);
+  if (formFor !== formResetKey) {
+    setFormFor(formResetKey);
+    if (formResetKey !== null) {
       setIsReadingRemote(false);
       // Reset project fields
       setProjectName(project.name);
@@ -114,18 +119,21 @@ export function RepositorySettings({
       setProjectNameError(null);
 
       // Reset repo config fields
-      const config = getRepositoryConfig(project.id) ?? DEFAULT_CONFIG;
-      setDefaultBranch(config.defaultBranch);
-      setPrBaseBranch(config.prBaseBranch);
-      setPortMappings(config.defaultPortMappings ?? []);
-      setFilesToCopy(config.filesToCopy ?? []);
-      setAgentSettings(normalizeAgentSettings(config.agentSettings));
-      setEntryPort(config.entryPort != null ? String(config.entryPort) : "");
+      const repoConfig = getRepositoryConfig(project.id) ?? DEFAULT_CONFIG;
+      setDefaultBranch(repoConfig.defaultBranch);
+      setPrBaseBranch(repoConfig.prBaseBranch);
+      setPortMappings(repoConfig.defaultPortMappings ?? []);
+      setFilesToCopy(repoConfig.filesToCopy ?? []);
+      setAgentSettings(normalizeAgentSettings(repoConfig.agentSettings));
+      setEntryPort(repoConfig.entryPort != null ? String(repoConfig.entryPort) : "");
     }
+  }
+  // A reset (or close) abandons any remote read still in flight.
+  useEffect(() => {
     return () => {
       remoteReadGeneration.current += 1;
     };
-  }, [open, project.id, project.name, project.gitUrl, project.localPath, getRepositoryConfig]);
+  }, [open, project.id, project.name, project.gitUrl, project.localPath]);
 
   // Validate project name
   const validateProjectName = (value: string): boolean => {

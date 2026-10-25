@@ -46,8 +46,8 @@ import { WebAnnotationRequestChip, webAnnotationMarkerFor } from "./WebAnnotatio
 import { RichMessageContext } from "@/lib/chat/rich-identity";
 
 export const NativeMessage = memo(function NativeMessage({
-  message,
-  previousMessage = null,
+  message: rawMessage,
+  previousMessage: rawPreviousMessage = null,
   assistantLabel = "Assistant",
   containerId,
   agentExpansionScope,
@@ -59,13 +59,11 @@ export const NativeMessage = memo(function NativeMessage({
   asyncQuestionResponses = [],
   respondToAsyncQuestion,
 }: NativeMessageProps) {
-  const normalizedMessage = useMemo(() => normalizeNativeMessage(message), [message]);
-  const normalizedPreviousMessage = useMemo(
-    () => (previousMessage ? normalizeNativeMessage(previousMessage) : null),
-    [previousMessage],
+  const message = useMemo(() => normalizeNativeMessage(rawMessage), [rawMessage]);
+  const previousMessage = useMemo(
+    () => (rawPreviousMessage ? normalizeNativeMessage(rawPreviousMessage) : null),
+    [rawPreviousMessage],
   );
-  message = normalizedMessage;
-  previousMessage = normalizedPreviousMessage;
   const toolIdsWithFirstClassImages = useMemo(
     () => firstClassImageToolUseIds(message.parts),
     [message.parts],

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { FolderInput, FolderOpen, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -73,9 +73,11 @@ export function EnvironmentMoveSection({ environment, onUpdate }: EnvironmentMov
   const [error, setError] = useState<string | null>(null);
 
   // A completed move (here or elsewhere) changes the folder the field starts from.
-  useEffect(() => {
+  const [startFolder, setStartFolder] = useState(currentFolder);
+  if (startFolder !== currentFolder) {
+    setStartFolder(currentFolder);
     setDestination(currentFolder);
-  }, [currentFolder]);
+  }
 
   const blockedReason = environmentMoveBlockedReason(environment);
   const trimmed = destination.trim();

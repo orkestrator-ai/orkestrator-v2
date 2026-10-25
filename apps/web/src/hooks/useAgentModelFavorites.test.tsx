@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { invoke } from "@/lib/native/backend";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { mockToastError } from "../../../../tests/mocks/sonner";
@@ -39,7 +40,10 @@ function deferred<T>() {
 function renderHook(): { current: HookValue } {
   const ref = { current: null as unknown as HookValue };
   function Probe() {
-    ref.current = useAgentModelFavorites();
+    const value = useAgentModelFavorites();
+    useLayoutEffect(() => {
+      ref.current = value;
+    });
     return null;
   }
   render(<Probe />);

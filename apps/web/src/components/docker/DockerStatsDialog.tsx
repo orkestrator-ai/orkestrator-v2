@@ -67,6 +67,8 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<DockerSystemStats | null>(null);
+  /** When the shown sample arrived; its age is judged against this. */
+  const [statsReceivedAt, setStatsReceivedAt] = useState(0);
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [showCleanupReview, setShowCleanupReview] = useState(false);
   // Track individual container operations
@@ -91,46 +93,60 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
   const orphanedCount = containers.filter(isUnclaimedContainer).length;
 
   const loading = useRef(false);
-  const loadData = useCallback(async (background = false) => {
-    // A background refresh never overlaps another load or shows a spinner.
+  /** Fetches without a spinner; a refresh never overlaps another load. */
+  const fetchData = useCallback((background: boolean) => {
     if (loading.current) return;
     loading.current = true;
-    if (!background) {
-      setIsLoading(true);
-      setError(null);
-    }
-    try {
-      const [statsData, containersData] = await Promise.all([
-        backend.getDockerSystemStats(),
-        backend.getOrkestratorContainers(),
-      ]);
-      setStats(statsData);
-      setContainers(containersData);
-      if (background) setError(null);
-    } catch (err) {
-      console.error("[DockerStatsDialog] Failed to load data:", err);
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      loading.current = false;
-      if (!background) setIsLoading(false);
-    }
+    void Promise.all([backend.getDockerSystemStats(), backend.getOrkestratorContainers()])
+      .then(([statsData, containersData]) => {
+        setStats(statsData);
+        setStatsReceivedAt(Date.now());
+        setContainers(containersData);
+        if (background) setError(null);
+      })
+      .catch((err: unknown) => {
+        console.error("[DockerStatsDialog] Failed to load data:", err);
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        loading.current = false;
+        // Also ends the spinner shown on opening, which a load already in
+        // flight then (possibly a background one) answers.
+        setIsLoading(false);
+      });
   }, []);
 
-  // Load data when dialog opens, then refresh while it stays open. The
-  // backend shares one sample between callers, so this costs no extra
-  // Docker calls within its interval.
-  useEffect(() => {
+  /** A load the user asked for, shown with a spinner. */
+  const loadData = () => {
+    if (loading.current) return;
+    setIsLoading(true);
+    setError(null);
+    fetchData(false);
+  };
+
+  // Opening shows the spinner until the first load answers; closing resets.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
     if (open) {
-      void loadData();
-      const timer = setInterval(() => void loadData(true), STATS_REFRESH_MS);
-      return () => clearInterval(timer);
+      setIsLoading(true);
+      setError(null);
     } else {
-      // Reset state when closing
       setStats(null);
       setContainers([]);
       setError(null);
     }
-  }, [open, loadData]);
+  }
+
+  // Load data when dialog opens, then refresh while it stays open. The
+  // backend shares one sample between callers, so this costs no extra
+  // Docker calls within its interval. Opening already showed the spinner.
+  useEffect(() => {
+    if (!open) return;
+    fetchData(false);
+    const timer = setInterval(() => fetchData(true), STATS_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [open, fetchData]);
 
   const handleStopContainer = async (containerId: string) => {
     setStoppingContainerId(containerId);
@@ -236,12 +252,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                   <Trash2 className="h-4 w-4 mr-1" />
                   Review cleanup…
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void loadData()}
-                  disabled={isLoading}
-                >
+                <Button variant="ghost" size="sm" onClick={loadData} disabled={isLoading}>
                   <RefreshCw className={`h-4 w-4 mr-1 ${isLoading ? "animate-spin" : ""}`} />
                   Refresh
                 </Button>
@@ -287,7 +298,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
               reports (on Docker Desktop, its virtual machine).
               {stats.sampledAt
                 ? ` Measured ${new Date(stats.sampledAt).toLocaleTimeString()}${
-                    stats.stale || Date.now() - Date.parse(stats.sampledAt) > STATS_STALE_MS
+                    stats.stale || statsReceivedAt - Date.parse(stats.sampledAt) > STATS_STALE_MS
                       ? " (stale — Docker has not answered since)"
                       : ""
                   }.`
@@ -475,7 +486,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
       <DockerCleanupReview
         open={showCleanupReview}
         onOpenChange={setShowCleanupReview}
-        onFinished={() => void loadData()}
+        onFinished={loadData}
       />
 
       {/* Reattach Container Dialog */}

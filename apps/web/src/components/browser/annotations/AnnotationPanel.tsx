@@ -100,6 +100,10 @@ export function AnnotationPanel({
     if (!committed || committed.sequence <= handledCommitRef.current) return;
     handledCommitRef.current = committed.sequence;
     if (!committed.automatic) return;
+    // A save the background resume finished has no event handler to announce
+    // from, and `announce` must clear the live region before setting it so a
+    // repeated message is read again; that pulse cannot happen during render.
+    // oxlint-disable-next-line react/set-state-in-effect
     announce("A note that was waiting for the connection is now saved");
     if (!selectedAnnotationId && !capture.activeCaptureId) selectAnnotation(committed.annotationId);
   }, [announce, capture.activeCaptureId, committed, selectAnnotation, selectedAnnotationId]);

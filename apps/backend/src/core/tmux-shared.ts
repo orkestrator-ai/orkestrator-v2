@@ -11,7 +11,10 @@ import type { JsonRecord } from "./storage.js";
 import { runCommand } from "./shell.js";
 import { TranscriptTaskTracker } from "./claude-transcript-tasks.js";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
-import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
+import {
+  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
+  AGENT_INTERACTION_HOLD_CEILING_MS,
+} from "@orkestrator/protocol/agent-interactions";
 import {
   parseTmuxAgentObservation,
   parseTmuxSelectionPrompt,
@@ -55,6 +58,27 @@ if (
   throw new Error("Agent interaction timeout must be a positive whole number of seconds");
 }
 export const HOOK_TIMEOUT_SECS = Math.trunc(AGENT_INTERACTION_DEFAULT_TIMEOUT_MS / 1_000);
+/** How long a paused prompt waits from the moment it was paused. */
+export const HOOK_HOLD_CEILING_SECS = Math.trunc(AGENT_INTERACTION_HOLD_CEILING_MS / 1_000);
+/**
+ * The `timeout` the blocking hooks are installed with. Claude Code kills a
+ * command hook after its own timeout (600 s when none is set), which would cut
+ * a paused prompt short. Two hold ceilings lets a first pause always run its
+ * full day; later pauses end at the hook's limit, published as such.
+ */
+export const HOOK_COMMAND_TIMEOUT_SECS = 2 * HOOK_HOLD_CEILING_SECS;
+/**
+ * The script stops waiting this long before Claude Code would kill it, so an
+ * expiry is still the deny the script writes rather than a killed hook.
+ */
+export const HOOK_LIMIT_MARGIN_SECS = 60;
+/**
+ * Second argument of a blocking hook's command. Claude Code snapshots its hook
+ * settings when it starts, so the argument proves the running CLI also took the
+ * matching `timeout`: a hook without it (an older install, or a CLI started
+ * before the reinstall) cannot be paused.
+ */
+export const HOOK_HOLD_PROTOCOL = "hold-v1";
 export const COMMAND_IDLE_TIMEOUT_MS = 8_000;
 export const COMMAND_NO_HOOK_SETTLE_MS = 2_000;
 export const COMMAND_AFTER_IDLE_SETTLE_MS = 400;
@@ -622,6 +646,8 @@ export type SessionHookPaths = {
   responseDir: string;
   timeoutDir: string;
   timingDir: string;
+  /** Pause and resume requests the hook script's wait loop consumes. */
+  holdDir: string;
 };
 
 export function parseFreshJsonlFindOutput(

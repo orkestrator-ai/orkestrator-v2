@@ -17,6 +17,7 @@ import {
 import { newSessionState } from "./agent-session.js";
 import { MAX_MESSAGES, workingDirectory } from "./config.js";
 import {
+  cursorInlineMcpServers,
   cursorMcpServers,
   formatMcpContent,
   hostOrkestratorCustomTools,
@@ -1175,4 +1176,22 @@ describe("transcript artifact tool calls", () => {
       expect(part.toolError).toContain(RECORDED_ARTIFACT_ERROR_CODE);
     });
   }
+});
+
+describe("cursorInlineMcpServers", () => {
+  // SDK 1.0.40 loads `.cursor/mcp.json` itself whenever `settingSources`
+  // includes `project` (`includeProjectMcp`), so repeating those servers
+  // inline would start each one twice.
+  const servers = {
+    project: { command: "repo-server" },
+    orkestrator: { type: "http" as const, url: "http://127.0.0.1/mcp" },
+  };
+
+  test("passes only backend-owned servers when the SDK loads project settings", () => {
+    expect(Object.keys(cursorInlineMcpServers(servers, true))).toEqual(["orkestrator"]);
+  });
+
+  test("passes every server when project settings are not loaded", () => {
+    expect(cursorInlineMcpServers(servers, false)).toEqual(servers);
+  });
 });

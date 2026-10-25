@@ -3,14 +3,9 @@ import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts"
 import { describe, expect, test } from "bun:test";
 import {
   AGENT_INTERACTION_LIMITS,
-  INTERACTIVE_AGENT_INTERACTION_POLICY,
   UNATTENDED_AGENT_INTERACTION_POLICY,
 } from "@orkestrator/protocol/agent-interactions";
-import {
-  createNativeAgentProvider,
-  ProviderUnavailableError,
-  type ProviderSessionRegistration,
-} from "./native-agent-provider.js";
+import { createNativeAgentProvider, ProviderUnavailableError } from "./native-agent-provider.js";
 import {
   waitUntil,
   openCodeFake,
@@ -651,81 +646,9 @@ describe("OpenCode provider", () => {
     }
   });
 
-  test("makes a successfully auto-rejected OpenCode question terminal instead of blocked", async () => {
+  test("leaves OpenCode permissions and questions pending for the journaled path", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
-    try {
-      await provider.createSession("build", "Build task");
-      await waitUntil(() => fake.subscriptions.length === 1);
-      fake.subscriptions[0]!.push({
-        type: "question.asked",
-        properties: { id: "owned-q", sessionID: "owned-session" },
-      });
-      await waitUntil(() => fake.questionRejections.length === 1);
-
-      // The reject removed the provider request. Keeping a local `blocked`
-      // marker here would park the pipeline forever on a card nobody can answer.
-      await expect(provider.activityBatch?.(["owned-session"])).resolves.toEqual(
-        new Map([["owned-session", "idle"]]),
-      );
-      await expect(provider.activity?.("owned-session")).resolves.toBe("idle");
-      await expect(provider.status("owned-session")).resolves.toBe("error");
-    } finally {
-      await provider.dispose?.();
-    }
-  });
-
-  test("bounds and disposes terminal OpenCode question latches", async () => {
-    const fake = openCodeFake();
-    const provider = openCodeProvider(fake);
-    const internal = provider as unknown as {
-      failedQuestionSessions: Set<string>;
-      lifecycle: { ownedSessions: Set<string> };
-      handleRequest(raw: unknown): Promise<void>;
-    };
-    for (let index = 0; index < 1_025; index += 1) {
-      const sessionId = `failed-session-${index}`;
-      internal.lifecycle.ownedSessions.add(sessionId);
-      await internal.handleRequest({
-        type: "question.rejected",
-        properties: { sessionID: sessionId },
-      });
-    }
-    expect(internal.failedQuestionSessions.size).toBe(1_024);
-    expect(internal.failedQuestionSessions.has("failed-session-0")).toBe(false);
-    expect(internal.failedQuestionSessions.has("failed-session-1024")).toBe(true);
-
-    await provider.dispose?.();
-    expect(internal.failedQuestionSessions.size).toBe(0);
-  });
-
-  test("records OpenCode auto-responses before applying them and isolates diagnostic failures", async () => {
-    const fake = openCodeFake();
-    const events: Array<{ state: string; kind: string }> = [];
-    let releaseDurableDetection!: () => void;
-    const durableDetection = new Promise<void>((resolve) => {
-      releaseDurableDetection = resolve;
-    });
-    const provider = createNativeAgentProvider(
-      {
-        agent: "opencode",
-        baseUrl: "http://opencode.test",
-        authToken: "test-token",
-        directory: "/workspace",
-      },
-      {
-        openCodeClient: fake.client,
-        monitorRetryMs: 1,
-        autoAnswerRequests: true,
-        onInteractionObservation: async (event) => {
-          events.push({ state: event.state, kind: event.kind });
-          if (event.kind === "permission") throw new Error("diagnostics unavailable");
-          if (event.kind === "question" && event.state === "detected") {
-            await durableDetection;
-          }
-        },
-      },
-    );
     try {
       await provider.createSession("build", "Build task", {
         interaction: {
@@ -743,215 +666,18 @@ describe("OpenCode provider", () => {
         type: "question.asked",
         properties: { id: "question-1", sessionID: "owned-session" },
       });
-      await waitUntil(() =>
-        events.some((event) => event.kind === "question" && event.state === "detected"),
-      );
+      fake.subscriptions[0]!.push({
+        type: "question.rejected",
+        properties: { id: "question-0", sessionID: "owned-session" },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // Even an unattended registration is answered by its owner through
+      // `agentInteractionPolicyAction`, never by the provider's event loop.
+      expect(fake.permissionReplies).toEqual([]);
       expect(fake.questionRejections).toEqual([]);
-      await waitUntil(() => fake.permissionReplies.length === 1);
-      await expect(provider.status("owned-session")).resolves.toBe("blocked");
-      releaseDurableDetection();
-      await waitUntil(() => fake.questionRejections.length === 1);
-      expect(fake.permissionReplies).toHaveLength(1);
-      expect(events).toHaveLength(4);
-      for (const kind of ["permission", "question"] as const) {
-        expect(
-          events.findIndex((event) => event.kind === kind && event.state === "detected"),
-        ).toBeLessThan(
-          events.findIndex((event) => event.kind === kind && event.state === "withdrawn"),
-        );
-      }
-    } finally {
-      await provider.dispose?.();
-    }
-  });
-
-  test("reports a withdrawn OpenCode auto-response as an error provider state", async () => {
-    const fake = openCodeFake();
-    const events: Array<{
-      kind: string;
-      state: string;
-      providerState?: string;
-    }> = [];
-    const provider = createNativeAgentProvider(
-      {
-        agent: "opencode",
-        baseUrl: "http://opencode.test",
-        authToken: "test-token",
-        directory: "/workspace",
-      },
-      {
-        openCodeClient: fake.client,
-        monitorRetryMs: 1,
-        autoAnswerRequests: true,
-        onInteractionObservation: (event) => {
-          events.push({
-            kind: event.kind,
-            state: event.state,
-            providerState: event.providerState,
-          });
-        },
-      },
-    );
-    try {
-      await provider.createSession("build", "Build task");
-      await waitUntil(() => fake.subscriptions.length === 1);
-      fake.subscriptions[0]!.push({
-        type: "permission.asked",
-        properties: { id: "permission-1", sessionID: "owned-session" },
-      });
-      await waitUntil(() => fake.permissionReplies.length === 1);
-      fake.subscriptions[0]!.push({
-        type: "question.asked",
-        properties: { id: "question-1", sessionID: "owned-session" },
-      });
-      await waitUntil(() => fake.questionRejections.length === 1);
-      await waitUntil(() => events.length === 4);
-
-      // `native-agent-service` projects this field straight onto the session
-      // (`event.providerState ?? "running"`). A provider-owned rejection is
-      // terminal, so `running` would leave the card spinning on a request the
-      // provider has already refused and nobody else will answer.
-      expect(events).toEqual([
-        { kind: "permission", state: "detected", providerState: undefined },
-        { kind: "permission", state: "withdrawn", providerState: "error" },
-        { kind: "question", state: "detected", providerState: undefined },
-        { kind: "question", state: "withdrawn", providerState: "error" },
-      ]);
-    } finally {
-      await provider.dispose?.();
-    }
-  });
-
-  test("carries the full workflow registration on every OpenCode observation", async () => {
-    const fake = openCodeFake();
-    const registration: ProviderSessionRegistration = {
-      origin: "build-pipeline",
-      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      phase: "build",
-      workflowId: "pipeline-1",
-      provider: "opencode",
-      fence: "pipeline-1:build:3:abc",
-    };
-    const observed: ProviderSessionRegistration[] = [];
-    const provider = createNativeAgentProvider(
-      {
-        agent: "opencode",
-        baseUrl: "http://opencode.test",
-        authToken: "test-token",
-        directory: "/workspace",
-      },
-      {
-        openCodeClient: fake.client,
-        monitorRetryMs: 1,
-        autoAnswerRequests: true,
-        onInteractionObservation: (event) => {
-          observed.push(event.registration);
-        },
-      },
-    );
-    try {
-      await provider.createSession("build", "Build task", {
-        interaction: registration,
-      });
-      await waitUntil(() => fake.subscriptions.length === 1);
-      fake.subscriptions[0]!.push({
-        type: "permission.asked",
-        properties: { id: "permission-1", sessionID: "owned-session" },
-      });
-      await waitUntil(() => observed.length === 2);
-
-      // The observer decides adoption from the workflow ownership fence, so the
-      // fence and its owning workflow have to survive the round trip alongside
-      // the origin/policy pair.
-      expect(observed).toEqual([registration, registration]);
-    } finally {
-      await provider.dispose?.();
-    }
-  });
-
-  test("keeps the original workflow fence when an OpenCode session is registered again", async () => {
-    const fake = openCodeFake();
-    const original: ProviderSessionRegistration = {
-      origin: "build-pipeline",
-      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      phase: "build",
-      workflowId: "pipeline-1",
-      provider: "opencode",
-      fence: "pipeline-1:build:3:abc",
-    };
-    const observed: ProviderSessionRegistration[] = [];
-    const provider = createNativeAgentProvider(
-      {
-        agent: "opencode",
-        baseUrl: "http://opencode.test",
-        authToken: "test-token",
-        directory: "/workspace",
-      },
-      {
-        openCodeClient: fake.client,
-        monitorRetryMs: 1,
-        autoAnswerRequests: true,
-        onInteractionObservation: (event) => {
-          observed.push(event.registration);
-        },
-      },
-    );
-    try {
-      await waitUntil(() => fake.subscriptions.length === 1);
-      provider.registerSession?.("restored-session", original);
-      // A cached or restored provider re-asserts its metadata on every pass. It
-      // must not move a live session onto a newer generation, and above all not
-      // switch it from unattended to interactive.
-      provider.registerSession?.("restored-session", {
-        origin: "interactive-native",
-        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
-        phase: "chat",
-        workflowId: "pipeline-2",
-        provider: "opencode",
-        fence: "pipeline-2:build:4:def",
-      });
-      fake.subscriptions[0]!.push({
-        type: "permission.asked",
-        properties: { id: "permission-1", sessionID: "restored-session" },
-      });
-      await waitUntil(() => observed.length >= 1);
-
-      expect(observed[0]).toEqual(original);
-    } finally {
-      await provider.dispose?.();
-    }
-  });
-
-  test("leaves an OpenCode question pending when durable detection fails", async () => {
-    const fake = openCodeFake();
-    const provider = createNativeAgentProvider(
-      {
-        agent: "opencode",
-        baseUrl: "http://opencode.test",
-        authToken: "test-token",
-        directory: "/workspace",
-      },
-      {
-        openCodeClient: fake.client,
-        monitorRetryMs: 1,
-        autoAnswerRequests: true,
-        onInteractionObservation: (event) => {
-          if (event.kind === "question" && event.state === "detected") {
-            throw new Error("durable failure write failed");
-          }
-        },
-      },
-    );
-    try {
-      await provider.createSession("build", "Build task");
-      await waitUntil(() => fake.subscriptions.length === 1);
-      fake.subscriptions[0]!.push({
-        type: "question.asked",
-        properties: { id: "question-1", sessionID: "owned-session" },
-      });
-      await waitUntil(() => fake.subscribeCallCount >= 2);
-      expect(fake.questionRejections).toEqual([]);
-      await expect(provider.status("owned-session")).resolves.toBe("blocked");
+      await expect(provider.status("owned-session")).resolves.not.toBe("blocked");
+      await expect(provider.status("owned-session")).resolves.not.toBe("error");
     } finally {
       await provider.dispose?.();
     }
@@ -1075,7 +801,6 @@ describe("OpenCode provider", () => {
           factoryCalls.push(options);
           return fake.client;
         }) as never,
-        autoAnswerRequests: false,
       },
     );
 
@@ -1163,73 +888,6 @@ describe("OpenCode provider", () => {
     }
   });
 
-  test("answers only owned-session events and denies unexpected permissions", async () => {
-    const fake = openCodeFake();
-    const provider = openCodeProvider(fake);
-    try {
-      await provider.createSession("build", "Build task");
-      await waitUntil(() => fake.subscriptions.length === 1);
-      const stream = fake.subscriptions[0]!;
-      stream.push({
-        type: "permission.asked",
-        properties: { id: "unrelated-p", sessionID: "other", always: ["*"] },
-      });
-      stream.push({
-        type: "permission.asked",
-        properties: { id: "owned-p", sessionID: "owned-session", always: ["*"] },
-      });
-      stream.push({
-        type: "question.asked",
-        properties: { id: "unrelated-q", sessionID: "other" },
-      });
-      stream.push({
-        type: "question.asked",
-        properties: { id: "owned-q", sessionID: "owned-session" },
-      });
-
-      await waitUntil(() => fake.questionRejections.length === 1);
-      expect(fake.permissionReplies).toEqual([
-        {
-          requestID: "owned-p",
-          directory: "/workspace",
-          reply: "reject",
-        },
-      ]);
-      expect(fake.questionRejections).toEqual([
-        {
-          requestID: "owned-q",
-          directory: "/workspace",
-        },
-      ]);
-      await expect(provider.status("owned-session")).resolves.toBe("error");
-    } finally {
-      await provider.dispose?.();
-    }
-  });
-
-  test("reconciles pending requests for a restored owned session", async () => {
-    const fake = openCodeFake();
-    fake.setPending(
-      [
-        { id: "owned-p", sessionID: "restored", always: ["*"] },
-        { id: "other-p", sessionID: "other", always: ["*"] },
-      ],
-      [
-        { id: "owned-q", sessionID: "restored" },
-        { id: "other-q", sessionID: "other" },
-      ],
-    );
-    const provider = openCodeProvider(fake);
-    try {
-      provider.registerSession?.("restored");
-      await waitUntil(() => fake.questionRejections.length === 1);
-      expect(fake.permissionReplies.map((call) => call.requestID)).toEqual(["owned-p"]);
-      expect(fake.questionRejections.map((call) => call.requestID)).toEqual(["owned-q"]);
-    } finally {
-      await provider.dispose?.();
-    }
-  });
-
   test.each([["throw"], ["missing-stream"]] as const)(
     "reconnects after an OpenCode subscribe %s failure",
     async (failure) => {
@@ -1244,88 +902,4 @@ describe("OpenCode provider", () => {
       }
     },
   );
-
-  test.each([["permission"], ["question"]] as const)(
-    "recovers after an OpenCode pending %s list failure",
-    async (requestType) => {
-      const fake = openCodeFake();
-      fake.setPending(
-        requestType === "permission" ? [{ id: "pending-request", sessionID: "restored" }] : [],
-        requestType === "question" ? [{ id: "pending-request", sessionID: "restored" }] : [],
-      );
-      fake.setPendingReadResponses(
-        requestType === "permission" ? { error: { message: "failed" } } : null,
-        requestType === "question" ? { error: { message: "failed" } } : null,
-      );
-      const provider = openCodeProvider(fake);
-      try {
-        await waitUntil(() => fake.subscriptions.length === 1);
-        provider.registerSession?.("restored");
-        await waitUntil(() => fake.permissionListCallCount >= 1 && fake.questionListCallCount >= 1);
-
-        fake.setPendingReadResponses(null, null);
-        fake.subscriptions[0]!.close();
-        if (requestType === "permission") {
-          await waitUntil(() => fake.permissionReplies.length === 1);
-        } else {
-          await waitUntil(() => fake.questionRejections.length === 1);
-        }
-        expect(fake.subscriptions.length).toBeGreaterThanOrEqual(2);
-      } finally {
-        await provider.dispose?.();
-      }
-    },
-  );
-
-  test("legacy reconciliation fails closed on malformed and oversized collections, then recovers", async () => {
-    const invalidPermissionResponses: Array<Record<string, unknown>> = [
-      { data: null },
-      {
-        data: Array.from({ length: 4_097 }, (_, index) => ({
-          id: `permission-${index}`,
-          sessionID: "restored",
-        })),
-      },
-    ];
-    for (const invalidPermissions of invalidPermissionResponses) {
-      const fake = openCodeFake();
-      fake.setPending(
-        [
-          {
-            id: "pending-request",
-            sessionID: "restored",
-          },
-        ],
-        [],
-      );
-      fake.setPendingReadResponses(invalidPermissions, { data: [] });
-      const provider = openCodeProvider(fake);
-      try {
-        await waitUntil(() => fake.subscriptions.length === 1);
-        provider.registerSession?.("restored");
-        await waitUntil(() => fake.permissionListCallCount >= 1);
-        expect(fake.permissionReplies).toEqual([]);
-
-        fake.setPendingReadResponses(null, null);
-        fake.subscriptions[0]!.close();
-        await waitUntil(() => fake.permissionReplies.length === 1);
-      } finally {
-        await provider.dispose?.();
-      }
-    }
-  });
-
-  test("legacy reconciliation accepts a maximum-length request identity", async () => {
-    const fake = openCodeFake();
-    const requestId = "x".repeat(AGENT_INTERACTION_LIMITS.maxIdLength);
-    fake.setPending([{ id: requestId, sessionID: "restored" }], []);
-    const provider = openCodeProvider(fake);
-    try {
-      provider.registerSession?.("restored");
-      await waitUntil(() => fake.permissionReplies.length === 1);
-      expect(fake.permissionReplies[0]!.requestID).toBe(requestId);
-    } finally {
-      await provider.dispose?.();
-    }
-  });
 });

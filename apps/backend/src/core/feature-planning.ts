@@ -1298,7 +1298,6 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
         ? await this.localConnection(environment)
         : await this.containerConnection(environment);
     const provider = createBuildPipelineProvider(connection, {
-      autoAnswerRequests: false,
       workflowResults: this.options.workflowResults,
     });
     this.providers.set(environmentId, provider);

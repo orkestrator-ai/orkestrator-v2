@@ -143,27 +143,10 @@ export class BuildPipelineAgents {
       {
         ...this.ctx.options.providerDependencies,
         workflowResults: this.ctx.options.workflowResults,
-        // Milestone 4 resolves every provider through the same journaled backend
-        // path. The OpenCode event-loop compatibility path used to grant an
-        // unexpected permission once and fail questions before the common
-        // monitor could see them; leaving it enabled would violate both rules.
-        autoAnswerRequests: false,
         // Task-snapshot images arrive as base64. Both bridges require a workspace
         // path, so they have to be written into the environment before they can be
         // attached to a prompt.
         stageImages: (images) => stagePromptImages(this.ctx.invoke, environment, images),
-        onInteractionObservation: async (event) => {
-          const enriched = {
-            ...event,
-            environmentId: pipeline.environmentId,
-            provider: agent,
-          };
-          try {
-            await this.ctx.options.onInteractionObservation?.(enriched);
-          } catch {
-            // Passive diagnostics never control workflow behavior.
-          }
-        },
       },
     );
   }

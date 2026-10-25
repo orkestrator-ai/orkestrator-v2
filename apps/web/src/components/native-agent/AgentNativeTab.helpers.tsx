@@ -698,8 +698,22 @@ export function UnassignedNativeAgentComposer({
   // The backend resolves the session's policy from these same environment
   // settings and caps whatever is chosen here, so this list is only the offer.
   const environmentApprovals = environment?.agentSettings?.executionPolicy?.approvals;
+  // Match backend boundary reconciliation: restricting a full-network
+  // container also requires an inner provider sandbox.
+  const launchSandbox =
+    environment?.environmentType === "containerized" &&
+    environment.agentSettings?.executionPolicy?.sandbox !== "provider" &&
+    !(
+      environment.networkAccessMode === "full" &&
+      environment.agentSettings?.executionPolicy?.networkAccess === "restricted"
+    )
+      ? ("container" as const)
+      : undefined;
   const { launchApprovalModes, selectedLaunchApprovalMode } = useMemo(() => {
-    const policy = { approvals: environmentApprovals ?? ("auto-approve" as const) };
+    const policy = {
+      approvals: environmentApprovals ?? ("auto-approve" as const),
+      ...(launchSandbox ? { sandbox: launchSandbox } : {}),
+    };
     return {
       launchApprovalModes: offerApprovalModes ? nativeAgentApprovalModes(platform, policy) : [],
       selectedLaunchApprovalMode: resolveNativeAgentApprovalMode(
@@ -708,7 +722,7 @@ export function UnassignedNativeAgentComposer({
         draft.approvalMode,
       ),
     };
-  }, [draft.approvalMode, environmentApprovals, offerApprovalModes, platform]);
+  }, [draft.approvalMode, environmentApprovals, launchSandbox, offerApprovalModes, platform]);
   // The catalogue's `supportsSpeed` describes the model; the table describes the
   // platform. Both have to allow it, so a catalogue entry cannot reintroduce a
   // toggle the platform has no way to apply.

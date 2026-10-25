@@ -21,6 +21,7 @@ import {
   getPendingHooks,
   getStatus,
   getTranscript,
+  holdHook,
   interruptSession,
   replyHook,
   startSession,
@@ -30,9 +31,11 @@ import {
   switchModel,
   switchPlanMode,
   subscribe,
+  type HookEventKind,
   type TmuxPendingHook,
   type TmuxEvent,
 } from "@/lib/claude-tmux-client";
+import type { AgentInteractionApplyOutcome } from "@orkestrator/protocol/agent-interactions";
 import { buildTmuxPromptWithAttachments } from "@orkestrator/protocol/tmux-prompt";
 import {
   tmuxSelectionPromptFingerprint,
@@ -174,6 +177,7 @@ export function ClaudeTmuxChatTab({
   const addPendingElicitation = useClaudeTmuxStore((s) => s.addPendingElicitation);
   const removePendingElicitation = useClaudeTmuxStore((s) => s.removePendingElicitation);
   const replacePendingHooks = useClaudeTmuxStore((s) => s.replacePendingHooks);
+  const updatePendingPromptTiming = useClaudeTmuxStore((s) => s.updatePendingPromptTiming);
   const pushInfoEvent = useClaudeTmuxStore((s) => s.pushInfoEvent);
   const setTabBusy = useClaudeTmuxStore((s) => s.setBusy);
   const setObservation = useClaudeTmuxStore((s) => s.setObservation);
@@ -592,6 +596,7 @@ export function ClaudeTmuxChatTab({
           const timing = {
             requestedAt: ev.requested_at,
             expiresAt: ev.expires_at,
+            ...(ev.hold ? { hold: ev.hold } : {}),
           };
           // Drive the "Claude is thinking…" indicator from the same hook
           // events Claude Code emits for the agent lifecycle. We rely on
@@ -880,6 +885,29 @@ export function ClaudeTmuxChatTab({
     } catch (e) {
       setError(String(e));
     }
+  };
+
+  // Pause or resume a prompt's countdown in the hook script that enforces it.
+  // The re-emitted hook updates every listener; the outcome updates this one
+  // at once.
+  const handleHold = async (
+    eventKind: HookEventKind,
+    eventId: string,
+    held: boolean,
+  ): Promise<AgentInteractionApplyOutcome> => {
+    const outcome = await holdHook(tabId, eventKind, eventId, held, environmentId);
+    if (outcome.hook) updatePendingPromptTiming(storeKey, eventId, hookTiming(outcome.hook));
+    return {
+      result:
+        outcome.result === "settled"
+          ? "stale"
+          : outcome.result === "unavailable"
+            ? "rejected"
+            : "applied",
+      interactionId: eventId,
+      sessionId: tabState?.sessionId ?? tabId,
+      revision: 0,
+    };
   };
 
   const handleApproval = async (eventId: string, decision: "approve" | "block") => {
@@ -1299,6 +1327,7 @@ export function ClaudeTmuxChatTab({
                       approval={a}
                       onApprove={() => handleApproval(a.eventId, "approve")}
                       onDeny={() => handleApproval(a.eventId, "block")}
+                      onHold={(held) => handleHold("PreToolUse", a.eventId, held)}
                     />
                   ))}
 
@@ -1311,7 +1340,9 @@ export function ClaudeTmuxChatTab({
                         questions: q.questions,
                         toolUseId: q.eventId,
                         expiresAt: q.expiresAt,
+                        ...(q.hold ? { hold: q.hold } : {}),
                       }}
+                      onHold={(held) => handleHold("PreToolUse", q.eventId, held)}
                       onSubmitAnswers={(answers) => handleQuestionAnswer(q, answers)}
                       onDismiss={() => handleQuestionReject(q)}
                       // Cleared by claudeTmuxStore when the question resolves.
@@ -1325,6 +1356,7 @@ export function ClaudeTmuxChatTab({
                       plan={p}
                       sessionKey={storeKey}
                       onRespond={(approved, feedback) => handlePlanResponse(p, approved, feedback)}
+                      onHold={(held) => handleHold("PreToolUse", p.eventId, held)}
                     />
                   ))}
 
@@ -1335,6 +1367,7 @@ export function ClaudeTmuxChatTab({
                       onRespond={(allow, updatedPermissions) =>
                         handlePermissionResponse(p, allow, updatedPermissions)
                       }
+                      onHold={(held) => handleHold("PermissionRequest", p.eventId, held)}
                     />
                   ))}
 
@@ -1344,6 +1377,7 @@ export function ClaudeTmuxChatTab({
                       elicitation={e}
                       sessionKey={storeKey}
                       onRespond={(action, content) => handleElicitationResponse(e, action, content)}
+                      onHold={(held) => handleHold("Elicitation", e.eventId, held)}
                     />
                   ))}
 

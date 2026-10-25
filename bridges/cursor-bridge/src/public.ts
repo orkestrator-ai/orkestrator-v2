@@ -6,14 +6,17 @@
  * here is a field the renderer stops seeing. Nothing Cursor-specific escapes
  * past this boundary.
  */
-import type {
-  BridgePromptDispatchStatus,
-  NativeAgentContextUsage,
-  NativeAgentReadiness,
-  NativeAgentRuntimeSummary,
+import {
+  readOnlyTurnReportedPolicy,
+  type BridgePromptDispatchStatus,
+  type NativeAgentContextUsage,
+  type NativeAgentExecutionPolicy,
+  type NativeAgentReadiness,
+  type NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
 import { PROVIDER } from "./config.js";
+import { cursorAppliedPolicy } from "./execution-policy.js";
 import { contextWindowForModelId, publishedComposer } from "./models.js";
 import { mergeAccountWindows, peekPlanAccountWindows } from "./plan-usage.js";
 import {
@@ -29,6 +32,22 @@ import {
  * published. A client must not read such a session as an ordinary live one:
  * it accepts no new work, and it is about to be gone.
  */
+/**
+ * The policy Agent Info should describe. A `readOnly` session's agent runs
+ * under the read-only coordinator policy (`cursorAppliedPolicy`), so that is
+ * what it reports until a prompt clears `readOnly`; reporting the session's
+ * own would understate the restrictions in force.
+ */
+function reportedPolicy(state: SessionState): NativeAgentExecutionPolicy | undefined {
+  if (state.readOnly) return readOnlyTurnReportedPolicy(cursorAppliedPolicy(state));
+  return state.policy;
+}
+
+function policyField(state: SessionState): { policy: NativeAgentExecutionPolicy } | object {
+  const policy = reportedPolicy(state);
+  return policy ? { policy } : {};
+}
+
 function closingMarker(state: SessionState): { closing: true } | Record<string, never> {
   return state.closed ? { closing: true } : {};
 }
@@ -48,7 +67,7 @@ export function publicSession(state: SessionState): JsonObject {
     revision: state.revision,
     sessionId: state.id,
     composer: publishedComposer(state.composer),
-    ...(state.policy ? { policy: state.policy } : {}),
+    ...policyField(state),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
     ...closingMarker(state),
@@ -69,7 +88,7 @@ export function publicStatus(state: SessionState, readiness?: NativeAgentReadine
     revision: state.revision,
     ...(state.agentId ? { resumableSessionId: state.agentId } : {}),
     composer: publishedComposer(state.composer),
-    ...(state.policy ? { policy: state.policy } : {}),
+    ...policyField(state),
     ...(readiness ? { readiness } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),

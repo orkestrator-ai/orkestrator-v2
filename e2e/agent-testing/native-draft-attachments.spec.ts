@@ -374,3 +374,85 @@ for (const { platform, assigned, text } of CASES) {
     }
   });
 }
+
+test("Docker fixture restricted-network container launch describes provider approvals across reload", async ({
+  page,
+}) => {
+  test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "requires a Docker fixture profile");
+  test.setTimeout(300_000);
+  const status = profileStatus();
+  expect(status.status).toBe("ready");
+  const invoke = await signIn(page, status);
+  const projects = await invoke<Project[]>("get_projects");
+  const fixture = projects.find((project) => project.localPath === status.testProject)!;
+  const environment = await invoke<Environment>("create_environment", {
+    projectId: fixture.id,
+    name: `approval-boundary-${Date.now()}`,
+    networkAccessMode: "full",
+    environmentType: "containerized",
+  });
+  const tabId = "approval-boundary-tab";
+  try {
+    await invoke("update_environment_agent_settings", {
+      environmentId: environment.id,
+      agentSettings: {
+        executionPolicy: { approvals: "ask", sandbox: "container", networkAccess: "restricted" },
+      },
+    });
+    await invoke("start_environment", { environmentId: environment.id });
+    const running = await invoke<Environment & { containerId: string }>("get_environment", {
+      environmentId: environment.id,
+    });
+    const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
+      environmentId: environment.id,
+    });
+    await invoke("save_pane_layout", {
+      environmentId: environment.id,
+      expectedRevision: layout?.revision ?? 0,
+      layout: {
+        version: PANE_LAYOUT_VERSION,
+        containerId: running.containerId,
+        activePaneId: "pane-approvals",
+        root: {
+          kind: "leaf",
+          id: "pane-approvals",
+          tabs: [
+            { id: tabId, type: "agent-native", nativeAgentData: { environmentId: environment.id } },
+          ],
+          activeTabId: tabId,
+        },
+      },
+    });
+    const key = `agent-native:${environment.id}:${encodeURIComponent(`env-${environment.id}:${tabId}`)}`;
+    await invoke("save_compose_draft", {
+      draftKey: key,
+      ownerType: "environment",
+      ownerId: environment.id,
+      value: { text: "", mentions: [], attachments: [], metadata: { platform: "codex" } },
+    });
+    for (const pass of ["initial", "reload"]) {
+      if (pass === "reload") await page.reload();
+      const expand = page.getByRole("button", {
+        name: `Expand project ${fixture.name}`,
+        exact: true,
+      });
+      const entry = page.getByText(environment.name, { exact: true }).first();
+      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+      if (await expand.isVisible()) await expand.click();
+      await entry.click();
+      const picker = page.getByTestId("launch-approval-mode-picker");
+      await expect(picker).toBeVisible();
+      await picker.click();
+      await expect(
+        page.getByRole("menuitemradio", { name: "On request", exact: true }),
+      ).toHaveAttribute("title", "Work in a sandbox; Codex asks before stepping outside it");
+      await page.getByRole("menuitemradio", { name: "On request", exact: true }).press("Escape");
+    }
+  } finally {
+    try {
+      await invoke("stop_environment", { environmentId: environment.id });
+    } finally {
+      await invoke("delete_environment", { environmentId: environment.id });
+    }
+  }
+});

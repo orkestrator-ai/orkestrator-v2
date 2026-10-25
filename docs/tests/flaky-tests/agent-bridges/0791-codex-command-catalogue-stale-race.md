@@ -83,3 +83,19 @@ mise run test:logged -- --name bridge-catalogue-recheck -- bun test --cwd bridge
 Original aggregate evidence: `orkestrator-test-run.T3LqzB/bridges.log`
 (compressed on aggregate completion). The original aggregate remains failed.
 No skips, assertions or timeouts were changed.
+
+
+## Interaction review fixes validation — 2026-10-25
+
+The aggregate `mise run test` on `todo-0001-agent-interactions-db4f03351da7`
+(`db35fb35f` plus the review fixes, Bun 1.4.4) repeated the first-answer
+settling wait timeout at 2111 ms. The complete unchanged owner passed alone in
+1.2 seconds:
+
+```sh
+mise run test:logged -- --name codex-catalogue-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Evidence: private `orkestrator-test-run.urvUKa/bridges.log` in the host temporary
+directory (compressed on aggregate completion). No assertion, skip, deadline or
+catalogue implementation was changed.

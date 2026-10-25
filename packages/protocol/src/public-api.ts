@@ -383,6 +383,14 @@ export const PUBLIC_ACTIONS = {
     milestone: "C",
     summary: "Answer one exact pending interaction at an expected revision.",
   },
+  "session.interaction.hold": {
+    version: 1,
+    mutation: true,
+    effects: ["provider-session"],
+    observation: "receipt",
+    milestone: "C",
+    summary: "Pause or resume one pending interaction's countdown where its deadline is enforced.",
+  },
   "session.transcript": {
     version: 1,
     mutation: false,

@@ -60,6 +60,47 @@ describe("ACP bridge", () => {
     });
   }
 
+  for (const scenario of ["unset", "environment", "user-config"] as const) {
+    test(`launches Grok with its question timeout raised only when nothing sets it (${scenario})`, async () => {
+      const directory = await temporaryDirectory();
+      const spawnFile = resolve(directory, "spawn.jsonl");
+      const grokHome = resolve(directory, "grok-home");
+      await fs.mkdir(grokHome, { recursive: true });
+      await fs.writeFile(resolve(grokHome, "auth.json"), "{}");
+      if (scenario === "user-config") {
+        await fs.writeFile(
+          resolve(grokHome, "config.toml"),
+          "[toolset.ask_user_question]\ntimeout_secs = 240\n",
+        );
+      }
+      const bridge = await spawnBridge({
+        env: {
+          ACP_PROVIDER: "grok",
+          GROK_HOME: grokHome,
+          FAKE_ACP_SPAWN_FILE: spawnFile,
+          GROK_ASK_USER_QUESTION_TIMEOUT_SECS: scenario === "environment" ? "120" : undefined,
+          GROK_ASK_USER_QUESTION_TIMEOUT_ENABLED: undefined,
+        },
+      });
+      const response = await nativeFetch(`${bridge.base}/session/create`, {
+        method: "POST",
+        headers: bridge.headers,
+      });
+      expect(response.status).toBe(201);
+      const launches = (await fs.readFile(spawnFile, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { questionTimeoutSecs?: string });
+      expect(launches.length).toBeGreaterThan(0);
+      for (const launch of launches) {
+        // The user's config.toml is Grok's to apply; the bridge adds nothing.
+        expect(launch.questionTimeoutSecs).toBe(
+          scenario === "unset" ? "86400" : scenario === "environment" ? "120" : undefined,
+        );
+      }
+    });
+  }
+
   for (const acpProvider of ["cursor", "grok"] as const) {
     test(`lists and resumes provider-owned ${acpProvider} sessions`, async () => {
       const directory = await temporaryDirectory();

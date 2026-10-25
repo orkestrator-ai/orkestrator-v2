@@ -381,6 +381,14 @@ caches the user files in `$XDG_CONFIG_HOME/opencode` for the server's
 lifetime (`instance.dispose` and `global.dispose` both keep them), so saves to
 those stay `restart-required`; so do container servers.
 
+**Claude MCP sign-in.** Claude delivers an MCP server's sign-in link through
+the CLI's `onElicitation`, which parks it as an `mcp-url` card in the
+conversation; the sign-in action only reconnects the server so that it asks.
+That needs a live Claude CLI for the session. With none running, the action
+is refused with a message asking the user to send a message first
+(`performSessionMcpAction` in the Claude bridge): a probe CLI has no
+`onElicitation` and would deliver the link to no one.
+
 **OpenCode MCP sign-in.** OpenCode completes an MCP OAuth sign-in only for a
 request that waits for the browser's callback (`mcp.auth.authenticate`, or
 `opencode mcp auth`); `mcp.auth.start` alone leaves its callback server with

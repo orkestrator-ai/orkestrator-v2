@@ -120,7 +120,6 @@ export class OpenCodeObservationStream {
 export async function readOpenCodeActivityBatch(
   sessionIds: readonly string[],
   sources: {
-    blockedSessions: ReadonlySet<string>;
     lifecycle: Pick<OpenCodeSessionLifecycle, "readSessionLifecycle">;
     client: OpencodeClient;
     directory: string | undefined;
@@ -129,16 +128,7 @@ export async function readOpenCodeActivityBatch(
 ): Promise<Map<string, ProviderActivityState>> {
   try {
     const activity = new Map<string, ProviderActivityState>();
-    const sessionIdsToRead = [...new Set(sessionIds)].filter((sessionId) => {
-      if (!sources.blockedSessions.has(sessionId)) return true;
-      // A blocked session asked a question this provider will not answer, so
-      // it is parked on a human. `status()` calls that `error` because a
-      // pipeline must stop advancing on it; for the sidebar the honest
-      // answer is `waiting`. `idle` is the one answer that is certainly
-      // wrong — it retires the indicator on a turn nobody has resolved.
-      activity.set(sessionId, "waiting");
-      return false;
-    });
+    const sessionIdsToRead = [...new Set(sessionIds)];
     if (sessionIdsToRead.length === 0) return activity;
 
     const lifecycle = await sources.lifecycle.readSessionLifecycle(sessionIdsToRead, true);

@@ -51,6 +51,7 @@ export const PUBLIC_ACTION_CLI_COMMANDS: Readonly<Record<PublicActionName, strin
     "session.fork": "orkestrator session fork",
     "session.interactions": "orkestrator session interactions list",
     "session.interaction.resolve": "orkestrator session interactions resolve",
+    "session.interaction.hold": "orkestrator session interactions hold",
     "session.transcript": "orkestrator session transcript",
     "changes.view": "orkestrator changes view",
     "changes.history": "orkestrator changes history",

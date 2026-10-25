@@ -32,79 +32,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 
 describe("OpenCode provider runtime", () => {
-  test.each([["permission"], ["question"]] as const)(
-    "cleans up the answering request id after an OpenCode %s response fails",
-    async (requestType) => {
-      const fake = openCodeFake();
-      const provider = openCodeProvider(fake);
-      try {
-        await provider.createSession("build", "Build task");
-        await waitUntil(() => fake.subscriptions.length === 1);
-        const event = {
-          type: `${requestType}.asked`,
-          properties: { id: "same-request", sessionID: "owned-session" },
-        };
-        if (requestType === "permission") {
-          fake.setPermissionReplyResponse({ error: { message: "failed" } });
-        } else {
-          fake.setQuestionRejectResponse({ error: { message: "failed" } });
-        }
-        fake.subscriptions[0]!.push(event);
-        await waitUntil(
-          () =>
-            (requestType === "permission" ? fake.permissionReplies : fake.questionRejections)
-              .length === 1,
-        );
-
-        if (requestType === "permission") {
-          fake.setPermissionReplyResponse({ data: true });
-        } else {
-          fake.setQuestionRejectResponse({ data: true });
-        }
-        await waitUntil(() => fake.subscriptions.length >= 2);
-        fake.subscriptions[1]!.push(event);
-        await waitUntil(
-          () =>
-            (requestType === "permission" ? fake.permissionReplies : fake.questionRejections)
-              .length === 2,
-        );
-      } finally {
-        await provider.dispose?.();
-      }
-    },
-  );
-
-  test("serializes reconciliation when sessions register concurrently", async () => {
-    const fake = openCodeFake();
-    fake.setPending(
-      [
-        { id: "permission-a", sessionID: "restored-a" },
-        { id: "permission-b", sessionID: "restored-b" },
-      ],
-      [],
-    );
-    const gate = deferred();
-    const provider = openCodeProvider(fake);
-    try {
-      await waitUntil(() => fake.subscriptions.length === 1);
-      fake.setPendingReadGate(gate.promise);
-      provider.registerSession?.("restored-a");
-      await waitUntil(() => fake.permissionListCallCount === 1);
-      provider.registerSession?.("restored-b");
-      gate.resolve();
-
-      await waitUntil(() => fake.permissionListCallCount === 2);
-      expect(fake.questionListCallCount).toBe(2);
-      expect(fake.permissionReplies.map(({ requestID }) => requestID).sort()).toEqual([
-        "permission-a",
-        "permission-b",
-      ]);
-    } finally {
-      await provider.dispose?.();
-    }
-  });
-
-  test("monitors projection events without answering requests when auto-answering is omitted", async () => {
+  test("monitors projection events without answering pending requests", async () => {
     const fake = openCodeFake();
     fake.setPending(
       [{ id: "permission-1", sessionID: "owned-session" }],
@@ -127,35 +55,6 @@ describe("OpenCode provider runtime", () => {
       await waitUntil(() => fake.subscriptions.length === 1);
       expect(fake.permissionReplies).toHaveLength(0);
       expect(fake.questionRejections).toHaveLength(0);
-    } finally {
-      await provider.dispose?.();
-    }
-  });
-
-  test("unblocks an owned OpenCode session when its question is answered elsewhere", async () => {
-    const fake = openCodeFake();
-    const provider = openCodeProvider(fake);
-    try {
-      await provider.createSession("build", "Build task");
-      await waitUntil(() => fake.subscriptions.length === 1);
-      const stream = fake.subscriptions[0]!;
-      stream.push({
-        type: "question.asked",
-        properties: { id: "owned-q", sessionID: "owned-session" },
-      });
-      await waitUntil(() => fake.questionRejections.length === 1);
-      await expect(provider.status("owned-session")).resolves.toBe("error");
-
-      stream.push({
-        type: "question.replied",
-        properties: { id: "owned-q", sessionID: "owned-session" },
-      });
-      stream.push({
-        type: "permission.asked",
-        properties: { id: "after-reply", sessionID: "owned-session" },
-      });
-      await waitUntil(() => fake.permissionReplies.length === 1);
-      await expect(provider.status("owned-session")).resolves.toBe("idle");
     } finally {
       await provider.dispose?.();
     }

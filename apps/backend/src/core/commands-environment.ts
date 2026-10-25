@@ -96,7 +96,6 @@ import {
 import type { Environment, EnvironmentStatus } from "./models.js";
 import type { PtyProcess } from "./pty.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import { completeTerminalHistory, configureTerminalHistory } from "./terminal-history.js";
 import {
   CONTAINER_WORKSPACE_SETUP_COMMAND,
   SETUP_DONE_OSC_SEQUENCE,
@@ -216,7 +215,7 @@ export function spawnTerminalProcess(
       });
     }
     hooks.onExit?.();
-    void completeTerminalHistory(id).catch(() => undefined);
+    void terminals.history.complete(id).catch(() => undefined);
     terminals.cleanupSession(id);
   });
   return terminalProcess;
@@ -538,7 +537,7 @@ export function beginSetupPreparationSession(
   const sessionId = setupTerminalSessionId(environment.id);
   const terminals = context.runtime.terminals;
   terminals.resetOutput(sessionId);
-  configureTerminalHistory({
+  terminals.history.configure({
     sessionId,
     dataDir: context.storage.getDataDir(),
     stableIdentity: `setup\0${environment.id}`,
@@ -646,7 +645,7 @@ export async function spawnSetupTerminal(
     running: true,
     startedAt: existingSession?.startedAt ?? new Date().toISOString(),
   });
-  configureTerminalHistory({
+  terminals.history.configure({
     sessionId,
     dataDir: context.storage.getDataDir(),
     stableIdentity: `setup\0${environment.id}`,

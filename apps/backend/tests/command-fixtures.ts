@@ -1522,7 +1522,6 @@ exit 0
       // cannot spawn `gh` against a fixture worktree later in the run.
       shutdownRuntimes();
       resetLocalServerHooks();
-      commandTesting.resetTerminalHistory();
       await Promise.all(
         tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
       );

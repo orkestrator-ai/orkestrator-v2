@@ -77,10 +77,12 @@ time), when all seven went back to `error`. The usual fixes:
 - In a loader an effect calls, set state only after the request settles; a
   click handler that wants an immediate loading state sets it itself.
 
-Eleven sites (2026-10-25) keep a disable directive for these rules, each with
-its reason above it. Ten are `react/set-state-in-effect` where the state change
-has to happen in the same effect as a side effect (a native cancel, a flush
-before unmount, a tab opened in the parent).
+Thirteen sites (2026-10-25) keep a disable directive for these rules, each
+with its reason above it. Twelve are `react/set-state-in-effect` where the
+state change has to happen in the same effect as a side effect (a native
+cancel, a flush before unmount, a tab opened in the parent) or must follow a
+commit (the design canvas restores its saved view only after the first
+default-view commit has marked the visible frames live).
 
 The `jsx-a11y` plugin is not enabled. Its interaction rules reported 58
 findings that are real accessibility gaps, but fixing them means adding keyboard

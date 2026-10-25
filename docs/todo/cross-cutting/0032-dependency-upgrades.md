@@ -83,10 +83,15 @@ advisories. Everything left waits on an upstream release or a date.
    317 findings in 114 files went to zero (145 `refs`, 112
    `set-state-in-effect`, 27 `immutability`, 18
    `preserve-manual-memoization`, 7 `globals`, 5 `purity`, 3 `use-memo`), and
-   all seven rules are `error` in `.oxlintrc.json`. Nine new
-   `react/set-state-in-effect` directives carry their reason (two existed
-   before). Fix patterns are in
-   [`linting.md`](../../development/linting.md#severity-policy).
+   all seven rules are `error` in `.oxlintrc.json`. Eleven new
+   `react/set-state-in-effect` directives carry their reason (two directives
+   existed before). Fix patterns are in
+   [`linting.md`](../../development/linting.md#severity-policy). The browser
+   suite caught one regression from the first pass: restoring the design
+   canvas's saved view during render stopped small canvases auto-expanding
+   their live frames on narrow layouts
+   (`e2e/DesignCanvasAccessibility.spec.ts`, mobile). The restore went back
+   into its effect; the spec passes on both projects.
 3. **Drop `tsx` from claude-bridge and codex-bridge.** **Done 2026-10-25.**
    Both `dev` scripts are `bun --watch src/index.ts`; both bridges started
    under it and answered `/health` with 401 (auth required) on a spare port.
@@ -169,7 +174,17 @@ None. The update-manifest key question is decided below.
 - Lint burn-down: area tests run by the five fixers (design 312, browser 197,
   terminal and files-panel 515, remaining components 1846, settings/chat/
   native-agent/markdown 2264) all passed, and the full `apps/web` suite passed
-  9,553 / 0. Repository results are in the change's test summary.
+  9,553 / 0.
+- `mise run test`: every group passed except backend, with 11010 pass and five
+  five-second timeouts in files this change does not touch; each owner passed
+  alone. `mise run test:browser`: 673 passed, 7 failed; four specs also fail
+  on the base commit or pass alone, and one was the design-canvas regression
+  above. Both are recorded in flake case
+  [0825](../../tests/flaky-tests/aggregate-validation-runs/0825-dependency-upgrades-0032-validation.md).
+- On Electron 45: `mise run build:electron` passed and
+  `mise run test:agent:electron` passed 31, skipped 1 (Linux-only), failed 0.
+  `package:mac` was not run: it replaces the app in `/Applications` on this
+  shared machine, which the user runs.
 
 ## Assumptions and decisions
 

@@ -14,8 +14,11 @@ model ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)).
 Since 2026-10-25 the suite also has a `status` scenario (a coordinator-launched
 Multi Review's `ready` and `fix-done` wakes, and a delegated worker held on an
 approval) and judges every echoed mail carrier through the renderer's tile
-parser. What is still unproven live is those two checks on each platform,
-Grok on every scenario, Grok mail approvals and the remaining Cursor/Grok
+parser. Both passed live on 2026-10-25 on Claude, Codex, OpenCode and Cursor,
+and on Pi except its Multi Review, which a Pi model-selection gap breaks
+([0172](0172-multi-review-defaults-ignore-pi-saved-model.md)). What is still
+unproven live is Grok on every scenario (signed out on this host), Claude on
+Linux, Pi's review part, Grok mail approvals and the remaining Cursor/Grok
 identity checks below.
 
 ## Current state
@@ -180,12 +183,15 @@ identity checks below.
   tool that can reach the network the agent makes no call and reports
   `unavailable`, "not denied, even though your instructions say network
   access is refused" (`readOnlyScenarioPrompt`; test "the prompt names every
-  probe…"). The suite keeps failing a `denied` without a call. Still owed:
-  four Cursor read-only runs to see whether the line removes the last
-  mislabel (`mise run test:agent:coordinator --credential-source cursor
-  --scenario read-only`, four times on a quiet host). If one still fails,
-  accept the rate as model noise and record it here; the suite keeps failing
-  that run.
+  mutation, the refused target and the canaries"). The suite keeps failing a `denied` without a call. Done
+  (2026-10-25): four Cursor read-only runs with the line
+  (`mise run test:agent:coordinator --credential-source cursor --scenario
+  read-only`, profiles `qa-coordinator-cursor-09737eeb`, `-db5abac0`,
+  `-c66ae943`, `-1cde6867`) all passed: each reported create, edit, shell,
+  commit and network `unavailable` with no call for them, `mcp` `denied` on
+  a refused `launch_job`, read the canary and the ticket, and left the
+  checkout unchanged. With the 2026-10-22 runs that is seven passes in eight,
+  and none since the line.
 
 - **Claude coordinator permission mode.** Resolved (2026-10-22): the code is
   intended and `coordinator.md` was wrong. A deny policy caps the turn's mode
@@ -314,14 +320,88 @@ for prerequisites and how to batch them with other provider runs.
     readiness") or dropped a gateway request (`ECONNRESET`); one backend read
     stalled for about 15 minutes. Run live profiles one at a time on a quiet
     host.
+- **2026-10-25 runs** (macOS, branch
+  `todo-0024-coordinator-live-conformance-4756fe9bd8ee` on `main` at
+  `00a0cb82`, the suite as committed in `38532577`, one disposable profile
+  per run, same pins). The host was busy with other worktrees' test runs
+  (load average about 50) and still started cleanly.
+
+  | Platform | Async | Status: review part | Status: approval part | Mail tiles |
+  | --- | --- | --- | --- | --- |
+  | Claude (macOS) | Passed | Passed | Passed | Passed in `async` (batched), `family`, `status` and `peer` |
+  | OpenCode | Passed | Passed | Passed | Passed in `async` (batched) and `status` |
+  | Cursor | Passed | Passed | Not applicable (never asks) | Passed in `async` (batched) and `status` |
+  | Pi | Passed | Failed: the review's rows resolved to a refused model ([0172](0172-multi-review-defaults-ignore-pi-saved-model.md)) | Passed | Passed in `async` (batched) and `status` |
+  | Codex | Passed on rerun (first try missed `queued-before-mail`, flake [0920](../../tests/flaky-tests/coordinator-and-multi-review/0920-live-coordinator-async-queued-overlap.md)) | Passed | Passed | Passed in `async` (batched, both runs) and `status` |
+  | Grok (`advisory`) | Skipped: `needs-auth` | Skipped (same) | Skipped (same) | Skipped (same) |
+
+  - Claude `status` (run `qa-coordinator-2026-10-25T16-20-48-792Z`, profile
+    `qa-coordinator-claude-533d34fd`, 4.7 minutes, tier `enforced`): the
+    coordinator called `launch_multi_review` once (result `delivery:
+    "async"`), was woken once by `ready` (tone attention, carrier row 4),
+    called `address_multi_review` once in that turn (row 5), was woken once
+    by `fix-done` (tone success, row 7) and wrote its done line; no other
+    review state was notified. In the approval part it called
+    `send_prompt_to_tab` once; the worker's `command-approval` reached the
+    harness and was held; one `waiting` notice (attention) arrived 21 s after
+    the harness first saw the approval and before it was answered; the
+    coordinator acknowledged it without trying to answer, and the worker's
+    own report followed once the harness denied the approval. No `sleep`,
+    `read_messages`, `get_message_status`, `list_environments` or
+    `get_multi_review` call, and nothing else reached the harness. Mail tiles:
+    four carrier rows, four tiles, none raw, none dropped, nothing outside
+    the carriers, every notice tile toned as its notice. Evidence:
+    `output/agent-testing/qa-coordinator-claude-533d34fd/coordinator/claude-status.json`
+    (local, ignored).
+  - Claude `async`, `family` and `peer` with the tile checks (run
+    `qa-coordinator-2026-10-25T16-26-06-861Z`, profile
+    `qa-coordinator-claude-0b14dd1d`, 4.9 minutes): all three passed every
+    earlier check and every tile check. `async`: 3 messages in 2 carrier rows,
+    one of them batched (the reporter's two messages), 3 tiles. `family`: 9
+    messages to the coordinator in 8 rows (one batched: the busy worker's
+    report and reply), 9 tiles. `peer`: 5 carriers and 5 tiles on each side.
+    No row was shown raw, none dropped a carrier, none had text outside its
+    carriers, and every notice tile carried its notice's tone.
+  - OpenCode, Cursor, Pi and Grok `async` and `status` (run
+    `qa-coordinator-2026-10-25T17-01-44-657Z`): OpenCode `status` passed in
+    8.2 minutes (its held interaction was a `permission`, its report came as
+    the finished notice); Cursor `status` passed in 5.0 minutes with the
+    approval part not run; Pi's approval part passed (notice 19 s after the
+    approval was seen) but its Multi Review failed in the preparation turn,
+    so it never reached `ready`. The failed notice was delivered and woke the
+    coordinator once, and its tile was right. Cause: no Pi model is saved in
+    the profile's Orkestrator settings, so the saved-default rows took the
+    first catalogue model, `openai/gpt-4`, which this host's ChatGPT-backed
+    Pi login refuses (OpenAI 400), while Pi tabs start on the host's saved
+    `openai/gpt-6.1-sol`. Filed as
+    [0172](0172-multi-review-defaults-ignore-pi-saved-model.md); the suite
+    was not changed to dodge it. All three `async` runs passed every check,
+    tiles included (3 messages, 2 carrier rows, one batched). Grok was
+    signed out on this host and skipped correctly.
+  - Codex, first try (run `qa-coordinator-2026-10-25T16-31-13-066Z`, under
+    `test:logged`): `async` passed every tile check (batched row included)
+    and every other check but `queued-before-mail`. The queued prompt did run
+    before the report (rows 3 and 4), but the harness never saw the busy
+    turn, the pending report and the queued prompt in one read, so the
+    overlap was not proven. `status` was cut off at 17 minutes, still waiting
+    for the review, by `test:logged`'s 30-minute group deadline, which also
+    cancelled the four platforms after it. Run the suite directly, not under
+    `test:logged`, when a run spans several platforms or a Multi Review.
+  - Codex rerun alone (run `qa-coordinator-2026-10-25T17-24-05-562Z`,
+    profile `qa-coordinator-codex-a5c78758`): `async` passed every check,
+    `queued-before-mail` included; `status` passed both parts in 7.0
+    minutes. Codex asked to escalate for the outside write and was held as a
+    `command-approval`; the `waiting` notice came 21 s after the approval
+    was seen, and the worker reported after the denial.
 - **Worker-mail family scenario**: covered by the `family` columns above.
 - **Re-runs still owed** (medium): ~~Pi~~ (done 2026-10-23: all four
   passed, above);
   Grok, every scenario, once the host Grok is signed in; Claude on Linux,
-  which has never run; Cursor read-only until its `network` label is
-  steady (see Verify); and, on every platform, the new `status` scenario and
-  the mail-tile checks the 2026-10-25 suite adds to `async`, `family` and
-  `peer` (a full run per platform covers both). One command each:
+  which has never run; ~~Cursor read-only until its `network` label is
+  steady~~ (done 2026-10-25, four of four, see Verify); Pi `status` after
+  0172; and, on Codex, OpenCode,
+  Cursor and Pi, `family` and `peer` with the 2026-10-25 tile checks
+  (confirmation; see "Mail tiles per platform"). One command each:
   `mise run test:agent:coordinator --credential-source <platform>`.
 - **Peer scenario** between two ordinary environments with Wake peers turned
   on: done (2026-10-22) on Claude, Codex, OpenCode and Cursor (the `peer`
@@ -340,6 +420,11 @@ for prerequisites and how to batch them with other provider runs.
     server-qualified mail tool is allowed without a person", "a bare name,
     another server, or another Orkestrator tool still asks", "Grok's use_tool
     is matched by the tool it wraps").
+  - The same part under `ask` on the other asking platforms (2026-10-25):
+    Claude, Codex and Pi workers reported by mail after their denial, so
+    their mail tools did not prompt; OpenCode's worker ended its turn without
+    mailing (its finished notice stood in), so OpenCode's mail-tool
+    exemption was not exercised by that run.
   - Still owed: the Grok `status` run once the host Grok is signed in
     (`mise run test:agent:coordinator --credential-source grok --scenario
     status`), and a note of which name form Grok 1.0.52 used, read from the
@@ -373,10 +458,14 @@ for prerequisites and how to batch them with other provider runs.
     build pipeline wakes on its end…", "seven reviews settling together
     arrive as one wake", "work the user started never wakes a
     coordinator").
-  - Still owed: a passing `status` run per qualified platform
-    (`mise run test:agent:coordinator --credential-source <platform>
-    --scenario status`). Live results so far are under "2026-10-25 runs"
-    below.
+  - Live (2026-10-25, "2026-10-25 runs" above): passed on Claude, Codex and
+    OpenCode (both parts) and Cursor (review part; the approval part does
+    not apply). Pi passed the approval part; its review part failed on
+    [0172](0172-multi-review-defaults-ignore-pi-saved-model.md).
+  - Still owed: Pi's review part once 0172 is fixed, or on a host whose
+    first Pi catalogue model the login accepts (`mise run
+    test:agent:coordinator --credential-source pi --scenario status`); Grok,
+    both parts, once the host Grok is signed in.
 - **Mail tiles per platform**: each platform echoes the injected carrier as its
   user row, single and batched, and the coordinator transcript shows one
   collapsed tile per message with no raw carrier text.
@@ -392,11 +481,20 @@ for prerequisites and how to batch them with other provider runs.
     (in `mise run test`).
   - Already shown live, before this check existed: every platform that passed
     `async` (Claude, Codex, OpenCode, Cursor, Pi) echoed both reporter
-    messages in one carrier row containing both ids, and every `family` and
-    `peer` pass found each delivered message in an echoed carrier row. Those
-    runs did not run the renderer's parser, so the tile half is still owed.
-  - Still owed: the tile checks passing on each platform, which any full run
-    of `async`, `family` and `peer` now records.
+    messages in one carrier row containing both ids (batched), and every
+    `family` pass found the busy worker's report and reply in one echoed
+    carrier row (single). `peer` only checked that no user row other than
+    carriers and the startup prompt appeared. None of those runs ran the
+    renderer's parser, so the tile half is still owed.
+  - Live (2026-10-25): every tile check passed on Claude (`async` batched,
+    `family`, `status`, both `peer` sides), and on Codex, OpenCode, Cursor
+    and Pi in `async` (batched) and `status` (single). No platform echoed a
+    carrier the renderer would show raw.
+  - Still owed: Grok on every scenario once signed in. `family` and `peer`
+    tiles have run on Claude only; they use the same echo path as `async`
+    and `status` on each bridge, so a full rerun of the other platforms is
+    confirmation rather than new coverage, and is batched with their next
+    full runs.
 - **Cursor and Grok mailbox identity:**
   - two tabs in one environment each see themselves as `self` in
     `list_mailboxes`;
@@ -725,12 +823,11 @@ Made on 2026-10-25 while adding the `status` scenario and the tile checks.
   coordinators use.
 - **Cursor's network label.** Options: accept the remaining rate as noise, or
   add a network-specific line. Chose the line (cheap, and it keeps the
-  verdict independent of luck); four Cursor runs will show whether it is
-  enough.
-- **Mail-tile evidence already in hand.** Earlier passes of `async`,
-  `family` and `peer` already found each delivered message in an echoed
-  carrier row, including the batched one; they are recorded as the echo
-  half only. The tile half needs a run with the new check.
+  verdict independent of luck); four Cursor runs then all passed.
+- **Mail-tile evidence already in hand.** Earlier passes of `async` and
+  `family` already found batched and single carriers echoed as user rows;
+  they are recorded as the echo half only. The tile half needs a run with the
+  new check.
 
 ## Open questions
 

@@ -1083,6 +1083,12 @@ mise run test:logged -- --name coordinator-live -- \
   mise run test:agent:coordinator --credential-source claude
 ```
 
+`test:logged` stops a command after 30 minutes
+(`ORKESTRATOR_TEST_GROUP_TIMEOUT_MS`), which one Multi Review on a slow
+provider or several platforms in one run exceeds; the cut-off also cancels
+every platform after it. Raise that variable for a long run, or run the suite
+directly.
+
 The `async` case launches two real workers on the fixture project through the
 coordinator and watches the coordinator's turns, its delegations
 (`get_project_coordinator`), every family mailbox and the coordinator's prompt

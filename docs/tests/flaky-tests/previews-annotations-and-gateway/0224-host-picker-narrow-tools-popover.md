@@ -627,6 +627,8 @@ readiness and lifecycle fixes (`fd22bccea`):
 
 - Original command: `mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`,
   credential-free Codex fixture profile `qa-browser-6f2f1c0e-53e`, one worker.
+  Result: 28 passed, 56 opt-in skips, one failed in 582.3 seconds, including
+  startup and cleanup; the profile was removed.
   The narrow case timed out after 15 seconds waiting to click
   `getByRole('button', { name: 'Repository settings', exact: true })` at
   `e2e/agent-testing/browser-gateway.spec.ts:241`.

@@ -102,6 +102,65 @@ egress, root tampering, live edits, published and host-service ports, and
 restarts of either side: exit 0 pass, 1 fail, 2 setup error. The backend does
 not create this topology yet.
 
+## Rootless Linux host (2026-10-25)
+
+The first run on a real rootless Linux daemon, not a nested
+`docker:dind-rootless`:
+- **Host:** Omarchy (Arch), kernel 7.2.8, x86_64.
+- **Daemon:** Docker Engine 29.9.1 rootless, run as a systemd user service
+  (`dockerd-rootless-setuptool.sh`, RootlessKit 3.3.0, slirp4netns 1.3.3,
+  builtin port driver), with the systemd cgroup driver on cgroup v2. The user
+  slice delegates only `cpu memory pids`; `docker info` warns that there is no
+  cpuset or io support.
+- **Image:** `orkestrator-v2:q0021-rootless-amd64`. This is the amd64 review
+  build `orkestrator-v2:review-ede1e368-amd64` with two files from the todo
+  0021 branch (`e6440483`) laid on top: `entrypoint.sh` and
+  `orkestrator-migrate.sh`, the only container scripts that differed from it.
+  Its manifest matches the branch's except `appVersion` (2.29.0-beta). It was
+  streamed into the rootless daemon because the host had 13 GB free.
+- **Command:** each suite as in [Suites](#suites), from a clone of the branch,
+  with `DOCKER_HOST=unix:///run/user/1000/docker.sock`.
+
+| Suite | Result |
+| --- | --- |
+| Live lifecycle (C09, C11, C12, C20) | 5/6. Both C12 volume tests pass. C20 fails: see staged inputs below |
+| Live replacement (C14–C19) | 10/10 |
+| Live data contracts (volume xattrs and capabilities, OpenCode accounts) | 2/2 |
+| Live network (C22, C24, C26) | 3/4. C24 budgets pass with `cpu memory pids` delegated. C22 fails on host-service reachability, below |
+| Live firewall (C23, policy 3 tuples) | 2/2: `ip_set`, `xt_set` and `nf_tables` were loaded on the stock kernel |
+| Live readiness faults | 5/8. The two C09 boots fail on a fixture `/tmp` mount, below; C22 host-service reply below |
+| Live rebuild faults (C15) | 4/5 in the sequence, then 5/5 on a rerun; the failure is a port collision, below |
+
+Volume storage, migration, rebuild, restore, capacity and the fault paths all
+pass on rootless. That qualified `volume-v1` there, and
+`ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` was removed. The rootless gaps
+this run found are tracked in
+[0109-rootless-linux-runtime-gaps.md](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md):
+
+- **Staged inputs are unreadable (C20).** The staged revision is owned by the
+  host user and is owner-only (`0700`/`0600`). Under rootless the host user
+  is container root, so the container's `node` user cannot open
+  `/codex-home`. A minimal reproduction got `Permission denied` even for a
+  `0644` file inside a `0700` directory. A provider's login and
+  configuration silently do not arrive. Nothing leaks.
+- **The agent-tools port is unreachable (C22).** `host.docker.internal`
+  resolves inside RootlessKit's network namespace, which has host loopback
+  disabled by default. The probe was refused (curl exit 7), and
+  `container-host-reachability` reported the path closed (`host=blocked`), so
+  the product says so rather than hanging.
+- **A read-only file bind from a `nosuid,nodev` mount fails.** Docker
+  refuses it with `remount-ro … operation not permitted`. The fixtures staged
+  the GitHub ranges seed under a tmpfs `/tmp` mounted that way; with `TMPDIR`
+  on the home filesystem both C09 tests pass. A data directory on a
+  `nodev`/`nosuid` filesystem, such as a separately mounted `/home`, would
+  fail the same way in production.
+- **An ephemeral published port can collide with a host process (C15).**
+  Rootless dockerd chooses the port inside its namespace and RootlessKit then
+  binds it on the host. The candidate got `127.0.0.1:33169`, which the
+  host's own running Orkestrator Claude bridge held, and the rebuild failed
+  `port-conflict` with the original kept. The rerun drew other ports and
+  passed.
+
 ## Docker Desktop on Apple Silicon (2026-10-23)
 
 The full live set, now six suites, ran on Docker Desktop 4.95.0 (Engine

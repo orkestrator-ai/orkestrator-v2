@@ -92,10 +92,7 @@ export type StorageFormatDecision =
   | { format: "volume-v1" }
   | {
       format: "legacy-layer";
-      reason:
-        | "disabled-by-configuration"
-        | "image-without-storage-contract"
-        | "engine-without-volume-subpath";
+      reason: "image-without-storage-contract" | "engine-without-volume-subpath";
     };
 
 /**
@@ -109,26 +106,17 @@ export function replacementAdmissionPaused(environment: NodeJS.ProcessEnv = proc
 }
 
 /**
- * New runtimes use persistent volumes only when the image implements the
- * storage contract, the daemon supports sub-path mounts, and the rollout
- * switch has not disabled it. Existing legacy runtimes are never migrated here.
- *
- * `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` is the last temporary rollout
- * switch, kept as the only fallback if volume storage fails on a daemon: new
- * runtimes keep the writable layer and preserving rebuilds are refused
- * (`disabled-by-configuration`), so nothing is copied or lost. Its owner and
- * removal criteria are in docs/architecture/container-lifecycle.md ("Rollout
- * switches"). An image or engine without the contract is the compatibility
- * boundary, not a switch, and keeps the writable layer.
+ * New runtimes use persistent volumes whenever the image implements the
+ * storage contract and the daemon supports sub-path mounts. Existing legacy
+ * runtimes are never migrated here. An image or engine without the contract is
+ * the compatibility boundary and keeps the writable layer; there is no switch
+ * that forces it on a capable one (`ORKESTRATOR_CONTAINER_STORAGE=legacy-layer`
+ * was removed once volume storage passed on a rootless Linux host).
  */
 export function selectStorageFormat(
   capabilities: ImageManifest["capabilities"] | null,
   topology: Pick<DockerTopology, "serverVersion" | "kind">,
-  environment: NodeJS.ProcessEnv = process.env,
 ): StorageFormatDecision {
-  if (environment.ORKESTRATOR_CONTAINER_STORAGE === "legacy-layer") {
-    return { format: "legacy-layer", reason: "disabled-by-configuration" };
-  }
   if (!capabilities?.["persistent-workspace"]) {
     return { format: "legacy-layer", reason: "image-without-storage-contract" };
   }

@@ -288,9 +288,8 @@ one.
 ## Persistent storage (`volume-v1`)
 
 A new environment — or one whose legacy runtime was explicitly discarded — gets
-a storage set when the image declares `persistent-workspace`, the daemon is
-Engine 26+ (volume sub-path mounts) and `ORKESTRATOR_CONTAINER_STORAGE` is not
-`legacy-layer`. An existing legacy runtime is never migrated by a start, read,
+a storage set when the image declares `persistent-workspace` and the daemon is
+Engine 26+ (volume sub-path mounts), rootful or rootless. An existing legacy runtime is never migrated by a start, read,
 status refresh or UI mount; that is the explicit preserving rebuild below.
 
 | Volume | Mount | Holds |
@@ -470,13 +469,13 @@ or on an Engine older than 26, keeps the writable layer, host agent-home
 mounts or the shared bridge that image expects. That is one lifecycle engine
 branching on what the image declares, not a second one, and it is not
 retired: an environment leaves it through a preserving rebuild, which always
-uses the current image. Switches read from the backend's environment that
-make a capable image behave like an old one are temporary.
+uses the current image. No switch makes a capable image behave like an old
+one any more.
 
 | Switch | Status | Effect while set | Owner and removal |
 | --- | --- | --- | --- |
 | `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` | Permanent | New rebuilds and migrations refused; recovery unaffected | Container lifecycle. Kept: it only ever refuses new work |
-| `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Temporary | New runtimes keep the writable layer; preserving rebuilds refused (`disabled-by-configuration`), so nothing is copied or lost | Container lifecycle ([0021](../todo/containers-and-environments/0021-container-rebuild-state-preservation.md)). The only fallback if volume storage fails on a daemon; removed once volume storage has passed on a real Linux rootless host ([0019](../todo/containers-and-environments/0019-container-platform-qualification.md)), the last unqualified platform. `scripts/qualify-backend-upgrade-rollback.ts` sets it on the old release only |
+| `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Removed 2026-10-25 | Ignored | It kept new runtimes on the writable layer as a fallback until volume storage passed on every platform; the rootless Linux run on 2026-10-25 was the last ([container qualification](../development/container-qualification.md#rootless-linux-host-2026-10-25)). A backend up to 2.30.0-beta still honours it and reports `disabled-by-configuration`, which the protocol and the rebuild section keep for that reason. `scripts/qualify-backend-upgrade-rollback.ts` sets it on its old release (v2.21.0) |
 | `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)) |
 | `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` | Removed 2026-10-25 | Ignored | It bound whole host agent homes read-only and put the Anthropic key in `docker inspect` |
 | `ORKESTRATOR_NETWORK_POLICY=1` | Removed 2026-10-25 | Ignored; a capable image gets at least policy 2 | It joined the shared bridge, where the legacy firewall allows the whole gateway `/24`, siblings included. Exhausted address pools are fixed by widening Docker's `default-address-pools`, as the error says |
@@ -493,6 +492,42 @@ What still exists in the legacy shapes, and what handles it:
 There is no host-archive export. A runtime's data leaves the legacy shape only
 as a verified copy into a new storage set on the same daemon, which then
 gets recovery copies, verification and ledger deletion like any other.
+
+### Design constraints
+
+These held through the design and should keep holding:
+
+- Always copy into a new storage set, including for a volume rebuild, so
+  candidate setup can never damage the only pre-rebuild copy. The source is
+  stopped, never restarted, to export it.
+- One revision-checked write moves the runtime and storage pointers together
+  and records the retained copies. Never revert automatically after the
+  commit; prefer forward repair.
+- Recovery copies have no age expiry; the cap blocks another rebuild rather
+  than evicting a copy. Named volumes are persistence, not backup.
+- Never mount all of `/home/node` or the host checkout to get persistence, and
+  never symlink a state path: both weaken the credential destination checks.
+  Credentials, configuration, caches and binaries stay in the container layer.
+- SQLite stores are copied only with their writer stopped, with their `-wal`
+  and `-shm` files. Dispatch journals stay beside their session identity, so
+  an ambiguous dispatch survives reconstruction as unknown; resuming never
+  manufactures a new turn.
+- An interrupted copy discards the candidate and a retry recopies from
+  scratch. A resumable copy journal was rejected: it would need partial-state
+  verification across daemon restarts, the riskiest part of the copy path,
+  and no measured workspace makes a recopy costly. Revisit only with one.
+- Keep the identities distinct (`environmentId`, `runtimeGeneration`,
+  `bootId`, `workspaceGeneration`, `storageSetId`, `operationId`, the lifecycle
+  `revision`). Runtime generations only increase.
+- Provider state is classified per path as preserve (needed to resume, rewind
+  or fork, or a bridge map without which the host session id cannot be
+  resolved), accept losing (user-visible, named in the limitation text, makes
+  the provider `partial`) or drop (credentials, configuration, caches, logs,
+  process registries, host-seeded content). A pinned-version test forces a
+  re-trace on every agent bump
+  ([upgrading agents](../development/upgrade-agents.md#re-trace-preserved-provider-state)).
+- Scope: Docker CLI primitives behind a small backend service; no
+  Kubernetes, no Docker SDK rewrite, no per-agent image matrix.
 
 ## Recovery copies
 

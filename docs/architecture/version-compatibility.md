@@ -122,8 +122,10 @@ Not governed by the window (listed so nobody waits on it):
   `ORKESTRATOR_RECURRING_METRICS=0`:
   [0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
 - Container `legacy-layer` storage, `host-mounts` inputs and network policy 1:
-  existing containers' state, retired after a migration path
-  ([0021](../todo/containers-and-environments/0021-container-rebuild-state-preservation.md)).
+  the switches that forced them on a capable image were removed on
+  2026-10-25. An older image or Engine keeps them as its guarded behaviour,
+  decided by the image's persisted capabilities rather than a window
+  ([container lifecycle](container-lifecycle.md#rollout-switches-and-legacy-runtimes)).
 
 ### Downgrade fences
 

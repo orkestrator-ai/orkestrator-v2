@@ -380,8 +380,7 @@ Update the traced version only after doing the steps below.
      (`apps/backend/tests/container-live-replacement.test.ts`).
 
    Never mount a whole provider home, and never symlink a state path; see the
-   constraints in
-   [0021-container-rebuild-state-preservation.md](../todo/containers-and-environments/0021-container-rebuild-state-preservation.md).
+   [design constraints](../architecture/container-lifecycle.md#design-constraints).
 4. Set the provider's entry in `PROVIDER_STATE_TRACED_VERSIONS` to the new
    version and update the "Traced against" line under "Provider state".
 

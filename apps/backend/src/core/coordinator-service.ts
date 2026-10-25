@@ -48,6 +48,16 @@ export function sanitizeCoordinatorError(value: unknown): string {
   return text.slice(0, MAX_STARTUP_ERROR_CHARS) || "Coordinator startup failed";
 }
 
+/** Whether a saved composer draft holds anything a user wrote or attached. */
+function composeDraftHasContent(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const draft = value as Record<string, unknown>;
+  if (typeof draft.text === "string" && draft.text.trim().length > 0) return true;
+  return ["mentions", "attachments", "annotations"].some(
+    (field) => Array.isArray(draft[field]) && (draft[field] as unknown[]).length > 0,
+  );
+}
+
 /** At most this many conversations are open: the main coordinator and its side agents. */
 const MAX_OPEN_COORDINATOR_CONVERSATIONS = 16;
 
@@ -435,7 +445,47 @@ export class CoordinatorService {
     };
   }
 
-  async createConversation(projectId: string, title?: string): Promise<CoordinatorSnapshot> {
+  /**
+   * Whether an open conversation was never used: an unassigned side agent with
+   * no saved draft, no mail and no work. The caller names the candidates (it
+   * knows its own unsaved composer text); this is the backend's half, so a
+   * draft another window saved, or mail the main already sent, keeps it open.
+   */
+  private async unusedConversation(
+    workspace: CoordinatorWorkspace,
+    conversationId: string,
+  ): Promise<boolean> {
+    const item = workspace.conversations.find((entry) => entry.id === conversationId);
+    if (!item || item.closedAt || item.role !== "side" || item.agent || item.providerSessionId) {
+      return false;
+    }
+    const runtimeId = coordinatorRuntimeId(workspace.id, item.id);
+    const drafts = await this.storage.listComposeDrafts("environment", runtimeId);
+    if (drafts.some((draft) => composeDraftHasContent(draft.value))) return false;
+    const mail = await this.storage
+      .getAgentMailMailbox(runtimeId, item.tabId, { limit: 1 })
+      .catch(() => null);
+    if (mail && mail.total > 0) return false;
+    const work = await this.storage.listCoordinatorWorkflowAssociations(workspace.projectId);
+    return !work.some(
+      (association) =>
+        association.coordinatorId === workspace.id && association.conversationId === item.id,
+    );
+  }
+
+  /**
+   * Open a conversation: the main coordinator when none is open, otherwise the
+   * next side agent.
+   *
+   * `closeUnused` names unassigned conversations the caller's composer shows
+   * as empty. Each one the backend agrees was never used is closed in the
+   * same write, so empty composers cannot fill the open-conversation limit.
+   */
+  async createConversation(
+    projectId: string,
+    title?: string,
+    options: { closeUnused?: readonly string[] } = {},
+  ): Promise<CoordinatorSnapshot> {
     if (!(await this.storage.getCoordinatorWorkspace(projectId))) {
       await this.ensure(projectId);
     }
@@ -443,6 +493,10 @@ export class CoordinatorService {
       const projectPath = await this.canonicalProjectPath(projectId);
       const existing = await this.storage.getCoordinatorWorkspace(projectId);
       if (!existing) throw new Error("Coordinator workspace disappeared");
+      const unused = new Set<string>();
+      for (const id of new Set(options.closeUnused ?? [])) {
+        if (await this.unusedConversation(existing, id)) unused.add(id);
+      }
       // Deliberately unassigned. Inheriting the selected conversation's
       // provider is what made a new conversation look locked: the composer had
       // one platform before the user had said anything.
@@ -455,8 +509,16 @@ export class CoordinatorService {
       if (title?.trim() && created.role === "main") created.title = title.trim();
       const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
         if (!current) throw new Error("Coordinator workspace disappeared");
+        const now = new Date().toISOString();
+        // Re-checked against the record being written: a conversation
+        // assigned since the read above is no longer unused.
+        const conversations = current.conversations.map((item) =>
+          unused.has(item.id) && !item.closedAt && !item.agent && item.role === "side"
+            ? { ...item, closedAt: now }
+            : item,
+        );
         if (
-          current.conversations.filter((item) => !item.closedAt).length >=
+          conversations.filter((item) => !item.closedAt).length >=
           MAX_OPEN_COORDINATOR_CONVERSATIONS
         ) {
           throw new Error("Coordinator conversation limit reached");
@@ -466,9 +528,9 @@ export class CoordinatorService {
         }
         return {
           ...current,
-          conversations: retainCoordinatorConversations([...current.conversations, created]),
+          conversations: retainCoordinatorConversations([...conversations, created]),
           selectedConversationId: created.id,
-          updatedAt: new Date().toISOString(),
+          updatedAt: now,
         };
       });
       if (!workspace) throw new Error("Coordinator workspace disappeared");

@@ -5,7 +5,8 @@
  * wake in `coordinator-service.ts`). This module covers everything else a
  * coordinator creates or prompts and then waits on: a Multi Review reaching a
  * state that needs a decision, a build pipeline ending or stopping on an
- * error, a run that stalls, a delegated tab blocked on input or an approval.
+ * error, a run that stalls, a delegated tab blocked on an approval or a
+ * question (named from its pending interactions when they can be read).
  *
  * Ownership is the durable workflow association recorded when the coordinator
  * launched or prompted the resource, never anything the user started. Each
@@ -644,12 +645,60 @@ export function lastAssistantText(messages: unknown): string | undefined {
   return undefined;
 }
 
+/** What a waiting worker is blocked on, read from its pending interactions. */
+export type CoordinatorWaitingBlocker = "approval" | "question" | "approval-and-question";
+
+const APPROVAL_INTERACTION_KINDS: ReadonlySet<string> = new Set([
+  "plan-approval",
+  "command-approval",
+  "file-approval",
+  "permission",
+]);
+const QUESTION_INTERACTION_KINDS: ReadonlySet<string> = new Set([
+  "question",
+  "mcp-form",
+  "mcp-url",
+  "elicitation",
+  "terminal-selection",
+]);
+
+/**
+ * Whether a worker's open interactions are approvals, questions or both.
+ *
+ * Only requests the turn is actually waiting on count: a non-blocking request
+ * does not hold the session at `waiting`, so it cannot be why it is. Undefined
+ * when nothing blocking is open (the activity state then says only "waiting").
+ */
+export function waitingBlocker(interactions: unknown): CoordinatorWaitingBlocker | undefined {
+  if (!Array.isArray(interactions)) return undefined;
+  let approval = false;
+  let question = false;
+  for (const interaction of interactions) {
+    if (!record(interaction) || interaction.blocking === false) continue;
+    if (interaction.state !== "pending" && interaction.state !== "answering") continue;
+    if (typeof interaction.kind !== "string") continue;
+    if (APPROVAL_INTERACTION_KINDS.has(interaction.kind)) approval = true;
+    else if (QUESTION_INTERACTION_KINDS.has(interaction.kind)) question = true;
+  }
+  if (approval && question) return "approval-and-question";
+  if (approval) return "approval";
+  return question ? "question" : undefined;
+}
+
+const WAITING_HEADLINES: Record<CoordinatorWaitingBlocker | "unknown", string> = {
+  approval: "is waiting for an approval",
+  question: "is waiting for an answer to a question",
+  "approval-and-question": "is waiting for an approval and an answer to a question",
+  unknown: "is waiting for input or an approval",
+};
+
 /** A delegated tab that has been waiting long enough to tell its coordinator. */
 export function waitingStatus(
   delegation: Pick<CoordinatorDelegation, "waiting">,
   environmentId: string,
   tabId: string,
   excerpt?: string,
+  blocker?: CoordinatorWaitingBlocker,
 ): CoordinatorStatus | null {
   const since = delegation.waiting?.since;
   if (!since) return null;
@@ -658,9 +707,9 @@ export function waitingStatus(
     state: "waiting",
     tone: "attention",
     terminal: false,
-    headline: "is waiting for input or an approval",
+    headline: WAITING_HEADLINES[blocker ?? "unknown"],
     details: [
-      `Waiting since ${since}. A person has to answer it in the worker's tab; the coordinator cannot approve on its behalf.`,
+      `Waiting since ${since}. A person has to answer it in the worker's tab; the coordinator cannot ${blocker === "question" ? "answer" : "approve"} on its behalf.`,
       ...(excerpt ? [`Last message: ${boundedLine(excerpt)}`] : []),
     ],
     tools: [
@@ -695,6 +744,11 @@ export interface CoordinatorStatusWakeOptions {
   ) => Promise<AgentActivityState | "unknown">;
   /** The worker's last assistant text, best effort; omitted when unavailable. */
   lastAssistantExcerpt?: (environmentId: string, tabId: string) => Promise<string | undefined>;
+  /** What the worker's pending interactions block it on, best effort. */
+  waitingBlocker?: (
+    environmentId: string,
+    tabId: string,
+  ) => Promise<CoordinatorWaitingBlocker | undefined>;
   timers?: CoordinatorStatusWakeTimers;
   coalesceMs?: number;
   waitingDebounceMs?: number;
@@ -1133,6 +1187,13 @@ export class CoordinatorStatusWakes {
       : await this.options
           .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
           .catch(() => undefined);
+    const blocker = remote
+      ? await remote
+          .waitingBlocker?.(association.nodeId!, association.resourceId, delegation.workerTabId)
+          .catch(() => undefined)
+      : await this.options
+          .waitingBlocker?.(association.resourceId, delegation.workerTabId)
+          .catch(() => undefined);
     const nodeName = remote
       ? await remote.nodeName(association.nodeId!).catch(() => association.nodeId!)
       : null;
@@ -1141,6 +1202,7 @@ export class CoordinatorStatusWakes {
       association.resourceId,
       delegation.workerTabId,
       excerpt,
+      blocker,
     );
     const status =
       waiting && nodeName ? statusOnNode(waiting, association.nodeId!, nodeName) : waiting;

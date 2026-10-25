@@ -556,8 +556,9 @@ export class StorageService extends StoragePublicOperations {
    * Serialized read-modify-write of one association's bookkeeping.
    *
    * `mutate` edits the stored record in place and returns whether it changed;
-   * nothing is written otherwise. Status-wake bookkeeping is backend-only, so
-   * this does not announce a coordinator change to clients.
+   * nothing is written otherwise. Most status-wake bookkeeping is backend-only
+   * and is not announced. A waiting episode starting or ending is: the
+   * coordinator panel marks that worker as needing a person.
    */
   async updateCoordinatorWorkflowAssociation(
     associationId: string,
@@ -567,9 +568,13 @@ export class StorageService extends StoragePublicOperations {
       const store = await this.loadCoordinatorStore();
       const association = store.workflows.find((item) => item.id === associationId);
       if (!association) return null;
+      const waitingBefore = association.delegation?.waiting?.since;
       if (!mutate(association)) return association;
       store.revision += 1;
       await this.saveSensitiveJson(this.coordinatorsFile(), store);
+      if (association.delegation?.waiting?.since !== waitingBefore) {
+        this.announce("coordinator", association.projectId, association.projectId);
+      }
       return association;
     });
   }

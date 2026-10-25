@@ -2316,6 +2316,45 @@ describe("AgentNativeTab", () => {
     expect(usePaneLayoutStore.getState().environments.size).toBe(0);
   });
 
+  test("an unassigned coordinator composer hides favourites for platforms it cannot use", async () => {
+    seedUnassignedDefaultCatalog();
+    const favoriteModels: Array<{ platform: AgentPlatform; modelId: string }> = [
+      { platform: "opencode", modelId: "anthropic/opencode-only-model" },
+      { platform: "codex", modelId: "gpt-5.4" },
+      { platform: "claude", modelId: "claude-sonnet-5" },
+    ];
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      favoriteModels,
+      agentSettings: { defaultAgent: "claude" },
+    } as never);
+    useEnvironmentStore.setState({ environments: [] });
+
+    render(
+      <AgentNativeTab
+        tabId="coordinator-tab-favorites"
+        data={{ environmentId: "coordinator:workspace-1:conversation-6", isLocal: true }}
+        isActive
+        executionPolicy="coordinator-read-only"
+        coordinatorProjectId="project-1"
+        onAssignPlatform={async () => undefined}
+        availablePlatforms={["claude", "codex"]}
+      />,
+    );
+
+    fireEvent.pointerDown(await screen.findByTitle(/^Choose /));
+    fireEvent.click(await screen.findByRole("button", { name: "Favorite models" }));
+    // Model rows only; the speed choices are radio items too.
+    const modelRows = () =>
+      screen
+        .getAllByRole("menuitemradio")
+        .map((item) => item.textContent ?? "")
+        .filter((row) => !row.includes("credit rate"));
+    await waitFor(() => expect(modelRows()).toEqual(["GPT-5.4Codex", "Claude SonnetClaude"]));
+    // The hidden favourite is still a favourite.
+    expect(useConfigStore.getState().config.global.favoriteModels).toEqual(favoriteModels);
+  });
+
   test("an unassigned coordinator composer searches the checkout and stages pastes outside it", async () => {
     // Before its first prompt a conversation has no Environment record, so the
     // composer used to have no workspace to search and nowhere to put a pasted

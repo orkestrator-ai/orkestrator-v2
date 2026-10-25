@@ -89,6 +89,21 @@ describe("coordinator command registry", () => {
     },
   );
 
+  test("create_coordinator_conversation passes only string conversation ids to close", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const create = mock(coordinator.createConversation.bind(coordinator));
+    coordinator.createConversation = create;
+    const run = commands.get("create_coordinator_conversation")!;
+    await run({ projectId: project.id }, context);
+    await run({ projectId: project.id, closeUnused: ["side-1", 7, "", null, "side-2"] }, context);
+    await run({ projectId: project.id, closeUnused: "side-1" }, context);
+    expect(create.mock.calls.map((call) => call[2])).toEqual([
+      { closeUnused: [] },
+      { closeUnused: ["side-1", "side-2"] },
+      { closeUnused: [] },
+    ]);
+  });
+
   test("removes a project even when the coordinator store schema is unsupported", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
     await fs.writeFile(

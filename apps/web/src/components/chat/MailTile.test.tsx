@@ -4,6 +4,7 @@ import type { AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
+import { ChatFindActiveContext } from "./chat-find-context";
 import { MailTile, mailTileTone } from "./MailTile";
 
 const LONG_REPORT = Array.from(
@@ -58,6 +59,31 @@ describe("MailTile", () => {
     expect(screen.getByText("10:04")).toBeTruthy();
     // The whole body stays in the document so transcript search can find it.
     expect(body.textContent).toContain("Paragraph 12 of the worker report.");
+  });
+
+  test("opens while transcript find's current match is in its row, then closes again", () => {
+    // Find counts matches in the whole body, but only three lines show while
+    // collapsed: the row holding the current match reveals every tile in it.
+    const { container, rerender } = render(
+      <ChatFindActiveContext value={true}>
+        <MailTile mail={mail()} expansionKey="k" />
+      </ChatFindActiveContext>,
+    );
+    const body = () => container.querySelector<HTMLElement>("[data-mail-body]")!;
+    expect(tile(container).dataset.expanded).toBe("true");
+    expect(body().hasAttribute("data-clamped")).toBe(false);
+    expect(body().hasAttribute("inert")).toBe(false);
+    expect(body().className).not.toContain("max-h-[3.75rem]");
+
+    // The reveal is temporary: moving the match elsewhere restores the
+    // reader's own choice, which find never wrote.
+    rerender(
+      <ChatFindActiveContext value={false}>
+        <MailTile mail={mail()} expansionKey="k" />
+      </ChatFindActiveContext>,
+    );
+    expect(tile(container).dataset.expanded).toBe("false");
+    expect(body().getAttribute("data-clamped")).toBe("true");
   });
 
   test("the header is a real button that controls the body", () => {

@@ -194,6 +194,106 @@ describe("project coordinator", () => {
     expect(mains[0]!.id).not.toBe(main.id);
   });
 
+  test("a new conversation closes the unused empty side agents its caller names", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const initial = await service.ensure(project.id);
+    const workspaceId = initial.workspace.id;
+    const main = initial.workspace.conversations[0]!;
+    const side = async () =>
+      (await service.createConversation(project.id)).workspace.selectedConversationId!;
+    const empty = await side();
+    const drafted = await side();
+    const metadataOnly = await side();
+    const owning = await side();
+    const assigned = await side();
+    const snapshot = (await service.get(project.id))!;
+    const byId = new Map(snapshot.workspace.conversations.map((item) => [item.id, item]));
+    const draftKey = (id: string) =>
+      `agent-native:${coordinatorRuntimeId(workspaceId, id)}:${encodeURIComponent(
+        `${coordinatorRuntimeId(workspaceId, id)}:${byId.get(id)!.tabId}`,
+      )}`;
+    await storage.saveComposeDraft(
+      draftKey(drafted),
+      "environment",
+      coordinatorRuntimeId(workspaceId, drafted),
+      { text: "Half-written plan", mentions: [], attachments: [], annotations: [] },
+    );
+    // A platform picked but nothing written is still an empty composer.
+    await storage.saveComposeDraft(
+      draftKey(metadataOnly),
+      "environment",
+      coordinatorRuntimeId(workspaceId, metadataOnly),
+      {
+        text: "  ",
+        mentions: [],
+        attachments: [],
+        annotations: [],
+        metadata: { platform: "codex" },
+      },
+    );
+    await storage.saveCoordinatorWorkflowAssociation({
+      id: "work-of-owning",
+      projectId: project.id,
+      coordinatorId: workspaceId,
+      conversationId: owning,
+      kind: "environment",
+      resourceId: "env-somewhere",
+      requestId: "request-owning",
+      createdAt: new Date().toISOString(),
+    });
+    await service.assignConversationAgent(project.id, assigned, "claude");
+
+    const created = await service.createConversation(project.id, undefined, {
+      closeUnused: [empty, drafted, metadataOnly, owning, assigned, main.id, "missing"],
+    });
+    const open = new Set(
+      created.workspace.conversations.filter((item) => !item.closedAt).map((item) => item.id),
+    );
+    expect(open.has(empty)).toBe(false);
+    expect(open.has(metadataOnly)).toBe(false);
+    // Text, owned work, an assigned provider and the main coordinator all stay.
+    expect(open.has(drafted)).toBe(true);
+    expect(open.has(owning)).toBe(true);
+    expect(open.has(assigned)).toBe(true);
+    expect(open.has(main.id)).toBe(true);
+    expect(open.has(created.workspace.selectedConversationId!)).toBe(true);
+    // Without names, nothing is closed.
+    const again = await service.createConversation(project.id);
+    expect(again.workspace.conversations.filter((item) => !item.closedAt)).toHaveLength(
+      open.size + 1,
+    );
+  });
+
+  test("closing unused composers makes room at the open-conversation limit", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    await service.ensure(project.id);
+    const sides: string[] = [];
+    for (let index = 0; index < 15; index += 1) {
+      sides.push((await service.createConversation(project.id)).workspace.selectedConversationId!);
+    }
+    await expect(service.createConversation(project.id)).rejects.toThrow(
+      "Coordinator conversation limit reached",
+    );
+    const created = await service.createConversation(project.id, undefined, {
+      closeUnused: sides,
+    });
+    expect(created.workspace.conversations.filter((item) => !item.closedAt)).toHaveLength(2);
+  });
+
   test("ensure and createConversation persist the renderer's canonical session keys", async () => {
     const project = await storage.addProject(
       createProject("https://example.invalid/repo.git", checkout),

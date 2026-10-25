@@ -144,7 +144,9 @@ session-activity and content announcements.
 key with the fastest active demand winning, joining of equivalent in-flight
 reads, a single trailing read per invalidation burst, and `refresh()` that
 always waits for a read started after the call. Automatic reads pause while
-the document is hidden or a transport has declared itself disconnected, and
+the document is hidden or a transport has declared itself disconnected (the
+browser gateway's main stream, or Electron's active connection; see
+`transport-connectivity.ts`), and
 visibility, focus, page-show, online and reconnect signals are coalesced for
 50 ms and reconciled once, critical keys first. Failed reads back off and keep
 the last good value as stale. The coordinator never owns prompt submission,

@@ -152,6 +152,44 @@ async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 1));
 }
 
+/**
+ * Records every requested timer delay and runs the timer almost at once, so a
+ * backoff ladder can be read without waiting it out.
+ */
+function captureTimerDelays(): { values: number[]; restore: () => void } {
+  const values: number[] = [];
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...rest: unknown[]) => {
+    if (typeof timeout === "number") values.push(timeout);
+    return realSetTimeout(handler as () => void, 0, ...(rest as []));
+  }) as unknown as typeof globalThis.setTimeout;
+  return {
+    values,
+    restore: () => {
+      globalThis.setTimeout = realSetTimeout;
+    },
+  };
+}
+
+async function denySubscriptionRepeatedly(
+  socket: MockWebSocket,
+  sessionId: string,
+  attempts: number,
+): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const requestId = subscribeFrame(socket, sessionId).requestId as number;
+    socket.receive(
+      JSON.stringify({
+        type: "error",
+        code: "subscription-denied",
+        message: "Terminal session is unavailable",
+        requestId,
+      }),
+    );
+    await tick();
+  }
+}
+
 describe("TerminalWebSocketClient", () => {
   test("owns one socket, multiplexes channels, acknowledges operations, and reconnects cursors", async () => {
     const { client, sockets, fallback, socketReady, channelReady } = createHarness();
@@ -833,37 +871,90 @@ describe("TerminalWebSocketClient", () => {
   });
 
   test("backs off repeatedly denied subscriptions instead of polling at a fixed interval", async () => {
-    const delays: number[] = [];
-    const realSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...rest: unknown[]) => {
-      if (typeof timeout === "number") delays.push(timeout);
-      return realSetTimeout(handler as () => void, 0, ...(rest as []));
-    }) as unknown as typeof globalThis.setTimeout;
+    const delays = captureTimerDelays();
     try {
       const { client, sockets } = createHarness({
         subscriptionRetryDelayMs: 100,
         maxSubscriptionRetryDelayMs: 800,
+        // The top of the jitter range is the unjittered ladder.
+        reconnectRandom: () => 1,
       });
       client.subscribe("session-a", () => undefined);
       const socket = sockets[0]!;
       openAndReady(socket);
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const requestId = subscribeFrame(socket, "session-a").requestId as number;
-        socket.receive(
-          JSON.stringify({
-            type: "error",
-            code: "subscription-denied",
-            message: "Terminal session is unavailable",
-            requestId,
-          }),
-        );
-        await tick();
-      }
+      await denySubscriptionRepeatedly(socket, "session-a", 5);
       // Each denial costs the backend two command invocations, so a session the
       // server will never accept must not be retried at a constant rate.
-      expect(delays.filter((delay) => delay >= 100)).toEqual([100, 200, 400, 800, 800]);
+      expect(delays.values.filter((delay) => delay > 1)).toEqual([100, 200, 400, 800, 800]);
     } finally {
-      globalThis.setTimeout = realSetTimeout;
+      delays.restore();
+    }
+  });
+
+  test("jitters denied-subscription retries so clients denied together spread out", async () => {
+    const delays = captureTimerDelays();
+    try {
+      const { client, sockets } = createHarness({
+        subscriptionRetryDelayMs: 100,
+        maxSubscriptionRetryDelayMs: 800,
+        reconnectRandom: () => 0,
+      });
+      client.subscribe("session-a", () => undefined);
+      const socket = sockets[0]!;
+      openAndReady(socket);
+      await denySubscriptionRepeatedly(socket, "session-a", 5);
+      // Equal jitter: never below half the step, never above it.
+      expect(delays.values.filter((delay) => delay > 1)).toEqual([50, 100, 200, 400, 400]);
+
+      // An accepted subscription resets that channel's ladder.
+      delays.values.length = 0;
+      acceptSubscription(socket, "session-a", 4);
+      client.observeSnapshotFailure("session-a");
+      await tick();
+      expect(delays.values.filter((delay) => delay > 1)).toEqual([50]);
+    } finally {
+      delays.restore();
+    }
+  });
+
+  test("backs off socket reconnects with jitter and resets only after a healthy connection", async () => {
+    const delays = captureTimerDelays();
+    let now = 0;
+    try {
+      const { client, sockets, fallback } = createHarness({
+        reconnectDelayMs: 100,
+        maxReconnectDelayMs: 800,
+        reconnectHealthyAfterMs: 30_000,
+        reconnectRandom: () => 0.5,
+        reconnectNow: () => now,
+      });
+      client.subscribe("session-a", () => undefined);
+      openAndReady(sockets[0]!);
+      const reconnectDelays = () => delays.values.filter((delay) => delay > 1);
+
+      // A restart that keeps refusing: the ladder climbs, jittered, to its cap.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        sockets.at(-1)!.close(1006, "dropped");
+        await tick();
+      }
+      expect(reconnectDelays()).toEqual([75, 150, 300, 600, 600]);
+      expect(fallback).toHaveBeenCalled();
+
+      // Ready, but dropped before it counted as healthy: still a failure.
+      openAndReady(sockets.at(-1)!);
+      now += 29_999;
+      sockets.at(-1)!.close(1006, "dropped");
+      await tick();
+      expect(reconnectDelays().at(-1)).toBe(600);
+
+      // Ready for the healthy interval: the next loss is a first failure again.
+      openAndReady(sockets.at(-1)!);
+      now += 30_000;
+      sockets.at(-1)!.close(1006, "dropped");
+      await tick();
+      expect(reconnectDelays().at(-1)).toBe(75);
+    } finally {
+      delays.restore();
     }
   });
 

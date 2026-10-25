@@ -16,6 +16,7 @@ import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { parseGitHubPullRequestLink } from "@orkestrator/protocol/github-pull-requests";
 import type { PrState } from "@/types";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
+import type { HydrationStatus } from "@/lib/bounded-hydration";
 
 interface UsePullRequestOptions {
   environmentId: string | null;
@@ -27,6 +28,10 @@ interface UsePullRequestReturn {
   hasMergeConflicts: boolean | null;
   checkSummary: PrCheckSummary | null;
   isDetecting: boolean;
+  /** Freshness of the PR monitor mirror these fields come from. */
+  monitorSyncStatus: HydrationStatus;
+  /** When the backend last checked this PR successfully (ISO), if known. */
+  lastSuccessfulCheckAt: string | null;
   error: string | null;
   /** Open the PR in the default browser */
   /** Opens the PR in the environment's files panel, or on GitHub when `external`. */
@@ -60,6 +65,8 @@ export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePul
   );
   const isDetecting = monitorState?.checkInProgress ?? false;
   const checkSummary = monitorState?.checkSummary ?? null;
+  const monitorSyncStatus = usePrMonitorStore((state) => state.syncStatus);
+  const lastSuccessfulCheckAt = monitorState?.lastSuccessfulCheckAt ?? null;
 
   // View the PR in the files panel, or in the default browser
   const viewPR = useCallback(
@@ -157,6 +164,8 @@ export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePul
     hasMergeConflicts,
     checkSummary,
     isDetecting,
+    monitorSyncStatus,
+    lastSuccessfulCheckAt,
     error,
     viewPR,
     resetPR,

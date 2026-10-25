@@ -353,7 +353,8 @@ None; see "Open questions answered" above.
   [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)
   (container fetch failure-ladder tuning, app-level fetch qualification),
   [0051-client-reconnect-and-freshness.md](../transcripts-and-observation/0051-client-reconnect-and-freshness.md)
-  (`WorktreeSnapshotState.remote` is published but not rendered),
+  (`WorktreeSnapshotState.remote` is rendered on the Files panel's Changes tab;
+  its real-browser check is still owed),
   [0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md)
   (Docker status sampler), [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
   (Linux Engine and rootless hosts).

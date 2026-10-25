@@ -417,10 +417,18 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     if (!dockerAvailable) setDockerStatsOpen(false);
   }, [dockerAvailable]);
 
-  const { prUrl, prState, hasMergeConflicts, checkSummary, viewPR, setModeCreatePending } =
-    usePullRequest({
-      environmentId: selectedEnvironmentId,
-    });
+  const {
+    prUrl,
+    prState,
+    hasMergeConflicts,
+    checkSummary,
+    monitorSyncStatus,
+    lastSuccessfulCheckAt,
+    viewPR,
+    setModeCreatePending,
+  } = usePullRequest({
+    environmentId: selectedEnvironmentId,
+  });
 
   const { deleteEnvironment } = useEnvironments(selectedProjectId, {
     listenForRenameEvents: false,
@@ -2474,6 +2482,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     prState,
     hasMergeConflicts,
     checkSummary,
+    monitorSyncStatus,
+    lastSuccessfulCheckAt,
     viewPR,
     setModeCreatePending,
     deleteEnvironment,

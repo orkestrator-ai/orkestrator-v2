@@ -1003,3 +1003,106 @@ describe("gateway streams waiting out a backoff when the tab or network comes ba
     }
   });
 });
+
+describe("gateway main stream connection state", () => {
+  test("a same-origin stream reports connected, disconnected while the browser retries, and idle when unused", async () => {
+    console.warn = mock(() => undefined);
+    MockEventSource.instances = [];
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const timers = manualTimers();
+    const api = createBrowserGatewayApi({
+      eventReconnectDelayMs: 100,
+      eventReconnectRandom: TOP_OF_RANGE,
+    });
+    const states: string[] = [];
+    const unsubscribeState = api.eventStreamConnection.subscribe((state) => states.push(state));
+    // Observing the state never opens a stream.
+    expect(api.eventStreamConnection.state()).toBe("idle");
+    expect(MockEventSource.instances).toHaveLength(0);
+
+    const stop = api.listen("changed", () => undefined);
+    const main = () => MockEventSource.instances.filter((s) => s.terminalEvents === null).at(-1)!;
+    expect(api.eventStreamConnection.state()).toBe("connecting");
+    main().open();
+    expect(api.eventStreamConnection.state()).toBe("connected");
+
+    // A recoverable error: the browser keeps the socket CONNECTING and retries.
+    main().readyState = EVENT_SOURCE_CONNECTING;
+    main().onerror?.();
+    expect(api.eventStreamConnection.state()).toBe("disconnected");
+    main().open();
+    expect(api.eventStreamConnection.state()).toBe("connected");
+
+    // A fatal error: still disconnected through the backed-off retry...
+    main().fail();
+    expect(api.eventStreamConnection.state()).toBe("disconnected");
+    timers.fire(100);
+    expect(MockEventSource.instances).toHaveLength(2);
+    expect(api.eventStreamConnection.state()).toBe("disconnected");
+    // ...until the retry opens.
+    main().open();
+    expect(api.eventStreamConnection.state()).toBe("connected");
+
+    stop();
+    expect(api.eventStreamConnection.state()).toBe("idle");
+    expect(states).toEqual([
+      "connecting",
+      "connected",
+      "disconnected",
+      "connected",
+      "disconnected",
+      "connected",
+      "idle",
+    ]);
+    unsubscribeState();
+  });
+
+  test("a direct stream reports disconnected across failed retries until one opens", async () => {
+    console.warn = mock(() => undefined);
+    let drop: (() => void) | null = null;
+    let eventRequests = 0;
+    globalThis.fetch = mock(async (input) => {
+      if (!String(input).includes(EVENTS_PATH)) return new Response(null, { status: 404 });
+      eventRequests += 1;
+      if (eventRequests === 1) {
+        const open = openTerminalResponse();
+        drop = open.drop;
+        return open.response;
+      }
+      if (eventRequests === 2) return new Response(null, { status: 503 });
+      return new Response(new ReadableStream({ start() {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const timers = manualTimers();
+    const api = createBrowserGatewayApi({
+      ...DIRECT,
+      eventReconnectDelayMs: 100,
+      eventReconnectRandom: TOP_OF_RANGE,
+    });
+    const stop = api.listen("changed", () => undefined);
+    try {
+      await until(
+        () => api.eventStreamConnection.state() === "connected",
+        "the stream did not connect",
+      );
+      drop!();
+      await until(
+        () => api.eventStreamConnection.state() === "disconnected",
+        "the dropped stream was not reported",
+      );
+      timers.fire(100);
+      await until(
+        () => timers.pendingDelays().includes(200),
+        "the failed retry did not reschedule",
+      );
+      expect(api.eventStreamConnection.state()).toBe("disconnected");
+      timers.fire(200);
+      await until(
+        () => api.eventStreamConnection.state() === "connected",
+        "the retry did not reconnect",
+      );
+    } finally {
+      stop();
+    }
+    expect(api.eventStreamConnection.state()).toBe("idle");
+  });
+});

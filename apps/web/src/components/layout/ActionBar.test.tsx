@@ -6404,6 +6404,54 @@ describe("ActionBar pull request actions", () => {
     expect(screen.queryByRole("status") === null).toBe(true);
   });
 
+  test("marks the View PR action while the monitor mirror is stale, and clears it when current", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    realStoresSnapshot.useEnvironmentStore.setState({
+      environments: [currentEnvironment],
+      isLoading: false,
+      error: null,
+    });
+    usePrMonitorStore.setState({
+      syncStatus: "current",
+      states: new Map([
+        [
+          currentEnvironment.id,
+          {
+            environmentId: currentEnvironment.id,
+            mode: "normal",
+            checkInProgress: false,
+            checkSummary: null,
+            consecutiveErrors: 0,
+            lastCheckAt: null,
+            lastSuccessfulCheckAt: "2026-10-25T10:00:00.000Z",
+            prUrl: currentEnvironment.prUrl,
+            prState: "open",
+            hasMergeConflicts: false,
+          },
+        ],
+      ]),
+    });
+    currentUseRealPullRequest = true;
+    try {
+      render(<ActionBar />);
+      const viewPrButton = screen.getByRole("button", { name: "View PR" });
+      expect(viewPrButton.querySelector("[data-freshness]") === null).toBe(true);
+
+      act(() => usePrMonitorStore.getState().setSyncStatus("stale"));
+      expect(viewPrButton.querySelector('[data-freshness="stale"]')).toBeTruthy();
+      // The icon is visual only: the button's name is unchanged.
+      expect(screen.getByRole("button", { name: "View PR" })).toBe(viewPrButton);
+
+      act(() => usePrMonitorStore.getState().setSyncStatus("degraded"));
+      expect(viewPrButton.querySelector('[data-freshness="degraded"]')).toBeTruthy();
+
+      act(() => usePrMonitorStore.getState().setSyncStatus("current"));
+      expect(viewPrButton.querySelector("[data-freshness]") === null).toBe(true);
+    } finally {
+      usePrMonitorStore.setState({ syncStatus: "idle", states: new Map() });
+    }
+  });
+
   test("does not show a CI indicator before GitHub reports checks", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     currentCheckSummary = { passed: 0, total: 0, pending: 0 };

@@ -1075,6 +1075,28 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
         },
       ],
     },
+    "session.interaction.hold": {
+      capability: "interactions",
+      confirmation: "never",
+      input: schema(
+        {
+          sessionId,
+          interactionId: {
+            type: "string",
+            minLength: 1,
+            maxLength: 512,
+            description: "Interaction ID from session.interactions.",
+          },
+          held: {
+            type: "boolean",
+            description:
+              "true pauses the countdown (until the hold ceiling or the provider's own limit); false resumes it with a fresh window.",
+          },
+        },
+        ["sessionId", "interactionId", "held"],
+      ),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID, interactionId: "interaction-1", held: true }],
+    },
     "session.transcript": {
       capability: "sessions.read",
       confirmation: "never",

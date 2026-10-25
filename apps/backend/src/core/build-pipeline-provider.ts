@@ -29,7 +29,6 @@ export type {
   ProviderCreateSessionOptions,
   ProviderDependencies,
   ProviderExecutionMode,
-  ProviderInteractionObservationEvent,
   ProviderPrepareDispatchOptions,
   ProviderSendOptions,
   ProviderSessionObservation,

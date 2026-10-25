@@ -5,7 +5,8 @@ import {
   type QuestionCardQuestion,
   type SubmitAnswersHandler,
 } from "@/components/chat/QuestionCard";
-import { TMUX_PROMPT_DEADLINE } from "@/components/chat/PromptDeadline";
+import type { PromptHoldHandler } from "@/hooks/usePromptHold";
+import { useTmuxPromptDeadline } from "./tmux-prompt-deadline";
 
 /**
  * Renders a Claude AskUserQuestion request. The caller owns the pending request
@@ -27,6 +28,8 @@ interface ClaudeQuestionCardProps {
    * their store clears on resolution; those without one pass none.
    */
   draftKey?: string;
+  /** Pauses or resumes the countdown, for a request whose `hold` allows it. */
+  onHold?: PromptHoldHandler;
 }
 
 export function ClaudeQuestionCard({
@@ -39,7 +42,9 @@ export function ClaudeQuestionCard({
   onDismiss,
   hideDismiss = false,
   draftKey,
+  onHold,
 }: ClaudeQuestionCardProps) {
+  const { deadline, error: holdError } = useTmuxPromptDeadline(question, onHold);
   const questions = useMemo<QuestionCardQuestion[]>(
     () =>
       question.questions.map((info, questionIndex) => ({
@@ -62,7 +67,7 @@ export function ClaudeQuestionCard({
     [onDismiss],
   );
 
-  return (
+  const card = (
     <QuestionCard
       agentLabel="Claude"
       title="Claude needs your input"
@@ -76,7 +81,16 @@ export function ClaudeQuestionCard({
       hideDismiss={hideDismiss}
       draftKey={draftKey}
       expiresAt={question.expiresAt}
-      deadline={TMUX_PROMPT_DEADLINE}
+      deadline={deadline}
     />
+  );
+  if (!holdError) return card;
+  return (
+    <div>
+      {card}
+      <div role="alert" className="mt-1 px-1 text-xs text-destructive">
+        {holdError}
+      </div>
+    </div>
   );
 }

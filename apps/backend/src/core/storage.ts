@@ -139,11 +139,54 @@ import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protoco
 export class StorageService {
   private readonly context: StorageContext;
   private readonly repos: StorageRepositories;
-  private scheduledJobStoreInstance: ScheduledJobStore | null = null;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
     this.repos = new StorageRepositories(this.context);
+  }
+
+  async init(): Promise<void> {
+    await this.context.open();
+    await this.repos.nativeAgentSessions.recoverExpiredPromptQueueClaims();
+    this.context.startSnapshots();
+    await this.repos.config.migrateConfigSchema();
+    await this.repos.nativeAgentSessions.migrateNativeAgentSessionOwners();
+  }
+
+  /** Closes the database connection. Later calls reopen it. */
+  close(): void {
+    this.context.close();
+  }
+
+  getDataDir(): string {
+    return this.context.dataDir;
+  }
+
+  getLogDirectory(): string {
+    return path.join(this.context.dataDir, "logs");
+  }
+
+  /** Installs the gateway's broadcast sink for committed mutations. */
+  setResourceChangeListener(listener: ResourceChangeListener | null): void {
+    this.context.changes.setResourceChangeListener(listener);
+  }
+
+  /** Subscribe backend services without replacing the gateway's broadcast sink. */
+  addResourceChangeListener(listener: ResourceChangeListener): () => void {
+    return this.context.changes.addResourceChangeListener(listener);
+  }
+
+  /** Publish a provider-authoritative projection after its cache is committed. */
+  announceNativeAgentSessionProjection(
+    environmentId: string,
+    scope?: { agent: string; logicalSessionKey: string },
+  ): void {
+    this.context.changes.announce("native-agent-session", environmentId, undefined, scope);
+  }
+
+  /** Publish a content-free hint after the artifact service commits its store. */
+  announceTranscriptArtifact(conversationKey: string): void {
+    this.context.changes.announce("transcript-artifact", conversationKey);
   }
 
   scheduledJobStore(): ScheduledJobStore {

@@ -87,7 +87,6 @@ describe("createNativeAgentProvider environment wiring", () => {
     const provider = createNativeAgentProvider(connection, {
       openCodeClient: fake.client,
       openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-      autoAnswerRequests: false,
       environment: { environmentId: "env-1", loadConfig: async () => config(["hpc-ai"]) },
     });
     try {
@@ -104,7 +103,6 @@ describe("createNativeAgentProvider environment wiring", () => {
     const provider = createNativeAgentProvider(connection, {
       openCodeClient: fake.client,
       openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-      autoAnswerRequests: false,
       resolveOpenCodeModelProviders: () => ["opencode"],
       environment: { environmentId: "env-1", loadConfig },
     });

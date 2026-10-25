@@ -1,5 +1,6 @@
 import type { ParkedDeadline, SessionState } from "./acp-context.js";
 import { schedulePersist } from "./acp-persist-writer.js";
+import { syncPromptTurnClock } from "./acp-prompt-clock.js";
 
 /** The two families of parked request a user can pause. */
 export type AcpHoldFamily = "approvals" | "interactions";
@@ -18,9 +19,11 @@ const STALE_ERRORS: Record<AcpHoldFamily, string> = {
  * Pause (`held: true`) or resume a parked request's countdown.
  *
  * A hold only moves the deadline: it never answers the request, and expiry
- * still cancels it exactly as before. The ceiling is the turn's prompt
- * deadline and, for a question, Grok's own question timeout (see
- * `parkGrokInteraction`), so `expiresAt` in the answer is the honest end.
+ * still cancels it exactly as before. While any request is held the turn's
+ * `session/prompt` timeout stops (`acp-prompt-clock.ts`), so the ceiling is
+ * the day-long hold ceiling and, for a question, Grok's own question timeout
+ * (see `parkGrokInteraction`); a turn without that clock still caps it at its
+ * deadline. `expiresAt` in the answer is the honest end.
  */
 export function holdParkedRequest(
   state: SessionState,
@@ -46,6 +49,7 @@ export function holdParkedRequest(
     };
   }
   if (result === "applied") {
+    syncPromptTurnClock(state);
     // The published `expiresAt` and `hold` moved; readers key on revision.
     state.revision += 1;
     schedulePersist();

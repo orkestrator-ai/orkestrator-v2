@@ -13,7 +13,12 @@ import type {
   TmuxAgentObservation,
   TmuxSelectionPrompt,
 } from "@orkestrator/protocol/tmux-observation";
-import type { HookEventKind, TranscriptLine, TranscriptContent } from "@/lib/claude-tmux-client";
+import type {
+  HookEventKind,
+  TmuxHookHold,
+  TranscriptLine,
+  TranscriptContent,
+} from "@/lib/claude-tmux-client";
 import type {
   ClaudeEffortLevel,
   ClaudeMessage,
@@ -71,6 +76,8 @@ export interface TmuxPendingApproval {
   receivedAt: string;
   requestedAt?: number;
   expiresAt?: number;
+  /** Pause state of the countdown, published by the backend beside `expiresAt`. */
+  hold?: TmuxHookHold;
 }
 
 /** Structured AskUserQuestion hook awaiting the user's answers. */
@@ -82,6 +89,8 @@ export interface TmuxPendingQuestion {
   receivedAt: string;
   requestedAt?: number;
   expiresAt?: number;
+  /** Pause state of the countdown, published by the backend beside `expiresAt`. */
+  hold?: TmuxHookHold;
 }
 
 /** Structured ExitPlanMode hook awaiting plan approval. */
@@ -95,6 +104,8 @@ export interface TmuxPendingPlan {
   receivedAt: string;
   requestedAt?: number;
   expiresAt?: number;
+  /** Pause state of the countdown, published by the backend beside `expiresAt`. */
+  hold?: TmuxHookHold;
 }
 
 /** PermissionRequest hook awaiting an allow/deny decision. */
@@ -107,6 +118,8 @@ export interface TmuxPendingPermission {
   receivedAt: string;
   requestedAt?: number;
   expiresAt?: number;
+  /** Pause state of the countdown, published by the backend beside `expiresAt`. */
+  hold?: TmuxHookHold;
 }
 
 /** MCP Elicitation hook awaiting form/url response. */
@@ -121,6 +134,8 @@ export interface TmuxPendingElicitation {
   receivedAt: string;
   requestedAt?: number;
   expiresAt?: number;
+  /** Pause state of the countdown, published by the backend beside `expiresAt`. */
+  hold?: TmuxHookHold;
 }
 
 /** An informational hook event (Notification / Stop / etc.). */
@@ -240,6 +255,8 @@ interface ClaudeTmuxState {
   removePendingPermission: (tabId: string, eventId: string) => void;
   addPendingElicitation: (tabId: string, elicitation: TmuxPendingElicitation) => void;
   removePendingElicitation: (tabId: string, eventId: string) => void;
+  /** Applies a moved deadline (a pause or resume) to whichever prompt has this id. */
+  updatePendingPromptTiming: (tabId: string, eventId: string, timing: TmuxPromptTiming) => void;
   replacePendingHooks: (
     tabId: string,
     pending: {
@@ -393,10 +410,8 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
   addPendingApproval: (tabId, approval) =>
     set((state) =>
       patchTab(state, tabId, (s) => {
-        if (s.pendingApprovals.some((a) => a.eventId === approval.eventId)) {
-          return s;
-        }
-        return { ...s, pendingApprovals: [...s.pendingApprovals, approval] };
+        const pendingApprovals = upsertPrompt(s.pendingApprovals, approval);
+        return pendingApprovals === s.pendingApprovals ? s : { ...s, pendingApprovals };
       }),
     ),
 
@@ -410,11 +425,10 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
 
   addPendingQuestion: (tabId, question) =>
     set((state) =>
-      patchTab(state, tabId, (s) =>
-        s.pendingQuestions.some((q) => q.eventId === question.eventId)
-          ? s
-          : { ...s, pendingQuestions: [...s.pendingQuestions, question] },
-      ),
+      patchTab(state, tabId, (s) => {
+        const pendingQuestions = upsertPrompt(s.pendingQuestions, question);
+        return pendingQuestions === s.pendingQuestions ? s : { ...s, pendingQuestions };
+      }),
     ),
 
   removePendingQuestion: (tabId, eventId) => {
@@ -432,11 +446,10 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
 
   addPendingPlan: (tabId, plan) =>
     set((state) =>
-      patchTab(state, tabId, (s) =>
-        s.pendingPlans.some((p) => p.eventId === plan.eventId)
-          ? s
-          : { ...s, pendingPlans: [...s.pendingPlans, plan] },
-      ),
+      patchTab(state, tabId, (s) => {
+        const pendingPlans = upsertPrompt(s.pendingPlans, plan);
+        return pendingPlans === s.pendingPlans ? s : { ...s, pendingPlans };
+      }),
     ),
 
   removePendingPlan: (tabId, eventId) => {
@@ -453,11 +466,10 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
 
   addPendingPermission: (tabId, permission) =>
     set((state) =>
-      patchTab(state, tabId, (s) =>
-        s.pendingPermissions.some((p) => p.eventId === permission.eventId)
-          ? s
-          : { ...s, pendingPermissions: [...s.pendingPermissions, permission] },
-      ),
+      patchTab(state, tabId, (s) => {
+        const pendingPermissions = upsertPrompt(s.pendingPermissions, permission);
+        return pendingPermissions === s.pendingPermissions ? s : { ...s, pendingPermissions };
+      }),
     ),
 
   removePendingPermission: (tabId, eventId) =>
@@ -470,11 +482,10 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
 
   addPendingElicitation: (tabId, elicitation) =>
     set((state) =>
-      patchTab(state, tabId, (s) =>
-        s.pendingElicitations.some((e) => e.eventId === elicitation.eventId)
-          ? s
-          : { ...s, pendingElicitations: [...s.pendingElicitations, elicitation] },
-      ),
+      patchTab(state, tabId, (s) => {
+        const pendingElicitations = upsertPrompt(s.pendingElicitations, elicitation);
+        return pendingElicitations === s.pendingElicitations ? s : { ...s, pendingElicitations };
+      }),
     ),
 
   removePendingElicitation: (tabId, eventId) => {
@@ -488,6 +499,31 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     const stateKey = resolveStateKey(get().tabs, tabId);
     usePromptDraftStore.getState().clearDraft(tmuxElicitationDraftKey(stateKey, eventId));
   },
+
+  updatePendingPromptTiming: (tabId, eventId, timing) =>
+    set((state) =>
+      patchTab(state, tabId, (s) => {
+        const update = <T extends { eventId: string } & TmuxPromptTiming>(list: T[]): T[] => {
+          const current = list.find((item) => item.eventId === eventId);
+          return current ? upsertPrompt(list, { ...current, ...timing, hold: timing.hold }) : list;
+        };
+        const next = {
+          ...s,
+          pendingApprovals: update(s.pendingApprovals),
+          pendingQuestions: update(s.pendingQuestions),
+          pendingPlans: update(s.pendingPlans),
+          pendingPermissions: update(s.pendingPermissions),
+          pendingElicitations: update(s.pendingElicitations),
+        };
+        return next.pendingApprovals === s.pendingApprovals &&
+          next.pendingQuestions === s.pendingQuestions &&
+          next.pendingPlans === s.pendingPlans &&
+          next.pendingPermissions === s.pendingPermissions &&
+          next.pendingElicitations === s.pendingElicitations
+          ? s
+          : next;
+      }),
+    ),
 
   replacePendingHooks: (tabId, pending) => {
     // This is the authoritative rehydration path: a prompt missing from the
@@ -1057,21 +1093,49 @@ function stableHash(line: TranscriptLine): string {
   return `h${(h >>> 0).toString(36)}`;
 }
 
-function promptTimingFields(timing: { requestedAt?: number; expiresAt?: number }): {
+/** A blocking hook's deadline and its pause state, as the backend publishes them. */
+export interface TmuxPromptTiming {
   requestedAt?: number;
   expiresAt?: number;
-} {
+  hold?: TmuxHookHold;
+}
+
+function promptTimingFields(timing: TmuxPromptTiming): TmuxPromptTiming {
   return {
     ...(timing.requestedAt !== undefined ? { requestedAt: timing.requestedAt } : {}),
     ...(timing.expiresAt !== undefined ? { expiresAt: timing.expiresAt } : {}),
+    ...(timing.hold !== undefined ? { hold: timing.hold } : {}),
   };
+}
+
+/**
+ * Adds a pending prompt, or, when it is already shown, takes the deadline and
+ * pause state of the newer delivery: a pause or resume re-emits the same hook
+ * with a moved deadline. Everything else about the prompt stays as it was.
+ */
+function upsertPrompt<T extends { eventId: string } & TmuxPromptTiming>(list: T[], prompt: T): T[] {
+  const index = list.findIndex((item) => item.eventId === prompt.eventId);
+  if (index < 0) return [...list, prompt];
+  const current = list[index]!;
+  if (
+    prompt.expiresAt === undefined ||
+    (current.expiresAt === prompt.expiresAt &&
+      JSON.stringify(current.hold) === JSON.stringify(prompt.hold))
+  ) {
+    return list;
+  }
+  const updated: T = { ...current, ...promptTimingFields(prompt) };
+  if (prompt.hold === undefined) delete updated.hold;
+  const next = [...list];
+  next[index] = updated;
+  return next;
 }
 
 /** Build a `TmuxPendingApproval` from a hook payload. */
 export function payloadToApproval(
   eventId: string,
   payload: unknown,
-  timing: { requestedAt?: number; expiresAt?: number } = {},
+  timing: TmuxPromptTiming = {},
 ): TmuxPendingApproval {
   const p = (payload ?? {}) as Record<string, unknown>;
   const toolName =
@@ -1095,7 +1159,7 @@ export function payloadToApproval(
 export function payloadToQuestion(
   eventId: string,
   payload: unknown,
-  timing: { requestedAt?: number; expiresAt?: number } = {},
+  timing: TmuxPromptTiming = {},
 ): TmuxPendingQuestion {
   const p = (payload ?? {}) as Record<string, unknown>;
   const toolInput = payloadToolInput(p);
@@ -1115,7 +1179,7 @@ export function payloadToQuestion(
 export function payloadToPlan(
   eventId: string,
   payload: unknown,
-  timing: { requestedAt?: number; expiresAt?: number } = {},
+  timing: TmuxPromptTiming = {},
 ): TmuxPendingPlan {
   const p = (payload ?? {}) as Record<string, unknown>;
   const toolInput = payloadToolInput(p);
@@ -1139,7 +1203,7 @@ export function payloadToPlan(
 export function payloadToPermission(
   eventId: string,
   payload: unknown,
-  timing: { requestedAt?: number; expiresAt?: number } = {},
+  timing: TmuxPromptTiming = {},
 ): TmuxPendingPermission {
   const p = (payload ?? {}) as Record<string, unknown>;
   return {
@@ -1160,7 +1224,7 @@ export function payloadToPermission(
 export function payloadToElicitation(
   eventId: string,
   payload: unknown,
-  timing: { requestedAt?: number; expiresAt?: number } = {},
+  timing: TmuxPromptTiming = {},
 ): TmuxPendingElicitation {
   const p = (payload ?? {}) as Record<string, unknown>;
   const requestedSchema = p.requested_schema ?? p.requestedSchema;

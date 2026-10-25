@@ -51,6 +51,7 @@ import {
   getStatus,
   getTaskList,
   getTranscript,
+  holdHook,
   interruptSession,
   listPreviousSessions,
   replyHook,
@@ -303,6 +304,18 @@ describe("claude-tmux-client invoke wrappers", () => {
       eventId: "evt",
       decision: "block",
       reason: "no",
+    });
+  });
+
+  test("holdHook forwards the pause request", async () => {
+    await holdHook("tab-1", "PreToolUse", "evt", true, "env-1");
+    expect(calls[0]!.cmd).toBe("claude_tmux_hold_hook");
+    expect(calls[0]!.args).toEqual({
+      tabId: "tab-1",
+      environmentId: "env-1",
+      eventKind: "PreToolUse",
+      eventId: "evt",
+      held: true,
     });
   });
 

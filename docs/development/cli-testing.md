@@ -198,6 +198,10 @@ ork session interactions resolve "$SESSION" "$INTERACTION" \
 ork run wait "$RUN"
 ```
 
+`ork session interactions hold "$SESSION" "$INTERACTION"` pauses a countdown
+(`--resume` restarts it); the listing shows the moved deadline and whether it
+is paused.
+
 To test that the UI answers a question the CLI started, wait with
 `--continue-on-interaction` and answer it in the browser.
 

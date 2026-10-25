@@ -1,8 +1,5 @@
 import { useState } from "react";
-import type {
-  AgentInteractionApplyOutcome,
-  AgentInteractionHold,
-} from "@orkestrator/protocol/agent-interactions";
+import type { AgentInteractionApplyOutcome } from "@orkestrator/protocol/agent-interactions";
 
 export type PromptHoldHandler = (held: boolean) => Promise<AgentInteractionApplyOutcome>;
 
@@ -14,7 +11,10 @@ export type PromptHoldHandler = (held: boolean) => Promise<AgentInteractionApply
  * call returns, and why it failed if it did. A request that went away
  * meanwhile (`stale`) is not an error: its card is about to disappear.
  */
-export function usePromptHold(hold: AgentInteractionHold | undefined, onHold?: PromptHoldHandler) {
+export function usePromptHold(
+  hold: { available: boolean; heldAt?: number } | undefined,
+  onHold?: PromptHoldHandler,
+) {
   const [requested, setRequested] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const serverHeld = hold?.heldAt !== undefined;

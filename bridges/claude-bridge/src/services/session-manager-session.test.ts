@@ -102,6 +102,14 @@ describe("idle MCP catalogue", () => {
     await performSessionMcpAction(session.id, "docs", "reconnect");
     await expectControlOnlyPrompt(await nextQueryCall());
     expect(reconnect).toHaveBeenCalledWith("docs");
+
+    // A sign-in link arrives only through a live CLI's `onElicitation`; a
+    // probe would send it nowhere, so the action is refused instead.
+    reconnect.mockClear();
+    await expect(performSessionMcpAction(session.id, "docs", "sign-in")).rejects.toThrow(
+      "only while this session's Claude is running",
+    );
+    expect(reconnect).not.toHaveBeenCalled();
   });
 });
 

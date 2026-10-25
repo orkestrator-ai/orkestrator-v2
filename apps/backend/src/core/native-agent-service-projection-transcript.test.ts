@@ -20,11 +20,7 @@ import {
   SUCCESSFUL_PUBLISH_CONTRACT,
   publishArtifactCallContract,
 } from "@orkestrator/protocol/testing/artifact-tool-fixtures";
-import {
-  createProviderStub,
-  waitForCondition,
-  withService,
-} from "./native-agent-service-projection-test-support.js";
+import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { nativeAgentSessionResumeIdentity } from "./models.js";
 import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
 import { adaptAppServerItem } from "../../../../bridges/codex-bridge/src/app-server/item-adapter.js";
@@ -446,11 +442,11 @@ describe("NativeAgentService transcript projection", () => {
           return session ? nativeAgentSessionResumeIdentity(session) : undefined;
         };
         await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
-        await waitForCondition(async () => (await recorded()) === "thread-observed");
+        expect(await recorded()).toBe("thread-observed");
         // A full projection reports it too, and a newer thread replaces the old one.
         thread = "thread-later";
         await service.getProjection(identity);
-        await waitForCondition(async () => (await recorded()) === "thread-later");
+        expect(await recorded()).toBe("thread-later");
       },
     );
   });

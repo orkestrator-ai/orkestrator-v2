@@ -203,3 +203,11 @@ The aggregate timed out at 5017.45 ms (root/support: 3381 passed, two failed). I
 - **Evidence:** `orkestrator-test-run.fqu9cJ/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirms recurrence; no implementation, assertion, deadline or skip changed. The original aggregate remains non-green.
 - **Final root counts:** 3,381 passed, one failed and one between-test error across 161 files (255.86 s).
+
+## Design resume identity review — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name resume-repository -- mise run test`; standard workspace/root/bridge/protocol worker reservations 4/1/2/1, with other checkout suites sharing host capacity.
+- **Failure:** `reports an isolated checkout and only fixes named legacy Turbo artifacts` exceeded the five-second deadline (5016.66 ms), with null subprocess status and one error between tests. Root/support: 3429 passed, one failed, one error across 3430 tests in 164 files (466.72 s execution; 520.9 s including capacity wait).
+- **Complete unchanged owner:** `mise run test:logged -- --name resume-disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed (exit 0, 2.3 s).
+- **Evidence:** `orkestrator-test-run.gciHk4/root-and-agent-support-tests.log.gz` under the host temporary directory after aggregate finalization; outer run `orkestrator-test-run.aqhArP/`.
+- **Assessment:** known intermittent recurrence under shared host load; no disk-report code, assertion, timeout or skip changed. The aggregate failure remains reported.

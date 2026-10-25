@@ -226,6 +226,22 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
             const turnsBefore = userTurns(await projection(designTabId));
             expect(turnsBefore).toBeGreaterThan(0);
 
+            // Exercise a real bridge restart before tab teardown. Current
+            // bridges can restore their live registrations from disk; either
+            // way the subsequent close and resume must retain the conversation.
+            if (provider === "codex") {
+              const before = await invoke<{ pid: number | null }>("get_local_codex_server_status", {
+                environmentId: target.id,
+              });
+              expect(before.pid).toBeGreaterThan(0);
+              await invoke("stop_local_codex_server_cmd", { environmentId: target.id });
+              const restarted = await invoke<{ pid: number }>("start_local_codex_server_cmd", {
+                environmentId: target.id,
+              });
+              expect(restarted.pid).toBeGreaterThan(0);
+              expect(restarted.pid).not.toBe(before.pid);
+            }
+
             // -- 2. Close the conversation's tab ----------------------------
             await page
               .getByRole("button", { name: new RegExp(`^Close ${label} \\d+`) })
@@ -237,7 +253,12 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
                 message: "closing the tab never recorded its session",
               })
               .not.toBe("");
-            expect(await agentTabs()).toHaveLength(0);
+            await expect
+              .poll(async () => (await agentTabs()).length, {
+                timeout: 30_000,
+                message: "the closed conversation tab remained in the shared layout",
+              })
+              .toBe(0);
 
             // -- 3. Both clients open Ask agent and press Resume together ---
             const resumeButtons = [];
@@ -270,7 +291,17 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
             // Content-free timing, relative to the first request: the two
             // requests overlapped when the later one started before the first
             // one was answered.
+            await Promise.all(responses.map((response) => response.finished()));
             const timings = responses.map((response) => response.request().timing());
+            for (const timing of timings) {
+              expect(timing.responseEnd, "the resume response did not finish").toBeGreaterThan(0);
+            }
+            expect(
+              Math.max(...timings.map((timing) => timing.startTime)),
+              "the resume requests were serialized; this run did not exercise concurrency",
+            ).toBeLessThan(
+              Math.min(...timings.map((timing) => timing.startTime + timing.responseEnd)),
+            );
             const origin = Math.min(...timings.map((timing) => timing.startTime));
             timings.forEach((timing, index) =>
               console.log(

@@ -73,6 +73,21 @@ describe("native agent session resume identity", () => {
     });
   });
 
+  test("normalizes padded identities once and leaves repeated observations untouched", async () => {
+    await withStorage(async (first) => {
+      await first.adoptNativeAgentSession({ ...input, providerSessionId: "bridge-1" });
+      expect(
+        await first.recordNativeAgentSessionResumeIdentity(input.key, "bridge-1", " thread-1 "),
+      ).toBe(true);
+      const saved = await first.getNativeAgentSession(input.key);
+      expect(saved?.resumeIdentity?.resumableSessionId).toBe("thread-1");
+      expect(
+        await first.recordNativeAgentSessionResumeIdentity(input.key, "bridge-1", " thread-1 "),
+      ).toBe(false);
+      expect(await first.getNativeAgentSession(input.key)).toEqual(saved);
+    });
+  });
+
   test("never lands on a mapping that has moved to another session, or on none", async () => {
     await withStorage(async (first) => {
       expect(

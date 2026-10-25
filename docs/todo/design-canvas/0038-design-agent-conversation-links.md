@@ -146,6 +146,28 @@ Every earlier step (launch, stale Ask agent, approval, handoff) also passed
 for both providers, so the handoff's design context now arriving as a chip in
 the unassigned composer did not regress it.
 
+### Concurrency review follow-up (2026-10-25)
+
+Identity captures now complete before a successful state/projection read
+returns. Full and progressive snapshot reads and their captures share a bounded
+per-session lane; supplementary metadata never delays the capture. Teardown
+reads the mapping after queued session mutations, and storage normalizes the
+identity before comparison and persistence. Controlled regressions cover a
+capture held behind a mutation lease during teardown, a full projection delayed
+behind metadata after a newer progressive thread, ordered in-flight reads, and
+missing snapshots carrying an unverified identity. Repeated padded identities
+are verified to leave the record unchanged.
+
+The live companion spec now requires overlapping request intervals and verifies
+a new Codex bridge process before close/resume. On disposable fixture profile
+`qa-design-resume-races`, both providers passed (78.7 seconds, two passed, zero
+skipped), using `claude-haiku-4-5` and the account's `gpt-6.1-sol`. Claude requests
+started together and finished at +36/+37 ms; Codex requests started at +0/+1 ms
+and finished at +2259/+2260 ms. Both clients converged on one tab and session,
+with unchanged user turns and no prompt sent. Current Codex bridges can restore
+registrations across a restart; the deterministic tests separately cover a
+bridge that has lost the live session. The profile was stopped and reset.
+
 ## Remaining work
 
 What was left of items 1, 3 and 5, narrowed; nothing here is new scope.
@@ -317,8 +339,8 @@ cons.
     - Pros: the link stays resumable whenever any client read the session's
       state while it was open; no extra bridge contact; content-free and
       backend-only (no event is announced). Cons: one storage write per
-      session (and per thread change) from a read path, fire-and-forget like
-      the inferred-composer write beside it; a session never read while open
+      session (and per thread change) from a read path, awaited under the
+      session mutation lease; a session never read while open
       (no client mounted it) still has nothing to fall back to.
 12. **Proving two-client Resume live.**
     - Options: (a) add the step to `design-live.spec.ts`; (b) a short

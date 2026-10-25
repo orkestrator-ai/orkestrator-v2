@@ -943,7 +943,10 @@ for two clients resuming one design conversation at once
 `ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS`, default `claude`). It launches a
 design workspace with a one-word brief, closes the conversation's tab, then has
 two separately signed-in browser contexts press **Resume conversation**
-together. Both `design_session_resume` answers must name the same
+together. The requests must overlap in flight; a serialized run fails. For
+Codex, the bridge is restarted (with a verified new process) before the tab
+closes, so the close/resume lifecycle is exercised across a bridge restart.
+Both `design_session_resume` answers must name the same
 `design-resume-…` tab and live session, the shared layout must hold that one
 tab, and the transcript must keep its user turns:
 

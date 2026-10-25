@@ -324,7 +324,7 @@ export function registerTeardownCommands(
       async () => {
         // Re-read under the lock: a concurrent teardown of this tab may already
         // have retired the mapping, or rebound it to another provider session.
-        const current = await context.storage.getNativeAgentSession(storageKey);
+        const current = await context.storage.getNativeAgentSessionAfterMutations(storageKey);
         if (current?.providerSessionId !== providerSessionId) return;
         // A session another tab shares, or a Multi Review owns, only loses this
         // tab's mapping. Of two tabs closed together, the second one under the

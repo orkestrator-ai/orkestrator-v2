@@ -112,7 +112,8 @@ import {
   normalizeNativeAgentSelectionPricing,
   resolveNativeAgentApprovalMode,
 } from "@orkestrator/protocol/native-agent";
-import { nativeAgentSessionResumeIdentity, sessionIncompleteTurnNotice } from "./models.js";
+import { sessionIncompleteTurnNotice } from "./models.js";
+import { NativeAgentResumeIdentityObserver } from "./native-agent-resume-identity.js";
 import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import { randomUUID } from "node:crypto";
 import { legacyCompatibilityCounts } from "./change-tracking/legacy-payload.js";
@@ -881,12 +882,14 @@ export class NativeAgentTranscriptProjection {
    */
   private detailRegistrations: ProjectionDetailRegistration[] | undefined;
 
+  private readonly resumeIdentity: NativeAgentResumeIdentityObserver;
   private readonly storage: StorageService;
   private readonly options: NativeAgentServiceOptions;
   private readonly catalogs: NativeAgentCatalogCache;
 
   constructor(private readonly host: NativeAgentTranscriptProjectionHost) {
     this.storage = host.storage;
+    this.resumeIdentity = new NativeAgentResumeIdentityObserver(this.storage);
     this.options = host.options;
     this.catalogs = host.catalogs;
     this.displayTailScheduler = new NativeAgentDisplayTailScheduler({
@@ -1918,24 +1921,6 @@ export class NativeAgentTranscriptProjection {
     });
     this.progressiveTrailing.set(key, trailing);
     return trailing;
-  }
-
-  /**
-   * Keep the resume identity a provider reports for an open session, so tab
-   * teardown can still name the conversation if the session is gone by the
-   * time the tab closes (a Codex thread id dies with its bridge session).
-   * Best effort and written only when it changes.
-   */
-  private observeResumeIdentity(
-    session: PersistedNativeAgentSession,
-    snapshot: { status?: unknown; resumableSessionId?: unknown },
-  ): void {
-    if (snapshot.status === "missing" || typeof snapshot.resumableSessionId !== "string") return;
-    const resumable = snapshot.resumableSessionId.trim();
-    if (!resumable || nativeAgentSessionResumeIdentity(session) === resumable) return;
-    void this.storage
-      .recordNativeAgentSessionResumeIdentity(session.key, session.providerSessionId, resumable)
-      .catch(() => undefined);
   }
 
   private sharedInteractiveSnapshot(
@@ -3187,15 +3172,17 @@ export class NativeAgentTranscriptProjection {
     const advertisedCapabilities = nativeCapabilities(input.agent);
     timer?.sourceStarted();
     const sourceReads = Promise.all([
-      resolved.provider.sessionStateSnapshot
-        ? resolved.provider.sessionStateSnapshot(resolved.session.providerSessionId)
-        : resolved.provider.interactiveSnapshot
-          ? this.sharedInteractiveSnapshot(
-              input,
-              resolved.provider,
-              resolved.session.providerSessionId,
-            )
-          : readProviderStatus(resolved.provider, resolved.session.providerSessionId),
+      this.resumeIdentity.read(resolved.session, () =>
+        resolved.provider.sessionStateSnapshot
+          ? resolved.provider.sessionStateSnapshot(resolved.session.providerSessionId)
+          : resolved.provider.interactiveSnapshot
+            ? this.sharedInteractiveSnapshot(
+                input,
+                resolved.provider,
+                resolved.session.providerSessionId,
+              )
+            : readProviderStatus(resolved.provider, resolved.session.providerSessionId),
+      ),
       resolved.provider.interactions
         ? resolved.provider.interactions.listPendingInteractions(resolved.session.providerSessionId)
         : Promise.resolve({ requests: [], revision: 0 }),
@@ -3213,7 +3200,6 @@ export class NativeAgentTranscriptProjection {
       timer?.sourceEnded(),
     );
     if (snapshot.status === "missing") return null;
-    this.observeResumeIdentity(resolved.session, snapshot);
     const commandRevision = (snapshot as ProviderSessionStateSnapshot).commandCatalogueRevision;
     if (commandRevision !== undefined) {
       this.catalogs.observeCommandRevision(
@@ -4824,16 +4810,20 @@ export class NativeAgentTranscriptProjection {
       // These reads describe independent parts of one projection. Keeping
       // them serial made a transcript wait for every approval, queue and slash
       // command round trip in turn, even though none produces message text.
-      const snapshotPromise: Promise<ProviderInteractiveSnapshot> = resolved.provider
-        .interactiveSnapshot
-        ? resolved.provider.interactiveSnapshot(resolved.session.providerSessionId)
-        : (async () => ({
-            // A terminal turn error belongs in the projection as `error` plus
-            // its detail, not as a thrown read that would report the whole
-            // runtime as unreachable.
-            ...(await readProviderStatus(resolved.provider, resolved.session.providerSessionId)),
-            messages: await resolved.provider.messages(resolved.session.providerSessionId),
-          }))();
+      const readSnapshot = (): Promise<ProviderInteractiveSnapshot> =>
+        resolved.provider.interactiveSnapshot
+          ? resolved.provider.interactiveSnapshot(resolved.session.providerSessionId)
+          : (async () => ({
+              // A terminal turn error belongs in the projection as `error` plus
+              // its detail, not as a thrown read that would report the whole
+              // runtime as unreachable.
+              ...(await readProviderStatus(resolved.provider, resolved.session.providerSessionId)),
+              messages: await resolved.provider.messages(resolved.session.providerSessionId),
+            }))();
+      // Capture as soon as the snapshot resolves, before unrelated metadata.
+      const snapshotPromise = resolved.transient
+        ? readSnapshot()
+        : this.resumeIdentity.read(resolved.session, readSnapshot);
       const interactionSnapshotPromise = resolved.provider.interactions
         ? resolved.provider.interactions.listPendingInteractions(resolved.session.providerSessionId)
         : Promise.resolve({ requests: [], revision: 0 });
@@ -4873,8 +4863,6 @@ export class NativeAgentTranscriptProjection {
                 steer: false,
               },
             };
-      // A transient (unpersisted) session has no mapping to keep it on.
-      if (!resolved.transient) this.observeResumeIdentity(resolved.session, snapshot);
       // A live session's own answer wins over the platform table. The table
       // says what a platform *may* raise; a Pi session with its approval gate
       // off raises nothing, and reporting the platform's list there would

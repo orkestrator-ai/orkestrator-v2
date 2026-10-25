@@ -324,6 +324,13 @@ export abstract class StorageNative extends StorageReviews {
     return loaded.sessions[key] ?? null;
   }
 
+  /** Teardown must see identity captures already queued behind a provider mutation. */
+  async getNativeAgentSessionAfterMutations(
+    key: string,
+  ): Promise<PersistedNativeAgentSession | null> {
+    return this.enqueueNativeAgentSessionMutation(key, () => this.getNativeAgentSession(key));
+  }
+
   /**
    * Backend-owned native session catalogue used by background reconcilers.
    * Keep this internal to the backend command surface: provider session IDs are
@@ -742,6 +749,7 @@ export abstract class StorageNative extends StorageReviews {
     ) {
       throw new Error("Native agent resume identity is invalid");
     }
+    resumableSessionId = resumableSessionId.trim();
     return this.enqueueNativeAgentSessionMutation(key, async () => {
       const loaded = await this.loadNativeAgentSessions();
       this.assertReadableNativeAgentSession(loaded, key);

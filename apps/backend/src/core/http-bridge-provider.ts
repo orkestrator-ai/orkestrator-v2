@@ -977,16 +977,18 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       return undefined;
     }
     if (this.agent === "codex") {
-      // Approval-only changes are persisted by the backend, then sent with the turn.
+      // Clear before I/O: any failed or non-durable write leaves cached mode untrusted.
+      const hasConfig =
+        [update.modelId, update.reasoningId, update.mode].some(Boolean) ||
+        update.fastMode !== undefined;
+      if (hasConfig) this.codexModes.delete(sessionId);
       const outcome = await updateCodexSessionConfig(
         this.connection,
         this.fetchImpl,
         sessionId,
         update,
       );
-      // The next send reconciles the mode again unless this one is durable.
       if (outcome?.durable) this.codexModes.set(sessionId, outcome.mode);
-      else if (outcome) this.codexModes.delete(sessionId);
       return undefined;
     }
     if (this.agent !== "cursor" && this.agent !== "grok" && this.agent !== "pi") {

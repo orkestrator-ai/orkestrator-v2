@@ -37,3 +37,20 @@ three solo runs of the unchanged owner
 not need aggregate load. The sibling case at line 284 fails the same way;
 see [0800](0800-codex-command-catalogue-armed-delay-race.md).
 
+
+## 2026-10-25 composer model admission validation
+
+Recurred in `review-tests` (`mise run test:logged -- --name review-tests --
+mise run test`) on `todo-0004-composer-model-params-803868a90fcb` with Bun
+1.4.4. Both cold-child catalogue cases expected `stale` but received `ready`;
+no command catalogue implementation or tests changed in this work.
+
+The complete unchanged owner passed alone (exit 0, 2.1 seconds):
+
+```sh
+mise run test:logged -- --name bridge-catalogue-recheck -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Original aggregate evidence: `orkestrator-test-run.T3LqzB/bridges.log`
+(compressed on aggregate completion). The original aggregate remains failed.
+No skips, assertions or timeouts were changed.

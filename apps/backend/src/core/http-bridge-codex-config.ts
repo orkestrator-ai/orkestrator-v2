@@ -53,6 +53,7 @@ async function readCodexConfig(
     durable?: unknown;
   };
   if (
+    !current ||
     (current.mode !== "plan" && current.mode !== "build") ||
     (current.model !== undefined && typeof current.model !== "string") ||
     (current.modelReasoningEffort !== undefined &&
@@ -165,12 +166,19 @@ export async function updateCodexSessionConfig(
     },
     fetchImpl,
   );
-  if (response.status === 404 || response.status === 409) {
+  if (
+    response.status === 404 ||
+    response.status === 409 ||
+    isTransientHttpStatus(response.status)
+  ) {
     throw new ProviderUnavailableError(
       `Codex session config update is temporarily unavailable (HTTP ${response.status})`,
     );
   }
   assertOk(response, "Codex session config update");
   const outcome = (await response.json().catch(() => null)) as { durable?: unknown } | null;
-  return { mode, durable: outcome?.durable === true };
+  if (outcome?.durable !== true) {
+    throw new ProviderUnavailableError("Codex session config update was not durably persisted");
+  }
+  return { mode, durable: true };
 }

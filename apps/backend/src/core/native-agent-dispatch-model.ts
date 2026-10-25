@@ -6,8 +6,9 @@
  * sent to an existing session used to be dropped: the turn ran the session's
  * model while the caller asked for another. The service applies such a model
  * the way a model pick is applied (a control update, persisted and sent to the
- * runtime) before anything is journaled, so the shown, stored and run model
- * stay the same. Platforms whose prompts carry the model never need this.
+ * runtime) after admission checks under the delivery lease, so the shown,
+ * stored and run model stay the same. Platforms whose prompts carry the model
+ * never need this.
  */
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import type {

@@ -1,12 +1,19 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import type { NativeAgentControlUpdate } from "@orkestrator/protocol/native-agent";
 
-import { PromptRejectedError } from "./native-agent-provider.js";
+import { createHash } from "node:crypto";
+import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
+import { PromptRejectedError, ProviderUnavailableError } from "./native-agent-provider.js";
 import { sessionHeldDispatchModelUpdate } from "./native-agent-dispatch-model.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
-import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
+import {
+  type Invoke,
+  createProviderStub,
+  waitForCondition,
+  withService,
+} from "./native-agent-service-projection-test-support.js";
 
 describe("sessionHeldDispatchModelUpdate", () => {
   const codex = { agent: "codex" as const, controls: { modelId: "gpt-held" } };
@@ -166,6 +173,327 @@ describe("a dispatch naming a model", () => {
         expect(stored?.controls?.modelId).toBe("gpt-held");
         // Nothing was journaled, so the same request id is free to retry.
         expect(stored?.pendingDispatch).toBeUndefined();
+      },
+    );
+  });
+
+  const models = ["gpt-held", "gpt-new", "gpt-picker"].map((id) => ({
+    platform: "codex" as const,
+    id,
+    label: id,
+    reasoning: [
+      { id: "medium", label: "Medium" },
+      { id: "xhigh", label: "Extra high" },
+    ],
+    defaultReasoningId: "medium",
+  }));
+
+  const invokeModels: Invoke = async <T>() => models as T;
+
+  test("holds picker updates behind reconciliation and delivery", async () => {
+    const applied = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const order: string[] = [];
+    let runtimeModel = "gpt-held";
+    const stub = createProviderStub("codex", {
+      modelCatalog: async () => models,
+      updateInteractiveControls: async (_id, update) => {
+        order.push(`config:${update.modelId}`);
+        runtimeModel = update.modelId!;
+        if (runtimeModel === "gpt-new") {
+          applied.resolve();
+          await release.promise;
+        }
+      },
+      send: async () => {
+        order.push(`send:${runtimeModel}`);
+      },
+    });
+    await withService(
+      {
+        invoke: invokeModels,
+        prefix: "dispatch-model-fence-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const input = identity("codex");
+        await service.ensureSession({ ...input, model: "gpt-held" });
+        const dispatch = service.dispatchPrompt({
+          ...input,
+          prompt: "Run",
+          requestId: "r1",
+          model: "gpt-new",
+        });
+        const admission = spyOn(storage, "updateNativeAgentSessionControls");
+        let picker: ReturnType<typeof service.updateProjectionControls> | undefined;
+        try {
+          await applied.promise;
+          picker = service.updateProjectionControls({
+            ...input,
+            update: { modelId: "gpt-picker" },
+          });
+          await waitForCondition(() => admission.mock.calls.length > 0);
+          expect(runtimeModel).toBe("gpt-new");
+          expect(order).toEqual(["config:gpt-new"]);
+        } finally {
+          release.resolve();
+        }
+        await dispatch;
+        await picker;
+        expect(order).toEqual(["config:gpt-new", "send:gpt-new", "config:gpt-picker"]);
+        expect((await storage.getNativeAgentSession(keyOf(input)))?.controls?.modelId).toBe(
+          "gpt-picker",
+        );
+      },
+    );
+  });
+
+  test.each([false, true])(
+    "replaying a completed request leaves picker controls unchanged (busy=%s)",
+    async (busy) => {
+      const order: string[] = [];
+      const stub = stubFor("codex", order);
+      stub.provider.modelCatalog = async () => models;
+      await withService(
+        {
+          invoke: invokeModels,
+          prefix: "dispatch-model-replay-",
+          provider: async () => stub.provider,
+        },
+        async ({ service, storage }) => {
+          const input = identity("codex");
+          await service.ensureSession({ ...input, model: "gpt-held" });
+          const request = { ...input, prompt: "Run", requestId: "r1", model: "gpt-new" };
+          await service.dispatchPrompt(request);
+          await service.updateProjectionControls({ ...input, update: { modelId: "gpt-picker" } });
+          order.length = 0;
+          if (busy)
+            stub.updateInteractiveControls!.mockImplementation(async () => {
+              throw new ProviderUnavailableError("running");
+            });
+          await service.dispatchPrompt(request);
+          expect(order).toEqual([]);
+          expect(stub.send).toHaveBeenCalledTimes(1);
+          expect((await storage.getNativeAgentSession(keyOf(input)))?.controls?.modelId).toBe(
+            "gpt-picker",
+          );
+        },
+      );
+    },
+  );
+
+  test.each(["dispatch", "steer"] as const)(
+    "a conflicting pending %s refuses without changing the model",
+    async (pending) => {
+      const order: string[] = [];
+      const stub = stubFor("codex", order);
+      await withService(
+        {
+          invoke: invokeModels,
+          prefix: "dispatch-model-conflict-",
+          provider: async () => stub.provider,
+        },
+        async ({ service, storage }) => {
+          const input = identity("codex");
+          await service.ensureSession({ ...input, model: "gpt-held" });
+          if (pending === "dispatch") {
+            await expect(
+              storage.dispatchNativeAgentPromptOnce(
+                keyOf(input),
+                "parked",
+                async () => {
+                  throw new Error("unknown outcome");
+                },
+                {
+                  requestId: "parked",
+                  prompt: "Earlier",
+                  createdAt: new Date().toISOString(),
+                },
+              ),
+            ).rejects.toThrow("unknown outcome");
+          } else {
+            await storage.dispatchNativeAgentSteerOnce(
+              keyOf(input),
+              {
+                requestId: "parked",
+                text: "Earlier",
+                inputDigest: createHash("sha256").update("Earlier").digest("hex"),
+                expectedRunId: "run-1",
+                state: "prepared",
+                createdAt: new Date().toISOString(),
+              },
+              async () => ({ outcome: "unknown", requestId: "parked" }),
+            );
+          }
+          await expect(
+            service.dispatchPrompt({ ...input, prompt: "Run", requestId: "r1", model: "gpt-new" }),
+          ).rejects.toThrow();
+          expect(order).toEqual([]);
+          expect((await storage.getNativeAgentSession(keyOf(input)))?.controls?.modelId).toBe(
+            "gpt-held",
+          );
+        },
+      );
+    },
+  );
+
+  test.each(["mode", "busy-mail"] as const)(
+    "a preparation refusal (%s) leaves the model unchanged",
+    async (refusal) => {
+      const order: string[] = [];
+      const stub = stubFor("codex", order);
+      stub.provider.status = async () => "running";
+      await withService(
+        {
+          invoke: invokeModels,
+          prefix: "dispatch-model-refused-",
+          provider: async () => stub.provider,
+        },
+        async ({ service, storage }) => {
+          const input = identity("codex");
+          const session = await service.ensureSession({ ...input, model: "gpt-held" });
+          await storage.updateNativeAgentSessionControls(session.key, session.providerSessionId, {
+            mode: "build",
+          });
+          const request = { ...input, prompt: "Run", requestId: "r1", model: "gpt-new" };
+          if (refusal === "mode") {
+            await expect(
+              service.dispatchPrompt({ ...request, requireSessionMode: "plan" }),
+            ).rejects.toThrow("no longer in Plan mode");
+          } else {
+            expect(await service.dispatchMailInject(request)).toEqual({
+              outcome: "held",
+              reason: "busy",
+            });
+          }
+          expect(order).toEqual([]);
+          const stored = await storage.getNativeAgentSession(keyOf(input));
+          expect(stored?.controls?.modelId).toBe("gpt-held");
+          expect(stored?.pendingDispatch).toBeUndefined();
+        },
+      );
+    },
+  );
+
+  test("a model-only dispatch clears stale effort in storage and projection", async () => {
+    const stub = createProviderStub("codex", {
+      modelCatalog: async () => models,
+      updateInteractiveControls: async () => undefined,
+    });
+    await withService(
+      {
+        invoke: invokeModels,
+        prefix: "dispatch-model-effort-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const input = identity("codex");
+        await service.ensureSession({ ...input, model: "gpt-held", reasoningEffort: "xhigh" });
+        expect((await storage.getNativeAgentSession(keyOf(input)))?.controls?.reasoningId).toBe(
+          "xhigh",
+        );
+        await service.dispatchPrompt({
+          ...input,
+          prompt: "Run",
+          requestId: "r1",
+          model: "gpt-new",
+        });
+        expect(
+          (await storage.getNativeAgentSession(keyOf(input)))?.controls?.reasoningId,
+        ).toBeUndefined();
+        const projection = await service.getProjection(input);
+        expect(projection?.composer?.selectedModelId).toBe("gpt-new");
+        expect(projection?.composer?.selectedReasoningId).not.toBe("xhigh");
+        expect(
+          projection?.composerControls.find((control) => control.id === "reasoning")?.value,
+        ).toBe("medium");
+      },
+    );
+  });
+
+  test("a failed catalogue read remains advisory and the runtime applies the explicit model", async () => {
+    const order: string[] = [];
+    const stub = stubFor("codex", order);
+    stub.provider.resolveDefaultModel = mock(async () => {
+      throw new Error("catalogue offline");
+    });
+    await withService(
+      {
+        invoke: invokeModels,
+        prefix: "dispatch-model-catalogue-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const input = identity("codex");
+        await service.ensureSession({ ...input, model: "gpt-held" });
+        await service.dispatchPrompt({
+          ...input,
+          prompt: "Run",
+          requestId: "r1",
+          model: "gpt-new",
+        });
+        expect(order).toEqual(["config:gpt-new", "send"]);
+        expect((await storage.getNativeAgentSession(keyOf(input)))?.controls?.modelId).toBe(
+          "gpt-new",
+        );
+      },
+    );
+  });
+
+  test("a non-durable update is not committed or sent, and retry after restart durably restores the model", async () => {
+    let durable = false;
+    let runtimeModel = "gpt-held";
+    const delivered: string[] = [];
+    const bridge = httpProvider((url, init) => {
+      if (url.endsWith("/config")) {
+        if (init.method === "POST") {
+          runtimeModel = JSON.parse(String(init.body)).model;
+          return Response.json({ durable });
+        }
+        return Response.json({
+          model: runtimeModel,
+          mode: "build",
+          fastMode: false,
+          durable: true,
+        });
+      }
+      if (url.endsWith("/prompt")) delivered.push(runtimeModel);
+      if (url.endsWith("/attach")) return Response.json({ attached: true });
+      return Response.json({ status: "processing" });
+    }, codexConnection);
+    const stub = createProviderStub("codex", {
+      send: bridge.provider.send.bind(bridge.provider),
+      updateInteractiveControls: bridge.provider.updateInteractiveControls!.bind(bridge.provider),
+    });
+    await withService(
+      {
+        invoke: invokeModels,
+        prefix: "dispatch-model-durable-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const input = identity("codex");
+        await service.ensureSession({ ...input, model: "gpt-held" });
+        const request = { ...input, prompt: "Run", requestId: "r1", model: "gpt-new" };
+        await expect(service.dispatchPrompt(request)).rejects.toBeInstanceOf(
+          ProviderUnavailableError,
+        );
+        expect(delivered).toEqual([]);
+        expect((await storage.getNativeAgentSession(keyOf(input)))?.controls?.modelId).toBe(
+          "gpt-held",
+        );
+        runtimeModel = "gpt-held"; // Restart restores the previously durable configuration.
+        durable = true;
+        await service.dispatchPrompt(request);
+        expect(delivered).toEqual(["gpt-new"]);
+        expect(
+          bridge.requests.filter(
+            ({ init }) => init.method === "POST" && String(init.body).includes('"model":"gpt-new"'),
+          ),
+        ).toHaveLength(2);
+        expect((await storage.getNativeAgentSession(keyOf(input)))?.controls?.modelId).toBe(
+          "gpt-new",
+        );
       },
     );
   });

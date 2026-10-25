@@ -929,6 +929,7 @@ export const SUPPRESSED_COMPOSER_PARAMETERS: Readonly<
   Partial<Record<AgentPlatform, readonly string[]>>
 > = Object.freeze({
   claude: Object.freeze(["parameter:thinking", "parameter:context1m"]),
+  codex: Object.freeze(["parameter:summary"]),
   cursor: Object.freeze(["parameter:variant"]),
 });
 

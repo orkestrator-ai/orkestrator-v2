@@ -2132,6 +2132,63 @@ describe("HTTP bridge provider", () => {
     ).rejects.toBeInstanceOf(ProviderUnavailableError);
   });
 
+  test.each([
+    "read-404",
+    "read-409",
+    "read-503",
+    "read-429",
+    "read-malformed",
+    "read-null",
+    "read-invalid-json",
+    "post-503",
+    "post-non-durable",
+    "post-malformed",
+  ])("failed Codex config updates invalidate cached mode (%s)", async (failure) => {
+    let failing = true;
+    const { provider, requests } = httpProvider((url, init) => {
+      if (url.endsWith("/create")) return Response.json({ sessionId: "codex-1" });
+      if (url.endsWith("/config")) {
+        if (failing) {
+          const phase = init.method === "POST" ? "post" : "read";
+          if (failure.startsWith(`${phase}-`)) {
+            const outcome = failure.slice(phase.length + 1);
+            if (/^\d+$/.test(outcome)) return new Response(null, { status: Number(outcome) });
+            if (outcome === "non-durable") return Response.json({ durable: false });
+            if (outcome === "null") return Response.json(null);
+            if (outcome === "invalid-json") return new Response("{");
+            return Response.json({ mode: "unknown", fastMode: false });
+          }
+        }
+        if (init.method === "POST") return Response.json({ durable: true });
+        return Response.json({ model: "gpt-held", mode: "build", fastMode: false, durable: true });
+      }
+      return new Response(null, { status: 204 });
+    }, codexConnection);
+    await provider.createSession("plan", "Inspect");
+    const update = provider.updateInteractiveControls!("codex-1", { modelId: "gpt-new" });
+    if (/\d+$/.test(failure) || failure === "post-non-durable" || failure === "post-malformed") {
+      await expect(update).rejects.toBeInstanceOf(ProviderUnavailableError);
+    } else {
+      await expect(update).rejects.toThrow();
+    }
+    if (failure.startsWith("read-")) {
+      expect(
+        requests.filter(({ url, init }) => url.endsWith("/config") && init.method === "POST"),
+      ).toHaveLength(0);
+    }
+    failing = false;
+    const offset = requests.length;
+    await provider.send("codex-1", "Inspect", { requestId: "r1", mode: "plan" });
+    expect(
+      requests.slice(offset).map(({ url, init }) => [url.split("/").at(-1), init.method ?? "GET"]),
+    ).toEqual([
+      ["config", "GET"],
+      ["config", "POST"],
+      ["prompt", "POST"],
+    ]);
+    expect(JSON.parse(String(requests[offset + 1]!.init.body)).mode).toBe("plan");
+  });
+
   test("a durable Codex mode update spares the next send a reconciliation", async () => {
     const { provider, requests } = codexConfigBridge({ mode: "build", fastMode: false });
     await provider.updateInteractiveControls!("codex-1", { mode: "plan" });

@@ -1146,32 +1146,27 @@ export class NativeAgentService {
   /**
    * Apply a dispatch's explicit model to a runtime whose prompts carry none
    * (`runsSessionHeldModel`), the way a model pick is applied: through a
-   * control update persisted under the session lease, before anything is
-   * journaled. A model the login's live catalogue positively does not offer is
-   * refused here with the draft intact, rather than reaching the runtime and
-   * failing there. See `native-agent-dispatch-model.ts`.
+   * control update under the admission/delivery lease, after replay and
+   * conflict checks and before anything is journaled. A model the login's live
+   * catalogue positively does not offer is refused here with the draft intact,
+   * rather than reaching the runtime and failing there.
+   * See `native-agent-dispatch-model.ts`.
    */
   private async applySessionHeldDispatchModel(
     input: DispatchNativeAgentPromptInput,
     session: PersistedNativeAgentSession,
     provider: NativeAgentRuntimeProvider,
-  ): Promise<PersistedNativeAgentSession> {
+  ): Promise<NativeAgentControlUpdate | undefined> {
     const update = sessionHeldDispatchModelUpdate(input, session);
-    if (!update?.modelId) return session;
+    if (!update?.modelId) return undefined;
     const availability = await this.resolveDefaultModel(provider, update.modelId);
     if (availability?.substitution) {
       throw new PromptRejectedError(
         unofferedDispatchModelMessage(session.agent, update.modelId, availability.substitution),
       );
     }
-    return this.storage.updateNativeAgentSessionControls(
-      session.key,
-      session.providerSessionId,
-      update,
-      async () => {
-        await provider.updateInteractiveControls?.(session.providerSessionId, update);
-      },
-    );
+    await provider.updateInteractiveControls?.(session.providerSessionId, update);
+    return update;
   }
 
   private async resolveDefaultModel(
@@ -3263,7 +3258,7 @@ export class NativeAgentService {
       if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {
         throw new Error("Native agent prompt or attachment and request ID must not be blank");
       }
-      let session: PersistedNativeAgentSession = await this.ensureSession(input);
+      const session: PersistedNativeAgentSession = await this.ensureSession(input);
       // Freeze the effective inherited choice before preparing and journaling
       // dispatch. Retries replay this concrete model, never a stale default.
       if (input.modelSource === "default" || !input.model) {
@@ -3275,7 +3270,6 @@ export class NativeAgentService {
         interactionPolicy: session.interactionPolicy,
         phase: input.phase,
       });
-      session = await this.applySessionHeldDispatchModel(input, session, provider);
       /*
        * Decide what this submission executes before anything is journaled or
        * attached. A command that no longer exists, changed, or cannot accept
@@ -3377,25 +3371,16 @@ export class NativeAgentService {
       await this.assertEnvironmentLive(input.environmentId);
       this.providerRegistry.beginDispatch(provider);
       try {
+        let preparation: PromptDispatchPreparation = { dispatch: true };
         const result = await this.storage.dispatchNativeAgentPromptOnce(
           session.key,
           input.requestId,
           async (durable) => {
-            const preparation = prepare
-              ? await prepare(durable, provider)
-              : { dispatch: true as const };
             if (!preparation.dispatch) {
               return {
                 dispatched: false as const,
                 ...(preparation.notice ? { incompleteTurnNotice: preparation.notice } : {}),
               };
-            }
-            // The storage session lease also serializes durable control updates.
-            // Recheck after provider preparation, immediately before delivery.
-            if (input.requireSessionMode && durable.controls?.mode !== input.requireSessionMode) {
-              throw new PromptRejectedError(
-                "The session is no longer in Plan mode, so this read-only prompt was not sent. Switch the session back to Plan and retry, or cancel it.",
-              );
             }
             // Reuse the credential resolved for the warm-up attach when it
             // succeeded; otherwise resolve it here, inside the at-most-once
@@ -3493,6 +3478,18 @@ export class NativeAgentService {
           persistAmbiguousDispatch && (session.origin === "interactive-native" || mailInject)
             ? this.persistedPendingDispatch({ ...input, command: commandPlan.persistedIntent })
             : undefined,
+          async (durable) => {
+            preparation = prepare ? await prepare(durable, provider) : { dispatch: true };
+            if (!preparation.dispatch) return undefined;
+            // The storage session lease also serializes durable control updates.
+            // Recheck after provider preparation, immediately before delivery.
+            if (input.requireSessionMode && durable.controls?.mode !== input.requireSessionMode) {
+              throw new PromptRejectedError(
+                "The session is no longer in Plan mode, so this read-only prompt was not sent. Switch the session back to Plan and retry, or cancel it.",
+              );
+            }
+            return this.applySessionHeldDispatchModel(input, durable, provider);
+          },
         );
         if (
           result.dispatched &&

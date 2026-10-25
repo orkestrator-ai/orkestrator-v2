@@ -104,17 +104,19 @@ once restricted containers no longer need `NET_ADMIN` can the sudo grants shrink
   to now, so Codex uses its access token (ten days at issue) until it
   expires instead of trying a refresh it cannot make. The entrypoint
   (`restrict_imported_login`) blanks the refresh token again in the
-  container's own copy. That covers `ORKESTRATOR_PORTABLE_INPUTS=host-mounts`
-  and containers that imported a full copy before this change. A copy whose
+  container's own copy. That covers containers created while the
+  `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` opt-out existed (removed
+  2026-10-25) and
+  containers that imported a full copy before this change. A copy whose
   access token lapses signs out on its own (Grok 1.0.52 says "Not signed
   in", checked live), and the host login is never touched. The cost: a
   container that imports the host login cannot keep its own `grok login` or
   `codex login` across a restart, because that refresh token is blanked too.
   A container that needs its own login should have that provider's
   credentials revoked. Images older than staged inputs still mount the host
-  homes and copy them whole with their old entrypoint; they go away with the
-  host-mounts path
-  ([0021-container-rebuild-state-preservation.md](0021-container-rebuild-state-preservation.md)).
+  homes and copy them whole with their old entrypoint. That path is their
+  guarded behaviour and stays until they are rebuilt
+  ([container lifecycle](../../architecture/container-lifecycle.md#rollout-switches-and-legacy-runtimes)).
 - Claude (2026-10-21): containers get the Claude login access-only too
   (`restrictClaudeCredentialsSnapshot`), on every path that used to pipe or
   stage it whole. The keeper and the host-side refresh are described in
@@ -489,8 +491,8 @@ once restricted containers no longer need `NET_ADMIN` can the sudo grants shrink
 ## Related
 
 - [0019-container-platform-qualification.md](0019-container-platform-qualification.md),
-  [0021-container-rebuild-state-preservation.md](0021-container-rebuild-state-preservation.md)
-  (retiring the policy-1 shared-bridge path),
+  [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md)
+  (staged inputs and host access on rootless),
   [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md) (the container
   preview relay), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md)
   (network and auth for MCP outside the backend host).

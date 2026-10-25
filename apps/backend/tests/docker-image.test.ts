@@ -454,6 +454,73 @@ esac
     }
   });
 
+  test("a capable image ignores the retired host-mount and shared-bridge opt-outs", async () => {
+    const dir = await tempDir("ork-retired-switches-");
+    cleanup.push(dir);
+    const environment = lifecycleEnvironment();
+    const { context } = memoryLifecycleContext([environment], dir);
+    Object.assign(context, { runtimeFlavor: "agent-test", credentialSources: new Set() });
+    Object.assign(context.storage, {
+      getProject: async () => ({
+        id: "project-1",
+        gitUrl: "https://example.invalid/project.git",
+        localPath: null,
+      }),
+      loadConfig: async () => ({
+        version: "1.0.0",
+        global: { enabledAgentPlatforms: [] },
+        repositories: {},
+      }),
+    });
+    await fs.writeFile(
+      path.join(dir, "github-ranges.txt"),
+      "# github-ranges fixture\n203.0.113.0/24\n",
+    );
+    const tar = await tarOf(
+      "image-manifest.json",
+      validManifest({
+        capabilities: { "network-policy": 3, "network-refresh": 1, "staged-inputs": 2 },
+      }),
+    );
+    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const saved = {
+      ORKESTRATOR_NETWORK_POLICY: process.env.ORKESTRATOR_NETWORK_POLICY,
+      ORKESTRATOR_PORTABLE_INPUTS: process.env.ORKESTRATOR_PORTABLE_INPUTS,
+    };
+    process.env.ORKESTRATOR_NETWORK_POLICY = "1";
+    process.env.ORKESTRATOR_PORTABLE_INPUTS = "host-mounts";
+    try {
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  context) printf 'unix:///var/run/docker.sock\\n' ;;
+  info) printf '{"OSType":"linux","OperatingSystem":"Debian","Architecture":"x86_64","SecurityOptions":[]}\\n' ;;
+  create) printf 'created-retired\\n' ;;
+  cp) cat '${tar}' ;;
+  network) [ "$2" = inspect ] && { echo "network not found" >&2; exit 1; }; exit 0 ;;
+esac
+`,
+        async (log) => {
+          expect(await createDockerContainer(environment, context, { imageId: IMAGE_ID })).toBe(
+            "created-retired",
+          );
+          const create = (await log.read())
+            .split("\n")
+            .find((line) => line.startsWith("create --name"));
+          expect(create).toContain("--label orkestrator-network-policy=3");
+          expect(create).toContain("--network ork-");
+          expect(create).toContain("--label orkestrator-inputs-revision=");
+        },
+      );
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("a create uses the id resolved at admission even after the tag moves", async () => {
     const dir = await tempDir("ork-pinned-image-");
     cleanup.push(dir);

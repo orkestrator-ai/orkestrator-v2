@@ -392,10 +392,11 @@ export async function createDockerContainer(
   // files of enabled providers, copied into a private per-environment
   // revision; older images keep the read-only home mounts their entrypoint
   // expects. A running legacy container keeps its mounts until it is rebuilt.
-  const stagingCapabilities =
-    identity.imageId && process.env.ORKESTRATOR_PORTABLE_INPUTS !== "host-mounts"
-      ? await imageCapabilities(identity.imageId, context)
-      : null;
+  // There is no switch back to home mounts for a capable image: they exposed
+  // whole host agent homes and put the Anthropic key in `docker inspect`.
+  const stagingCapabilities = identity.imageId
+    ? await imageCapabilities(identity.imageId, context)
+    : null;
   // An entrypoint older than Cursor's copy would ignore `/cursor-config`, and
   // staging it anyway would report Cursor's MCP servers as delivered.
   const stagedProviders = imageCopiesCursorMcpConfig(stagingCapabilities)

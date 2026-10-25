@@ -161,7 +161,12 @@ All on this branch, 2026-10-25.
   8 routing tests above (fixed) and one timeout recorded as flake
   [0905](../../tests/flaky-tests/backend-services-and-tooling/0905-public-api-environment-create-replay-timeout.md)
   (its owner passed alone).
-- Final `mise run test`: see the coordinator report for the pushed head.
+- Second `mise run test` (head `14213a95`, after those fixes): workspace
+  (web, backend, desktop, web-public, cli, protocol, toolchain), root and
+  agent-support tests and codex protocol lockfile passed; bridges failed one
+  test, the known Codex flake
+  [0492](../../tests/flaky-tests/agent-bridges/0492-codex-deleted-session-initial-retry-race.md)
+  (no bridge code changed here), whose owner passed alone (123 pass).
 
 ## Assumptions and decisions
 

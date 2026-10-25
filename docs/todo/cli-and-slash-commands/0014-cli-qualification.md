@@ -191,6 +191,32 @@ command, result and limitations. Run artifacts are
 `output/cli-scenarios/<run>/manifest.json` (git-ignored; IDs, stages and exit
 codes only).
 
+- **2026-10-25, macOS (Darwin 27, arm64), 0017 command surface.** Branch
+  `todo-0017-cli-command-surface-b2ac5c7a331e` on `ba7cc8d4`; Bun 1.4.4,
+  Claude Code 2.1.304, Agent SDK 0.3.309.
+  - `mise run test:cli:scenarios -- --scenario project-cascade --scenario
+    project-init`: both passed locally (3.3 s, 2.3 s) after one fix to the
+    scenario itself (`environment create` takes base branch and commit
+    together). Container variants were not run (no worktree-owned image built).
+  - `mise run test:cli:scenarios -- --scenario live-session --provider claude`:
+    passed (52.7 s, local). Beyond the existing turn and follow-up it covered
+    `session commands --refresh` (ready), an unknown command refused (exit 3)
+    and a stale binding revision refused (exit 8) with nothing admitted, Claude's
+    built-in `/context` through `session command --wait` (succeeded, 1.0 s),
+    `--literal` (1.9 s), `--attach` (the agent quoted the attached file, 4.0 s),
+    and `--enqueue` behind a running `sleep 20` turn (a plain prompt was refused
+    busy; the queued run succeeded after the slow turn, 27.9 s). Two earlier
+    attempts failed on the scenario's own choice of command: project commands
+    in `.claude/commands` were not in this Claude build's session catalogue, so
+    the step uses the built-in `/context`. No other provider was run.
+  - Final rerun on the committed code (after the local-only start point was
+    narrowed to `project init` projects and the attach step learned the
+    image-only refusal): `project-cascade` 7.4 s, `project-init` 6.7 s and
+    Claude `live-session` 61.8 s, all passed.
+  - `cli-ui.spec.ts` on an isolated `qa-0017` profile: the new "CLI-initialized
+    project and its cascade removal" test and the existing settings test passed
+    (24.3 s); the profile was stopped and reset.
+
 - **2026-10-22, macOS, review fixes.** Recovery now validates the submitted
   canonical intent and scope on the server, refuses saved intent conflicts,
   preserves definitive lookup and interruption errors, and shares an absolute

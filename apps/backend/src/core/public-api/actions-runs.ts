@@ -164,7 +164,7 @@ export function createRunReadHandlers(
         }
       }
       const fresh = await reconcileOperation(record, context);
-      return { result: null, receipt: toReceipt(fresh, false) };
+      return { result: fresh.result ?? null, receipt: toReceipt(fresh, false) };
     },
   };
 
@@ -174,6 +174,7 @@ export function createRunReadHandlers(
 const PROMPT_RUN_ACTIONS: readonly PublicActionName[] = [
   "session.start",
   "session.prompt",
+  "session.command",
   "environment.launch",
   "session.steer",
 ];

@@ -213,6 +213,50 @@ export interface PublicSessionSummary {
 }
 
 // ---------------------------------------------------------------------------
+// Slash commands
+
+/**
+ * One row of a session's slash-command catalogue. The descriptor ID and
+ * binding revision are opaque selection keys; the provider's private binding
+ * (skill paths, template files, provider command names) is never exposed.
+ */
+export interface PublicSessionCommand {
+  id: string;
+  name: string;
+  aliases: string[];
+  description: string | null;
+  argumentHint: string | null;
+  source: string;
+  /** Changes when what the command runs changes; pass it back to refuse a changed command. */
+  bindingRevision: string | null;
+  available: boolean;
+  unavailableReason: string | null;
+  /** `optional` when the provider states no policy. */
+  arguments: "none" | "optional" | "required";
+  /** `idle`: refused while the agent is busy. */
+  busy: "queue" | "idle" | "running" | null;
+}
+
+export interface PublicSessionCommandList {
+  sessionId: string;
+  agent: AgentPlatform;
+  /**
+   * `ready`/`stale`/`loading`/`unavailable`/`unsupported` as the backend's
+   * catalogue reports it; `unknown` when the session has not been read yet
+   * (use `refresh`).
+   */
+  catalogue: {
+    status: string;
+    revision: number | null;
+    fetchedAt: string | null;
+    error: string | null;
+  };
+  commands: PublicSessionCommand[];
+  /** Present when `refresh` was requested: what the refresh did. */
+  refresh?: { outcome: string; message?: string };
+}
+
+// ---------------------------------------------------------------------------
 // Agent options
 
 export type PublicCatalogueState = "ready" | "empty" | "stale" | "unavailable";

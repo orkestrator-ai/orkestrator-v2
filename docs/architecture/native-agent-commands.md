@@ -144,6 +144,12 @@ interprets prompt text itself and has no suppression (Claude, Grok) refuse a
 literal prompt whose leading token names a known command rather than running
 it (`literalCommandSuppression`).
 
+The public CLI sends explicit intent: `session prompt` and `session start`
+carry `literal` only with `--literal` (otherwise the tab's typed default
+applies), and `session command` always carries `selected` with the binding
+revision the backend resolved at admission, so it is never re-resolved by
+name ([public-cli.md](public-cli.md#sessions-and-runs)).
+
 ## Session actions and collisions
 
 The backend merges runtime actions into the provider list

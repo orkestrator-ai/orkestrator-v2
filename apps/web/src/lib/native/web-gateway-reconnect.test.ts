@@ -1106,3 +1106,40 @@ describe("gateway main stream connection state", () => {
     expect(api.eventStreamConnection.state()).toBe("idle");
   });
 });
+
+test("replacing a disconnected gateway reports idle and clears its state listeners", () => {
+  MockEventSource.instances = [];
+  globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+  const target = { location: { protocol: "https:" } } as Pick<
+    Window,
+    "location" | "orkestrator" | "orkestratorGateway"
+  >;
+  installBrowserGatewayApi(target);
+  const old = target.orkestrator!;
+  const states: string[] = [];
+  const stopState = old.eventStreamConnection!.subscribe((state) => states.push(state));
+  const stop = old.listen("changed", () => undefined);
+  const main = MockEventSource.instances[0]!;
+  main.open();
+  main.readyState = EVENT_SOURCE_CONNECTING;
+  main.onerror?.();
+  expect(old.eventStreamConnection!.state()).toBe("disconnected");
+
+  installBrowserGatewayApi(target, { replaceExisting: true });
+  expect(old.eventStreamConnection!.state()).toBe("idle");
+  expect(states).toEqual(["connecting", "connected", "disconnected", "idle"]);
+  const stateCount = states.length;
+  // Trigger a state change on the old adapter after replacement: its observers
+  // must already have been removed, even if a transport callback arrives late.
+  main.open();
+  stop();
+  expect(states).toHaveLength(stateCount);
+  const next = target.orkestrator!;
+  expect(next.eventStreamConnection!.state()).toBe("idle");
+  const stopNext = next.listen("changed", () => undefined);
+  MockEventSource.instances.at(-1)!.open();
+  expect(next.eventStreamConnection!.state()).toBe("connected");
+  expect(states).toHaveLength(stateCount);
+  stopNext();
+  stopState();
+});

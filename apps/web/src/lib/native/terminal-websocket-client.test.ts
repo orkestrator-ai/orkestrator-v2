@@ -958,6 +958,61 @@ describe("TerminalWebSocketClient", () => {
     }
   });
 
+  test("foreground reconciliation preserves the socket retry ladder", async () => {
+    const delays = captureTimerDelays();
+    const visibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
+    try {
+      const { client, sockets } = createHarness({
+        reconnectDelayMs: 100,
+        maxReconnectDelayMs: 800,
+        reconnectRandom: () => 1,
+      });
+      client.subscribe("session-a", () => undefined);
+      sockets[0]!.close(1006, "offline");
+      await tick();
+      sockets[1]!.close(1006, "offline");
+      await tick();
+      expect(delays.values.filter((delay) => delay > 1)).toEqual([100, 200]);
+
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(sockets[2]!.closes.at(-1)?.reason).toBe("Foreground reconciliation");
+      expect(sockets).toHaveLength(4);
+      sockets[3]!.close(1006, "still offline");
+      await tick();
+      expect(delays.values.filter((delay) => delay > 1)).toEqual([100, 200, 400]);
+    } finally {
+      if (visibility) Object.defineProperty(document, "visibilityState", visibility);
+      else Reflect.deleteProperty(document, "visibilityState");
+      delays.restore();
+    }
+  });
+
+  test("closing the idle socket resets the retry ladder for a later subscription", async () => {
+    const delays = captureTimerDelays();
+    try {
+      const { client, sockets } = createHarness({
+        reconnectDelayMs: 100,
+        maxReconnectDelayMs: 800,
+        reconnectRandom: () => 1,
+      });
+      const stop = client.subscribe("session-a", () => undefined);
+      sockets[0]!.close(1006, "offline");
+      await tick();
+      sockets[1]!.close(1006, "offline");
+      await tick();
+      stop();
+      expect(sockets[2]!.closes.at(-1)?.reason).toBe("No terminal subscriptions");
+
+      client.subscribe("session-b", () => undefined);
+      sockets[3]!.close(1006, "offline again");
+      await tick();
+      expect(delays.values.filter((delay) => delay > 1)).toEqual([100, 200, 100]);
+    } finally {
+      delays.restore();
+    }
+  });
+
   test("times out missing operation acknowledgements and reconnects through fallback", async () => {
     const { client, sockets, fallback, channelUnavailable } = createHarness({
       operationTimeoutMs: 1,

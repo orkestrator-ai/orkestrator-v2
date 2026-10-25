@@ -6452,6 +6452,70 @@ describe("ActionBar pull request actions", () => {
     }
   });
 
+  test.each([
+    ["current", null],
+    [
+      "stale",
+      "The last refresh of pull request status failed, so this shows the last state received. Retrying.",
+    ],
+    [
+      "degraded",
+      "Refreshing pull request status keeps failing, so this shows the last state received. It recovers on reconnect or the next check.",
+    ],
+  ] as const)(
+    "shows the last successful observation and %s freshness in the View PR tooltip",
+    async (syncStatus, detail) => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open" };
+      realStoresSnapshot.useEnvironmentStore.setState({
+        environments: [currentEnvironment],
+        isLoading: false,
+        error: null,
+      });
+      const observedAt = "2026-10-25T10:07:00.000Z";
+      usePrMonitorStore.setState({
+        syncStatus,
+        states: new Map([
+          [
+            currentEnvironment.id,
+            {
+              environmentId: currentEnvironment.id,
+              mode: "normal",
+              checkInProgress: false,
+              checkSummary: null,
+              consecutiveErrors: 0,
+              lastCheckAt: "2026-10-25T11:00:00.000Z",
+              lastSuccessfulCheckAt: observedAt,
+              prUrl: currentEnvironment.prUrl,
+              prState: "open",
+              hasMergeConflicts: false,
+            },
+          ],
+        ]),
+      });
+      currentUseRealPullRequest = true;
+      try {
+        await withTooltipClocks(async ({ open }) => {
+          render(<ActionBar />);
+          fireEvent.mouseEnter(screen.getByRole("button", { name: "View PR" }));
+          await fireTooltipTimer(open);
+          const formatted = new Date(observedAt).toLocaleString([], {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+          expect(screen.getByText(`Last successful check: ${formatted}`)).toBeTruthy();
+          expect(screen.getByText("Open PR in the sidebar (⌘-click opens GitHub)")).toBeTruthy();
+          if (detail) expect(screen.getByText(detail)).toBeTruthy();
+          else expect(screen.queryByText(/shows the last state received/) === null).toBe(true);
+          expect(screen.queryByText(observedAt) === null).toBe(true);
+        });
+      } finally {
+        usePrMonitorStore.setState({ syncStatus: "idle", states: new Map() });
+      }
+    },
+  );
+
   test("does not show a CI indicator before GitHub reports checks", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     currentCheckSummary = { passed: 0, total: 0, pending: 0 };

@@ -55,6 +55,23 @@ describe("environment network policy status", () => {
     expect(screen.getByText(/reachable on\s+every port/)).toBeTruthy();
   });
 
+  test("says where the firewall is enforced and whether a root terminal can change it", async () => {
+    install({ ...base, enforcement: "gateway" });
+    render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
+    await screen.findByText(/Enforced by the environment's egress gateway/);
+    expect(screen.queryByText(/a root terminal can change these rules/) === null).toBe(true);
+    cleanup();
+    install({ ...base, enforcement: "container" });
+    render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
+    await screen.findByText(/Enforced inside the container, so a root terminal can change/);
+    cleanup();
+    // A backend that predates the report says nothing about it.
+    install(base);
+    render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
+    await screen.findByText(/40 allowed address ranges/);
+    expect(screen.queryByText(/Enforced/) === null).toBe(true);
+  });
+
   test("policy 3 states that allowed domains answer on HTTPS and the ports entries name", async () => {
     install({ ...base, policyVersion: 3 });
     render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);

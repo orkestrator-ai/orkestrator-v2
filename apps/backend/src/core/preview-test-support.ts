@@ -19,6 +19,8 @@ export interface FakeContainer {
   owner?: string;
   environmentId: string;
   ports: Record<string, Array<{ HostIp?: string; HostPort?: string }> | null>;
+  /** The id of the egress gateway whose namespace it joined. */
+  networkOwner?: string;
 }
 
 export class FakeDocker {
@@ -35,8 +37,12 @@ export class FakeDocker {
     const id = args.at(-1)!;
     const container = this.containers.get(id);
     if (!container) throw new Error(`Error: No such container: ${id}`);
+    if (args.includes("{{json .NetworkSettings.Ports}}")) {
+      return { stdout: `${JSON.stringify(container.ports)}\n` };
+    }
+    const networkMode = container.networkOwner ? `container:${container.networkOwner}` : "bridge";
     return {
-      stdout: `${container.id}\t${container.status ?? "running"}\t${container.owner ?? ""}\t${container.environmentId}\t${JSON.stringify(container.ports)}\n`,
+      stdout: `${container.id}\t${container.status ?? "running"}\t${container.owner ?? ""}\t${container.environmentId}\t${JSON.stringify(container.ports)}\t${networkMode}\n`,
     };
   };
 

@@ -947,6 +947,7 @@ views stay sandboxed.
 | `docker/entrypoint.sh`         | Container entrypoint                                     |
 | `docker/workspace-setup.sh`    | Repo clone, `.env` files, project config, shown in terminal |
 | `docker/init-firewall.sh`      | Network firewall rules applied at startup                |
+| `docker/orkestrator-egress-gateway.sh` | Entrypoint of a restricted runtime's egress gateway |
 | `docker/update-firewall.sh`    | Operator-only allowlist edits via `docker exec --user root` |
 | `docker/runtime-env.sh`        | PATH/env snapshot so `docker exec` sees setup-time tools |
 | `docker/git-branch-helpers.sh` | Makes a bare `git push` publish and track the branch     |
@@ -1011,13 +1012,23 @@ Users and isolation:
   terminals with `docker exec --user orkroot`; `node` has no sudoers path to
   become `orkroot`.
 - Network firewall (iptables/ipset) for security isolation. `node` has
-  passwordless sudo for exactly three things: the image entrypoint
+  passwordless sudo for exactly two things: the image entrypoint
   (`/usr/local/bin/network-policy-entrypoint.sh`, which records the network
-  policy once, root-owned, before dropping to `node`),
-  `/usr/local/bin/init-firewall.sh`, and `/usr/local/bin/run-root-setup.sh`
-  (the latter only when the recorded mode is `full`). The container boundary,
-  not a reusable root shell, is what isolates an agent. Runtime allowlist edits use
-  `docker exec --user root /usr/local/bin/update-firewall.sh`.
+  policy once, root-owned, runs the firewall step as root and only then drops
+  to `node`) and `/usr/local/bin/run-root-setup.sh` (only when the recorded
+  mode is `full`). There is no grant for `init-firewall.sh`. The container
+  boundary, not a reusable root shell, is what isolates an agent. Runtime
+  allowlist edits use `docker exec --user root /usr/local/bin/update-firewall.sh`
+  in the container that owns the network namespace: the runtime's egress
+  gateway when it has one.
+- `/usr/local/bin/orkestrator-egress-gateway` is the entrypoint of a restricted
+  runtime's egress gateway: the same image, run as root with `NET_ADMIN` and a
+  tmpfs `/run`, records the policy (`network-policy-entrypoint.sh
+  --record-only`), applies the unchanged `init-firewall.sh` and idles. The
+  runtime joins its namespace with no added capability; the runtime's root
+  entrypoint then only verifies that the gateway rejects an unlisted
+  destination (`egress-unverified` / `egress-gateway-unavailable` boot
+  failures otherwise).
 
 ### Playwright
 
@@ -1141,10 +1152,17 @@ else is rejected outright. `full` mode skips the firewall entirely.
   for the next boot. Keep that state in
   root-only `/run/orkestrator-firewall/`; node owns `/run/orkestrator`.
 - The firewall limits destinations. It does not stop data leaving through an
-  allowed service. A root terminal (`orkroot`) has `NET_ADMIN` in restricted
-  mode too and can change the firewall; restricted mode constrains agents and
-  `node` terminals, not a user who opens a root shell. Full-mode containers
-  are not given `NET_ADMIN`.
+  allowed service. Where it runs depends on the image. A restricted runtime
+  from an image with `egress-gateway=1` (and network policy 2 or later) joins
+  the namespace of its own egress gateway, a small companion container that
+  holds `NET_ADMIN`, the environment network, the published ports and the
+  firewall (`apps/backend/src/core/egress-gateway.ts`); the runtime gets no
+  capability, so nothing in it, a root terminal included, can change the
+  rules. Older runtimes, and any created with `ORKESTRATOR_EGRESS=in-container`
+  (a rollout cap), keep the firewall inside the runtime with `NET_ADMIN`,
+  where a root terminal (`orkroot`) can change it. Full-mode containers get
+  neither `NET_ADMIN` nor a gateway. Do not describe a runtime with an
+  in-container firewall as unable to change it.
 
 ## Configuration Storage
 

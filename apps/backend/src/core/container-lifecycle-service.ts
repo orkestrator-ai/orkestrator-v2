@@ -26,6 +26,7 @@ import {
 } from "./constants.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
+import { removeRuntimeContainer } from "./egress-gateway.js";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { removeStorageVolumes } from "./container-storage.js";
@@ -804,7 +805,9 @@ export async function reconcileContainerOperation(
           ? search.containerIds
           : [];
     for (const id of candidates) {
-      await runCommand("docker", ["rm", "-f", id], { timeoutMs: 60_000 }).catch(() => undefined);
+      await removeRuntimeContainer(id, dockerOwnerNamespace(context.storage.getDataDir())).catch(
+        () => undefined,
+      );
     }
     const kept = operation.candidateStorage
       ? await removeStorageVolumes(context, environment.id, operation.candidateStorage)

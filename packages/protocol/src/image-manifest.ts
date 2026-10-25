@@ -49,6 +49,13 @@ export const IMAGE_CAPABILITIES = {
   "network-policy": 3,
   /** Expiring, refreshed allowlist with durable in-place edits and revocation (step 09). */
   "network-refresh": 1,
+  /**
+   * `orkestrator-egress-gateway`: a companion container that owns a
+   * restricted runtime's network namespace and enforces its firewall, so the
+   * workload joins it with no `NET_ADMIN`; the workload's root entrypoint
+   * runs the firewall step itself and verifies a gateway's enforcement.
+   */
+  "egress-gateway": 1,
   /** Bridge diagnostic files rotated by a launch wrapper (step 11). */
   "bounded-logs": 1,
   /**

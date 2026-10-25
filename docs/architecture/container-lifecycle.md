@@ -476,6 +476,7 @@ one any more.
 | --- | --- | --- | --- |
 | `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` | Permanent | New rebuilds and migrations refused; recovery unaffected | Container lifecycle. Kept: it only ever refuses new work |
 | `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Removed 2026-10-25 | Ignored | It kept new runtimes on the writable layer as a fallback until volume storage passed on every platform; the rootless Linux run on 2026-10-25 was the last ([container qualification](../development/container-qualification.md#rootless-linux-host-2026-10-25)). A backend up to 2.30.0-beta still honours it and reports `disabled-by-configuration`, which the protocol and the rebuild section keep for that reason. `scripts/qualify-backend-upgrade-rollback.ts` sets it on its old release (v2.21.0) |
+| `ORKESTRATOR_EGRESS=in-container` | Egress gateway rollout cap, not a legacy path | A gateway-capable image's restricted runtime keeps its firewall inside, with `NET_ADMIN`, where a root terminal can change it | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)). Remove once the gateway has been qualified on Linux Engine and rootless |
 | `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)) |
 | `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` | Removed 2026-10-25 | Ignored | It bound whole host agent homes read-only and put the Anthropic key in `docker inspect` |
 | `ORKESTRATOR_NETWORK_POLICY=1` | Removed 2026-10-25 | Ignored; a capable image gets at least policy 2 | It joined the shared bridge, where the legacy firewall allows the whole gateway `/24`, siblings included. Exhausted address pools are fixed by widening Docker's `default-address-pools`, as the error says |
@@ -795,6 +796,83 @@ removed, and the policy file is rewritten so a restart applies the same port.
 The network is removed by the deletion ledger's `network` step after the
 environment's containers (never while one is attached), and reviewed cleanup
 offers networks of environments that no longer exist.
+
+### Egress gateway (`egress-gateway=1`)
+
+A restricted runtime whose image declares `egress-gateway=1` (and gets
+network policy 2 or later) has its firewall enforced from outside it
+(`egress-gateway.ts`). A companion container, `<runtime name>-egress`, owns
+the network namespace, and the runtime joins it (`--network
+container:<gateway id>`) with no added capability, so nothing in the runtime,
+`orkroot` terminals included, can change the rules. Before this, the
+firewall ran inside the runtime, which needed `NET_ADMIN`; that remains for
+older images and under the `ORKESTRATOR_EGRESS=in-container` rollout cap.
+The network status reports `enforcement` (`gateway`, `container`, `none`)
+and the Network section says whether a root terminal can change the rules.
+
+- **The gateway.** The same image (already local, with the same firewall
+  scripts), run as root with `NET_ADMIN`, `--init`, a tmpfs `/run`, 128 MiB
+  and 128 PIDs where the daemon enforces them, and the bounded log driver,
+  through `/usr/local/bin/orkestrator-egress-gateway`: it records the policy
+  (`network-policy-entrypoint.sh --record-only`), runs the unchanged
+  `init-firewall.sh` (which starts the refresher) and idles. A failed or
+  missing firewall leaves it running with `DROP` policies and a `failed`
+  report. It holds everything that belongs to a namespace: the environment
+  network, `net.ipv6.conf.all.disable_ipv6=1`, the published ports, the
+  Linux Engine `host.docker.internal` alias (the runtime shares its
+  `/etc/hosts` and `resolv.conf`), the GitHub seed and the policy
+  environment. It carries the owner label, role `egress-gateway`,
+  `orkestrator-egress-environment` and `orkestrator-egress-workload` (the
+  runtime's name), and neither the app label nor `environment-id`, so no
+  listing of runtimes (cleanup review, usage, recovery copies, operation
+  reconciliation) mistakes it for one. The runtime carries
+  `orkestrator-egress-gateway` and `ORKESTRATOR_EGRESS=gateway`, which its
+  root entrypoint records once with the rest of the policy.
+- **Namespace owner.** Published ports, the firewall report, live edits,
+  `--host-ports` and the network endpoint belong to the gateway.
+  `container-network-owner.ts` resolves a runtime's owner from its
+  immutable network mode (cached), and `getHostPort`, the network status,
+  `applyEnvironmentAllowedDomains`, `ensureContainerHostServicePorts`, the
+  Linux host alias repair and the preview resolver read through it.
+- **Creation.** The gateway is created first, the runtime referencing it by
+  id; a runtime create that certainly failed removes the gateway, an
+  ambiguous one keeps it for reconciliation. A same-named gateway left by an
+  interrupted attempt is replaced only when it is ours, for the same runtime,
+  and that runtime does not exist.
+- **Start.** `prepareEgressGatewayForStart` (in
+  `startContainerWithAgentAccounts` and before a rebuild candidate's start)
+  starts a stopped gateway and waits until its firewall reports `applied`;
+  the tmpfs `/run` means an earlier boot's report cannot be read. A `failed`
+  report, a gateway that stops, or 180 s without a report refuses the start
+  (`not-ready`), and a missing gateway is `needs-attention` (rebuild). Docker
+  itself refuses to start a runtime whose gateway is not running ("cannot
+  join network namespace of a non running container"). A runtime still
+  running in the namespace of a gateway that restarted since (its interface
+  is gone, so it has only loopback and fails closed) is stopped and started
+  again. Runtimes have no restart policy, so after a daemon restart Docker
+  starts neither; the backend's start path keeps the order.
+- **Boot verification.** The runtime's root entrypoint does not run the
+  firewall; it connects to TEST-NET-1 (`192.0.2.1:443`) and requires the
+  gateway's `icmp-admin-prohibited` rejection ("No route to host"). A
+  timeout or success is `egress-unverified`, no route at all is
+  `egress-gateway-unavailable`; both fail the boot.
+- **Stop and removal.** `stopRuntimeContainer` stops the runtime, then its
+  gateway, which frees fixed host ports for a rebuild candidate's gateway.
+  `removeRuntimeContainer` removes a runtime and then its gateway (verified
+  by owner and role) everywhere a runtime is removed: recreate, rollback,
+  operation reconciliation, recovery copies, reviewed cleanup and an
+  unpersisted create. The deletion ledger's `container` step also removes
+  every gateway labelled for the environment before the `network` step, and
+  startup removes gateways older than ten minutes whose runtime no longer
+  exists (`sweepOrphanEgressGateways`). A recovery copy keeps its stopped
+  gateway, so restoring it starts it the normal way.
+
+The workload's own `NET_ADMIN` and the `init-firewall.sh` sudo grant are
+gone: every image now runs the firewall step from the root entrypoint before
+privileges drop, and an in-container runtime gets `NET_ADMIN` only for that
+firewall. `no-new-privileges` stays off: the image's entrypoint is `sudo
+network-policy-entrypoint.sh` as `node`, which it would break, and starting
+runtimes as root instead would make every `docker exec` default to root.
 
 ## Agent tools reachability (`container-host-reachability.ts`)
 

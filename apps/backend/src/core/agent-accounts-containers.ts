@@ -1,3 +1,4 @@
+import { prepareEgressGatewayForStart } from "./egress-gateway.js";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -305,6 +306,10 @@ export async function startContainerWithAgentAccounts(
   containerId: string,
   runners: ContainerRunners = defaultRunners,
 ): Promise<void> {
+  // A runtime behind an egress gateway starts only once the gateway's
+  // firewall is applied; one left on a gateway's earlier boot is stopped here
+  // and started below like any stopped runtime.
+  await prepareEgressGatewayForStart(containerId);
   const state = await runCommand("docker", [
     "inspect",
     "--format",

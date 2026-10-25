@@ -172,6 +172,14 @@ export interface EnvironmentNetworkPolicy {
    * domains open only on TCP 443 or the port their entry names.
    */
   policyVersion: 1 | 2 | 3 | null;
+  /**
+   * Where the runtime's firewall runs: `gateway`, a companion container that
+   * owns the namespace (nothing in the runtime, root included, can change
+   * it); `container`, inside the runtime with `NET_ADMIN` (a root terminal
+   * can change it); `none` in full mode. Absent when there is no runtime, or
+   * from a backend that predates the report.
+   */
+  enforcement?: "gateway" | "container" | "none";
   /** The environment's own network as Docker reports it (policy 2). */
   network?: { name: string; subnet: string | null; gateway: string | null } | null;
   /**

@@ -605,6 +605,137 @@ esac
     }
   });
 
+  test("a restricted runtime on a gateway image joins its egress gateway with no capability", async () => {
+    const dir = await tempDir("ork-egress-gateway-");
+    cleanup.push(dir);
+    const environment = lifecycleEnvironment({
+      portMappings: [{ containerPort: 3000, hostPort: 3000, protocol: "tcp" }],
+    });
+    const { context } = memoryLifecycleContext([environment], dir);
+    Object.assign(context, { runtimeFlavor: "agent-test", credentialSources: new Set() });
+    Object.assign(context.storage, {
+      getProject: async () => ({
+        id: "project-1",
+        gitUrl: "https://example.invalid/project.git",
+        localPath: null,
+      }),
+      loadConfig: async () => ({
+        version: "1.0.0",
+        global: { enabledAgentPlatforms: [], allowedDomains: ["one.example"] },
+        repositories: {},
+      }),
+    });
+    await fs.writeFile(
+      path.join(dir, "github-ranges.txt"),
+      "# github-ranges fixture\n203.0.113.0/24\n",
+    );
+    const tar = await tarOf(
+      "image-manifest.json",
+      validManifest({
+        capabilities: {
+          "network-policy": 3,
+          "network-refresh": 1,
+          "staged-inputs": 2,
+          "egress-gateway": 1,
+        },
+      }),
+    );
+    const gatewayId = "d".repeat(64);
+    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const { resetNetworkOwnerCache } = await import("../src/core/container-network-owner");
+    const script = (workloadCreate: string) => `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  context) printf 'unix:///var/run/docker.sock\\n' ;;
+  info) printf '{"OSType":"linux","OperatingSystem":"Debian","Architecture":"x86_64","MemoryLimit":true,"PidsLimit":true,"SecurityOptions":[]}\\n' ;;
+  create)
+    case "$*" in
+      *"--entrypoint /usr/local/bin/orkestrator-egress-gateway"*) printf '${gatewayId}\\n' ;;
+      *) ${workloadCreate} ;;
+    esac ;;
+  cp) cat '${tar}' ;;
+  network) [ "$2" = inspect ] && { echo "network not found" >&2; exit 1; }; exit 0 ;;
+esac
+`;
+    const saved = process.env.ORKESTRATOR_EGRESS;
+    try {
+      delete process.env.ORKESTRATOR_EGRESS;
+      await withDockerScript(script("printf 'created-workload\\n'"), async (log) => {
+        expect(await createDockerContainer(environment, context, { imageId: IMAGE_ID })).toBe(
+          "created-workload",
+        );
+        const creates = (await log.read())
+          .split("\n")
+          .filter((line) => line.startsWith("create --name ork-"));
+        expect(creates).toHaveLength(2);
+        const [gateway, workload] = creates as [string, string];
+        // The gateway owns the namespace: capability, network, IPv6 setting,
+        // published ports, policy and its GitHub seed.
+        expect(gateway).toMatch(/--name ork-[0-9a-f]{16}-env-lifecycle-egress /);
+        expect(gateway).toContain("--label orkestrator-resource-role=egress-gateway");
+        expect(gateway).toContain("--label orkestrator-egress-environment=env-lifecycle");
+        expect(gateway).toMatch(
+          /--label orkestrator-egress-workload=ork-[0-9a-f]{16}-env-lifecycle /,
+        );
+        expect(gateway).not.toContain("--label app=");
+        expect(gateway).not.toContain("--label environment-id=");
+        expect(gateway).toContain("--entrypoint /usr/local/bin/orkestrator-egress-gateway");
+        expect(gateway).toContain("--cap-add NET_ADMIN");
+        expect(gateway).toContain("--tmpfs /run:rw,nosuid,nodev,mode=0755");
+        expect(gateway).toContain("--network ork-");
+        expect(gateway).toContain("--sysctl net.ipv6.conf.all.disable_ipv6=1");
+        expect(gateway).toContain("dst=/etc/orkestrator-seed/github-ranges");
+        expect(gateway).toContain("-p 127.0.0.1:3000:3000/tcp");
+        expect(gateway).toContain("-p 127.0.0.1::4097/tcp");
+        expect(gateway).toContain("-e NETWORK_MODE=restricted");
+        expect(gateway).toContain("-e ALLOWED_DOMAINS=one.example");
+        expect(gateway).toContain("-e ORKESTRATOR_NETWORK_POLICY=3");
+        expect(gateway).toMatch(/-e ORKESTRATOR_INGRESS_PORTS=3000,4096,4097/);
+        // The workload joins it by id and holds nothing of the namespace.
+        expect(workload).toContain(`--network container:${gatewayId}`);
+        expect(workload).toMatch(
+          /--label orkestrator-egress-gateway=ork-[0-9a-f]{16}-env-lifecycle-egress /,
+        );
+        expect(workload).toContain("-e ORKESTRATOR_EGRESS=gateway");
+        expect(workload).toContain("--label orkestrator-network-policy=3");
+        expect(workload).not.toContain("NET_ADMIN");
+        expect(workload).not.toContain(" -p ");
+        expect(workload).not.toContain("--sysctl");
+        expect(workload).not.toContain("--add-host");
+        expect(workload).not.toContain("github-ranges");
+      });
+
+      // A workload Docker certainly did not create takes its gateway with it.
+      resetNetworkOwnerCache();
+      await withDockerScript(
+        script("echo 'Error response from daemon: invalid' >&2; exit 1"),
+        async (log) => {
+          await expect(
+            createDockerContainer(environment, context, { imageId: IMAGE_ID }),
+          ).rejects.toThrow();
+          expect(await log.read()).toContain(`rm -f ${gatewayId}`);
+        },
+      );
+
+      // The rollout cap keeps the firewall in the workload.
+      process.env.ORKESTRATOR_EGRESS = "in-container";
+      await withDockerScript(script("printf 'created-workload\\n'"), async (log) => {
+        await createDockerContainer(environment, context, { imageId: IMAGE_ID });
+        const creates = (await log.read())
+          .split("\n")
+          .filter((line) => line.startsWith("create --name ork-"));
+        expect(creates).toHaveLength(1);
+        expect(creates[0]).toContain("--cap-add NET_ADMIN");
+        expect(creates[0]).toContain("--network ork-");
+        expect(creates[0]).toContain("-p 127.0.0.1::4097/tcp");
+        expect(creates[0]).not.toContain("ORKESTRATOR_EGRESS");
+      });
+    } finally {
+      if (saved === undefined) delete process.env.ORKESTRATOR_EGRESS;
+      else process.env.ORKESTRATOR_EGRESS = saved;
+    }
+  });
+
   test("a create uses the id resolved at admission even after the tag moves", async () => {
     const dir = await tempDir("ork-pinned-image-");
     cleanup.push(dir);

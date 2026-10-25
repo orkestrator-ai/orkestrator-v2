@@ -29,6 +29,7 @@ import { openRegistryWriter } from "./registry-writer-lease.js";
 import { shutdownContainerLogService } from "./container-log-service.js";
 import { shutdownOomEventWatcher, startOomEventWatcher } from "./container-oom-events.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
+import { sweepOrphanEgressGateways } from "./egress-gateway.js";
 import { DesignService } from "./design/index.js";
 import { PreviewRuntime } from "./preview-runtime.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
@@ -1280,6 +1281,11 @@ export class OrkestratorBackend {
       // Probe containers are never started; one left by an interrupted
       // manifest read is removed in the background.
       void cleanupStaleManifestProbes(this.context).catch(() => undefined);
+      // Egress gateways whose runtime is gone (removed by hand, or by an
+      // interrupted removal) are removed in the background too.
+      void sweepOrphanEgressGateways(dockerOwnerNamespace(this.context.storage.getDataDir())).catch(
+        () => undefined,
+      );
     }
     // Counts out-of-memory kills of this installation's containers for the
     // usage view; a read-only observer, stopped at shutdown.

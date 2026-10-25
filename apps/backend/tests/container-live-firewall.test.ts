@@ -14,6 +14,9 @@ import path from "node:path";
 import { runCommand } from "../src/core/shell";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
+import { networkOwnerContainer } from "../src/core/container-network-owner";
+import { getHostPort } from "../src/core/commands-container-exec";
+import { prepareEgressGatewayForStart, stopRuntimeContainer } from "../src/core/egress-gateway";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 
@@ -147,9 +150,28 @@ async function booted(containerId: string): Promise<void> {
   }
 }
 
+/**
+ * Starts a runtime the way the backend does: its egress gateway first (when
+ * the image has one), then the runtime once the gateway's firewall applied.
+ */
+async function startRuntime(containerId: string): Promise<void> {
+  await prepareEgressGatewayForStart(containerId);
+  await docker(["start", containerId]);
+  await booted(containerId);
+}
+
+async function restartRuntime(containerId: string): Promise<void> {
+  await stopRuntimeContainer(containerId);
+  await startRuntime(containerId);
+}
+
 async function refresherPids(containerId: string): Promise<string[]> {
   const out = await docker([
     "exec",
+    // As node: a gateway's default exec user is root, and this probe's own
+    // shell is a session leader too.
+    "-u",
+    "node",
     containerId,
     "sh",
     "-c",
@@ -181,8 +203,9 @@ describe("C23 allowlist edits, refresh and revocation", () => {
         runtimeGeneration: 1,
       });
       await context.storage.updateEnvironment(environment.id, { containerId, status: "running" });
-      await docker(["start", containerId]);
-      await booted(containerId);
+      // The firewall's namespace owner: the egress gateway on a gateway image.
+      const firewall = await networkOwnerContainer(containerId);
+      await startRuntime(containerId);
 
       // Booted with the saved list, which it reports by revision.
       let policy = await environmentNetworkPolicy(environment.id, context);
@@ -192,29 +215,95 @@ describe("C23 allowlist edits, refresh and revocation", () => {
       expect(await probe(containerId, "https://example.com/")).not.toBe(0);
       // Resolved addresses carry kernel expiry, as HTTPS tuples (policy 3).
       expect(
-        await docker(["exec", "--user", "root", containerId, "ipset", "list", "allowed-domains"]),
+        await docker(["exec", "--user", "root", firewall, "ipset", "list", "allowed-domains"]),
       ).toMatch(/^\d+\.\d+\.\d+\.\d+,tcp:443 timeout \d+$/m);
 
-      // One root refresher, which node can neither signal nor duplicate.
-      const [refresher] = await refresherPids(containerId);
+      // One root refresher, which node can neither signal nor duplicate. The
+      // root entrypoint runs the firewall; node has no sudo grant for it.
+      const [refresher] = await refresherPids(firewall);
       expect(refresher).toBeTruthy();
       expect(
-        await dockerStatus(["exec", "-u", "node", containerId, "kill", "-TERM", refresher!]),
+        await dockerStatus(["exec", "-u", "node", firewall, "kill", "-TERM", refresher!]),
       ).toBe(1);
-      await docker(["exec", "-u", "node", containerId, "sudo", "/usr/local/bin/init-firewall.sh"]);
-      expect(await refresherPids(containerId)).toHaveLength(1);
-      // node cannot write the firewall's report or schedule.
       expect(
         await dockerStatus([
           "exec",
           "-u",
           "node",
           containerId,
+          "sudo",
+          "-n",
+          "/usr/local/bin/init-firewall.sh",
+        ]),
+      ).toBe(1);
+      expect(await refresherPids(firewall)).toHaveLength(1);
+      // node cannot write the firewall's report or schedule.
+      expect(
+        await dockerStatus([
+          "exec",
+          "-u",
+          "node",
+          firewall,
           "sh",
           "-c",
           "echo 1 > /run/orkestrator-firewall/refresh-delay",
         ]),
       ).toBe(1);
+
+      if (firewall !== containerId) {
+        // External enforcement: the runtime holds no capability, so root in it
+        // cannot change the gateway's rules, and its boot verified them.
+        expect(
+          await docker(["exec", containerId, "awk", "/^CapEff/ { print $2 }", "/proc/self/status"]),
+        ).toBe("0000000000000000");
+        expect(
+          await docker(["exec", containerId, "cat", "/run/orkestrator-network/firewall-boot"]),
+        ).toBe("gateway");
+        for (const tamper of [
+          ["iptables", "-P", "OUTPUT", "ACCEPT"],
+          ["iptables", "-F"],
+          ["ipset", "flush", "allowed-domains"],
+        ]) {
+          expect(await dockerStatus(["exec", "--user", "orkroot", containerId, ...tamper])).toBe(1);
+        }
+        expect(await probe(containerId, "https://example.com/")).not.toBe(0);
+        expect(await probe(containerId, "https://registry.npmjs.org/")).toBe(0);
+        expect((await environmentNetworkPolicy(environment.id, context)).enforcement).toBe(
+          "gateway",
+        );
+        // The runtime's published ports are the gateway's.
+        await docker([
+          "exec",
+          "-d",
+          "-u",
+          "node",
+          containerId,
+          "node",
+          "-e",
+          'require("http").createServer((q, r) => r.end("ok")).listen(4096)',
+        ]);
+        const hostPort = await getHostPort(containerId, 4096);
+        expect(hostPort).toBeGreaterThan(0);
+        let answered = "";
+        for (let attempt = 0; attempt < 30 && answered !== "ok"; attempt += 1) {
+          answered = await fetch(`http://127.0.0.1:${hostPort}/`)
+            .then((response) => response.text())
+            .catch(() => "");
+          if (answered !== "ok") await Bun.sleep(200);
+        }
+        expect(answered).toBe("ok");
+
+        // A gateway restart leaves the running runtime with only loopback
+        // (fail closed); the start path stops it and starts it again once
+        // the gateway's new boot applied its firewall.
+        await docker(["restart", "-t", "5", firewall]);
+        expect(await probe(containerId, "https://registry.npmjs.org/")).not.toBe(0);
+        expect(await prepareEgressGatewayForStart(containerId)).toBe("restarted-gateway");
+        await docker(["start", containerId]);
+        await booted(containerId);
+        expect(await probe(containerId, "https://registry.npmjs.org/")).toBe(0);
+        expect(await probe(containerId, "https://example.com/")).not.toBe(0);
+      }
 
       // Saved but not yet applied is reported as pending, then applied in
       // place. A bare domain is HTTPS only; port 80 needs its own entry.
@@ -232,7 +321,7 @@ describe("C23 allowlist edits, refresh and revocation", () => {
       });
       expect((await applyEnvironmentAllowedDomains(environment.id, context)).kind).toBe("applied");
       expect(await probe(containerId, "http://example.com/")).toBe(0);
-      expect(await docker(["exec", containerId, "cat", "/etc/orkestrator/allowed-domains"])).toBe(
+      expect(await docker(["exec", firewall, "cat", "/etc/orkestrator/allowed-domains"])).toBe(
         "registry.npmjs.org,example.com,example.com:80",
       );
 
@@ -270,7 +359,7 @@ describe("C23 allowlist edits, refresh and revocation", () => {
         "exec",
         "--user",
         "root",
-        containerId,
+        firewall,
         "/usr/local/bin/update-firewall.sh",
         "--refresh",
       ]);
@@ -284,13 +373,13 @@ describe("C23 allowlist edits, refresh and revocation", () => {
           "exec",
           "--user",
           "root",
-          containerId,
+          firewall,
           "/usr/local/bin/update-firewall.sh",
           "--set-domains",
           "example.com;id",
         ]),
       ).toBe(1);
-      expect(await docker(["exec", containerId, "cat", "/etc/orkestrator/allowed-domains"])).toBe(
+      expect(await docker(["exec", firewall, "cat", "/etc/orkestrator/allowed-domains"])).toBe(
         "registry.npmjs.org",
       );
 
@@ -299,23 +388,21 @@ describe("C23 allowlist edits, refresh and revocation", () => {
         allowedDomains: ["registry.npmjs.org", "example.com"],
       });
       expect((await applyEnvironmentAllowedDomains(environment.id, context)).kind).toBe("applied");
-      await docker(["restart", "-t", "5", containerId]);
-      await booted(containerId);
+      await restartRuntime(containerId);
       policy = await environmentNetworkPolicy(environment.id, context);
       expect(policy.domains).toBe("applied");
       expect(await probe(containerId, "https://example.com/")).toBe(0);
-      expect(await refresherPids(containerId)).toHaveLength(1);
+      expect(await refresherPids(firewall)).toHaveLength(1);
 
       // An edit saved while the container is stopped is pending until applied.
-      await docker(["stop", "-t", "5", containerId]);
+      await stopRuntimeContainer(containerId);
       await context.storage.updateEnvironment(environment.id, {
         allowedDomains: ["registry.npmjs.org"],
       });
       expect((await applyEnvironmentAllowedDomains(environment.id, context)).kind).toBe(
         "not-running",
       );
-      await docker(["start", containerId]);
-      await booted(containerId);
+      await startRuntime(containerId);
       expect((await environmentNetworkPolicy(environment.id, context)).domains).toBe("pending");
       expect(await probe(containerId, "https://example.com/")).toBe(0);
       expect((await applyEnvironmentAllowedDomains(environment.id, context)).kind).toBe("applied");
@@ -417,11 +504,12 @@ describe("policy 3 kernel tuple qualification", () => {
         imageId: resolved.imageId,
       });
       await context.storage.updateEnvironment(environment.id, { containerId, status: "running" });
+      const firewall = await networkOwnerContainer(containerId);
       const network = await docker([
         "inspect",
         "--format",
         "{{.HostConfig.NetworkMode}}",
-        containerId,
+        firewall,
       ]);
       const peer = await docker([
         "run",
@@ -454,15 +542,16 @@ describe("policy 3 kernel tuple qualification", () => {
           for (const port of [18080, 18081, 18082])
             expect(await echoProbe(peer, protocol, port)).toBe(0);
         }
-        await docker(["start", containerId]);
-        await booted(containerId);
+        // The peer runs before the gateway, so the gateway must be started
+        // after it joined the network: start the runtime the backend's way.
+        await startRuntime(containerId);
         const policy = await environmentNetworkPolicy(environment.id, context);
         expect(policy.policyVersion).toBe(3);
         const members = await docker([
           "exec",
           "--user",
           "root",
-          containerId,
+          firewall,
           "ipset",
           "list",
           "allowed-domains",

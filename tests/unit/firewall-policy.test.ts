@@ -49,8 +49,15 @@ describe("container firewall policy", () => {
     expect(dockerfile).not.toContain("SETENV:");
     expect(dockerfile).not.toMatch(/node\s+ALL=\(orkroot\)\s+NOPASSWD:\s+ALL/);
     expect(wrapper).toContain(`${policyPath}/network-mode`);
-    expect(entrypoint).toContain("if ! sudo /usr/local/bin/init-firewall.sh");
+    // The root entrypoint runs the firewall before privileges drop; node has
+    // no grant for it, and the node entrypoint only reads the recorded result.
+    expect(entrypoint).not.toContain("sudo /usr/local/bin/init-firewall.sh");
+    expect(entrypoint).toContain("/run/orkestrator-network/firewall-boot");
     expect(entrypoint).toContain(`${policyPath}/network-mode`);
+    expect(bootstrap.indexOf("elif /usr/local/bin/init-firewall.sh; then")).toBeGreaterThan(0);
+    expect(bootstrap.indexOf("elif /usr/local/bin/init-firewall.sh; then")).toBeLessThan(
+      bootstrap.indexOf("exec setpriv"),
+    );
     expect(bootstrap).toContain("chown root:root");
     expect(bootstrap).toContain(
       "if [ ! -e /etc/orkestrator/network-mode ] && [ ! -e /etc/orkestrator/allowed-domains ]",
@@ -64,8 +71,10 @@ describe("container firewall policy", () => {
       'ENTRYPOINT ["/usr/bin/sudo", "/usr/local/bin/network-policy-entrypoint.sh"]',
     );
     expect(dockerfile).not.toContain("update-firewall.sh *");
-    expect(dockerfile).toContain("NOPASSWD: /usr/local/bin/init-firewall.sh");
+    expect(dockerfile).not.toContain("NOPASSWD: /usr/local/bin/init-firewall.sh");
     expect(dockerfile).toContain("NOPASSWD: /usr/local/bin/run-root-setup.sh *");
+    // The gateway entrypoint is never a sudo target.
+    expect(dockerfile).not.toContain("NOPASSWD: /usr/local/bin/orkestrator-egress-gateway");
   });
 
   test("privileged scripts read only the root-owned policy", () => {
@@ -88,6 +97,8 @@ describe("container firewall policy", () => {
         script,
         read("docker/network-policy-entrypoint.sh")
           .replaceAll(policyPath, join(dir, "policy"))
+          .replaceAll("/run/orkestrator-network", join(dir, "run-network"))
+          .replaceAll("/usr/local/bin/init-firewall.sh", join(dir, "init-firewall.sh"))
           .replaceAll("/usr/local/bin/entrypoint.sh", join(dir, "node-entrypoint.sh")),
       );
       writeStub(bin, "install", 'mkdir -p "${@: -1}"');
@@ -638,6 +649,8 @@ esac`,
         script,
         read("docker/network-policy-entrypoint.sh")
           .replaceAll(policyPath, join(dir, "policy"))
+          .replaceAll("/run/orkestrator-network", join(dir, "run-network"))
+          .replaceAll("/usr/local/bin/init-firewall.sh", join(dir, "init-firewall.sh"))
           .replaceAll("/usr/local/bin/entrypoint.sh", join(dir, "node-entrypoint.sh")),
       );
       writeStub(bin, "install", 'mkdir -p "${@: -1}"');
@@ -668,6 +681,271 @@ esac`,
     }
   });
 
+  // The root entrypoint with stubbed tools: `timeout` stands in for the
+  // probe's connect and prints what the kernel would report.
+  function bootstrapFixture(dir: string, probe: { exit: number; output: string }) {
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    const script = join(dir, "network-policy-entrypoint.sh");
+    writeFileSync(
+      script,
+      read("docker/network-policy-entrypoint.sh")
+        .replaceAll(policyPath, join(dir, "policy"))
+        .replaceAll("/run/orkestrator-network", join(dir, "run-network"))
+        .replaceAll("/usr/local/bin/init-firewall.sh", join(dir, "init-firewall.sh"))
+        .replaceAll("/usr/local/bin/entrypoint.sh", join(dir, "node-entrypoint.sh")),
+    );
+    writeStub(bin, "install", 'mkdir -p "${@: -1}"');
+    writeStub(bin, "chown", "exit 0");
+    writeStub(bin, "stat", "printf '0:644\\n'");
+    writeStub(bin, "setpriv", 'shift 3; exec "$@"');
+    writeStub(bin, "timeout", `printf '%s\\n' '${probe.output}' >&2; exit ${probe.exit}`);
+    writeFileSync(
+      join(dir, "init-firewall.sh"),
+      `#!/bin/bash\nprintf 'ran\\n' >> "${join(dir, "init-calls")}"\nexit "\${INIT_EXIT:-0}"\n`,
+    );
+    chmodSync(join(dir, "init-firewall.sh"), 0o755);
+    writeFileSync(join(dir, "node-entrypoint.sh"), "#!/bin/bash\nexit 0\n");
+    chmodSync(join(dir, "node-entrypoint.sh"), 0o755);
+    return (env: Record<string, string>) => {
+      const result = Bun.spawnSync({
+        cmd: ["bash", script],
+        env: { ...process.env, PATH: `${bin}:${gnuToolPath}`, ...env },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      let boot = "";
+      let calls = "";
+      try {
+        boot = readFileSync(join(dir, "run-network", "firewall-boot"), "utf8").trim();
+      } catch {}
+      try {
+        calls = readFileSync(join(dir, "init-calls"), "utf8");
+      } catch {}
+      return {
+        exitCode: result.exitCode,
+        boot,
+        initRuns: calls.split("\n").filter(Boolean).length,
+      };
+    };
+  }
+
+  test.each([
+    [
+      "rejected by the gateway's policy",
+      { exit: 1, output: "bash: connect: No route to host" },
+      "gateway",
+    ],
+    [
+      "the gateway has gone",
+      { exit: 1, output: "bash: connect: Network is unreachable" },
+      "gateway-unavailable",
+    ],
+    ["the attempt left the namespace", { exit: 124, output: "" }, "gateway-unverified"],
+    ["the destination answered", { exit: 0, output: "" }, "gateway-unverified"],
+  ])(
+    "a gateway workload records its egress once and verifies enforcement without running the firewall: %s",
+    (_name, probe, expected) => {
+      const dir = mkdtempSync(join(tmpdir(), "ork-policy-egress-"));
+      try {
+        const run = bootstrapFixture(dir, probe);
+        const env = {
+          NETWORK_MODE: "restricted",
+          ALLOWED_DOMAINS: "example.org",
+          ORKESTRATOR_NETWORK_POLICY: "3",
+          ORKESTRATOR_EGRESS: "gateway",
+        };
+        const first = run(env);
+        expect(first.exitCode).toBe(0);
+        expect(first.boot).toBe(expected);
+        expect(first.initRuns).toBe(0);
+        expect(readFileSync(join(dir, "policy/egress"), "utf8")).toBe("gateway\n");
+        // A later caller cannot switch the recorded enforcement back.
+        const second = run({ ...env, ORKESTRATOR_EGRESS: "container" });
+        expect(second.boot).toBe(expected);
+        expect(second.initRuns).toBe(0);
+        expect(readFileSync(join(dir, "policy/egress"), "utf8")).toBe("gateway\n");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("the root entrypoint runs the firewall itself and records the outcome per mode", () => {
+    for (const [mode, initExit, expected] of [
+      ["restricted", "0", "applied"],
+      ["restricted", "1", "failed"],
+      ["full", "0", "full"],
+      ["full", "1", "full-failed"],
+    ] as const) {
+      const dir = mkdtempSync(join(tmpdir(), "ork-policy-init-"));
+      try {
+        const run = bootstrapFixture(dir, { exit: 1, output: "" });
+        const result = run({
+          NETWORK_MODE: mode,
+          ALLOWED_DOMAINS: "example.org",
+          ORKESTRATOR_NETWORK_POLICY: "3",
+          INIT_EXIT: initExit,
+        });
+        expect(result.exitCode).toBe(0);
+        expect(result.boot).toBe(expected);
+        expect(result.initRuns).toBe(1);
+        // No egress record defaults to the in-container firewall.
+        expect(readFileSync(join(dir, "policy/egress"), "utf8")).toBe("container\n");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("the root entrypoint refuses an unknown egress value and --record-only stops before the firewall", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ork-policy-record-"));
+    try {
+      const run = bootstrapFixture(dir, { exit: 1, output: "" });
+      expect(run({ NETWORK_MODE: "restricted", ORKESTRATOR_EGRESS: "sidecar" }).exitCode).toBe(1);
+      const script = join(dir, "network-policy-entrypoint.sh");
+      const recorded = Bun.spawnSync({
+        cmd: ["bash", script, "--record-only"],
+        env: {
+          ...process.env,
+          PATH: `${join(dir, "bin")}:${gnuToolPath}`,
+          NETWORK_MODE: "restricted",
+          ORKESTRATOR_NETWORK_POLICY: "3",
+        },
+      });
+      expect(recorded.exitCode).toBe(0);
+      expect(readFileSync(join(dir, "policy/network-mode"), "utf8")).toBe("restricted\n");
+      expect(() => readFileSync(join(dir, "init-calls"), "utf8")).toThrow();
+      expect(() => readFileSync(join(dir, "run-network", "firewall-boot"), "utf8")).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the root entrypoint opens this boot's record before the firewall step and hands over its id", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ork-policy-bootrecord-"));
+    try {
+      const run = bootstrapFixture(dir, { exit: 1, output: "" });
+      const script = join(dir, "network-policy-entrypoint.sh");
+      mkdirSync(join(dir, "boot"));
+      writeFileSync(
+        script,
+        readFileSync(script, "utf8")
+          .replace("BOOT_STATUS_DIR=/run/orkestrator\n", `BOOT_STATUS_DIR=${join(dir, "boot")}\n`)
+          .replace(
+            "cat /proc/sys/kernel/random/uuid",
+            "printf 01234567-89ab-cdef-0123-456789abcdef",
+          )
+          .replace("/proc/1/stat", join(dir, "stat")),
+      );
+      // PID 1's start time is field 22.
+      writeFileSync(
+        join(dir, "stat"),
+        `${Array.from({ length: 21 }, () => "0").join(" ")} 4242 0\n`,
+      );
+      // The firewall stub records the boot record it sees while it runs.
+      writeFileSync(
+        join(dir, "init-firewall.sh"),
+        `#!/bin/bash\ncat "${join(dir, "boot", "boot-status.json")}" > "${join(dir, "seen")}"\n`,
+      );
+      writeFileSync(
+        join(dir, "node-entrypoint.sh"),
+        `#!/bin/bash\nprintf '%s' "$ORKESTRATOR_BOOT_ID" > "${join(dir, "handed")}"\n`,
+      );
+      expect(run({ NETWORK_MODE: "restricted", ORKESTRATOR_NETWORK_POLICY: "3" }).exitCode).toBe(0);
+      const seen = JSON.parse(readFileSync(join(dir, "seen"), "utf8")) as Record<string, unknown>;
+      expect(seen.phase).toBe("initializing");
+      expect(seen.version).toBe(1);
+      expect(seen.pid1Start).toBe("4242");
+      expect(readFileSync(join(dir, "handed"), "utf8")).toBe(String(seen.bootId));
+      expect(String(seen.bootId)).toMatch(/^[0-9a-f-]{36}$/);
+      // The node entrypoint keeps a handed-over id and drops it from its environment.
+      const entrypoint = read("docker/entrypoint.sh");
+      expect(entrypoint).toContain('BOOT_ID="$ORKESTRATOR_BOOT_ID"');
+      expect(entrypoint).toContain("unset ORKESTRATOR_BOOT_ID");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the node entrypoint fails a restricted boot unless the firewall applied or a gateway enforces it", () => {
+    const entrypoint = read("docker/entrypoint.sh");
+    const block = entrypoint.slice(
+      entrypoint.indexOf('case "$firewall_boot" in'),
+      entrypoint.indexOf("write_boot_status network-ready"),
+    );
+    for (const [result, code] of [
+      ["gateway-unverified", "egress-unverified"],
+      ["gateway-unavailable", "egress-gateway-unavailable"],
+      ["missing", "firewall-missing"],
+    ]) {
+      const arm = block.slice(block.indexOf(`    ${result})`));
+      expect(arm.slice(0, arm.indexOf(";;"))).toContain(`BOOT_FAILURE_CODE=${code}`);
+      expect(arm.slice(0, arm.indexOf(";;"))).toContain("exit 1");
+    }
+    // Anything else (failed, or no record at all) fails unless the mode is full.
+    const fallback = block.slice(block.indexOf("    *)"));
+    expect(fallback).toContain('if [ "${network_mode:-}" != "full" ]; then');
+    expect(fallback).toContain("BOOT_FAILURE_CODE=firewall-failed");
+  });
+
+  test("the egress gateway records the policy, applies the unchanged firewall and idles", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ork-egress-gateway-"));
+    try {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      const script = join(dir, "gateway.sh");
+      writeFileSync(
+        script,
+        read("docker/orkestrator-egress-gateway.sh")
+          .replaceAll("/usr/local/bin/network-policy-entrypoint.sh", join(dir, "record.sh"))
+          .replaceAll("/usr/local/bin/init-firewall.sh", join(dir, "init-firewall.sh"))
+          .replaceAll("/run/orkestrator-firewall", join(dir, "run-firewall")),
+      );
+      writeFileSync(
+        join(dir, "record.sh"),
+        `#!/bin/bash\nprintf 'record %s\\n' "$*" >> "${join(dir, "calls")}"\n`,
+      );
+      writeFileSync(
+        join(dir, "init-firewall.sh"),
+        `#!/bin/bash\nprintf 'init\\n' >> "${join(dir, "calls")}"\nexit "\${INIT_EXIT:-0}"\n`,
+      );
+      chmodSync(join(dir, "record.sh"), 0o755);
+      chmodSync(join(dir, "init-firewall.sh"), 0o755);
+      writeStub(bin, "sleep", "exit 0");
+      writeStub(bin, "iptables", `printf 'iptables %s\\n' "$*" >> "${join(dir, "calls")}"`);
+      writeStub(bin, "install", 'mkdir -p "${@: -1}"');
+      for (const initExit of ["0", "1"]) {
+        rmSync(join(dir, "calls"), { force: true });
+        rmSync(join(dir, "run-firewall"), { recursive: true, force: true });
+        const result = Bun.spawnSync({
+          cmd: ["bash", script],
+          env: { ...process.env, PATH: `${bin}:${gnuToolPath}`, INIT_EXIT: initExit },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        // A failed firewall keeps the gateway, closed, with a failed report
+        // even when the script never wrote one, so the start gate refuses.
+        expect(result.exitCode).toBe(0);
+        const calls = readFileSync(join(dir, "calls"), "utf8");
+        expect(calls.startsWith("record --record-only\ninit\n")).toBe(true);
+        if (initExit === "0") {
+          expect(calls).not.toContain("iptables");
+        } else {
+          expect(calls).toContain("iptables -P OUTPUT DROP");
+          expect(
+            JSON.parse(readFileSync(join(dir, "run-firewall", "firewall.json"), "utf8")).state,
+          ).toBe("failed");
+        }
+      }
+      expect(read("docker/orkestrator-egress-gateway.sh")).toContain(
+        "ORKESTRATOR_CAPABILITY egress-gateway=1",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("policy capture validates port lists and keeps the legacy two-file policy readable", () => {
     const bootstrap = read("docker/network-policy-entrypoint.sh");
     expect(bootstrap).toContain("ORKESTRATOR_NETWORK_POLICY");
@@ -675,7 +953,7 @@ esac`,
     expect(bootstrap).toContain("if [ ! -e /etc/orkestrator/network-policy ]; then");
     const dockerfile = read("docker/Dockerfile");
     expect(dockerfile).toContain(
-      'env_keep += "NETWORK_MODE ALLOWED_DOMAINS ORKESTRATOR_NETWORK_POLICY ORKESTRATOR_HOST_SERVICE_PORTS ORKESTRATOR_INGRESS_PORTS"',
+      'env_keep += "NETWORK_MODE ALLOWED_DOMAINS ORKESTRATOR_NETWORK_POLICY ORKESTRATOR_HOST_SERVICE_PORTS ORKESTRATOR_INGRESS_PORTS ORKESTRATOR_EGRESS"',
     );
     const update = read("docker/update-firewall.sh");
     // The replacement chain is attached before the old one is removed.

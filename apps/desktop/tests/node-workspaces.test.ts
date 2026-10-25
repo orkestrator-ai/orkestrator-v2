@@ -1,7 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, setSystemTime, test } from "bun:test";
 import {
   NodeWorkspaceScopes,
   openNodeWorkspace,
+  WORKSPACE_DIRECT_RETRY_MS,
   type WorkspaceBinding,
 } from "../electron/node-workspaces";
 
@@ -68,4 +69,92 @@ test("workspace epoch changes and failed grant renewal replace binding through c
   await Promise.resolve();
   expect(calls).toContainEqual(["close_node_workspace", { workspaceId: "new-2" }]);
   expect(calls).toContainEqual(["close_node_workspace", { workspaceId: "old" }]);
+});
+
+const directBinding = (id: string): WorkspaceBinding => ({
+  workspaceId: id,
+  nodeId: "bk_c",
+  baseUrl: "https://c.example.ts.net",
+  token: `grant-${id}`,
+  params: { node: "C", path: "direct", route: "https" },
+});
+
+async function settle(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+}
+
+test("a relayed panel in use retries its direct route after the retry interval", async () => {
+  setSystemTime(new Date("2026-10-25T00:00:00.000Z"));
+  try {
+    const calls: Array<[string, unknown]> = [];
+    const retargeted: WorkspaceBinding[] = [];
+    let reopens = 0;
+    const scopes = new NodeWorkspaceScopes(async () => ({}));
+    scopes.track("panel", "relayed", {
+      invoke: async (command, args) => {
+        calls.push([command, args]);
+        return {};
+      },
+      reopen: async () => {
+        reopens++;
+        return reopens === 1 ? binding("still-relayed", 45001) : directBinding("direct");
+      },
+      retarget: (value) => retargeted.push(value),
+      relayed: true,
+    });
+
+    // Used, but within the interval of the probe that chose the relay.
+    scopes.noteUse("panel");
+    await settle();
+    expect(reopens).toBe(0);
+
+    // The direct route still fails: the trial workspace is closed, the relay kept.
+    setSystemTime(new Date(Date.now() + WORKSPACE_DIRECT_RETRY_MS));
+    scopes.noteUse("panel");
+    await settle();
+    expect(reopens).toBe(1);
+    expect(retargeted).toEqual([]);
+    expect(calls).toContainEqual(["close_node_workspace", { workspaceId: "still-relayed" }]);
+
+    // Idle time alone never probes; the next use after the interval does.
+    setSystemTime(new Date(Date.now() + 3 * WORKSPACE_DIRECT_RETRY_MS));
+    expect(reopens).toBe(1);
+    scopes.noteUse("panel");
+    await settle();
+    expect(reopens).toBe(2);
+    expect(retargeted.map((value) => value.workspaceId)).toEqual(["direct"]);
+    expect(calls).toContainEqual(["close_node_workspace", { workspaceId: "relayed" }]);
+
+    // Once direct, use never probes again.
+    setSystemTime(new Date(Date.now() + 2 * WORKSPACE_DIRECT_RETRY_MS));
+    scopes.noteUse("panel");
+    await settle();
+    expect(reopens).toBe(2);
+    scopes.release("panel");
+  } finally {
+    setSystemTime();
+  }
+});
+
+test("a direct panel is never re-probed on use", async () => {
+  setSystemTime(new Date("2026-10-25T00:00:00.000Z"));
+  try {
+    let reopens = 0;
+    const scopes = new NodeWorkspaceScopes(async () => ({}));
+    scopes.track("panel", "direct", {
+      invoke: async () => ({}),
+      reopen: async () => {
+        reopens++;
+        return directBinding("other");
+      },
+    });
+    setSystemTime(new Date(Date.now() + 2 * WORKSPACE_DIRECT_RETRY_MS));
+    scopes.noteUse("panel");
+    scopes.noteUse("unknown-scope");
+    await settle();
+    expect(reopens).toBe(0);
+    scopes.release("panel");
+  } finally {
+    setSystemTime();
+  }
 });

@@ -1009,7 +1009,12 @@ function registerIpc(): void {
   registerMainIpc({
     getBackend: (event) => {
       const scope = scopeForEvent(event);
-      return { invoke: (command, args) => manager().invoke(command, args, scope) };
+      return {
+        invoke: (command, args) => {
+          nodeWorkspaceScopes?.noteUse(scope);
+          return manager().invoke(command, args, scope);
+        },
+      };
     },
     getMainWindow: (event) => ipcContextForEvent(event).window,
     getArtifactHosts: (event) => ipcContextForEvent(event).artifactHosts,

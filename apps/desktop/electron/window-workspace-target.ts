@@ -1,5 +1,6 @@
 import type { ConnectionManager } from "./connection-manager.js";
 import {
+  isDirectBinding,
   openNodeWorkspace,
   type NodeWorkspaceScopes,
   type WorkspaceBinding,
@@ -112,7 +113,11 @@ async function applyTarget<T extends WorkspaceContext>(
         invoke,
         reopen: () => reopen(),
         epoch: () => manager.epochOf(manager.getConnectionId(portalScope)),
-        retarget: (replacement) => manager.rebindWorkspace(context.scope, replacement),
+        retarget: (replacement) => {
+          manager.rebindWorkspace(context.scope, replacement);
+          context.target = workspaceTargetFrom(nodeId, replacement.params);
+        },
+        relayed: !isDirectBinding(binding),
       });
       context.portalScope = portalScope;
       context.target = workspaceTargetFrom(nodeId, binding.params);

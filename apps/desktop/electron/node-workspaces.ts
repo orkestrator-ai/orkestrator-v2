@@ -33,7 +33,17 @@ export interface WorkspaceBinding {
 }
 
 export const WORKSPACE_RENEW_INTERVAL_MS = 10 * 60_000;
+/**
+ * How long a panel in use stays on a relay before the direct route is tried
+ * again. One failed probe (a node still starting, say) would otherwise pin the
+ * panel to the relay for as long as the relay keeps answering.
+ */
+export const WORKSPACE_DIRECT_RETRY_MS = 5 * 60_000;
 const DIRECT_PROBE_TIMEOUT_MS = 3_000;
+
+export function isDirectBinding(binding: WorkspaceBinding): boolean {
+  return binding.params.path === "direct";
+}
 
 type Invoke = (command: string, args: Record<string, unknown>) => Promise<unknown>;
 
@@ -120,6 +130,9 @@ export class NodeWorkspaceScopes {
       renewedAt: number;
       running: boolean;
       failed: boolean;
+      /** Bound through the relay rather than the node's own route. */
+      relayed: boolean;
+      directTriedAt: number;
     }
   >();
 
@@ -133,6 +146,7 @@ export class NodeWorkspaceScopes {
       reopen?: () => Promise<WorkspaceBinding>;
       retarget?: (binding: WorkspaceBinding) => void;
       epoch?: () => number;
+      relayed?: boolean;
     } = {},
   ): void {
     const timer = setInterval(() => {
@@ -156,7 +170,51 @@ export class NodeWorkspaceScopes {
       renewedAt: Date.now(),
       running: false,
       failed: false,
+      relayed: options.relayed ?? false,
+      directTriedAt: Date.now(),
     });
+  }
+
+  /**
+   * The panel is in use. A relayed panel whose last direct attempt is older
+   * than the retry interval tries the direct route again in the background;
+   * an idle panel is never probed.
+   */
+  noteUse(scope: string): void {
+    const entry = this.scopes.get(scope);
+    if (!entry?.relayed || entry.running || entry.failed || !entry.reopen) return;
+    if (Date.now() - entry.directTriedAt < WORKSPACE_DIRECT_RETRY_MS) return;
+    entry.directTriedAt = Date.now();
+    void this.upgrade(scope);
+  }
+
+  private async upgrade(scope: string): Promise<void> {
+    const entry = this.scopes.get(scope);
+    if (!entry?.reopen || entry.running) return;
+    entry.running = true;
+    try {
+      const binding = await entry.reopen().catch(() => null);
+      if (!binding) return;
+      if (this.scopes.get(scope) !== entry || entry.failed || !isDirectBinding(binding)) {
+        // Still no better route, or the panel moved on: keep what it has.
+        await entry
+          .invoke("close_node_workspace", { workspaceId: binding.workspaceId })
+          .catch(() => undefined);
+        return;
+      }
+      const oldId = entry.workspaceId;
+      entry.retarget?.(binding);
+      entry.workspaceId = binding.workspaceId;
+      entry.lastEpoch = entry.epoch?.() ?? 0;
+      entry.renewedAt = Date.now();
+      entry.relayed = false;
+      console.info(
+        `[Workspaces] ${binding.params.node ?? binding.nodeId} moved to its direct route.`,
+      );
+      await entry.invoke("close_node_workspace", { workspaceId: oldId }).catch(() => undefined);
+    } finally {
+      entry.running = false;
+    }
   }
 
   async reconcile(scope: string): Promise<void> {
@@ -185,6 +243,8 @@ export class NodeWorkspaceScopes {
         entry.lastEpoch = entry.epoch?.() ?? 0;
         entry.renewedAt = Date.now();
         entry.failed = false;
+        entry.relayed = !isDirectBinding(binding);
+        entry.directTriedAt = Date.now();
         await entry.invoke("close_node_workspace", { workspaceId: oldId }).catch(() => undefined);
       } catch {
         /* Retry with the same captured command node on the next bounded tick. */

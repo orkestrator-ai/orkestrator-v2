@@ -1,3 +1,4 @@
+import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode, useCallback, useState } from "react";
@@ -3173,6 +3174,46 @@ describe("PersistentTerminal", () => {
       expect(writeMock).toHaveBeenCalledWith("pasted text");
     });
   });
+
+  it.each(["metaKey", "ctrlKey"])(
+    "yields %s+Shift+K to the dialog without PTY input",
+    async (modifier) => {
+      render(
+        <>
+          <KeyboardShortcutsDialog />
+          <PersistentTerminal
+            terminalData={createTerminalData()}
+            tabId="tab-1"
+            tabType="plain"
+            containerId="container-1"
+            environmentId="env-1"
+            isEnvironmentVisible
+            isActive
+            isFocused
+            isFirstTab={false}
+            paneId="pane-1"
+          />
+        </>,
+      );
+      await waitFor(() => expect(terminalKeyHandler).toBeDefined());
+      writeMock.mockClear();
+      const event = new KeyboardEvent("keydown", {
+        key: "K",
+        shiftKey: true,
+        [modifier]: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      const handled = terminalKeyHandler!(event);
+      // xterm only emits input for keys its custom handler accepts.
+      if (handled) terminalInputHandler?.("\x0b");
+      expect(handled).toBe(false);
+      expect(event.defaultPrevented).toBe(false);
+      fireEvent(window, event);
+      await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
+      expect(writeMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("sends Shift+Enter as LF without letting xterm submit the prompt", async () => {
     const terminalData = createTerminalData();

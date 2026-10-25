@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
+import { cn } from "@/lib/utils";
 import { Keyboard, Search } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -9,13 +11,13 @@ import {
   type ShortcutPlatform,
 } from "@/lib/keyboard-shortcuts";
 
-function KeyCaps({ keys }: { keys: readonly string[] }) {
+function KeyCaps({ keys, className }: { keys: readonly string[]; className?: string }) {
   return (
-    <span className="flex shrink-0 items-center gap-1">
+    <span className={cn("flex shrink-0 items-center gap-1", className)}>
       {keys.map((key, index) => (
         <kbd
           key={`${key}-${index}`}
-          className="min-w-5 rounded-md border border-border/70 bg-zinc-900 px-1.5 py-0.5 text-center font-sans text-[11px] font-medium text-zinc-300"
+          className="min-w-5 max-w-full rounded-md border border-border/70 bg-zinc-900 px-1.5 py-0.5 text-center font-sans text-[11px] font-medium text-zinc-300"
         >
           {key}
         </kbd>
@@ -35,7 +37,7 @@ function KeyboardShortcutsPanel({ platform }: { platform: ShortcutPlatform }) {
 
   return (
     <>
-      <div className="flex items-center gap-2 border-b border-border/70 px-4 py-3">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border/70 px-4 py-3">
         <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <input
           value={query}
@@ -54,7 +56,7 @@ function KeyboardShortcutsPanel({ platform }: { platform: ShortcutPlatform }) {
       <div
         id="keyboard-shortcuts-list"
         data-testid="keyboard-shortcuts-list"
-        className="max-h-[28rem] overflow-y-auto px-2 py-2"
+        className="min-h-0 flex-1 overflow-y-auto px-2 py-2"
       >
         {groups.length === 0 ? (
           <div className="px-3 py-10 text-center text-sm text-muted-foreground">
@@ -78,7 +80,10 @@ function KeyboardShortcutsPanel({ platform }: { platform: ShortcutPlatform }) {
                       className="flex items-center gap-3 rounded-lg px-3 py-1.5 text-sm text-zinc-200"
                     >
                       <span className="min-w-0 flex-1 truncate">{shortcut.description}</span>
-                      <KeyCaps keys={shortcutKeys(shortcut, platform) ?? []} />
+                      <KeyCaps
+                        className="max-w-[55%] flex-wrap justify-end"
+                        keys={shortcutKeys(shortcut, platform) ?? []}
+                      />
                     </li>
                   ))}
                 </ul>
@@ -88,7 +93,7 @@ function KeyboardShortcutsPanel({ platform }: { platform: ShortcutPlatform }) {
         )}
       </div>
 
-      <div className="flex items-center justify-between gap-4 border-t border-border/70 px-4 py-2 text-[11px] text-zinc-500">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-t border-border/70 px-4 py-2 text-[11px] text-zinc-500">
         <span className="inline-flex items-center gap-1.5">
           <Keyboard className="h-3.5 w-3.5" aria-hidden="true" />
           Keyboard shortcuts
@@ -108,36 +113,53 @@ function KeyboardShortcutsPanel({ platform }: { platform: ShortcutPlatform }) {
   );
 }
 
-/** Lists every keyboard shortcut, searchable; toggled with ⌘⇧K / Ctrl+Shift+K. */
+/** Lists application keyboard shortcuts, searchable; toggled with ⌘⇧K / Ctrl+Shift+K. */
 export function KeyboardShortcutsDialog({
   platform: platformOverride,
 }: {
   platform?: ShortcutPlatform;
 }) {
   const [open, setOpen] = useState(false);
+  const previousFocus = useRef<HTMLElement | null>(null);
   const platform = useMemo(() => platformOverride ?? detectShortcutPlatform(), [platformOverride]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !isKeyboardShortcutsShortcut(event)) return;
+      // Claim the chord before Monaco (Delete Line) or xterm can process it.
       event.preventDefault();
-      setOpen((current) => !current);
+      event.stopPropagation();
+      if (event.repeat) return;
+      if (!open) {
+        previousFocus.current =
+          document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      }
+      setOpen(!open);
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent
         showCloseButton={false}
         data-testid="keyboard-shortcuts-dialog"
-        className="max-w-2xl gap-0 overflow-hidden p-0 sm:max-w-2xl sm:p-0"
+        className={cn(
+          "flex max-h-[min(36rem,calc(100dvh-1rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl sm:p-0",
+          Z_FULLSCREEN_DIALOG,
+        )}
+        overlayClassName={Z_FULLSCREEN_DIALOG}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (previousFocus.current?.isConnected) previousFocus.current.focus();
+          previousFocus.current = null;
+        }}
       >
         <DialogTitle className="sr-only">Keyboard shortcuts</DialogTitle>
         <DialogDescription className="sr-only">
-          Every keyboard shortcut in Orkestrator. Type to filter the list.
+          Application keyboard shortcuts in Orkestrator. Type to filter the list.
         </DialogDescription>
         <KeyboardShortcutsPanel platform={platform} />
       </DialogContent>

@@ -59,6 +59,39 @@ describe("isKeyboardShortcutsShortcut", () => {
     );
   });
 
+  test("the advertised toggle keys match the owning shortcut handler", () => {
+    const shortcut = KEYBOARD_SHORTCUT_GROUPS.flatMap((group) => group.shortcuts).find(
+      (shortcut) => shortcut.id === "show-shortcuts",
+    )!;
+    for (const keys of [shortcut.mac, shortcut.other!]) {
+      expect(
+        isKeyboardShortcutsShortcut(
+          keydown({
+            key: keys.at(-1)!,
+            metaKey: keys.includes("⌘"),
+            ctrlKey: keys.includes("Ctrl"),
+            shiftKey: keys.includes("⇧") || keys.includes("Shift"),
+          }),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  test("uses the logical K instead of a different layout's physical KeyK", () => {
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      expect(
+        isKeyboardShortcutsShortcut(
+          keydown({ key: "T", code: "KeyK", shiftKey: true, ...modifier }),
+        ),
+      ).toBe(false);
+      expect(
+        isKeyboardShortcutsShortcut(
+          keydown({ key: "K", code: "KeyV", shiftKey: true, ...modifier }),
+        ),
+      ).toBe(true);
+    }
+  });
+
   test("leaves Cmd+K and other combinations alone", () => {
     expect(isKeyboardShortcutsShortcut(keydown({ key: "k", metaKey: true }))).toBe(false);
     expect(

@@ -33,6 +33,59 @@ describe("KeyboardShortcutsDialog", () => {
     await waitFor(() => expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog")));
   });
 
+  test.each(["Escape", "toggle"])("restores the editing surface after %s", async (dismiss) => {
+    render(
+      <>
+        <textarea aria-label="Composer" />
+        <KeyboardShortcutsDialog />
+      </>,
+    );
+    const composer = screen.getByRole("textbox", { name: "Composer" });
+    composer.focus();
+    pressShortcut();
+    const search = await screen.findByRole("textbox", { name: "Search keyboard shortcuts" });
+    await waitFor(() => expect(document.activeElement).toBe(search));
+    if (dismiss === "Escape") fireEvent.keyDown(search, { key: "Escape" });
+    else pressShortcut();
+    await waitFor(() => expect(document.activeElement).toBe(composer));
+  });
+
+  test("consumes repeats without toggling and claims the chord before editor handlers", async () => {
+    const { container } = render(
+      <>
+        <textarea aria-label="Editor" />
+        <KeyboardShortcutsDialog />
+      </>,
+    );
+    let editorCalls = 0;
+    container.addEventListener("keydown", () => {
+      editorCalls++;
+    });
+    const editor = screen.getByRole("textbox", { name: "Editor" });
+    fireEvent.keyDown(editor, { key: "K", metaKey: true, shiftKey: true });
+    await screen.findByRole("dialog");
+    for (let i = 0; i < 3; i++) pressShortcut({ metaKey: true, repeat: true });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(editorCalls).toBe(0);
+    pressShortcut();
+    await waitFor(() => expectDomAbsent(screen.queryByRole("dialog")));
+    pressShortcut({ metaKey: true, repeat: true });
+    expectDomAbsent(screen.queryByRole("dialog"));
+  });
+
+  test("does not try to restore a removed editing surface", async () => {
+    render(<KeyboardShortcutsDialog />);
+    const editor = document.createElement("textarea");
+    document.body.append(editor);
+    editor.focus();
+    pressShortcut();
+    await screen.findByRole("dialog");
+    editor.remove();
+    pressShortcut();
+    await waitFor(() => expectDomAbsent(screen.queryByRole("dialog")));
+    expect(document.activeElement === editor).toBe(false);
+  });
+
   test("Cmd+K alone does not open it", () => {
     render(<KeyboardShortcutsDialog platform="mac" />);
     fireEvent.keyDown(window, { key: "k", code: "KeyK", metaKey: true });

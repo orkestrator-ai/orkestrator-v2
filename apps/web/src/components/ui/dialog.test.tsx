@@ -113,6 +113,7 @@ describe("Dialog primitives", () => {
     // Ordinary dialogs need the same explicit content and overlay layers as
     // alert dialogs when they are portalled out of a fullscreen surface.
     const sources = [
+      "apps/web/src/components/layout/KeyboardShortcutsDialog.tsx",
       "apps/web/src/components/settings/machines/AddMachineDialog.tsx",
       "apps/web/src/components/settings/machines/DeviceConnectionSection.tsx",
       "apps/web/src/components/settings/machines/MachineSettingsDialog.tsx",

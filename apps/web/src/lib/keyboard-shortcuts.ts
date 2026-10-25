@@ -25,6 +25,107 @@ export interface KeyboardShortcutGroup {
   shortcuts: readonly KeyboardShortcut[];
 }
 
+/** Shared with the design canvas help overlay to keep both catalogs in sync. */
+export const DESIGN_KEYBOARD_SHORTCUTS: readonly KeyboardShortcut[] = [
+  {
+    id: "design-undo",
+    description: "Undo the last design edit",
+    mac: ["⌘", "Z"],
+    other: ["Ctrl", "Z"],
+  },
+  {
+    id: "design-redo",
+    description: "Redo (also Ctrl+Y)",
+    mac: ["⌘", "⇧", "Z"],
+    other: ["Ctrl", "Shift", "Z"],
+  },
+  {
+    id: "design-fit",
+    description: "Fit all frames",
+    mac: ["⇧", "1"],
+    other: ["Shift", "1"],
+  },
+  {
+    id: "design-zoom-selection",
+    description: "Zoom to the selection",
+    mac: ["⇧", "2"],
+    other: ["Shift", "2"],
+  },
+  {
+    id: "design-zoom-100",
+    description: "Zoom the canvas to 100%",
+    mac: ["⌘", "0"],
+    other: ["Ctrl", "0"],
+  },
+  {
+    id: "design-preview",
+    description: "Toggle preview mode",
+    mac: ["P"],
+    other: ["P"],
+  },
+  {
+    id: "design-delete",
+    description: "Delete the selected frame",
+    mac: ["⌫ / Delete"],
+    other: ["Delete / Backspace"],
+    keywords: ["backspace", "remove"],
+  },
+  {
+    id: "design-help",
+    description: "Show design canvas shortcuts",
+    mac: ["?"],
+    other: ["?"],
+  },
+  {
+    id: "design-zoom-in",
+    description: "Zoom the canvas in",
+    mac: ["+ / ="],
+    other: ["+ / ="],
+  },
+  {
+    id: "design-zoom-out",
+    description: "Zoom the canvas out",
+    mac: ["- / _"],
+    other: ["- / _"],
+  },
+  {
+    id: "design-move",
+    description: "Move the focused frame (Shift: 10px)",
+    mac: ["Arrow keys"],
+    other: ["Arrow keys"],
+  },
+  {
+    id: "design-resize",
+    description: "Resize the focused frame (Shift: 10px)",
+    mac: ["⌥", "Arrow keys"],
+    other: ["Alt", "Arrow keys"],
+  },
+  {
+    id: "design-escape",
+    description: "Cancel a gesture, exit preview, clear selection, close panels",
+    mac: ["Esc"],
+    other: ["Esc"],
+  },
+  {
+    id: "design-select",
+    description: "Select the frame",
+    mac: ["Click a frame title"],
+    other: ["Click a frame title"],
+  },
+  {
+    id: "design-zoom-pointer",
+    description: "Zoom at the pointer",
+    mac: ["⌘ / Ctrl", "Scroll / Pinch"],
+    other: ["Ctrl", "Scroll / Pinch"],
+  },
+  {
+    id: "design-pan",
+    description: "Pan the canvas",
+    mac: ["Scroll / Shift+Scroll / Middle-drag"],
+    other: ["Scroll / Shift+Scroll / Middle-drag"],
+  },
+];
+
 export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
   {
     id: "general",
@@ -314,51 +415,7 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
   {
     id: "design",
     title: "Design canvas",
-    shortcuts: [
-      {
-        id: "design-undo",
-        description: "Undo the last design edit",
-        mac: ["⌘", "Z"],
-        other: ["Ctrl", "Z"],
-      },
-      {
-        id: "design-redo",
-        description: "Redo",
-        mac: ["⌘", "⇧", "Z"],
-        other: ["Ctrl", "Y"],
-      },
-      {
-        id: "design-fit",
-        description: "Fit all frames",
-        mac: ["⇧", "1"],
-        other: ["Shift", "1"],
-      },
-      {
-        id: "design-zoom-selection",
-        description: "Zoom to the selection",
-        mac: ["⇧", "2"],
-        other: ["Shift", "2"],
-      },
-      {
-        id: "design-zoom-100",
-        description: "Zoom the canvas to 100%",
-        mac: ["⌘", "0"],
-        other: ["Ctrl", "0"],
-      },
-      {
-        id: "design-preview",
-        description: "Toggle preview mode",
-        mac: ["P"],
-        other: ["P"],
-      },
-      {
-        id: "design-delete",
-        description: "Delete the selected frame",
-        mac: ["⌫"],
-        other: ["Delete"],
-        keywords: ["backspace", "remove"],
-      },
-    ],
+    shortcuts: DESIGN_KEYBOARD_SHORTCUTS,
   },
 ];
 
@@ -436,6 +493,6 @@ export function isKeyboardShortcutsShortcut(event: KeyboardEvent): boolean {
     !hasBothModifiers &&
     event.shiftKey &&
     !event.altKey &&
-    (event.key.toLowerCase() === "k" || event.code === "KeyK")
+    event.key.toLowerCase() === "k"
   );
 }

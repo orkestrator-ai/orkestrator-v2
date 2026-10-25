@@ -6,16 +6,7 @@ import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   ContextMenu,
@@ -126,19 +117,6 @@ export function SortableProjectGroup({
     transition,
   };
   const githubRepositoryUrl = getGitHubRepositoryUrl(project.gitUrl);
-
-  const confirmDelete = async (event: React.MouseEvent) => {
-    // Radix closes alert dialogs on action clicks by default. Defer closing
-    // until the asynchronous deletion has actually succeeded.
-    event.preventDefault();
-    try {
-      await onDeleteProject(project.id);
-      setShowDeleteDialog(false);
-    } catch {
-      // The parent owns error reporting. Keep the confirmation open so the
-      // user can retry instead of producing an unhandled promise rejection.
-    }
-  };
 
   const handleAddEnvironment = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
@@ -369,31 +347,13 @@ export function SortableProjectGroup({
       </div>
 
       {/* Delete Confirmation Dialog */}
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Project</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to remove <strong>{project.name}</strong> from your projects?
-              {environments.length > 0 && (
-                <span className="block mt-2 text-orange-500">
-                  Warning: This project has {environments.length} environment
-                  {environments.length !== 1 && "s"} that will also be deleted.
-                </span>
-              )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={confirmDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DeleteProjectDialog
+        open={showDeleteDialog}
+        onOpenChange={setShowDeleteDialog}
+        projectName={project.name}
+        environmentCount={environments.length}
+        onConfirm={() => onDeleteProject(project.id)}
+      />
     </>
   );
 }

@@ -859,6 +859,9 @@ function isSyntheticPersistedUserText(text: string): boolean {
     // Codex 0.162 drops the path from the heading when it injects only the
     // user's global instructions.
     /^# AGENTS\.md instructions[ \t]*\n\s*<INSTRUCTIONS>/.test(trimmed) ||
+    // The cwd, sandbox and shell block Codex injects as a user message; only
+    // a message that is exactly that block, so a user's own text is kept.
+    (trimmed.startsWith("<environment_context>") && trimmed.endsWith("</environment_context>")) ||
     trimmed.startsWith(
       "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
     )

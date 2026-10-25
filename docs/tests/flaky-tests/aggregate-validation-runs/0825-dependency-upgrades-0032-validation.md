@@ -86,3 +86,63 @@ per-owner `output/playwright/stale-request-<Spec>/` directories.
 The isolated passes establish intermittence for the other owners; shared-host
 contention remains a hypothesis. No failing-owner assertion, timeout or skip
 was changed.
+
+
+## Main merge validation — 2026-10-25
+
+Merge parents: `5d3233472f67505b332d4c33e3a627d237ca166b` and
+`162584a52740c94cc84ecb3187df3b6fd002a963`. The complete original conflict
+list was retained with these parent IDs in local Git metadata before staging:
+`DesignToolbar.tsx`, `MobileAppShellLayout.tsx`, and the aggregate-validation
+index. The resolution retains the React Compiler fixes, main's shared design
+shortcut catalog and remote-dialog drawer subscription, and every index row.
+
+- `mise run test:logged -- --name merge-format -- mise run format:check`,
+  `merge-lint -- mise run lint`, and `merge-typecheck -- mise run typecheck`
+  all passed. Each shorthand label denotes a separate `test:logged` command.
+- The complete owning component files passed:
+  `mise run test:logged -- --name merge-owning-tests -- bun test --cwd apps/web ./src/components/design/DesignCanvasTab.test.tsx ./src/components/layout/MobileAppShellLayout.test.tsx --parallel=1 --only-failures`.
+- `mise run test:logged -- --name merge-tests -- mise run test` passed in
+  633.8 seconds, including workspace, root/support, bridges and protocol checks.
+- `mise run test:logged -- --name merge-design-stack -- mise run test:agent:design:isolated`
+  passed both real-gateway design tests (76.8 seconds logged). Disposable
+  profile `qa-browser-0908a39a-630` was stopped and reset by the runner.
+- `mise run test:logged -- --name merge-browser -- mise run test:browser`
+  used nine component workers: 702 passed, 102 skipped, six failed across 810
+  cases (357.7 seconds). All design and mobile-shell cases passed. Failures:
+  - `ToolGroupFold.spec.ts:79`, mobile `a live group crossing the fold threshold folds into its line with no-preference motion`:
+    painted gap 57 px versus at most 2 px (`:147`).
+  - `ToolGroupFold.spec.ts:442`, mobile `a waiting group that fits its cap follows appended calls as it starts overflowing`:
+    inner scrollTop 704 versus zero after five seconds (`:471`); see [0747](../web-ui/0747-tool-group-overflow-follow.md).
+  - `ToolGroupFold.spec.ts:153`, desktop `a live group growing above a released reader preserves their place with reduce motion`:
+    anchor error 166.25 px versus at most 2 px (`:224`); related owner history in [0793](../web-ui/0793-live-tool-group-overscan.md).
+  - `StreamingTranscript.spec.ts:361`, desktop `scrollbar departure after find stays put when streaming reapplies highlights`:
+    find remained `unresolved` instead of `converged` after five seconds (`:371`); see [0767](../native-agents-and-transcripts/0767-streaming-find-convergence-aggregate-timeout.md).
+  - `AgentLaunchDialog.spec.ts:7`, both projects `selects a native branch suggestion with the keyboard and confirms`:
+    `rel` instead of `release/2.0` (`:49`), matching the prior base-commit comparison above.
+
+Each complete failed owner was rerun sequentially, with one worker, using
+`mise run test:logged -- --name <label> -- bunx playwright test --config e2e/playwright.config.ts e2e/<Spec>.spec.ts --workers=1 --output output/playwright/<label>`:
+
+| Spec | Label | Result |
+| --- | --- | --- |
+| ToolGroupFold | merge-toolgroup-owner | Passed unchanged, 76.3 seconds. |
+| StreamingTranscript | merge-streaming-owner | Passed unchanged, 44.2 seconds. |
+| AgentLaunchDialog | merge-branch-suggestion-owner | Two manual-entry cases passed; both native suggestion cases still failed, 21.6 seconds. |
+
+The complete unchanged owner passes establish intermittence for the tool-group
+and streaming failures; contention is a hypothesis, not an established cause.
+No implementation, assertion, timeout or skip was changed for a failing owner.
+The component failure prevented the chained public-site suite from starting;
+`mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts --workers=1 --output output/playwright/merge-public-browser`
+passed separately (16.6 seconds). Electron, Docker and iOS scenarios were
+outside the original conflict and resolution scope.
+
+Evidence under the host temporary directory:
+`orkestrator-test-run.jOjGVq/merge-browser.log.gz`,
+`orkestrator-test-run.Ptn9sn/merge-branch-suggestion-owner.log.gz`, and passing
+summaries `orkestrator-test-run.B3dvC4/summary.json` (repository),
+`orkestrator-test-run.2Qa8yy/summary.json` (ToolGroupFold),
+`orkestrator-test-run.xKR7NW/summary.json` (StreamingTranscript), and
+`orkestrator-test-run.xnqrxU/summary.json` (isolated design). Browser traces
+remain under `output/playwright/test-results/` and the per-owner output paths.

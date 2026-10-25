@@ -198,3 +198,52 @@ test("terminal sign-in resolves the registered launcher at execution and fixes s
     });
   }
 });
+
+describe("preferred identity argument validation", () => {
+  const setPreferred = createCommandRegistry().get("set_preferred_agent_identity")!;
+  test.each([
+    { platform: "claude", email: "work@example.com", extra: true },
+    { platform: "pi", email: "work@example.com" },
+    { platform: 42, email: "work@example.com" },
+    {},
+    { platform: "claude", email: 42 },
+    { platform: "claude", email: false },
+    { platform: "claude", email: {} },
+    { platform: "claude", email: [] },
+    { platform: "claude", email: " " },
+    { platform: "claude", email: "invalid" },
+  ])("rejects invalid arguments before mutating storage %j", async (args) => {
+    const mutateAgentAccounts = mock(() => {
+      throw new Error("unexpected storage access");
+    });
+    await expect(
+      setPreferred(args, { storage: { mutateAgentAccounts } } as unknown as CommandContext),
+    ).rejects.toThrow();
+    expect(mutateAgentAccounts).not.toHaveBeenCalled();
+  });
+
+  test.each([{}, { email: null }])(
+    "omitted or null email clears only the selected platform %j",
+    async (args) => {
+      const store = {
+        version: 1 as const,
+        accounts: [],
+        active: {},
+        preferred: { claude: "work@example.com", codex: "code@example.com" },
+      };
+      const mutateAgentAccounts = mock(
+        (mutate: (value: typeof store) => { store: unknown; result: unknown }) => {
+          const next = mutate(store);
+          expect(next.store).toEqual({ ...store, preferred: { codex: "code@example.com" } });
+          return Promise.resolve(next.result);
+        },
+      );
+      await expect(
+        setPreferred({ platform: "claude", ...args }, {
+          storage: { mutateAgentAccounts },
+        } as unknown as CommandContext),
+      ).resolves.toEqual({ codex: "code@example.com" });
+      expect(mutateAgentAccounts).toHaveBeenCalledTimes(1);
+    },
+  );
+});

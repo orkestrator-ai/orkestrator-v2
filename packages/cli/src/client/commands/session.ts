@@ -3,12 +3,14 @@ import type {
   PublicAgentOptions,
   PublicInteraction,
   PublicInteractionAnswerInput,
+  PublicSessionCommandList,
   PublicSessionSummary,
   PublicTranscriptPage,
 } from "@orkestrator/protocol/public-api-resources";
+import path from "node:path";
 import { CliError } from "../errors.js";
 import { keyValues, receiptLines, sessionLines, sessionRows, table } from "../format.js";
-import { readPrompt, readTextSource } from "../inputs.js";
+import { readBinaryFile, readPrompt, readTextSource } from "../inputs.js";
 import type { CommandContext, CommandOutcome, CommandSpec, ParsedCommand } from "../spec.js";
 import { observe, ObservationStopped } from "../wait.js";
 import {
@@ -63,6 +65,60 @@ const CONTROL_OPTIONS = [
   },
 ];
 
+const LITERAL_OPTION = {
+  name: "literal",
+  kind: "boolean" as const,
+  description:
+    "Send the prompt as plain text: a leading /name never runs a provider command (by default it does).",
+};
+
+const ENQUEUE_OPTION = {
+  name: "enqueue",
+  kind: "boolean" as const,
+  description:
+    "If the session is busy, queue this behind its current work (the backend sends it later) instead of refusing.",
+};
+
+const ATTACH_OPTION = {
+  name: "attach",
+  kind: "list" as const,
+  valueName: "FILE",
+  description: `Send a local file with the prompt (repeatable; at most ${PUBLIC_API_LIMITS.promptAttachmentsMaxItems} files, ${PUBLIC_API_LIMITS.promptAttachmentsMaxBytes / 1024} KiB in total).`,
+};
+
+/**
+ * Read `--attach` files from the caller's machine, bounded in count and total
+ * size, and encode them for the request. Only the file name travels; the
+ * backend decides where in the workspace the bytes are written.
+ */
+async function readAttachments(
+  context: CommandContext,
+  options: Record<string, unknown>,
+): Promise<Array<{ name: string; dataBase64: string }> | undefined> {
+  const files = (options.attach as string[] | undefined) ?? [];
+  if (files.length === 0) return undefined;
+  if (files.length > PUBLIC_API_LIMITS.promptAttachmentsMaxItems) {
+    throw new CliError(
+      "input-too-large",
+      `At most ${PUBLIC_API_LIMITS.promptAttachmentsMaxItems} attachments are allowed`,
+    );
+  }
+  let remaining = PUBLIC_API_LIMITS.promptAttachmentsMaxBytes;
+  const names = new Set<string>();
+  const attachments: Array<{ name: string; dataBase64: string }> = [];
+  for (const file of files) {
+    const name = path.basename(file);
+    if (names.has(name)) {
+      throw new CliError("invalid-input", `Two attachments are both named ${name}`);
+    }
+    names.add(name);
+    const bytes = await readBinaryFile(context.io, file, `Attachment ${name}`, remaining);
+    remaining -= bytes.byteLength;
+    attachments.push({ name, dataBase64: Buffer.from(bytes).toString("base64") });
+  }
+  return attachments;
+}
+
 function waitBudget(options: Record<string, unknown>): number {
   return (options.timeout as number | undefined) ?? DEFAULT_WAIT_MS;
 }
@@ -70,7 +126,7 @@ function waitBudget(options: Record<string, unknown>): number {
 /** Submit a run; with --wait, a lost response is recovered by request key. */
 async function submitRun<T>(
   context: CommandContext,
-  action: "session.start" | "session.prompt",
+  action: "session.start" | "session.prompt" | "session.command",
   input: Record<string, unknown>,
   options: Record<string, unknown>,
 ) {
@@ -297,9 +353,12 @@ export const sessionCommands: CommandSpec[] = [
       { name: "title", kind: "string", valueName: "TITLE", description: "Tab title." },
       ...CONTROL_OPTIONS,
       ...PROMPT_OPTIONS,
+      LITERAL_OPTION,
+      ATTACH_OPTION,
       ...WAIT_OPTIONS,
       REQUEST_ID_OPTION,
     ],
+    inputFields: { attach: "attachments" },
     idOutput: "session ID",
     async run(context, parsed) {
       const options = parsed.options;
@@ -310,6 +369,7 @@ export const sessionCommands: CommandSpec[] = [
         throw new CliError("invalid-input", "--environment and --agent are required");
       }
       const prompt = await readPrompt(context.io, options);
+      const attachments = await readAttachments(context, options);
       const { session, result, receipt, warnings, recoveryDeadline } = await submitRun<{
         sessionId: string;
         tabId: string;
@@ -323,6 +383,8 @@ export const sessionCommands: CommandSpec[] = [
           prompt,
           ...(options.title !== undefined ? { title: options.title } : {}),
           ...controlsInput(options),
+          ...(options.literal === true ? { literal: true } : {}),
+          ...(attachments ? { attachments } : {}),
         },
         options,
       );
@@ -360,9 +422,9 @@ export const sessionCommands: CommandSpec[] = [
   {
     path: ["session", "prompt"],
     action: "session.prompt",
-    summary: "Send a follow-up prompt to an idle session.",
+    summary: "Send a follow-up prompt to an idle session, or queue it behind a busy one.",
     description:
-      "Busy sessions are refused (exit 8); use `session steer` to redirect an active turn. The target must be the exact session: a vanished session is never replaced by a new one.",
+      "Busy sessions are refused (exit 8) unless --enqueue puts the prompt in the backend's durable queue; use `session steer` to redirect an active turn. A leading /name runs that provider command unless --literal is given. The target must be the exact session: a vanished session is never replaced by a new one.",
     positionals: [{ name: "session", required: true }],
     options: [
       {
@@ -372,14 +434,19 @@ export const sessionCommands: CommandSpec[] = [
         description: "Conversation mode for this turn.",
       },
       ...PROMPT_OPTIONS,
+      LITERAL_OPTION,
+      ENQUEUE_OPTION,
+      ATTACH_OPTION,
       ...WAIT_OPTIONS,
       REQUEST_ID_OPTION,
     ],
+    inputFields: { attach: "attachments" },
     idOutput: "operation (run) ID",
     async run(context, parsed) {
       const options = parsed.options;
       validateWaitOptions(options);
       const prompt = await readPrompt(context.io, options);
+      const attachments = await readAttachments(context, options);
       const { session, result, receipt, warnings, recoveryDeadline } = await submitRun<{
         runId: string;
       }>(
@@ -391,6 +458,9 @@ export const sessionCommands: CommandSpec[] = [
           ...(options.mode !== undefined
             ? { mode: oneOf(options.mode, ["plan", "build"] as const, "--mode") }
             : {}),
+          ...(options.literal === true ? { literal: true } : {}),
+          ...(options.enqueue === true ? { enqueue: true } : {}),
+          ...(attachments ? { attachments } : {}),
         },
         options,
       );
@@ -400,6 +470,116 @@ export const sessionCommands: CommandSpec[] = [
         parsed,
         {
           action: "session.prompt",
+          result: result ?? { runId },
+          receipt,
+          warnings,
+          connection: session.identity,
+          ids: [runId],
+          human: receipt ? receiptLines(receipt) : [`run ${runId}`],
+        },
+        recoveryDeadline,
+      );
+    },
+  },
+  {
+    path: ["session", "commands"],
+    action: "session.commands",
+    summary: "List the session's slash commands (ID, name, availability, argument policy).",
+    description:
+      "Reads the catalogue the backend already holds; --refresh asks the provider again. Use an ID (or a unique name) with `session command`.",
+    positionals: [{ name: "session", required: true }],
+    options: [
+      { name: "refresh", kind: "boolean", description: "Ask the provider for its list again." },
+    ],
+    idOutput: "command IDs, one per line",
+    async run(context, parsed) {
+      const session = await context.session();
+      const list = await session.read<PublicSessionCommandList>("session.commands", {
+        sessionId: parsed.positionals.session,
+        ...(parsed.options.refresh === true ? { refresh: true } : {}),
+      });
+      return {
+        action: "session.commands",
+        result: list,
+        connection: session.identity,
+        ids: list.commands.map((command) => command.id),
+        human: [
+          `catalogue ${list.catalogue.status}${list.catalogue.error ? ` (${list.catalogue.error})` : ""}`,
+          ...table(
+            ["NAME", "ID", "ARGS", "AVAILABLE", "DESCRIPTION"],
+            list.commands.map((command) => [
+              command.name,
+              command.id,
+              command.arguments,
+              command.available ? "yes" : `no: ${command.unavailableReason ?? ""}`,
+              (command.description ?? "").slice(0, 60),
+            ]),
+          ),
+        ],
+      };
+    },
+  },
+  {
+    path: ["session", "command"],
+    action: "session.command",
+    summary: "Run one selected slash command in a session.",
+    description:
+      "Pass the command's ID or unique name with --command and its arguments after `--`. The command is sent as a selection: if it is missing, ambiguous, unavailable or changed (--expected-binding-revision), the request fails (exit 3 or 8) and nothing is sent as text. Busy sessions are refused unless --enqueue.",
+    positionals: [{ name: "session", required: true }],
+    options: [
+      {
+        name: "command",
+        kind: "string",
+        valueName: "ID|NAME",
+        description: "Command ID or name from `session commands`.",
+      },
+      {
+        name: "expected-binding-revision",
+        kind: "string",
+        valueName: "REV",
+        description: "Refuse if the command changed since `session commands` listed this revision.",
+      },
+      ENQUEUE_OPTION,
+      ...WAIT_OPTIONS,
+      REQUEST_ID_OPTION,
+    ],
+    acceptsRest: true,
+    idOutput: "operation (run) ID",
+    examples: [
+      "orkestrator session command ses_… --command /review -- the open diff",
+      "orkestrator session command ses_… --command /compact --wait",
+    ],
+    async run(context, parsed) {
+      const options = parsed.options;
+      validateWaitOptions(options);
+      const command = stringOption(options, "command");
+      if (!command) throw new CliError("invalid-input", "--command is required");
+      const args = parsed.rest.join(" ");
+      if (Buffer.byteLength(args) > PUBLIC_API_LIMITS.commandArgumentsMaxBytes) {
+        throw new CliError("input-too-large", "Command arguments are too large");
+      }
+      const { session, result, receipt, warnings, recoveryDeadline } = await submitRun<{
+        runId: string;
+      }>(
+        context,
+        "session.command",
+        {
+          sessionId: parsed.positionals.session,
+          command,
+          ...(args.trim() ? { arguments: args } : {}),
+          ...(options["expected-binding-revision"] !== undefined
+            ? { expectedBindingRevision: options["expected-binding-revision"] }
+            : {}),
+          ...(options.enqueue === true ? { enqueue: true } : {}),
+        },
+        options,
+      );
+      const runId = result?.runId ?? receipt!.operationId;
+      return finishRun(
+        context,
+        parsed,
+        {
+          action: "session.command",
           result: result ?? { runId },
           receipt,
           warnings,

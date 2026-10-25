@@ -10,6 +10,7 @@ import { LAUNCH_HANDLERS } from "./actions-launch.js";
 import { MAIL_HANDLERS } from "./actions-mail.js";
 import { PROJECT_HANDLERS } from "./actions-projects.js";
 import { createRunReadHandlers, RUN_RECOVERY_HANDLERS } from "./actions-runs.js";
+import { SESSION_COMMAND_HANDLERS } from "./actions-session-commands.js";
 import { SESSION_CONTROL_HANDLERS } from "./actions-session-controls.js";
 import { SESSION_HANDLERS } from "./actions-sessions.js";
 import { SETTINGS_HANDLERS } from "./actions-settings.js";
@@ -35,6 +36,7 @@ export function publicActionHandlers(): PublicActionHandler[] {
     ...SETTINGS_HANDLERS,
     ...LAUNCH_HANDLERS,
     ...SESSION_HANDLERS,
+    ...SESSION_COMMAND_HANDLERS,
     ...SESSION_CONTROL_HANDLERS,
     ...TRANSCRIPT_HANDLERS,
     ...CHANGE_HANDLERS,
@@ -51,15 +53,22 @@ export function publicActionHandlers(): PublicActionHandler[] {
   return handlers;
 }
 
+/**
+ * Optional features. Each names the action or input that carries it, and is
+ * withdrawn by removing that handler or input, never by flipping this alone:
+ * `project.remove` `cascade`, `project.init`, `attachments` on
+ * `session.prompt`/`session.start`, `session.commands`/`session.command`
+ * (with `literal` on prompts), and `enqueue`.
+ */
 export function publicFeatures(): PublicCapabilities["features"] {
   return {
     transcriptFollow: "poll",
     exec: { local: true, container: true },
-    projectCascadeRemove: false,
-    localProjectInit: false,
-    promptAttachments: false,
-    selectedSlashCommands: false,
-    enqueue: false,
+    projectCascadeRemove: true,
+    localProjectInit: true,
+    promptAttachments: true,
+    selectedSlashCommands: true,
+    enqueue: true,
   };
 }
 

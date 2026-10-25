@@ -3,7 +3,9 @@ import {
   isWorkspaceRealm,
   postToShell,
   type RealmBoardTab,
+  type RealmDialog,
 } from "@/lib/federation/workspace-realm";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -16,6 +18,11 @@ export interface MachineWorkspaceSpec {
   boardTab?: RealmBoardTab;
   /** Open the New Environment dialog for `projectId` instead of selecting it. */
   createEnvironment?: boolean;
+  /**
+   * Open one of the node's own dialogs over the selection: the project's, or
+   * with `environmentId`, the environment's settings.
+   */
+  dialog?: RealmDialog;
   /** For messages while it opens. */
   title: string;
 }
@@ -73,6 +80,7 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
       ui.selectProject(spec.projectId);
       if (spec.boardTab) ui.setProjectBoardTab(spec.boardTab);
     }
+    if (spec.dialog) openDialog(spec.dialog, spec.projectId, spec.environmentId);
     return;
   }
   useRemoteWorkspaceStore.getState().open(
@@ -85,6 +93,17 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
             projectId: spec.projectId,
             ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
             ...(spec.boardTab ? { boardTab: spec.boardTab } : {}),
+            ...(spec.dialog ? { dialog: spec.dialog } : {}),
           },
   );
+}
+
+/** Opens one of this window's own node's dialogs, as its sidebar menus do. */
+export function openDialog(dialog: RealmDialog, projectId: string, environmentId?: string): void {
+  const dialogs = useAppDialogStore.getState();
+  if (dialog === "environment-settings") {
+    if (environmentId) dialogs.open({ kind: "environment-settings", environmentId });
+    return;
+  }
+  dialogs.open({ kind: dialog, projectId });
 }

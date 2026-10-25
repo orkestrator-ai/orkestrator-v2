@@ -20,6 +20,7 @@ import { CodexSubagentCardsFixture } from "./CodexSubagentCardsFixture";
 import { MachinesSettingsFixture } from "./MachinesSettingsFixture";
 import { DesignCanvasFixture, installDesignCanvasFixture } from "./DesignCanvasFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
+import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
@@ -162,6 +163,12 @@ declare global {
     lastCreateEnvironmentOptions?: ClaudeOptions;
   }
 }
+
+const KeyboardShortcutsFixture = lazy(() =>
+  import("./KeyboardShortcutsFixture").then((module) => ({
+    default: module.KeyboardShortcutsFixture,
+  })),
+);
 
 function assertFixtureArgs(
   command: string,
@@ -940,6 +947,7 @@ function MonacoRuntimeFixture() {
 
   return (
     <main className="h-screen bg-background p-4 text-foreground">
+      <KeyboardShortcutsDialog platform="mac" />
       <section data-testid="monaco-runtime-editor" className="h-[32rem] border border-border">
         <MonacoFileEditor
           language="typescript"
@@ -1775,7 +1783,13 @@ function fixtureForPath() {
   if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
   if (window.location.pathname === "/agent-account-status") return <AgentAccountStatusFixture />;
   if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
-  if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
+  if (window.location.pathname === "/fullscreen-settings")
+    return (
+      <>
+        <KeyboardShortcutsDialog platform="mac" />
+        <FullscreenSettingsFixture />
+      </>
+    );
   if (window.location.pathname === "/settings-machines") return <SettingsMachineFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
   if (window.location.pathname === "/github-cli-setup") return <GitHubCliSetupFixture />;
@@ -1801,6 +1815,12 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/native-compose") return <NativeComposeFixture />;
   if (window.location.pathname === "/menu-placement") return <MenuPlacementFixture />;
+  if (window.location.pathname === "/keyboard-shortcuts")
+    return (
+      <Suspense fallback={null}>
+        <KeyboardShortcutsFixture />
+      </Suspense>
+    );
   if (window.location.pathname === "/composer-icon-pickers") return <ComposerIconPickersFixture />;
   if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;
   if (window.location.pathname === "/mobile-shell") {

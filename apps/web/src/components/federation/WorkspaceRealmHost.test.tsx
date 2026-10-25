@@ -8,6 +8,8 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { realmSearchParams, type RealmSelectRequest } from "@/lib/federation/workspace-realm";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { useConfigStore } from "@/stores/configStore";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import type { Environment, Project } from "@/types";
@@ -20,6 +22,7 @@ const originalNative = window.orkestrator;
 const originalPortal = portalStore.getState();
 const originalRemote = useRemoteWorkspaceStore.getState();
 const originalUI = useUIStore.getState();
+const originalConfig = useConfigStore.getState();
 const originalProjects = useProjectStore.getState();
 const originalEnvironments = useEnvironmentStore.getState();
 const nativeInvoke = invoke as ReturnType<typeof mock>;
@@ -97,6 +100,8 @@ afterEach(() => {
   happyDOM.setURL(originalHref);
   window.orkestrator = originalNative;
   delete window.orkestratorWorkspaceTarget;
+  useAppDialogStore.setState({ request: null });
+  useConfigStore.setState(originalConfig, true);
   useUIStore.setState(originalUI, true);
   useProjectStore.setState(originalProjects, true);
   useEnvironmentStore.setState(originalEnvironments, true);
@@ -117,6 +122,22 @@ test("initial leaf selection keeps Home through a delayed project snapshot and d
   );
   expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id);
   expect(useUIStore.getState().projectBoardTab).toBe("home");
+});
+
+test("a project dialog asked of the realm opens once the node's projects have loaded", async () => {
+  useAppDialogStore.setState({ request: null });
+  openRealm({ projectId: project.id, dialog: "delete-project" });
+  // The dialog reads the project from the node's list, so it waits for it.
+  expect(useAppDialogStore.getState().request).toBeNull();
+  await act(async () => resolveProjects([project]));
+  await waitFor(() =>
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "delete-project",
+      projectId: project.id,
+    }),
+  );
+  expect(useUIStore.getState().selectedProjectId).toBe(project.id);
+  useAppDialogStore.setState({ request: null });
 });
 
 test("a board choice made while projects load survives Home activation", async () => {
@@ -222,4 +243,84 @@ test("panel messages leave sidebar and selection untouched; only sidebar message
   act(() => deliver({ type: "grouping", grouping: "project" }));
   expect(useRealmShellStore.getState().grouping).toBe("project");
   useRealmShellStore.setState({ grouping: null });
+});
+
+for (const fail of [false, true]) {
+  test(`delete request waits for ${fail ? "a successful" : "the delayed"} environment snapshot`, async () => {
+    let finish!: (environments: Environment[]) => void;
+    let reject!: (error: unknown) => void;
+    const snapshot = new Promise<Environment[]>((resolve, no) => {
+      finish = resolve;
+      reject = no;
+    });
+    nativeInvoke.mockImplementation(async (command: string) => {
+      if (command === "get_projects") return [project];
+      if (command === "get_environments") return snapshot;
+      return undefined;
+    });
+    useAppDialogStore.setState({ request: null });
+    happyDOM.setURL(
+      `http://localhost/?${realmSearchParams({ projectId: project.id, dialog: "delete-project" })}`,
+    );
+    render(<WorkspaceRealmHost />);
+    await waitFor(() => expect(useProjectStore.getState().hasLoaded).toBe(true));
+    expect(useAppDialogStore.getState().request).toBeNull();
+    await act(async () => {
+      if (fail) reject(new Error("snapshot unavailable"));
+      else finish([home]);
+    });
+    if (fail) expect(useAppDialogStore.getState().request).toBeNull();
+    else
+      await waitFor(() =>
+        expect(useAppDialogStore.getState().request?.kind).toBe("delete-project"),
+      );
+  });
+}
+
+test("repository settings request waits for configuration after projects have loaded", async () => {
+  useConfigStore.setState({ hasLoaded: false });
+  useAppDialogStore.setState({ request: null });
+  openRealm({ projectId: project.id, dialog: "repository-settings" });
+  await act(async () => resolveProjects([project]));
+  await waitFor(() => expect(useProjectStore.getState().hasLoaded).toBe(true));
+  expect(useAppDialogStore.getState().request).toBeNull();
+  act(() => useConfigStore.setState({ hasLoaded: true }));
+  await waitFor(() =>
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "repository-settings",
+      projectId: project.id,
+    }),
+  );
+});
+
+test("environment settings waits for its environment and selects without starting it", async () => {
+  let finish!: (environments: Environment[]) => void;
+  const snapshot = new Promise<Environment[]>((resolve) => {
+    finish = resolve;
+  });
+  const stopped = { ...home, id: "stopped", projectHome: false, status: "stopped" as const };
+  nativeInvoke.mockImplementation(async (command: string) => {
+    if (command === "get_projects") return [project];
+    if (command === "get_environments") return snapshot;
+    return undefined;
+  });
+  useAppDialogStore.setState({ request: null });
+  happyDOM.setURL(
+    `http://localhost/?${realmSearchParams({ projectId: project.id, environmentId: stopped.id, dialog: "environment-settings" })}`,
+  );
+  render(<WorkspaceRealmHost />);
+  await waitFor(() => expect(useProjectStore.getState().hasLoaded).toBe(true));
+  expect(useAppDialogStore.getState().request).toBeNull();
+  expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+  await act(async () => finish([stopped]));
+  await waitFor(() =>
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "environment-settings",
+      environmentId: stopped.id,
+    }),
+  );
+  expect(useUIStore.getState().selectedEnvironmentId).toBe(stopped.id);
+  expect(
+    nativeInvoke.mock.calls.filter(([command]) => String(command).startsWith("start_environment")),
+  ).toEqual([]);
 });

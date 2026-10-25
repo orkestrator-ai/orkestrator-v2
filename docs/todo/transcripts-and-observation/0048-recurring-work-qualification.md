@@ -54,8 +54,8 @@ drivers.
   [recurring-work.md](../../architecture/recurring-work.md#latency-budgets).
   No reference artifact is committed; generate one before any comparison.
   The workflows block drives feature planning, build pipelines, looped review
-  and multi review (its legacy whole-store tick stands in for the
-  real-timer `WorkflowDueScheduler` rollback). It reports `storageReads`
+  and multi review (its rollback is the real `WorkflowDueScheduler`, on the
+  harness's manual clock since 2026-10-25). It reports `storageReads`
   beside `storageStats`, and the test holds each attempt to a per-domain
   storage budget (`STORAGE_PER_ATTEMPT`). The harness now closes each
   temporary `StorageService` before deleting its directory. Before that fix a
@@ -73,9 +73,11 @@ drivers.
     `WorkflowDueScheduler`.
   - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0` (read in `core/index.ts`).
   - `ORKESTRATOR_RECURRING_METRICS=0` turns the recorder off.
-- Multi review also keeps `adaptiveScheduling: false` (the legacy 1 s tick)
-  and `evidencePermits` in `MultiReviewServiceOptions`; their removal is owned
-  by [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md).
+- Multi review's own rollback gates (`adaptiveScheduling: false`, the legacy
+  1 s tick, and `evidencePermits`) were removed on 2026-10-25 by
+  [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md).
+  Only the `multi-review` domain of the switch above and its
+  `WorkflowDueScheduler` remain.
 - Trial constants: `DEFAULT_PR_MONITOR_POLICY` (terminal discovery 5 min plus
   30 s jitter), `CONTAINER_FETCH_COOLDOWN_MS` (5 min) and
   `CONTAINER_FETCH_FAILURE_COOLDOWN_MAX_MS` (30 min),
@@ -246,8 +248,10 @@ the rollback drivers stay.
 
 - Remove `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the whole-store drivers
   domain by domain, with the desktop allowlist entry. Remove the
-  `multi-review` domain together with `WorkflowDueScheduler`, which
-  [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md) deletes.
+  `multi-review` domain together with `WorkflowDueScheduler`
+  (`multi-review-scheduler.ts` and its test). Since 2026-10-25 nothing else in
+  Multi Review depends on it; `stableJitterMs` lives in that file and the
+  keyed path still uses it, so move it first.
 - Remove `ORKESTRATOR_NATIVE_OBSERVATION_SHARING` and its allowlist entry.
 - Decide whether `ORKESTRATOR_RECURRING_METRICS` stays as a permanent off
   switch. On the 2026-10-22 idle A/B the recorder's cost did not show above

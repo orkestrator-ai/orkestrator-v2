@@ -142,15 +142,34 @@ const reconcileCreate: ReconcileFunction = async (record, context) => {
 const reconcileGenericInFlight: ReconcileFunction = async (record, context) => {
   if (!fromPreviousGeneration(record, context)) return null;
   if (record.action === "session.steer" && record.dispatch?.recoverable === true) return null;
-  if (
-    record.action === "project.remove" &&
-    (await context.command.storage.getProject(record.resources.projectId ?? ""))
-  ) {
-    await context.command.storage.releaseProjectRemovalFence(record.resources.projectId!);
-  }
   return interrupted(
     "The backend restarted while this operation was in progress; its effect is not confirmed",
   );
+};
+
+/**
+ * Removal, with or without cascade. A project that is gone was removed; one
+ * that survives a restart has its removal fence lifted so it stays usable.
+ * Environments a cascade already deleted stay deleted (each deletion has its
+ * own durable cleanup ledger); the caller retries with a new request ID.
+ */
+const reconcileProjectRemove: ReconcileFunction = async (record, context) => {
+  if (!fromPreviousGeneration(record, context)) return null;
+  const projectId = record.resources.projectId ?? "";
+  if (!(await context.command.storage.getProject(projectId))) {
+    return {
+      state: "succeeded",
+      stage: "completed",
+      result: { ...record.result, removed: projectId, effects: "registration-only" },
+    };
+  }
+  await context.command.storage.releaseProjectRemovalFence(projectId);
+  return {
+    ...interrupted(
+      "The backend restarted before the removal finished; the project was kept. Retry with a new request ID",
+    ),
+    ...(record.result ? { result: record.result } : {}),
+  };
 };
 
 registerReconciler("environment.start", reconcileStart);
@@ -158,13 +177,14 @@ registerReconciler("environment.recreate", reconcileStart);
 registerReconciler("environment.stop", reconcileStop);
 registerReconciler("environment.delete", reconcileDelete);
 registerReconciler("environment.create", reconcileCreate);
+registerReconciler("project.remove", reconcileProjectRemove);
 for (const action of [
   "environment.fork",
   "environment.rename",
   "project.add",
   "project.create",
+  "project.init",
   "project.update",
-  "project.remove",
   "project.config.set",
   "environment.config.set",
   "session.config.set",

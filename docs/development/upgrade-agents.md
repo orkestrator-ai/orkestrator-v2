@@ -410,6 +410,16 @@ expires. Also check that `expires` is still in milliseconds and the refresh
 window (Pi refreshes five minutes early, OpenCode's xAI two) still fits inside
 `PROVIDER_AUTH_MIN_VALIDITY_MS`.
 
+On every Codex bump, run `bun scripts/codex-access-only-auth-probe.ts --codex
+<pinned binary>`. It hands the pinned Codex the access-only `auth.json` a
+coordinator home or container receives, built from a synthetic login against
+a local server, and reports every refresh attempt. On 0.164.0: no refresh for
+an access token more than five minutes from its `exp`, whatever
+`last_refresh` says; inside those five minutes, or after a 401, one attempt
+with the blank refresh token that fails and leaves the file untouched. A
+change there (a refresh before the window, or a rewritten file) needs
+`restrictCodexAuthSnapshot` and `TOKEN_REPLACEMENT_LEAD_MS` re-read.
+
 ## Claude
 
 ### Where the SDK is used
@@ -1230,6 +1240,10 @@ trusting a green result.
 6. Smoke-test sign-in through the bridge's `--login` child, run a turn with tool
    calls and a diff, switch model and effort, cancel mid-turn, and check the
    inactive-environment path.
+   `src/login-no-open-browser.test.ts` runs the pinned SDK's login with a fake
+   system opener and fails if `NO_OPEN_BROWSER` no longer stops the launch: a
+   sign-in started from another machine's Settings relies on it (checked on
+   1.0.40).
 7. [Re-trace preserved provider state](#re-trace-preserved-provider-state):
    confirm the SDK's local agent store still writes only under the root
    `cursorSdkStateDirectoryPath()` hands it. (1.0.40 added an OS-temp

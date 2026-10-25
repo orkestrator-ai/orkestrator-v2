@@ -35,6 +35,12 @@ export type ProjectBoardTab =
   | "features"
   | "pull-requests";
 export type EnvironmentSortMode = "project" | "activity";
+/**
+ * How "By activity" orders environments: `priority` puts unread work, then
+ * waiting, then working before idle, newest first within each; `newest` and
+ * `oldest` order by activity time alone.
+ */
+export type ActivitySortOrder = "priority" | "newest" | "oldest";
 
 /**
  * A project opens on its coordinator, except on a leaf node: coordination
@@ -73,6 +79,8 @@ interface UIState {
   expandedSessionsEnvironments: string[];
   /** How environments are arranged in the sidebar. */
   environmentSortMode: EnvironmentSortMode;
+  /** Order of the "By activity" list. */
+  activitySortOrder: ActivitySortOrder;
   /** Zoom level as a percentage (50-200, default 100) */
   zoomLevel: number;
   /** Multi Review graph height set by dragging its divider; null sizes it to the graph. */
@@ -106,6 +114,7 @@ interface UIState {
   /** Toggle the expanded state of sessions for an environment */
   toggleSessionsExpanded: (environmentId: string) => void;
   setEnvironmentSortMode: (mode: EnvironmentSortMode) => void;
+  setActivitySortOrder: (order: ActivitySortOrder) => void;
   /** Check if sessions are expanded for an environment */
   isSessionsExpanded: (environmentId: string) => boolean;
   /** Collapse projects that have no environments (used on initial load) */
@@ -139,6 +148,7 @@ export const createUIStore = () =>
         selectedEnvironmentIds: [],
         expandedSessionsEnvironments: [],
         environmentSortMode: "project",
+        activitySortOrder: "priority",
         zoomLevel: ZOOM_DEFAULT,
         multiReviewGraphHeight: null,
 
@@ -238,6 +248,8 @@ export const createUIStore = () =>
 
         setEnvironmentSortMode: (mode) => set({ environmentSortMode: mode }),
 
+        setActivitySortOrder: (order) => set({ activitySortOrder: order }),
+
         isSessionsExpanded: (environmentId) =>
           get().expandedSessionsEnvironments.includes(environmentId),
 
@@ -278,6 +290,7 @@ export const createUIStore = () =>
           collapsedProjectFolders: state.collapsedProjectFolders,
           recentProjectIds: state.recentProjectIds,
           environmentSortMode: state.environmentSortMode,
+          activitySortOrder: state.activitySortOrder,
           zoomLevel: state.zoomLevel,
           multiReviewGraphHeight: state.multiReviewGraphHeight,
         }),

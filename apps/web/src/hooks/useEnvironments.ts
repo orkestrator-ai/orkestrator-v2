@@ -115,6 +115,8 @@ interface UseEnvironmentsOptions {
 }
 
 interface LoadEnvironmentsOptions {
+  /** Let readiness-sensitive callers distinguish a failed snapshot from an empty one. */
+  throwOnError?: boolean;
   /** Refresh store data without changing user-visible loading or error state. */
   silent?: boolean;
   /** Reconcile persisted container state with Docker before returning the list. */
@@ -775,6 +777,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         } else {
           setError(message);
         }
+        if (options.throwOnError) throw err;
       } finally {
         if (!silent) {
           setLoading(false);

@@ -1,3 +1,4 @@
+import { DESIGN_KEYBOARD_SHORTCUTS, KEYBOARD_SHORTCUT_GROUPS } from "@/lib/keyboard-shortcuts";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { DesignElement } from "@orkestrator/protocol/design-canvas";
@@ -151,6 +152,50 @@ describe("DesignCanvasTab", () => {
       input.remove();
     } finally {
       window.removeEventListener("keydown", appZoomReset);
+    }
+  });
+
+  test("the shared catalog matches design help, zoom, move and resize handlers", async () => {
+    render(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    const title = await screen.findByRole("button", { name: "Move frame A" });
+    const documented = (id: string) =>
+      DESIGN_KEYBOARD_SHORTCUTS.find((shortcut) => shortcut.id === id)!;
+    expect(KEYBOARD_SHORTCUT_GROUPS.find((group) => group.id === "design")!.shortcuts).toBe(
+      DESIGN_KEYBOARD_SHORTCUTS,
+    );
+    title.focus();
+    // Derive the keys from the catalog and exercise the actual owning handlers.
+    const zoom = () =>
+      screen
+        .getByRole("button", { name: /^Zoom \d+%\. Reset to 100%$/ })
+        .getAttribute("aria-label");
+    const initialZoom = zoom();
+    fireEvent.keyDown(title, { key: documented("design-zoom-in").mac[0]!.split(" / ")[0] });
+    await waitFor(() => expect(zoom()).not.toBe(initialZoom));
+    fireEvent.keyDown(title, { key: documented("design-zoom-out").mac[0]!.split(" / ")[0] });
+    await waitFor(() => expect(zoom()).toBe(initialZoom));
+    fireEvent.keyDown(title, { key: documented("design-help").mac[0] });
+    const help = await screen.findByRole("dialog", { name: "Design keyboard shortcuts" });
+    for (const shortcut of DESIGN_KEYBOARD_SHORTCUTS) {
+      expect(within(help).getByText(shortcut.description)).toBeTruthy();
+    }
+    fireEvent.keyDown(help, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
+
+    const initial = { ...backend.frames.get(frameA)!.frame };
+    for (const [id, shiftKey, expected] of [
+      ["design-move", false, { x: initial.x + 1 }],
+      ["design-move", true, { x: initial.x + 11 }],
+      ["design-resize", false, { width: initial.width + 1 }],
+      ["design-resize", true, { width: initial.width + 11 }],
+    ] as const) {
+      const keys = documented(id).mac;
+      expect(keys).toContain("Arrow keys");
+      title.focus();
+      fireEvent.keyDown(title, { key: "ArrowRight", shiftKey, altKey: keys.includes("⌥") });
+      await waitFor(() => expect(backend.frames.get(frameA)!.frame).toMatchObject(expected));
     }
   });
 

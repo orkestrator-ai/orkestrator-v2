@@ -1,0 +1,14 @@
+# MCP source-store lock setup races its fixed wait under aggregate load
+
+- **ID:** 0932
+- **Status:** open
+- **Date observed:** 2026-10-25
+- **Tests:** `McpSourceStore > takes over a lock left by a dead process but not one held by a live process`; `McpSourceStore > a live holder whose identity cannot be verified is never taken over on age`.
+- **File:** `apps/backend/src/core/mcp-management/source-store.test.ts`.
+- **Original command:** `mise run test:logged -- --name resume-repository -- mise run test`; standard workspace/root/bridge/protocol reservations 4/1/2/1, with other checkout suites on the same host.
+- **Failures:** the first test's fixed 20 ms setup wait finished before the lock file appeared, so `lockFile.endsWith` threw on `undefined` (23.32 ms). The following case then observed `ENOENT` opening its lock instead of the expected busy error (307.20 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name resume-mcp-source-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures` passed (exit 0, 0.8 s).
+- **Evidence:** `orkestrator-test-run.gciHk4/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory; compressed from partial inner logs after the outer watchdog stopped the run. Outer run: `orkestrator-test-run.aqhArP/`.
+- **Hypothesis:** the fixed delay does not establish lock acquisition under load. The early failure also bypasses `release()` and `await held`, so its still-running holder may cross test cleanup into the next case. The cascade is plausible but has not been reproduced under controlled scheduling. No MCP implementation, assertion, timeout or skip changed; aggregate failures remain reported.
+
+- **Suite result:** the outer 30-minute watchdog stopped the aggregate after a 876.2 s workspace capacity wait. Backend had three failed cases and no final test counts; the aggregate is incomplete, with its observed assertion failures preserved.

@@ -585,7 +585,6 @@ describe("OpenCodeProvider change evidence", () => {
       {
         openCodeClient: fake.client,
         openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-        autoAnswerRequests: false,
         monitorRetryMs: 1,
         openCodeStatusReconcileIntervalMs: 60_000,
         commandChanges: { probe: fakeProbe() },

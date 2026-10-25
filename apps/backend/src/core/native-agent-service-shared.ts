@@ -98,7 +98,6 @@ import {
   type ProviderInteractiveSnapshot,
   type ProviderSessionStateSnapshot,
   type ProviderTranscriptSnapshot,
-  type ProviderInteractionObservationEvent,
   type ProviderExecutionMode,
 } from "./native-agent-provider.js";
 import {
@@ -107,8 +106,6 @@ import {
   stagePromptImages,
   type PromptAttachment,
 } from "./prompt-attachments.js";
-
-export const PROVIDER_REPORTED_INTERACTION_GRACE_MS = 60_000;
 
 /** An authoritative provider probe proved that a session no longer exists. */
 export class NativeAgentProviderSessionMissingError extends Error {
@@ -996,7 +993,6 @@ export type {
   ProviderInteractiveSnapshot,
   ProviderSessionStateSnapshot,
   ProviderTranscriptSnapshot,
-  ProviderInteractionObservationEvent,
   ProviderExecutionMode,
   PromptAttachment,
 };

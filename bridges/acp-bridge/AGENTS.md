@@ -73,10 +73,26 @@ the record would be dropped).
 
 - **A pause only moves the deadline.** `POST .../approvals/:id/hold` and
   `.../interactions/:id/hold` re-arm the request's `InteractionDeadline`
-  (`acp-interaction-hold.ts`), capped by the in-flight `session/prompt`
-  timeout (`promptDeadlineAt`) and, for a question, Grok's own
-  `GROK_ASK_USER_QUESTION_TIMEOUT_SECS`. Expiry still cancels; a hold never
-  answers the request.
+  (`acp-interaction-hold.ts`) at the day-long hold ceiling or, for a
+  question, Grok's own question timeout if sooner. Expiry still cancels; a
+  hold never answers the request.
+- **A held request stops the turn's clock.** The `session/prompt` timeout
+  terminates the child that would answer a parked request, so it runs on a
+  pausable clock (`acp-prompt-clock.ts`, `AcpProcess.request`'s
+  `onTimeoutArmed`): it stops while any request is held, restarts with the
+  time it had left when the last hold ends or the held request settles, and
+  gives a resumed countdown at least its fresh window. Call
+  `syncPromptTurnClock` wherever a parked request is removed or its hold
+  changes. `promptDeadlineAt` still caps a countdown that is running.
+- **Grok's question timeout is raised at launch, not guessed.** Grok
+  abandons an `ask_user_question` on its own timer (30 minutes by default),
+  and the request carries no deadline. `acp-question-timeout.ts` resolves it
+  per key the way Grok does (`/etc/grok/requirements.toml`, then the
+  environment, then `$GROK_HOME/config.toml`) when the child is spawned. If
+  nothing sets the duration the child gets
+  `GROK_ASK_USER_QUESTION_TIMEOUT_SECS` at the hold ceiling, so the bridge's
+  deadline decides; a duration or off switch the user set is left alone and
+  published as the request's provider limit.
 
 ## Policy refusals
 

@@ -444,7 +444,6 @@ describe("OpenCode provider dispatch", () => {
       {
         openCodeClient: fake.client,
         openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-        autoAnswerRequests: false,
         resolveOpenCodeModelProviders: () => ["hpc-ai", "opencode"],
       },
     );
@@ -493,7 +492,6 @@ describe("OpenCode provider dispatch", () => {
       {
         openCodeClient: fake.client,
         openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-        autoAnswerRequests: false,
         resolveOpenCodeModelProviders: () => ["hpc-ai", "opencode"],
       },
     );
@@ -541,7 +539,6 @@ describe("OpenCode provider dispatch", () => {
       {
         openCodeClient: fake.client,
         openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-        autoAnswerRequests: false,
         resolveOpenCodeModelProviders: () => ["opencode"],
       },
     );
@@ -880,7 +877,6 @@ describe("OpenCode provider dispatch", () => {
           openCodeClient: fake.client,
           openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
           monitorRetryMs: 1,
-          autoAnswerRequests: true,
         },
       );
 

@@ -666,6 +666,12 @@ export async function spawnSetupTerminal(
     }
     const shellPath = resolveLocalShellPath();
     const setupCommand = buildSetupTerminalCommand(commands, `${quoteShell(shellPath)} -l`);
+    terminals.rememberSession(sessionId, {
+      kind: "local",
+      environmentId: environment.id,
+      cols: 80,
+      rows: 24,
+    });
     spawnTerminalProcess(
       sessionId,
       shellPath,

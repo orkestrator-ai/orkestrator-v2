@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { sessionRuntimeHealthBody } from "./runtime-health-body.js";
+import { claudeReportedPolicy } from "../services/claude-query-config.js";
 import {
   holdPendingRequest,
   type ClaudeHoldFamily,
@@ -358,7 +359,7 @@ session.get("/:id", async (c) => {
     structuredOutputRequestId: sessionData.structuredOutputRequestId,
     structuredOutput: sessionData.structuredOutput,
     contextUsage: sessionData.inProgressUsage ?? sessionData.usage,
-    policy: sessionData.executionPolicy,
+    policy: claudeReportedPolicy(sessionData),
     // Authoritative even before the first turn completes: rate-limit events
     // arrive mid-turn, long before there is a usage snapshot to carry them.
     rateLimits: sessionData.rateLimits,
@@ -519,7 +520,7 @@ session.post("/:id/config", async (c) => {
   } else if (permissionMode === "plan" || permissionMode === "bypassPermissions") {
     await setSessionPreferences(sessionData.id, { planMode: permissionMode === "plan" });
   }
-  return c.json({ ok: true, policy: sessionData.executionPolicy });
+  return c.json({ ok: true, policy: claudeReportedPolicy(sessionData) });
 });
 
 /**

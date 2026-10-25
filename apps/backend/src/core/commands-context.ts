@@ -105,6 +105,8 @@ export type CommandContext = {
   notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
   probeAgentCreatedPullRequest?: (environmentId: string) => Promise<void>;
   drainAgentMail?: () => Promise<void>;
+  /** Durable, backend-timed scheduled jobs (docs/architecture/scheduled-jobs.md). */
+  scheduledJobs?: import("./scheduled-jobs/service.js").ScheduledJobService;
   /** Every agent tab in the app and what it is doing; see agent-registry.ts. */
   agentRegistry?: import("./agent-registry.js").AgentRegistry;
 };

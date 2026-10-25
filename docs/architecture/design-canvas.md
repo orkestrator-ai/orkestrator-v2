@@ -384,7 +384,14 @@ Code: `apps/backend/src/core/design/session-links.ts`,
   tab the identity a resume needs: Codex's thread id, read from the session
   before it is closed (`NativeAgentService.resumableSessionIdIfRunning`,
   observe only), and the provider session id for Claude, which resumes by it.
-  An identity that cannot be read is not recorded rather than guessed. The
+  If the open session can no longer be read (its bridge restarted or lost it
+  before the close landed), teardown uses the identity the provider last
+  reported for that session: every native state read keeps it on the tab's
+  mapping (`PersistedNativeAgentSession.resumeIdentity`, written only when it
+  changes and only for the provider session it was read from). The identity
+  read before the close is also journaled on the teardown intent, so a close
+  replayed after a backend restart records the same one. An identity that
+  cannot be named is not recorded rather than guessed. The
   link is written after the provider-session teardown lock is released (a
   resume holds its canvas lane while waiting for that lock), and recording
   never fails the close.
@@ -430,7 +437,8 @@ Backend: the `core/design/` `service`, `operations`, `history`, `lifecycle`,
 `sync`, `records`, `exports`, `export-writer`, `renderer`, `mcp`,
 `cross-process`, `host-file` and `session-links` tests,
 `commands-registry-teardown` (a closing tab records its session on design
-links) and `commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
+links, including from the identity kept on the mapping when the session is
+gone), `storage-native-agent-resume-identity` and `commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
 plus one real-Chromium renderer test). Backend tests reach a storage bound
 (change log, history entries) by lowering it with `withDesignLimit`, not with
 hundreds of fsynced commits, and check the shipped bound in memory. A test
@@ -444,6 +452,10 @@ command registry at desktop and phone widths;
 `e2e/agent-testing/design-live.spec.ts` (opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1`)
 runs the full tool cycle, Ask agent, an approval, the handoff and closing and
 resuming the design conversation with real Claude and Codex.
+`e2e/agent-testing/design-resume-clients-live.spec.ts` (opt-in,
+`ORKESTRATOR_AGENT_TEST_LIVE_DESIGN_RESUME=1`) has two signed-in browser clients
+press Resume on one closed design conversation at once and checks they get
+one tab and one live session.
 `e2e/DesignCanvasAccessibility.spec.ts` runs a keyboard-only journey with focus
 survival, accessibility-tree, label-in-name, reduced-motion, 200% and 400% zoom
 and narrow-pane checks, and

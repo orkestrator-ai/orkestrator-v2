@@ -339,6 +339,14 @@ export function NativeAgentQuestionCard({
                         {option.description}
                       </span>
                     ) : null}
+                    {option.preview ? (
+                      <span
+                        data-testid="question-option-preview"
+                        className="mt-1.5 block max-h-48 overflow-auto whitespace-pre rounded border border-border/40 bg-black/20 p-2 font-mono text-[11px] leading-snug text-muted-foreground"
+                      >
+                        {option.preview}
+                      </span>
+                    ) : null}
                   </span>
                 </button>
               );

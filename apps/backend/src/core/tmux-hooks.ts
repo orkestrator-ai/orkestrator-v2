@@ -1,8 +1,16 @@
 import * as shared from "./tmux-shared.js";
 import {
+  AGENT_INTERACTION_HOLD_CEILING_MS,
+  type AgentInteractionHold,
+} from "@orkestrator/protocol/agent-interactions";
+import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
   BACKUP_SENTINEL_NO_ORIGINAL,
   CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN,
+  HOOK_COMMAND_TIMEOUT_SECS,
+  HOOK_HOLD_CEILING_SECS,
+  HOOK_HOLD_PROTOCOL,
+  HOOK_LIMIT_MARGIN_SECS,
   HOOK_TIMEOUT_SECS,
   MAX_PREVIOUS_SESSIONS,
   THINKING_DISPLAY_FLAG,
@@ -59,12 +67,37 @@ export type WorkspaceHookPaths = {
   claudeSettingsBackup: string;
 };
 
+/**
+ * Whether a tmux prompt's countdown can be paused. The hook script owns the
+ * deadline, so this is derived from the timing it writes. `hook-outdated` is a
+ * prompt raised by a script, or a Claude Code process, that predates pausing.
+ */
+export type TmuxHookHold = AgentInteractionHold | { available: false; reason: "hook-outdated" };
+
 export type PendingHookEvent = {
   id: string;
   kind: string;
   payload: unknown;
   requestedAt?: number;
   expiresAt?: number;
+  hold?: TmuxHookHold;
+};
+
+/** What a pausable hook's timing sidecar adds to the two timestamps. */
+export type BlockingHookPause = {
+  /** When the current countdown window started: the request, or the last resume. */
+  startedAt: number;
+  /** When the script stops waiting whatever happens: Claude Code's hook timeout. */
+  limitAt: number;
+  /** Present while paused. */
+  heldAt?: number;
+};
+
+export type BlockingHookTiming = {
+  requestedAt: number;
+  expiresAt: number;
+  /** Absent for a hook that cannot be paused. */
+  pause?: BlockingHookPause;
 };
 
 /**
@@ -73,10 +106,10 @@ export type PendingHookEvent = {
  * cannot be held in memory and fanned out to every SSE subscriber.
  */
 export const TMUX_HOOK_PAYLOAD_MAX_BYTES = 4 * 1024 * 1024;
-/** The timing sidecar is two integers. */
+/** The timing sidecar is a handful of integers. */
 export const TMUX_HOOK_TIMING_MAX_BYTES = 4 * 1024;
 
-export function blockingHookTiming(id: string): { requestedAt: number; expiresAt: number } | null {
+export function blockingHookTiming(id: string): BlockingHookTiming | null {
   const timestamp = id.split("-", 1)[0] ?? "";
   if (!/^\d+$/.test(timestamp)) return null;
   const seconds = Number.parseInt(timestamp, 10);
@@ -90,29 +123,86 @@ export function blockingHookTiming(id: string): { requestedAt: number; expiresAt
   };
 }
 
-export function parseBlockingHookTiming(content: string | undefined): {
-  requestedAt: number;
-  expiresAt: number;
-} | null {
+function isEpochMs(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+/**
+ * Parse the timing sidecar the hook script writes.
+ *
+ * The original shape is `{requestedAt, expiresAt}` with exactly the default
+ * window between them; it cannot be paused. A pausable script writes
+ * `version: 2` with the window's start and the hook's limit, plus `heldAt`
+ * while paused, and its deadline moves: a pause sets it to the hold ceiling
+ * (or the limit, if sooner) and a resume to a fresh window. Anything that does
+ * not add up is ignored, and the prompt keeps the id-derived fallback.
+ */
+export function parseBlockingHookTiming(content: string | undefined): BlockingHookTiming | null {
   if (content === undefined) return null;
   try {
     const parsed = JSON.parse(content) as Record<string, unknown>;
-    const requestedAt = parsed.requestedAt;
-    const expiresAt = parsed.expiresAt;
-    if (
-      typeof requestedAt !== "number" ||
-      typeof expiresAt !== "number" ||
-      !Number.isSafeInteger(requestedAt) ||
-      !Number.isSafeInteger(expiresAt) ||
-      requestedAt <= 0 ||
-      expiresAt - requestedAt !== AGENT_INTERACTION_DEFAULT_TIMEOUT_MS
-    ) {
-      return null;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const { requestedAt, expiresAt } = parsed;
+    if (!isEpochMs(requestedAt) || !isEpochMs(expiresAt)) return null;
+    if (parsed.version === undefined) {
+      if (expiresAt - requestedAt !== AGENT_INTERACTION_DEFAULT_TIMEOUT_MS) return null;
+      return { requestedAt, expiresAt };
     }
-    return { requestedAt, expiresAt };
+    if (parsed.version !== 2) return null;
+    const { startedAt, limitAt, heldAt } = parsed;
+    if (!isEpochMs(startedAt) || !isEpochMs(limitAt)) return null;
+    if (startedAt < requestedAt || limitAt <= requestedAt || expiresAt > limitAt) return null;
+    if (heldAt === undefined) {
+      if (expiresAt !== Math.min(startedAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS, limitAt)) {
+        return null;
+      }
+      return { requestedAt, expiresAt, pause: { startedAt, limitAt } };
+    }
+    if (!isEpochMs(heldAt) || heldAt < startedAt || heldAt >= expiresAt) return null;
+    if (expiresAt !== Math.min(heldAt + AGENT_INTERACTION_HOLD_CEILING_MS, limitAt)) return null;
+    return { requestedAt, expiresAt, pause: { startedAt, limitAt, heldAt } };
   } catch {
     return null;
   }
+}
+
+/**
+ * The hold a prompt publishes, mirroring `InteractionDeadline.hold()`: the
+ * hook's own limit is the provider limit, and an MCP server behind an
+ * elicitation may stop waiting on its own.
+ */
+export function blockingHookHold(
+  kind: string,
+  timing: BlockingHookTiming,
+  now: number = Date.now(),
+): TmuxHookHold {
+  const pause = timing.pause;
+  if (!pause) return { available: false, reason: "hook-outdated" };
+  const reasonAt = (at: number): AgentInteractionHold["reason"] =>
+    pause.limitAt < at + AGENT_INTERACTION_HOLD_CEILING_MS
+      ? "provider-limit"
+      : kind === "Elicitation"
+        ? "upstream-may-expire"
+        : undefined;
+  if (pause.heldAt !== undefined) {
+    const reason = reasonAt(pause.heldAt);
+    return { available: true, heldAt: pause.heldAt, ...(reason ? { reason } : {}) };
+  }
+  if (pause.limitAt <= timing.expiresAt) return { available: false, reason: "no-extension" };
+  const reason = reasonAt(now);
+  return { available: true, ...(reason ? { reason } : {}) };
+}
+
+function blockingTimingFields(
+  kind: string,
+  timing: BlockingHookTiming | null,
+): Pick<PendingHookEvent, "requestedAt" | "expiresAt" | "hold"> {
+  if (!timing) return {};
+  return {
+    requestedAt: timing.requestedAt,
+    expiresAt: timing.expiresAt,
+    hold: blockingHookHold(kind, timing),
+  };
 }
 
 export async function readBlockingHookTiming(
@@ -120,7 +210,7 @@ export async function readBlockingHookTiming(
   paths: SessionHookPaths,
   filename: string,
   id: string,
-): Promise<{ requestedAt: number; expiresAt: number } | null> {
+): Promise<BlockingHookTiming | null> {
   const authoritative = parseBlockingHookTiming(
     (await backend.readBoundedFile(`${paths.timingDir}/${filename}`, TMUX_HOOK_TIMING_MAX_BYTES))
       ?.content,
@@ -151,6 +241,7 @@ export function sessionHookPaths(
     responseDir: `${sessionDir}/response`,
     timeoutDir: `${sessionDir}/timeout`,
     timingDir: `${sessionDir}/timing`,
+    holdDir: `${sessionDir}/hold`,
   };
 }
 
@@ -159,8 +250,11 @@ export function hookScript(workspace: WorkspaceHookPaths): string {
 # orkestrator-v2 claude-tmux hook
 set -u
 EVENT_KIND="\${1:-Unknown}"
+HOLD_PROTOCOL="\${2:-}"
 SESSIONS_DIR=${shellDq(workspace.sessionsDir)}
 TIMEOUT_SECS=${HOOK_TIMEOUT_SECS}
+HOLD_CEILING_SECS=${HOOK_HOLD_CEILING_SECS}
+HOOK_LIMIT_SECS=${HOOK_COMMAND_TIMEOUT_SECS - HOOK_LIMIT_MARGIN_SECS}
 
 PAYLOAD="$(cat)"
 
@@ -191,13 +285,16 @@ PENDING_DIR="$SESSION_DIR/pending"
 RESPONSE_DIR="$SESSION_DIR/response"
 TIMEOUT_DIR="$SESSION_DIR/timeout"
 TIMING_DIR="$SESSION_DIR/timing"
-mkdir -p "$PENDING_DIR" "$RESPONSE_DIR" "$TIMEOUT_DIR" "$TIMING_DIR" 2>/dev/null || true
+HOLD_DIR="$SESSION_DIR/hold"
+mkdir -p "$PENDING_DIR" "$RESPONSE_DIR" "$TIMEOUT_DIR" "$TIMING_DIR" "$HOLD_DIR" 2>/dev/null || true
 
 ID="$(date +%s)-$$-\${RANDOM}-\${RANDOM}"
 PENDING_FILE="$PENDING_DIR/\${EVENT_KIND}-\${ID}.json"
 RESPONSE_FILE="$RESPONSE_DIR/\${EVENT_KIND}-\${ID}.json"
 TIMEOUT_FILE="$TIMEOUT_DIR/\${EVENT_KIND}-\${ID}.json"
 TIMING_FILE="$TIMING_DIR/\${EVENT_KIND}-\${ID}.json"
+TIMING_TMP="$TIMING_DIR/.\${EVENT_KIND}-\${ID}.tmp"
+HOLD_FILE="$HOLD_DIR/\${EVENT_KIND}-\${ID}.json"
 
 epoch_millis() {
   if command -v python3 >/dev/null 2>&1; then
@@ -209,31 +306,112 @@ epoch_millis() {
   fi
 }
 
+# The pausable sidecar. Written to a temporary name and renamed, so a reader
+# never sees half of it.
+write_timing() {
+  HELD_FIELD=""
+  if [ -n "$HELD_AT_MS" ]; then HELD_FIELD=",\\"heldAt\\":$HELD_AT_MS"; fi
+  printf '{"version":2,"requestedAt":%s,"startedAt":%s,"expiresAt":%s,"limitAt":%s%s}' \\
+    "$REQUESTED_AT_MS" "$STARTED_AT_MS" "$EXPIRES_AT_MS" "$LIMIT_AT_MS" "$HELD_FIELD" > "$TIMING_TMP" &&
+    mv -f "$TIMING_TMP" "$TIMING_FILE"
+}
+
+# A single sleeper owns the deadline. Counting quarter-second polling
+# iterations would add the loop's process and filesystem overhead to the
+# advertised window, so the published deadline and the actual acceptance
+# window would drift apart under load. A pause or resume replaces the sleeper.
+arm_deadline() {
+  if [ -n "$TIMEOUT_PID" ]; then
+    kill "$TIMEOUT_PID" 2>/dev/null || true
+    wait "$TIMEOUT_PID" 2>/dev/null || true
+  fi
+  sleep "$1" &
+  TIMEOUT_PID=$!
+}
+
+seconds_until() {
+  REMAINING_MS=$(($1 - $(epoch_millis)))
+  if [ "$REMAINING_MS" -le 0 ]; then echo 0; else echo $(((REMAINING_MS + 999) / 1000)); fi
+}
+
+min_ms() {
+  if [ "$1" -lt "$2" ]; then echo "$1"; else echo "$2"; fi
+}
+
+# Applies one pause ("hold") or resume request from the backend. A request
+# that changes nothing (already paused, or no room left before the hook's
+# limit) is consumed and ignored; the backend reads the sidecar to tell.
+apply_hold_request() {
+  HOLD_REQUEST="$(cat "$HOLD_FILE" 2>/dev/null || true)"
+  # Remote writers create the file before streaming its contents. Leave an
+  # incomplete request for the next poll rather than losing it.
+  case "$HOLD_REQUEST" in
+    hold|resume) ;;
+    *) return 1 ;;
+  esac
+  rm -f "$HOLD_FILE"
+  NOW_MS="$(epoch_millis)"
+  case "$HOLD_REQUEST" in
+    hold)
+      if [ -z "$HELD_AT_MS" ]; then
+        NEXT_MS="$(min_ms $((NOW_MS + HOLD_CEILING_SECS * 1000)) "$LIMIT_AT_MS")"
+        if [ "$NEXT_MS" -gt "$EXPIRES_AT_MS" ]; then
+          HELD_AT_MS="$NOW_MS"
+          EXPIRES_AT_MS="$NEXT_MS"
+          write_timing
+          arm_deadline "$(seconds_until "$EXPIRES_AT_MS")"
+        fi
+      fi
+      ;;
+    resume)
+      if [ -n "$HELD_AT_MS" ]; then
+        HELD_AT_MS=""
+        STARTED_AT_MS="$NOW_MS"
+        EXPIRES_AT_MS="$(min_ms $((NOW_MS + TIMEOUT_SECS * 1000)) "$LIMIT_AT_MS")"
+        write_timing
+        arm_deadline "$(seconds_until "$EXPIRES_AT_MS")"
+      fi
+      ;;
+  esac
+}
+
 case "$EVENT_KIND" in
   PreToolUse|PermissionRequest|Elicitation)
     REQUESTED_AT_MS="$(epoch_millis)"
+    STARTED_AT_MS="$REQUESTED_AT_MS"
     EXPIRES_AT_MS=$((REQUESTED_AT_MS + TIMEOUT_SECS * 1000))
-    printf '{"requestedAt":%s,"expiresAt":%s}' "$REQUESTED_AT_MS" "$EXPIRES_AT_MS" > "$TIMING_FILE"
+    HELD_AT_MS=""
+    LIMIT_AT_MS=""
+    TIMEOUT_PID=""
+    if [ "$HOLD_PROTOCOL" = "${HOOK_HOLD_PROTOCOL}" ]; then
+      # Only a hook whose command carries the protocol was started by a
+      # Claude Code that also took the matching hook timeout; anything else
+      # keeps the original, unpausable sidecar.
+      LIMIT_AT_MS=$((REQUESTED_AT_MS + HOOK_LIMIT_SECS * 1000))
+      write_timing
+    else
+      printf '{"requestedAt":%s,"expiresAt":%s}' "$REQUESTED_AT_MS" "$EXPIRES_AT_MS" > "$TIMING_FILE"
+    fi
     printf '%s' "$PAYLOAD" > "$PENDING_FILE"
-    # A single sleeper owns the deadline. Counting 1,200 quarter-second
-    # polling iterations would add the loop's process and filesystem overhead
-    # to the advertised five minutes, causing the published deadline and the
-    # actual acceptance window to drift apart under load.
-    sleep "$TIMEOUT_SECS" &
-    TIMEOUT_PID=$!
+    arm_deadline "$TIMEOUT_SECS"
     while kill -0 "$TIMEOUT_PID" 2>/dev/null; do
       if [ -f "$RESPONSE_FILE" ]; then
         kill "$TIMEOUT_PID" 2>/dev/null || true
         wait "$TIMEOUT_PID" 2>/dev/null || true
         cat "$RESPONSE_FILE"
-        rm -f "$RESPONSE_FILE" "$PENDING_FILE" "$TIMING_FILE"
+        rm -f "$RESPONSE_FILE" "$PENDING_FILE" "$TIMING_FILE" "$TIMING_TMP" "$HOLD_FILE"
         exit 0
+      fi
+      if [ -n "$LIMIT_AT_MS" ] && [ -f "$HOLD_FILE" ]; then
+        if apply_hold_request; then
+          continue
+        fi
       fi
       sleep 0.25
     done
     wait "$TIMEOUT_PID" 2>/dev/null || true
     printf '{"timed_out":true}' > "$TIMEOUT_FILE"
-    rm -f "$PENDING_FILE" "$TIMING_FILE"
+    rm -f "$PENDING_FILE" "$TIMING_FILE" "$TIMING_TMP" "$HOLD_FILE"
     case "$EVENT_KIND" in
       PreToolUse)
         echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Approval timed out without a user response."}}'
@@ -257,6 +435,13 @@ esac
 export function hooksBlock(hookScriptPath: string): unknown {
   const commandPrefix = `bash ${shellDq(hookScriptPath)} `;
   const command = (kind: string) => `${commandPrefix}${kind}`;
+  // The blocking hooks carry the hold protocol and a timeout above the hold
+  // ceiling, so a paused prompt is not killed at Claude Code's 600 s default.
+  const blocking = (kind: string) => ({
+    type: "command",
+    command: `${command(kind)} ${HOOK_HOLD_PROTOCOL}`,
+    timeout: HOOK_COMMAND_TIMEOUT_SECS,
+  });
   const matcherHook = (kind: string) => ({
     matcher: "*",
     hooks: [{ type: "command", command: command(kind) }],
@@ -269,15 +454,15 @@ export function hooksBlock(hookScriptPath: string): unknown {
     PreToolUse: [
       {
         matcher: "AskUserQuestion",
-        hooks: [{ type: "command", command: command("PreToolUse") }],
+        hooks: [blocking("PreToolUse")],
       },
       {
         matcher: "ExitPlanMode",
-        hooks: [{ type: "command", command: command("PreToolUse") }],
+        hooks: [blocking("PreToolUse")],
       },
     ],
-    PermissionRequest: [matcherHook("PermissionRequest")],
-    Elicitation: [hook("Elicitation")],
+    PermissionRequest: [{ matcher: "*", hooks: [blocking("PermissionRequest")] }],
+    Elicitation: [{ hooks: [blocking("Elicitation")] }],
     ElicitationResult: [hook("ElicitationResult")],
     UserPromptExpansion: [hook("UserPromptExpansion")],
     PostToolUse: [matcherHook("PostToolUse")],
@@ -412,6 +597,7 @@ export async function ensureSessionDirs(
   await backend.ensureDir(paths.responseDir);
   await backend.ensureDir(paths.timeoutDir);
   await backend.ensureDir(paths.timingDir);
+  await backend.ensureDir(paths.holdDir);
 }
 
 /** `names` comes from the tick's {@link TmuxPollSnapshot}, not a fresh listing. */
@@ -426,6 +612,7 @@ export async function drainTimeouts(
     const parsed = parseEventFilename(name);
     await backend.removeFile(`${paths.timeoutDir}/${name}`).catch(() => undefined);
     await backend.removeFile(`${paths.timingDir}/${name}`).catch(() => undefined);
+    await backend.removeFile(`${paths.holdDir}/${name}`).catch(() => undefined);
     out.push(parsed);
   }
   return out;
@@ -486,7 +673,9 @@ export async function drainPending(
       id,
       kind,
       payload,
-      ...(blocking ? ((await readBlockingHookTiming(backend, paths, name, id)) ?? {}) : {}),
+      ...(blocking
+        ? blockingTimingFields(kind, await readBlockingHookTiming(backend, paths, name, id))
+        : {}),
     });
   }
   return events;
@@ -530,7 +719,7 @@ export async function listPendingBlocking(
       id,
       kind,
       payload,
-      ...(await readBlockingHookTiming(backend, paths, name, id)),
+      ...blockingTimingFields(kind, await readBlockingHookTiming(backend, paths, name, id)),
     });
   }
   return events;
@@ -547,6 +736,103 @@ export async function replyToHook(
   await backend.writeFile(`${paths.responseDir}/${filename}`, JSON.stringify(response ?? {}));
   await backend.removeFile(`${paths.pendingDir}/${filename}`).catch(() => undefined);
   await backend.removeFile(`${paths.timingDir}/${filename}`).catch(() => undefined);
+  await backend.removeFile(`${paths.holdDir}/${filename}`).catch(() => undefined);
+}
+
+export type HookHoldResult = "applied" | "unchanged" | "unavailable" | "settled";
+
+/** How long the backend waits for the hook script to take a pause or resume. */
+export const TMUX_HOOK_HOLD_ACK_TIMEOUT_MS = 5_000;
+const TMUX_HOOK_HOLD_POLL_MS = 100;
+
+async function readWaitingBlockingHook(
+  backend: TmuxBackend,
+  paths: SessionHookPaths,
+  filename: string,
+  kind: string,
+  id: string,
+): Promise<{ event: PendingHookEvent; timing: BlockingHookTiming | null } | undefined> {
+  if ((await backend.readFile(`${paths.responseDir}/${filename}`)) !== undefined) return undefined;
+  const read = await backend.readBoundedFile(
+    `${paths.pendingDir}/${filename}`,
+    TMUX_HOOK_PAYLOAD_MAX_BYTES,
+  );
+  // A truncated payload is answered fail-closed by the poll loop; it is not
+  // something to pause.
+  if (read === undefined || read.truncated) return undefined;
+  let payload: unknown = read.content;
+  try {
+    payload = JSON.parse(read.content);
+  } catch {
+    payload = read.content;
+  }
+  const timing = await readBlockingHookTiming(backend, paths, filename, id);
+  return { event: { id, kind, payload, ...blockingTimingFields(kind, timing) }, timing };
+}
+
+/**
+ * Pause (`held`) or resume one blocking hook's countdown.
+ *
+ * The hook script owns the deadline, so this only drops a request into the
+ * hold directory and waits for the script to rewrite the timing sidecar. The
+ * script's wait loop consumes the request, moves the deadline (to the hold
+ * ceiling, or a fresh window on resume) and re-arms its sleeper. A request it
+ * does not take in time is withdrawn and reported as an error: the prompt then
+ * still runs on the deadline it had, which is the fail-closed outcome.
+ */
+export async function requestHookHold(
+  backend: TmuxBackend,
+  paths: SessionHookPaths,
+  kind: string,
+  id: string,
+  held: boolean,
+  options: {
+    ackTimeoutMs?: number;
+    pollMs?: number;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<{ result: HookHoldResult; hook?: PendingHookEvent }> {
+  if (!isBlockingHook(kind)) throw new Error(`hook event kind cannot be paused: ${kind}`);
+  const filename = responseFilename(kind, id);
+  const now = options.now ?? Date.now;
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const before = await readWaitingBlockingHook(backend, paths, filename, kind, id);
+  if (!before) return { result: "settled" };
+  const pause = before.timing?.pause;
+  if (!before.timing || !pause) return { result: "unavailable", hook: before.event };
+  if (held === (pause.heldAt !== undefined)) return { result: "unchanged", hook: before.event };
+  if (held) {
+    const ceiling = Math.min(now() + AGENT_INTERACTION_HOLD_CEILING_MS, pause.limitAt);
+    if (ceiling <= before.timing.expiresAt) return { result: "unavailable", hook: before.event };
+  }
+
+  await backend.writeFile(`${paths.holdDir}/${filename}`, held ? "hold" : "resume");
+  const changed = (timing: BlockingHookTiming | null | undefined) =>
+    timing?.expiresAt !== before.timing?.expiresAt ||
+    timing?.pause?.heldAt !== before.timing?.pause?.heldAt;
+  const deadline = now() + (options.ackTimeoutMs ?? TMUX_HOOK_HOLD_ACK_TIMEOUT_MS);
+  for (;;) {
+    await sleep(options.pollMs ?? TMUX_HOOK_HOLD_POLL_MS);
+    const current = await readWaitingBlockingHook(backend, paths, filename, kind, id);
+    if (!current) return { result: "settled" };
+    if (changed(current.timing)) {
+      const nowHeld = current.timing?.pause?.heldAt !== undefined;
+      return { result: nowHeld === held ? "applied" : "unavailable", hook: current.event };
+    }
+    if (now() >= deadline) break;
+  }
+  await backend.removeFile(`${paths.holdDir}/${filename}`).catch(() => undefined);
+  // The script may have taken the request between the last read and the
+  // withdrawal; the sidecar is the truth either way.
+  const last = await readWaitingBlockingHook(backend, paths, filename, kind, id);
+  if (!last) return { result: "settled" };
+  if (changed(last.timing)) {
+    const nowHeld = last.timing?.pause?.heldAt !== undefined;
+    return { result: nowHeld === held ? "applied" : "unavailable", hook: last.event };
+  }
+  throw new Error("The terminal hook did not take the pause in time. Try again.");
 }
 
 export function preToolUseResponse(decision: string, reason?: string): unknown {

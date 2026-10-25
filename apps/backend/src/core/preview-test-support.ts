@@ -67,7 +67,10 @@ export interface PreviewHarness {
       status?: Environment["status"];
     },
   ): Promise<void>;
-  addLocalEnvironment(id: string, options?: { status?: Environment["status"] }): Promise<void>;
+  addLocalEnvironment(
+    id: string,
+    options?: { status?: Environment["status"]; entryPort?: number },
+  ): Promise<void>;
   newRuntime(options?: Partial<ConstructorParameters<typeof PreviewRuntime>[0]>): PreviewRuntime;
   cleanup(): Promise<void>;
 }
@@ -149,6 +152,7 @@ export async function createPreviewHarness(
         createdAt: new Date(0).toISOString(),
         networkAccessMode: "restricted",
         order: order++,
+        ...(environment.entryPort ? { entryPort: environment.entryPort } : {}),
       } as Environment);
     },
     async cleanup() {

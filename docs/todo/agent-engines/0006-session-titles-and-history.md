@@ -107,6 +107,9 @@ archived agents) are not adopted.
   2.x only).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the provider runs.
+- [0038-design-agent-conversation-links.md](../design-canvas/0038-design-agent-conversation-links.md)
+  waits on the archive work here: once a native conversation can be archived,
+  design links add an archived state.
 
 ## Replaces
 

@@ -16,6 +16,11 @@ import { recordTurnUsage } from "./acp-session.js";
 import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "./structured-prompt-marker.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { schedulePersist } from "./acp-persist-writer.js";
+import {
+  startPromptTurnClock,
+  stopPromptTurnClock,
+  type PromptTurnClock,
+} from "./acp-prompt-clock.js";
 import type { PromptResponse, StopReason } from "@agentclientprotocol/sdk";
 
 // Transient provider codes the bridge auto-retries. `resource_exhausted` is
@@ -194,17 +199,29 @@ export async function requestPromptWithRetriableProviderRetries(
     let requestError: Error | undefined;
     const deniedBefore = state.policyDeniedRequests ?? 0;
     // `request` arms its timeout synchronously, so the attempt times out at
-    // this instant or a moment after it, never before. A paused parked request
-    // is capped here: the timeout terminates the child that would answer it.
+    // this instant or a moment after it, never before. The timeout terminates
+    // the child that would answer a parked request, so it caps a countdown;
+    // holding a request stops it (`acp-prompt-clock.ts`).
     const promptDeadlineAt = Date.now() + PROMPT_TIMEOUT_MS;
     state.promptDeadlineAt = promptDeadlineAt;
+    let clock: PromptTurnClock | undefined;
     try {
-      result = await child.request("session/prompt", prompt, PROMPT_TIMEOUT_MS);
+      const request = child.request(
+        "session/prompt",
+        prompt,
+        PROMPT_TIMEOUT_MS,
+        undefined,
+        (rearm) => {
+          clock = startPromptTurnClock(state, PROMPT_TIMEOUT_MS, rearm);
+        },
+      );
+      result = await request;
     } catch (error) {
       if (!retriableProviderError(error)) throw error;
       requestError = error;
     } finally {
-      if (state.promptDeadlineAt === promptDeadlineAt) state.promptDeadlineAt = undefined;
+      if (clock) stopPromptTurnClock(state, clock);
+      else if (state.promptDeadlineAt === promptDeadlineAt) state.promptDeadlineAt = undefined;
     }
 
     recordTurnUsage(state, result);

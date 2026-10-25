@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { PINNED_TOOLCHAIN_VERSIONS } from "../../../packages/toolchain/src/manifest.js";
 
-export function policyQualificationCli(agent: "grok" | "opencode"): string | undefined {
+export function policyQualificationCli(agent: "claude" | "grok" | "opencode"): string | undefined {
   const explicit = process.env[`ORKESTRATOR_POLICY_${agent.toUpperCase()}_PATH`];
   if (explicit) {
     if (!existsSync(explicit))

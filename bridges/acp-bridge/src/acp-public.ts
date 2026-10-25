@@ -11,7 +11,8 @@ import {
   type PromptJournalEntry,
   type SessionState,
 } from "./acp-context.js";
-import { acpReportedPolicy } from "./acp-policy.js";
+import { acpSessionReportedPolicy } from "./acp-policy.js";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { boundTranscript } from "./acp-transcript.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 
@@ -31,7 +32,7 @@ export function publicSession(state: SessionState): JsonObject {
     revision: state.revision,
     sessionId: state.id,
     composer: state.sessionConfig.composer,
-    ...(state.policy ? { policy: acpReportedPolicy(state.policy, providerConfig.name) } : {}),
+    ...policyField(state),
     ...(contextUsage ? { contextUsage } : {}),
     ...publicCommandRevision(state),
     runtime: publicRuntime(state),
@@ -44,6 +45,12 @@ export function publicSession(state: SessionState): JsonObject {
  * backend polling status can notice a push and re-read the catalogue for a
  * tab that is not looking. Absent until any inventory is known.
  */
+/** The `policy` field of a session's projections (`acpSessionReportedPolicy`). */
+export function policyField(state: SessionState): { policy: NativeAgentExecutionPolicy } | object {
+  const policy = acpSessionReportedPolicy(state, providerConfig.name);
+  return policy ? { policy } : {};
+}
+
 export function publicCommandRevision(state: SessionState): { commandRevision?: number } {
   return state.commandsRevision === undefined ? {} : { commandRevision: state.commandsRevision };
 }

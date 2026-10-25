@@ -6,7 +6,6 @@ import type {
   PersistedNativeAgentSession,
   StorageService,
   NativeAgentRuntimeProvider,
-  ProviderInteractionObservationEvent,
   EnsureNativeAgentSessionInput,
   NativeAgentProjectionInput,
   NativeAgentServiceOptions,
@@ -23,7 +22,6 @@ import {
   INTERACTION_MONITOR_MAX_ADOPTED_SESSIONS,
   INTERACTION_MONITOR_MAX_OBSERVATIONS,
   INTERACTION_MONITOR_MAX_TRACKED_REQUESTS,
-  PROVIDER_REPORTED_INTERACTION_GRACE_MS,
   isActiveBuildPhase,
   isBuildPipeline,
   isEnvironmentReadyForAgents,
@@ -58,8 +56,8 @@ export interface NativeAgentInteractionTrackerHost {
 
 /**
  * Pending approvals and questions across every native session: the bounded
- * observation records published to the interaction monitor, the provider- and
- * sweep-reported detections behind them, the monitor's round-robin sweep with
+ * observation records published to the interaction monitor, the sweep-reported
+ * detections behind them, the monitor's round-robin sweep with
  * its per-session retry back-off, and the short-lived pending-interaction read
  * cache. Observations are advisory: an interaction is answered (or denied on
  * timeout, disconnect or generation death) by its provider, never here.
@@ -73,15 +71,6 @@ export class NativeAgentInteractionTracker {
       sessionKey: string;
       expiresAt?: number;
       scan: number;
-    }
-  >();
-  private readonly providerReportedInteractions = new Map<
-    string,
-    {
-      observationKey: string;
-      providerSessionKey: string;
-      detectedAt: number;
-      missingSince?: number;
     }
   >();
   private readonly interactionRetryAt = new Map<string, number>();
@@ -148,7 +137,6 @@ export class NativeAgentInteractionTracker {
     return {
       interactionObservations: this.interactionObservations,
       trackedInteractions: this.trackedInteractions,
-      providerReportedInteractions: this.providerReportedInteractions,
       interactionRetryAt: this.interactionRetryAt,
       interactionAttempts: this.interactionAttempts,
       monitoredInteractionSessionKeys: this.monitoredInteractionSessionKeys,
@@ -255,91 +243,6 @@ export class NativeAgentInteractionTracker {
     return [...this.interactionObservations.values()].map((entry) => ({ ...entry }));
   }
 
-  /** Close the polling race for a provider that applies an immediate legacy response. */
-  recordProviderInteractionObservation(
-    event: ProviderInteractionObservationEvent & {
-      environmentId: string;
-      provider: BuildPipelineAgent;
-    },
-  ): void {
-    if (this.host.isStopped() || this.options.interactionMonitorMode !== "observe-only") return;
-    const phase =
-      event.registration.origin === "build-pipeline"
-        ? "pipeline"
-        : (event.registration.phase?.slice(0, 256) ?? "native-session");
-    const observationKey = [event.provider, event.kind, event.registration.origin, phase].join(
-      "\0",
-    );
-    const providerSessionKey = JSON.stringify([
-      event.environmentId,
-      event.provider,
-      event.sessionId,
-    ]);
-    const trackedKey = JSON.stringify([
-      event.environmentId,
-      event.provider,
-      event.sessionId,
-      event.interactionId,
-    ]);
-
-    if (event.state === "withdrawn") {
-      const tracked = this.providerReportedInteractions.get(trackedKey);
-      if (!tracked) return;
-      this.providerReportedInteractions.delete(trackedKey);
-      const observation = this.interactionObservations.get(tracked.observationKey);
-      if (!observation) return;
-      const remainsBlocked =
-        [...this.trackedInteractions.values()].some(
-          (entry) => entry.observationKey === tracked.observationKey,
-        ) ||
-        [...this.providerReportedInteractions.values()].some(
-          (entry) => entry.observationKey === tracked.observationKey,
-        );
-      if (!remainsBlocked) {
-        observation.providerState = event.providerState ?? "running";
-        observation.eventualOutcome = "withdrawn";
-        observation.eventualAt = this.host.now();
-      }
-      return;
-    }
-
-    const existing = this.providerReportedInteractions.get(trackedKey);
-    if (existing) {
-      const observation = this.interactionObservations.get(existing.observationKey);
-      if (observation) {
-        observation.lastDetectedAt = this.host.now();
-        observation.providerState = "blocked";
-        delete observation.eventualOutcome;
-        delete observation.eventualAt;
-        return;
-      }
-      this.providerReportedInteractions.delete(trackedKey);
-    }
-    if (
-      this.trackedInteractions.size + this.providerReportedInteractions.size >=
-      INTERACTION_MONITOR_MAX_TRACKED_REQUESTS
-    )
-      return;
-    const observation = this.ensureInteractionObservation(
-      observationKey,
-      event.provider,
-      event.kind,
-      event.registration.origin,
-      phase,
-    );
-    observation.count += 1;
-    observation.lastDetectedAt = this.host.now();
-    observation.providerState = "blocked";
-    delete observation.eventualOutcome;
-    delete observation.eventualAt;
-    this.providerReportedInteractions.set(trackedKey, {
-      observationKey,
-      providerSessionKey,
-      detectedAt: this.host.now(),
-    });
-    this.emitInteractionObservation(observation);
-  }
-
   /**
    * Reconcile provider-owned pending requests without applying policy.
    *
@@ -385,9 +288,6 @@ export class NativeAgentInteractionTracker {
     this.interactionObservations.delete(key);
     for (const [trackedKey, tracked] of this.trackedInteractions) {
       if (tracked.observationKey === key) this.trackedInteractions.delete(trackedKey);
-    }
-    for (const [trackedKey, tracked] of this.providerReportedInteractions) {
-      if (tracked.observationKey === key) this.providerReportedInteractions.delete(trackedKey);
     }
   }
 
@@ -454,10 +354,7 @@ export class NativeAgentInteractionTracker {
       }
       this.trackedInteractions.delete(trackedKey);
     }
-    if (
-      this.trackedInteractions.size + this.providerReportedInteractions.size >=
-      INTERACTION_MONITOR_MAX_TRACKED_REQUESTS
-    ) {
+    if (this.trackedInteractions.size >= INTERACTION_MONITOR_MAX_TRACKED_REQUESTS) {
       return;
     }
     const key = this.observationKey(session, kind);
@@ -504,9 +401,7 @@ export class NativeAgentInteractionTracker {
   ): void {
     if (removed.size === 0) return;
     const stillBlocked = new Set(
-      [...this.trackedInteractions.values(), ...this.providerReportedInteractions.values()].map(
-        (tracked) => tracked.observationKey,
-      ),
+      [...this.trackedInteractions.values()].map((tracked) => tracked.observationKey),
     );
     const now = this.host.now();
     for (const [observationKey, tracked] of removed) {
@@ -584,60 +479,6 @@ export class NativeAgentInteractionTracker {
         session.interactionPolicy.mode === "unattended" &&
         environmentIds.has(session.environmentId),
     );
-    const liveProviderSessions = new Set(
-      eligibleSessions.map((session) =>
-        JSON.stringify([session.environmentId, session.agent, session.providerSessionId]),
-      ),
-    );
-    const providerReportSweepAt = this.host.now();
-    for (const [trackedKey, tracked] of this.providerReportedInteractions) {
-      if (providerReportSweepAt - tracked.detectedAt >= PROVIDER_REPORTED_INTERACTION_GRACE_MS) {
-        this.providerReportedInteractions.delete(trackedKey);
-        const observation = this.interactionObservations.get(tracked.observationKey);
-        if (!observation) continue;
-        const remainsBlocked =
-          [...this.trackedInteractions.values()].some(
-            (entry) => entry.observationKey === tracked.observationKey,
-          ) ||
-          [...this.providerReportedInteractions.values()].some(
-            (entry) => entry.observationKey === tracked.observationKey,
-          );
-        if (!remainsBlocked) {
-          observation.providerState = "missing";
-          observation.eventualOutcome = "withdrawn";
-          observation.eventualAt = providerReportSweepAt;
-        }
-        continue;
-      }
-      if (liveProviderSessions.has(tracked.providerSessionKey)) {
-        delete tracked.missingSince;
-        continue;
-      }
-      // A provider can report detection, wait for the owner to durably fail an
-      // unattended workflow, and only then withdraw the upstream request. The
-      // durable failure removes the session from the active-pipeline snapshot,
-      // so retain this bounded direct record briefly for that terminal event.
-      // Without the grace period, a concurrent scan stamps `missing` and makes
-      // the provider's authoritative `withdrawn/error` event a no-op.
-      tracked.missingSince ??= providerReportSweepAt;
-      if (providerReportSweepAt - tracked.missingSince < PROVIDER_REPORTED_INTERACTION_GRACE_MS)
-        continue;
-      this.providerReportedInteractions.delete(trackedKey);
-      const observation = this.interactionObservations.get(tracked.observationKey);
-      if (!observation) continue;
-      const remainsBlocked =
-        [...this.trackedInteractions.values()].some(
-          (entry) => entry.observationKey === tracked.observationKey,
-        ) ||
-        [...this.providerReportedInteractions.values()].some(
-          (entry) => entry.observationKey === tracked.observationKey,
-        );
-      if (!remainsBlocked) {
-        observation.providerState = "missing";
-        observation.eventualOutcome = "withdrawn";
-        observation.eventualAt = this.host.now();
-      }
-    }
     const eligibleEnvironmentIds = new Set(
       eligibleSessions.map((session) => session.environmentId),
     );

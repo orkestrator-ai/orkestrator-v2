@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 
 import path from "node:path";
 
-import { type BuildPipeline, type BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
+import { type BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
@@ -436,50 +436,6 @@ function pendingInteractionSnapshot(
       updatedAt: now,
       expiresAt: now + 1_000,
     })),
-  };
-}
-
-function activePipeline(
-  id: string,
-  providerSessionId: string,
-  agent: BuildPipelineAgent = "codex",
-): BuildPipeline {
-  return {
-    id,
-    taskId: `task-${id}`,
-    projectId: "project-1",
-    environmentId: "env-1",
-    environmentType: "local",
-    agentType: agent,
-    phase: "building",
-    sessions: [
-      {
-        phase: "build",
-        agent,
-        origin: "build-pipeline",
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        iteration: 0,
-        sessionKey: `session-${id}`,
-        sdkSessionId: providerSessionId,
-        status: "running",
-        startedAt: new Date(0).toISOString(),
-        label: "Build",
-      },
-    ],
-    currentSessionIndex: 0,
-    iteration: 0,
-    maxIterations: 3,
-    createdAt: new Date(0).toISOString(),
-    taskTitle: "Task",
-    taskSnapshot: {
-      title: "Task",
-      description: "",
-      acceptanceCriteria: "",
-      comments: [],
-      images: [],
-    },
-    backendRevision: 0,
-    controller: "backend",
   };
 }
 
@@ -948,70 +904,6 @@ describe("NativeAgentService", () => {
           eventualOutcome: "expired",
         });
         expect(interactionInternals(service).trackedInteractions.size).toBe(0);
-      },
-    );
-  });
-
-  test("retains a direct observation until a terminal pipeline rejection is reported", async () => {
-    let now = 10_000;
-    await withService(
-      {
-        prefix: "orkestrator-native-provider-reported-terminal-race-",
-        interactionMonitorMode: "observe-only",
-        now: () => now,
-      },
-      async ({ storage, service }) => {
-        const pipeline = activePipeline("pipeline-direct-race", "provider-session", "opencode");
-        await storage.saveBuildPipeline(
-          pipeline.id,
-          pipeline.projectId,
-          pipeline.environmentId,
-          1,
-          pipeline,
-        );
-        const event = {
-          environmentId: "env-1",
-          provider: "opencode" as const,
-          sessionId: "provider-session",
-          interactionId: "question-1",
-          kind: "question" as const,
-          registration: {
-            origin: "build-pipeline" as const,
-            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-            phase: "build",
-          },
-        };
-        service.recordProviderInteractionObservation({ ...event, state: "detected" });
-
-        const record = await storage.getBuildPipeline(pipeline.id);
-        pipeline.phase = "failed";
-        pipeline.sessions[0]!.status = "error";
-        await storage.saveBuildPipeline(
-          pipeline.id,
-          pipeline.projectId,
-          pipeline.environmentId,
-          1,
-          pipeline,
-          record!.revision,
-        );
-        await service.reconcileAgentInteractions();
-        expect(interactionInternals(service).providerReportedInteractions.size).toBe(1);
-        expect(service.getInteractionObservations()[0]).toMatchObject({
-          providerState: "blocked",
-        });
-
-        now += 30_000;
-        await service.reconcileAgentInteractions();
-        expect(interactionInternals(service).providerReportedInteractions.size).toBe(1);
-        service.recordProviderInteractionObservation({
-          ...event,
-          state: "withdrawn",
-          providerState: "error",
-        });
-        expect(service.getInteractionObservations()[0]).toMatchObject({
-          providerState: "error",
-          eventualOutcome: "withdrawn",
-        });
       },
     );
   });

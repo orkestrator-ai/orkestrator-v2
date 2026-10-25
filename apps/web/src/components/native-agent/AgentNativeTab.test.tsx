@@ -3184,6 +3184,49 @@ describe("AgentNativeTab", () => {
     );
   });
 
+  test("describes Codex's sandbox-edge approval modes as what they do in a container", async () => {
+    getNativeAgentModelCatalogMock.mockImplementation(
+      async () =>
+        [
+          {
+            platform: "codex",
+            id: "codex-m",
+            label: "Codex M",
+            supportsSpeed: false,
+            supportsMode: true,
+          },
+        ] as never,
+    );
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Container approvals",
+          order: 0,
+          setupPhase: "ready",
+          environmentType: "containerized",
+        } as never,
+      ],
+    });
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["codex"],
+      favoriteModels: [],
+    } as never);
+    const tabId = "tab-codex-container-approvals";
+    seedUnassignedPane(tabId);
+    useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), {
+      platform: "codex",
+      modelId: "codex-m",
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    fireEvent.pointerDown(await screen.findByTestId("launch-approval-mode-picker"));
+    const onRequest = await screen.findByRole("menuitemradio", { name: "On request" });
+    expect(onRequest.getAttribute("title")).toContain("never asks; choose Untrusted");
+  });
+
   test("shows a draft's annotations as removable chips and sends them with the first prompt", async () => {
     getNativeAgentModelCatalogMock.mockImplementation(
       async () =>

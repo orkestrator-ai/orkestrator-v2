@@ -51,6 +51,15 @@ export interface ManifestEntry {
   errorCode?: string;
   operationId?: string;
   ids?: Record<string, string>;
+  /**
+   * The provider model behind a live turn: what the scenario pinned (null for
+   * the provider's default) and what the session reported in force afterwards.
+   */
+  model?: {
+    requested: string | null;
+    resolved: string | null;
+    readError?: string;
+  };
 }
 
 /** Private, bounded record of what a run did (IDs and codes only). */
@@ -63,6 +72,21 @@ export class RunManifest {
     this.entries.push(entry);
     if (this.entries.length > 2_000) this.entries.shift();
     await this.flush();
+  }
+
+  /** Adds fields to the latest entry for `scenario` and `stage`, if any. */
+  async annotate(
+    scenario: string,
+    stage: string,
+    fields: Pick<ManifestEntry, "model" | "ids">,
+  ): Promise<boolean> {
+    const entry = this.entries.findLast(
+      (candidate) => candidate.scenario === scenario && candidate.stage === stage,
+    );
+    if (!entry) return false;
+    Object.assign(entry, fields);
+    await this.flush();
+    return true;
   }
 
   async flush(extra: Record<string, unknown> = {}): Promise<void> {
@@ -131,7 +155,12 @@ export async function startIsolatedBackend(options: {
         dataDir,
         ...runtime.toolchainTools.flatMap((tool) => ["--tool", tool]),
       ],
-      { cwd: options.root, env, encoding: "utf8", timeout: TOOLCHAIN_INSTALL_TIMEOUT_MS },
+      {
+        cwd: options.root,
+        env,
+        encoding: "utf8",
+        timeout: TOOLCHAIN_INSTALL_TIMEOUT_MS,
+      },
     );
     if (install.status !== 0)
       throw new Error(
@@ -260,14 +289,20 @@ export async function createFixtureRepository(
   git(["init", "--bare", "-b", "main", originPath]);
   git(["init", "-b", "main"], projectPath);
   for (const [file, contents] of Object.entries(files)) {
-    await mkdir(path.dirname(path.join(projectPath, file)), { recursive: true });
+    await mkdir(path.dirname(path.join(projectPath, file)), {
+      recursive: true,
+    });
     await writeFile(path.join(projectPath, file), contents);
   }
   git(["add", "."], projectPath);
   git(["commit", "-m", "Initial scenario fixture"], projectPath);
   git(["remote", "add", "origin", originPath], projectPath);
   git(["push", "-u", "origin", "main"], projectPath);
-  return { projectPath, originPath, head: git(["rev-parse", "HEAD"], projectPath) };
+  return {
+    projectPath,
+    originPath,
+    head: git(["rev-parse", "HEAD"], projectPath),
+  };
 }
 
 export class ScenarioFailure extends Error {}
@@ -374,7 +409,11 @@ export class CliDriver {
     stage: string,
     options: { stdin?: string; timeoutMs?: number } = {},
   ): Promise<{ result: T; envelope: PublicEnvelope }> {
-    const run = await this.run(["--json", ...argv], { stage, expectCode: 0, ...options });
+    const run = await this.run(["--json", ...argv], {
+      stage,
+      expectCode: 0,
+      ...options,
+    });
     const envelope = run.envelope!;
     expectThat(envelope.ok, `[${stage}] envelope not ok`);
     return { result: (envelope as { result: T }).result, envelope };
@@ -391,6 +430,8 @@ export interface ScenarioContext {
   cleanup: Array<{ label: string; run: () => Promise<void> }>;
   provider?: string;
   environmentType: "local" | "container";
+  /** The worktree-owned image container runs use (`--docker-image`). */
+  dockerImage?: string;
 }
 
 export async function newScenarioRoot(prefix: string): Promise<string> {

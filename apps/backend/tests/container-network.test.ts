@@ -332,8 +332,12 @@ describe("allowlist edits in place", () => {
     expect(containerNetworkPolicy(2, undefined)).toBe(2);
     expect(containerNetworkPolicy(3, undefined)).toBe(3);
     expect(containerNetworkPolicy(3, "2")).toBe(2);
-    expect(containerNetworkPolicy(3, "1")).toBe(1);
     expect(containerNetworkPolicy(2, "3")).toBe(2);
+    // The shared-bridge opt-out is gone: a capable image never joins the
+    // default bridge, where siblings can reach each other.
+    expect(containerNetworkPolicy(3, "1")).toBe(3);
+    expect(containerNetworkPolicy(2, "1")).toBe(2);
+    expect(containerNetworkPolicy(0, "3")).toBe(1);
   });
 
   test("ports reach only a policy 3 container; earlier policies get each domain once", async () => {

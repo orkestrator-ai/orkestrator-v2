@@ -1,67 +1,69 @@
 # Container rebuild state preservation
 
-Checked against `main` at `9906db30` (2026-10-16).
+Checked against `main` at `ba7cc8d4` (2026-10-25).
 
 A preserving rebuild (`migrate` from a legacy writable layer, `rebuild` from
 volumes) copies `/workspace` and the resume-critical provider state into a new
-storage set and commits the new runtime in one write. The provider-state
-inventory was re-traced against the current pins on 2026-10-16. Codex and
-OpenCode still drop some user-visible, non-resume state by explicit decision.
-The legacy writable-layer, whole-home-mount and shared-network code paths
-remain, behind rollout switches, with no retirement plan.
+storage set and commits the new runtime in one write. Codex, OpenCode and
+Grok still drop some user-visible, non-resume state by explicit decision.
+On 2026-10-25 the OpenCode host seeding was narrowed to the login, the
+`host-mounts` and policy-1 opt-outs were removed, the legacy-retirement and
+restore-generation questions were decided, and a volume rebuild stopped
+dropping file capabilities. One item remains: removing the
+`ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` switch, which waits for a Linux
+rootless qualification.
 
 ## Current state
 
 - `PROVIDER_STATE_LAYOUT` and `PROVIDER_PRESERVATION` in
   `apps/backend/src/core/container-state-layout.ts` define what is mounted by
-  sub-path from the `state` volume and what the product may claim. Claude, Pi,
-  Cursor and Grok are `full`; Codex and OpenCode are `partial`, and their
+  sub-path from the `state` volume and what the product may claim. Claude, Pi
+  and Cursor are `full`; Codex, OpenCode and Grok are `partial`, and their
   limitation text reaches the user through `rebuildPreview`. The provider-state
   inventory in [container-lifecycle.md](../../architecture/container-lifecycle.md)
   ("Provider state") records what each provider preserves and excludes.
 - `PROVIDER_STATE_TRACED_VERSIONS` in the same module names the versions the
-  layout was traced against. `apps/backend/tests/container-state-layout.test.ts`
-  fails when a manifest CLI pin or the `@cursor/sdk` pin moves away from it,
-  and [upgrading agents](../../development/upgrade-agents.md#re-trace-preserved-provider-state)
-  says how to re-trace.
+  layout was traced against (Claude 2.1.309, Codex 0.164.0, OpenCode 1.19.4,
+  Pi 1.4.0, `@cursor/sdk` 1.0.40, Grok 1.0.67).
+  `apps/backend/tests/container-state-layout.test.ts` fails when a manifest
+  CLI pin or the `@cursor/sdk` pin moves away from it, and
+  [upgrading agents](../../development/upgrade-agents.md#re-trace-preserved-provider-state)
+  says how to re-trace. For OpenCode that now includes
+  `scripts/qualify-opencode-seeded-data.sh`.
 - Storage selection is `selectStorageFormat` in
   `apps/backend/src/core/container-storage.ts`: `volume-v1` only when the
   image declares `persistent-workspace`, the daemon is Engine 26+
-  (`MIN_ENGINE_FOR_VOLUME_SUBPATH`) and the switch below does not disable it.
-  `imageWritesVolumeStorage` refuses newer state for an older image.
+  (`MIN_ENGINE_FOR_VOLUME_SUBPATH`) and `ORKESTRATOR_CONTAINER_STORAGE` is not
+  `legacy-layer`. `imageWritesVolumeStorage` refuses newer state for an older
+  image.
 - Replacement is `replaceRuntimePreservingState` and `rebuildPreview` in
-  `apps/backend/src/core/container-replacement.ts`. Copy and verification run
-  in `docker/orkestrator-migrate.sh` (`copy_stream`, `verify`). Restore and
-  discard are `restoreRecoveryCopy` and `discardRecoveryCopy` in
-  `apps/backend/src/core/recovery-copies.ts`; `assertRecoveryCapacity`
-  enforces the cap of 16 copies.
+  `apps/backend/src/core/container-replacement.ts`; both use the current
+  image, so a `migrate` also moves a runtime off an old image. Copy and
+  verification run in `docker/orkestrator-migrate.sh` (`copy_stream`,
+  `verify`). Restore and discard are `restoreRecoveryCopy` and
+  `discardRecoveryCopy` in `apps/backend/src/core/recovery-copies.ts`;
+  `assertRecoveryCapacity` enforces the cap of 16 copies. A restore always
+  assigns a new runtime generation.
 - A legacy runtime is never migrated by a start, read, status refresh or UI
   mount. Migration is the explicit "Rebuild (keeps files)" or
   `orkestrator environment recreate` without `--discard`.
-- No export path exists. The only copies are recovery copies on the same
-  daemon.
-- Four rollout switches, read from the backend's environment when a container
-  is created or a rebuild is admitted:
-  - `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` (`selectStorageFormat`): new
-    runtimes keep the legacy writable layer even on a capable image.
-  - `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` (`createDockerContainer` in
-    `apps/backend/src/core/commands-containers.ts`): skips staged inputs even
-    for an image that declares `staged-inputs`. The container gets the
-    read-only host agent-home mounts an older entrypoint expects, and an
-    Anthropic API key goes into the creation environment
-    (`-e ANTHROPIC_API_KEY`) instead of a staged file. `get_environment_inputs`
-    reports it as `host-mounts`.
-  - `ORKESTRATOR_NETWORK_POLICY=1` (`createDockerContainer`): skips the
-    per-environment network and policy 2 even for an image that declares
-    `network-policy=2`. The container joins the shared default bridge, and
-    the firewall's legacy policy allows the whole gateway `/24`, which
-    includes sibling containers.
+- No host-archive export exists, by decision (below). The only copies are
+  storage sets and recovery copies on the same daemon.
+- OpenCode's `/opencode-data` input is `auth.json` alone: `portableInputSpec`
+  in `apps/backend/src/core/portable-inputs.ts` stages only it, and the
+  `/opencode-data` block of `docker/entrypoint.sh` copies only it.
+- Rollout switches, read from the backend's environment when a container is
+  created or a rebuild is admitted, are listed with their owner, status and
+  removal criteria in [container-lifecycle.md](../../architecture/container-lifecycle.md)
+  ("Rollout switches and legacy runtimes"):
   - `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` (`replacementAdmissionPaused`):
-    refuses new rebuilds and migrations (the preview reports
-    `admission-paused`) while listing, restoring and discarding copies and
-    resolving an interrupted operation keep working.
-
-  The `host-mounts` and policy-1 opt-outs are documented nowhere else.
+    permanent.
+  - `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` (`selectStorageFormat`):
+    temporary, the item below.
+  - `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` and
+    `ORKESTRATOR_NETWORK_POLICY=1`: removed; `createDockerContainer`
+    (`commands-containers.ts`) and `containerNetworkPolicy`
+    (`container-network.ts`) ignore them.
 - Quiescing the source stops its Claude state poll
   (`shutdownClaudeStatePolling`), and `ContainerGitFetchPolicy.forgetContainer`
   drops a container's fetch records on lifecycle changes, so the committed
@@ -72,38 +74,111 @@ remain, behind rollout switches, with no retirement plan.
 
 ### Code
 
-1. Stop seeding OpenCode `snapshot/`, `storage/` and `account.json` from the
-   host in `docker/entrypoint.sh` (the `/opencode-data` block), after
-   confirming with a live run that nothing reads them. The static trace of
-   1.19.0 found no reader for any of the copies: a snapshot directory is keyed by
-   `sha1(worktree path)`, which a host path never matches against
-   `/workspace/...`; `storage/` is a legacy store with no reader; and
-   `account.json` no longer appears in the binary (accounts live in the
-   database). Large snapshot stores are already skipped by the copy caps.
-   Re-check at the OpenCode 2.x move (see [0008-opencode-v2.md](../agent-engines/0008-opencode-v2.md)),
-   which may change `OPENCODE_DB` semantics and the `opencode/db` entry.
-2. Legacy retirement. This needs the decision under "Open questions" first.
-   Then:
-   - provide an export or migration path for legacy writable-layer
-     containers;
-   - account for retained resources (recovery copies, `legacy-unadopted`
-     containers, runtimes still on host mounts or policy 1);
-   - remove the `legacy-layer`, `host-mounts` and policy-1 code paths with
-     their switches, giving each switch an owner, removal criteria and safe
-     disabled behaviour until then.
+1. ~~Stop seeding OpenCode `snapshot/`, `storage/` and `account.json` from the
+   host.~~ Done 2026-10-25. `docker/entrypoint.sh` copies only `auth.json`
+   from `/opencode-data`, and `portable-inputs.ts` stages only `auth.json` for
+   it. Live evidence, `scripts/qualify-opencode-seeded-data.sh` on
+   `orkestrator-v2:review-ede1e368-arm64`
+   (`sha256:4c74b68de8c2c735795df7078ed7c87d0b1d08f2c5145d8fc695bcecd9a6a97f`,
+   OpenCode 1.19.4, arm64, Docker Desktop 4.96.3, Engine 29.9.2): five
+   network-less containers, each running a real `opencode serve` and one turn
+   against a local mock model (a `write` tool call, the session diff, revert
+   and unrevert) while inotify watched OpenCode's data directory. All checks
+   passed:
+   - With nothing seeded, in both the volume (`OPENCODE_DB` relocated) and
+     legacy database layouts, the turn finished, the diff listed the written
+     file, revert removed it and unrevert restored it.
+   - With a host-shaped seed, nothing opened `account.json` or either seeded
+     `snapshot/` directory (one keyed by a host worktree hash, one in the
+     older per-project layout). OpenCode created its own
+     `snapshot/<root commit>/<worktree hash>` instead.
+   - Of a current host's `storage/`, only `storage/migration` (the
+     legacy-migration index) was opened. With no index (an old host's seed),
+     OpenCode ran its legacy storage migrations over the seeded session JSON
+     and wrote `migration=2`; with nothing seeded it ran them over an empty
+     directory. No host session was ever listed.
 
-   Do not tie retirement to an app launch count or to automatic migration on
-   startup. Persisted capability and layout versions stay the long-term
-   compatibility boundary; old images keep their guarded behaviour rather
-   than a second lifecycle engine.
+   The static trace was wrong on one point: `storage/` is not dead at 1.19.4.
+   OpenCode still writes each session's change list to
+   `storage/session_diff/<session>.json`. Those are container-written, not
+   host-seeded, and are not preserved across a rebuild; the provider-state
+   inventory now says so. The re-check at the OpenCode 2.x move
+   ([0008-opencode-v2.md](../agent-engines/0008-opencode-v2.md)) is now part of
+   the re-trace every OpenCode bump requires: the upgrade guide's OpenCode row
+   runs the same script.
+
+   An image built from this change, `orkestrator-v2:dev-b1beedeedb67`
+   (`sha256:976b45babde1b29e3b167bebeeeb50379839dcb5080bd7d4fd6c8f4a849a5c9a`,
+   arm64; built before a comment-only edit to `entrypoint.sh`), was checked
+   as well:
+   - `docker/tests/final-image-smoke.sh` passes on it.
+   - The same five-variant script passes on it.
+   - Its real entrypoint, started with `NETWORK_MODE=full` and a host-shaped
+     `/opencode-data` mount (`auth.json`, `account.json`, `storage/`,
+     `snapshot/`), left only `auth.json` (mode `0600`) in
+     `~/.local/share/opencode` beside the image's own `log/` and `repos/`.
+2. ~~Legacy retirement.~~ Done 2026-10-25, except the `legacy-layer` switch
+   (item 3). The decision is under "Assumptions and decisions".
+   - Export or migration path: the preserving rebuild (`migrate`) is the
+     path. It copies a writable-layer runtime into a verified storage set of
+     the current image; no host-archive export was added.
+   - Retained resources are accounted for in
+     [container-lifecycle.md](../../architecture/container-lifecycle.md)
+     ("Rollout switches and legacy runtimes"). Each shape keeps a handler:
+     - writable-layer runtimes are migrated by an explicit rebuild;
+     - runtimes on host mounts or policy 1 keep them until rebuilt, and the
+       inputs and network status report them;
+     - legacy recovery copies are listed, restored, discarded and
+       ledger-deleted like any copy;
+     - `legacy-unadopted` containers are offered for reattachment and never
+       removed.
+   - Switches: `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` and
+     `ORKESTRATOR_NETWORK_POLICY=1` are removed. A capable image always gets
+     staged inputs and at least policy 2, and an older image keeps its
+     guarded behaviour, which is the capability boundary rather than a
+     switch. Tests: `a capable image ignores the retired host-mount and
+     shared-bridge opt-outs` (`apps/backend/tests/docker-image.test.ts`) and
+     the policy cases in `apps/backend/tests/container-network.test.ts`. Both
+     fail against the previous code.
+   - `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` stays as a permanent safety
+     switch. `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` has an owner,
+     removal criteria and safe disabled behaviour; it is documented at
+     `selectStorageFormat` and in the lifecycle doc.
+3. Remove `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` (the branch in
+   `selectStorageFormat` and the `disabled-by-configuration` reason) once
+   volume storage has passed on a real Linux rootless host. That run is
+   tracked in
+   [0019-container-platform-qualification.md](0019-container-platform-qualification.md),
+   and Linux rootless is the last platform where `volume-v1` is unqualified.
+   Until then the switch is the only fallback if volume storage fails on a
+   daemon. While it is set, new runtimes keep the writable layer and
+   preserving rebuilds are refused before anything is copied, so no data is
+   at risk. When it goes, `scripts/qualify-backend-upgrade-rollback.ts` still
+   works: it sets the switch only on the old release's backend, which keeps
+   honouring it. Blocked on 0019: this machine has only Docker Desktop.
 
 ### Qualification
 
-- Per-provider resume after a rebuild (C13) and a re-run of C14 are tracked in
-  [0019-container-platform-qualification.md](0019-container-platform-qualification.md).
-  C14 now also asserts a Codex `thread_history_1.sqlite` relocation, the Codex
-  bridge title index, a Grok session directory, and that Grok's
-  `active_sessions.json` is not carried over; none has run live yet.
+- C14 (legacy migration and volume rebuild) ran live on 2026-10-16 with the
+  Codex `thread_history_1.sqlite` relocation, the Codex bridge title index,
+  the Grok session directory and the exclusion of Grok's
+  `active_sessions.json`, all passing
+  ([container-qualification.md](../../development/container-qualification.md),
+  "Provider-state review evidence"). On 2026-10-25 the live replacement suite
+  (`container-live-replacement.test.ts`, C14–C19) passed again on
+  `orkestrator-v2:review-ede1e368-arm64` with this branch's backend,
+  including the new assertions that a restored runtime takes generation 3,
+  then 4: 10 of 10 tests. On `orkestrator-v2:dev-b1beedeedb67`, built from
+  this change and so carrying the `copy-volume` fix, the same suite passed
+  10 of 10, and the live rebuild-fault suite
+  (`container-live-rebuild-faults.test.ts`, C15) passed 5 of 5. Per-provider
+  resume after a rebuild (C13; Grok remains) is tracked in 0019.
+- The volume-rebuild capability fix was checked live by running the changed
+  `orkestrator-migrate.sh copy-volume` in a helper of the same image, with
+  real volumes. A `setcap` file kept `cap_net_bind_service=ep` (the image's
+  own script dropped it), hard links and symlinks survived, and the source
+  marker was excluded. The image built from this change gave the same
+  result with its own script. It reaches users with the next image release.
 
 ## Constraints and rationale
 
@@ -127,89 +202,175 @@ remain, behind rollout switches, with no retirement plan.
   dispatch survives reconstruction as unknown. Resuming never manufactures a
   new turn.
 - Named volumes are persistence, not backup.
-- Old images never gain capabilities by default.
+- Old images never gain capabilities by default, and keep their guarded
+  behaviour. Persisted capability and layout versions are the long-term
+  compatibility boundary. Retirement is never tied to an app launch count or
+  to automatic migration on startup.
 - An interrupted copy discards the candidate and a retry recopies from
   scratch; there is no resumable copy journal.
 - Keep the identities distinct: `environmentId`, `runtimeGeneration`,
   `bootId`, `workspaceGeneration`, `storageSetId`, `operationId` and the
-  lifecycle `revision`.
+  lifecycle `revision`. Runtime generations only increase.
 - Scope: Docker CLI primitives behind a small backend service. No Kubernetes,
   no wholesale Docker SDK rewrite, no per-agent image matrix.
-- Provider state is classified per path as preserve (needed to resume, rewind
-  or fork, or a bridge map without which the host session id cannot be
-  resolved), accept losing (user-visible, named in the limitation text, makes
-  the provider `partial`) or drop (credentials, configuration, caches, logs,
-  process registries, host-seeded content). The 2026-10-16 re-trace (static:
-  pinned binaries' strings and bundled docs, no Docker) found every preserved
-  path still correct at Claude 2.1.296, Codex 0.162.1, OpenCode 1.19.0, Pi
-  1.2.0, `@cursor/sdk` 1.0.37 and Grok 1.0.52.
+- Provider state is classified per path as one of:
+  - preserve: needed to resume, rewind or fork, or a bridge map without which
+    the host session id cannot be resolved;
+  - accept losing: user-visible, named in the limitation text, and makes the
+    provider `partial`;
+  - drop: credentials, configuration, caches, logs, process registries and
+    host-seeded content.
 - Re-tracing is forced, not just documented: a test pinned to the manifest
   fails on every bump until `PROVIDER_STATE_TRACED_VERSIONS` is updated. It
   proves the step was acknowledged, not that the trace was right; the upgrade
   guide carries the per-provider checks.
 - Codex: `session_index.jsonl` is still written at the home root, and Codex
   offers no variable to relocate it alone. A single-file mount would break as
-  soon as Codex replaced the file by rename, so it is accepted as lost.
-  A name set in Orkestrator now also goes into the bridge's own title index
-  (`orkestrator-bridge/session-titles.jsonl`, preserved), as generated titles
-  already did, so only a name set inside the Codex CLI is lost. Every
-  `*_N.sqlite` runtime database at 0.162.1 (state, thread history, goals,
-  queue, memories, logs) follows `CODEX_SQLITE_HOME` and matches the migrate
-  selection.
-- OpenCode: `snapshot/` (a per-project git directory used only for revert and
-  diff, recreated on demand and pruned after 7 days) and `tool-output/` are
-  accepted as lost rather than mounted. Preserving them would copy a
+  soon as Codex replaced the file by rename, so it is accepted as lost. A name
+  set in Orkestrator also goes into the bridge's own title index
+  (`orkestrator-bridge/session-titles.jsonl`, preserved), so only a name set
+  inside the Codex CLI is lost.
+- OpenCode: `snapshot/` (a per-project, per-worktree git directory used only
+  for revert and diff), `tool-output/` and `storage/session_diff/` are
+  accepted as lost rather than mounted. Preserving `snapshot/` would copy a
   workspace-sized object store on every rebuild, for revert of turns that may
-  already be pruned. Sessions, messages and parts are entirely in the database
-  `OPENCODE_DB` relocates (still an absolute file path at 1.19.0).
+  already be pruned. Sessions, messages and parts are entirely in the
+  database `OPENCODE_DB` relocates.
 - Grok: `active_sessions.json` is a live-process registry and `worktrees.db`
   tracks only worktrees Grok creates under its own home, which are not
   preserved either. `session/load` needs only the session directory under
-  `~/.grok/sessions`. Both are dropped deliberately, so Grok is `full`.
-  `memory-v2/` is opt-in and off by default; it is not preserved.
+  `~/.grok/sessions`. Grok is `partial` because its resume after a rebuild is
+  still unqualified (C13).
 
 ## Open questions
 
-- When does legacy retirement happen, and what does the export look like (an
-  archive on the host, or a volume set to adopt)? Does
-  `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` stay as a permanent safety switch
-  after the others go?
-- `restoreRecoveryCopy` swaps a retained runtime back in with its older
-  `runtimeGeneration` when that container still exists; only a new runtime
-  gets `nextRuntimeGeneration`. Should a restore always assign a new
-  generation, so a stale handle bound to the old generation through
-  `expectedRuntimeGeneration` is refused?
-- Is a resumable copy journal worth its complexity for very large workspaces?
+None. The three earlier questions are answered under "Assumptions and
+decisions".
+
+## Assumptions and decisions
+
+1. **OpenCode host data (item 1).**
+   - Options:
+     - keep seeding `snapshot/`, `storage/` and `account.json`;
+     - seed only `storage/migration`, to spare an old host's migrations;
+     - seed only `auth.json`.
+   - Choice: seed only `auth.json`, in both the entrypoint and the staging
+     allowlist, since they must stay in step.
+   - Why: the live run showed nothing reads the other three in a container.
+     The migration index only saves OpenCode re-running migrations over an
+     empty directory, which costs nothing.
+   - Pros: fewer bytes staged and copied on every start; less host data (git
+     objects of the user's other worktrees) inside containers; one less
+     allowlist to keep in step.
+   - Cons: an image built before this change still has the old entrypoint,
+     but receives no seeded copies from a new backend's staging. That is
+     harmless, because its entrypoint skips missing files.
+2. **Export format and when legacy retirement happens (first open
+   question).**
+   - Options:
+     - a host-archive export (a tar of `/workspace` and provider state on the
+       host);
+     - a volume set to adopt, which is what `migrate` already produces;
+     - removing legacy support after N launches or by migrating
+       automatically.
+   - Choice: the volume set. `migrate` is the export path, and old-image
+     behaviour is not retired.
+   - Why: a host archive would be a second, unverified format with no import
+     path. It would also put workspace and transcript content (which can hold
+     user secrets) outside the volumes' private permissions, against "never
+     exported implicitly". The automatic options are ruled out by the
+     constraints.
+   - Pros: one verified copy path, already qualified (C14–C19). Recovery
+     copies, capacity checks and ledger deletion apply unchanged.
+   - Cons: an Engine older than 26, or a remote daemon, has no path off the
+     writable layer except upgrading Docker. Nobody can move an environment
+     to another machine. Both are accepted, as neither is in scope.
+3. **Which switches go (item 2).**
+   - Options:
+     - remove all three legacy switches now;
+     - remove none and only document them;
+     - remove the two that weaken isolation and keep `legacy-layer` until
+       its platform gate passes.
+   - Choice: the third.
+   - Why: `host-mounts` exposed whole host agent homes and put the Anthropic
+     key in `docker inspect`. Policy 1 put the container on the shared
+     bridge, reachable by siblings. Neither is a fallback for anything: the
+     address-pool error already tells users to widen Docker's pools.
+     `legacy-layer` protects data, and is the only fallback while Linux
+     rootless volume storage is unqualified.
+   - Pros: removes two reachable security downgrades at once; the remaining
+     switch has a measurable removal criterion.
+   - Cons: an operator who relied on `host-mounts` or policy 1 silently gets
+     the safe default (no warning is logged). One temporary switch remains.
+4. **`paused` (first open question, second half).**
+   - Options: retire it with the others, or keep it permanently.
+   - Choice: keep it permanently.
+   - Why: it only refuses new rebuilds and migrations, and recovery keeps
+     working, so it cannot strand data. It is the rollback lever the rollout
+     rules ask for.
+   - Pros: an immediate stop for a bad copy path without a release.
+   - Cons: one permanent environment knob to document and test.
+5. **Restore generation (second open question).**
+   - Options:
+     - keep the swapped-back runtime's original generation;
+     - always assign `nextRuntimeGeneration`.
+   - Choice: always assign a new generation.
+   - Why: generations should only increase. A handle bound to generation 1
+     before a rebuild otherwise matched again after the generation-1 runtime
+     was restored, which is the A-B-A case `expectedRuntimeGeneration`
+     exists to refuse.
+   - Pros: stale handles are refused with `runtime-changed` across every
+     replacement.
+   - Cons: a swapped-back container's `orkestrator-runtime-generation` label
+     and `-gN` name keep its creation generation, so the label no longer
+     equals the record. Only `findOperationContainers` reads the label, for a
+     container the operation itself created, and a swap creates none.
+6. **Resumable copy journal (third open question).**
+   - Options: add a resumable copy journal, or keep discard-and-recopy.
+   - Choice: keep discard-and-recopy.
+   - Why: an interrupted copy already rolls back with the original
+     authoritative, and the capacity preflight and admission limits bound the
+     cost. A journal would need partial-state verification across daemon
+     restarts, which is the riskiest part of the copy path. No measurement
+     shows a workspace large enough for a recopy to matter.
+   - Pros: the copy stays one verified pass.
+   - Cons: a very large workspace pays the full copy again after an
+     interruption. Revisit only with a measured case.
+7. **Living-doc drift.**
+   - The xattr claim was not only stale but hid a defect. Extraction kept
+     file capabilities, but the volume producer archived without `--xattrs`,
+     so a volume rebuild dropped them.
+   - Choice: fix the producer (`copy-volume` now archives `user.*` and
+     `security.capability`) and document what each source path carries,
+     rather than only correcting the sentence.
+   - Pros: the script now does what its own header says.
+   - Cons: a destination filesystem that refused `user.*` attributes would
+     now fail extraction. Source and candidate are volumes on the same daemon
+     filesystem, so it accepts what the source holds.
 
 ## Related
 
-- [0019-container-platform-qualification.md](0019-container-platform-qualification.md),
+- [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
+  (Linux rootless, which gates item 3; C13),
   [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md)
-  (policy-1 retirement), [0023-environment-and-disk-cleanup.md](0023-environment-and-disk-cleanup.md)
+  (the policy-1 path is retired here), [0023-environment-and-disk-cleanup.md](0023-environment-and-disk-cleanup.md)
   (volumes and copies removed through the deletion ledger),
+  [0058-legacy-migration-root-symlink.md](0058-legacy-migration-root-symlink.md)
+  (a `migrate` refusal that can block the migration path),
   [0008-opencode-v2.md](../agent-engines/0008-opencode-v2.md),
   [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md) (container-private
   overlay writes).
 - [Container lifecycle](../../architecture/container-lifecycle.md) (the
-  provider-state inventory is under "Provider state"),
+  provider-state inventory is under "Provider state"; switches and legacy
+  accounting under "Rollout switches and legacy runtimes"),
   [container qualification](../../development/container-qualification.md),
   [upgrading agents](../../development/upgrade-agents.md).
-- Living-doc drift to fix in `docs/architecture/container-lifecycle.md`:
-  - "Preserving rebuild" says extended attributes are not preserved.
-    `tar_filter_args` in `docker/orkestrator-migrate.sh` preserves `user.*`
-    and `security.capability` xattrs (not verified), preserves and verifies
-    hard links, recreates FIFOs and refuses device nodes.
-  - "Portable inputs" says the Anthropic API key is still in the creation
-    environment and visible in `docker inspect`. For a staged-inputs
-    container `createDockerContainer` writes it to
-    `/claude-config/.orkestrator-anthropic-key` and `docker/runtime-env.sh`
-    exports it into shells; only a container without staged inputs gets
-    `-e ANTHROPIC_API_KEY`. It stays visible to same-user processes, but no
-    longer in `docker inspect`. The "Credentials" bullet in the same section
-    repeats the old claim.
-  - Only `ORKESTRATOR_CONTAINER_STORAGE` and
-    `ORKESTRATOR_CONTAINER_REPLACEMENT` are documented; the `host-mounts` and
-    policy-1 opt-outs are not.
+- The living-doc drift recorded here was fixed on 2026-10-25 in
+  `docs/architecture/container-lifecycle.md`:
+  - "Preserving rebuild" states the actual copy policy.
+  - "Portable inputs" says the Anthropic key is staged, not in `docker
+    inspect`, for a staged-inputs container.
+  - The switches are listed in one table.
 
 ## Replaces
 

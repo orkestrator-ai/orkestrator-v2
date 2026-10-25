@@ -52,6 +52,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Real stack, root terminal | Included in `test:agent:docker`; start the profile with `--fixture-network full` for the full-network half | **New root terminal**: uid 0, outbound access by network mode (`container-root-terminal.spec.ts`) |
 | Real stack, local | `mise run test:agent:browser:isolated` | C30 |
 | Provider resume | `scripts/qualify-session-resume.sh <profile> <agent> [environment-name]` | C13 |
+| OpenCode seeded data | `scripts/qualify-opencode-seeded-data.sh <image>` | A real OpenCode turn (local mock model, no network) with diff, revert and unrevert, while inotify shows nothing opens the host data the entrypoint used to seed (`snapshot/`, `storage/`, `account.json`) |
 | Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
 | Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
 | Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm` |

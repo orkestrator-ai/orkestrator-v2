@@ -976,7 +976,9 @@ considered, the choice, why, and its pros and cons.
 - [0035-mobile-layout-gaps.md](../cross-cutting/0035-mobile-layout-gaps.md): the environment settings
   dialog blocked by the projects drawer, found during the container settings
   real-stack run.
-- [0021-container-rebuild-state-preservation.md](0021-container-rebuild-state-preservation.md),
+- [0021-container-rebuild-state-preservation.md](0021-container-rebuild-state-preservation.md)
+  (its last item, removing `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer`,
+  waits for the Linux rootless run here),
   [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md),
   [0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md),
   [0023-environment-and-disk-cleanup.md](0023-environment-and-disk-cleanup.md)

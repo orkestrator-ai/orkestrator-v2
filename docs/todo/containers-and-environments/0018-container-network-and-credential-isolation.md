@@ -104,8 +104,10 @@ once restricted containers no longer need `NET_ADMIN` can the sudo grants shrink
   to now, so Codex uses its access token (ten days at issue) until it
   expires instead of trying a refresh it cannot make. The entrypoint
   (`restrict_imported_login`) blanks the refresh token again in the
-  container's own copy. That covers `ORKESTRATOR_PORTABLE_INPUTS=host-mounts`
-  and containers that imported a full copy before this change. A copy whose
+  container's own copy. That covers containers created while the
+  `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` opt-out existed (removed
+  2026-10-25, [0021](0021-container-rebuild-state-preservation.md)) and
+  containers that imported a full copy before this change. A copy whose
   access token lapses signs out on its own (Grok 1.0.52 says "Not signed
   in", checked live), and the host login is never touched. The cost: a
   container that imports the host login cannot keep its own `grok login` or

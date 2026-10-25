@@ -499,6 +499,9 @@ describe("C17/C18 recovery copies and reviewed cleanup", () => {
       let environment = await fixture.context.storage.getEnvironment(environmentId);
       expect(environment?.containerId).toBe(containerId);
       expect(lifecycleOf(environment).storage.format).toBe("legacy-layer");
+      // The swapped-back runtime (generation 1) takes a new generation, so a
+      // handle bound to generation 1 before the migration is refused.
+      expect(lifecycleOf(environment).runtime?.runtimeGeneration).toBe(3);
       await docker(["start", containerId]);
       await waitForContainerBoot(containerId);
       expect(await exec(containerId, WORKSPACE_SNAPSHOT)).toBe(legacySnapshot);
@@ -522,6 +525,7 @@ describe("C17/C18 recovery copies and reviewed cleanup", () => {
       );
       environment = await fixture.context.storage.getEnvironment(environmentId);
       expect(environment?.containerId).toBe(migrated!.containerId);
+      expect(lifecycleOf(environment).runtime?.runtimeGeneration).toBe(4);
       await docker(["start", migrated!.containerId]);
       await waitForContainerBoot(migrated!.containerId);
       expect(await exec(migrated!.containerId, "cat /workspace/newer.txt")).toBe("newer");

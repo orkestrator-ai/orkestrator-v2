@@ -124,6 +124,8 @@ and is unsupported.
 
 Any command may send `expectedRuntimeGeneration`; a replaced runtime answers
 `runtime-changed` instead of connecting the handle to the new container.
+Generations only increase, including when a recovery copy's runtime is
+swapped back in, so a handle bound before a rebuild never matches again.
 
 ## Images
 
@@ -341,7 +343,7 @@ re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserve
 | --- | --- | --- |
 | Claude | `claude/projects` → `~/.claude/projects` (SDK transcripts); `claude/file-history` → `~/.claude/file-history` (rewind); `claude/orkestrator` → `~/.claude/orkestrator` (bridge dispatch and steer journals, preferences) | `.credentials.json`, settings, `commands`/`agents`/`plugins`, caches, `~/.claude.json` |
 | Codex | `codex/sessions`, `codex/archived_sessions` (rollouts, fork lineage); `codex/orkestrator-bridge` (session map, dispatch journal, the title index that keeps names set in Orkestrator); `codex/sqlite` at `CODEX_SQLITE_HOME` (every `*_N.sqlite` runtime database: state, thread history, goals, queue, memories, logs) | `session_index.jsonl` (Codex's own thread names, at the home root; only a name set in the Codex CLI itself is lost), `history.jsonl` (prompt recall), `shell_snapshots`, `auth.json`, `config.toml`, caches |
-| OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), legacy `storage/`, the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
+| OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), `storage/` (the legacy-migration index and each session's saved change list, `session_diff/`), the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
 | Pi | `pi/sessions` → `~/.pi/agent/sessions` (`PI_SESSION_DIR`); `pi/bridge-state` → `/tmp/orkestrator-pi-state` | `auth.json`, `models.json`, settings, extensions, themes |
 | Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor/mcp.json` (a staged input: snapshotted at creation, re-imported on every start), other `~/.cursor` auxiliaries |
 | Grok | `grok/sessions` → `~/.grok/sessions` (per-cwd session directories, which hold everything `session/load` reads, and the rebuildable search index); `grok/bridge-state` → `/tmp/orkestrator-acp-state` | `active_sessions.json` (live-process registry), `worktrees.db` (registry of Grok's own worktrees, which live outside the preserved set), opt-in `memory-v2/`, `auth.json`, configuration |
@@ -393,9 +395,16 @@ commit is the write that completes the operation, so an unresolved one never
 committed. A candidate volume that will not remove is kept as a
 `failed-candidate` retained set rather than orphaned.
 
-Copy policy: bytes, modes, ownership and link targets are preserved and
-verified; sockets are skipped; extended attributes are not preserved; sparse
-files are copied densely. A copied root that is itself a symlink is refused
+Copy policy (`docker/orkestrator-migrate.sh`): bytes, modes, numeric
+ownership, symlink targets and hard links are preserved and verified; FIFOs
+are recreated; device nodes are refused (`unsupported`); sockets are skipped;
+sparse files are copied densely. File capabilities (`security.capability`)
+and `user.*` extended attributes are kept on extraction but not verified. A
+legacy source arrives as a `docker cp` archive, which carries file
+capabilities but not `user.*` attributes; a volume source is archived with
+both. Images built before 2026-10-25 archived a volume source without them,
+so their volume rebuilds dropped file capabilities. Host labels such as
+`security.selinux` are never copied. A copied root that is itself a symlink is refused
 (`root-symlink`) because Docker would otherwise deliver nothing for it. Codex
 databases (`~/.codex/*.sqlite*`) and OpenCode's `opencode.db*` are relocated
 into their state sub-directories; the rest of those homes (configuration,
@@ -453,6 +462,38 @@ new rebuild or migration is refused (`capability-unavailable`) before anything
 runs and the preview reports `admission-paused`. Recovery — listing, restoring
 and discarding copies, reconciling an interrupted operation — is unaffected.
 
+## Rollout switches and legacy runtimes
+
+Persisted capabilities are the compatibility boundary: a runtime created from
+an image without `persistent-workspace`, `staged-inputs` or `network-policy=2`,
+or on an Engine older than 26, keeps the writable layer, host agent-home
+mounts or the shared bridge that image expects. That is one lifecycle engine
+branching on what the image declares, not a second one, and it is not
+retired: an environment leaves it through a preserving rebuild, which always
+uses the current image. Switches read from the backend's environment that
+make a capable image behave like an old one are temporary.
+
+| Switch | Status | Effect while set | Owner and removal |
+| --- | --- | --- | --- |
+| `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` | Permanent | New rebuilds and migrations refused; recovery unaffected | Container lifecycle. Kept: it only ever refuses new work |
+| `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Temporary | New runtimes keep the writable layer; preserving rebuilds refused (`disabled-by-configuration`), so nothing is copied or lost | Container lifecycle ([0021](../todo/containers-and-environments/0021-container-rebuild-state-preservation.md)). The only fallback if volume storage fails on a daemon; removed once volume storage has passed on a real Linux rootless host ([0019](../todo/containers-and-environments/0019-container-platform-qualification.md)), the last unqualified platform. `scripts/qualify-backend-upgrade-rollback.ts` sets it on the old release only |
+| `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)) |
+| `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` | Removed 2026-10-25 | Ignored | It bound whole host agent homes read-only and put the Anthropic key in `docker inspect` |
+| `ORKESTRATOR_NETWORK_POLICY=1` | Removed 2026-10-25 | Ignored; a capable image gets at least policy 2 | It joined the shared bridge, where the legacy firewall allows the whole gateway `/24`, siblings included. Exhausted address pools are fixed by widening Docker's `default-address-pools`, as the error says |
+
+What still exists in the legacy shapes, and what handles it:
+
+| Resource | Handled by |
+| --- | --- |
+| Current runtime on the writable layer | "Rebuild (keeps files)" or `orkestrator environment recreate` (a `migrate`); never migrated by a start, read or status refresh |
+| Current runtime with host mounts or policy 1 (an older image, or created while a removed switch was set) | Kept until rebuilt; `get_environment_inputs` reports `host-mounts`, the network status reports the policy. Any rebuild creates the new runtime from the current image |
+| Recovery copy of a legacy runtime | Listed, restored (swapped back as it was) and discarded like any copy; removed with the environment by the cleanup ledger |
+| `legacy-unadopted` container (from before owner labels) | Offered for reattachment in the cleanup review, never removed by it |
+
+There is no host-archive export. A runtime's data leaves the legacy shape only
+as a verified copy into a new storage set on the same daemon, which then
+gets recovery copies, verification and ledger deletion like any other.
+
 ## Recovery copies
 
 An environment keeps earlier states as recovery copies (`recovery-copies.ts`,
@@ -466,7 +507,7 @@ layer is the data.
 | Action | Effect |
 | --- | --- |
 | Reset (discard) with `keepRecoveryCopy` | Runtime stopped, not removed; it and its set become a `workspace-reset` copy; new workspace generation. The settings dialog defaults to this. |
-| `restore_recovery_copy` | Current runtime quiesced and kept as a `restore-source` copy in the same commit; a retained runtime still present is swapped back in, otherwise a new runtime mounts the verified set. Then the normal start path runs. |
+| `restore_recovery_copy` | Current runtime quiesced and kept as a `restore-source` copy in the same commit; a retained runtime still present is swapped back in, otherwise a new runtime mounts the verified set. Either way the restored runtime takes a new runtime generation (a swapped-back container keeps the generation label and name it was created with). Then the normal start path runs. |
 | `discard_recovery_copy` | Removes the copy's container and volumes, label-verified, never forced; whatever does not remove stays referenced for a retry. |
 
 Copies are kept indefinitely — no age-based expiry — and capped at 16 per
@@ -513,7 +554,7 @@ Staged per provider (`portableInputSpec`):
 | Provider | Mount | Staged |
 | --- | --- | --- |
 | Claude | `/claude-config`, `/claude-config.json` | `CLAUDE.md`, `settings.local.json`, `.credentials.json` (access-only), `commands`, `agents`, `ide`, `plugins`; `~/.claude.json` |
-| OpenCode | `/opencode-config`, `/opencode-data`, `/opencode-state/model.json` | configuration (except `node_modules`); `auth.json` (access-only), `account.json`, `storage`, `snapshot`; `model.json` |
+| OpenCode | `/opencode-config`, `/opencode-data`, `/opencode-state/model.json` | configuration (except `node_modules`); `auth.json` (access-only); `model.json`. Nothing else from the data directory: OpenCode never reads a host's `snapshot/` (keyed by the worktree path) or `account.json` in a container, and of `storage/` reads only the legacy-migration index, which an empty `storage/` recreates (`scripts/qualify-opencode-seeded-data.sh`) |
 | Codex | `/codex-home` | `auth.json` (access-only), `config.toml`, `AGENTS.md`, `hooks.json`, `.codex-global-state.json`, model and cloud caches, `rules`, `skills`, `prompts`, `vendor_imports`, `plugins/cache` |
 | Grok | `/grok-home`, `/grok-config` | `xai-api-key`, `auth.json` (access-only), `config.toml`, `trusted_folders.toml`, `agent_id`, `models_cache.json`, `hooks`, `skills`; `~/.config/grok` |
 | Pi | `/pi-config` | `agent/auth.json` (access-only), `models.json`, `settings.json`, `mcp.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills`, `prompts`, `extensions`, `themes` |
@@ -581,16 +622,21 @@ image. Backend code that needs to know checks
   the running container's `~/.claude.json`. Remaining qualification and renewal
   work is tracked in
   [0018-container-network-and-credential-isolation.md](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
-- The Cursor key is no longer in a staged-inputs container's creation
-  environment; the bridge reads the synced owner-only file. The Anthropic API
-  key (when used instead of OAuth) still is, because Claude Code in terminals
-  reads it from the process environment: it is visible to same-user processes
-  and in `docker inspect`.
+- Neither the Cursor key nor the Anthropic API key (when used instead of
+  OAuth) is in a staged-inputs container's creation environment. The bridge
+  reads the synced owner-only Cursor file. The Anthropic key is written to
+  `/claude-config/.orkestrator-anthropic-key` in the staged revision, and
+  `docker/runtime-env.sh` exports it into shells and agent processes, because
+  Claude Code in terminals reads it from the process environment: it is
+  visible to same-user processes, but not in `docker inspect`. Only a
+  container of an image without staged inputs still gets
+  `-e ANTHROPIC_API_KEY` (and `CURSOR_API_KEY`).
 - Older images keep the read-only home mounts their entrypoint expects, and a
   running legacy container keeps them until it is rebuilt; `get_environment_inputs`
   reports that as `host-mounts`, never as narrowed.
-- Credentials (staged inputs, the Anthropic key in the creation environment,
-  the Cursor key and the start-time Claude credential sync) go only to
+- Credentials (staged inputs, the staged Anthropic key, or the creation
+  environment of an image without staged inputs, the Cursor key and the
+  start-time Claude credential sync) go only to
   providers that are enabled, authorized for agent-test profiles and not
   revoked for the environment (`providerCredentialsAllowed`).
 - Enabling a provider later is a rebuild, reported as `missingProviders`.

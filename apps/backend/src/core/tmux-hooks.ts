@@ -343,6 +343,12 @@ min_ms() {
 # limit) is consumed and ignored; the backend reads the sidecar to tell.
 apply_hold_request() {
   HOLD_REQUEST="$(cat "$HOLD_FILE" 2>/dev/null || true)"
+  # Remote writers create the file before streaming its contents. Leave an
+  # incomplete request for the next poll rather than losing it.
+  case "$HOLD_REQUEST" in
+    hold|resume) ;;
+    *) return 1 ;;
+  esac
   rm -f "$HOLD_FILE"
   NOW_MS="$(epoch_millis)"
   case "$HOLD_REQUEST" in
@@ -397,8 +403,9 @@ case "$EVENT_KIND" in
         exit 0
       fi
       if [ -n "$LIMIT_AT_MS" ] && [ -f "$HOLD_FILE" ]; then
-        apply_hold_request
-        continue
+        if apply_hold_request; then
+          continue
+        fi
       fi
       sleep 0.25
     done

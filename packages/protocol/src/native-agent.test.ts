@@ -116,6 +116,13 @@ describe("native agent capability table", () => {
     ]);
   });
 
+  test("OpenCode advertises exactly the kinds its question and permission mappers emit", () => {
+    expect(nativeAgentCapabilities("opencode").interactions?.kinds).toEqual([
+      "question",
+      "permission",
+    ]);
+  });
+
   test("pins Codex and Grok interaction capabilities", () => {
     expect(nativeAgentCapabilities("codex").interactions?.kinds).toEqual([
       "question",

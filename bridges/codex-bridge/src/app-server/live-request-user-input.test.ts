@@ -244,6 +244,7 @@ describeLive("live request_user_input", () => {
     expect(result.questions[0]).toMatchObject({
       kind: "question",
       method: "item/tool/requestUserInput",
+      isBlocking: false,
     });
     expect(JSON.stringify(result.questions[0])).toContain("Which codeword should I use?");
     // Codex 0.164.0 marks it non-blocking but still waits for the answer, and

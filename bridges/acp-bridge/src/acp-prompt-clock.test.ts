@@ -156,6 +156,37 @@ describe("the turn's prompt clock while a parked request is held", () => {
     expect(state.promptDeadlineAt).toBe(Date.now() + TURN);
   });
 
+  test.each(["settled", "expired"])(
+    "a late renewal extends the backstop while another held request is %s",
+    (outcome) => {
+      const session = turn();
+      const { state, timeouts, clock } = session;
+      const first = permission(session, 7);
+      const second = permission(session, 8);
+      holdParkedRequest(state, "approvals", first, true);
+      holdParkedRequest(state, "approvals", second, true);
+      jest.advanceTimersByTime(CEILING - 60 * MINUTE);
+      holdParkedRequest(state, "approvals", second, false);
+      holdParkedRequest(state, "approvals", second, true);
+      const renewedExpiry = state.approvals.get(second)!.deadline.expiresAt;
+      expect(renewedExpiry).toBe(Date.now() + CEILING);
+      expect(timeouts.at(-1)).toBe(renewedExpiry + TURN);
+      expect(clock.remainingMs).toBe(TURN);
+      if (outcome === "settled") state.approvals.get(first)!.respond("allow");
+      else jest.advanceTimersByTime(60 * MINUTE);
+      expect(state.approvals.has(first)).toBe(false);
+      expect(state.promptDeadlineAt).toBeUndefined();
+      for (const entry of state.approvals.values()) {
+        expect(timeouts.at(-1)!).toBeGreaterThan(entry.deadline.expiresAt);
+      }
+      // Pass the original backstop without expiring the renewed request.
+      jest.advanceTimersByTime(2 * 60 * MINUTE);
+      expect(state.approvals.has(second)).toBe(true);
+      holdParkedRequest(state, "approvals", second, false);
+      expect(state.promptDeadlineAt).toBe(Date.now() + TURN);
+    },
+  );
+
   test("a held question still ends at a shorter question timeout Grok keeps", () => {
     const session = turn(10 * MINUTE);
     parkGrokInteraction(session.state, session.child, 9, "x.ai/ask_user_question", {

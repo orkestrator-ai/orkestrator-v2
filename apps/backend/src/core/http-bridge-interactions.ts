@@ -769,10 +769,12 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     const providerRequestId = nonEmptyString(request?.interactionId);
     const requestedAt = request?.requestedAt;
     const expiresAt = request?.expiresAt;
-    // Older bridge builds omitted this field and treated every question as
-    // blocking. Preserve that meaning during a rolling backend/bridge update.
-    const isBlocking = request?.isBlocking !== false;
     const kind = request?.kind;
+    // A parked requestUserInput RPC needs an answer even when Codex's Default
+    // mode reports isBlocking:false. This is distinct from transcript async
+    // questions, which do not pass through this adapter and keep running.
+    // Preserve non-blocking MCP elicitations and the legacy omitted-field default.
+    const isBlocking = kind === "question" || request?.isBlocking !== false;
     if (
       !request ||
       !providerRequestId ||

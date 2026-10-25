@@ -698,11 +698,15 @@ export function UnassignedNativeAgentComposer({
   // The backend resolves the session's policy from these same environment
   // settings and caps whatever is chosen here, so this list is only the offer.
   const environmentApprovals = environment?.agentSettings?.executionPolicy?.approvals;
-  // A container stays the boundary unless the override adds a provider
-  // sandbox inside it, which is what the mode descriptions depend on.
+  // Match backend boundary reconciliation: restricting a full-network
+  // container also requires an inner provider sandbox.
   const launchSandbox =
     environment?.environmentType === "containerized" &&
-    environment.agentSettings?.executionPolicy?.sandbox !== "provider"
+    environment.agentSettings?.executionPolicy?.sandbox !== "provider" &&
+    !(
+      environment.networkAccessMode === "full" &&
+      environment.agentSettings?.executionPolicy?.networkAccess === "restricted"
+    )
       ? ("container" as const)
       : undefined;
   const { launchApprovalModes, selectedLaunchApprovalMode } = useMemo(() => {

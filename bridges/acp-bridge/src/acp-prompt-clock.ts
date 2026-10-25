@@ -1,4 +1,3 @@
-import { AGENT_INTERACTION_HOLD_CEILING_MS } from "@orkestrator/protocol/agent-interactions";
 import type { SessionState } from "./acp-context.js";
 
 /**
@@ -11,8 +10,7 @@ import type { SessionState } from "./acp-context.js";
  * the held request settling) starts it again from there. A request the user
  * resumes gets a fresh countdown, so the turn is given at least that much to
  * run. While stopped, the request's own timer is a backstop: the turn's
- * timeout moves to what it had left plus the hold ceiling, after the latest
- * moment any held request can expire.
+ * timeout moves to the latest parked deadline plus the time the turn had left.
  */
 export interface PromptTurnClock {
   /** Time the turn had left when the clock last started. */
@@ -78,8 +76,13 @@ export function syncPromptTurnClock(state: SessionState): void {
     clock.remainingMs = Math.max(0, clock.remainingMs - (now - clock.runningSince));
     clock.runningSince = undefined;
     state.promptDeadlineAt = undefined;
-    clock.rearm(now + clock.remainingMs + AGENT_INTERACTION_HOLD_CEILING_MS);
-  } else if (!held && clock.runningSince === undefined) {
+  }
+  if (held) {
+    // Another request can be held (or resumed and held again) while the
+    // clock is already stopped. Keep the backstop beyond every live deadline
+    // without spending any of the remaining prompt budget.
+    clock.rearm(latestParkedDeadline(state) + clock.remainingMs);
+  } else if (clock.runningSince === undefined) {
     // A resumed request restarts a full countdown; never let the turn end first.
     clock.remainingMs = Math.max(clock.remainingMs, latestParkedDeadline(state) - now);
     clock.runningSince = now;

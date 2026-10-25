@@ -71,3 +71,9 @@ backend's own catalogue has changed, so the tab's picker lags the backend.
 Next step: time `get_native_agent_discovery_update` for a container session
 against a local one at the same load, and check whether an explicit refresh
 invalidates the progressive discovery snapshot as well as the catalogue cache.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** #1215 (0014505ca) and #1223 (d723429d5) changed the slash catalogue on 2026-10-24, but nobody has rerun the container variant under load since, so a fix is not shown.
+- **Next step:** as recorded above: time `get_native_agent_discovery_update` for a container session against a local one at the same load, then rerun the container variant.

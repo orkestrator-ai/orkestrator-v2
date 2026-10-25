@@ -313,6 +313,13 @@ decisions) is done.
   run). The offline `conformance-coordinator-sandbox-live.test.ts` covers the
   first case on any Linux CI host with bubblewrap. Not run because this node
   has no Linux host.
+  CI evidence (2026-10-25, todo 0030): on GitHub's Ubuntu 26.04 runner the
+  test's positive cases failed on every run, because Ubuntu's
+  `bwrap-userns-restrict` AppArmor profile stops the CLI's nested user
+  namespace, so every sandboxed command fails while the host still reports
+  `enforced`. CI now removes that profile; a stock Ubuntu host is still
+  affected, which is tracked in
+  [0145](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md).
 - [ ] **A research server call on Pi, Cursor and OpenCode, live (rest of item 10).** One
   coordinator turn per platform with the default research setting that
   resolves React's Context7 library ID, as was done for Codex and Claude on

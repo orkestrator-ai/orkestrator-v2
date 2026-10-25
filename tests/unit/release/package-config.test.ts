@@ -62,6 +62,11 @@ describe("Electron packaging configuration", () => {
       path.join(process.cwd(), "apps/desktop/electron/main.ts"),
       "utf8",
     );
+    // The window and connection bookkeeping main.ts wires.
+    const desktopWindows = await fs.readFile(
+      path.join(process.cwd(), "apps/desktop/electron/desktop-window-contexts.ts"),
+      "utf8",
+    );
 
     expect(packageJson.main).toBe("apps/desktop/dist/electron/main.js");
     expect(packageJson.scripts).toBeUndefined();
@@ -142,24 +147,26 @@ describe("Electron packaging configuration", () => {
     expect(desktopMain).toContain("onUnexpectedClose: () => app.quit()");
     expect(desktopMain).toContain("await toolchainProgress.close()");
     expect(desktopMain).toContain('alwaysQuit: runtimeFlavor === "agent-test"');
-    expect(desktopMain).toContain("const windowContexts = new Map<number, DesktopWindowContext>()");
-    expect(desktopMain.indexOf("windowContexts.set(webContentsId")).toBeLessThan(
+    expect(desktopMain).toContain("new DesktopWindowContexts<DesktopWindowContext>(");
+    expect(desktopWindows).toContain("private readonly contexts = new Map<number, T>()");
+    expect(desktopMain.indexOf("desktopWindows.register({")).toBeGreaterThan(-1);
+    expect(desktopMain.indexOf("desktopWindows.register({")).toBeLessThan(
       desktopMain.indexOf("windowAllClosedQuit.markMainWindowCreated();"),
     );
     expect(desktopMain).toContain("initializeBrowserPreviews");
     expect(desktopMain).toContain("browserPreviewManager: browserPreviewRuntime.manager");
     expect(desktopMain).toContain("getBrowserPreviews: (event)");
     // Closing a window destroys its previews and the preview transport it owns.
-    expect(desktopMain).toContain("closing?.browserPreviewManager.destroyAll()");
-    expect(desktopMain).toContain("closing?.previewTransport.disposeAll()");
+    expect(desktopWindows).toContain("closing?.browserPreviewManager.destroyAll()");
+    expect(desktopWindows).toContain("closing?.previewTransport.disposeAll()");
     // A connection switch builds previews in the new connection's partition,
     // after use, connect, forget and a command handover alike. (A window never moves to another
     // node; a realm builds its own previews when it opens.)
     expect(desktopMain).toContain("browserPreviewPartitionForWindow(slot, partitionKey)");
-    expect(desktopMain).toContain(
-      "rebindWindowPreviews(context, connectionManager.getConnectionId",
-    );
-    expect(desktopMain.match(/followWindowConnection\((?:context|current)\);/g)).toHaveLength(4);
+    expect(desktopWindows).toContain("rebindWindowPreviews(context, connections.getConnectionId");
+    // Connect, forget and a command handover in main.ts; use in the bookkeeping.
+    expect(desktopMain.match(/followWindowConnection\((?:context|current)\);/g)).toHaveLength(3);
+    expect(desktopWindows).toContain("this.followConnection(context);");
     expect(desktopMain).toContain("const previews = createWindowBrowserPreviews(");
     expect(desktopMain.indexOf("registerIpc();")).toBeLessThan(
       desktopMain.indexOf("windowRequestGate.markReady()"),

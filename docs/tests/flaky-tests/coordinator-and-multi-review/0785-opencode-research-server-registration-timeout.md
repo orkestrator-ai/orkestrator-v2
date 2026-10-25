@@ -21,3 +21,9 @@
 - Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.MUtdn0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - Complete unchanged owner: `mise run test:logged -- --name opencode-research-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/opencode-coordinator-research-live.test.ts --parallel=1 --only-failures` passed (exit 0, 6.2 s).
 - Assessment: a second aggregate-only timeout under heavy load. Still open; no implementation, assertion, deadline or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** recurred on 2026-10-25 in [0801](../aggregate-validation-runs/0801-per-machine-accounts-validation.md) at 40,002.06 ms, and the owner passed alone. Two failures at exactly the 40 s deadline, against 1.5 s alone, suggest a hang during startup rather than slow work.
+- **Next step:** on timeout, print the `opencode serve` output and the last registration step reached. Check whether the start waits on the shared OpenCode database lock (see [0723](../backend-services-and-tooling/0723-opencode-host-shutdown-retry-race.md)).

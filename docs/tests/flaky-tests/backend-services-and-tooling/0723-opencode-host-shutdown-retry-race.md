@@ -20,3 +20,9 @@ The aggregate repeated this case during coordinator adapter validation. Exact
 commands, timing, owner rerun results and evidence are recorded in
 [0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
 The owning implementation, assertions, timeouts and skips were unchanged.
+
+## Triage 2026-10-25
+
+- **Disposition:** open; a likely product race found.
+- **Evidence:** `commands-servers.ts:295` decides the failure type in the child's `exit` handler, using `stderrTail` built from stderr `data` events. Node documents that stdio may still be open when `exit` fires. If `database is locked` arrives after `exit`, the error is the plain `exited before becoming healthy`, no lock retry is scheduled, and the test sees that instead of `shutting down`. That matches the failure text and the lock message logged just before it. The sibling case `a start that loses the database is retried and comes up` failed in [0801](../aggregate-validation-runs/0801-per-machine-accounts-validation.md) on 2026-10-25 (291.53 ms), which fits the same race. The owner passed alone today (9/9, 5.3 s; Bun 1.4.4).
+- **Next step:** classify on `close` (or after stderr ends) rather than `exit`, then stress the owner under load. Real OpenCode starts that lose the lock would hit the same path.

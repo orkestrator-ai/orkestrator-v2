@@ -1,7 +1,7 @@
 # Codex command catalogue armed-delay stale/ready race
 
 - **ID:** 0800
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-10-25, `todo-0722-per-machine-accounts` branch validation
 - **Test:** `a cold app-server child > an explicit refresh cannot replace the baseline for an already armed delay`
 - **File:** `bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts:284`
@@ -26,3 +26,7 @@ Unlike 0791's first observation, this one fails without parallel workers, so
 host load is not needed to reproduce it. The same hypothesis applies: a
 background catalogue refresh settles between the test's polling condition and
 the final `commands.list()`. Not established.
+
+## Triage 2026-10-25
+
+- **Disposition:** resolved as a duplicate of [0791](0791-codex-command-catalogue-stale-race.md). Same `describe`, same fixture, same real 20 ms settle timer and the same `stale`/`ready` symptom. Its facts are folded into 0791's triage section, which is the case to follow.

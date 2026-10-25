@@ -1,17 +1,23 @@
 # Test suite and CI health
 
-Checked against `main` at `b83ae534` (2026-10-22).
+Checked against `main` at `20f6de91` (2026-10-25).
 
 `mise run test` should be fast and green, and stay that way, without weakening
 what it proves. Every test file has exactly one owner, waits are controlled
 rather than slept, and setup matches what each assertion needs. Most of the
-2026-09-21 streamlining review landed in #815, and #966 moved the backend and
-desktop suites into their packages. On 2026-10-22 the cause of every red `main`
-run since 2026-10-20 was fixed on branch `todo-0030-test-suite-ci-health`, along
-with the skipped settings test, the root group's long pole, the Codex
-import-time server and the `BackendProcess` startup gaps. What remains is
-applying the approved ruleset once `main` is green, some slow backend owners,
-the Electron main-process bookkeeping tests and two dev-tooling defects.
+2026-09-21 streamlining review landed in #815, #966 moved the backend and
+desktop suites into their packages, and #1149 (2026-10-22) fixed the red `main`
+of 2026-10-20 to 2026-10-22.
+
+`main` went red again on 2026-10-23 and has stayed red since 2026-10-24
+17:43: every `CI` run on `main` from then to 2026-10-25 12:00 failed "Unit and
+integration tests".
+Branch `todo-0030-test-suite-ci-health-e11a519267e2` (2026-10-25) fixes every
+cause those runs showed, and a GitHub Actions run of the branch's exact
+`ci.yml` jobs is the evidence (item 1). It also finishes items 3, 6, 8 and 9,
+the measurable part of item 4, and a triage of the flake registry. What remains
+is the maintainer applying the prepared ruleset once `main` has three green
+runs, one tmux-session timer conversion, the open flakes and two live checks.
 
 ## Current state
 
@@ -19,173 +25,79 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
   requests, with three jobs: "bun fmt and oxlint", "Typecheck", and "Unit and
   integration tests". `validate-bun-runtime.yml` builds the bundled Bun per
   platform and runs the container smoke. A failing group prints its output
-  tail and then Bun's report for every failing test. Since 2026-10-15 that
-  includes failures the 256 KiB tail lost: PR #1008's first run failed one web
-  test whose name never reached the log. The test job also uploads the
-  compressed logs (`test-logs-<run>-<attempt>`) when it fails.
-- **`main` is unprotected.** `gh api repos/{owner}/{repo}/branches/main/protection`
-  answers 404 "Branch not protected", and `gh api repos/{owner}/{repo}/rulesets`
-  returns `[]` (rechecked on 2026-10-22). The maintainer approved the ruleset in
+  tail and then Bun's report for every failing test, and the test job uploads
+  the compressed logs (`test-logs-<run>-<attempt>`) when it fails.
+- **The runner is Ubuntu 26.04.** `ubuntu-latest` reported Ubuntu 26.04.1 LTS,
+  kernel 7.0 (Azure), four cores and 16 GB on 2026-10-25 (probe run
+  40193653132). Its image has no `zsh` or `fish`, has world-writable
+  `/usr/share/zsh` completion directories, and loads AppArmor's
+  `bwrap-userns-restrict` and `unprivileged_userns` profiles.
+- **`main` is unprotected.** `gh api repos/orkestrator-ai/orkestrator-v2/branches/main/protection`
+  answers 404 "Branch not protected", and `gh api repos/orkestrator-ai/orkestrator-v2/rulesets`
+  returns `[]` (rechecked 2026-10-25). The maintainer approved the ruleset in
   item 1 on 2026-10-15.
-- **`main` was red on every CI run from 2026-10-20 to 2026-10-22** (fixed on
-  the branch, not yet merged). The last green `main` run was `0f39f1de` (#1108,
-  run 39497188149). Lint and typecheck passed throughout; only "Unit and
-  integration tests" failed. Across the 17 failing runs examined (`d9bc8b84`,
-  #1107, through `c66604e2`, #1120):
-  - **Linux worktree-watcher crash (every run, since #1107).** Bun on Linux
-    reports a removed watch root as `rename` with an `undefined` filename,
-    although Node types it `string | null`. `worktree-watcher.ts` checked only
-    for `null`, so `filename.replaceAll` threw from `fs.watch` dispatch whenever
-    a test removed a watched worktree. That failed nine backend cases
-    (`commands-integration`, `commands-registry-environments`,
-    `environment-move`, `public-api-launch`,
-    `commands-environment-worktree-location`) and both packaged-CLI scenarios
-    (`cli-client.test.ts`: the real backend exited 1). macOS never emits the
-    event, so local runs stayed green. The same throw would hit a Linux host
-    whose watched worktree is removed. A probe in `oven/bun:1.4.3` confirmed the
-    event; the watcher now normalises the name once for every listener. In a
-    Linux container replicating the CI job (non-root, `CI` and `GITHUB_ACTIONS`
-    set, two workers), the six backend owners failed 9 cases before the fix and
-    passed 203 after; the CLI owner failed 2 and passed 9.
-  - **Claude plan-mode fixture race** (flakes 0385, 0473, 0513, now resolved;
-    two runs): see the flake cases for the root cause.
-  - **Coordinator OpenCode reconcile join** (flake 0671, resolved; one run):
-    the test counted on a race the product correctly dedupes.
-  - **Cursor HTTP hook timeouts** (flake 0182, open; one run on 2026-10-19) and
-    a **Chromium page crash** in `preview-interactive.test.ts` (flake 0672,
-    open; one run on 2026-10-21). Both owners pass alone.
-- **Earlier red runs (2026-10-14 to 2026-10-18).** #999
-  (`cefcaf69`) made the backend suite finish on CI. Of the four `main` and
-  pull-request runs that then completed it, only `5c7517eb` (#1001, run
-  38778314321) passed. It was the first green `lint.yml` run on `main` since
-  2026-09-30 (run 36746796730). The runs since #999 surfaced three more
-  failures, now addressed:
-  - **Real-Chromium design renderer** (flake 0246, open): the launch missed
-    its 15 s deadline on three of the four runs. The case now allows 45 s and
-    prints Playwright's launch log on failure. A separate real-browser case
-    uses the production 15 s budget and checks successful rendering or the
-    bounded startup failure state; timeout warnings still require follow-up.
-    The cause is unconfirmed.
-  - **`environment cleanup steps`, the two container cases** (one run): the
-    ownership probe before `docker rm` called the runner's real Docker, so an
-    unreachable daemon, or `c1` prefixing another object, refused before the
-    injected runner ran. Both now pass `containerOwnershipVerified`. The
-    probe's verdicts are covered in `container-lifecycle-service.test.ts`.
-  - **Multi Review slow-reviewer benchmark** (flake 0171, resolved): 630 ms
-    against a 310 ms bound. It now asserts dispatch ordering, not wall time.
+- **`main` red from 2026-10-23 to 2026-10-25.** 44 `CI` runs on `main` failed
+  between `39985615373` (#1190, 2026-10-23 16:17) and `40190229310` (#1245,
+  2026-10-25 11:45), with a few green runs among them until `40115711165`
+  (2026-10-24 17:20); every run after that failed.
+  Lint and typecheck passed on every run; only "Unit and integration tests"
+  failed. The causes, by count of runs:
 
-  An investigation of the 15 completed runs on 2026-10-14 and 2026-10-15,
-  before #999, found these causes; the first five are fixed:
-  - **The backend suite never finished on CI.** Turbo's default log order is
-    `grouped` in CI, so a package task prints nothing until it exits. The
-    four-core runner gives each package one Bun worker, and the backend
-    package needs at least eight minutes (481 s locally on one worker), so the
-    runner's five-minute no-progress watchdog killed the workspace group on
-    every run. Failures after the kill point were never seen. The aggregate
-    now pins `--log-order=stream` and `--continue=dependencies-successful`.
-  - **Credential write** (`claude-credential-injection.test.ts`): Turbo drops
-    `SHLVL`, so `bash -lc` ran Debian's default `~/.bash_logout` on the
-    script's early `exit 0`, and `clear_console` failing under `set -e` turned
-    it into status 1. The script now guards the write instead of exiting.
-  - **`GitHub CLI setup > reports a missing gh`**: the fixture's PATH included
-    `/usr/bin`, where the runner has `gh`. The PATH is now hermetic.
-  - **Two `review-validation-worker.test.ts` cases**: an unmeasured command
-    asks for four host slots and the budget defaults to the core count, so on
-    four cores commands the tests expect to overlap ran one after another. The
-    fixture now pins an eight-slot host.
-  - **Bundled Bun (macos-arm64)** failed on every `main` push with `EMFILE`
-    while ad-hoc signing the app; pull requests skip signing and passed. The
-    job now raises the descriptor limit and signs pull requests too.
-  - **Load flakes** recorded in the registry: 0160 (runtime-env-wiring, 5 of
-    16 runs; its Claude setup block case now has the 15-second budget its
-    Codex sibling already had), 0176 (InitializationLogs), 0232 (ACP close fixture) and the new
-    0240 (Cursor steering at capacity, resolved on 2026-10-15 with 0216: both
-    cases made hundreds of real fsyncs, which a loaded Linux runner could not
-    finish inside Bun's timeouts).
+  | Failure | Runs | Cause | Fix on this branch |
+  | --- | ---: | --- | --- |
+  | `mermaid rendering > enforces source bytes, edges and SVG limits at and over the boundary` | 26 | Five Chromium layouts on four cores took the 2,000-note diagram past the 5 s render deadline, so it failed as `render_timeout` before its SVG was counted. | That runner gets a 20 s render budget; every limit and the production deadline stay ([flake 0879](../../tests/flaky-tests/design-canvas-and-artifacts/0879-mermaid-limits-render-deadline-on-ci.md)). |
+  | `Claude coordinator sandbox qualification > default-sandbox-writes` and `coordinator-sandbox-reads` | 20 | Every completed run since the test landed (#1217, 2026-10-24 17:43). Ubuntu's AppArmor bwrap profile strips capabilities from the nested user namespace the CLI's `apply-seccomp` creates, so every sandboxed command fails. The older live test only ever expected sandboxed commands to fail, so it never noticed. | CI removes the two AppArmor profiles and checks a nested namespace before the tests. The test now prints why a command failed. The product side is [0145](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md). |
+  | Runner "received a shutdown signal" about 5 minutes in | 8 | Started with #1227's own pull-request run (22:01) and stopped once #1236 changed the same tool-group animation code; pull-request runs in that window died the same way. The likely cause is a test from #1227 exhausting the runner; no runner diagnostics exist to confirm it. | None needed: gone since #1236. |
+  | `native shell completion execution > zsh bashcompinit …` | 6 | Since #1246. The runner has no `zsh`; with it installed, `compinit` aborts on the world-writable completion directories because it cannot prompt. | CI installs `zsh` and `fish`; the test runs `compinit -u` and skips on a host without `zsh`. The fish test now runs on CI and checks short flags in a way fish 3.7 and 4 both answer. |
+  | `interactive preview in Chromium > resource escape …` (`Page crashed`) | 2 | Unknown ([flake 0672](../../tests/flaky-tests/design-canvas-and-artifacts/0672-preview-interactive-chromium-page-crash.md)). | Registered recurrence; open. |
+  | ACP composer patch/prompt race | 1 | The test assumes two concurrent requests overlap ([0875](../../tests/flaky-tests/agent-bridges/0875-acp-composer-patch-prompt-overlap-assumption.md)). | Open, with a concrete next step. |
+  | ACP `401` after `spawnBridge` | 1 | Another server took the harness's released port; readiness checked only unauthenticated health ([0876](../../tests/flaky-tests/agent-bridges/0876-acp-harness-port-squatter-401.md)). | Reproduced and fixed. |
+  | Claude persistence `EEXIST` | 1 | A previous test's unawaited preference write landed in the next test ([0877](../../tests/flaky-tests/agent-bridges/0877-claude-session-preference-write-crosses-tests.md)). | Shown and fixed. |
+  | Interaction hold `rejected` | 1 | The fixture read the clock twice, so the pause could predate the request ([0878](../../tests/flaky-tests/native-agents-and-transcripts/0878-interaction-hold-fixture-clock-boundary.md)). | Reproduced and fixed. |
 
-  A full backend run under CI emulation (one worker, `CI` and
-  `GITHUB_ACTIONS` set) also exposed: `AgentRegistry > lists every
-  agent tab and coordinator with live state and counts` compared two
-  snapshots whose `generatedAt` stamps could differ by a millisecond (23 of
-  300 reruns failed). It now ignores only the stamp.
-- **Worktree persist-failure test (fixed 2026-10-18).** `Electron backend
-  environment lifecycle commands > removes a newly created worktree and its
-  branch when persisting them fails`
-  (`apps/backend/tests/commands-registry-environments.test.ts`) failed with
-  "Received promise that resolved" on some runs, never on a commit boundary.
-  The cause was the test, not the product. Since #955 (2026-10-13) the start
-  path stores the canonical worktree root (`validateWorktreeLocation`, then
-  `realpath`), but the storage mock failed only an update whose `worktreePath`
-  equalled `path.join(context.worktreeDir, …)` spelled as given. The fixture
-  root is `ORKESTRATOR_WORKTREE_DIR`, else `os.tmpdir()`. The
-  `tests/setup-node.ts` preload makes the first canonical. A bare
-  `bun test <file>` from `apps/backend` loaded no preload, so the root was the
-  shell's `ORKESTRATOR_WORKTREE_DIR` or a temp directory under a symlink
-  (macOS `/tmp`, `/var/folders/…`). The mock then never fired, the start
-  succeeded, and the outcome depended on the shell. The product compensation
-  was correct throughout: it removes the worktree and branch it created, by
-  the path it created.
-  - **Fix.** The mock fails the first update that persists any worktree path,
-    and the test asserts that path equals the expected one, so a mismatch
-    reads as a path diff. `expectedManagedWorktreePath`
-    (`apps/backend/tests/command-fixtures.ts`) canonicalizes the root as
-    production does. `apps/backend/bunfig.toml` now preloads
-    `tests/setup-node.ts`, so a bare run gets the suite's isolated worktree
-    root and Git config instead of writing under a shell-exported root.
-  - **Evidence** (Bun 1.4.3, macOS, branch from `a5d338c1`). Before: the
-    bare single-test run failed deterministically (root `/tmp/…`, worktree
-    created under `/private/tmp/…`); the same run with
-    `--preload ../../tests/setup-node.ts` passed. After, with only the test
-    change: 3 of 3 bare runs passed. After the full change: 20 of 20
-    sequential bare runs, 8 of 8 concurrent bare runs, 3 of 3 with
-    `TMPDIR=$(getconf DARWIN_USER_TEMP_DIR)`, and the whole owning file 3 of
-    3 (`bun test --preload ../../tests/setup-node.ts
-    tests/commands-registry-environments.test.ts --parallel=1
-    --only-failures`, 68 of 68, 31–41 s). A probe confirmed a bare run
-    overrides an inherited `ORKESTRATOR_WORKTREE_DIR`, and that a preload
-    named in both `bunfig.toml` and `--preload` is evaluated once.
-    `mise run check` passed, and one full `mise run test` passed every
-    group (workspace 406.4 s, root 220.3 s, bridges 115.2 s, exit 0).
-  - **Not reproduced.** The 2026-10-17 report also saw it fail in the
-    Grok-trust build's full `mise run test`, where the preload makes the
-    root canonical. That run's command and environment were not recorded,
-    and no in-tree path with the preload produces a different spelling. A
-    recurrence now fails on the path assertion, which names both paths.
+  The two failures named for this round are also settled. The OpenCode
+  conformance owner already compares with `PINNED_TOOLCHAIN_VERSIONS.opencode`
+  (changed by #1217) and passed 70 of 70 alone on 2026-10-25. The Firefox
+  favicon case ([0697](../../tests/flaky-tests/design-canvas-and-artifacts/0697-artifact-engine-firefox-favicon-sink-hit.md))
+  was Firefox's own UI fetching `/favicon.ico`; Firefox now launches with
+  `browser.chrome.site_icons` off.
+- **Earlier red periods, all fixed.** 2026-10-14 to 2026-10-18: the backend
+  suite never finished under Turbo's grouped CI log order (#999 streams it),
+  plus a credential-script `bash_logout` exit, a non-hermetic `gh` PATH, a
+  four-core review-worker budget, `EMFILE` while signing the macOS bundle and
+  load flakes 0160, 0176, 0232 and 0240. 2026-10-20 to 2026-10-22: Bun on Linux
+  reports a removed watch root with an `undefined` filename, which crashed
+  `worktree-watcher.ts` (#1149), plus flakes 0385/0473/0513 and 0671. The
+  worktree persist-failure test (`commands-registry-environments.test.ts`) was
+  fixed on 2026-10-18 by matching the canonical worktree path and preloading
+  `tests/setup-node.ts` from `apps/backend/bunfig.toml`. Details are in git
+  history and the flake cases.
 - **Ownership guard.** `tests/unit/test-suite-ownership.test.ts` derives owners
   from `buildConcurrentGroups` (`scripts/test-all.ts`) and the package test
   selectors. It also rejects root tests that import backend or desktop
   sources.
 - **Controlled time.** `tests/helpers/controlled-timeout.ts`
   (`installControlledTimeout`, with collision detection and `assertDrained`) is
-  tested by `tests/unit/controlled-timeout.test.ts`. The `GlobalSettings`,
-  `GlobalSettingsDefaults`, `PersistentTerminal`, `AddProjectDialog` and desktop
-  `BackendProcess` suites use it. The testing guide now documents it, the timer
-  rules and how the ownership guard derives owners.
+  tested by `tests/unit/controlled-timeout.test.ts` and documented in the
+  testing guide with the timer rules.
 - **Task graph.** `apps/web`, `apps/web-public`, `apps/desktop` and
-  `packages/protocol` set `test:workspace.dependsOn: []` in their `turbo.json`.
-  Backend and CLI inherit the root `dependsOn: ["build"]`, because
-  `apps/backend/tests/standalone.test.ts` and `packages/cli/tests/cli.test.ts`
-  consume `dist`. The workspace group asks Turbo for `build` and
-  `test:workspace` in one invocation. `planWorkers` caps the aggregate at
-  `MAX_AGGREGATE_TEST_WORKERS` (8) with `MIN_BRIDGE_WORKERS` (2). Bridge
-  `test:bridge` scripts preload `tests/setup-node.ts`.
-- **Timing.** The package rows come from 18 local Bun timing profiles written
-  on 2026-10-15 (cumulative per-file times, host contention unknown). The file
-  rows were remeasured alone on 2026-10-22 (macOS arm64, Bun 1.4.3, one file at
-  a time on an otherwise busy host).
+  `packages/protocol` set `test:workspace.dependsOn: []`; backend and CLI keep
+  `dependsOn: ["build"]` because some of their tests consume `dist`. The
+  workspace group asks Turbo for `build` and `test:workspace` in one
+  invocation. `planWorkers` caps the aggregate at `MAX_AGGREGATE_TEST_WORKERS`
+  (8). On a four-core host it plans Turbo `--concurrency=1` and one backend
+  worker, so the workspace packages run one after another.
+- **Timing on CI** (`main` runs 40187357422, 40189950916 and 40190229310,
+  2026-10-25; Bun's own per-package totals):
 
-  | Owner or file | Cumulative time |
+  | Group or package | Time |
   | --- | ---: |
-  | Backend package (about 440 files) | 482–745 s |
-  | Web package (about 427 files) | 183–315 s |
-  | Root group (about 136 files) | 148–204 s |
-  | ACP bridge | 60–140 s |
-  | `tests/unit/components/AddProjectDialog.test.tsx` | 2.1 s (was 55–57 s) |
-  | `apps/backend/src/core/review-validation-worker.test.ts` | 47.0 s (46 tests) |
-  | `apps/backend/src/core/public-api/public-api-exec.test.ts` | 35.7 s (17 tests) |
-  | `apps/backend/tests/commands-integration.test.ts` | 34.8 s (55 tests) |
-  | `apps/backend/tests/tmux-session.test.ts` | 28.6 s (71 tests) |
-  | `apps/web/src/components/terminal/PersistentTerminal.test.tsx` | 21.2 s (135 tests) |
+  | Workspace group | 1,215–1,296 s |
+  | Backend package (669 files, 11,374 tests) | 700–755 s |
+  | Web package (610 files, 9,670 tests) | 377–400 s |
+  | Root and agent-support group | 199–214 s |
+  | Bridges group | 145–191 s |
+  | ACP bridge | 140–146 s |
 
 ## Outstanding work
 
@@ -193,19 +105,30 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
 
 1. **Confirm `main` stays green, then apply the approved ruleset.** This is a
    repository settings change for the maintainer; agents prepare it and do not
-   apply it. Every failure the completed CI runs have shown so far is fixed,
-   registered or mitigated (see Current state), but the fixes are not on `main`
-   until the `todo-0030-test-suite-ci-health` branch merges, and no CI run has
-   exercised them yet: the Linux evidence comes from a container replica, not
-   GitHub Actions. Once `main` passes three `CI` runs in a row, apply the
-   ruleset below. If a run fails first, fix or register the failure and
-   restart the count. The maintainer approved this ruleset on 2026-10-15; its
-   inputs were rechecked on 2026-10-22 against the check runs of `c66604e2`.
+   apply it. Once `main` passes three `CI` runs in a row, apply the ruleset
+   below. If a run fails first, fix or register the failure and restart the
+   count.
 
+   - **Done (2026-10-25): every failure since 2026-10-23 is fixed or
+     registered** (table above).
+   - **Evidence that the branch is green on the three required checks.**
+     `CI` cannot run on a branch without a pull request, so a throwaway branch
+     (`todo-0030-ci-probe-e11a519267e2`) dispatched `validate-bun-runtime.yml`
+     with its own jobs skipped and `ci.yml`'s three jobs copied in unchanged
+     (renamed "… (todo 0030 probe)"), on this branch's tree: run
+     PROBE3_RUN. PROBE3_RESULT Two earlier probe runs found the Ubuntu 26.04
+     facts: 40193653132 (full suite plus diagnostics) and 40195484352 (the
+     AppArmor and zsh fixes, step by step). The probe branch is deleted after
+     the evidence is recorded.
+   - **Still to do (maintainer):** after the branch merges, wait for three
+     consecutive green `CI` runs on `main`, then run the command below. `main`
+     itself was not green on any of the 25 most recent runs on 2026-10-25, all
+     before this branch.
    - Required checks: `bun fmt and oxlint`, `Typecheck` and
      `Unit and integration tests` from `.github/workflows/ci.yml`, all reported
-     by `github-actions` (app 15368). `tests/unit/ci-workflows.test.ts` fails if
-     a context below stops matching a `ci.yml` job name.
+     by `github-actions` (app 15368). Rechecked on 2026-10-25 against the check
+     runs of `20f6de91`. `tests/unit/ci-workflows.test.ts` fails if a context
+     below stops matching a `ci.yml` job name.
    - Ruleset settings: target `main` (`~DEFAULT_BRANCH`), enforcement active,
      block deletion and force pushes, strict up-to-date checks off, enforce on
      branch creation, Admin role (`actor_id` 5) may always bypass.
@@ -236,6 +159,9 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
    }
    ```
 
+   - Check first: `gh run list --branch main --workflow ci.yml --limit 3`
+     shows three `success` runs, and
+     `gh api repos/orkestrator-ai/orkestrator-v2/rulesets` still returns `[]`.
    - Apply from a checkout of `main` that contains this file. The command
      extracts the first `json` block, as `tests/unit/ci-workflows.test.ts` does:
 
@@ -254,16 +180,17 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
    Why these settings:
 
    - The three contexts are the `ci.yml` job names, reported by
-     `github-actions` (app 15368), as checked on `7ccb193e` and again on
-     `c66604e2` (2026-10-22). `actor_id` 5 is the repository Admin role.
+     `github-actions` (app 15368), as checked on `7ccb193e`, `c66604e2` and
+     `20f6de91`. `actor_id` 5 is the repository Admin role. The lint job was
+     renamed from "oxfmt and oxlint" to "bun fmt and oxlint" by #1229
+     (2026-10-24); the ruleset uses the current name and the contract test
+     keeps them in step.
    - Strict up-to-date checks stay off at first: about 226 pull requests a
-     month and a 12-minute test job would serialise merges. Revisit with a
+     month and a 21-minute test job would serialise merges. Revisit with a
      merge queue, which needs a `merge_group:` trigger in `ci.yml`.
    - Repository admins may bypass, because version bumps are pushed to `main`
-     directly (44 such pushes since 2026-09-15; version bumps and release fixes
-     were still pushed directly up to 2026-10-19). No workflow pushes to
-     `main`. Moving the bumps to pull requests would allow pull-request-only
-     bypass.
+     directly. No workflow pushes to `main`. Moving the bumps to pull requests
+     would allow pull-request-only bypass.
    - The Bundled Bun and Container checks are not required: that workflow is
      path-filtered, so a required check would stay pending on unrelated pull
      requests.
@@ -271,125 +198,123 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
      `apps/backend/src/core/commands-review.ts`) is refused until the three
      checks pass. That is intended; the maintainer chose not to add `--admin`
      or `--auto`.
-2. **Done (2026-10-22): `AddProjectDialog.test.tsx`.** 17 cases waited out the
-   real 2 s typed-path debounce (`PATH_DETECTION_DEBOUNCE_MS`). It is captured
-   with `installControlledTimeout`; host-picker lookups use a zero delay and
-   stay real. The file went from 56.5 s to 2.1 s; setting the debounce to 1 s,
-   dropping its `clearTimeout` or debouncing picker lookups each fail cases.
-3. **Remaining literal waits.** Deferred on 2026-10-22: these are quiet-window
-   negative assertions over several different retry, probe and bootstrap
-   timers, so each needs its production timer identified first, and together
-   they cost about 10 s inside the web package, which is not the aggregate's
-   critical path.
-   - `PersistentTerminal.test.tsx`: 14 waits, about 7.9 s.
-   - `apps/web/src/components/native-agent/AgentNativeTab.test.tsx`: 33 waits,
-     about 2.4 s, including fifteen 120 ms resource-event waits.
-   - Convert a wait only where the production timer can be captured or an
-     explicit completion signal exists; otherwise record why it stays. The
-     ActionBar suite's residual waits (about 0.3 s) are not worth converting.
-4. **Backend slow owners.** Per-test profiles from 2026-10-22 (alone, macOS):
-   - `review-validation-worker.test.ts` (47.0 s): spread across many cases
-     that drive a real worker child through queue timeouts and heartbeats; the
-     slowest, `a command that expires while queued keeps no stale queue
-     explanation`, takes 6.3 s on a 6 s queue timeout. Parent-side controlled
-     time cannot reach the child, so shortening these needs a fixture boundary
-     the child honours.
-   - `public-api-exec.test.ts` (35.7 s): three cases that ignore SIGTERM cost
-     19.7 s, because `exec-worker.ts` escalates to SIGKILL after a hard-coded
-     5 s inside the worker process. Shortening them needs a test-only grace
-     override in that child, which counts as changing a production constant;
-     decide that before doing it.
-   - `commands-integration.test.ts` (34.8 s, no case over 2.2 s) and
-     `tmux-session.test.ts` (28.6 s): no single dominant case. Profile with
-     process and Git spawn counts before narrowing any fixture.
-     `createGitWorktreeWithOrigin` (`apps/backend/tests/command-fixtures.ts`)
-     was judged necessary for `commands-integration`; revisit only with counts.
-5. **Done (2026-10-22): skipped settings test.** `stops retrying a
-   persistently failing GitHub credential propagation` was skipped in #717
-   together with a `[DEBUG] auto-save effect ran` `console.log` left in
-   `GlobalSettings.tsx`. The behaviour was already correct; the test runs again
-   with its original intent, stepping the controlled debounce per attempt
-   instead of a 3 s sleep (0.6 s), and fails if the retry bound is 1 or 3. The
-   debug log is gone.
-6. **Desktop test gaps.**
-   - Done (2026-10-22): `BackendProcess.launch`. "BackendProcess startup
-     failure boundaries" in `apps/desktop/tests/backend-process.test.ts` covers
-     the 30 s readiness deadline (controlled), an auth file without a valid
-     token, the child exiting between readiness and client setup (held there by
-     a FIFO auth file) and `stop()` during startup. Each fails when its product
-     branch is removed. Line coverage had already executed most of `launch`, so
-     it could not show these gaps; the behaviours were the gap.
-   - `apps/desktop/electron/main.ts` window and connection bookkeeping:
-     `windowContexts`, `contextForEvent`, `emitToConnection`, and the
-     `useConnection` handler that swaps the window's preview runtime and rolls
-     it back on failure. `apps/desktop/tests/main-ipc.test.ts` replaces
-     `useConnection` and `forgetConnection` with mocks. The menu helpers in
-     `window-menu.ts` are tested. Confirmed on 2026-10-22:
-     `main-startup-switches.test.ts` loads `main.ts` in a child Bun process only
-     through the `app.setPath` boundary; it does not exercise `windowContexts`,
-     `contextForEvent`, `emitToConnection`, or `useConnection`. Testing that
-     bookkeeping needs it extracted from the Electron entry point first.
-7. **Flakes.** Resolve the gateway-auth part of flake 0006 once the registry
-   criteria are met; the file now runs in well under a second. Flakes 0166
-   (OpenCode probe deadline) and 0171 (Multi Review slow-reviewer benchmark)
-   were resolved on 2026-10-15 with a controlled deadline and an ordering
-   check. 0246 (real-Chromium launch) is resolved with a warm-up launch.
-   New on 2026-10-22: 0182 (Cursor HTTP hooks) recurred once on CI, and 0672
-   (Chromium page crash in `preview-interactive.test.ts`) is open after one CI
-   occurrence. Both owners pass alone.
-8. **Dev profiles report Electron's version as the backend's.** Found on
-   2026-10-17 during the container qualification. The dev launcher starts
-   Electron on `apps/desktop/dist/electron/main.js`
-   (`apps/desktop/scripts/dev/lifecycle.ts:629`), so `app.getVersion()` returns
-   Electron's 44.7.0 and `createBackendProcessEnvironment` exports it as
-   `ORKESTRATOR_VERSION`. Every `mise run dev` and `dev:test` browser therefore
-   shows "Orkestrator has been updated … the server now runs 44.7.0" over the
-   bottom-right of the page. Pass the package version in dev, or point
-   Electron at `apps/desktop` so it reads `package.json`. Not done on
-   2026-10-22: pointing Electron at a directory also changes its app name,
-   which may move `userData`, so either fix needs a real `dev:test` run to
-   verify.
-
-9. **Electron specs leak their Vite server on a timeout.** The
-   `e2e/agent-testing/*-electron.spec.ts` helpers spawn a detached Vite dev server
-   and stop its process group in a `finally`. When the test times out while
-   `ElectronApplication.close()` hangs, Playwright tears the worker down and
-   the `finally` never runs, so the dev server keeps its port. Two leaked on
-   2026-10-17 (see the
-   [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md) evidence log). Stop
-   the group from a fixture teardown or a worker-exit hook as well, and bound
-   the `close()` wait.
-
-10. **Done (2026-10-22): the Codex bridge listened on import in a test.**
-    `item-to-parts.test.ts` now imports the renderer from `./messages/`
-    instead of `./index.js`, and the re-export that existed only for it is
-    gone ([flake 0660](../../tests/flaky-tests/agent-bridges/0660-codex-item-to-parts-inherited-port.md),
-    resolved). The entry point still starts its server on import; that is
-    harmless under the suite preload (`CODEX_BRIDGE_NO_SERVER=1`) and was not
-    changed, because `import.meta.main` is not reliable across the Bun and
-    Node runtimes the bundle runs under.
+2. **Done (2026-10-22): `AddProjectDialog.test.tsx`.** The 2 s typed-path
+   debounce is captured with `installControlledTimeout` (56.5 s to 2.1 s).
+3. **Done (2026-10-25): remaining literal waits.**
+   - `PersistentTerminal.test.tsx`: #1161 had already converted 13 of the 14
+     waits (the file was about 3 s, not 7.9 s). The last 60 ms wait now
+     captures the visibility redraw's 50 ms final-refresh timer
+     (`persistent-terminal-redraw.ts`), which is armed only after both resize
+     attempts, and asserts `resize` was never called. Three mutations (raw
+     `resize` in the scheduled fit, in the redraw, or inside the timer) fail it.
+   - `AgentNativeTab.test.tsx`: 24 of 33 waits converted, including 14 of the
+     fifteen 120 ms resource-event waits. `deliverResourceChange` captures the
+     50 ms coalescing timer (`resource-sync.ts`, `COALESCE_MS`), checks exactly
+     one timer armed and none dropped, then waits for the read coordinator to
+     go idle (`getDiagnostics()`). The 16 affected tests went from about 2.6 s
+     to 0.8–1.7 s. With `COALESCE_MS` at 200 ms, 15 of them fail; with the old
+     sleeps only 3 did.
+   - Kept, each with a reason in the test review: line 7413 (120 ms, `ensure`
+     finishing while inactive has no observable signal), 7347, 8016 and 8039
+     (negative windows with no signal), 6656, 6759, 8897, 9329 and 3847 (no
+     production timer: a regression would be a mount effect or render loop).
+   - Both files passed 5 runs in a row, and the web package passed (9,660
+     pass, 10 skip).
+4. **Backend slow owners.** Measured alone, macOS, 2026-10-25.
+   - Done: `review-validation-worker.test.ts`. The worker already honours
+     `ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS`; `a command that expires while queued
+     keeps no stale queue explanation` now uses 3 s instead of 6 s and watches
+     the worker's state file instead of starting a control process per check
+     (6.4 s to 3.3–3.4 s). Three mutations fail it. The other cases sit on the
+     worker's 1 s minimum for its test overrides, or need 1 s of CPU
+     measurement.
+   - Done: `public-api-exec.test.ts`. #1161 had already given the three
+     TERM-ignoring cases a 500 ms test-only grace
+     (`ORKESTRATOR_TEST_EXEC_KILL_GRACE_MS`, default 5000, clamped to
+     100–5000; 14.4 s for the file). `exec-worker.test.ts` pins the 5 s default
+     on a stepped clock and now also covers an empty and a zero value.
+   - Done: spawn profiles. `commands-integration.test.ts` (14.5 s, 55 cases):
+     457 spawns, 272 of them real `git`, from the production code under test;
+     `createGitWorktreeWithOrigin` builds its repository once. No fixture waste.
+     `tmux-session.test.ts` (15.7 s, 71 cases): 237 spawns, almost all to the
+     fake `tmux`; the time is the real 250 ms poll loop (`POLL_INTERVAL_MS`).
+   - **Still to do:** step the poll in the slow `tmux-session.test.ts` hook and
+     notification cases with the existing `pollTick` hook
+     (`pollTickStepper()`, used by two cases today). It could save most of
+     about 12 s. This is a timer conversion, so the timer rules apply.
+5. **Done (2026-10-22): skipped settings test.** It runs again, stepping the
+   controlled debounce per attempt.
+6. **Done (2026-10-25): desktop test gaps.**
+   - `BackendProcess.launch` startup boundaries (2026-10-22).
+   - `main.ts` window and connection bookkeeping now lives in
+     `apps/desktop/electron/desktop-window-contexts.ts` (`DesktopWindowContexts`,
+     injected Electron dependencies, in the style of `RealmContexts`), and
+     `main.ts` wires it. `apps/desktop/tests/desktop-window-contexts.test.ts`
+     has 16 tests: registration and focus, `forEvent` for windows, realms and
+     unknown or closed senders, the teardown order on close, focus hand-off,
+     `emitToConnection` reaching only that connection's renderers and portals,
+     `useConnection` swapping the previews and leaving them when the switch
+     fails, and a window closing mid-switch. 41 mutations each failed a test
+     (one was a no-op). The desktop package passed (1,253 pass, 14 skip).
+7. **Flakes.**
+   - Done (2026-10-25): triage of 0694–0849. Of 59 rows (0697 aside), 10 are
+     resolved (four duplicates folded: 0765 into 0746, 0791 previews into
+     0780, 0800 into 0791 bridges, and run records whose owners have cases),
+     13 are environmental (documented load around 50 or more, or live Docker
+     and profiles on the same host) and 36 stay open, each with a concrete
+     next step in its case.
+   - Done (2026-10-25): resolved with a shown cause 0179 (the ACP harness
+     child announced `ready` before installing its SIGTERM handler), 0697,
+     0876, 0877, 0878 and 0879. 0875 is new and open.
+   - **Still to do:** the gateway-auth part of 0006; 0182 (Cursor HTTP hooks)
+     and 0672 (Chromium page crash) on CI; 0875's held-RPC fixture. Owner cases
+     the triage suggested but did not create (no numbers were free):
+     `media-stream.browser.test.ts` (timed out in 0694, 0801 and 0825),
+     `cursor-bridge/src/initial-run.test.ts`, `RemoteWorkspaceRegion.test.tsx`
+     (five `postMessage` calls instead of zero), `workspace-setup-preserve.test.ts`
+     and the two desktop shutdown-deadline cases in 0720. One more: `a
+     cooperative command queued on the host does not hold the local runner slot`
+     (`review-validation-worker.test.ts`) failed once in a baseline run and
+     passed alone and in three full runs; its message was not captured.
+   - Not flakes, found by the triage: `workspace-realm-electron.spec.ts:409`
+     and the annotation Notes focus check fail alone too (0740, 0772, 0789,
+     0790), and `AgentLaunchDialog.spec.ts`'s branch suggestion fails on
+     `main` (tracked only in 0493). They need a bug or todo of their own.
+     0723 points at a likely product race: `commands-servers.ts:295` decides
+     the error on `exit`, before stderr ("database is locked") may arrive.
+8. **Done (2026-10-25): dev profiles report the real version.**
+   `desktopApplicationVersion(app)` (`apps/desktop/electron/app-version.ts`)
+   returns `app.getVersion()` when packaged and the desktop `package.json`
+   version otherwise, and `main.ts` passes it to the backend.
+   `apps/desktop/tests/app-version.test.ts` fails with `Received: "45.0.0"`
+   without the fix. Live: a `dev:test` profile (`t0030-version`, stopped and
+   reset afterwards) logged
+   `Host executable discovery ready: version=2.30.0-beta`. The banner itself
+   was not looked at in a browser. Electron's app name and `userData` are
+   unchanged.
+9. **Done (2026-10-25): Electron specs no longer leak their Vite server.**
+   `ownProcessGroup` (`e2e/process-cleanup.ts`) records each detached group
+   and kills any still recorded when the worker exits; a worker-scoped
+   automatic fixture (`e2e/agent-testing/electron-fixtures.ts`) stops them in
+   teardown; `closeElectronWithin` (`e2e/agent-testing/design-electron-cleanup.ts`)
+   bounds `close()` and kills the Electron tree when it hangs or fails. Every
+   `*-electron.spec.ts` uses them. `tests/unit/electron-spec-process-ownership.test.ts`
+   (5 tests) fails with each part removed. A throwaway Playwright run with a
+   2 s timeout leaked the old pattern's process group and left nothing with
+   the new one. Not run: a real Electron spec with a hung `close()`.
+10. **Done (2026-10-22): the Codex bridge listened on import in a test**
+    ([flake 0660](../../tests/flaky-tests/agent-bridges/0660-codex-item-to-parts-inherited-port.md)).
 
 ### Qualification
 
-- The 2026-10-22 CI fixes need GitHub Actions evidence: after the branch
-  merges, three consecutive green `CI` runs on `main` (item 1). The Linux
-  evidence so far is from an `oven/bun:1.4.3` container (arm64, four CPUs,
-  non-root, `CI` and `GITHUB_ACTIONS` set) running the affected owners, not
-  the full `mise run test` on an x64 runner. The whole backend package there
-  (one worker) passed 9,806, skipped 146 and failed 33 in 878 s, with no
-  watcher error; the 33 are container-script, media, worker and Node-parity
-  cases that no real CI run failed, consistent with the slim image lacking
-  runner tools such as `node`. They were not investigated one by one.
-- Local `mise run test` on the branch (macOS, host load 21–27) failed only
-  open flakes 0192 and 0175; both owners passed alone. Bridges, web, CLI and
-  the rest of the backend passed.
-- There is no controlled before-and-after comparison; the streamlining
-  validation table was never filled. The 401.9 s (review) and 283.3 s (#815)
-  aggregate figures predate #966 and #969.
-- If speed work resumes, start from fresh baselines: one quiet warm run and one
-  build-cache-miss run. Record queue and execution time separately (the
-  aggregate `elapsedMs` includes admission waiting), peak process-tree memory,
-  and a two-worktree contention check.
+- Three consecutive green `CI` runs on `main` after the branch merges (item 1).
+  The branch's evidence is one GitHub Actions run of the same jobs on the same
+  runner image, not `main`.
+- 0145 needs stock Ubuntu 24.04 and 26.04 hosts; CI only proves the runner.
+- If speed work resumes, start from the CI timings above and one quiet warm
+  local run. Record queue and execution time separately (the aggregate
+  `elapsedMs` includes admission waiting), peak process-tree memory, and a
+  two-worktree contention check.
 
 ### Deferred until measured
 
@@ -398,14 +323,14 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
   already exist in `acp-tools.test.ts`, but the subprocess cases also assert
   ordering, acknowledgement and transport lifecycle. Re-measure before moving
   any.
-- **Longest-first bridge scheduling.** Not warranted while ACP is about as long
-  as the other four bridges combined.
+- **Longest-first bridge scheduling.** Still not warranted: on CI, ACP
+  (140–152 s) is about as long as the other four bridges combined (about
+  140 s).
 - **Barrel and type-only runtime tests** were kept on purpose: they exercise
   import initialisation. `apps/web/src/types/index.test.ts` is also compiled by
   the web typecheck.
 - **Split backend `test:workspace`** into source tests and the
-  artifact-consuming tests. This may matter now that backend is the largest
-  owner; check with Turbo `--summarize` output first.
+  artifact-consuming tests. Not now (see Open questions).
 
 ## Constraints and rationale
 
@@ -447,30 +372,160 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
 
 ## Open questions
 
-- Is backend now the critical path of the workspace group, so that splitting
-  its build-dependent tests is worth it?
-- Should the testing guide carry current reference timings? Its 188 s cold and
-  75 s warm figures are from an older 18-core run.
+- **Is backend the critical path of the workspace group, so that splitting
+  its build-dependent tests is worth it?** Answered 2026-10-25 from CI: yes,
+  backend is the critical path (700–755 s of a 1,215–1,296 s group), but a split
+  would only let backend's source tests start before its build, which is a
+  small part of that. Most of the group's time is that four cores give it
+  Turbo `--concurrency=1` and one backend worker, so backend and web run one
+  after the other. Changing that is a concurrency change, which the
+  constraints rule out without measurements. Not split.
+- **Should the testing guide carry current reference timings?** Answered: yes.
+  [`testing-guide.md`](../../development/testing-guide.md) now gives the
+  GitHub runner's group and package times (dated) beside the old 18-core
+  figures, and says the workspace group is the group closest to the 30-minute
+  group limit.
 
 ## Needs verification
 
-- Whether the backend package's fixture timings still meet the five-minute
-  no-progress watchdog on CI now that the watcher crash no longer ends those
-  cases early. The container replica ran only the affected owners.
-- Current wall-clock group times, which need Turbo `--summarize` from a quiet
-  run.
+- **The workspace group's margin.** On CI it takes 20–22 minutes against the
+  runner's 30-minute group deadline (`DEFAULT_TEST_GROUP_TIMEOUT_MS`) and the
+  job's 45 minutes. Watch it as the backend package grows.
+- **The 2026-10-24 runner shutdowns.** The cause is inferred from which
+  commits bracket them; if they return, capture the runner's memory (for
+  example a background `free -m` loop in the job) before the next attempt.
+
+## Assumptions and decisions
+
+Decisions made on 2026-10-25 for this round, with the options weighed.
+
+- **D1. How to get GitHub Actions evidence without a pull request.**
+  - Options: (a) open a draft pull request; (b) wait for the merge and use
+    `main`'s runs; (c) push a throwaway branch and dispatch an existing
+    `workflow_dispatch` workflow whose file on that branch runs `ci.yml`'s jobs;
+    (d) rely on a local Linux container.
+  - Choice: (c), plus (d) for quick iteration.
+  - Why: the brief said not to open a pull request, `CI` has no manual
+    trigger, and a container did not reproduce the runner (the sandbox passed
+    in a privileged Debian container). Only the real runner showed Ubuntu
+    26.04, its AppArmor profiles and its zsh directories.
+  - Pros: real runner, real image, this branch's exact tree and job
+    definitions. Cons: uses Actions minutes; the check names carry a
+    "(todo 0030 probe)" suffix and the checks are not attached to `main`, so it
+    does not count towards the three green runs.
+- **D2. The Claude sandbox on the runner.**
+  - Options: (a) skip the positive cases on Linux CI; (b) relax the test to
+    accept a failing command; (c) change the runner's AppArmor policy so the
+    CLI's nested namespace works, and check it in the setup step; (d) run the
+    test in a privileged container.
+  - Choice: (c), with the product gap filed as 0145.
+  - Why: (a) and (b) hide a real defect. Probe run 40195484352 showed neither
+    sysctl is enough; only removing `bwrap-userns-restrict` and
+    `unprivileged_userns` lets the nested namespace work, so CI applies exactly
+    the tested combination.
+  - Pros: the qualification proves real containment on Linux again; a policy
+    regression fails at setup with a clear message. Cons: CI no longer matches
+    a stock Ubuntu host, which is exactly where 0145's users fail.
+- **D3. Mermaid size-limit case.**
+  - Options: (a) render the five diagrams one at a time; (b) give that runner
+    a longer render budget; (c) shrink the 2,000-note diagram; (d) raise the
+    production 5 s deadline.
+  - Choice: (b), 20 s, under the 30 s worker wall budget.
+  - Why: the case tests the size limits, and the deadline has its own
+    watchdog case. (a) loses the concurrent admission it also covers, (c)
+    risks no longer exceeding 5,000 elements, and (d) changes production.
+  - Pros: smallest change, production unchanged. Cons: on a host slow enough
+    to pass 20 s it would fail again, now as an obvious timing problem.
+- **D4. zsh and fish completion tests.**
+  - Options: (a) `skipIf` without zsh, as fish already did; (b) install both
+    shells on CI and keep skips for local hosts; (c) require them everywhere.
+  - Choice: (b), with a contract test that the install line lists `zsh`,
+    `fish`, `bubblewrap` and `socat`; `compinit -u`; the fish short-flag check
+    asks for completions of `-`.
+  - Why: (a) alone leaves both tests vacuous on CI. Ubuntu's fish 4.2 and 3.7
+    differ on completing a finished `-h`, and the runner's completion
+    directories are world-writable.
+  - Pros: both scripts run on CI against real shells. Cons: two more apt
+    packages in the job; `-u` skips an audit that does not concern the test.
+- **D5. Firefox favicon (0697).**
+  - Options: (a) ignore `/favicon.ico` in the sink; (b) give every sink
+    response a `data:` icon (already done, not enough); (c) turn off Firefox's
+    site icons.
+  - Choice: (c).
+  - Why: the request comes from the browser's UI, not the document, so it is
+    not something the policy governs; (a) would weaken a sink that must see
+    nothing. A probe showed 1 request by default and 0 with the preference.
+  - Pros: the zero-hit assertion is unchanged. Cons: the failure did not
+    reproduce here, so the fix rests on the mechanism check, not an A/B run.
+- **D6. ACP harness port (0876).**
+  - Options: (a) let the bridge bind port 0 and report its port; (b) make
+    readiness prove it is our child and replace a child that exits while
+    starting.
+  - Choice: (b), up to three fresh-port attempts.
+  - Why: (a) changes the bridge's startup contract for a test problem. (b)
+    retries only the port allocation, never a request the test asserts on.
+  - Pros: harness-only, reproduced and fixed. Cons: a bridge that keeps dying
+    at startup is reported after three attempts instead of one.
+- **D7. Cross-test preference writes (0877).**
+  - Options: (a) await the write in the one test that failed; (b) settle every
+    pending preference write in the shared `afterEach`.
+  - Choice: (b), through `settleSessionPreferenceWritesForTesting()`.
+  - Why: 11 tests in the file end with a write pending, so any of them can
+    leak into the next. Pros: closes the whole class. Cons: a test-only export
+    in a production module.
+- **D8. `public-api-exec` default-grace case.**
+  - Options: (a) one end-to-end case on the real 5 s grace (about +5 s);
+    (b) keep the 500 ms override everywhere and rely on `exec-worker.test.ts`,
+    which runs the real worker script on a stepped clock.
+  - Choice: (b).
+  - Why: (b) already pins the exact default (absent, empty, zero, invalid),
+    and the item's purpose is a faster suite. Pros: no added time. Cons: no
+    wall-clock proof of the 5 s escalation in the full exec path.
+- **D9. Literal waits that stay.** Nine `AgentNativeTab` waits stay because
+  nothing observable signals the end of their window and no production timer
+  is involved; converting them would mean adding production hooks only for
+  tests. The coalescing clock is installed around each dispatch rather than
+  before render, so unrelated 50 ms timers in the tree stay out; a collision
+  still fails on the armed and dropped checks.
+- **D10. Dev version (item 8).**
+  - Options: (a) have the dev launcher export a version; (b) read the desktop
+    `package.json` version when `app.isPackaged` is false; (c) point Electron
+    at `apps/desktop`.
+  - Choice: (b).
+  - Why: nothing reads a launcher variable today and the backend environment
+    deliberately overwrites `ORKESTRATOR_VERSION`; (c) may move `userData`.
+  - Pros: covers `dev` and `dev:test`, no launcher change. Cons: assumes the
+    desktop and web manifests match, which `set-version.ts` keeps true.
+- **D11. Electron spec cleanup (item 9).** A worker-scoped automatic fixture,
+  not per-test, because two specs start Vite in `beforeAll`; plus a
+  synchronous exit hook for a worker torn down mid-test, and a 20 s bound on
+  `close()`. A worker killed with SIGKILL still cannot clean up.
+- **D12. Flake triage cut-off.** Load timeouts are environmental only when
+  the record shows load around 50 or more, or live Docker suites or profiles
+  on the same host; single 5 s timeouts at moderate load stay open with
+  "explicit budget, or environmental if it does not recur". Suggested owner
+  cases were listed instead of created, because only five new case numbers
+  (0875–0879) were available and they went to the CI failures.
+- **D13. The ruleset.** Unchanged from the version approved on 2026-10-15; only
+  its inputs were rechecked. It is not applied: applying it is the
+  maintainer's call, after three green `main` runs.
 
 ## Related
 
-- [Flake registry](../../tests/flaky-tests/0000-index.md); entries
+- [Flake registry](../../tests/flaky-tests/0000-index.md); this round:
+  [0179](../../tests/flaky-tests/agent-bridges/0179-acp-harness-child-exit-publication.md),
+  [0672](../../tests/flaky-tests/design-canvas-and-artifacts/0672-preview-interactive-chromium-page-crash.md),
+  [0697](../../tests/flaky-tests/design-canvas-and-artifacts/0697-artifact-engine-firefox-favicon-sink-hit.md),
+  [0875](../../tests/flaky-tests/agent-bridges/0875-acp-composer-patch-prompt-overlap-assumption.md),
+  [0876](../../tests/flaky-tests/agent-bridges/0876-acp-harness-port-squatter-401.md),
+  [0877](../../tests/flaky-tests/agent-bridges/0877-claude-session-preference-write-crosses-tests.md),
+  [0878](../../tests/flaky-tests/native-agents-and-transcripts/0878-interaction-hold-fixture-clock-boundary.md),
+  [0879](../../tests/flaky-tests/design-canvas-and-artifacts/0879-mermaid-limits-render-deadline-on-ci.md);
+  still open from earlier rounds:
   [0006](../../tests/flaky-tests/aggregate-validation-runs/0006-2026-09-08-coordinator-action-validation.md),
-  [0166](../../tests/flaky-tests/agent-bridges/0166-opencode-probe-deadline-exit-code.md),
-  [0171](../../tests/flaky-tests/coordinator-and-multi-review/0171-multi-review-admission-benchmark-load.md),
-  [0246](../../tests/flaky-tests/design-canvas-and-artifacts/0246-design-renderer-real-chromium-launch-deadline.md),
-  [0182](../../tests/flaky-tests/agent-bridges/0182-cursor-auth-readiness-aggregate-timeout.md),
-  [0385](../../tests/flaky-tests/agent-bridges/0385-claude-enter-plan-fixture-directory-race.md),
-  [0671](../../tests/flaky-tests/coordinator-and-multi-review/0671-coordinator-opencode-reconcile-join-race.md),
-  [0672](../../tests/flaky-tests/design-canvas-and-artifacts/0672-preview-interactive-chromium-page-crash.md).
+  [0182](../../tests/flaky-tests/agent-bridges/0182-cursor-auth-readiness-aggregate-timeout.md).
+- [0145-claude-linux-sandbox-apparmor-nested-userns.md](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md):
+  the product side of the CI sandbox failure.
 - [0031-live-provider-and-platform-qualification.md](0031-live-provider-and-platform-qualification.md)
   for runs CI cannot do.
 - [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md) for test
@@ -481,14 +536,11 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
   Renderer windows keep `sandbox: false` as a documented exception for ESM
   preloads (`apps/desktop/electron/window.ts`); emitting CJS preloads would
   allow `sandbox: true`.
-- Living-doc drift:
-  - Fixed on 2026-10-22: [`testing-guide.md`](../../development/testing-guide.md)
-    now describes the per-package `test:workspace` build dependencies, controlled
-    time and its rules, and how the ownership guard derives owners.
-  - The flake registry reuses 14 IDs, each on two case files: 0147, 0151,
-    0161, 0162, 0163, 0164, 0176 and 0512–0518. Renumbering means rewriting
-    prose references across case files; new entries take the next free number
-    (0671 and 0672 on 2026-10-22).
+- Living-doc drift: the flake registry reuses IDs on two or three case files
+  each: 0147, 0151, 0161–0164, 0176, 0512–0518, 0672, 0694 (three), 0721,
+  0724, 0785, 0786, 0790 (three) and 0791. Renumbering means rewriting prose
+  references across case files; decided not to renumber, and new entries
+  take numbers assigned per branch.
 
 ## Replaces
 

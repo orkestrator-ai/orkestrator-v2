@@ -57,3 +57,12 @@ three solo runs of the unchanged owner
 ../../tests/setup-node.ts` from `bridges/codex-bridge`, Bun 1.4.2): it does
 not need aggregate load. The sibling case at line 284 fails the same way;
 see [0800](0800-codex-command-catalogue-armed-delay-race.md).
+
+## Triage 2026-10-25
+
+- **Disposition:** open. This case now also covers [0800](0800-codex-command-catalogue-armed-delay-race.md) (duplicate) and the third sibling seen in [0810](../aggregate-validation-runs/0810-cli-command-surface-validation.md).
+- **Rerun today:** the complete owner alone, three times (`mise exec -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/commands/codex-command-catalogue.test.ts --parallel=1`, Bun 1.4.4, load average 35 to 46): 30/30, 30/30, then this case failed (29/30, 51.53 ms). The fix d723429d5 (#1223, 2026-10-24) predates both 2026-10-25 failures, so it did not cure this.
+- **Folded from 0800:** `an explicit refresh cannot replace the baseline for an already armed delay` (line 284) failed 2 of 8 solo runs on 2026-10-25 (72.51 ms and 115.88 ms, at lines 290 or 293), expected `stale`, received `ready`; Bun 1.4.2, no aggregate load.
+- **Folded from 0810:** `its first answer is stale until a settling re-read confirms the plugin skills` (line 191) missed its own 2 s `waitFor` (2176.95 ms) in a loaded aggregate on 2026-10-25.
+- **Likely cause:** `coldCatalogue` uses a real 20 ms `skillColdSettleMs` timer (line 187). Each case calls `commands.list()` after a `waitFor(state.calls.length === N)`. When the scheduler is slow, the next delayed read runs and settles before that `list()`, so it reports `ready`.
+- **Next step:** drive the settle delay from an injected timer, or hold each fake `listSkills` answer until the test releases it, so the test decides when each delayed read lands.

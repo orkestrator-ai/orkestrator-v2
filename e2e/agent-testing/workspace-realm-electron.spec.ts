@@ -1,4 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { closeElectronWithin } from "./design-electron-cleanup";
+import { expect, test } from "./electron-fixtures";
+import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -196,6 +198,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
         VITE_ORKESTRATOR_PROFILE: profile.id,
       },
     });
+    ownProcessGroup(vite);
     await waitForUrl(rendererUrl);
     app = await electron.launch({
       executablePath: electronExecutable,
@@ -654,12 +657,8 @@ test("a leaf's workspace opens in the window's central region without moving or 
       .invoke("stop_environment", { environmentId: leaf.environment.id })
       .catch(() => undefined);
   } finally {
-    await app?.close().catch(() => undefined);
-    if (vite?.pid) {
-      try {
-        process.kill(-vite.pid, "SIGTERM");
-      } catch {}
-    }
+    await closeElectronWithin(app).catch(() => undefined);
+    if (vite) await stopProcessGroup(vite).catch(() => undefined);
     if (leafChild && leafChild.exitCode === null) {
       const exited = new Promise<void>((resolve) => leafChild!.once("exit", () => resolve()));
       leafChild.kill("SIGTERM");

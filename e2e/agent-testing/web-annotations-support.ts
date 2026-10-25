@@ -7,6 +7,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { open, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { STORAGE_DATABASE_FILE } from "@orkestrator/protocol/node/storage-database";
 import {
   WEB_ANNOTATION_EVIDENCE_CLOSE,
@@ -32,26 +33,17 @@ export interface FixtureServer {
  * run under Node, so the Bun server is always its own process group.
  */
 export async function startFixtureServer(cwd: string, port: number): Promise<FixtureServer> {
-  const child: ChildProcess = spawn("bun", ["annotation-app/server.ts"], {
-    cwd,
-    detached: true,
-    stdio: "ignore",
-    env: { ...process.env, PORT: String(port), HOST: "127.0.0.1" },
-  });
+  // Owned, so a test that times out before `stop()` cannot leak the server.
+  const child: ChildProcess = ownProcessGroup(
+    spawn("bun", ["annotation-app/server.ts"], {
+      cwd,
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, PORT: String(port), HOST: "127.0.0.1" },
+    }),
+  );
   const url = `http://127.0.0.1:${port}`;
-  const stop = async () => {
-    if (child.exitCode !== null || !child.pid) return;
-    const exited = new Promise((resolve) => child.once("exit", resolve));
-    try {
-      process.kill(-child.pid, "SIGTERM");
-    } catch {
-      return;
-    }
-    await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 3_000))]);
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch {}
-  };
+  const stop = () => stopProcessGroup(child, 3_000);
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error("Annotation fixture server exited during startup");

@@ -60,3 +60,9 @@ The combined merge repeated a failure in this owner during `mise run test:logged
 - **Complete unchanged owner:** `mise run test:logged -- --name native-command-isolated -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit 0 in 6.8 s logged.
 - **Evidence:** `orkestrator-test-run.bSoN4E/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate completion.
 - **Assessment:** recurrence of the existing intermittent extra projection read; shared-host contention remains a hypothesis. No native-command implementation, assertion, timeout or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** at least seven recurrences from 2026-10-24 to 2026-10-25, including [0815](../aggregate-validation-runs/0815-container-rebuild-state-validation.md), and one failure alone (three reads, 21.11 s), so it is not only load. The test takes its baseline count right after the listbox appears (`AgentNativeTab.commands.test.tsx:596`); one more projection read lands while it types 20 keystrokes.
+- **Next step:** find what issues the extra `getNativeAgentProjection` call (a mount-time or periodic re-read), and wait for it to settle before taking the baseline, or stub it.

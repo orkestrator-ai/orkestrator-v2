@@ -11,3 +11,9 @@
 - **Unchanged owner rerun:** `mise run test:logged -- --name upload-expiry-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/nodes/node-files.test.ts --parallel=1 --only-failures` passed (exit 0, 0.8 s).
 - **Evidence:** `orkestrator-test-run.MJ1vdw/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.pnyrDq/`, under the host temporary directory.
 - **Hypothesis:** the expiry timer and asynchronous temporary-file removal did not finish before the fixed assertion wait under aggregate contention. The isolated pass establishes intermittence; the cause is not established. No upload implementation, assertion, timeout, or skip was changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** the fixed 30 ms wait against a 10 ms expiry is still at `node-files.test.ts:340`. The owner passed alone today (14/14, 2.0 s; Bun 1.4.4).
+- **Next step:** poll (bounded) until the temporary file is gone, instead of the fixed wait.

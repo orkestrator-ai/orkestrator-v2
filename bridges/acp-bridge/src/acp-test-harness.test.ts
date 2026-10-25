@@ -22,8 +22,10 @@ describe("ACP test harness child tracking", () => {
         process.execPath,
         [
           "-e",
-          `await Bun.write(process.env.HARNESS_READY_PATH, "ready");
-process.on("SIGTERM", async () => {
+          // The handler is installed before "ready" is announced: the other
+          // order let cleanup's SIGTERM arrive first and kill the child by
+          // default, leaving `exitCode` null (flake 0179).
+          `process.on("SIGTERM", async () => {
   try {
     await Bun.write(process.env.HARNESS_EXIT_PATH, "exited");
     process.exit(0);
@@ -31,6 +33,7 @@ process.on("SIGTERM", async () => {
     process.exit(1);
   }
 });
+await Bun.write(process.env.HARNESS_READY_PATH, "ready");
 setInterval(() => {}, 1_000);`,
         ],
         {

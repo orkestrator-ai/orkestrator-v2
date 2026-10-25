@@ -1,7 +1,7 @@
 # Artifact engine qualification: Firefox favicon request reaches the sink
 
 - **ID:** 0697
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-23
 - **Test:** `executable document policy in firefox > popups, new-window links and top navigation reach the sink zero times`
 - **Owner:** `apps/backend/src/core/transcript-artifacts/content-server.engines.test.ts` (assertion at line 924, `expect(sink.hits).toEqual([])`)
@@ -45,3 +45,21 @@ in here, since both are the same test and symptom.
 - **Isolated result:** 38 passed, 1 failed across 39 tests in 93.07 s; the same Firefox favicon failure occurred after 2,792.43 ms. This recurrence also reproduces alone; it is not evidence of a parallel-only race.
 - **Evidence:** aggregate workspace log `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KwiLUu/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; isolated log directory `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.P7iGsd`.
 - **Disposition:** existing case remains open; assertions, source, timeouts, and skips are unchanged. Focused lifecycle regressions, static checks, and the Docker browser fixture suite passed. The disposable `review-fixes-0019` profile was stopped and reset.
+
+## Root cause and fix, 2026-10-25
+
+- **Root cause:** the `/favicon.ico` request comes from Firefox's own UI, not
+  from the document, so the policy under test cannot govern it. Firefox asks
+  for a page's site icon after load, sometimes after the page's context has
+  closed, so the request can land in a later observation. The sink's
+  `<link rel="icon" href="data:,">` covers only pages that parse that link.
+- **Mechanism check (Playwright Firefox 157.0, macOS):** a page with no icon
+  link, loaded three times, made 1 `/favicon.ico` request with default
+  preferences and 0 with `browser.chrome.site_icons` set to `false`.
+- **Fix:** on branch `todo-0030-test-suite-ci-health-e11a519267e2`, the engine
+  suite launches Firefox with `firefoxUserPrefs: { "browser.chrome.site_icons": false }`.
+  The assertion that the sink sees nothing is unchanged.
+- **Stress:** the Firefox subset (`-t "in firefox"`, 13 tests) passed 14 of 14
+  runs with the fix: 8 at low load, 6 at load average 35–55. The unchanged
+  copy also passed its 14 interleaved runs, so this host did not reproduce the
+  failure; the preference check above is the evidence for the fix.

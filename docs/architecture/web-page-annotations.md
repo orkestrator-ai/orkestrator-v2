@@ -251,7 +251,13 @@ off-page notes are listed in the panel with their state. A `MutationObserver`
 re-resolves after DOM replacement (hot reload, re-render) on a coalesced
 schedule: at most one trailing pass per 750 ms, a pause after 120 passes until
 the host re-sends pins, no work while the document is hidden, and a shared
-budget of 60,000 node visits or 120 ms per pass. Main clears pins for every
+budget of 60,000 node visits or 120 ms per pass. Pins are redrawn (not
+re-resolved) on scroll, resize, a settled font load (`loadingdone` /
+`loadingerror`) and a change in the document's size, so a web font that
+reflows the page without touching the DOM still moves them. A matched target
+that renders no box (inside a closed dialog or menu) gets no pin. Main runs its
+page scripts only once a loading page has loaded, so while a font holds the
+load event pins appear after the font's shift, on the shifted target. Main clears pins for every
 new document and emits `pins-invalidated`, so the panel re-sends them from
 backend records after a reload, navigation or remount. Every result carries
 the document generation it was resolved against; the panel keeps only results
@@ -262,8 +268,12 @@ current.
 **Show on page** navigates to the note's logical route through the current
 preview routing, waits for the document, resolves the anchor, then scrolls and
 highlights (10 s timeout). It never replays a form submission or an
-interaction. When the sanitized route is incomplete, sign-in expired or
-routing changed, the panel asks the user to navigate and reselect.
+interaction. When the sanitized route is incomplete, sign-in expired (a
+redirect away from the route: `navigation-required`, checked on the real stack
+with the fixture's `/account` → `/sign-in` redirect) or routing changed, the
+panel asks the user to navigate and reselect. A target that matched but
+renders no box is reported as `hidden` ("open it, then try again"), not as
+shown.
 
 ## Requests
 
@@ -299,7 +309,12 @@ else calls providers.
 
 1. Commit request, reservations and enqueue intent.
 2. Write the selected images to `.orkestrator/annotations/<request>-<digest>.png`
-   in the worktree or container.
+   in the worktree or container (`materializedEvidencePath`; the attachment's
+   `relativePath` keeps the brief's own `<digest>.png` name). Once the request
+   is settled and its notes are deleted or 7 days have passed, the reconciler's
+   garbage-collection pass (every 100 ticks, about 5 minutes) removes that same
+   file if it still has the recorded digest; a container file is removed
+   inside the container.
 3. `enqueuePromptQueueMessageIfAbsent` appends the message unless the id is
    already queued, claimed, in flight, parked, dispatched or pending in the
    native session.
@@ -498,6 +513,21 @@ and copies them as JSON; counts reset when the backend or app restarts.
 | Backend disconnected | Cached content with connection status; unsaved text retained. |
 | Storage degraded | Read-only for affected items with the reason. |
 
+What has actually been exercised on a real stack (details and dates in
+[0044-web-annotation-qualification.md](../todo/previews-and-annotations/0044-web-annotation-qualification.md)):
+
+| Area | Exercised | Not exercised |
+| --- | --- | --- |
+| Desktop capture and native window | macOS (Electron 44, display scale 1, DPR 2 forced); Linux before #969 | Windows; a physical Retina display; OS-level focus on a shared desktop |
+| Pins and Show on page | Reorder, hot reload, duplication, offscreen, closed and open modal, late-font shift (blocking and script-loaded), expired sign-in redirect (macOS) | Linux after #969 |
+| Result captures | Stable, unstable (animation, loading font), route, viewport and target differences, expired sign-in (macOS) | Pixel differences (not implemented) |
+| Live implement | Claude, Codex, Cursor, Grok, OpenCode, Pi (local worktree); Claude in a Docker container | Other providers in a container |
+| Live Discuss | All six; read-only on Claude and on Codex/Cursor/Grok sessions in Plan | — |
+| Needs input | Claude: approval and clarifying question answered from the request card | Codex (its Ask policy does not gate workspace edits); Cursor, Grok, OpenCode, Pi not run |
+| Approvals across disruption | Claude: environment switch, reload, stream loss, graceful restart, backend crash | Other providers |
+| Evidence in workspaces | Local worktree and Docker container written, checked and cleaned up | Remote backend on another host |
+| Web review | Gateway browser client (Chromium, and WebKit for Safari's engine) | The iOS `WKWebView` wrapper itself |
+
 ## Known limitations
 
 - A turn outcome is `unknown` when no running bridge answers the status read
@@ -527,7 +557,12 @@ and copies them as JSON; counts reset when the backend or app restarts.
   attests it. Provenance is still assigned by the server.
 - The gateway token is a single user credential that reaches every
   environment, as for other environment-scoped commands.
-- Not yet exercised on a real stack: Docker materialization, remote backend
-  upload, live-agent implementation runs per provider, iOS review, and
-  native-window checks at several zoom levels. See "Last evidence" in
-  [0044-web-annotation-qualification.md](../todo/previews-and-annotations/0044-web-annotation-qualification.md).
+- An Ask approval policy does not make every provider wait before an edit:
+  Codex applies edits inside the workspace without an approval, so its
+  implement requests never enter `needs-input` for them.
+- After a restart cuts a turn short, that session refuses new annotation
+  requests (`dispatch-rejected`, "Send a message to continue") until the user
+  sends a message in its chat; the request card shows the reason.
+- Not yet exercised on a real stack: a remote backend on another host, the
+  iOS wrapper, Windows, and a physical Retina display. See the matrix above
+  and [0044-web-annotation-qualification.md](../todo/previews-and-annotations/0044-web-annotation-qualification.md).

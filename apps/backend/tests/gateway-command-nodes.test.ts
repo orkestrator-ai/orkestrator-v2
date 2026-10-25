@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createServer } from "node:http";
+import { gzipSync } from "node:zlib";
 import {
   BACKEND_CAPABILITIES,
   BACKEND_HELLO_PATH,
@@ -285,6 +286,41 @@ describe("DP-03 relay through the command node", () => {
       expect(seen).toHaveLength(1);
     } finally {
       await new Promise<void>((resolve) => leaf.close(() => resolve()));
+    }
+  });
+
+  test("relays a compressed leaf answer as the decoded body it read", async () => {
+    const payload = JSON.stringify({ result: { text: "x".repeat(64 * 1024) } });
+    const leaf = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json", "content-encoding": "gzip" });
+      response.end(gzipSync(payload));
+    });
+    await new Promise<void>((resolve) => leaf.listen(0, "127.0.0.1", resolve));
+    const port = (leaf.address() as { port: number }).port;
+    try {
+      const { info } = await startGateway({
+        backendHello: async () => identity,
+        nodeHooks: {
+          ...hooks([]),
+          relayTarget: () => ({ baseUrl: `http://127.0.0.1:${port}`, headers: {} }),
+        },
+      });
+      const relayed = await fetch(
+        new URL("/__orkestrator/nodes/bk_leaf/__orkestrator/invoke", info.url),
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${info.token}`,
+            "content-type": "application/json",
+            "accept-encoding": "gzip",
+          },
+          body: JSON.stringify({ command: "get_projects", args: {} }),
+        },
+      );
+      expect(relayed.headers.get("content-encoding")).toBeNull();
+      expect(await relayed.text()).toBe(payload);
+    } finally {
+      leaf.close();
     }
   });
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -18,6 +18,12 @@ import {
   type ConnectionCatalogueStore,
 } from "../electron/connection-catalogue-store";
 import { ConnectionManager, type SecureStorage } from "../electron/connection-manager";
+import { NodeWorkspaceScopes, WORKSPACE_DIRECT_RETRY_MS } from "../electron/node-workspaces";
+import {
+  setDesktopWorkspaceTarget,
+  type WorkspaceContext,
+} from "../electron/window-workspace-target";
+import { refreshWorkspaceRealm } from "../electron/realm-contexts";
 import type { RouteFailure, SshTunnelProvider } from "../electron/connection-routes";
 
 const originalFetch = globalThis.fetch;
@@ -1150,4 +1156,114 @@ describe("handover connection-manager integration", () => {
       connections.dispose();
     }
   });
+});
+
+test("a realm's existing relay-origin preview is replaced by an authorized direct-origin preview", async () => {
+  setSystemTime(new Date("2026-10-25T00:00:00Z"));
+  const relay = "https://relay.example";
+  const direct = "https://direct.example";
+  installGateways({
+    [relay]: { installationId: "bk_leaf", token: "client-grant" },
+    [direct]: { installationId: "bk_leaf", token: "client-grant" },
+  });
+  let opens = 0;
+  const revoked: string[] = [];
+  const local = localBackend();
+  const connections = manager(new MemoryStore(), {
+    localBackend: {
+      ...local,
+      invoke: (async (command: string, args: Record<string, unknown>) => {
+        if (command === "open_node_workspace") {
+          opens++;
+          return {
+            workspaceId: `grant-${opens}`,
+            nodeId: "bk_leaf",
+            nodeName: "Leaf",
+            grant: { token: "client-grant", expiresAt: Date.now() + 900_000 },
+            directOrigins: opens === 1 ? [] : [direct],
+            loopbackOrigin: relay,
+            relayBase: "/relay",
+          };
+        }
+        if (command === "close_node_workspace") revoked.push(String(args.workspaceId));
+        return local.invoke(command, args);
+      }) as typeof local.invoke,
+    },
+  });
+  const scopes = new NodeWorkspaceScopes(async () => ({}));
+  const binding: WorkspaceContext = {
+    scope: "realm",
+    portalScope: null,
+    target: null,
+    window: { isDestroyed: () => false },
+  };
+  let registered:
+    | {
+        target: WorkspaceContext["target"];
+        contents: { isDestroyed(): boolean; reload(): void };
+        previewConnectionId: string;
+        browserPreviewManager: { destroyAll(): void };
+        previewTransport: { disposeAll(): Promise<void> };
+      }
+    | undefined;
+  let previewUrl = "";
+  let oldDocumentClosed = false;
+  let reloaded = false;
+  try {
+    await connections.initialize();
+    await connections.bind("realm", "local");
+    await setDesktopWorkspaceTarget(
+      binding,
+      { nodeId: "bk_leaf" },
+      {
+        manager: connections,
+        scopes,
+        committed: (updated) => {
+          if (registered)
+            refreshWorkspaceRealm(registered, updated.target, () => ({
+              manager: { destroyAll: () => undefined },
+              previewTransport: { disposeAll: async () => undefined },
+            }));
+        },
+      },
+    );
+    previewUrl = `${connections.getGatewayBaseUrl("realm")}/__orkestrator/browser/loopback/3000/`;
+    expect(new URL(previewUrl).origin).toBe(relay);
+    expect(connections.getRendererRequestAuthorization(previewUrl, "realm")).toBe(
+      "Bearer client-grant",
+    );
+    registered = {
+      target: binding.target,
+      previewConnectionId: connections.getConnectionId("realm"),
+      browserPreviewManager: {
+        destroyAll: () => {
+          oldDocumentClosed = true;
+        },
+      },
+      previewTransport: { disposeAll: async () => undefined },
+      contents: {
+        isDestroyed: () => false,
+        reload: () => {
+          expect(oldDocumentClosed).toBe(true);
+          expect(registered?.target?.path).toBe("direct");
+          // A remount resolves the persisted canonical localhost address again.
+          previewUrl = `${connections.getGatewayBaseUrl("realm")}/__orkestrator/browser/loopback/3000/`;
+          expect(new URL(previewUrl).origin).toBe(direct);
+          expect(connections.getRendererRequestAuthorization(previewUrl, "realm")).toBe(
+            "Bearer client-grant",
+          );
+          reloaded = true;
+        },
+      },
+    };
+    setSystemTime(new Date(Date.now() + WORKSPACE_DIRECT_RETRY_MS));
+    scopes.noteUse("realm");
+    await until(() => reloaded, "direct realm refresh");
+    expect(revoked).toContain("grant-1");
+    expect(registered.target?.path).toBe("direct");
+  } finally {
+    scopes.releaseAll();
+    connections.dispose();
+    setSystemTime();
+  }
 });

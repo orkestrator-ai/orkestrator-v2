@@ -56,8 +56,9 @@ export function rebindWindowPreviews<
   connectionId: string,
   create: (connectionId: string) => { manager: Manager; previewTransport: Transport },
   logger: Pick<Console, "warn"> = console,
+  force = false,
 ): boolean {
-  if (connectionId === context.previewConnectionId) return false;
+  if (!force && connectionId === context.previewConnectionId) return false;
   const next = create(connectionId);
   context.browserPreviewManager.destroyAll();
   void context.previewTransport.disposeAll().catch((error: unknown) => {

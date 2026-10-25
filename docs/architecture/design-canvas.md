@@ -282,9 +282,23 @@ the frame in blue; Delete/Backspace deletes it — undoable, and confirmed first
 on legacy canvases; a canvas-background click or Escape deselects), Escape
 priority (gesture → preview → element selection → frame selection → drawers),
 design undo only when the canvas owns the shortcut. Narrow panes use
-Layers/Inspector drawers. **Preview** mode routes scroll and hover into the
-frame while links, forms, navigation, scripts and network stay blocked; Escape
-inside the frame returns to Inspect.
+Layers/Inspector drawers. Short panes (under 400 px, about 400% zoom) keep the
+Layers and inspector toggles and the design name in the toolbar and move every
+other tool into a **More design tools** menu; there the inspector scrolls as
+one column and the Layers heading and filter note are visually hidden, so the
+panels keep their height (WCAG 1.4.10). Zoom steps keep the menu open; other
+items run after it closes, so focus returns to its trigger. **Preview** mode
+routes scroll and hover into the frame while links, forms, navigation, scripts
+and network stay blocked; Escape inside the frame returns to Inspect.
+
+Inspector fields are named by their visible label ("Fill", "Align items"),
+not the CSS property, so speech input can use what it sees (WCAG 2.5.3); the
+property is in the field's `data-property` and the label's tooltip, and tests
+and tooling address fields through it. Enter on a Layers row whose frame has
+not rendered brings the frame into view, announces that it is loading and
+selects the layer when the frame renders; selecting anything else or moving to
+another frame first drops the wait, and after 10 s it is dropped with an
+announcement.
 
 ## Save, export and download
 
@@ -419,7 +433,8 @@ command registry at desktop and phone widths;
 runs the full tool cycle, Ask agent, an approval, the handoff and closing and
 resuming the design conversation with real Claude and Codex.
 `e2e/DesignCanvasAccessibility.spec.ts` runs a keyboard-only journey with focus
-survival, accessibility-tree, reduced-motion, zoom and narrow-pane checks, and
+survival, accessibility-tree, label-in-name, reduced-motion, 200% and 400% zoom
+and narrow-pane checks, and
 `e2e/agent-testing/design-canvas-electron.spec.ts` (`mise run test:agent:electron`)
 drives the canvas in the real Electron window. The opt-in
 `core/design/export-container.test.ts` (`ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE`)

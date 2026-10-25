@@ -426,11 +426,13 @@ describe("large collections", () => {
     expect(refused.detail).toMatchObject({ resource: "annotations" });
   });
 
-  test("creation cost stays flat as the collection grows (no whole-history rewrite)", async () => {
+  test("SQLite writes per create stay bounded as the collection grows (no whole-history rewrite)", async () => {
     harness = await createHarness();
     // Count actual persisted row writes, including unchanged rows a regressed
     // whole-history writer might rewrite. Wall time alone cannot distinguish
-    // that from fsync contention on a shared host (flake 0225).
+    // that from fsync contention on a shared host (flake 0225). CPU per create
+    // still grows linearly: every commit clones the manifest and re-serializes
+    // every index row to find the changed ones (`commitManifest`, `planRows`).
     await harness.service.storage.environment(ENV_A);
     const db = harness.service.storage.database().db;
     db.exec(`

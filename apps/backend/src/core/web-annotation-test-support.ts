@@ -20,6 +20,7 @@ import {
   fixtureDestination,
 } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { PNG_SIGNATURE, crc32 } from "./web-annotation-assets.js";
+import { materializedEvidencePath } from "./web-annotation-materialization.js";
 import type {
   CancelOutcome,
   CompileBriefInput,
@@ -185,7 +186,9 @@ export class FakeDispatch implements WebAnnotationDispatchPort {
     const out: WebAnnotationRequestAttachment[] = [];
     for (const attachment of input.attachments) {
       await input.readAsset(attachment.assetId);
-      out.push({ ...attachment, materializedPath: `/workspace/${attachment.relativePath}` });
+      // The file name the real materializer writes (and cleanup removes).
+      const written = materializedEvidencePath(input.requestId, attachment.relativePath);
+      out.push({ ...attachment, materializedPath: `/workspace/${written}` });
     }
     return out;
   }

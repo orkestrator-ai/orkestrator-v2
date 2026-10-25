@@ -318,3 +318,11 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - **Evidence:** `orkestrator-test-run.jMkwTI/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate completion.
 - **Assessment:** recurrence of the existing aggregate deadline failure; this change touches no environment-move source, assertions, deadlines, or skips.
 - **Final aggregate counts:** backend 10968 passed, 84 skipped and one failed across 11053 tests in 638 files (576.56 seconds). The full run exited 1 in 719.6 seconds; its other two failures were the existing Codex bridge cases 0492 and 0800, whose unchanged owners also passed separately. Root/support and protocol validation passed.
+
+## Annotation qualification validation — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name annotation-suite -- mise run test`, with the standard worker leases. The workspace group waited 512.1 seconds for shared host capacity before starting.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded its five-second deadline at 5072.20 ms. Its recursive submodule-status child was terminated with `SIGTERM`, producing an error between tests.
+- **Complete unchanged owner:** `mise run test:logged -- --name annotation-worktree-recovery-check -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 18.7 seconds.
+- **Evidence:** `orkestrator-test-run.N5VXK9/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; the enclosing log is `orkestrator-test-run.gSVRr6/annotation-suite.log.gz`.
+- **Assessment:** recurrence of the known deadline failure. The annotation fixes do not change the move implementation or its tests; no deadline, assertion or skip was changed.

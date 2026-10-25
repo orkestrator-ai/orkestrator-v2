@@ -14,11 +14,16 @@ import {
   EXPECTED_SOURCE_CHANGE,
   FIXTURE_MARKER,
   INITIAL_ROUTE,
+  LATE_FONT_DELAY_MS,
   ROUTE_VARIANTS,
   SYNTHETIC_SECRETS,
   TEST_IDS,
 } from "../../test-fixtures/agent-project/annotation-app/fixture-data";
-import { INITIAL_STATE, renderPage } from "../../test-fixtures/agent-project/annotation-app/page";
+import {
+  INITIAL_STATE,
+  lateFontDelay,
+  renderPage,
+} from "../../test-fixtures/agent-project/annotation-app/page";
 import { nativeWebPlatform } from "../register-dom";
 
 // Happy DOM replaces the global fetch/Response in root tests, so the fixture
@@ -62,7 +67,16 @@ function occurrences(haystack: string, needle: string): number {
 
 describe("annotation fixture pages", () => {
   test("every route renders deterministically and unknown routes are 404", async () => {
-    for (const route of [INITIAL_ROUTE, "/pricing", "/"]) {
+    for (const route of [
+      INITIAL_ROUTE,
+      "/pricing",
+      "/",
+      ROUTE_VARIANTS.motion,
+      ROUTE_VARIANTS.lateFont,
+      ROUTE_VARIANTS.dialogs,
+      ROUTE_VARIANTS.account,
+      ROUTE_VARIANTS.signIn,
+    ]) {
       const url = new URL(route, "http://127.0.0.1:1");
       const first = renderPage(url, { ...INITIAL_STATE });
       const second = renderPage(url, { ...INITIAL_STATE });
@@ -90,6 +104,41 @@ describe("annotation fixture pages", () => {
     expect(pricing).toContain("<fixture-shadow-card");
     expect(pricing).toContain("<canvas");
     expect(pricing).toContain("min-width:960px");
+  });
+
+  test("stability, font, dialog and sign-in routes carry their targets", () => {
+    const render = (route: string) =>
+      renderPage(new URL(route, "http://h"), { ...INITIAL_STATE })!.html;
+    const motion = render(ROUTE_VARIANTS.motion);
+    expect(motion).toContain(`class="animated" data-testid="${TEST_IDS.animatedBanner}"`);
+    expect(motion).toContain("animation:fixture-slide 0.9s ease-in-out infinite alternate");
+    expect(motion).toContain(`data-testid="${TEST_IDS.staticCopy}"`);
+
+    const font = render(`${ROUTE_VARIANTS.lateFont}?delay=250`);
+    expect(font).toContain(`data-testid="${TEST_IDS.lateFontHeading}"`);
+    expect(font).toContain(`data-testid="${TEST_IDS.fontShiftTarget}"`);
+    expect(font).toContain("url(/__fixture/font?delay=250&load=");
+    expect(font).toContain(".fonts-settled .late-font{font-size:40px");
+    expect(font).toContain("  start();");
+    expect(render(`${ROUTE_VARIANTS.lateFont}?lazy=1`)).toContain(
+      'window.addEventListener("load", () => setTimeout(start, 200));',
+    );
+    expect(lateFontDelay(new URL("http://h/fonts"))).toBe(LATE_FONT_DELAY_MS.default);
+    expect(lateFontDelay(new URL("http://h/fonts?delay=999999"))).toBe(LATE_FONT_DELAY_MS.max);
+    expect(lateFontDelay(new URL("http://h/fonts?delay=-5"))).toBe(0);
+    expect(lateFontDelay(new URL("http://h/fonts?delay=x"))).toBe(LATE_FONT_DELAY_MS.default);
+
+    const closed = render(ROUTE_VARIANTS.dialogs);
+    expect(closed).toContain(`<dialog data-testid="${TEST_IDS.dialog}"`);
+    expect(closed).toContain(`data-testid="${TEST_IDS.dialogConfirm}"`);
+    expect(closed).toContain(`data-testid="${TEST_IDS.offscreenFooter}"`);
+    expect(closed).not.toContain("  open();");
+    expect(render(`${ROUTE_VARIANTS.dialogs}?open=1`)).toContain("  open();");
+
+    expect(render(ROUTE_VARIANTS.account)).toContain(`data-testid="${TEST_IDS.accountPlan}"`);
+    const signIn = render(`${ROUTE_VARIANTS.signIn}?next=%2Faccount`);
+    expect(signIn).toContain(`data-testid="${TEST_IDS.signInSubmit}"`);
+    expect(signIn).toContain('name="next" value="/account"');
   });
 
   test("synthetic secrets appear only in their sensitive fields", () => {
@@ -166,6 +215,35 @@ describe("annotation fixture state", () => {
     expect(reset.state).toEqual({ ...INITIAL_STATE });
     expect(await fetch(`${fixture.url}/pricing`).then((response) => response.text())).toBe(initial);
   });
+
+  test("an expired session redirects the account page to sign-in, and the late font is delayed", async () => {
+    const fixture = await started();
+    const signedIn = await fetch(`${fixture.url}${ROUTE_VARIANTS.account}`, {
+      redirect: "manual",
+    });
+    expect(signedIn.status).toBe(200);
+    await fetch(`${fixture.url}/__fixture/state`, {
+      method: "POST",
+      body: JSON.stringify({ sessionExpired: true }),
+    });
+    const expired = await fetch(`${fixture.url}${ROUTE_VARIANTS.account}`, { redirect: "manual" });
+    expect(expired.status).toBe(302);
+    expect(expired.headers.get("location")).toBe(`${ROUTE_VARIANTS.signIn}?next=%2Faccount`);
+    const invalid = await fetch(`${fixture.url}/__fixture/state`, {
+      method: "POST",
+      body: JSON.stringify({ sessionExpired: "yes" }),
+    });
+    expect(invalid.status).toBe(400);
+    await fetch(`${fixture.url}/__fixture/reset`, { method: "POST" });
+    expect(
+      (await fetch(`${fixture.url}${ROUTE_VARIANTS.account}`, { redirect: "manual" })).status,
+    ).toBe(200);
+
+    const fontRequested = Date.now();
+    const font = await fetch(`${fixture.url}/__fixture/font?delay=300`);
+    expect(font.status).toBe(404);
+    expect(Date.now() - fontRequested).toBeGreaterThanOrEqual(250);
+  }, 30_000);
 
   test("variant query parameters render reordered and duplicate pages deterministically", () => {
     const reordered = renderPage(new URL("http://h/settings?variant=reordered"), {

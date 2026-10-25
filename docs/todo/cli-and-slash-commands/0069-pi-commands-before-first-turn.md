@@ -87,6 +87,20 @@ and Grok from its push after `session/new`. Found by the live picker run in
      reads once.
    - Persistence, protocol, backend adapter and cache, and renderer tests
      cover the new field end to end.
+   - Multi Review (`action-18dc39945a2fed456047a580352a4781`, verdict "ready
+     with fixes") found one P1, fixed: a preview that finished while an
+     attach was in flight was discarded but stayed cached, so if that attach
+     then failed no later catalogue read retried discovery. A discarded
+     preview is now marked `discarded` and the next read under the same
+     policy reads again; a read whose policy changed mid-flight, or whose
+     session closed, is discarded the same way. Its three test gaps are
+     covered: the failed-attach retry (success and failure reads), the
+     closed-session and policy-change discard branches, and
+     `http-command-preview.test.ts`, which submits a command selected from an
+     unattached preview through the first prompt's attach: unchanged it runs
+     with its arguments verbatim (202); shadowed by an extension bound at
+     attach it is refused with 422 `command-unavailable` before anything is
+     journaled.
 
 ### Qualification
 
@@ -225,7 +239,22 @@ Made on 2026-10-25 while implementing this file.
    - Pros: bounded work; never loses better rows. Cons: a template added on
      disk before the first turn appears only after a refresh or the first
      turn, as on every other attached Pi session.
-6. **Container verification.** The picker spec gained a container variant
+6. **Recovering a preview discarded during an attach (Multi Review P1).**
+   - Options: (a) clear `commandPreview` in the attach failure path; (b)
+     publish the preview while an attach is pending and let a successful
+     attach overwrite it; (c) mark the discarded preview and re-read on the
+     next catalogue read under the same policy.
+   - Chosen: (c).
+   - Why: (a) spreads preview bookkeeping into the attach lifecycle and loses
+     the "these rows came from a preview" marker for a `ready` preview; (b)
+     can briefly publish rows that a concurrent attach is about to replace.
+     (c) stays inside `command-preview.ts` and also covers a policy change or
+     close while a read is in flight.
+   - Pros: local to the preview module; a successful attach still clears the
+     preview, so it can never overwrite attached rows. Cons: the retry waits
+     for the next catalogue read rather than happening at the moment the
+     attach fails.
+7. **Container verification.** The picker spec gained a container variant
    (`ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT=container`, sharing
    `containerWorkspace` with `slash-command-inactive.spec.ts`), because the
    host run alone could not answer "Needs verification".

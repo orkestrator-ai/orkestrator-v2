@@ -207,6 +207,8 @@ export interface PiCommandPreview {
   key: string;
   /** Settles when the read has been published or discarded. Never rejects. */
   settled: Promise<void>;
+  /** A discarded result must be read again after an attach fails. */
+  discarded?: boolean;
 }
 
 /**

@@ -6,9 +6,11 @@ import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-codin
 import type { NativeAgentSlashCommand } from "@orkestrator/protocol/native-agent";
 import {
   createPiSessionServices,
+  ensureSession,
   markSessionClosed,
   newSessionState,
   piResourceLoaderPolicy,
+  setAgentSessionTestHooks,
 } from "./agent-session.js";
 import {
   awaitCommandPreview,
@@ -28,6 +30,7 @@ afterAll(async () => {
 const globals = globalThis as { __orkPreviewLoaded?: string[] };
 afterEach(() => {
   delete globals.__orkPreviewLoaded;
+  setAgentSessionTestHooks(undefined);
 });
 
 /** An extension that records being loaded at all, and registers a command. */
@@ -224,6 +227,16 @@ function freshState(projectResources = true): SessionState {
   return newSessionState(undefined, { ...PROJECT_POLICY, projectResources });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("command preview lifecycle", () => {
   test("publishes a never-read session's list as stale and attach-pending", async () => {
     const state = freshState();
@@ -325,6 +338,147 @@ describe("command preview lifecycle", () => {
     expect(names(state.slashCommands)).toEqual(["/attached"]);
     expect(state.commandCatalogue.status).toBe("ready");
   });
+
+  test.each(["success", "failure"])(
+    "retries a preview %s discarded during an attach that fails",
+    async (outcome) => {
+      const state = freshState();
+      const discovery = deferred<ReturnType<typeof rows>>();
+      const attach = deferred<never>();
+      let reads = 0;
+      let attaches = 0;
+      const read: ResourceCommandReader = () => {
+        reads += 1;
+        if (reads === 1) return discovery.promise;
+        if (outcome === "failure") throw new Error("retry read failed");
+        return Promise.resolve(rows("retried"));
+      };
+      setAgentSessionTestHooks({
+        createAgentSession: () => {
+          attaches += 1;
+          return attach.promise;
+        },
+      });
+      const preview = startCommandPreview(state, read)!;
+      // Let discovery begin before starting the real attach lifecycle.
+      await Promise.resolve();
+      const attached = ensureSession(state).catch((error: unknown) => error);
+      expect(state.attaching).toBeDefined();
+      if (outcome === "success") discovery.resolve(rows("discarded"));
+      else discovery.reject(new Error("discarded read failed"));
+      await preview.settled;
+      expect(state.slashCommands).toEqual([]);
+      expect(state.health.snapshot().notices).toEqual([]);
+
+      attach.reject(new Error("attach failed"));
+      expect(await attached).toEqual(new Error("attach failed"));
+      expect(state.attaching).toBeUndefined();
+      state.lastAccessed = 1;
+      await awaitCommandPreview(state, 1_000, read);
+      await awaitCommandPreview(state, 1_000, read);
+      expect(reads).toBe(2);
+      expect(attaches).toBe(1);
+      expect(state.session).toBeNull();
+      expect(state.lastAccessed).toBe(1);
+      if (outcome === "success") {
+        expect(names(state.slashCommands)).toEqual(["/retried"]);
+        expect(state.commandCatalogue).toEqual({
+          status: "stale",
+          revision: 1,
+          attachPending: true,
+        });
+      } else {
+        expect(state.health.snapshot().notices).toContainEqual(
+          expect.objectContaining({
+            method: "session/commandPreview",
+            occurrences: [expect.objectContaining({ detail: "retry read failed" })],
+          }),
+        );
+      }
+    },
+  );
+
+  test("retries a discarded read even when an earlier policy published a ready preview", async () => {
+    const state = freshState(false);
+    await awaitCommandPreview(state, 1_000, async () => rows());
+    expect(state.commandCatalogue.status).toBe("ready");
+    state.policy = PROJECT_POLICY;
+    const discovery = deferred<ReturnType<typeof rows>>();
+    const preview = startCommandPreview(state, () => discovery.promise)!;
+    state.attaching = new Promise(() => undefined);
+    discovery.resolve(rows("discarded"));
+    await preview.settled;
+    state.attaching = undefined;
+
+    await awaitCommandPreview(state, 1_000, async () => rows("retried"));
+    expect(names(state.slashCommands)).toEqual(["/retried"]);
+    expect(state.commandCatalogue).toMatchObject({ status: "stale", attachPending: true });
+  });
+
+  test.each(["success", "failure"])(
+    "discards a preview %s after the session closes",
+    async (outcome) => {
+      const state = freshState();
+      const discovery = deferred<ReturnType<typeof rows>>();
+      const preview = startCommandPreview(state, () => discovery.promise)!;
+      await Promise.resolve();
+      const revision = state.revision;
+      markSessionClosed(state);
+      if (outcome === "success") discovery.resolve(rows("late"));
+      else discovery.reject(new Error("late failure"));
+      await preview.settled;
+
+      expect(state.slashCommands).toEqual([]);
+      expect(state.commandCatalogue).toEqual({ status: "stale", revision: 0 });
+      expect(state.revision).toBe(revision);
+      expect(state.health.snapshot().notices).toEqual([]);
+      expect(startCommandPreview(state)).toBeUndefined();
+    },
+  );
+
+  test("discards a read if its policy changes before another catalogue request", async () => {
+    const state = freshState();
+    const discovery = deferred<ReturnType<typeof rows>>();
+    const preview = startCommandPreview(state, () => discovery.promise)!;
+    await Promise.resolve();
+    state.policy = { ...PROJECT_POLICY, projectResources: false };
+    discovery.resolve(rows("old-policy"));
+    await preview.settled;
+    expect(state.slashCommands).toEqual([]);
+    expect(state.commandCatalogue.revision).toBe(0);
+
+    await awaitCommandPreview(state, 1_000, async () => rows());
+    expect(state.commandCatalogue).toEqual({ status: "ready", revision: 1 });
+  });
+
+  test.each(["success", "failure"])(
+    "a superseded preview %s cannot replace or invalidate the new policy's read",
+    async (outcome) => {
+      const state = freshState();
+      const discovery = deferred<ReturnType<typeof rows>>();
+      const preview = startCommandPreview(state, () => discovery.promise)!;
+      await Promise.resolve();
+      state.policy = { ...PROJECT_POLICY, projectResources: false };
+      let reads = 0;
+      const read: ResourceCommandReader = async () => {
+        reads += 1;
+        return rows();
+      };
+      await awaitCommandPreview(state, 1_000, read);
+      const replacement = state.commandPreview;
+      const revision = state.revision;
+      if (outcome === "success") discovery.resolve(rows("old-policy"));
+      else discovery.reject(new Error("old-policy failure"));
+      await preview.settled;
+      await awaitCommandPreview(state, 1_000, read);
+      expect(state.commandPreview).toBe(replacement);
+      expect(reads).toBe(1);
+      expect(state.revision).toBe(revision);
+      expect(state.slashCommands).toEqual([]);
+      expect(state.commandCatalogue).toEqual({ status: "ready", revision: 1 });
+      expect(state.health.snapshot().notices).toEqual([]);
+    },
+  );
 
   test("a failed read keeps the list stale and empty, reports it, and does not loop", async () => {
     const state = freshState();

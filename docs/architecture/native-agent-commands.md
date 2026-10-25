@@ -313,6 +313,9 @@ catalogue read cannot let `/clear` reach the CLI.
   sessions) nothing can add a command at attach, so the read is `ready`. Rows
   an attach read (live, kept across an idle detach, or restored) are never
   replaced by a preview, and an attach that lands first wins over a late one.
+  A read that finishes while an attach is in flight, after its policy
+  changed, or after the session closed is discarded; if that attach then
+  fails, the next catalogue read reads again.
   A selection from a preview row is re-checked after the prompt route
   attaches, against the attached list and Pi's dispatch order, so a template
   an extension shadows is refused with 422, never run as the extension. Literal intent uses

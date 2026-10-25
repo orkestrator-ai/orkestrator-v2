@@ -97,3 +97,27 @@ The owning implementation, assertions, timeouts and skips were unchanged.
   (see 0213).
   The account implementation and tests were unchanged. The existing intermittent
   cleanup/publication ordering symptom remains open.
+
+## Pi command preview lifecycle review — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`,
+  Bun 1.4.4 on macOS, on branch `todo-0069-pi-commands-first-turn-694a28fc5c19`
+  over `7eb8e1026` with only Pi preview implementation/tests changed.
+  Workspace/root/bridges/protocol reservations were 4/1/2/1; backend tests used
+  two Bun workers. Other worktrees shared the host, and the workspace group
+  waited 229.1 seconds for capacity.
+- **Failure:** the same test at `apps/backend/src/core/agent-accounts.test.ts:811`
+  found a second account directory after rejecting the duplicate (95.28 ms).
+  This was the only failing test in the repository run.
+- **Counts:** backend reported 11292 passed, 84 skipped and one failed across
+  11377 tests in 669 files (625.73 seconds). Twelve of thirteen workspace
+  tasks passed. Root/support, every bridge and protocol-lockfile groups passed;
+  the outer run finished in 879.8 seconds.
+- **Unchanged owner:** `mise run test:logged -- --name agent-accounts-isolated -- bun test --cwd apps/backend ./src/core/agent-accounts.test.ts --preload ../../tests/setup-node.ts --parallel=1`
+  passed the complete owning file, exit 0, in 8.8 seconds. Passing output was
+  deleted by the logged runner, so individual test counts were not retained.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.5EnZGR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer summary/log directory `orkestrator-test-run.8aRErX` under the same root.
+- **Assessment:** another intermittent recurrence of the existing cleanup/publication
+  ordering symptom. Account implementation, assertions, timeouts and skips
+  remain unchanged; the root cause is still unproved.

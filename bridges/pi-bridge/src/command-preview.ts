@@ -151,7 +151,8 @@ export function setCommandPreviewReaderForTests(reader?: ResourceCommandReader):
  * across an idle detach, or restored from disk) list extension commands, so
  * they are kept. `publishAttachedSession` clears
  * `commandPreview`, which also stops a late preview overwriting an attach.
- * Never attaches, never rejects; one read per policy, success or not.
+ * Never attaches, never rejects; one published read per policy, success or not.
+ * Discarded reads retry once no attach is pending.
  */
 export function startCommandPreview(
   state: SessionState,
@@ -161,14 +162,25 @@ export function startCommandPreview(
   const policy = piResourceLoaderPolicy(state);
   const key = JSON.stringify(policy);
   const current = state.commandPreview;
-  if (current?.key === key) return current;
+  if (current?.key === key && !current.discarded) return current;
   if (!current && rowsFromAttach(state)) return undefined;
   const preview: PiCommandPreview = { key, settled: Promise.resolve() };
-  const stillCurrent = () =>
-    state.commandPreview === preview &&
-    !state.session &&
-    !state.attaching &&
-    !isSessionClosed(state);
+  const stillCurrent = () => {
+    if (state.commandPreview !== preview) return false;
+    if (
+      state.session ||
+      state.attaching ||
+      isSessionClosed(state) ||
+      JSON.stringify(piResourceLoaderPolicy(state)) !== key
+    ) {
+      // Keep the preview marker so previously published preview rows (even a
+      // ready list under a no-extensions policy) aren't mistaken for attached
+      // rows. A failed attach must let the next metadata read retry discovery.
+      preview.discarded = true;
+      return false;
+    }
+    return true;
+  };
   // Through `then`, so a reader that throws synchronously still settles.
   preview.settled = Promise.resolve()
     .then(() => read(policy))

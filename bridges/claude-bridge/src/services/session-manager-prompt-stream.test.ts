@@ -98,7 +98,8 @@ function delta(index: number, text: string, type: "text" | "thinking" = "text") 
     event: {
       type: "content_block_delta",
       index,
-      delta: type === "text" ? { type: "text_delta", text } : { type: "thinking_delta", thinking: text },
+      delta:
+        type === "text" ? { type: "text_delta", text } : { type: "thinking_delta", thinking: text },
     },
   };
 }
@@ -368,7 +369,12 @@ describe("createPromptStreamState", () => {
         event: { type: "content_block_stop", index: 0 },
       }),
     ).toBe(false);
-    expect(stream.applyPartialAssistantMessage({ type: "stream_event", event: { type: "message_stop" } })).toBe(false);
+    expect(
+      stream.applyPartialAssistantMessage({
+        type: "stream_event",
+        event: { type: "message_stop" },
+      }),
+    ).toBe(false);
     stream.flushStreamedAssistantMessage();
     expect(session.messages).toEqual([]);
   });

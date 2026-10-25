@@ -50,7 +50,7 @@ export async function turnCanUseTool(
   input: Record<string, unknown>,
   permissionContext: Parameters<CanUseTool>[2],
 ): ReturnType<CanUseTool> {
-  const { session, sessionId, stream } = turn;
+  const { session, sessionId } = turn;
   if (toolName === "AskUserQuestion") {
     const questions: QuestionInfo[] = Array.isArray(input.questions) ? input.questions : [];
     const questionTexts = questions.map((question) => question.question);
@@ -249,7 +249,7 @@ export async function turnCanUseTool(
 
       if (response.approved) {
         // User approved - emit exit event and allow the tool.
-        // Mark `stream.planApprovedThisTurn` so the fallback below can detect
+        // Mark `turn.planApprovedThisTurn` so the fallback below can detect
         // the case where the SDK still fails the ExitPlanMode tool
         // (override the failure + re-prompt Claude to continue).
         // Approval ends plan mode; record it so the preference the
@@ -282,7 +282,7 @@ export async function turnCanUseTool(
             message: `Plan mode could not be exited safely: ${message}`,
           };
         }
-        stream.planApprovedThisTurn = true;
+        turn.planApprovedThisTurn = true;
         eventEmitter.emit({
           type: "plan.exit-requested",
           sessionId,
@@ -304,7 +304,7 @@ export async function turnCanUseTool(
         const denyMessage = `User rejected the plan. ${feedbackMessage} Please revise your approach based on this feedback.`;
 
         // Store the raw feedback for potential re-prompt
-        stream.pendingPlanRejectionFeedback = response.feedback
+        turn.pendingPlanRejectionFeedback = response.feedback
           ? `I've reviewed the plan and I'd like changes: ${response.feedback}\n\nPlease revise the plan based on this feedback.`
           : `I've reviewed the plan and I don't approve it as-is. Please revise your approach.`;
 

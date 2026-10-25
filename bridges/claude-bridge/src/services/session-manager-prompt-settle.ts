@@ -69,13 +69,13 @@ export function settleTurnEnd(turn: TurnState): PromptFollowUp | undefined {
   // actually sees it and generates a revised plan.
   // Guard: only re-prompt once (skip if this call is itself a re-prompt).
   if (
-    stream.pendingPlanRejectionFeedback &&
+    turn.pendingPlanRejectionFeedback &&
     !abortController.signal.aborted &&
     !options?._isReprompt &&
     !turn.superseded
   ) {
-    const feedbackPrompt = stream.pendingPlanRejectionFeedback;
-    stream.pendingPlanRejectionFeedback = null;
+    const feedbackPrompt = turn.pendingPlanRejectionFeedback;
+    turn.pendingPlanRejectionFeedback = null;
 
     debugLog("[session-manager] Re-prompting with plan rejection feedback", { sessionId });
 
@@ -104,19 +104,19 @@ export function settleTurnEnd(turn: TurnState): PromptFollowUp | undefined {
   }
 
   // Defensive fallback continuation: see the comment block on
-  // `stream.planApprovedThisTurn` above. If the SDK failed the ExitPlanMode tool
+  // `TurnState.planApprovedThisTurn`. If the SDK failed the ExitPlanMode tool
   // despite an approval (we already overrode the tool state to success in
   // the message loop), re-prompt Claude WITHOUT plan mode so it actually
   // implements the approved plan instead of ending the turn.
   // Guard: skip if this call is itself a re-prompt to avoid recursion.
   if (
-    stream.pendingPlanApprovalContinuation &&
+    turn.pendingPlanApprovalContinuation &&
     !abortController.signal.aborted &&
     !options?._isReprompt &&
     !turn.superseded
   ) {
-    const continuationPrompt = stream.pendingPlanApprovalContinuation;
-    stream.pendingPlanApprovalContinuation = null;
+    const continuationPrompt = turn.pendingPlanApprovalContinuation;
+    turn.pendingPlanApprovalContinuation = null;
 
     debugLog("[session-manager] Re-prompting after approved-plan ExitPlanMode failure", {
       sessionId,
@@ -130,7 +130,7 @@ export function settleTurnEnd(turn: TurnState): PromptFollowUp | undefined {
     // Attachments are intentionally not forwarded: the SDK has already seen
     // them in the conversation history, and re-sending them on a synthetic
     // system-role continuation could double-count their content. Matches
-    // the stream.pendingPlanRejectionFeedback re-prompt path above.
+    // the turn.pendingPlanRejectionFeedback re-prompt path above.
     const repromptOptions: PromptOptions = {
       model: options?.model,
       effort: options?.effort,

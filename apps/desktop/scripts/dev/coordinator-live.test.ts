@@ -179,14 +179,14 @@ describe("live coordinator platforms", () => {
       ]),
     ).toMatchObject({ scenarios: ["read-only", "family"] });
     expect(parseCoordinatorLiveArguments(["--scenario", "peer"]).scenarios).toEqual(["peer"]);
-    expect(() => parseCoordinatorLiveArguments(["--scenario", "status"])).toThrow(
+    expect(() => parseCoordinatorLiveArguments(["--scenario", "pipeline"])).toThrow(
       "Unknown live coordinator scenario",
     );
     expect(() => parseCoordinatorLiveArguments(["--scenario"])).toThrow("Missing value");
     expect(coordinatorLiveScenariosFromEnv(undefined)).toEqual([...COORDINATOR_LIVE_SCENARIOS]);
     expect(coordinatorLiveScenariosFromEnv(" family , async ")).toEqual(["async", "family"]);
     expect(coordinatorLiveScenariosFromEnv("peer,async")).toEqual(["async", "peer"]);
-    expect(() => coordinatorLiveScenariosFromEnv("async,status")).toThrow("Unknown");
+    expect(() => coordinatorLiveScenariosFromEnv("async,pipeline")).toThrow("Unknown");
   });
 });
 
@@ -203,6 +203,9 @@ describe("read-only scenario", () => {
     // A step with no tool is unavailable, not denied (Cursor mislabelled its
     // hidden fetch and removed write tools `denied` with no call).
     expect(prompt).toContain("A step you made no call for is never denied");
+    // Said again on the network step, the one Cursor still mislabelled after
+    // the general line (2026-10-22, one run of four).
+    expect(prompt).toContain("network is then unavailable, not denied");
     // The answers are planted outside the prompt; quoting them would prove nothing.
     expect(prompt).not.toContain(probe.canaryLine);
     expect(prompt).not.toContain(probe.ticketTitle);
@@ -845,6 +848,7 @@ describe("transcript and turn", () => {
       id: "i-1",
       kind: "command-approval",
       state: "pending",
+      createdAt: 1,
       sessionId: "s",
     } as const;
     const first = watch.observe(projection("running", { interactions: [command] }));
@@ -855,10 +859,10 @@ describe("transcript and turn", () => {
       projection("running", {
         interactions: [
           command,
-          { id: "i-2", kind: "file-approval", state: "pending", sessionId: "s" },
-          { id: "i-3", kind: "question", state: "pending", sessionId: "s" },
+          { id: "i-2", kind: "file-approval", state: "pending", createdAt: 1, sessionId: "s" },
+          { id: "i-3", kind: "question", state: "pending", createdAt: 1, sessionId: "s" },
           // Settled by the policy before the harness saw it: bookkeeping.
-          { id: "i-4", kind: "command-approval", state: "declined", sessionId: "s" },
+          { id: "i-4", kind: "command-approval", state: "declined", createdAt: 1, sessionId: "s" },
         ],
       }),
     );
@@ -1158,6 +1162,7 @@ describe("suite verdict", () => {
       "read-only": summary("passed"),
       async: summary("passed", undefined, "async"),
       family: summary("passed", undefined, "family"),
+      status: summary("passed", undefined, "status"),
       peer: summary("passed", undefined, "peer"),
     };
     expect(coordinatorLiveVerdict("codex", all, run({ summaries: passed }))).toMatchObject({
@@ -1195,12 +1200,13 @@ describe("suite verdict", () => {
       "read-only": summary("skipped", "no credential"),
       async: summary("skipped", "no credential", "async"),
       family: summary("skipped", "no credential", "family"),
+      status: summary("skipped", "no credential", "status"),
       peer: summary("skipped", "no credential", "peer"),
     };
     expect(coordinatorLiveVerdict("codex", all, run({ summaries: skipped }))).toMatchObject({
       verdict: "skipped",
       reason:
-        "read-only: no credential; async: no credential; family: no credential; peer: no credential",
+        "read-only: no credential; async: no credential; family: no credential; status: no credential; peer: no credential",
     });
   });
 
@@ -1281,7 +1287,7 @@ describe("suite verdict", () => {
       { ...summary("passed"), version: 2 },
       { ...summary("passed"), platform: "other" },
       { ...summary("passed"), verdict: "flaky" },
-      { ...summary("passed"), scenario: "status" },
+      { ...summary("passed"), scenario: "pipeline" },
     ]) {
       expect(parseCoordinatorLivePlatformSummary(value)).toBeNull();
     }

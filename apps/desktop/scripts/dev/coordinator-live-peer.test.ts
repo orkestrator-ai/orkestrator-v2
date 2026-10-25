@@ -369,7 +369,15 @@ describe("peer watch", () => {
             messages: [],
             interactions:
               environmentId === RESPONDER
-                ? [{ id: "ask", kind: "command-approval", state: "pending", sessionId: "s" }]
+                ? [
+                    {
+                      id: "ask",
+                      kind: "command-approval",
+                      state: "pending",
+                      createdAt: 1,
+                      sessionId: "s",
+                    },
+                  ]
                 : [],
           } satisfies CoordinatorTurnProjection as T;
         case "get_native_agent_auth_status":

@@ -235,6 +235,7 @@ describe("scripts/test-all.ts", () => {
     expect(rootGroup.args).toContain("./e2e/agent-testing/mcp-apply-live-support.test.ts");
     expect(rootGroup.args).toContain("./e2e/agent-testing/mcp-apply-live-safety.test.ts");
     expect(rootGroup.args).toContain("./e2e/agent-testing/idle-observation-live-support.test.ts");
+    expect(rootGroup.args).toContain("./e2e/agent-testing/coordinator-mail-tiles.test.ts");
     expect(rootGroup.args).toContain("./scripts/opencode-live-compatibility-probe.test.ts");
     expect(rootGroup.args).toContain("./test-fixtures/agent-project/server.test.ts");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/desktop");

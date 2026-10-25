@@ -49,7 +49,11 @@ export interface DelegationMailMessage {
   injectRequestId?: string;
   injectedAt?: string;
   coordinatorDelegationId?: string;
-  notice?: { resource?: { environmentId?: string }; state?: string };
+  notice?: {
+    resource?: { kind?: string; id?: string; environmentId?: string };
+    state?: string;
+    tone?: string;
+  };
   route?: string;
   /** Filled in by the harness from `get_agent_mail_message`; never recorded. */
   body?: string;

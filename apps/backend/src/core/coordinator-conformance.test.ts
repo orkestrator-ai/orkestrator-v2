@@ -112,6 +112,7 @@ describe("coordinator read-only conformance", () => {
     expect(COORDINATOR_LIVE_SCENARIOS).toContain("read-only");
     expect(COORDINATOR_LIVE_SCENARIOS).toContain("async");
     expect(COORDINATOR_LIVE_SCENARIOS).toContain("family");
+    expect(COORDINATOR_LIVE_SCENARIOS).toContain("status");
     expect(COORDINATOR_LIVE_SCENARIOS).toContain("peer");
   });
 

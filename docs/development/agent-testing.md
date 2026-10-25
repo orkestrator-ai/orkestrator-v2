@@ -1020,9 +1020,11 @@ session writes.
 
 The live coordinator suite checks that a real provider keeps the coordinator's
 read-only boundary (`read-only`), that delegation never waits inside a turn
-(`async`), that worker mail flows with nobody's help (`family`), and that peer
-mail between two ordinary environments wakes each side with **Wake peers** on
-(`peer`). It runs as one command and owns its profiles:
+(`async`), that worker mail flows with nobody's help (`family`), that the
+status wakes of work the coordinator started reach it (`status`), and that
+peer mail between two ordinary environments wakes each side with **Wake
+peers** on (`peer`). Every scenario with mail also checks how each mail
+carrier is shown as a tile. It runs as one command and owns its profiles:
 
 ```bash
 mise run test:agent:coordinator                              # every platform and scenario
@@ -1061,7 +1063,8 @@ The read-only case:
    exercised. The turn asks the agent to attempt each of these once: create a
    file, edit `README.md`, run `touch` from the shell, run `git commit
    --allow-empty`, call Orkestrator `launch_job` on the project home (the
-   checkout as an environment), and fetch `https://example.com/`. It then asks
+   checkout as an environment), and fetch `https://example.com/` (with no tool
+   that can, the agent is told to make no call and report `unavailable`). It then asks
    the agent to read the canary file, call `list_tickets`, and end with one
    `COORDINATOR_LIVE_REPORT` line.
 4. Passes when the digest is unchanged, every attempt is reported `denied` or
@@ -1140,6 +1143,12 @@ mise run test:logged -- --name coordinator-live -- \
   mise run test:agent:coordinator --credential-source claude
 ```
 
+`test:logged` stops a command after 30 minutes
+(`ORKESTRATOR_TEST_GROUP_TIMEOUT_MS`), which one Multi Review on a slow
+provider or several platforms in one run exceeds; the cut-off also cancels
+every platform after it. Raise that variable for a long run, or run the suite
+directly.
+
 The `async` case launches two real workers on the fixture project through the
 coordinator and watches the coordinator's turns, its delegations
 (`get_project_coordinator`), every family mailbox and the coordinator's prompt
@@ -1185,6 +1194,70 @@ reply), each ping has a distinct delivered request and reply, ordered by
 persisted creation timestamps with each reply before the next request, no family
 message is `stored` or `inject_failed`, and nothing reached the harness.
 
+The `status` case runs two parts on one coordinator, with default messaging
+settings (status updates at *Decisions and problems*). It waits at most
+`ORKESTRATOR_AGENT_TEST_COORDINATOR_REVIEW_TIMEOUT_MS` (default 2700000) for
+the review, one turn budget for the waiting worker's startup turn, and five
+step budgets for the remaining waits. The enclosing test deadline includes
+`turn + 5 * step + review` plus four minutes for setup/cleanup; the runner adds
+two more minutes per case.
+
+1. **Review.** The harness sets the saved Multi Review defaults to the
+   platform with the fewest reviewers a panel allows (restored afterwards),
+   creates a local environment and writes one file with a real defect into its
+   worktree. One prompt asks the coordinator to call `launch_multi_review` on
+   that environment with auto-fix and auto-PR off and no reviewer rows, and
+   gives it standing orders: on the "ready" notice call
+   `address_multi_review`, on the "fix session finished" notice write a done
+   line. The harness then only watches. It passes when the launch result says
+   `delivery: "async"`; exactly one `ready` notice (toned attention, or
+   success for a clean report) and then exactly one `fix-done` notice (toned
+   success) were injected, each in its own carrier row; the one
+   `address_multi_review` call comes after the ready carrier and before the
+   fix-done one; no review state was notified twice; the done line follows;
+   the coordinator made no `sleep`, `read_messages`, `get_message_status`,
+   `list_environments` or `get_multi_review` call; and nothing reached the
+   harness. A `failed`, `cancelled` or `fix-failed` notice ends the wait
+   early. An interactive Fix ends at `fix-done`: only a structured Fix
+   reaches `completed`, which `address_multi_review` does not start.
+2. **Approval** (every platform but Cursor, which never asks). The harness
+   creates an ordinary local environment whose execution policy is
+   `approvals: "ask"` (Codex also keeps its provider sandbox on, since it asks
+   only to leave it) and lets its startup agent answer once and go idle. A
+   second prompt asks the coordinator to `send_prompt_to_tab` that tab a task
+   that runs one `touch` outside every checkout, and gives it standing orders
+   for the waiting notice and the report. The harness *holds* that worker's
+   approval (`holdWorkerInteractions` in `coordinator-live-observer.ts`)
+   until the coordinator has been woken by the `waiting` notice and has
+   written its line, then denies it and waits for the worker's report. It
+   passes when one `send_prompt_to_tab` call was made, only approvals reached
+   the harness from that worker, exactly one `waiting` notice (toned
+   attention) was injected at least 19.5 seconds after the backend created
+   the approval (the 20-second debounce less a 500 ms timestamp tolerance) and
+   before it was answered, the coordinator acknowledged it, the worker's report
+   (or its finished notice when no report arrived) followed, nothing was polled,
+   and no other interaction reached anybody.
+
+What the `status` case leaves to `coordinator-status-wakes.test.ts`, because
+no provider is involved: which states notify under each setting, dedupe and
+coalescing (seven reviews settling together are one wake), ownership (a review
+the user started never wakes a coordinator), budgets, restart recovery, and
+build pipeline notices, which reach a coordinator through the same notice and
+carrier as a Multi Review's.
+
+Mail tiles are judged on every scenario with mail (`async`, `family`, `status`
+and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
+Each provider echoes the injected carrier as a user row in its own way, and the
+transcript shows that row as tiles only when the renderer's
+`isPeerMailCarrierContent` accepts its `content`. The check runs the
+renderer's own `createPeerMailNativeMessagesFromCarrier` over every echoed
+row and requires: no carrier row shown raw (a carrier only in the parts, or
+after other text, fails), exactly one tile per injected message and none
+dropped, no text outside the carriers (the tiles would hide it), and each
+notice tile toned as its notice. `async` also requires a batched row, since
+the reporter's two messages share one carrier. The summary counts carrier
+rows, tile rows, batched rows and tiles.
+
 The `peer` case needs no coordinator. It turns **Settings → Messaging → Wake
 peers** on for its run (off by default) and restores it afterwards, then
 creates two ordinary local environments on the fixture project, each with a
@@ -1216,17 +1289,25 @@ to the coordinator (a carrier count of -1 means unverified), and its `sleep`,
 Playwright timeouts cover the sum of each scenario's wait budgets plus four
 minutes for setup and cleanup. The profile runner uses those same timeouts and
 adds two minutes per selected scenario for process overhead. Both honor the
-step, turn, family and peer timeout environment overrides.
+step, turn, family, review and peer timeout environment overrides.
 
 Credential-free tests in `coordinator-live-observer.test.ts` exercise the same
 observer and gate/queue orchestration as the live spec, including completion
-and mail injection between reads, queue overlap, poll output collection and
-cleanup after a worker deletion fails. Evaluator and runner tests cover
-negative evidence and deadline relationships.
+and mail injection between reads, queue overlap, poll output collection,
+cleanup after a worker deletion fails, and a held worker's approval staying
+pending until it is released, with retries after failed resolutions.
+`coordinator-live-status-orchestration.test.ts` runs the same status orchestration
+as the live spec through a scripted command transport: environment creation and
+startup, review and approval waits, release recovery, cleanup, and startup
+interactions that must fail qualification. `coordinator-live-status.test.ts` and
+`coordinator-mail-tiles.test.ts` cover the status and tile evaluations, including
+observation lag and report selection independent of mailbox order. Evaluator and
+runner tests cover negative evidence and deadline relationships, including a
+startup turn budget larger than a step budget.
 
 To run the spec against a profile you started yourself, set the opt-in and
 optionally narrow the platforms and scenarios
-(`ORKESTRATOR_AGENT_TEST_COORDINATOR_SCENARIOS=async,family,peer`). Each case closes the main conversation an
+(`ORKESTRATOR_AGENT_TEST_COORDINATOR_SCENARIOS=async,family,status,peer`). Each case closes the main conversation an
 earlier case assigned and leaves the project home environment in place:
 
 ```bash

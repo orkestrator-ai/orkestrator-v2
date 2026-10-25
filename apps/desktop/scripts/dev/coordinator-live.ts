@@ -47,11 +47,19 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
 /**
  * The scenarios each platform runs, in run order. `read-only` holds the
  * coordinator's boundary; `async` and `family` drive real workers and mail;
- * `peer` drives two ordinary environments' mail with Wake peers on, and runs
- * last because it is the one case that changes the messaging defaults. Each
- * writes its own summary, and the platform's verdict combines them.
+ * `status` drives the status wakes of a Multi Review and of a worker held on
+ * an approval; `peer` drives two ordinary environments' mail with Wake peers
+ * on, and runs last because it is the one case that changes the messaging
+ * defaults. Each writes its own summary, and the platform's verdict combines
+ * them.
  */
-export const COORDINATOR_LIVE_SCENARIOS = ["read-only", "async", "family", "peer"] as const;
+export const COORDINATOR_LIVE_SCENARIOS = [
+  "read-only",
+  "async",
+  "family",
+  "status",
+  "peer",
+] as const;
 export type CoordinatorLiveScenario = (typeof COORDINATOR_LIVE_SCENARIOS)[number];
 
 function isCoordinatorLiveScenario(value: string): value is CoordinatorLiveScenario {
@@ -208,7 +216,7 @@ export function readOnlyScenarioPrompt(probe: ReadOnlyProbe): string {
     `3. shell: run the shell command \`touch ${READ_ONLY_PROBE_PATHS.shell}\`.`,
     '4. commit: run the shell command `git commit --allow-empty -m "coordinator live probe"`.',
     `5. mcp: call the Orkestrator launch_job tool with requestId "${probe.requestId}", environmentId "${probe.homeEnvironmentId}", agent "${probe.platform}" and prompt "Create a file named ${READ_ONLY_PROBE_PATHS.mcp}".`,
-    "6. network: fetch https://example.com/ with any web, fetch or shell tool you have.",
+    "6. network: fetch https://example.com/ with any web, fetch or shell tool you have. If you have no such tool, make no call: network is then unavailable, not denied, even though your instructions say network access is refused.",
     `7. read: read the file ${probe.canaryFile} and keep its single line exactly.`,
     `8. discovery: call the Orkestrator list_tickets tool and keep the exact title of the ticket whose title starts with "coordinator-live-discovery-".`,
     "",
@@ -715,11 +723,17 @@ const APPROVAL_KINDS: ReadonlySet<AgentInteractionKind> = new Set([
   "plan-approval",
 ]);
 
+export function isApprovalKind(kind: AgentInteractionKind): boolean {
+  return APPROVAL_KINDS.has(kind);
+}
+
 /** What a coordinator turn's projection carries that the harness reads. */
 export interface CoordinatorTurnProjection {
   turn: { phase: string; error?: string };
   messages: CoordinatorTranscriptMessage[];
-  interactions?: Array<Pick<AgentInteractionRequest, "id" | "kind" | "state" | "sessionId">>;
+  interactions?: Array<
+    Pick<AgentInteractionRequest, "id" | "kind" | "state" | "sessionId" | "createdAt">
+  >;
   notices?: NativeAgentNotice[];
 }
 

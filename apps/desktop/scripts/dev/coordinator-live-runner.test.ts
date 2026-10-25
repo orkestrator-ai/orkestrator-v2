@@ -162,7 +162,7 @@ test("every scenario runs by default, each in its own summary, combined per plat
   });
   expect(run.exitCode).toBe(0);
   const tests = (await f.events()).filter((event) => event.task === "playwright");
-  expect(tests.map((event) => event.scenarios)).toEqual(["read-only,async,family,peer"]);
+  expect(tests.map((event) => event.scenarios)).toEqual(["read-only,async,family,status,peer"]);
   expect(run.results[0]).toMatchObject({
     platform: "claude",
     verdict: "passed",
@@ -170,6 +170,7 @@ test("every scenario runs by default, each in its own summary, combined per plat
       { scenario: "read-only", verdict: "passed" },
       { scenario: "async", verdict: "passed" },
       { scenario: "family", verdict: "passed" },
+      { scenario: "status", verdict: "passed" },
       { scenario: "peer", verdict: "passed" },
     ],
   });
@@ -281,6 +282,10 @@ test("runner budgets cover selected Playwright timeouts, underlying waits and cl
   for (const env of [
     {},
     {
+      ORKESTRATOR_AGENT_TEST_COORDINATOR_TURN_TIMEOUT_MS: "1800000",
+      ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS: "100000",
+    },
+    {
       ORKESTRATOR_AGENT_TEST_COORDINATOR_TURN_TIMEOUT_MS: "900000",
       ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS: "1200000",
       ORKESTRATOR_AGENT_TEST_COORDINATOR_FAMILY_TIMEOUT_MS: "3000000",
@@ -291,6 +296,22 @@ test("runner budgets cover selected Playwright timeouts, underlying waits and cl
     expect(budgets.waits.async).toBe(7 * budgets.step);
     expect(budgets.waits.family).toBe(2 * budgets.step + budgets.family);
     expect(budgets.waits.peer).toBe(2 * budgets.step + budgets.peer);
+    // Independently enumerate the live sequence: startup, review launch,
+    // review completion, delegation, approval arrival, waiting wake, report.
+    const statusWaits = [
+      budgets.turn,
+      budgets.step,
+      budgets.review,
+      budgets.step,
+      budgets.step,
+      budgets.step,
+      budgets.step,
+    ];
+    const statusTotal = statusWaits.reduce((sum, wait) => sum + wait, 0);
+    expect(budgets.tests.status).toBeGreaterThanOrEqual(statusTotal + budgets.overhead);
+    expect(coordinatorLiveRunnerTimeout(["status"], env)).toBeGreaterThanOrEqual(
+      statusTotal + budgets.overhead + budgets.processMargin,
+    );
     const all = COORDINATOR_LIVE_SCENARIOS;
     for (const scenario of all) {
       expect(budgets.tests[scenario]).toBeGreaterThanOrEqual(

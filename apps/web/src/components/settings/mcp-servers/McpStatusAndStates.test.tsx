@@ -530,6 +530,62 @@ describe("catalog states", () => {
     ).toBe("true");
   });
 
+  test("a live plugin server highlights its read-only plugin row, listed after the files", async () => {
+    const pluginSource = {
+      ...snapshot().sources[0]!,
+      sourceId: "claude:plugin-0123456789abcdef",
+      scope: "plugin" as const,
+      owner: "plugin" as const,
+      label: "Plugin docs",
+      displayPath: "~/.claude/plugins/cache/m/docs/1.0.0/.mcp.json",
+      precedence: 101,
+      writable: false,
+      readOnlyReason: "Managed by Claude Code's plugin settings.",
+      note: 'enabledPlugins["docs@m"] is false, but Orkestrator passes this plugin to Claude Code directly.',
+    };
+    const blocked = { supported: false, reason: "Managed by Claude Code's plugin settings." };
+    install({
+      ...baseHandlers,
+      get_mcp_management_snapshot: () =>
+        snapshot({
+          sources: [pluginSource, snapshot().sources[0]!],
+          definitions: [
+            definition(),
+            definition({
+              entryId: "claude:plugin-0123456789abcdef/cGx1Z2lu",
+              sourceId: pluginSource.sourceId,
+              name: "plugin:docs:search",
+              readOnlyReason: blocked.reason,
+              actions: { edit: blocked, rename: blocked, remove: blocked, setEnabled: blocked },
+            }),
+          ],
+        }),
+    });
+    requestMcpServerSettings({
+      provider: "claude",
+      serverName: "plugin:docs:search",
+      serverScope: "plugin",
+    });
+    render(<ProviderMcpSettings />);
+    const note = await screen.findByRole("note", { name: "Server from the live session" });
+    expect(note.textContent).toContain("highlighted row in Plugin docs");
+    expect(note.textContent).toContain("Plugin servers are read-only here");
+    const region = screen.getByRole("region", { name: "Plugin docs" });
+    expect(
+      within(region)
+        .getByRole("listitem", { name: /^plugin:docs:search,/ })
+        .getAttribute("aria-current"),
+    ).toBe("true");
+    expect(region.textContent).toContain("Managed by Claude Code's plugin settings.");
+    expect(region.textContent).toContain("passes this plugin to Claude Code directly");
+    const regions = screen
+      .getAllByRole("region")
+      .map((element) => element.getAttribute("aria-label"));
+    expect(regions.indexOf("Plugin docs")).toBeGreaterThan(
+      regions.indexOf(snapshot().sources[0]!.label),
+    );
+  });
+
   test("a live row with no saved entry says where it may come from", async () => {
     install(baseHandlers);
     requestMcpServerSettings({ provider: "claude", serverName: "from-plugin-team" });

@@ -52,3 +52,11 @@ Full failure names, counts, evidence paths and unresolved limitations are in [07
 - **Aggregate counts:** Backend 11,012 passed, 79 skipped and three failed across 660 files (642.56 s); root/support 3,405 passed and one failed across 162 files (403.31 s). All other workspace packages, bridges and protocol passed; aggregate exit 1 in 692.6 s logged.
 - **Evidence:** `orkestrator-test-run.sQR1xm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; the outer aggregate log is `orkestrator-test-run.k2y50g/aggregate-tests.log.gz`.
 - **Assessment:** Recurrence of the existing intermittent failure. No backend implementation, assertion, deadline or skip changed; the original aggregate remains non-green.
+
+## Claude plugin MCP branch — 2026-10-25
+
+Recurred in a four-worker backend run on the todo 0121 branch
+(`cd apps/backend && bun test --preload ../../tests/setup-node.ts src tests --parallel=4`;
+backend 11,302 passed, 85 skipped, 13 failed). The unchanged owning file
+passed alone (39 pass, 0 fail; aggregate failure was the `(unnamed)` hook timeout at 5,001.40 ms). The branch does not touch this owner; no
+implementation, assertion, timeout or skip changed.

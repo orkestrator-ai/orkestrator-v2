@@ -2062,8 +2062,16 @@ function sortDefinitions(
   const precedence = new Map(
     catalog.sources.map((source) => [source.spec.sourceId, source.spec.precedence]),
   );
+  // Plugin rows are read-only extras; when rows are trimmed, they go first.
+  const plugin = new Set(
+    catalog.sources
+      .filter((source) => source.spec.owner === "plugin")
+      .map((source) => source.spec.sourceId),
+  );
+  const rank = (row: McpDefinitionSummary) => (plugin.has(row.sourceId) ? 1 : 0);
   return [...definitions].sort(
     (left, right) =>
+      rank(left) - rank(right) ||
       left.name.localeCompare(right.name) ||
       (precedence.get(right.sourceId) ?? 0) - (precedence.get(left.sourceId) ?? 0) ||
       STATUS_ORDER[left.status] - STATUS_ORDER[right.status],

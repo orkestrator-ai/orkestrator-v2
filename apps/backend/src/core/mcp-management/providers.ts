@@ -26,6 +26,7 @@ import {
   type McpTransport,
 } from "@orkestrator/protocol/mcp-management";
 
+import { claudePluginSources, listHostDirectories } from "./claude-plugins.js";
 import { PROVIDER_CODECS } from "./codecs.js";
 import {
   codexProjectTrust,
@@ -58,6 +59,12 @@ export interface ProviderHomes {
   opencodeDisableProjectConfig?: boolean;
   /** Grok's documented environment switches, verbatim. */
   grokEnv?: GrokPolicyInput["env"];
+  /**
+   * `$CLAUDE_CONFIG_DIR`, where the Claude CLI reads its user settings
+   * (`settings.json`, so `enabledPlugins`); default `~/.claude`. The bridge
+   * still reads `homedir()/.claude.json` and `~/.claude/plugins`.
+   */
+  claudeConfigDir?: string;
 }
 
 function expandTilde(value: string, home: string): string {
@@ -94,6 +101,7 @@ export function resolveProviderHomes(
     opencodeDisableProjectConfig: /^(true|1)$/i.test(
       env.OPENCODE_DISABLE_PROJECT_CONFIG?.trim() ?? "",
     ),
+    claudeConfigDir: envPath(env.CLAUDE_CONFIG_DIR, home),
     grokEnv: {
       claudeMcps: env.GROK_CLAUDE_MCPS_ENABLED,
       cursorMcps: env.GROK_CURSOR_MCPS_ENABLED,
@@ -717,6 +725,18 @@ export async function providerSources(
           }),
         );
       }
+      for (const spec of await claudePluginSources({
+        home: homes.home,
+        claudeConfigDir: homes.claudeConfigDir,
+        cwd: worktree,
+        includeProjectSources: context.projectResources !== false,
+        readText: read,
+        exists: input.exists,
+        listDirectories: input.inContainer ? undefined : listHostDirectories,
+        display: (filePath) => display(filePath, homes, worktree),
+      })) {
+        add(spec);
+      }
       break;
     }
     case "codex": {
@@ -958,6 +978,10 @@ export async function containerSources(
     const compat = spec.owner === "compatibility";
     const copied = copiedFromBackend(spec);
     const base = { ...spec, container: { containerId }, allowedRoot: undefined };
+    if (spec.owner === "plugin") {
+      // The container's own plugins, read where its sessions read them.
+      return { ...base, displayPath: inProject ? spec.path : `container:${spec.path}` };
+    }
     if (compat || spec.owner === "managed-policy") {
       return {
         ...base,

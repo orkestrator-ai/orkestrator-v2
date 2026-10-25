@@ -20,3 +20,11 @@ The aggregate repeated this case during coordinator adapter validation. Exact
 commands, timing, owner rerun results and evidence are recorded in
 [0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
 The owning implementation, assertions, timeouts and skips were unchanged.
+
+## Claude plugin MCP branch — 2026-10-25
+
+Recurred in a four-worker backend run on the todo 0121 branch
+(`cd apps/backend && bun test --preload ../../tests/setup-node.ts src tests --parallel=4`;
+backend 11,302 passed, 85 skipped, 13 failed). The unchanged owning file
+passed alone (9 pass, 0 fail; same expected `shutting down`, received `opencode server exited before becoming healthy` failure in the aggregate). The branch does not touch this owner; no
+implementation, assertion, timeout or skip changed.

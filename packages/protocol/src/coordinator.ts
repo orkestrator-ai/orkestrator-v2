@@ -234,6 +234,8 @@ export interface CoordinatorDelegation {
   workerTabId: string;
   state: "running" | "completed" | "failed" | "stopped";
   completedAt?: string;
+  /** Closed after this bounded background wait; retained for wake retries and restart recovery. */
+  backgroundWorkTimeoutMs?: number;
   /** Durable wake decision, recorded before mail is released or synthesized. */
   wakeKind?: "report" | "notice";
   /**

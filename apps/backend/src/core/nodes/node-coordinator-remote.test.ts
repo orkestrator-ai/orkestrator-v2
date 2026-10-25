@@ -38,6 +38,7 @@ describe("NodeCoordinatorRemote", () => {
       tab: "idle",
       name: "feature",
       requestPending: false,
+      backgroundWorkPending: false,
     });
     expect(calls.find((call) => call.command === "get_agent_registry")?.args).toEqual({
       projectId: "p-leaf",
@@ -59,6 +60,19 @@ describe("NodeCoordinatorRemote", () => {
       environment: "stopped",
       tab: "unknown",
       requestPending: true,
+    });
+  });
+
+  test("reads background work from the leaf even when its registry turn is idle", async () => {
+    const { access } = remote({
+      get_environment: { status: "running" },
+      get_worker_request_state: { requestPending: false, backgroundWorkPending: true },
+      get_agent_registry: { entries: [{ environmentId: "e1", tabId: "t", state: "idle" }] },
+    });
+    expect(await access.workerState("bk_leaf", "e1", "t")).toMatchObject({
+      tab: "idle",
+      requestPending: false,
+      backgroundWorkPending: true,
     });
   });
 

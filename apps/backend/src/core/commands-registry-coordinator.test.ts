@@ -15,6 +15,8 @@ import {
   COORDINATOR_DELEGATION_FRAME_OPEN,
   COORDINATOR_DELEGATION_PRESENTATION,
 } from "@orkestrator/protocol/review-evidence-frames";
+import { parseBackendId } from "@orkestrator/protocol/federation";
+import { NodeCoordinatorRemote } from "./nodes/node-coordinator-remote.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
 describe("coordinator command registry", () => {
@@ -115,6 +117,7 @@ describe("coordinator command registry", () => {
       });
       environment.id = "worker-1";
       environment.status = "creating";
+      environment.pendingAgentLaunch = true;
       environment.delegationBaseBranch = "main";
       environment.delegationBaseCommit = head;
       environment.controlRequestId = String(args.controlRequestId);
@@ -151,6 +154,40 @@ describe("coordinator command registry", () => {
     });
     await expect(launch(args, context)).resolves.toMatchObject({ environment: { id: "worker-1" } });
     expect(create).toHaveBeenCalledTimes(1);
+    // Launch intent alone is delivery evidence, even before a session/mailbox exists.
+    await storage.updateEnvironment("worker-1", { initialPrompt: undefined, status: "running" });
+    const requestState = commands.get("get_worker_request_state")!;
+    expect(
+      await requestState({ environmentId: "worker-1", tabId: "startup-agent" }, context),
+    ).toEqual({
+      requestPending: true,
+      backgroundWorkPending: false,
+    });
+    expect(
+      await requestState({ environmentId: "worker-1", tabId: "other" }, context),
+    ).toMatchObject({
+      requestPending: false,
+    });
+    const remote = new NodeCoordinatorRemote({
+      invokeOnNode: async ({ command, args: remoteArgs }) => ({
+        outcome: "ok",
+        result:
+          command === "get_agent_registry"
+            ? { entries: [{ environmentId: "worker-1", tabId: "startup-agent", state: "idle" }] }
+            : await commands.get(command)!(remoteArgs, context),
+      }),
+      summaries: async () => ({ selfId: parseBackendId("bk_command"), nodes: [] }),
+    });
+    expect(await remote.workerState("bk_leaf", "worker-1", "startup-agent")).toMatchObject({
+      tab: "idle",
+      requestPending: true,
+    });
+    await coordinator.reconcileWorkerDelegations();
+    expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+    await storage.updateEnvironment("worker-1", { pendingAgentLaunch: false });
+    expect(await remote.workerState("bk_leaf", "worker-1", "startup-agent")).toMatchObject({
+      requestPending: false,
+    });
     await expect(
       launch(
         {

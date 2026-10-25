@@ -1771,7 +1771,6 @@ describe("project coordinator", () => {
       worker.setupPhase = "ready";
       worker.setupScriptsComplete = true;
       if (options.pendingStartupPrompt) {
-        worker.initialPrompt = "Delegated work.";
         worker.pendingAgentLaunch = true;
       }
       await storage.addEnvironment(worker);

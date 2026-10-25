@@ -494,8 +494,16 @@ while background tasks still run counts as idle on the sweep, so a missed
 turn-end edge cannot hold its report until those tasks finish. A worker that
 ended its turn **without** a report while that background work (a shell,
 sub-agents) still runs is paused, not finished: its delegation stays open until
-the work reports and a later turn ends, for at most 30 minutes, after which the
-notice says the worker stopped with background work still running.
+the work reports and a later turn ends, for at most two minutes per pause,
+after which the notice says background work may still resume the worker. The
+short bound limits notice latency for servers and watchers, which share the
+same raw activity signal as awaited tasks. Observing the worker working again
+resets the pause budget. The timeout reason and duration are stored with the
+delegation's close, so failed wake writes and backend restarts preserve that
+qualification. Remote workers use the same bounded hold when their node
+reports `backgroundWorkPending` through `get_worker_request_state`; older
+nodes retain their previous turn-only settlement behavior. A report is always
+released immediately, even if background work continues.
 
 A worker started by `launch_environment` receives its request as the startup
 tab's initial prompt. That prompt counts as an undelivered request until the

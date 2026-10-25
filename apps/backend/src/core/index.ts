@@ -1,3 +1,4 @@
+import { workerSessionActivity } from "./worker-session-activity.js";
 import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
 import { coordinatorNodeContext } from "./nodes/node-context.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
@@ -478,47 +479,18 @@ export class OrkestratorBackend {
       tools: () => readToolStatus(context, this.hostMaintenance.ghChannel()),
       image: () => readImageStatus(context),
     });
-    const workerSession = async (environmentId: string, tabId: string) => {
-      const logicalSessionKey = `env-${environmentId}:${tabId}`;
-      return (await storage.listNativeAgentSessions()).find(
-        (candidate) =>
-          candidate.environmentId === environmentId &&
-          candidate.logicalSessionKey === logicalSessionKey,
-      );
-    };
     this.coordinators = new CoordinatorService(
       storage,
       () => this.controlMcp.getSettings(),
       undefined,
-      async (environmentId, tabId) => {
-        const logicalSessionKey = `env-${environmentId}:${tabId}`;
-        const session = await workerSession(environmentId, tabId);
-        if (!session) return "unknown";
-        // The turn view: a worker whose turn ended but whose background tasks
-        // still run has answered, and its report must not wait for them. The
-        // raw state stays `working` until every task finishes, which held a
-        // report indefinitely when the turn-end edge itself was missed.
-        return this.nativeAgents.sessionTurnActivitySnapshot(
-          environmentId,
-          session.agent,
-          logicalSessionKey,
-        );
-      },
+      async (environmentId, tabId) =>
+        (await workerSessionActivity(storage, this.nativeAgents, environmentId, tabId)).turn,
       {
         lastAssistantExcerpt: (environmentId, tabId) =>
           this.lastAssistantExcerpt(environmentId, tabId),
-        // The turn ended (the composer is free) but tasks it started still run.
-        workerBackgroundWork: async (environmentId, tabId) => {
-          const session = await workerSession(environmentId, tabId);
-          if (!session) return false;
-          const key = session.logicalSessionKey;
-          return (
-            this.nativeAgents.sessionActivitySnapshot(environmentId, session.agent, key) ===
-              "working" &&
-            this.nativeAgents.sessionTurnActivitySnapshot(environmentId, session.agent, key) ===
-              "idle"
-          );
-        },
+        workerBackgroundWork: async (environmentId, tabId) =>
+          (await workerSessionActivity(storage, this.nativeAgents, environmentId, tabId))
+            .backgroundWorkPending,
       },
     );
     context.coordinators = this.coordinators;

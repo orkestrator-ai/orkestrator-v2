@@ -1,6 +1,6 @@
 # Test suite and CI health
 
-Checked against `main` at `5a8b11b9` (2026-10-25).
+Checked against `main` at `bf49a751` (2026-10-25).
 
 `mise run test` should be fast and green, and stay that way, without weakening
 what it proves. Every test file has exactly one owner, waits are controlled
@@ -129,7 +129,10 @@ one live check (an Electron spec with a hung `close()`).
      except two root tests that read `main.ts` source, updated for the
      extracted window bookkeeping and the dev version). The probe branch was
      deleted after the evidence was recorded. These runs do not count towards
-     the three green `main` runs.
+     the three green `main` runs. The branch was then rebased once more, onto
+     `bf49a751` (#1250, #1252, which touch the e2e annotation helpers and
+     flake indexes); that rebase was checked locally (`mise run check` and the
+     affected root tests), not on Actions.
    - **Still to do (maintainer):** after the branch merges, wait for three
      consecutive green `CI` runs on `main`, then run the command below. `main`
      itself failed every completed run from 2026-10-24 17:43 to 2026-10-25

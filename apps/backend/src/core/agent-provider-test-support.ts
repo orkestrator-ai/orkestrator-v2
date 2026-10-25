@@ -732,9 +732,6 @@ export function openCodeProvider(
       openCodeClient: fake.client,
       openCodeMessageIdCoordinator: messageIds,
       monitorRetryMs,
-      // Exercises the isolated compatibility responder. Production providers
-      // default this off and unattended callers use the common journaled resolver.
-      autoAnswerRequests: true,
     },
   );
 }
@@ -760,7 +757,6 @@ export function openCodeActivityProvider(
     {
       openCodeClient: fake.client,
       openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-      autoAnswerRequests: false,
       ...dependencies,
     },
   );

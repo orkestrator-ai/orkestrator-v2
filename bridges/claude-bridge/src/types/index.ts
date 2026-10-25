@@ -1007,6 +1007,8 @@ export interface ModelInfo {
 export interface QuestionOption {
   label: string;
   description?: string;
+  /** Markdown/ASCII preview (`toolConfig.askUserQuestion.previewFormat`). */
+  preview?: string;
 }
 
 /** Question info structure */

@@ -3068,6 +3068,9 @@ printf '%s' ${JSON.stringify(
       `,
       );
 
+      // An agent-test profile launches only the Claude its own toolchain holds.
+      await fs.mkdir(path.join(appRoot, "bin"), { recursive: true });
+      await fs.writeFile(path.join(appRoot, "bin", "claude"), "");
       const environment = createEnvironment({ id: "env-claude-credential", worktreePath });
       const { context } = createContext(environment, { dataDir });
       context.runtimeFlavor = "agent-test";
@@ -3197,6 +3200,9 @@ printf '%s' ${JSON.stringify(
       `,
       );
 
+      // An agent-test profile launches only the Claude its own toolchain holds.
+      await fs.mkdir(path.join(appRoot, "bin"), { recursive: true });
+      await fs.writeFile(path.join(appRoot, "bin", "claude"), "");
       const environment = createEnvironment({ id: "env-claude-disk-credential", worktreePath });
       const { context } = createContext(environment, { dataDir });
       context.runtimeFlavor = "agent-test";

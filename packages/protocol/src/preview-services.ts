@@ -117,7 +117,8 @@ export function resolvePreviewLimits(overrides: Record<string, unknown> = {}): P
  * - `container`: an application port inside an owned Docker container, reached
  *   through its published host binding (or the optional relay).
  * - `worktree`: a loopback listener on the backend machine associated with a
- *   local worktree environment.
+ *   local worktree environment. A listener another environment's terminal or
+ *   agent started is never shown for it.
  * - `backend-host`: an explicitly registered backend loopback port. The
  *   association with an environment is a user statement, not proof of
  *   ownership, and is labelled as such in diagnostics.
@@ -167,6 +168,23 @@ export interface PreviewServiceDefinition {
   definitionRevision: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * A generated `worktree` service the user has not confirmed or edited. Every
+ * local environment of a project gets the same entry port and shares the
+ * backend host's loopback, so it opens only a listener this environment
+ * provably started (`listener: "this-environment"`). Any edit, including an
+ * empty one, is the user's confirmation and makes it their own registration.
+ */
+export function requiresListenerOwner(
+  definition: Pick<PreviewServiceDefinition, "targetKind" | "provenance" | "userOverride">,
+): boolean {
+  return (
+    definition.targetKind === "worktree" &&
+    definition.provenance !== "user" &&
+    !definition.userOverride
+  );
 }
 
 /** Mutable configuration accepted by register/update. */
@@ -226,6 +244,23 @@ export interface PreviewReadiness {
 }
 
 /**
+ * Backend-loopback targets only: who the backend found listening on the
+ * registered port. `this-environment` / `other-environment` mean the listener
+ * descends from a terminal or agent process this backend started for that
+ * environment. `unattributed` is a listener with no such ancestor (another
+ * terminal, another user, a system service); `none` is no listener;
+ * `unchecked` means this host cannot tell (no `lsof`, unsupported platform).
+ */
+export const PREVIEW_LISTENER_ATTRIBUTIONS = [
+  "this-environment",
+  "other-environment",
+  "unattributed",
+  "none",
+  "unchecked",
+] as const;
+export type PreviewListenerAttribution = (typeof PREVIEW_LISTENER_ATTRIBUTIONS)[number];
+
+/**
  * Safe endpoint description for the trusted client. It may name the resolved
  * host port for diagnostics, but never carries a credential.
  */
@@ -241,6 +276,8 @@ export interface PreviewEndpointSnapshot {
   containerId: string | null;
   /** How ownership was established. */
   ownership: "owned-container" | "managed-process" | "user-registered" | null;
+  /** Loopback targets: the last listener check. Absent for containers and older backends. */
+  listener?: PreviewListenerAttribution;
   readiness: PreviewReadiness;
   failure: PreviewError | null;
 }

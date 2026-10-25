@@ -157,7 +157,6 @@ No owning implementation, assertion, deadline or skip was changed.
 - **Evidence:** `orkestrator-test-run.Sh2roc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of the existing aggregate timeout, confirmed intermittent by the unchanged owner's isolated pass. No history code, assertion, timeout or skip changed.
 
-
 ## CLI qualification review validation — 2026-10-25
 
 - **Original command:** `mise run test:logged -- --name cli-review-repository -- mise run test`
@@ -185,3 +184,12 @@ No owning implementation, assertion, deadline or skip was changed.
 - **Assessment:** recurrence of the existing intermittent aggregate deadline.
   Shared-host contention remains a hypothesis. No terminal-history code,
   assertions, deadlines or skips changed; the aggregate failure is retained.
+
+## Live provider review validation — 2026-10-25
+
+The two-worker backend aggregate repeated this failure at `2238f5ec4`. The
+complete unchanged owner passed alone with one isolated worker. Exact failure
+text, durations, commands, suite counts and retained evidence are recorded in
+[0887](../aggregate-validation-runs/0887-live-provider-review-validation.md).
+No implementation, assertion, deadline or skip changed; the original aggregate
+remains failed.

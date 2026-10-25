@@ -190,6 +190,49 @@ describe("launch_coordinator_node_environment", () => {
     expect(association?.pending).toBe(true);
   });
 
+  test("a lost start answer for a worker the node did start still opens the delegation", async () => {
+    const { run, scope, loseNext, associations } = await setup();
+    loseNext("start_environment_background");
+
+    const result = await run("launch_coordinator_node_environment", {
+      scope,
+      requestId: "launch-lost-start",
+      nodeId: "bk_leaf",
+      input: launchInput(scope.projectId),
+    });
+
+    expect(result.startError).toBeUndefined();
+    expect(result).toMatchObject({ coordinatorDelegationOpened: true });
+    const [association] = await associations();
+    expect(association?.delegation).toMatchObject({ state: "running" });
+  });
+
+  test("a lost start answer for a worker that is still stopped reports the start error", async () => {
+    const { run, scope, loseNext, associations } = await setup({
+      answers: {
+        get_environment: {
+          id: "leaf-env",
+          projectId: "p-leaf",
+          name: "leaf-env",
+          status: "stopped",
+        },
+      },
+    });
+    loseNext("start_environment_background");
+
+    const result = await run("launch_coordinator_node_environment", {
+      scope,
+      requestId: "launch-lost-start-stopped",
+      nodeId: "bk_leaf",
+      input: launchInput(scope.projectId),
+    });
+
+    expect(String(result.startError)).toContain("outcome is unknown");
+    expect(result).toMatchObject({ coordinatorDelegationOpened: false });
+    const [association] = await associations();
+    expect(association?.delegation).toBeUndefined();
+  });
+
   test("refuses a node without a copy, a disconnected node and this node", async () => {
     const noCopy = await setup({ hasCopy: false });
     await expect(

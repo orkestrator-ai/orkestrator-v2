@@ -16,7 +16,7 @@ import { COORDINATOR_MAIL_ADDRESS, coordinatorRuntimeId } from "@orkestrator/pro
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { AgentMailMessage, AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import { AgentMailService } from "./agent-mail-service.js";
-import { CoordinatorService } from "./coordinator-service.js";
+import { CoordinatorService, type CoordinatorDelegationOptions } from "./coordinator-service.js";
 import type { CoordinatorStatusWakeOptions } from "./coordinator-status-wakes.js";
 import { runCommand } from "./shell.js";
 import type { AgentMailSender } from "./storage-agent-mail.js";
@@ -38,6 +38,7 @@ const BASE_COMMIT = "a".repeat(40);
 export type MailWorldOptions = {
   /** Status-wake collaborators for the coordinator service, kept across restarts. */
   statusWakes?: CoordinatorStatusWakeOptions;
+  delegations?: CoordinatorDelegationOptions;
 };
 
 /** One carrier's JSON payload, the structured part of an injected mail prompt. */
@@ -87,7 +88,7 @@ export class MailWorld {
       }),
       undefined,
       workerActivity,
-      statusWakes,
+      { ...statusWakes, ...options.delegations },
     );
     const mail = new AgentMailService(
       storage,

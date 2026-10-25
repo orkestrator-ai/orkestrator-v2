@@ -109,6 +109,28 @@ export function codexProjectTrustConfig(
   };
 }
 
+/**
+ * Thread configuration that lets the model ask the user a question
+ * (`request_user_input`) in a session someone is watching; empty otherwise.
+ *
+ * Every Orkestrator turn runs in Codex's Default collaboration mode, where
+ * Codex answers `request_user_input` with "request_user_input is unavailable
+ * in Default mode" and the model falls back to asking in plain text. The
+ * `default_mode_request_user_input` feature lifts that refusal, so the call
+ * reaches the bridge as `item/tool/requestUserInput` and parks as a question
+ * card. Verified against 0.164.0 (`live-request-user-input.test.ts`).
+ *
+ * Unattended sessions (`pipeline`, which every workflow owner resolves) keep
+ * the refusal: nobody would see the question, and their owner would only
+ * decline it by policy. Without a policy (an older backend) nothing changes.
+ */
+export function codexRequestUserInputConfig(
+  policy: NativeAgentExecutionPolicy | undefined,
+): Record<string, unknown> {
+  if (!policy || policy.id === "pipeline") return {};
+  return { "features.default_mode_request_user_input": true };
+}
+
 /** More skills than any real inventory; past it the thread is refused. */
 export const MAX_CODEX_DISABLED_SKILLS = 1_024;
 

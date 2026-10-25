@@ -77,6 +77,7 @@ import {
   codexNetworkDeniedSearchMode,
   codexProjectSkillsConfig,
   codexProjectTrustConfig,
+  codexRequestUserInputConfig,
   codexToolHistoryGaps,
 } from "../codex-config.js";
 import { findTranscriptPath, listTranscriptPaths } from "../history/rollout.js";
@@ -1584,6 +1585,9 @@ export class AppServerEngine implements CodexEngine {
       // Project resources off: this thread does not load the checkout's own
       // `.codex` configuration, even where the user trusts it in Codex.
       ...codexProjectTrustConfig(config.policy, cwd),
+      // A watched session may ask the user a question; Default mode refuses
+      // `request_user_input` without this.
+      ...codexRequestUserInputConfig(config.policy),
       ...extraConfig,
       ...(config.agentMcp
         ? {

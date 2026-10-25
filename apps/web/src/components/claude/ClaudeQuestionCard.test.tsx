@@ -538,10 +538,14 @@ describe("ClaudeQuestionCard", () => {
 });
 
 describe("ClaudeQuestionCard countdown in terminal mode", () => {
-  test("shows the countdown but explains that terminal mode cannot pause it yet", () => {
+  test("a prompt from a hook that predates pausing explains why it cannot pause", () => {
     render(
       <ClaudeQuestionCard
-        question={{ ...singleQuestionWithOptions(), expiresAt: Date.now() + 2 * 60_000 }}
+        question={{
+          ...singleQuestionWithOptions(),
+          expiresAt: Date.now() + 2 * 60_000,
+          hold: { available: false, reason: "hook-outdated" },
+        }}
         onSubmitAnswers={onSubmitAnswers}
       />,
     );
@@ -549,7 +553,57 @@ describe("ClaudeQuestionCard countdown in terminal mode", () => {
     const countdown = screen.getByLabelText(/^Time remaining \d:\d\d$/);
     expect(countdown.tabIndex).toBe(0);
     expect(document.getElementById(countdown.getAttribute("aria-describedby")!)?.textContent).toBe(
-      "Pausing the countdown isn't available in terminal mode yet.",
+      "This prompt came from a terminal hook that predates pausing. Prompts after Claude restarts can be paused.",
     );
+  });
+
+  test("a pausable prompt pauses through the hook and reports a refusal", async () => {
+    const onHold = mock(async (held: boolean) => ({
+      result: held ? ("rejected" as const) : ("applied" as const),
+      interactionId: "q-1",
+      sessionId: "s-1",
+      revision: 0,
+    }));
+    render(
+      <ClaudeQuestionCard
+        question={{
+          ...singleQuestionWithOptions(),
+          expiresAt: Date.now() + 2 * 60_000,
+          hold: { available: true },
+        }}
+        onSubmitAnswers={onSubmitAnswers}
+        onHold={onHold}
+      />,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Pause countdown/ }));
+    });
+    expect(onHold).toHaveBeenCalledWith(true);
+    expect(screen.getByRole("alert").textContent).toBe("This countdown can't be paused right now.");
+  });
+
+  test("a paused prompt offers to restart the countdown", async () => {
+    const onHold = mock(async () => ({
+      result: "applied" as const,
+      interactionId: "q-1",
+      sessionId: "s-1",
+      revision: 0,
+    }));
+    const heldAt = Date.now();
+    render(
+      <ClaudeQuestionCard
+        question={{
+          ...singleQuestionWithOptions(),
+          expiresAt: heldAt + 24 * 60 * 60_000,
+          hold: { available: true, heldAt },
+        }}
+        onSubmitAnswers={onSubmitAnswers}
+        onHold={onHold}
+      />,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Resume countdown" }));
+    });
+    expect(onHold).toHaveBeenCalledWith(false);
   });
 });

@@ -1021,6 +1021,58 @@ describe("pendingApprovals", () => {
     expect(useClaudeTmuxStore.getState().getTab("e").pendingApprovals).toHaveLength(1);
   });
 
+  test("a re-delivered hook with a moved deadline updates the card it already shows", () => {
+    const store = useClaudeTmuxStore.getState();
+    const payload = { tool_name: "Bash", tool_input: { command: "ls" } };
+    store.addPendingApproval(
+      "e",
+      payloadToApproval("evt-1", payload, {
+        requestedAt: 1_000,
+        expiresAt: 301_000,
+        hold: { available: true },
+      }),
+    );
+    const before = useClaudeTmuxStore.getState().getTab("e").pendingApprovals;
+    // The same delivery again changes nothing, not even the array identity.
+    store.addPendingApproval(
+      "e",
+      payloadToApproval("evt-1", payload, {
+        requestedAt: 1_000,
+        expiresAt: 301_000,
+        hold: { available: true },
+      }),
+    );
+    expect(useClaudeTmuxStore.getState().getTab("e").pendingApprovals).toBe(before);
+
+    store.addPendingApproval(
+      "e",
+      payloadToApproval("evt-1", payload, {
+        requestedAt: 1_000,
+        expiresAt: 86_402_000,
+        hold: { available: true, heldAt: 2_000 },
+      }),
+    );
+    const [paused] = useClaudeTmuxStore.getState().getTab("e").pendingApprovals;
+    expect(paused).toEqual(
+      expect.objectContaining({
+        eventId: "evt-1",
+        expiresAt: 86_402_000,
+        hold: { available: true, heldAt: 2_000 },
+        receivedAt: before[0]!.receivedAt,
+      }),
+    );
+
+    store.updatePendingPromptTiming("e", "evt-1", {
+      requestedAt: 1_000,
+      expiresAt: 400_000,
+      hold: { available: true },
+    });
+    const [resumed] = useClaudeTmuxStore.getState().getTab("e").pendingApprovals;
+    expect(resumed!.expiresAt).toBe(400_000);
+    expect(resumed!.hold).toEqual({ available: true });
+    expect(useClaudeTmuxStore.getState().getTab("e").pendingApprovals).toHaveLength(1);
+  });
+
   test("removePendingApproval removes by eventId", () => {
     useClaudeTmuxStore
       .getState()

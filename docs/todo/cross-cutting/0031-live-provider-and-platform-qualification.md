@@ -1,6 +1,6 @@
 # Live-provider and platform qualification
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `00a0cb82` (2026-10-25).
 
 Most features ship with unit, contract and credential-free real-stack coverage
 on Linux. The gate that is missing most often is the same everywhere: a run
@@ -70,72 +70,120 @@ evidence. This file only points at it.
   on the host policy without asking. The file was created by that run and
   removed afterwards. The isolated Codex home now covers `rules/` as well
   as `config.toml`.
-- Agent-test isolation: `checkHostTool` (`apps/backend/src/core/host-tools.ts`)
-  reports only managed binaries in an agent-test profile, but spawning does
-  not match it. `resolveClaudeBinary`, `resolveCodexBinary`,
-  `resolveOpenCodeBinary` and `resolvePiBinary`
-  (`apps/backend/src/core/commands-agent-support.ts`) fall back to the bare
-  name on `PATH` in every runtime flavour. Only Cursor and Grok
-  (`resolveManagedAcpBinary`) never fall back. `agent-testing.md` describes
-  the fallback as intentional: it lets Claude, Codex and OpenCode run in a
-  profile that provisioned nothing.
+- Agent-test isolation: availability reporting and spawning agree.
+  `checkHostTool` (`apps/backend/src/core/host-tools.ts`) reports only
+  managed binaries in an agent-test profile, and since 2026-10-25
+  `resolveClaudeBinary`, `resolveCodexBinary`, `resolveOpenCodeBinary` and
+  `resolvePiBinary` (`resolvePathFallbackAgentBinary` in
+  `apps/backend/src/core/commands-agent-support.ts`) refuse the bare-name
+  `PATH` fallback there too, with "`<Agent>` is not installed in this
+  agent-test profile's toolchain". Other runtime flavours keep the fallback.
+  Cursor and Grok (`resolveManagedAcpBinary`) never fall back anywhere.
+  Covered by `apps/backend/src/core/commands-agent-support.test.ts`.
+- A `dev:test` profile's backend reports the workspace package version, not
+  Electron's (`desktopApplicationVersion` in
+  `apps/desktop/electron/app-version.ts`, from #1265), so stream reconnects no
+  longer raise the version reminder.
 
 ## Outstanding work
 
 ### Code
 
-1. **Decide and align agent-test binary resolution.** Either keep the `PATH`
-   fallback in agent-test profiles (and say in `agent-testing.md` that
-   availability reporting and spawning differ), or refuse it for platforms the
-   profile did not provision. With the second option, a launch requested
-   directly through the backend could not reach a host binary that the profile
-   reports as unavailable.
-2. **Refresh the live OpenCode spec** (`e2e/agent-testing/opencode-live.spec.ts`)
-   for the shipped fixes. Since #985 no fixed default model ships, and since
-   #975 forks keep their model.
-   - Make `ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL` optional; an unset model now
-     resolves to a connected default. Keep it for the build-pipeline case,
-     which needs a model that emits reasoning.
-   - Rewrite the header comment and the `requirePinnedModel` error message,
-     which still describe the old default failure.
-   - Assert that the fork tab keeps the source's model and reasoning profile
-     before its first prompt. The spec currently skips this on purpose.
-   - Make the undo case assert that the reverted turn disappears; today it
-     only checks the toast and an idle turn.
-   - Update the matching paragraph in `agent-testing.md` (see "Related").
-3. **A dev profile's backend reports the Electron version.** In a `dev:test`
-   profile the backend starts as "Orkestrator 44.7.0": `ORKESTRATOR_VERSION`
-   comes from an unpackaged Electron's `app.getVersion()`
-   (`apps/backend/src/core/constants.ts:147`). The renderer is 2.21.1, so
-   every event-stream reconnect raises "Reload to use the matching version"
-   (`BackendVersionReminder.tsx`). The toast sits over the composer's Send
-   button and intercepts browser-spec clicks; `slash-command-inactive.spec.ts`
-   dismisses it with a locator handler. Pass the workspace package version in
-   development, or skip the reminder for agent-test profiles.
+1. ~~**Decide and align agent-test binary resolution.**~~ Done 2026-10-25.
+   An agent-test profile now refuses the `PATH` fallback for Claude, Codex,
+   OpenCode and Pi, so a launch requested directly through the backend cannot
+   reach a host binary the profile reports as unavailable (decision 1 below).
+   Evidence: `resolvePathFallbackAgentBinary` in `commands-agent-support.ts`;
+   `commands-agent-support.test.ts` covers managed-first, the fallback outside
+   agent-test, the refusal (also through `resolveAgentBinary`), and that
+   `checkHostTool` and spawning agree in one profile. `feature-build.ts` now
+   passes the runtime flavour to its Codex naming call. The two Claude
+   credential-brokering tests in `apps/backend/tests/commands-integration.test.ts`
+   and the agent-test Claude probe in `host-model-catalog-refresh.test.ts`
+   now provision a managed `claude`, as a real profile does. A live profile
+   (`qa-0031-oc`, OpenCode only) logged `tool=claude available=false` and
+   `tool=opencode available=true source=managed` and ran every OpenCode case
+   below. `agent-testing.md` § "Agent toolchains in an isolated profile"
+   describes the new behaviour.
+2. ~~**Refresh the live OpenCode spec**~~ Done 2026-10-25
+   (`e2e/agent-testing/opencode-live.spec.ts`).
+   - `ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL` is optional. Unset, the native
+     tab starts on the connected default and the spec reads it back
+     (`composer.selectedModelId`, `provider/model` shape) and checks that the
+     reply's `modelId` matches it. The build-pipeline case still needs the pin
+     and is skipped without it (decision 2).
+   - The header comment and the error message (`optionalPinnedModel`) no
+     longer describe the old default failure.
+   - The fork step asserts that the fork's composer keeps the source's model
+     and reasoning id before its first prompt.
+   - The undo case already asserted that the reverted reply leaves the
+     projection and the screen; the live run showed the product does not do
+     that yet (0175). The stale toast texts ("OpenCode session reverted",
+     "OpenCode revert undone") were corrected to "Session reverted" and
+     "Revert undone", and the post-fork check now matches only the visible
+     reply, since the source tab stays mounted behind the fork.
+   - `agent-testing.md` describes the optional pin and the new assertions.
+3. ~~**A dev profile's backend reports the Electron version.**~~ Done; fixed
+   on `main` by #1265 (`desktopApplicationVersion` passes the workspace
+   package version when Electron is unpackaged; `apps/desktop/tests/app-version.test.ts`).
+   On 2026-10-25 the locator handlers that dismissed the reminder were
+   removed from `slash-command-inactive.spec.ts`, `slash-command-picker.spec.ts`,
+   `mcp-apply-inactive.spec.ts` and `design-live.spec.ts`, so a regression
+   shows up as a blocked click instead of being dismissed silently
+   (decision 3). None of the six live OpenCode runs on profile `qa-0031-oc`
+   (reconnects, reloads, environment switches) failed on the reminder.
 
 ### Qualification: checks with no other home
 
-- **Electron terminal input resume.** Re-run `mise run test:agent:electron` for
-  `e2e/agent-testing/terminal-input-resume-electron.spec.ts`. The review
-  follow-up of #986 did not re-run the Electron suite. Confirm that Resume
-  keeps the same PTY process id.
-- **Live OpenCode spec.** One live run after the refresh above. Also check
-  whether OpenCode 1.19's `session.fork` fills in `Session.model`. The fix
-  falls back to the source session's model either way.
+- ~~**Electron terminal input resume.**~~ Done 2026-10-25 on macOS 27.0
+  arm64, Electron 45.0.0, Bun 1.4.2, `main` at `00a0cb82` plus this change:
+  `ORKESTRATOR_AGENT_TEST_RUN_ID=qa-0031-electron-resume mise run
+  test:agent:electron -- e2e/agent-testing/terminal-input-resume-electron.spec.ts`,
+  exit 0, 1 passed, 0 skipped, 15.9 s, in a real Electron window. The spec
+  asserts the shell's PTY process id is unchanged after the fenced write,
+  after Resume and after the next write (`shellPid(1..3)`). It creates and
+  removes its own temporary profile.
+- ~~**Live OpenCode spec.**~~ Done 2026-10-25; evidence under "Live OpenCode
+  spec evidence" below. The run found that undo leaves the reverted turn in
+  the transcript, now
+  [0175-opencode-undo-keeps-reverted-turn.md](../agent-engines/0175-opencode-undo-keeps-reverted-turn.md);
+  the spec's full pass is that file's qualification. OpenCode 1.19's
+  `session.fork` does **not** fill in `Session.model`: both fork sessions
+  had empty `model` and `agent` columns in the profile's `opencode.db`, while
+  their sources held `{"id":"gpt-5.6-luna","providerID":"opencode-go"}`. The
+  fork still showed the source's model and reasoning, so the fallback (#975)
+  is what carries it.
 - **Runtime drift and advisories.** On two platforms, the Agent Info runtime
   section shows drift counters and an advisory notice, and both rehydrate after
-  a reload.
+  a reload. Still owed (2026-10-25): a manual pass in a `dev:test --fixture`
+  profile on macOS and on Linux (for example over ssh on a Linux node, leaving
+  its configuration as found), each with a provider whose bridge reports
+  unrecognised events (the OpenCode run above showed "1 event this bridge did
+  not recognise: server.heartbeat" in Agent Info, which is one such counter).
 - **Transcript part coverage.** Drive a compaction (Claude or Pi), an image
   round trip and a long-running tool. Switch tabs, let the turn finish in the
   inactive environment, then return and reload. The compaction, retry, status
-  and image parts must render from the snapshot.
+  and image parts must render from the snapshot. Still owed: a Claude or Pi
+  profile (`--credential-source claude --agent-platforms claude`) and a
+  manual or scripted browser pass; the OpenCode run above covers OpenCode's
+  compaction part only.
 - **Usage panel.** On two providers, the usage panel shows turns and account
-  windows and keeps them across a reload.
-- **OpenCode inactive path.** Start a turn, switch environment, let it finish,
-  return, reload. Record the poll count.
+  windows and keeps them across a reload. Still owed: one profile with two
+  credential sources (for example `claude` and `codex`). The OpenCode runs
+  above checked Agent Info's token usage only; their Agent Info snapshot
+  showed no account windows, so they do not count as one of the two.
+- ~~**OpenCode inactive path.**~~ Done 2026-10-25 (behaviour). The live
+  spec's native-tab case starts a turn, switches to another environment,
+  waits for the backend projection to settle with no UI mounted, returns,
+  and hard-reloads; status, model and transcript were correct each time
+  (five runs, below). The poll count was not recorded: neither the backend
+  nor OpenCode's log counts `session.status` reads, and the "before" it was
+  to be compared with (the pre-SSE code) no longer exists (decision 4).
 - **Grok tool output.** Terminal output from a Grok shell call renders inline
   and survives a reload. The upgrade runbook already covers the argv and
-  handshake check for each Grok bump.
+  handshake check for each Grok bump. Still owed: a profile with
+  `--credential-source grok --agent-platforms grok`, one prompt that runs a
+  shell command, then a reload.
 
 ### Qualification: batching index
 
@@ -155,9 +203,9 @@ Provider runs (credentials needed). Every provider also has items in [0049-nativ
 
 | Provider | Items in |
 | --- | --- |
-| Claude | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0036-design-canvas-qualification.md](../design-canvas/0036-design-canvas-qualification.md), [0038-design-agent-conversation-links.md](../design-canvas/0038-design-agent-conversation-links.md) |
-| Codex | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md), [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0036-design-canvas-qualification.md](../design-canvas/0036-design-canvas-qualification.md), [0038-design-agent-conversation-links.md](../design-canvas/0038-design-agent-conversation-links.md) |
-| OpenCode | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), the live spec and inactive-path checks above |
+| Claude | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0036-design-canvas-qualification.md](../design-canvas/0036-design-canvas-qualification.md) |
+| Codex | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md), [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0036-design-canvas-qualification.md](../design-canvas/0036-design-canvas-qualification.md) |
+| OpenCode | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0175-opencode-undo-keeps-reverted-turn.md](../agent-engines/0175-opencode-undo-keeps-reverted-turn.md) (the live spec's undo step) |
 | Cursor | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md), [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md), [0004-composer-model-parameters.md](../agent-engines/0004-composer-model-parameters.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md) |
 | Grok | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0007-provider-sdk-adoption-backlog.md](../agent-engines/0007-provider-sdk-adoption-backlog.md), the tool-output check above |
 | Pi | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md) |
@@ -323,16 +371,106 @@ prompt asked for three sub-agents (`alpha_check`, `beta_check`,
   is the host `~/.codex`, so the run's six rollouts under
   `~/.codex/sessions/2026/10/17/` (synthetic prompts only) were left in place.
 
+### Live OpenCode spec evidence
+
+Live runs, 2026-10-25, macOS 27.0 arm64, `main` at `00a0cb82` plus this
+change, Bun 1.4.2, managed OpenCode 1.19.0 from the profile's own
+toolchain. Profile `qa-0031-oc`: `mise run dev:test --profile qa-0031-oc
+--fixture --credential-source opencode --agent-platforms opencode`. The
+host's OpenCode login has the `opencode` and `opencode-go` providers. Each
+run: `ORKESTRATOR_AGENT_TEST_PROFILE=qa-0031-oc
+ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE=1 [ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL=…]
+ORKESTRATOR_AGENT_TEST_RUN_ID=<run> mise run test:agent:browser --
+e2e/agent-testing/opencode-live.spec.ts`.
+
+| Run | Pin | Result |
+| --- | --- | --- |
+| `qa-0031-oc-unpinned` | none | exit 1, 1 failed, 1 skipped (build case, no pin), 89 s. Native case resolved `opencode-go/gpt-5.6-luna`, passed the inactive turn, reload and Agent Info usage; failed waiting for the stale "OpenCode session reverted" toast. |
+| `qa-0031-oc-unpinned2` | none | exit 1, 1 failed, 1 skipped, 50 s. Toast text fixed; failed at "Undo must remove the latest reply": the projection kept the reverted reply (0175). |
+| `qa-0031-oc-unpinned-noundo` | none | exit 1, 1 failed, 1 skipped. Diagnostic run with the two undo-hides assertions removed in an uncommitted copy: redo, compact and the fork model/reasoning assertion passed; the post-fork text check matched the hidden source tab. Fixed with a visible-only match. |
+| `qa-0031-oc-unpinned-noundo2` | none | exit 0, 1 passed, 1 skipped, 36.7 s. Same uncommitted copy as above, with the visible-only fix: every other native-tab step passed, including fork model and reasoning and the post-fork reload. |
+| `qa-0031-oc-pinned-build` | `opencode-go/deepseek-v4.1-flash` | exit 0, 1 passed (build case only, `--grep "build pipeline"`), 19.2 s: no raw envelopes, thinking and timed tool rows before and after reload. |
+| `qa-0031-oc-final` | `opencode-go/deepseek-v4.1-flash` | exit 1, 1 failed, 1 passed, 82 s. The committed spec: build case passed; native case failed only at the undo-hides assertion (0175). |
+
+- Undo: OpenCode's `session.revert` applied (the session row's `revert.messageID`
+  was the second user message), but the projection still listed the reverted
+  reply 30 s later. Tracked in 0175.
+- No Share dialog was opened in any run.
+- Host after the runs: `~/.local/share/opencode/auth.json` kept its
+  2026-10-19 mtime; the profile used its own snapshot and its own
+  `opencode.db`.
+- Cleanup: every case deleted its environments and pipeline;
+  `mise run dev:stop --profile qa-0031-oc` and
+  `mise run dev:reset --profile qa-0031-oc` afterwards.
+
+## Assumptions and decisions
+
+Recorded 2026-10-25 while working this file.
+
+1. **Agent-test binary resolution: refuse the `PATH` fallback.** Options:
+   (a) keep the fallback in agent-test profiles and document that
+   availability reporting and spawning differ; (b) refuse it for any
+   platform the profile did not provision. Chose (b). Why: an agent-test
+   profile exists to test the pinned toolchain in isolation, and since every
+   profile provisions all platforms by default, the fallback only ever
+   mattered for a platform the profile deliberately left out, which
+   `checkHostTool` already reports as unavailable. Pros: no launch path can
+   reach a host binary of another version, which would make live evidence
+   untrustworthy; one rule for reporting and spawning; a clear error naming
+   `--agent-platforms`. Cons: a backend-level launch (bridge start, model
+   catalogue probe, extension discovery, Codex environment naming) of a
+   platform the profile left out now fails instead of quietly using the
+   host's install; tests that faked an agent-test profile without a managed
+   binary had to provision one. Not covered: a terminal tab is the user's
+   shell, so a command typed there still resolves through the shell's
+   `PATH` (managed directories first); that is not a backend launch.
+2. **OpenCode build-pipeline case without a pin: skip, not fail.** Options:
+   fail the run when the pin is missing, use the connected default, or skip
+   the case. Chose skip with a reason. Why: the case asserts thinking rows,
+   and the connected default need not reason, so running it unpinned tests
+   the model rather than the product. Pros: the native case can be qualified
+   with no model knowledge; the skip is reported as a skip, never a pass.
+   Cons: an operator who forgets the pin gets a skipped case and must notice
+   it.
+3. **Remove the version-reminder locator handlers.** Options: keep them as
+   harmless guards, or remove them. Chose removal. Why: the cause is fixed
+   (#1265), and a handler that silently dismisses the reminder would hide a
+   regression of that fix. Pros: a regression fails visibly. Cons: a
+   legitimately mixed-version live run (none of these four specs is one)
+   would now need its own handling.
+4. **OpenCode inactive path without a poll count.** Options: add an
+   OpenCode request counter to measure polls, or close the item on the
+   behaviour alone. Chose the latter. Why: the count was meant as a
+   before/after comparison for the SSE adoption, whose "before" code no
+   longer exists, and the backend has no counter to read; a single number
+   with no baseline would not show anything. Pros: no new instrumentation
+   in a hot path for a one-off number. Cons: the polling cost of an
+   inactive OpenCode session is still unmeasured; if it matters, add a
+   counter under a new todo.
+5. **Live OpenCode spec item closed with a failing case.** The item asked for
+   one live run after the refresh. The run happened and found a product gap,
+   which has its own file (0175) with its own qualification, so the gap is
+   tracked there rather than holding this item open.
+
 ## Open questions
 
 - Should a provider that is qualified for a feature be re-qualified after
   every agent SDK or CLI upgrade? [`upgrade-agents.md`](../../development/upgrade-agents.md)
   has the bump runbook but no rule for this. The CLI, slash-command and MCP
-  todo files each raise the same question.
+  todo files each raise the same question. Recommendation (2026-10-25): no
+  blanket re-run; on a bump, re-run only the opt-in live specs for the bumped
+  engine (for OpenCode, `opencode-live.spec.ts`), and re-qualify a feature
+  only when the bump's changelog touches its surface. Left open because it
+  changes the upgrade runbook's cost, which is the maintainer's call.
 - Which providers have credentials available for agent-test profiles, and who
-  owns the macOS, iOS and two-machine runs?
+  owns the macOS, iOS and two-machine runs? Known 2026-10-25: the primary
+  macOS host has OpenCode (`opencode`, `opencode-go`) and ran this file's
+  OpenCode and Electron checks; earlier runs show Claude and Codex there too.
 - Should any of these runs become a scheduled CI job, such as Docker live
   suites on a Docker-capable runner or a macOS runner for Electron?
+  Recommendation: the credential-free Electron suite first
+  (`terminal-input-resume-electron.spec.ts` took 16 s here), since it needs
+  no secrets; live provider suites stay manual because they spend tokens.
 
 ## Needs verification
 
@@ -359,10 +497,10 @@ prompt asked for three sub-agents (`alpha_check`, `beta_check`,
   slow or flaky suites.
 - [0034-mixed-version-compatibility.md](0034-mixed-version-compatibility.md) for
   old-client and old-bridge runs.
-- Living-doc drift to fix: the OpenCode paragraph in
-  [`agent-testing.md`](../../development/agent-testing.md) still says a pinned
-  model is required because the shipped default fails, and links a deleted
-  note. Since #985 no fixed default ships.
+- [0175-opencode-undo-keeps-reverted-turn.md](../agent-engines/0175-opencode-undo-keeps-reverted-turn.md)
+  for the undo gap the live OpenCode run found.
+- The OpenCode paragraph in [`agent-testing.md`](../../development/agent-testing.md)
+  was brought up to date on 2026-10-25 (optional pin, new assertions).
 
 ## Replaces
 

@@ -27,11 +27,7 @@ import {
   WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
-import type {
-  BridgeConnection,
-  ProviderInteractionObservationEvent,
-  ProviderSendOptions,
-} from "./agent-provider-contract.js";
+import type { BridgeConnection, ProviderSendOptions } from "./agent-provider-contract.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";
 import {
@@ -83,8 +79,6 @@ export interface OpenCodeProviderDependencies {
   now?: () => number;
   openCodeExistenceCacheTtlMs?: number;
   openCodeStatusReconcileIntervalMs?: number;
-  autoAnswerRequests?: boolean;
-  onInteractionObservation?: (event: ProviderInteractionObservationEvent) => void | Promise<void>;
   /** See `ProviderCommonDependencies.onObservationHint`. */
   onObservationHint?: (sessionId: string | undefined) => void;
   resolveOpenCodeModelProviders?: () =>

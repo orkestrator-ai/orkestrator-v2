@@ -16,10 +16,6 @@ import {
   OpenCodeMessageIdCoordinator,
   openCodeRequestMarker,
 } from "@orkestrator/protocol/opencode-message-id";
-import {
-  AGENT_INTERACTION_LIMITS,
-  type AgentInteractionKind,
-} from "@orkestrator/protocol/agent-interactions";
 import type {
   AgentModel,
   NativeAgentContextUsage,
@@ -42,7 +38,6 @@ import {
   type ProviderDispatchStatus,
   type ProviderInteractiveSnapshot,
   type ProviderSessionStateSnapshot,
-  type ProviderInteractionObservationEvent,
   type ProviderPrepareDispatchOptions,
   type ProviderSendOptions,
   type ProviderCommandCatalogue,
@@ -60,9 +55,7 @@ import {
   MAX_TRACKED_INTERACTION_SESSIONS,
   MAX_TRACKED_PROVIDER_INTERACTIONS,
   nonEmptyString,
-  serializedByteLength,
   setBoundedMapEntry,
-  setBoundedSetEntry,
 } from "./agent-provider-runtime.js";
 import { openCodeCatalogCacheKey, resolveOpenCodeDefaultModel } from "./opencode-model-catalog.js";
 import {
@@ -74,7 +67,6 @@ import {
   openCodeStructuredPrompt,
 } from "./opencode-messages.js";
 import {
-  boundedOwnedOpenCodeCollection,
   openCodeSessionStateSnapshot,
   openCodeTranscriptPage,
   openCodeTranscriptSnapshot,
@@ -182,8 +174,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   );
   private readonly commands: OpenCodeCommandRegistry;
   private readonly commandReload: OpenCodeInstanceReload;
-  private readonly blockedSessions = new Set<string>();
-  private readonly failedQuestionSessions = new Set<string>();
   private readonly sessionPolicy: OpenCodeSessionPolicy;
   private readonly sessionPolicies = new Map<string, NativeAgentExecutionPolicy>();
   /** A coordinator's research tool ids; empty everywhere else. */
@@ -195,7 +185,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly monitorBackoff: ReconnectBackoff;
   private readonly waitForMonitorRetry: (ms: number, signal: AbortSignal) => Promise<void>;
   private readonly now: () => number;
-  private readonly answeringRequestIds = new Set<string>();
   private readonly requestTasks = new Set<Promise<void>>();
   /**
    * SSE event types this provider had no branch for.
@@ -213,16 +202,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   readonly changeEvidence: OpenCodeChangeEvidence;
   readonly changeEvidenceSource = (id: string) => this.changeEvidence.connectionSource(id);
   private activeStreamController: AbortController | null = null;
-  private reconciliation: Promise<void> | null = null;
   private streamReconciliation: Promise<void> | null = null;
   private monitorPromise: Promise<void>;
   private disposed = false;
   /** Stream liveness and wakeup hints for the backend observer (step 07). */
   private readonly observation: OpenCodeObservationStream;
-  private readonly autoAnswerRequests: boolean;
-  private readonly onInteractionObservation?: (
-    event: ProviderInteractionObservationEvent,
-  ) => void | Promise<void>;
   private readonly resolveOpenCodeModelProviders?: () =>
     | readonly string[]
     | undefined
@@ -311,8 +295,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       () => this.requestOptions(),
       dependencies.openCodeStatusReconcileIntervalMs,
     );
-    this.autoAnswerRequests = dependencies.autoAnswerRequests === true;
-    this.onInteractionObservation = dependencies.onInteractionObservation;
     this.observation = new OpenCodeObservationStream(dependencies.onObservationHint);
     this.actionRetry = new OpenCodeActionRetryCoordinator(
       connection,
@@ -340,15 +322,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.streamState.register(sessionId);
     this.interactionTracker.register(sessionId, interaction);
     if (interaction?.reviewerSession) this.reviewPermissions.registerCandidate(sessionId);
-    if (!this.autoAnswerRequests) return;
-    const activeReconciliation = this.reconciliation;
-    const reconciliation = activeReconciliation
-      ? activeReconciliation.catch(() => undefined).then(() => this.reconcilePendingRequests())
-      : this.reconcilePendingRequests();
-    void reconciliation.catch(() => {
-      // The reconnect loop will try again. Registration must stay synchronous
-      // so restoring a pipeline does not block on an external service.
-    });
   }
 
   private async optionalSdkCall(
@@ -434,10 +407,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         }
         let receivedFrame = false;
         let startupError: unknown;
-        const startup = Promise.all([
-          this.reconcileStreamState(),
-          ...(this.autoAnswerRequests ? [this.reconcilePendingRequests()] : []),
-        ]).catch((error) => {
+        const startup = this.reconcileStreamState().catch((error) => {
           startupError = error;
           if (this.activeStreamController === streamController) streamController.abort();
         });
@@ -556,105 +526,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         return;
       }
     }
-    const requestId = typeof properties.id === "string" ? properties.id : undefined;
-    const sessionId = rawSessionId;
-    if (!sessionId || !this.lifecycle.ownedSessions.has(sessionId)) return;
-    this.observation.ownedEvent(event.type, sessionId);
-    if (requestId && requestId.length > AGENT_INTERACTION_LIMITS.maxIdLength) return;
-
-    const observedKind: AgentInteractionKind | null =
-      event.type === "permission.asked"
-        ? "permission"
-        : event.type === "question.asked"
-          ? "question"
-          : null;
-
-    const observe = async (
-      state: ProviderInteractionObservationEvent["state"],
-      providerState?: ProviderInteractionObservationEvent["providerState"],
-    ): Promise<void> => {
-      if (!requestId || !observedKind) return;
-      await this.onInteractionObservation?.({
-        sessionId,
-        interactionId: requestId,
-        kind: observedKind,
-        registration: this.interactionTracker.registration(sessionId),
-        state,
-        providerState,
-      });
-    };
-
-    if (!this.autoAnswerRequests) return;
-    if (event.type === "question.replied") {
-      this.blockedSessions.delete(sessionId);
-      this.failedQuestionSessions.delete(sessionId);
-      return;
-    }
-    if (event.type === "question.rejected") {
-      this.blockedSessions.delete(sessionId);
-      setBoundedSetEntry(this.failedQuestionSessions, sessionId, MAX_TRACKED_INTERACTION_SESSIONS);
-      return;
-    }
-    if (!requestId || this.answeringRequestIds.has(requestId)) return;
-
-    this.answeringRequestIds.add(requestId);
-    try {
-      if (event.type === "permission.asked") {
-        await observe("detected").catch(() => undefined);
-        const response = await this.client.permission.reply(
-          {
-            requestID: requestId,
-            directory: this.connection.directory,
-            reply: "reject",
-          },
-          this.requestOptions(),
-        );
-        assertSdkResponse(response, "OpenCode permission response");
-        await observe("withdrawn", "error").catch(() => undefined);
-      } else if (event.type === "question.asked") {
-        // The owner persists the fail-closed terminal outcome before the
-        // upstream question is removed. If persistence fails, leave the
-        // request pending so a restart cannot silently advance the workflow.
-        this.blockedSessions.add(sessionId);
-        await observe("detected");
-        // No cleanup on failure: the request may still be live and
-        // user-resolvable, so the session stays blocked and the
-        // reconnect/reconciliation loop retries the fail-closed reject.
-        const response = await this.client.question.reject(
-          {
-            requestID: requestId,
-            directory: this.connection.directory,
-          },
-          this.requestOptions(),
-        );
-        assertSdkResponse(response, "OpenCode question rejection");
-        this.blockedSessions.delete(sessionId);
-        // Terminal, not blocked. The rejection is delivered, so the supervisor
-        // must stop parking on it — this set is what unparks it, and is
-        // deliberately *not* conditional on the interaction policy. Whether a
-        // refusal fails the workflow or merely declines one request is decided
-        // by the pipeline that owns the session, from
-        // `agentInteractionPolicyAction`; gating this here instead would leave
-        // a declined session parked forever.
-        setBoundedSetEntry(
-          this.failedQuestionSessions,
-          sessionId,
-          MAX_TRACKED_INTERACTION_SESSIONS,
-        );
-        await observe("withdrawn", "error").catch(() => undefined);
-      }
-    } finally {
-      this.answeringRequestIds.delete(requestId);
-    }
-  }
-
-  private async reconcilePendingRequests(): Promise<void> {
-    if (!this.reconciliation) {
-      this.reconciliation = this.reconcilePendingRequestsNow().finally(() => {
-        this.reconciliation = null;
-      });
-    }
-    return this.reconciliation;
+    if (rawSessionId && owned) this.observation.ownedEvent(event.type, rawSessionId);
   }
 
   private async reconcileStreamState(): Promise<void> {
@@ -678,38 +550,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     });
     // Recover idle edges lost across a stream gap; reload rechecks the directory.
     if (!this.disposed) this.commandReload.idleObserved();
-  }
-
-  private async reconcilePendingRequestsNow(): Promise<void> {
-    if (this.disposed || this.lifecycle.ownedSessions.size === 0) return;
-    const [permissions, questions] = await Promise.all([
-      this.client.permission.list({ directory: this.connection.directory }, this.requestOptions()),
-      this.client.question.list({ directory: this.connection.directory }, this.requestOptions()),
-    ]);
-    assertSdkResponse(permissions, "OpenCode pending permission read");
-    assertSdkResponse(questions, "OpenCode pending question read");
-    const pendingPermissions = boundedOwnedOpenCodeCollection(
-      permissions.data,
-      this.lifecycle.ownedSessions,
-      "OpenCode pending permission read",
-    );
-    const pendingQuestions = boundedOwnedOpenCodeCollection(
-      questions.data,
-      this.lifecycle.ownedSessions,
-      "OpenCode pending question read",
-    );
-    if (
-      serializedByteLength([pendingPermissions, pendingQuestions]) >
-      AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
-    ) {
-      throw new ProviderUnavailableError("OpenCode interaction snapshot is oversized");
-    }
-    for (const request of pendingPermissions) {
-      await this.handleRequest({ type: "permission.asked", properties: request });
-    }
-    for (const request of pendingQuestions) {
-      await this.handleRequest({ type: "question.asked", properties: request });
-    }
   }
 
   async createSession(
@@ -905,8 +745,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
 
   async status(sessionId: string): Promise<ProviderStatus> {
     if (this.actionRetry.isPending(sessionId)) return "running";
-    if (this.blockedSessions.has(sessionId)) return "blocked";
-    if (this.failedQuestionSessions.has(sessionId)) return "error";
     try {
       const lifecycle = (await this.lifecycle.readSessionLifecycle([sessionId], false, true)).get(
         sessionId,
@@ -952,7 +790,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
 
   async activityBatch(sessionIds: readonly string[]): Promise<Map<string, ProviderActivityState>> {
     return readOpenCodeActivityBatch(sessionIds, {
-      blockedSessions: this.blockedSessions,
       lifecycle: this.lifecycle,
       client: this.client,
       directory: this.connection.directory,
@@ -1061,8 +898,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
 
   private async projectedStatus(sessionId: string): Promise<ProviderStatus> {
     if (this.actionRetry.isPending(sessionId)) return "running";
-    if (this.blockedSessions.has(sessionId)) return "blocked";
-    if (this.failedQuestionSessions.has(sessionId)) return "error";
     const lifecycle = (await this.lifecycle.readSessionLifecycle([sessionId], false)).get(
       sessionId,
     );
@@ -1467,8 +1302,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.interactiveMetadata.delete(sessionId);
     this.sessionPolicies.delete(sessionId);
     this.sessionPolicy.forget(sessionId);
-    this.blockedSessions.delete(sessionId);
-    this.failedQuestionSessions.delete(sessionId);
     this.actionRetry.forget(sessionId);
   }
 
@@ -1486,9 +1319,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     await this.monitorPromise;
     await Promise.allSettled(this.requestTasks);
     this.lifecycle.clear();
-    this.blockedSessions.clear();
-    this.failedQuestionSessions.clear();
-    this.answeringRequestIds.clear();
     this.requestTasks.clear();
     this.streamState.clear();
     this.changeEvidence.dispose();

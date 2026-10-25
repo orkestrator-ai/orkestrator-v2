@@ -158,12 +158,6 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
       test.setTimeout(container ? 1_200_000 : 600_000);
       page.setDefaultTimeout(15_000);
       await page.setViewportSize({ width: 1440, height: 1600 });
-      await page.addLocatorHandler(
-        page.getByText("Reload to use the matching version."),
-        async (reminder) => {
-          await reminder.click();
-        },
-      );
 
       const status = profileStatus(profile);
       expect(status.profile, "dev:status answered for a different profile").toBe(profile);

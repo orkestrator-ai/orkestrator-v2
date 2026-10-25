@@ -446,6 +446,11 @@ export function claudeQueryOptions(
     // events a failed lifecycle hook would silently leave task or
     // compaction projection stale.
     includeHookEvents: true,
+    // AskUserQuestion option previews arrive as Markdown/ASCII, which the
+    // question card shows verbatim in a monospace block. Not `html`: the card
+    // would have to render model-written HTML. Explicit, so an SDK whose
+    // default changes cannot start sending a format the card does not expect.
+    toolConfig: { askUserQuestion: { previewFormat: "markdown" } },
     // Pinned against @anthropic-ai/claude-agent-sdk 0.3.309: although the
     // SDK warns that bypassPermissions shadows canUseTool for ordinary
     // tool permission checks, AskUserQuestion is a special case. A live

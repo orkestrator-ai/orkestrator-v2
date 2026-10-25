@@ -234,6 +234,8 @@ export interface CoordinatorDelegation {
   workerTabId: string;
   state: "running" | "completed" | "failed" | "stopped";
   completedAt?: string;
+  /** Closed after this bounded background wait; retained for wake retries and restart recovery. */
+  backgroundWorkTimeoutMs?: number;
   /** Durable wake decision, recorded before mail is released or synthesized. */
   wakeKind?: "report" | "notice";
   /**
@@ -312,7 +314,9 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "adopt_workflow",
   "cancel_build_pipeline",
   "cancel_multi_review",
+  "cancel_schedule",
   "compare_project_files",
+  "create_schedule",
   "create_ticket",
   "get_build_pipeline",
   "get_environment",
@@ -334,6 +338,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "list_node_environments",
   "list_nodes",
   "list_projects",
+  "list_schedules",
   "list_tabs",
   "list_tickets",
   "list_workflows",

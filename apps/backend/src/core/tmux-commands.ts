@@ -477,6 +477,16 @@ export function registerTmuxBackendCommands(
       response,
     ),
   );
+  register(
+    "claude_tmux_hold_hook",
+    ({ tabId, eventKind, eventId, held, environmentId }, context) => {
+      if (typeof held !== "boolean") throw new Error("held must be a boolean");
+      return requireSession(
+        asString(environmentId, "environmentId"),
+        asString(tabId, "tabId"),
+      ).holdHook(asString(eventKind, "eventKind"), asString(eventId, "eventId"), held, context);
+    },
+  );
   register("claude_tmux_list_previous_sessions", async ({ environmentId }, context) => {
     const backend = await resolveBackend(asString(environmentId, "environmentId"), context);
     const paths = workspaceAndClaudeHome(backend);

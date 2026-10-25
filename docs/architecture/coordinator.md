@@ -511,7 +511,25 @@ the coordinator is woken once, after both. (`send_prompt_to_tab` and
 
 "Finished" is read from the turn, not the process: a worker whose turn ended
 while background tasks still run counts as idle on the sweep, so a missed
-turn-end edge cannot hold its report until those tasks finish. A report held
+turn-end edge cannot hold its report until those tasks finish. A worker that
+ended its turn **without** a report while that background work (a shell,
+sub-agents) still runs is paused, not finished: its delegation stays open until
+the work reports and a later turn ends, for at most two minutes per pause,
+after which the notice says background work may still resume the worker. The
+short bound limits notice latency for servers and watchers, which share the
+same raw activity signal as awaited tasks. Observing the worker working again
+resets the pause budget. The timeout reason and duration are stored with the
+delegation's close, so failed wake writes and backend restarts preserve that
+qualification. Remote workers use the same bounded hold when their node
+reports `backgroundWorkPending` through `get_worker_request_state`; older
+nodes retain their previous turn-only settlement behavior. A report is always
+released immediately, even if background work continues.
+
+A worker started by `launch_environment` receives its request as the startup
+tab's initial prompt. That prompt counts as an undelivered request until the
+provider accepts it (`pendingAgentLaunch` is cleared), exactly like
+uninjected mail, so the startup session reading idle during setup, before the
+delegated turn starts, cannot settle the delegation. A report held
 for a delegation that closed and was woken without it (a race with the
 "finished without a report" notice) is released on the next sweep.
 
@@ -544,6 +562,21 @@ is doing — see [`agent-registry.md`](agent-registry.md).
 Pause or mute messaging, or set a mailbox's injection policy to **Off**, to
 hold automatic delivery. Stored, injected, acknowledged, and completed remain
 distinct states. An injection receipt is not proof that the task finished.
+
+## Scheduled wakes and actions
+
+A coordinator turn cannot wait, so a coordinator that needs to act later
+(after a usage window resets, before a deadline) schedules it:
+`create_schedule` with `at: "03:12"` and `action: {type: "send_message",
+toEnvironmentId: "coordinator", body}` arrives at 03:12 as a reminder that
+starts a turn, even if the conversation's provider was swapped meanwhile.
+Schedules can also send a worker mail, prompt a worker tab, launch a worker
+(resolving the base branch's newest commit when it fires) or call another of
+the coordinator's own tools, with `nodeId` where the tool takes one. Each
+fire runs the coordinator's own tool under its current scope, so read-only
+rules and project boundaries apply unchanged. Main schedules follow the next
+main conversation; a side agent's schedules end with it. See
+[scheduled-jobs.md](scheduled-jobs.md).
 
 ## Status wakes
 

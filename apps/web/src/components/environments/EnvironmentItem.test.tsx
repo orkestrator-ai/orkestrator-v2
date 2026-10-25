@@ -107,7 +107,7 @@ beforeEach(() => {
     viewedSessionIds: new Map(),
   });
   resetChangeProjectionStore();
-  useEnvironmentDiffStore.setState({ stats: new Map() });
+  useEnvironmentDiffStore.setState({ stats: new Map(), syncStatus: "idle" });
 });
 
 afterEach(cleanup);
@@ -321,5 +321,30 @@ describe("EnvironmentItem change badge", () => {
     renderItem();
     expect(badge()).toBeNull();
     expect(document.body.textContent).toContain("+99-98");
+  });
+
+  test("marks the legacy counts while their mirror is stale, and clears it when current", () => {
+    useEnvironmentDiffStore.setState({
+      stats: new Map([["env-1", legacyStats]]),
+      syncStatus: "current",
+    });
+    renderItem();
+    const counts = () => screen.getByTestId("environment-diff-stats");
+    expect(counts().querySelector("[data-freshness]") === null).toBe(true);
+
+    act(() => useEnvironmentDiffStore.getState().setSyncStatus("degraded"));
+    expect(counts().querySelector('[data-freshness="degraded"]')).toBeTruthy();
+    // The counts themselves are kept: stale data stays visible.
+    expect(counts().textContent).toContain("+99");
+
+    act(() => useEnvironmentDiffStore.getState().setSyncStatus("current"));
+    expect(counts().querySelector("[data-freshness]") === null).toBe(true);
+  });
+
+  test("the projection's own quality wins over the legacy mirror's freshness", () => {
+    useEnvironmentDiffStore.setState({ stats: new Map(), syncStatus: "degraded" });
+    useChangeProjectionStore.getState().applyProjection(environmentProjectionFixture("env-1"));
+    renderItem();
+    expect(document.querySelector("[data-freshness]") === null).toBe(true);
   });
 });

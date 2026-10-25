@@ -1154,6 +1154,8 @@ export class WebAnnotationEnvironmentStore {
     this.assertWritable();
     const base = this.snapshot;
     const nowMs = this.nowMs();
+    // A deep copy, so a throwing `work` leaves the committed manifest intact.
+    // With `planRows` below it is the commit's O(collection) CPU cost.
     const tx = new WebAnnotationTransaction(
       structuredClone(base.manifest),
       new Date(nowMs).toISOString(),

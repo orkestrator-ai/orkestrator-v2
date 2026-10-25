@@ -1,101 +1,91 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
-  deferredMergeCleanupCountForTesting,
-  requestMergeCleanupRecovery,
-  resetMergeCleanupSchedulerForTesting,
-  setMergeCleanupScheduler,
-} from "@/../../backend/src/core/commands-pr-monitor";
-import { BackendRuntime } from "@/../../backend/src/core/backend-runtime";
+  BackendRuntime,
+  type BackendRuntimeOptions,
+} from "@/../../backend/src/core/backend-runtime";
 import type { CommandContext } from "@/../../backend/src/core/commands-context";
 
 /**
- * `commands-pr-monitor` observes a merged PR; `commands-servers` owns the
- * cleanup that follows. The scheduler is registered rather than imported so the
- * two modules stay acyclic (see `module-import-cycles.test.ts`). Inversions like
- * this are only safe if an unregistered request is deferred rather than dropped,
- * which is what these tests hold in place.
+ * `PrMonitorRuntime` observes a merged PR; `commands-servers` owns the cleanup
+ * that follows. The backend passes that scheduler to `BackendRuntime` as
+ * `prMonitor.scheduleMergeCleanup` (`index.ts`, `tests/command-fixtures.ts`)
+ * rather than the monitor importing it, so the two modules stay acyclic (see
+ * `module-import-cycles.test.ts`) and each backend calls its own.
  */
-// `getEnvironment` resolving to null is the real scheduler's first exit: it has
-// nothing to clean up. That keeps the registration test below on a quiet path
-// while still proving the production scheduler, not a stub, was invoked.
-const context = {
-  storage: { getEnvironment: async () => null },
-  emit: () => undefined,
-  runtime: new BackendRuntime({ emit: () => undefined }),
-} as unknown as CommandContext;
+const MERGED = { url: "https://github.com/acme/repo/pull/7", state: "merged" } as const;
+
+const runtimes: BackendRuntime[] = [];
 
 afterEach(() => {
-  resetMergeCleanupSchedulerForTesting();
+  for (const runtime of runtimes.splice(0)) runtime.shutdown();
 });
 
-describe("merge cleanup scheduler registration", () => {
-  test("forwards straight through once a scheduler is registered", () => {
+function runtimeWith(options: Omit<BackendRuntimeOptions, "emit"> = {}): BackendRuntime {
+  const runtime = new BackendRuntime({ emit: () => undefined, ...options });
+  runtimes.push(runtime);
+  return runtime;
+}
+
+/** No environments, so a sync only binds the context to the monitor. */
+function contextFor(runtime: BackendRuntime): CommandContext {
+  return {
+    storage: { loadEnvironments: async () => [], getEnvironment: async () => null },
+    emit: () => undefined,
+    runtime,
+  } as unknown as CommandContext;
+}
+
+describe("merge cleanup scheduler option", () => {
+  test("forwards a merged observation's cleanup with the bound context", async () => {
     const calls: Array<[string, CommandContext]> = [];
-    setMergeCleanupScheduler((environmentId, ctx) => calls.push([environmentId, ctx]));
+    const runtime = runtimeWith({
+      prMonitor: { scheduleMergeCleanup: (environmentId, ctx) => calls.push([environmentId, ctx]) },
+    });
+    const context = contextFor(runtime);
+    await runtime.prMonitor.sync(context);
 
-    requestMergeCleanupRecovery("env-1", context);
+    runtime.prMonitor.resumeTerminalEffects("env-merged", MERGED);
+    // A closed PR has no cleanup to resume.
+    runtime.prMonitor.resumeTerminalEffects("env-closed", { ...MERGED, state: "closed" });
 
-    expect(calls).toEqual([["env-1", context]]);
-    expect(deferredMergeCleanupCountForTesting()).toBe(0);
+    expect(calls).toEqual([["env-merged", context]]);
   });
 
-  test("defers a request made before registration and replays it", () => {
-    requestMergeCleanupRecovery("env-early", context);
-    expect(deferredMergeCleanupCountForTesting()).toBe(1);
+  test("a runtime without a scheduler skips the cleanup without throwing", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const runtime = runtimeWith();
+      await runtime.prMonitor.sync(contextFor(runtime));
 
-    const calls: string[] = [];
-    setMergeCleanupScheduler((environmentId) => calls.push(environmentId));
-
-    // The whole point of the inversion: a merge observed before
-    // `commands-servers` finished evaluating still gets cleaned up.
-    expect(calls).toEqual(["env-early"]);
-    expect(deferredMergeCleanupCountForTesting()).toBe(0);
-  });
-
-  test("collapses repeated deferred requests for one environment", () => {
-    requestMergeCleanupRecovery("env-dupe", context);
-    requestMergeCleanupRecovery("env-dupe", context);
-    requestMergeCleanupRecovery("env-dupe", context);
-
-    expect(deferredMergeCleanupCountForTesting()).toBe(1);
-
-    const calls: string[] = [];
-    setMergeCleanupScheduler((environmentId) => calls.push(environmentId));
-    expect(calls).toEqual(["env-dupe"]);
-  });
-
-  test("bounds the deferred set instead of growing without limit", () => {
-    for (let index = 0; index < 300; index += 1) {
-      requestMergeCleanupRecovery(`env-${index}`, context);
+      expect(() => runtime.prMonitor.resumeTerminalEffects("env-1", MERGED)).not.toThrow();
+      expect(() => runtime.prMonitor.resumeTerminalEffects("env-2", MERGED)).not.toThrow();
+      // One warning per runtime, not one per observation.
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
     }
-
-    expect(deferredMergeCleanupCountForTesting()).toBe(256);
   });
 
-  test("loading the command surface registers the real scheduler", async () => {
-    // The structural guarantee behind the inversion: `commands-servers`
-    // registers at its own module scope, and every path that can reach the PR
-    // monitor goes through this barrel, so nothing observable can run with the
-    // scheduler still unset.
-    resetMergeCleanupSchedulerForTesting();
-    await import("@/../../backend/src/core/commands-helpers");
+  test("two runtimes each call their own scheduler", async () => {
+    const first: Array<[string, CommandContext]> = [];
+    const second: Array<[string, CommandContext]> = [];
+    const firstRuntime = runtimeWith({
+      prMonitor: { scheduleMergeCleanup: (environmentId, ctx) => first.push([environmentId, ctx]) },
+    });
+    const secondRuntime = runtimeWith({
+      prMonitor: {
+        scheduleMergeCleanup: (environmentId, ctx) => second.push([environmentId, ctx]),
+      },
+    });
+    const firstContext = contextFor(firstRuntime);
+    const secondContext = contextFor(secondRuntime);
+    await firstRuntime.prMonitor.sync(firstContext);
+    await secondRuntime.prMonitor.sync(secondContext);
 
-    const monitor = await import("@/../../backend/src/core/commands-pr-monitor");
-    monitor.requestMergeCleanupRecovery("env-registered", context);
+    firstRuntime.prMonitor.resumeTerminalEffects("env-a", MERGED);
+    secondRuntime.prMonitor.resumeTerminalEffects("env-b", MERGED);
 
-    // Forwarded, not deferred - a deferred request would leave a count of 1.
-    expect(monitor.deferredMergeCleanupCountForTesting()).toBe(0);
-  });
-
-  test("a later registration replaces the previous scheduler", () => {
-    const first: string[] = [];
-    const second: string[] = [];
-    setMergeCleanupScheduler((environmentId) => first.push(environmentId));
-    setMergeCleanupScheduler((environmentId) => second.push(environmentId));
-
-    requestMergeCleanupRecovery("env-2", context);
-
-    expect(first).toEqual([]);
-    expect(second).toEqual(["env-2"]);
+    expect(first).toEqual([["env-a", firstContext]]);
+    expect(second).toEqual([["env-b", secondContext]]);
   });
 });

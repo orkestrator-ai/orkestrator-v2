@@ -438,7 +438,6 @@ describe("runtime routing", () => {
     const launched: ClaudeLaunchProfile = {
       context1m: false,
       chrome: false,
-      maxBudgetUsd: null,
       promptSuggestions: false,
       thinking: "adaptive",
       bypassCapable: true,

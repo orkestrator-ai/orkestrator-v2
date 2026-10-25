@@ -11,7 +11,9 @@
  *     late event can never overwrite state belonging to a newer process;
  *   - in-flight requests fail *ambiguously* (see errors.ts) rather than being
  *     silently retried;
- *   - repeated failures open a **circuit breaker** instead of restarting forever;
+ *   - repeated failures open a **circuit breaker** instead of restarting forever.
+ *     After a quiet cooldown the next demand gets one probe start (half-open):
+ *     success closes it, failure re-opens it for a longer cooldown;
  *   - an **environment fingerprint** forces a controlled restart when the
  *     developer's PATH changes, which a persistent child would otherwise miss;
  *   - a **pidfile** plus process-group termination stops orphaned children from
@@ -50,9 +52,9 @@ import type { EngineGeneration, EngineState } from "../engine/types.js";
  *
  * Declared here rather than in the shared taxonomy because it is not a startup
  * *fault*: nothing about this process is broken. Counting it as one would trip
- * the circuit breaker — which nothing ever resets — and lock the workspace out
- * permanently over a condition that resolves as soon as the other owner exits
- * (or its record ages past the TTL).
+ * the circuit breaker and lock the workspace out for a whole cooldown (longer
+ * with each failed probe) over a condition that resolves as soon as the other
+ * owner exits (or its record ages past the TTL).
  */
 export class AppServerOwnershipUnavailableError extends AppServerUnavailableError {
   /** Discriminant, so the check survives a subclass being re-instantiated. */
@@ -119,6 +121,13 @@ export interface AppServerSupervisorOptions {
   /** Failures within `circuitWindowMs` that trip the breaker. */
   circuitBreakerThreshold?: number;
   circuitWindowMs?: number;
+  /**
+   * How long an open breaker stays closed to all starts. After it, the next
+   * demand gets exactly one probe start; a failed probe doubles the cooldown,
+   * up to `circuitMaxCooldownMs`.
+   */
+  circuitCooldownMs?: number;
+  circuitMaxCooldownMs?: number;
   shutdownGraceMs?: number;
   /** Disables pidfile bookkeeping in tests. */
   pidFileEnabled?: boolean;
@@ -198,6 +207,14 @@ interface PidOwnershipRecord {
 const DEFAULT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000, 10_000];
 const DEFAULT_CIRCUIT_THRESHOLD = 5;
 const DEFAULT_CIRCUIT_WINDOW_MS = 60_000;
+/**
+ * A breaker that never closes turns a transient fault (a full disk, a broken
+ * `codex` upgrade the user then fixes) into a workspace that needs a bridge
+ * restart. Five quiet minutes is long enough that a crash-looping child costs
+ * a handful of spawns an hour, and the probe only runs on real demand.
+ */
+const DEFAULT_CIRCUIT_COOLDOWN_MS = 5 * 60_000;
+const DEFAULT_CIRCUIT_MAX_COOLDOWN_MS = 30 * 60_000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 5_000;
 const INCOMPLETE_PIDFILE_GRACE_MS = 1_000;
 /**
@@ -222,6 +239,8 @@ export class AppServerSupervisor {
   private readonly backoffSchedule: number[];
   private readonly circuitThreshold: number;
   private readonly circuitWindowMs: number;
+  private readonly circuitCooldownMs: number;
+  private readonly circuitMaxCooldownMs: number;
   private readonly shutdownGraceMs: number;
   private readonly fingerprintEnvironment: () => string;
 
@@ -243,6 +262,12 @@ export class AppServerSupervisor {
   private restartFailures: number[] = [];
   private restartCount = 0;
   private circuitOpen = false;
+  /** When the open breaker admits its next probe start. */
+  private circuitProbeAt = 0;
+  /** Cooldown applied the next time the breaker opens; doubles per failed probe. */
+  private nextCircuitCooldownMs: number;
+  /** Wakes a backoff sleep when `stop()` runs, so shutdown never waits it out. */
+  private readonly stopController = new AbortController();
   private lastError: string | undefined;
   private lastExitCode: number | null = null;
   private lastExitSignal: string | null = null;
@@ -261,6 +286,12 @@ export class AppServerSupervisor {
     this.backoffSchedule = options.backoffScheduleMs ?? DEFAULT_BACKOFF_MS;
     this.circuitThreshold = options.circuitBreakerThreshold ?? DEFAULT_CIRCUIT_THRESHOLD;
     this.circuitWindowMs = options.circuitWindowMs ?? DEFAULT_CIRCUIT_WINDOW_MS;
+    this.circuitCooldownMs = Math.max(0, options.circuitCooldownMs ?? DEFAULT_CIRCUIT_COOLDOWN_MS);
+    this.circuitMaxCooldownMs = Math.max(
+      this.circuitCooldownMs,
+      options.circuitMaxCooldownMs ?? DEFAULT_CIRCUIT_MAX_COOLDOWN_MS,
+    );
+    this.nextCircuitCooldownMs = this.circuitCooldownMs;
     this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
     this.fingerprintEnvironment = options.fingerprintEnvironment ?? fingerprintRuntimeEnvironment;
   }
@@ -330,13 +361,16 @@ export class AppServerSupervisor {
    */
   private async ensureStarted(): Promise<Generation> {
     if (this.stopping) throw new AppServerUnavailableError("stopped");
-    if (this.circuitOpen) {
+    if (this.startPromise) return this.startPromise;
+    if (this.circuitOpen && this.now() < this.circuitProbeAt) {
       throw new AppServerCircuitOpenError(this.restartFailures.length, this.lastError);
     }
     if (this.current && !this.current.client.isClosed() && this.state === "ready") {
       return this.current;
     }
-    this.startPromise ??= this.startWithRetry().finally(() => {
+    // An open breaker past its cooldown is half-open: this demand gets exactly
+    // one start attempt, with no retries behind it.
+    this.startPromise = this.startWithRetry(this.circuitOpen).finally(() => {
       this.startPromise = null;
     });
     return this.startPromise;
@@ -424,12 +458,14 @@ export class AppServerSupervisor {
     await this.current.client.respondWithError(id, code, message);
   }
 
-  private async startWithRetry(): Promise<Generation> {
+  private async startWithRetry(probe = false): Promise<Generation> {
     let attempt = 0;
     for (;;) {
       try {
         const generation = await this.start();
         this.restartFailures = [];
+        this.circuitOpen = false;
+        this.nextCircuitCooldownMs = this.circuitCooldownMs;
         return generation;
       } catch (error) {
         this.lastError = error instanceof Error ? error.message : String(error);
@@ -441,7 +477,7 @@ export class AppServerSupervisor {
           this.setState("failed", this.lastError);
           throw error;
         }
-        this.recordFailure();
+        this.recordFailure(probe);
         if (this.circuitOpen) {
           this.setState("failed", this.lastError);
           throw new AppServerCircuitOpenError(this.restartFailures.length, this.lastError);
@@ -449,19 +485,24 @@ export class AppServerSupervisor {
         const delay = this.backoffDelay(attempt);
         attempt += 1;
         this.setState("backoff", `retrying in ${delay}ms: ${this.lastError}`);
-        await sleep(delay);
+        await sleepUnlessAborted(delay, this.stopController.signal);
         if (this.stopping) throw new AppServerUnavailableError("stopped");
       }
     }
   }
 
-  private recordFailure(): void {
+  /** `probe`: the half-open attempt failed, so the breaker re-opens at once. */
+  private recordFailure(probe = false): void {
     const now = this.now();
     this.restartFailures = this.restartFailures.filter((at) => now - at <= this.circuitWindowMs);
     this.restartFailures.push(now);
-    if (this.restartFailures.length >= this.circuitThreshold) {
-      this.circuitOpen = true;
-    }
+    if (!probe && this.restartFailures.length < this.circuitThreshold) return;
+    this.circuitOpen = true;
+    this.circuitProbeAt = now + this.nextCircuitCooldownMs;
+    this.nextCircuitCooldownMs = Math.min(
+      this.circuitMaxCooldownMs,
+      Math.max(1, this.nextCircuitCooldownMs) * 2,
+    );
   }
 
   /** Full jitter, so several environments restarting together do not synchronise. */
@@ -808,6 +849,7 @@ export class AppServerSupervisor {
    */
   async stop(): Promise<void> {
     this.stopping = true;
+    this.stopController.abort();
     this.setState("draining", "bridge shutting down");
     const pendingStart = this.startPromise;
     const startingChild = this.startingChild;
@@ -1070,8 +1112,8 @@ export class AppServerSupervisor {
       const claimedAt = Date.parse(record?.acquiredAt ?? record?.startedAt ?? "");
       // A live bridge PID is not proof of identity: PIDs are recycled and
       // `isProcessAlive` also reports true on EPERM. Without an expiry a single
-      // collision locked the workspace out permanently, because the resulting
-      // start failures opened a circuit breaker nothing resets.
+      // collision locked the workspace out for good, because the resulting
+      // start failures kept the circuit breaker open.
       const abandoned = Number.isFinite(claimedAt) && this.now() - claimedAt > PID_OWNERSHIP_TTL_MS;
       // This includes another supervisor in the same process. Ownership is per
       // supervisor token, not merely per bridge PID.
@@ -1511,6 +1553,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
     timer.unref?.();
+  });
+}
+
+/** `sleep` that resolves early, without rejecting, once `signal` aborts. */
+function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const wake = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", wake);
+      resolve();
+    };
+    const timer = setTimeout(wake, ms);
+    timer.unref?.();
+    signal.addEventListener("abort", wake, { once: true });
   });
 }
 

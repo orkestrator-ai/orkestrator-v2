@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { BackendRuntime } from "./backend-runtime.js";
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -128,6 +129,7 @@ test("validation output reader returns a bounded tail and rejects replaced artif
     appRoot: root,
     resourceRoot: root,
     toolchainBinDir: path.dirname(process.execPath),
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as unknown as CommandContext;
 
   try {
@@ -197,6 +199,7 @@ test("real backend runner seals hashed evidence and refuses a moved head or repl
     appRoot: root,
     resourceRoot: root,
     toolchainBinDir: path.dirname(process.execPath),
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as unknown as CommandContext;
   const initial = newReviewValidationRun("review-validation-fixture", {
     headRef: head,
@@ -304,6 +307,7 @@ test("stop-command stops one command through the backend runner and rejects fore
     appRoot: root,
     resourceRoot: root,
     toolchainBinDir: path.dirname(process.execPath),
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as unknown as CommandContext;
   const step = (id: string, command: string) => ({
     id,
@@ -395,6 +399,7 @@ test("stop-command uses Docker exec and accepts the matching container snapshot"
         containerId: "validation-container",
       }),
     },
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as unknown as CommandContext;
   const previousPath = process.env.PATH;
   process.env.PATH = `${bin}:${previousPath}`;

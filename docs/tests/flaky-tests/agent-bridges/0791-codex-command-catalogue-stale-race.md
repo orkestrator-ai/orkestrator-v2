@@ -27,7 +27,28 @@ not establish the cause.
 Original evidence: host temporary directory
 `orkestrator-test-run.GSCek7/bridges.log.gz`, with the outer run under `orkestrator-test-run.iCAyRT`.
 
-## 2026-10-25
+## Annotation qualification validation, 2026-10-25
+
+The unchanged owner failed again during `annotation-suite` (`mise run test`),
+this time in `a cold app-server child > its first answer is stale until a
+settling re-read confirms the plugin skills`. Its exact-call-count settling
+wait at line 212 timed out after 2,067.66 ms. Codex reported 2356 pass, 40 skip
+and 1 fail across 88 files (72.69 seconds). The shared host capacity queue was
+also delaying this run's workspace group; that does not establish the cause of
+the test failure.
+
+The entire owner passed alone, with no source or timeout changes:
+
+```sh
+mise run test:logged -- --name annotation-codex-catalogue-check -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Exit status was 0; logged duration was 1.3 seconds. The annotation fixes do not
+change any bridge implementation. Aggregate evidence is in the host temporary
+directory `orkestrator-test-run.N5VXK9/bridges.log.gz`; the enclosing log is
+`orkestrator-test-run.gSVRr6/annotation-suite.log.gz`.
+
+## Per-machine accounts validation, 2026-10-25
 
 Failed again in the `todo-0722-per-machine-accounts` branch's
 `mise run test` aggregate (the branch changes no bridge code), and once in
@@ -37,3 +58,19 @@ three solo runs of the unchanged owner
 not need aggregate load. The sibling case at line 284 fails the same way;
 see [0800](0800-codex-command-catalogue-armed-delay-race.md).
 
+## 2026-10-25 composer model admission validation
+
+Recurred in `review-tests` (`mise run test:logged -- --name review-tests --
+mise run test`) on `todo-0004-composer-model-params-803868a90fcb` with Bun
+1.4.4. Both cold-child catalogue cases expected `stale` but received `ready`;
+no command catalogue implementation or tests changed in this work.
+
+The complete unchanged owner passed alone (exit 0, 2.1 seconds):
+
+```sh
+mise run test:logged -- --name bridge-catalogue-recheck -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Original aggregate evidence: `orkestrator-test-run.T3LqzB/bridges.log`
+(compressed on aggregate completion). The original aggregate remains failed.
+No skips, assertions or timeouts were changed.

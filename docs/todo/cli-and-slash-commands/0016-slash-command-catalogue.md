@@ -166,7 +166,8 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
   across group boundaries and clamped at both ends. Found on the way: a new Pi
   tab lists no provider commands until its session attaches (first turn, or
   the menu's "Refresh commands"); tracked as
-  [0069](0069-pi-commands-before-first-turn.md). Not batched with the
+  [0069](0069-pi-commands-before-first-turn.md), fixed on 2026-10-25 (it now
+  lists its templates and skills before attach). Not batched with the
   inactive-environment scenario in 0015 (decision 11).
 - **Before deleting a legacy route.** Done as far as this machine allows
   (decisions 1 and 12): no production counts exist (none are collected

@@ -56,7 +56,7 @@ import {
   createRealmRequestAuthInstaller,
   installRemoteGatewayRequestAuth,
 } from "./remote-gateway-request-auth.js";
-import { RealmContexts } from "./realm-contexts.js";
+import { RealmContexts, refreshWorkspaceRealm } from "./realm-contexts.js";
 import { ensurePinnedToolchains } from "@orkestrator/toolchain/manager";
 import { pinnedArtifactsForPlatforms } from "@orkestrator/toolchain/manifest";
 import {
@@ -216,7 +216,11 @@ type DesktopWindowContext = {
   portalScope: string | null;
   target: WindowWorkspaceTarget | null;
   /** A workspace realm: another node's workspace in a window's central region. */
-  realm: { parentWebContentsId: number; viewId: string } | null;
+  realm: {
+    parentWebContentsId: number;
+    viewId: string;
+    layout: WorkspaceViewRecord["layout"];
+  } | null;
 };
 type WindowWorkspaceTarget = {
   nodeId: string;
@@ -884,7 +888,26 @@ function createWorkspaceViews(): WorkspaceViews {
           {
             manager,
             scopes: nodeWorkspaceScopes,
-            committed: () => undefined,
+            committed: (updated) => {
+              const context = Array.from(realmContexts.values()).find(
+                (realm) => realm.scope === updated.scope,
+              );
+              if (!context?.realm) return; // Initial open precedes registration.
+              const owner: RealmViewOwner = {
+                contents: context.contents,
+                ViewCtor: realmChildViewClass(WebContentsView, context.realm.layout),
+              };
+              refreshWorkspaceRealm(context, updated.target, (connectionId) =>
+                createWindowBrowserPreviews(
+                  context.window,
+                  context.scope,
+                  context.slot,
+                  connectionId,
+                  `node:${updated.target!.nodeId}`,
+                  owner,
+                ),
+              );
+            },
           },
         );
       } catch (error) {
@@ -941,7 +964,7 @@ function registerRealm(record: WorkspaceViewRecord, parentWebContentsId: number)
     artifactHosts: createWindowArtifactHosts(parent.window, owner),
     portalScope: binding.portalScope,
     target: binding.target,
-    realm: { parentWebContentsId, viewId: record.viewId },
+    realm: { parentWebContentsId, viewId: record.viewId, layout: record.layout },
   });
   installDefaultContextMenu(parent.window, Menu, writeClipboardText, contents);
   contents.on("did-finish-load", () => {
@@ -1009,7 +1032,12 @@ function registerIpc(): void {
   registerMainIpc({
     getBackend: (event) => {
       const scope = scopeForEvent(event);
-      return { invoke: (command, args) => manager().invoke(command, args, scope) };
+      return {
+        invoke: (command, args) => {
+          nodeWorkspaceScopes?.noteUse(scope);
+          return manager().invoke(command, args, scope);
+        },
+      };
     },
     getMainWindow: (event) => ipcContextForEvent(event).window,
     getArtifactHosts: (event) => ipcContextForEvent(event).artifactHosts,

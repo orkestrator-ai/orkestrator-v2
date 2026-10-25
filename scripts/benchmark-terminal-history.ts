@@ -1,14 +1,7 @@
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  appendTerminalHistory,
-  configureTerminalHistory,
-  flushTerminalHistories,
-  getTerminalHistoryPage,
-  getTerminalStateSnapshot,
-  terminalHistoryTesting,
-} from "../apps/backend/src/core/terminal-history";
+import { TerminalHistory } from "../apps/backend/src/core/terminal-history";
 
 type Measurement = {
   terminals: number;
@@ -40,12 +33,12 @@ function percentile(values: number[], quantile: number): number {
 
 async function measure(terminals: number, outputBytesPerTerminal: number): Promise<Measurement> {
   const dataDir = await mkdtemp(path.join(tmpdir(), "ork-terminal-history-benchmark-"));
-  terminalHistoryTesting.clear();
+  const history = new TerminalHistory();
   Bun.gc(true);
   const before = process.memoryUsage();
   try {
     for (let index = 0; index < terminals; index += 1) {
-      configureTerminalHistory({
+      history.configure({
         sessionId: `terminal-${index}`,
         dataDir,
         stableIdentity: `benchmark-terminal-${index}`,
@@ -58,23 +51,23 @@ async function measure(terminals: number, outputBytesPerTerminal: number): Promi
     const ingestStarted = performance.now();
     if (outputBytesPerTerminal > 0) {
       for (let index = 0; index < terminals; index += 1) {
-        appendTerminalHistory(`terminal-${index}`, output, 1, 1);
+        history.append(`terminal-${index}`, output, 1, 1);
       }
     }
-    await flushTerminalHistories();
+    await history.flush();
     const ingestMs = performance.now() - ingestStarted;
     const snapshotTimes: number[] = [];
     let largestSnapshotBytes = 0;
     let largestPageBytes = 0;
     for (let index = 0; index < terminals; index += 1) {
       const started = performance.now();
-      const snapshot = await getTerminalStateSnapshot(`terminal-${index}`);
+      const snapshot = await history.stateSnapshot(`terminal-${index}`);
       snapshotTimes.push(performance.now() - started);
       largestSnapshotBytes = Math.max(
         largestSnapshotBytes,
         Buffer.byteLength(`${snapshot?.output ?? ""}${snapshot?.pendingOutput ?? ""}`),
       );
-      const page = await getTerminalHistoryPage(`terminal-${index}`);
+      const page = await history.page(`terminal-${index}`);
       largestPageBytes = Math.max(
         largestPageBytes,
         Buffer.byteLength(JSON.stringify(page ?? null)),
@@ -91,12 +84,12 @@ async function measure(terminals: number, outputBytesPerTerminal: number): Promi
       largestSnapshotBytes,
       largestPageBytes,
       diskBytes: await directoryBytes(dataDir),
-      estimatedStateBytes: terminalHistoryTesting.stats().estimatedStateBytes,
+      estimatedStateBytes: history.stats().estimatedStateBytes,
       rssDeltaBytes: Math.max(0, after.rss - before.rss),
       heapDeltaBytes: Math.max(0, after.heapUsed - before.heapUsed),
     };
   } finally {
-    terminalHistoryTesting.clear();
+    history.shutdown();
     await rm(dataDir, { recursive: true, force: true });
   }
 }

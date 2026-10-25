@@ -31,6 +31,7 @@ import {
   type TmuxSessionTimingOptions,
 } from "../src/core/tmux";
 
+import { BackendRuntime } from "../src/core/backend-runtime";
 import type { Environment } from "../src/core/models";
 
 export const tempDirs: string[] = [];
@@ -661,7 +662,19 @@ main().catch((error) => {
   }
 }
 
+/**
+ * The backend runtime `invoke` hands a command when its context names none; one
+ * per test, so fence and terminal state set in one test never reaches the next.
+ */
+let currentRuntime = new BackendRuntime({ emit: () => undefined });
+
+export function harnessRuntime(): BackendRuntime {
+  return currentRuntime;
+}
+
 afterEach(async () => {
+  currentRuntime.shutdown();
+  currentRuntime = new BackendRuntime({ emit: () => undefined });
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -686,6 +699,7 @@ export async function invoke(
     emit: () => undefined,
     appRoot: "",
     resourceRoot: "",
+    runtime: currentRuntime,
     ...contextOverrides,
   });
 }

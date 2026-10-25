@@ -1,7 +1,7 @@
 # OpenCode compatibility probe deadline sees no exit code under aggregate load
 
 - **ID:** 0166
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-09-26
 - **Test:** `runOpenCodeLiveCompatibility > kills the server when the overall deadline expires`
 - **File:** `scripts/opencode-live-compatibility-probe.test.ts`
@@ -118,3 +118,25 @@ owning file passed three consecutive runs with
 `mise run test:logged -- --name oc-probe-N -- bun test ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1`.
 Case 0242 (a shared temporary-root prefix across worktrees) is separate and
 stays open.
+
+## Recurrence — 2026-10-25 (reopened)
+
+- **Branch:** `todo-0066-residual-module-state-40e8f98a7ef0` (moves backend
+  module state into `BackendRuntime`; it does not touch
+  `scripts/opencode-live-compatibility-probe*.ts`).
+- **Original command:** `mise run test`, reservations 4/1/2/1, root group with
+  one worker slot, other worktrees running tests on the same host.
+- **Failure:** a different assertion from the original case: `server.exitCode`
+  was 0, but `expect(await tempRoots()).toEqual(before)` at line 399 found an
+  extra `ork-opencode-compat-vgEpCr` directory in the temporary directory.
+  37.93 ms. Root counts: 3414 pass, 1 fail, 3415 tests across 162 files
+  (227.75 s). Artifact `orkestrator-test-run.sBEjBh` under the host temporary
+  directory.
+- **Isolated rerun:** `bun test ./scripts/opencode-live-compatibility-probe.test.ts`
+  from the repository root: 31 pass, 0 fail (1.23 s).
+- **Hypothesis (not established):** `tempRoots()` lists every
+  `ork-opencode-compat-*` entry in the shared OS temporary directory, so a
+  probe run by another process or worktree on the same host at that moment
+  would appear as a leak. Scoping the listing to roots this test created would
+  rule that out.
+

@@ -116,6 +116,7 @@ export class HttpBridgeCatalogAdapter {
       ...(normalized.revision !== undefined ? { revision: normalized.revision } : {}),
       ...(normalized.generation ? { generation: normalized.generation } : {}),
       ...(normalized.freshness ? { freshness: normalized.freshness } : {}),
+      ...(normalized.attachPending ? { attachPending: true } : {}),
     };
   }
 

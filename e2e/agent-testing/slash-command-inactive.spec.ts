@@ -65,14 +65,13 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { watchEventStream } from "./event-stream-outage";
 import {
   authenticatedInvoke,
-  assertRelative,
+  containerWorkspace,
   hostWorkspace,
   profileStatus,
   repositoryRoot,
   sidebarNavigator,
   type Environment,
   type Project,
-  type Workspace,
 } from "./slash-command-live-support";
 
 type Message = { role?: unknown; content?: unknown };
@@ -125,53 +124,6 @@ function selectedEnvironmentKind(): EnvironmentKind {
   return raw as EnvironmentKind;
 }
 const ENVIRONMENT_KIND: EnvironmentKind = LIVE_OPT_IN ? selectedEnvironmentKind() : "local";
-
-/**
- * A container's `/workspace`, which exists only inside the container. Files
- * are written as `node`, the user the bridges and providers run as, so the
- * provider can read and the model's shell can append to them.
- */
-function containerWorkspace(containerId: string): Workspace {
-  const exec = (script: string, relative: string, input?: string) => {
-    assertRelative(relative);
-    return spawnSync(
-      "docker",
-      [
-        "exec",
-        ...(input === undefined ? [] : ["-i"]),
-        "--user",
-        "node",
-        "--workdir",
-        "/workspace",
-        containerId,
-        "sh",
-        "-c",
-        script,
-        "sh",
-        relative,
-      ],
-      { encoding: "utf8", ...(input === undefined ? {} : { input }) },
-    );
-  };
-  const failed = (action: string, result: ReturnType<typeof spawnSync>) =>
-    new Error(`docker exec (${action}) exited ${result.status}: ${String(result.stderr).trim()}`);
-  return {
-    write(relative, body) {
-      const result = exec('mkdir -p "$(dirname "$1")" && cat > "$1"', relative, body);
-      if (result.status !== 0) throw failed("write", result);
-    },
-    remove(relative) {
-      const result = exec('rm -f -- "$1"', relative);
-      if (result.status !== 0) throw failed("remove", result);
-    },
-    read(relative) {
-      const result = exec('[ -e "$1" ] || exit 3; cat -- "$1"', relative);
-      if (result.status === 3) return undefined;
-      if (result.status !== 0) throw failed("read", result);
-      return result.stdout;
-    },
-  };
-}
 
 function selectedProviders(): Provider[] {
   const raw = process.env.ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS?.trim() || "codex";

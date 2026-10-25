@@ -26,3 +26,30 @@ Unlike 0791's first observation, this one fails without parallel workers, so
 host load is not needed to reproduce it. The same hypothesis applies: a
 background catalogue refresh settles between the test's polling condition and
 the final `commands.list()`. Not established.
+
+## 2026-10-25 composer model admission validation
+
+Recurred in `review-tests` (`mise run test:logged -- --name review-tests --
+mise run test`) on `todo-0004-composer-model-params-803868a90fcb` with Bun
+1.4.4. Both cold-child catalogue cases expected `stale` but received `ready`;
+no command catalogue implementation or tests changed in this work.
+
+The complete unchanged owner passed alone (exit 0, 2.1 seconds):
+
+```sh
+mise run test:logged -- --name bridge-catalogue-recheck -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Original aggregate evidence: `orkestrator-test-run.T3LqzB/bridges.log`
+(compressed on aggregate completion). The original aggregate remains failed.
+No skips, assertions or timeouts were changed.
+
+## PR monitor shutdown validation recurrence — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name residual-state-suite -- mise run test`, on `todo-0066-residual-module-state-40e8f98a7ef0`, Bun 1.4.4.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 slots; one isolated Bun worker per bridge package. Bridges waited 90.8 seconds for shared host capacity.
+- **Failure:** line 293 expected `stale` but received `ready` (74.91 ms).
+- **Package counts:** Codex reported 2355 passed, 40 skipped and two failed across 2397 tests in 88 files; the other failure was [0492](0492-codex-deleted-session-initial-retry-race.md).
+- **Owning-file rerun:** `mise run test:logged -- --name codex-catalogue-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 1.3 seconds.
+- **Evidence:** `orkestrator-test-run.jMkwTI/bridges.log.gz` under the host temporary directory after aggregate completion.
+- **Assessment:** recurrence of the existing stale/ready race; this change touches no bridge source or assertions.

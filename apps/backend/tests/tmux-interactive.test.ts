@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { BackendRuntime } from "../src/core/backend-runtime";
 import type { CommandContext } from "../src/core/commands";
 import {
   buildTmuxPaneUpdate,
@@ -131,6 +132,7 @@ describe("interactive tmux terminal snapshots", () => {
     const id = manager.create(tmux as never, 120, 40);
     const context = {
       emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+      runtime: new BackendRuntime({ emit: () => undefined }),
     } as unknown as CommandContext;
     return {
       manager,
@@ -164,7 +166,7 @@ describe("interactive tmux terminal snapshots", () => {
     expect(harness.emitted).toHaveLength(2);
     expect(harness.scheduled[2]?.delayMs).toBe(INTERACTIVE_SNAPSHOT_MIN_MS);
 
-    await harness.manager.write(harness.id, "x");
+    await harness.manager.write(harness.id, "x", harness.context);
     expect(harness.writeCount()).toBe(1);
     expect(harness.scheduled.at(-1)?.delayMs).toBe(INTERACTIVE_SNAPSHOT_MIN_MS);
   });
@@ -178,7 +180,8 @@ describe("interactive tmux terminal snapshots", () => {
     await harness.manager.start(harness.id, harness.context);
     const armed = harness.scheduled[0]!;
 
-    for (const char of "hello world") await harness.manager.write(harness.id, char);
+    for (const char of "hello world")
+      await harness.manager.write(harness.id, char, harness.context);
 
     expect(harness.writeCount()).toBe(11);
     expect(harness.cancelled).not.toContain(armed.timer);
@@ -199,7 +202,7 @@ describe("interactive tmux terminal snapshots", () => {
     const backedOff = harness.scheduled[2]!;
     expect(backedOff.delayMs).toBeGreaterThan(INTERACTIVE_SNAPSHOT_MIN_MS);
 
-    await harness.manager.write(harness.id, "x");
+    await harness.manager.write(harness.id, "x", harness.context);
 
     expect(harness.cancelled).toContain(backedOff.timer);
     expect(harness.scheduled.at(-1)?.delayMs).toBe(INTERACTIVE_SNAPSHOT_MIN_MS);

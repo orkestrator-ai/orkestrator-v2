@@ -55,6 +55,18 @@ interface Window {
     listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
     /** Browser gateway only: resolves once the event's filtered stream is live. */
     eventStreamReady?(event: string): Promise<void>;
+    /**
+     * Browser gateway only: whether the authoritative main event stream is up.
+     * Electron reports transport state through `connections` instead.
+     */
+    eventStreamConnection?: {
+      state(): import("@/lib/native/web-gateway").GatewayEventStreamConnectionState;
+      subscribe(
+        listener: (
+          state: import("@/lib/native/web-gateway").GatewayEventStreamConnectionState,
+        ) => void,
+      ): () => void;
+    };
     clipboard: {
       readText(): Promise<string>;
       writeText(text: string): Promise<void>;

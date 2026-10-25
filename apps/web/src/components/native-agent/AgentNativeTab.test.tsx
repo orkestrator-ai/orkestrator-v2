@@ -26,6 +26,7 @@ import { nativeAsyncQuestionRequestId } from "@orkestrator/protocol/native-agent
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as scrollState from "@/hooks/useVirtuosoScrollState";
 import * as realBackend from "@/lib/backend";
+import * as modelPicker from "@/components/chat/AgentModelPicker";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -2314,6 +2315,120 @@ describe("AgentNativeTab", () => {
     // The pane store owns a normal tab's lock; a coordinator conversation is
     // backend state and must not be locked locally.
     expect(usePaneLayoutStore.getState().environments.size).toBe(0);
+  });
+
+  test("a platform-locked tab filters favourites and merges visible reorder into their original slots", async () => {
+    const favoriteModels = [
+      { platform: "codex" as const, modelId: "gpt-5.4" },
+      { platform: "claude" as const, modelId: "claude-a" },
+      { platform: "opencode" as const, modelId: "hidden" },
+      { platform: "claude" as const, modelId: "claude-b" },
+    ];
+    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+      const projection = await defaultProjection(input);
+      return {
+        ...projection,
+        composer: {
+          ...projection.composer,
+          models: [
+            { platform: "claude", id: "claude-a", label: "Claude A" },
+            { platform: "claude", id: "claude-b", label: "Claude B" },
+          ],
+        },
+      } as NativeAgentSessionProjection<NativeMessage>;
+    });
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      favoriteModels,
+    });
+    let pickerProps: Parameters<typeof modelPicker.AgentModelPicker>[0] | undefined;
+    const OriginalPicker = modelPicker.AgentModelPicker;
+    const picker = spyOn(modelPicker, "AgentModelPicker").mockImplementation((props) => {
+      pickerProps = props;
+      return <OriginalPicker {...props} />;
+    });
+    const persist = spyOn(realBackend, "updateGlobalConfig").mockImplementation(async (global) => ({
+      ...useConfigStore.getState().config,
+      global,
+    }));
+    try {
+      render(
+        <AgentNativeTab
+          tabId="locked-favourites"
+          data={{ environmentId: "env-1", platform: "claude" }}
+          isActive
+        />,
+      );
+      fireEvent.pointerDown(await screen.findByTitle(/^Choose /));
+      fireEvent.click(await screen.findByRole("button", { name: "Favorite models" }));
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByRole("menuitemradio")
+            .map((item) => item.textContent)
+            .filter((row) => row?.startsWith("Claude ")),
+        ).toEqual(["Claude AClaude", "Claude BClaude"]),
+      );
+      expect(screen.queryByRole("menuitemradio", { name: /GPT-5.4/ }) === null).toBe(true);
+      expect(pickerProps?.platformSelectionLocked).toBe(true);
+      expect(pickerProps?.favorites).toEqual([favoriteModels[1]!, favoriteModels[3]!]);
+      await act(async () => {
+        pickerProps!.onReorderFavorites!([favoriteModels[3]!, favoriteModels[1]!]);
+      });
+      const reordered = [
+        favoriteModels[0]!,
+        favoriteModels[3]!,
+        favoriteModels[2]!,
+        favoriteModels[1]!,
+      ];
+      await waitFor(() =>
+        expect(useConfigStore.getState().config.global.favoriteModels).toEqual(reordered),
+      );
+      expect(persist).toHaveBeenCalledWith(expect.objectContaining({ favoriteModels: reordered }));
+    } finally {
+      cleanup();
+      picker.mockRestore();
+      persist.mockRestore();
+    }
+  });
+
+  test("an unassigned coordinator composer hides favourites for platforms it cannot use", async () => {
+    seedUnassignedDefaultCatalog();
+    const favoriteModels: Array<{ platform: AgentPlatform; modelId: string }> = [
+      { platform: "opencode", modelId: "anthropic/opencode-only-model" },
+      { platform: "codex", modelId: "gpt-5.4" },
+      { platform: "claude", modelId: "claude-sonnet-5" },
+    ];
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      favoriteModels,
+      agentSettings: { defaultAgent: "claude" },
+    } as never);
+    useEnvironmentStore.setState({ environments: [] });
+
+    render(
+      <AgentNativeTab
+        tabId="coordinator-tab-favorites"
+        data={{ environmentId: "coordinator:workspace-1:conversation-6", isLocal: true }}
+        isActive
+        executionPolicy="coordinator-read-only"
+        coordinatorProjectId="project-1"
+        onAssignPlatform={async () => undefined}
+        availablePlatforms={["claude", "codex"]}
+      />,
+    );
+
+    fireEvent.pointerDown(await screen.findByTitle(/^Choose /));
+    fireEvent.click(await screen.findByRole("button", { name: "Favorite models" }));
+    // Model rows only; the speed choices are radio items too.
+    const modelRows = () =>
+      screen
+        .getAllByRole("menuitemradio")
+        .map((item) => item.textContent ?? "")
+        .filter((row) => !row.includes("credit rate"));
+    await waitFor(() => expect(modelRows()).toEqual(["GPT-5.4Codex", "Claude SonnetClaude"]));
+    // The hidden favourite is still a favourite.
+    expect(useConfigStore.getState().config.global.favoriteModels).toEqual(favoriteModels);
   });
 
   test("an unassigned coordinator composer searches the checkout and stages pastes outside it", async () => {
@@ -5858,40 +5973,24 @@ describe("AgentNativeTab", () => {
   test.each([
     ["review", true],
     ["ordinary", false],
-  ] as const)(
-    "hides only the Codex reasoning summary control in a %s tab",
-    async (kind, review) => {
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
-        ...(await defaultProjection(input)),
-        composerControls: codexSummaryControls,
-      }));
-
-      render(
-        <AgentNativeTab
-          tabId={`tab-codex-${kind}-parameters`}
-          data={identity("codex")}
-          isActive
-          isReviewTab={review}
-        />,
-      );
-
-      expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
-      // The filter must not swallow Codex's other parameter controls.
-      expect(screen.getByText(/Effort: Medium/)).toBeTruthy();
-      expect(screen.queryByText(/Reasoning summary: Automatic/) === null).toBe(true);
-    },
-  );
-
-  test("keeps the reasoning summary control for a platform other than Codex", async () => {
+  ] as const)("hides unsupported Codex summary in a %s tab", async (kind, review) => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       composerControls: codexSummaryControls,
     }));
 
-    render(<AgentNativeTab tabId="tab-cursor-summary" data={freshTab("cursor")} isActive />);
+    render(
+      <AgentNativeTab
+        tabId={`tab-codex-${kind}-parameters`}
+        data={identity("codex")}
+        isActive
+        isReviewTab={review}
+      />,
+    );
 
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
-    expect(screen.getByText(/Reasoning summary: Automatic/)).toBeTruthy();
+    expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
+    expect(screen.getByText(/Effort: Medium/)).toBeTruthy();
+    expect(screen.queryByText(/Reasoning summary: Automatic/) === null).toBe(true);
   });
 
   test("renders model parameters supplied for a non-Claude platform", async () => {

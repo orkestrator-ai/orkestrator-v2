@@ -571,7 +571,8 @@ describe("BrowserPreviewManager pins", () => {
           state: "matched",
           rule: "semantic-context",
           candidateCount: 1,
-          rect: null,
+          // Null geometry is a valid hidden match; malformed geometry is not.
+          rect: { x: 1, y: 2, width: -3, height: 4 },
         },
         {
           annotationId: "annotation-99",

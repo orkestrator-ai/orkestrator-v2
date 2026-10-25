@@ -437,7 +437,8 @@ the full matrix is a separate task:
 
 ```bash
 # Credential-free: read-only, local-lifecycle, retry-and-retention,
-# setup-failure, client-exit, exec, wrong-profile
+# setup-failure, client-exit, exec, wrong-profile, project-cascade,
+# project-init (container runs add foreign-owner and drop the local-only ones)
 mise run test:logged -- --name cli-scenarios -- mise run test:cli:scenarios
 
 # One scenario, keeping its root for inspection on failure
@@ -455,17 +456,23 @@ mise run test:cli:scenarios -- --environment-type container \
 ```
 
 `mise run test:agent:browser:isolated` includes `e2e/agent-testing/cli-ui.spec.ts`
-(CLI changes seen by an open and a reloaded renderer). Its live question test
-needs a profile started with Claude credentials:
+(CLI changes seen by an open and a reloaded renderer). Its live question and
+approval tests start their run on `ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT`
+(default `claude`; `ORKESTRATOR_AGENT_TEST_LIVE_CLI_MODEL` pins a model) and
+need a profile started with that provider's credentials. The approval test
+sets the environment's execution policy to ask (a host session otherwise
+auto-approves):
 
 ```bash
-mise run dev:test --profile qa-cli-live --fixture --credential-source claude --agent-platforms claude
+mise run dev:test --profile qa-cli-live --fixture --credential-source opencode --agent-platforms opencode
 ORKESTRATOR_AGENT_TEST_PROFILE=qa-cli-live ORKESTRATOR_AGENT_TEST_LIVE_CLI=1 \
+  ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT=opencode \
   mise run test:agent:browser -- e2e/agent-testing/cli-ui.spec.ts
 mise run dev:stop --profile qa-cli-live && mise run dev:reset --profile qa-cli-live
 ```
 
-The run manifest (IDs, exit codes, stages — no prompts or tokens) is written to
+The run manifest (IDs, exit codes, stages and, for a live turn, the pinned and
+reported model — no prompts or tokens) is written to
 `output/cli-scenarios/<run>/manifest.json`. Record live results in the
 [evidence log](../todo/cli-and-slash-commands/0014-cli-qualification.md#evidence-log), against the coverage
 table in [cli-testing.md](cli-testing.md#coverage-by-layer).

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
@@ -66,7 +67,9 @@ async function createEnvironment(
   name: string,
   extra: string[] = [],
 ): Promise<PublicEnvironmentSummary> {
-  const { result } = await context.cli.ok<{ environment: PublicEnvironmentSummary }>(
+  const { result } = await context.cli.ok<{
+    environment: PublicEnvironmentSummary;
+  }>(
     [
       "environment",
       "create",
@@ -149,6 +152,18 @@ function git(cwd: string, args: string[]): string {
   return result.stdout.trim();
 }
 
+/** Docker CLI, argv only; trimmed stdout. Throws unless `allowFailure`. */
+function docker(args: string[], options: { allowFailure?: boolean } = {}): string {
+  const result = spawnSync("docker", args, {
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  if (result.status !== 0 && !options.allowFailure) {
+    throw new Error(`docker ${args[0]} failed: ${result.stderr || result.error?.message}`);
+  }
+  return (result.stdout ?? "").trim();
+}
+
 export const SCENARIOS: ScenarioDefinition[] = [
   {
     name: "read-only",
@@ -204,7 +219,9 @@ export const SCENARIOS: ScenarioDefinition[] = [
         "--base-commit",
         fixture.head,
       ]);
-      const started = await context.cli.ok<{ environment: PublicEnvironmentSummary }>(
+      const started = await context.cli.ok<{
+        environment: PublicEnvironmentSummary;
+      }>(
         ["environment", "start", environment.id, "--wait", "ready", "--timeout", "3m"],
         "start --wait ready",
       );
@@ -222,7 +239,9 @@ export const SCENARIOS: ScenarioDefinition[] = [
       }
       expectThat(ready.base.commit === fixture.head, "recorded base commit differs");
       await expectChangesView(context, environment.id, ready.workspacePath);
-      const configured = await context.cli.ok<{ settings: { revision: string } }>(
+      const configured = await context.cli.ok<{
+        settings: { revision: string };
+      }>(
         [
           "environment",
           "config",
@@ -266,10 +285,9 @@ export const SCENARIOS: ScenarioDefinition[] = [
         "branch was not renamed with the environment",
       );
       if (context.environmentType === "local") {
-        const forked = await context.cli.ok<{ environment: PublicEnvironmentSummary }>(
-          ["environment", "fork", environment.id, "--type", "local"],
-          "fork",
-        );
+        const forked = await context.cli.ok<{
+          environment: PublicEnvironmentSummary;
+        }>(["environment", "fork", environment.id, "--type", "local"], "fork");
         const forkId = forked.result.environment.id;
         context.cleanup.unshift({
           label: `delete fork ${forkId}`,
@@ -395,7 +413,9 @@ export const SCENARIOS: ScenarioDefinition[] = [
       await configureConnection(context);
       const fixture = await addFixtureProject(context, "setupfail", {
         "README.md": "# setup failure\n",
-        "orkestrator-ai.json": JSON.stringify({ setupLocal: "echo failing setup; exit 7" }),
+        "orkestrator-ai.json": JSON.stringify({
+          setupLocal: "echo failing setup; exit 7",
+        }),
       });
       const environment = await createEnvironment(context, fixture.projectId, "setup-fails");
       const failed = await context.cli.run(
@@ -475,7 +495,10 @@ export const SCENARIOS: ScenarioDefinition[] = [
       const environment = await createEnvironment(context, fixture.projectId, "client-exit");
       const interrupted = await context.cli.run(
         ["--json", "environment", "start", environment.id, "--wait", "ready", "--timeout", "3m"],
-        { stage: "interrupted wait", signalAfterMs: { signal: "SIGINT", afterMs: 2_500 } },
+        {
+          stage: "interrupted wait",
+          signalAfterMs: { signal: "SIGINT", afterMs: 2_500 },
+        },
       );
       expectThat(
         interrupted.code === 130,
@@ -588,7 +611,9 @@ export const SCENARIOS: ScenarioDefinition[] = [
         `command outlived its environment (${drained.state})`,
       );
       if (context.environmentType === "local") {
-        const survivors = spawnSync("pgrep", ["-f", "^sleep 127$"], { encoding: "utf8" });
+        const survivors = spawnSync("pgrep", ["-f", "^sleep 127$"], {
+          encoding: "utf8",
+        });
         expectThat(survivors.status === 1, "the command's process survived deletion");
       }
     },
@@ -614,6 +639,141 @@ export const SCENARIOS: ScenarioDefinition[] = [
     },
   },
   {
+    name: "foreign-owner",
+    description:
+      "A container and volume labelled for the same environment but another owner are never adopted, started, exec'd into, stopped or removed.",
+    environmentTypes: ["container"],
+    async run(context) {
+      expectThat(context.dockerImage, "foreign-owner needs --docker-image");
+      await configureConnection(context);
+      const fixture = await addFixtureProject(context, "foreign-owner");
+      const environment = await createEnvironment(context, fixture.projectId, "foreign-owner");
+      // Every label a lookup by environment could match, except the owner.
+      const foreignOwner = `foreign-${randomUUID().slice(0, 12)}`;
+      const labels = [
+        "app=orkestrator-v2",
+        `orkestrator-owner=${foreignOwner}`,
+        `environment-id=${environment.id}`,
+        `project-id=${fixture.projectId}`,
+        `environment-name=${environment.name}`,
+      ].flatMap((label) => ["--label", label]);
+      const volume = docker(["volume", "create", ...labels, `ork-${foreignOwner}-decoy`]);
+      context.cleanup.push({
+        label: `remove decoy volume ${volume}`,
+        run: async () => {
+          docker(["volume", "rm", "--force", volume], { allowFailure: true });
+        },
+      });
+      const decoy = docker([
+        "create",
+        "--name",
+        `ork-${foreignOwner}-decoy`,
+        "--network",
+        "none",
+        ...labels,
+        "--mount",
+        `type=volume,source=${volume},target=/foreign-decoy`,
+        context.dockerImage,
+        "true",
+      ]);
+      // Runs before the volume removal pushed above, which it still mounts.
+      context.cleanup.unshift({
+        label: `remove decoy container ${decoy}`,
+        run: async () => {
+          docker(["rm", "--force", decoy], { allowFailure: true });
+        },
+      });
+      const snapshot = () => ({
+        container: docker([
+          "container",
+          "inspect",
+          "--format",
+          "{{.State.Status}} {{.State.StartedAt}} {{.State.FinishedAt}} {{.RestartCount}} {{json .Config.Labels}}",
+          decoy,
+        ]),
+        volume: docker(["volume", "inspect", "--format", "{{json .Labels}}", volume]),
+      });
+      const before = snapshot();
+      expectThat(before.container.startsWith("created "), "the decoy was not left created");
+      const unchanged = (stage: string) => {
+        const now = snapshot();
+        expectThat(
+          now.container === before.container && now.volume === before.volume,
+          `[${stage}] the foreign-owner decoy changed:\n${before.container}\n${now.container}`,
+        );
+      };
+      const labelled = () =>
+        docker([
+          "ps",
+          "--all",
+          "--no-trunc",
+          "--filter",
+          `label=environment-id=${environment.id}`,
+          "--format",
+          '{{.ID}} {{.State}} {{.Label "orkestrator-owner"}}',
+        ])
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [id, state, owner] = line.split(" ");
+            return { id: id!, state: state!, owner: owner ?? "" };
+          });
+
+      await context.cli.ok(
+        ["environment", "start", environment.id, "--wait", "ready", "--timeout", "5m"],
+        "start beside the decoy",
+      );
+      unchanged("start");
+      const ours = labelled().filter((container) => container.id !== decoy);
+      expectThat(ours.length === 1, `expected one owned container, found ${ours.length}`);
+      expectThat(
+        ours[0]!.state === "running" && ours[0]!.owner !== foreignOwner && ours[0]!.owner !== "",
+        `the environment runs in ${ours[0]!.state} container owned by '${ours[0]!.owner}'`,
+      );
+      // Only the decoy mounts /foreign-decoy, so this also proves which
+      // container the command ran in.
+      const probe = await context.cli.run(
+        [
+          "--json",
+          "environment",
+          "exec",
+          environment.id,
+          "--wait",
+          "--exit-code",
+          "--",
+          "sh",
+          "-c",
+          "test ! -e /foreign-decoy",
+        ],
+        { stage: "exec beside the decoy" },
+      );
+      expectThat(probe.code === 0, `exec ran where the decoy's volume is (${probe.code})`);
+      unchanged("exec");
+      const listed = await context.cli.ok<{
+        items: PublicEnvironmentSummary[];
+      }>(["environment", "list", "--project", fixture.projectId], "list beside the decoy");
+      expectThat(
+        listed.result.items.length === 1 && listed.result.items[0]!.id === environment.id,
+        `the project lists ${listed.result.items.length} environments`,
+      );
+      await context.cli.ok(
+        ["environment", "stop", environment.id, "--wait", "stopped", "--timeout", "3m"],
+        "stop beside the decoy",
+      );
+      unchanged("stop");
+      await context.cli.ok(
+        ["environment", "delete", environment.id, "--wait", "deleted", "--timeout", "3m"],
+        "delete beside the decoy",
+      );
+      unchanged("delete");
+      const left = labelled().filter((container) => container.id !== decoy);
+      expectThat(
+        left.length === 0,
+        `delete left ${left.length} owned containers: ${left.map((c) => c.id).join(", ")}`,
+      );
+    },
+  },
+  {
     name: "project-cascade",
     description:
       "Cascade removal: a project with a started and a stopped environment is refused without --cascade, then removed with it; checkout and origin survive.",
@@ -622,7 +782,9 @@ export const SCENARIOS: ScenarioDefinition[] = [
       const fixture = await addFixtureProject(context, "cascade");
       const started = await createEnvironment(context, fixture.projectId, "cascade-a");
       const stopped = await createEnvironment(context, fixture.projectId, "cascade-b");
-      const ready = await context.cli.ok<{ environment: PublicEnvironmentSummary }>(
+      const ready = await context.cli.ok<{
+        environment: PublicEnvironmentSummary;
+      }>(
         ["environment", "start", started.id, "--wait", "ready", "--timeout", "3m"],
         "start one environment",
       );
@@ -647,7 +809,11 @@ export const SCENARIOS: ScenarioDefinition[] = [
           "--request-id",
           "cascade-remove",
         ],
-        { stage: "remove --cascade --wait", expectCode: 0, timeoutMs: 6 * 60_000 },
+        {
+          stage: "remove --cascade --wait",
+          expectCode: 0,
+          timeoutMs: 6 * 60_000,
+        },
       );
       expectThat(receiptOf(removed).state === "succeeded", "cascade removal did not succeed");
       for (const environment of [started, stopped]) {
@@ -694,10 +860,9 @@ export const SCENARIOS: ScenarioDefinition[] = [
     async run(context) {
       await configureConnection(context);
       const target = path.join(context.root, "fixtures", "init-scratch");
-      const { result } = await context.cli.ok<{ project: PublicProjectSummary }>(
-        ["project", "init", "--path", target, "--request-id", "init-scratch"],
-        "project init",
-      );
+      const { result } = await context.cli.ok<{
+        project: PublicProjectSummary;
+      }>(["project", "init", "--path", target, "--request-id", "init-scratch"], "project init");
       const projectId = result.project.id;
       context.cleanup.push({
         label: `remove project ${projectId}`,
@@ -711,7 +876,9 @@ export const SCENARIOS: ScenarioDefinition[] = [
       expectThat(git(target, ["rev-list", "--count", "HEAD"]) === "1", "init made no commit");
       expectThat(git(target, ["remote"]) === "", "init configured a remote");
       const environment = await createEnvironment(context, projectId, "init-env");
-      const started = await context.cli.ok<{ environment: PublicEnvironmentSummary }>(
+      const started = await context.cli.ok<{
+        environment: PublicEnvironmentSummary;
+      }>(
         ["environment", "start", environment.id, "--wait", "ready", "--timeout", "3m"],
         "start an environment of the local-only project",
       );
@@ -797,6 +964,14 @@ export const SCENARIOS: ScenarioDefinition[] = [
         { stage: "session start --wait", timeoutMs: 9 * 60_000 },
       );
       const receipt = started.envelope?.receipt as PublicReceipt;
+      // Recorded before the outcome is judged, so a failed run still says
+      // which model it ran on.
+      await recordResolvedModel(
+        context,
+        "session start --wait",
+        model ?? null,
+        receipt?.resources?.sessionId,
+      );
       expectThat(
         receipt?.state === "succeeded",
         `live run ended ${receipt?.state} (${started.envelope && !started.envelope.ok ? started.envelope.error.code : "ok"}): ${
@@ -859,6 +1034,67 @@ export const SCENARIOS: ScenarioDefinition[] = [
 ];
 
 /**
+ * Reads the model the session reports in force (`session config get`) and
+ * adds it to the manifest entry for `stage`. An unpinned run otherwise leaves
+ * no record of the model it used. A failed read is recorded, not fatal: the
+ * turn's own outcome stays the scenario's verdict.
+ */
+export async function recordResolvedModel(
+  context: Pick<ScenarioContext, "name" | "cli" | "manifest">,
+  stage: string,
+  requested: string | null,
+  sessionId: string | undefined,
+): Promise<{
+  requested: string | null;
+  resolved: string | null;
+  readError?: string;
+}> {
+  let model: {
+    requested: string | null;
+    resolved: string | null;
+    readError?: string;
+  };
+  if (!sessionId) {
+    model = { requested, resolved: null, readError: "no-session" };
+  } else {
+    try {
+      const read = await context.cli.run(["--json", "session", "config", "get", sessionId], {
+        stage: "session config get",
+      });
+      const envelope = read.envelope;
+      if (envelope?.ok) {
+        const resolved = (envelope as { result: { model?: unknown } }).result.model;
+        model = {
+          requested,
+          resolved: typeof resolved === "string" ? resolved : null,
+        };
+      } else {
+        model = {
+          requested,
+          resolved: null,
+          readError: envelope && !envelope.ok ? envelope.error.code : `exit-${read.code}`,
+        };
+      }
+    } catch (error) {
+      // A malformed envelope is a CLI defect other scenarios report; here it
+      // only means the model is unknown.
+      model = {
+        requested,
+        resolved: null,
+        readError: error instanceof Error ? error.message.slice(0, 200) : "unreadable",
+      };
+    }
+  }
+  await context.manifest.annotate(context.name, stage, { model });
+  console.log(
+    `${context.name}: model requested=${model.requested ?? "(provider default)"} resolved=${
+      model.resolved ?? `(unknown${model.readError ? `: ${model.readError}` : ""})`
+    }`,
+  );
+  return model;
+}
+
+/**
  * The live half of the post-release command surface: the session's command
  * catalogue, refusals that never send text, a selected project command
  * (Claude), --literal, --attach and --enqueue behind a running turn.
@@ -866,7 +1102,11 @@ export const SCENARIOS: ScenarioDefinition[] = [
 async function liveCommandSurface(context: ScenarioContext, sessionId: string): Promise<void> {
   const listed = await context.cli.ok<{
     catalogue: { status: string };
-    commands: Array<{ id: string; name: string; bindingRevision: string | null }>;
+    commands: Array<{
+      id: string;
+      name: string;
+      bindingRevision: string | null;
+    }>;
   }>(["session", "commands", sessionId, "--refresh"], "session commands --refresh", {
     timeoutMs: 3 * 60_000,
   });
@@ -973,14 +1213,16 @@ async function liveCommandSurface(context: ScenarioContext, sessionId: string): 
   // Codex, Cursor and Grok take image attachments only: a text file is
   // refused before admission, which is the behaviour to check there.
   if (!refusedFile) {
+    const receipt = receiptOf(attached);
     expectThat(
-      receiptOf(attached).state === "succeeded",
-      "the prompt with an attachment did not complete",
+      receipt.state === "succeeded",
+      `the prompt with an attachment did not complete (${receipt.state}): ${
+        receipt.error?.message ?? ""
+      } ${receipt.execution?.error ?? receipt.execution?.reason ?? ""}`.trim(),
     );
-    const transcript = await context.cli.ok<{ messages: Array<{ role: string; text: string }> }>(
-      ["session", "transcript", sessionId, "--limit", "4"],
-      "transcript after attachment",
-    );
+    const transcript = await context.cli.ok<{
+      messages: Array<{ role: string; text: string }>;
+    }>(["session", "transcript", sessionId, "--limit", "4"], "transcript after attachment");
     expectThat(
       transcript.result.messages.some((message) => /marigold/i.test(message.text)),
       "the agent did not read the attached file",

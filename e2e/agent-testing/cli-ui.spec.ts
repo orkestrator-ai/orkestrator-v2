@@ -29,6 +29,13 @@ type SettingsSnapshot = {
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const launcher = path.join(repositoryRoot, "packages", "cli", "bin", "orkestrator.js");
+/**
+ * The provider the live card tests start their run on. The profile must have
+ * been started with `--credential-source <agent>`.
+ */
+const liveAgent = process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT ?? "claude";
+const liveModel = process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLI_MODEL;
+const liveSkipReason = `Needs ORKESTRATOR_AGENT_TEST_LIVE_CLI=1 and a profile started with --credential-source ${liveAgent}`;
 
 function profileStatus(): Status {
   const command = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
@@ -142,13 +149,106 @@ async function login(page: Page) {
   expect(response?.ok() ?? false).toBe(true);
 }
 
+/** Starts the live run on `liveAgent`; the receipt identifies run and session. */
+function startLiveRun(configDir: string, environmentId: string, prompt: string, key: string) {
+  const started = cliRun(configDir, [
+    "session",
+    "start",
+    "--environment",
+    environmentId,
+    "--agent",
+    liveAgent,
+    ...(liveModel ? ["--model", liveModel] : []),
+    "--mode",
+    "build",
+    "--prompt-file",
+    prompt,
+    "--request-id",
+    key,
+    "--wait",
+    "--timeout",
+    "5m",
+  ]);
+  const receipt = (
+    started.envelope as unknown as {
+      receipt?: {
+        operationId: string;
+        state: string;
+        resources: { sessionId?: string };
+        execution?: {
+          interactions?: Array<{ id: string; revision: number; kind?: string }>;
+        };
+      };
+    }
+  ).receipt;
+  return { code: started.code, envelope: started.envelope, receipt };
+}
+
+/** The receipt fields that say why a run has not settled, for a failure message. */
+function runSummary(envelope: Envelope<unknown>): string {
+  const receipt = (envelope as unknown as { receipt?: { state?: string; execution?: unknown } })
+    .receipt;
+  return JSON.stringify({
+    state: receipt?.state,
+    execution: receipt?.execution,
+    error: envelope.error,
+  });
+}
+
+function pendingInteractionIds(envelope: Envelope<unknown>): string[] {
+  const receipt = (
+    envelope as unknown as {
+      receipt?: { execution?: { interactions?: Array<{ id: string }> } };
+    }
+  ).receipt;
+  return receipt?.execution?.interactions?.map((interaction) => interaction.id) ?? [];
+}
+
+/**
+ * `run wait` after the UI resolved `answered`. The renderer submits
+ * asynchronously, so for a moment the run can still report those
+ * interactions as pending (exit 6); a settled run, or one waiting on another
+ * interaction, is returned as is.
+ */
+async function waitPastResolved(configDir: string, runId: string, answered: ReadonlySet<string>) {
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const result = cliRun(configDir, ["run", "wait", runId, "--timeout", "5m"]);
+    const stillAnswered =
+      result.code === 6 && pendingInteractionIds(result.envelope).every((id) => answered.has(id));
+    if (!stillAnswered || Date.now() > deadline) return result;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+}
+
+/** Reads a file from an environment through `environment exec`. */
+function readEnvironmentFile(configDir: string, environmentId: string, file: string): string {
+  const cat = cliRun(configDir, [
+    "environment",
+    "exec",
+    environmentId,
+    "--wait",
+    "--",
+    "cat",
+    file,
+  ]);
+  expect(cat.code).toBe(0);
+  const operation = (cat.envelope as unknown as { receipt: { operationId: string } }).receipt
+    .operationId;
+  return cli<{ text: string }>(configDir, ["run", "output", operation]).text.trim();
+}
+
 /**
  * Show a project's environments. A freshly started profile can take a while
  * to serve its first render, and a reused one may already be expanded.
  */
 async function openProject(page: Page, projectName: string, timeout = 30_000) {
-  const expand = page.getByRole("button", { name: `Expand project ${projectName}` });
-  const collapse = page.getByRole("button", { name: `Collapse project ${projectName}` });
+  const expand = page.getByRole("button", {
+    name: `Expand project ${projectName}`,
+  });
+  const collapse = page.getByRole("button", {
+    name: `Collapse project ${projectName}`,
+  });
   await expect(expand.or(collapse)).toBeVisible({ timeout });
   if (await expand.isVisible()) await expand.click();
   await expect(collapse).toBeVisible();
@@ -330,7 +430,9 @@ test("a CLI-initialized project and its cascade removal reach an open renderer",
       timeout: 30_000,
     });
     await expect(
-      page.getByRole("button", { name: `Collapse project ${created.project.name}` }),
+      page.getByRole("button", {
+        name: `Collapse project ${created.project.name}`,
+      }),
     ).toHaveCount(0, { timeout: 30_000 });
     await page.reload();
     // The sidebar has rendered once the profile's own fixture project shows.
@@ -372,10 +474,7 @@ test("a CLI-initialized project and its cascade removal reach an open renderer",
 test("a CLI-started question rehydrates in an inactive, reloaded renderer and takes the UI's answer", async ({
   page,
 }, testInfo) => {
-  test.skip(
-    process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLI !== "1",
-    "Needs ORKESTRATOR_AGENT_TEST_LIVE_CLI=1 and a profile started with --credential-source claude",
-  );
+  test.skip(process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLI !== "1", liveSkipReason);
   testInfo.setTimeout(900_000);
   const status = profileStatus();
   expect(status.status).toBe("ready");
@@ -398,42 +497,17 @@ test("a CLI-started question rehydrates in an inactive, reloaded renderer and ta
     const prompt = path.join(configDir, "prompt.txt");
     writeFileSync(
       prompt,
-      "Use your AskUserQuestion tool to ask me one question: which colour should be used, " +
-        "with exactly two options labelled red and blue. After I answer, create a file named " +
-        "colour.txt in the repository root containing only the chosen colour in lowercase. " +
-        "Do nothing else.\n",
+      // Claude calls the tool AskUserQuestion, OpenCode and Grok call it question.
+      "Use your tool for asking the user a question (AskUserQuestion or question) to ask me " +
+        "one question: which colour should be used, with exactly two options labelled red and " +
+        "blue. After I answer, create a file named colour.txt in the repository root containing " +
+        "only the chosen colour in lowercase. Do nothing else.\n",
     );
-    const started = cliRun(configDir, [
-      "session",
-      "start",
-      "--environment",
-      asking,
-      "--agent",
-      "claude",
-      "--mode",
-      "build",
-      "--prompt-file",
-      prompt,
-      "--request-id",
-      `cli-ask-${suffix}`,
-      "--wait",
-      "--timeout",
-      "5m",
-    ]);
+    const started = startLiveRun(configDir, asking, prompt, `cli-ask-${suffix}`);
     // Exit 6: the run is waiting for an answer, which the CLI reports as such.
-    expect(started.code).toBe(6);
+    expect(started.code, `run ended ${started.receipt?.state}`).toBe(6);
     // The receipt, not a result, identifies the run and session here.
-    const receipt = (
-      started.envelope as unknown as {
-        receipt: {
-          operationId: string;
-          resources: { sessionId?: string };
-          execution?: {
-            interactions?: Array<{ id: string; revision: number }>;
-          };
-        };
-      }
-    ).receipt;
+    const receipt = started.receipt!;
     const pending = receipt.execution?.interactions?.[0];
     expect(pending).toBeTruthy();
     const runId = receipt.operationId;
@@ -445,28 +519,16 @@ test("a CLI-started question rehydrates in an inactive, reloaded renderer and ta
     await openProject(page, fixture.name);
     await page.getByText(`cli-other-${suffix}`, { exact: true }).first().click();
     await page.getByText(`cli-ask-${suffix}`, { exact: true }).first().click();
-    // Option names carry their descriptions ("blue Use blue").
-    const card = page.getByRole("group", { name: "Claude needs input" });
+    // Option names carry their descriptions ("blue Use blue"). The card is
+    // titled after the provider ("Claude needs input", "OpenCode needs input").
+    const card = page.getByRole("group", { name: / needs input$/ });
     await expect(card).toBeVisible({ timeout: 60_000 });
     await card.getByRole("button", { name: /^blue\b/ }).click();
     await card.getByRole("button", { name: "Submit", exact: true }).click();
 
-    const settled = cliRun(configDir, ["run", "wait", runId, "--timeout", "5m"]);
-    expect(settled.code).toBe(0);
-    const cat = cliRun(configDir, [
-      "environment",
-      "exec",
-      asking,
-      "--wait",
-      "--",
-      "cat",
-      "colour.txt",
-    ]);
-    expect(cat.code).toBe(0);
-    const operation = (cat.envelope as unknown as { receipt: { operationId: string } }).receipt
-      .operationId;
-    const output = cli<{ text: string }>(configDir, ["run", "output", operation]);
-    expect(output.text.trim()).toBe("blue");
+    const settled = await waitPastResolved(configDir, runId, new Set([pending!.id]));
+    expect(settled.code, runSummary(settled.envelope)).toBe(0);
+    expect(readEnvironmentFile(configDir, asking, "colour.txt")).toBe("blue");
 
     // The answered question cannot be answered again, even with its exact revision.
     const stale = cliRun(configDir, [
@@ -490,7 +552,105 @@ test("a CLI-started question rehydrates in an inactive, reloaded renderer and ta
     await expect(page.getByText("Which colour", { exact: false }).first()).toBeVisible({
       timeout: 30_000,
     });
-    await expect(page.getByRole("group", { name: "Claude needs input" })).toHaveCount(0);
+    await expect(page.getByRole("group", { name: / needs input$/ })).toHaveCount(0);
+  } finally {
+    for (const environmentId of created) deleteQuietly(configDir, environmentId);
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
+test("a CLI-started approval rehydrates in an inactive, reloaded renderer and takes the UI's approval", async ({
+  page,
+}, testInfo) => {
+  test.skip(process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLI !== "1", liveSkipReason);
+  testInfo.setTimeout(900_000);
+  const status = profileStatus();
+  expect(status.status).toBe("ready");
+  const configDir = mkdtempSync(path.join(os.tmpdir(), "ork-cli-ui-approve-"));
+  const suffix = Date.now().toString(36);
+  const created: string[] = [];
+  try {
+    const fixture = await fixtureProject(configDir, status);
+    const approving = readyEnvironment(configDir, fixture.id, `cli-approve-${suffix}`);
+    created.push(approving);
+    const other = readyEnvironment(configDir, fixture.id, `cli-calm-${suffix}`);
+    created.push(other);
+
+    await login(page);
+    // A host session auto-approves by default; the per-environment policy
+    // override (Settings -> Execution policy) is what asks a human.
+    const response = await page.request.post(
+      new URL("/__orkestrator/invoke", status.browserUrl!).href,
+      {
+        data: {
+          command: "update_environment_agent_settings",
+          args: {
+            environmentId: approving,
+            agentSettings: { executionPolicy: { approvals: "ask" } },
+          },
+        },
+      },
+    );
+    expect(response.ok(), "the execution policy override was refused").toBe(true);
+    await page.goto(status.browserUrl!);
+    await openProject(page, fixture.name, 120_000);
+    await page.getByText(`cli-calm-${suffix}`, { exact: true }).first().click();
+
+    const prompt = path.join(configDir, "prompt.txt");
+    writeFileSync(
+      prompt,
+      "Use your shell tool to run exactly this command in the repository root: " +
+        "printf approved > approval.txt\nDo nothing else and do not read any files first.\n",
+    );
+    const started = startLiveRun(configDir, approving, prompt, `cli-approve-${suffix}`);
+    // Exit 6: the run waits for an approval, which the CLI reports as such.
+    expect(started.code, `run ended ${started.receipt?.state}`).toBe(6);
+    const runId = started.receipt!.operationId;
+    const sessionId = started.receipt!.resources.sessionId!;
+    expect(sessionId).toBeTruthy();
+    const first = started.receipt!.execution?.interactions?.[0];
+    expect(first).toBeTruthy();
+
+    // Reload while the approving environment is not mounted, then open it.
+    await page.reload();
+    await openProject(page, fixture.name);
+    await page.getByText(`cli-calm-${suffix}`, { exact: true }).first().click();
+    await page.getByText(`cli-approve-${suffix}`, { exact: true }).first().click();
+    // Claude labels the button "Approve", OpenCode "Approve once". A provider
+    // may ask more than once (a read before the command); approve each in the
+    // UI until the CLI run settles.
+    const approve = page.getByRole("button", { name: /^Approve( once)?$/ });
+    let settled: ReturnType<typeof cliRun> = { code: 6, envelope: { ok: true, result: null } };
+    let answering = [first!.id];
+    for (let round = 0; round < 4 && settled.code === 6; round++) {
+      // A card whose approval is still being submitted stays, disabled.
+      await expect(approve.first()).toBeEnabled({ timeout: 60_000 });
+      await approve.first().click();
+      settled = await waitPastResolved(configDir, runId, new Set(answering));
+      answering = pendingInteractionIds(settled.envelope);
+    }
+    expect(settled.code, runSummary(settled.envelope)).toBe(0);
+    expect(readEnvironmentFile(configDir, approving, "approval.txt")).toBe("approved");
+
+    // The approval cannot be given again, even with its exact revision.
+    const stale = cliRun(configDir, [
+      "session",
+      "interactions",
+      "resolve",
+      sessionId,
+      first!.id,
+      "--revision",
+      String(first!.revision),
+      "--action",
+      "deny",
+    ]);
+    expect(stale.envelope.ok).toBe(false);
+    expect(stale.code).not.toBe(0);
+
+    await page.reload();
+    await openProject(page, fixture.name);
+    await page.getByText(`cli-approve-${suffix}`, { exact: true }).first().click();
+    await expect(approve).toHaveCount(0);
   } finally {
     for (const environmentId of created) deleteQuietly(configDir, environmentId);
     rmSync(configDir, { recursive: true, force: true });
@@ -519,8 +679,11 @@ test("live Codex conversation resumes after moving its worktree", async ({ page 
       expect(response.ok(), `Command failed: ${command}`).toBe(true);
       return ((await response.json()) as { result: T }).result;
     };
-    const original = (await invoke<{ worktreePath: string }>("get_environment", { environmentId }))
-      .worktreePath;
+    const original = (
+      await invoke<{ worktreePath: string }>("get_environment", {
+        environmentId,
+      })
+    ).worktreePath;
     const prompt = path.join(configDir, "prompt.txt");
     const memory = `move-memory-${suffix}`;
     writeFileSync(
@@ -551,22 +714,30 @@ test("live Codex conversation resumes after moving its worktree", async ({ page 
       `First turn failure code: ${first.envelope.error?.code ?? "run-failed"}`,
     ).toBe(0);
     const sessionId = (
-      first.envelope as unknown as { receipt: { resources: { sessionId: string } } }
+      first.envelope as unknown as {
+        receipt: { resources: { sessionId: string } };
+      }
     ).receipt.resources.sessionId;
     expect(sessionId).toBeTruthy();
     // Wait for authoritative activity reconciliation before opening settings.
     await expect
       .poll(
         async () =>
-          (await invoke<{ agentActivityState?: string }>("get_environment", { environmentId }))
-            .agentActivityState ?? "idle",
+          (
+            await invoke<{ agentActivityState?: string }>("get_environment", {
+              environmentId,
+            })
+          ).agentActivityState ?? "idle",
         { timeout: 30_000 },
       )
       .toBe("idle");
-    const moved = await invoke<{ worktreePath: string; lifecycleError?: string }>(
-      "move_environment",
-      { environmentId, destinationDir: path.join(configDir, "destination") },
-    );
+    const moved = await invoke<{
+      worktreePath: string;
+      lifecycleError?: string;
+    }>("move_environment", {
+      environmentId,
+      destinationDir: path.join(configDir, "destination"),
+    });
     expect(moved.lifecycleError).toBeFalsy();
     await page.reload();
     writeFileSync(

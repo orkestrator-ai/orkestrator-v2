@@ -99,10 +99,13 @@ async function runOne(
   name: string;
   passed: boolean;
   durationMs: number;
+  /** Launch to the backend's readiness line; null when it never became ready. */
+  backendReadyMs: number | null;
   error?: string;
   cleanupErrors: string[];
 }> {
   const started = Date.now();
+  let backendReadyMs: number | null = null;
   const root = await newScenarioRoot(definition.name);
   const cleanupErrors: string[] = [];
   let passed = false;
@@ -114,6 +117,7 @@ async function runOne(
       ...(options.provider && definition.live ? { credentialSource: options.provider } : {}),
       extraArgs: options.dockerImage ? ["--docker-image", options.dockerImage] : [],
     });
+    backendReadyMs = Date.now() - started;
     context = {
       name: definition.name,
       root,
@@ -131,6 +135,7 @@ async function runOne(
       cleanup: [],
       ...(options.provider ? { provider: options.provider } : {}),
       environmentType: options.environmentType,
+      ...(options.dockerImage ? { dockerImage: options.dockerImage } : {}),
     };
     await definition.run(context);
     passed = true;
@@ -168,6 +173,7 @@ async function runOne(
     name: definition.name,
     passed: passed && cleanupErrors.length === 0,
     durationMs: Date.now() - started,
+    backendReadyMs,
     ...(error ? { error } : {}),
     cleanupErrors,
   };
@@ -202,10 +208,11 @@ async function main(): Promise<number> {
     run: id,
     provider: options.provider ?? null,
     environmentType: options.environmentType,
-    results: results.map(({ name, passed, durationMs, cleanupErrors }) => ({
+    results: results.map(({ name, passed, durationMs, backendReadyMs, cleanupErrors }) => ({
       name,
       passed,
       durationMs,
+      backendReadyMs,
       cleanupErrors,
     })),
   });

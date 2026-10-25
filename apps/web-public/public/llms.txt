@@ -1,0 +1,26 @@
+# Orkestrator
+
+> Orkestrator is a desktop app and standalone backend that runs coding agents (Claude Code, Codex, OpenCode, Cursor Agent, Grok Build, Pi) in isolated Docker or local-worktree environments. Agents can drive it through a local MCP server or the `orkestrator` CLI.
+
+There are two ways to connect, and each takes a different token:
+
+- **Control MCP** at `http://127.0.0.1:34122/mcp`. It only listens on loopback, so it works only on the same machine. It takes an MCP credential from Settings → MCP.
+- **`orkestrator` CLI** (npm package, run it with `bunx orkestrator`). It works on the same machine or remotely through the backend's Tailscale address. For remote use it takes the Gateway token from Settings → Web client.
+
+The Gateway token doesn't work on the Control MCP, which answers it with "Invalid control MCP credential". The gateway has no `/api/...` routes: an unknown path returns the web app's HTML.
+
+## Agents
+
+- [Agent skill: connecting to Orkestrator](https://orkestrator.dev/skill.md): which token goes where, MCP and CLI setup, first commands, troubleshooting
+
+## Docs
+
+- [Control MCP guide](https://github.com/orkestrator-ai/orkestrator-v2/blob/main/docs/architecture/control-mcp.md): credentials and profiles, tool tiers, confirmation tokens, results
+- [Control MCP for voice clients](https://github.com/orkestrator-ai/orkestrator-v2/blob/main/docs/architecture/control-mcp-voice.md): the voice profile, spoken confirmation, the relay for hosted voice platforms
+- [CLI reference](https://github.com/orkestrator-ai/orkestrator-v2/blob/main/docs/architecture/public-cli.md): choosing a backend, connections, the JSON envelope and exit codes, request keys, every command
+- [CLI package README](https://github.com/orkestrator-ai/orkestrator-v2/blob/main/packages/cli/README.md): installing, running the backend without the desktop app, client commands
+
+## Optional
+
+- [Install script](https://orkestrator.dev/install.sh): installs Bun if needed and starts the backend service
+- [Source code](https://github.com/orkestrator-ai/orkestrator-v2)

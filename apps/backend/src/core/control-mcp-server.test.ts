@@ -8,6 +8,7 @@ import {
   readControlMcpDescriptor,
   type ControlMcpInvoker,
 } from "./control-mcp-server.js";
+import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
 import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-authority.js";
 import {
   COORDINATOR_CONTROL_TOOL_NAMES,
@@ -398,15 +399,7 @@ describe("Orkestrator control MCP server", () => {
       coordinatorId: "coordinator-1",
       conversationId: "conversation-1",
       mailboxIncarnationId: "incarnation-1",
-      capabilities: [
-        "discovery",
-        "tickets",
-        "environments",
-        "jobs",
-        "build-pipelines",
-        "multi-review",
-        "mail",
-      ],
+      capabilities: coordinatorRoleCapabilities("main"),
     });
     const listed = await rpc(credential.url, credential.token, "tools/call", {
       name: "list_projects",

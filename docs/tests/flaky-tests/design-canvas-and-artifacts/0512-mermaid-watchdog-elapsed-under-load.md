@@ -113,3 +113,8 @@ The owning implementation, assertions, timeouts and skips were unchanged.
 ## Environment-list UI main merge — 2026-10-24
 
 The aggregate recurrence passed in the complete unchanged owning-file rerun. Exact commands, durations, merge parents, aggregate results and evidence are retained in [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Recurrence 2026-10-25 (scheduled jobs)
+
+`mermaid rendering > enforces source bytes, edges and SVG limits at and over the boundary` returned `render_timeout` (5000 ms parse/layout watchdog) instead of `package_size_exceeded` in the scheduled-jobs `mise run test` aggregate (8084 ms). The complete unchanged 13-test owner passed alone (`bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts`).
+Recurred after rebasing onto main `eda21487` (8347.60 ms aggregate); the unchanged owner passed alone (`mise run test:logged -- --name mermaid-owner -- bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1`, 24.1 s).

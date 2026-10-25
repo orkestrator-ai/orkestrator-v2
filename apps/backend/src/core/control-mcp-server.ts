@@ -3,7 +3,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import path from "node:path";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler } from "@modelcontextprotocol/server";
-import type { ControlMcpCredentialSummary } from "@orkestrator/protocol/control-mcp";
+import type {
+  ControlMcpCredentialPolicy,
+  ControlMcpCredentialSummary,
+} from "@orkestrator/protocol/control-mcp";
 import { COORDINATOR_ASYNC_CONTRACT } from "@orkestrator/protocol/coordinator";
 import { ConfirmTokens } from "./control-mcp-confirm.js";
 import {
@@ -18,13 +21,19 @@ import { createNodeTargets } from "./control-mcp-nodes.js";
 import { controlMcpAuthority } from "./public-api/operation-ledger.js";
 import {
   COORDINATOR_CAPABILITIES,
-  COORDINATOR_TOOL_CAPABILITY,
+  coordinatorToolGranted,
   createControlMcp,
   type CoordinatorControlScope,
   type CoordinatorPollGuard,
 } from "./control-mcp-tools.js";
 import { isRecord, type JsonRecord } from "./control-mcp-tool-support.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
+import {
+  callToolInProcess,
+  listToolsInProcess,
+  type InProcessToolInfo,
+  type InProcessToolResult,
+} from "./mcp-in-process.js";
 
 const CONTROL_MCP_PATH = "/mcp";
 const CONTROL_MCP_DESCRIPTOR = "control-mcp.json";
@@ -403,6 +412,132 @@ export class ControlMcpServer {
     };
   }
 
+  /**
+   * Revalidates a coordinator scope against the stored workspace and returns
+   * the command invoker its tools run through: every project, environment
+   * and command it names is checked at this boundary.
+   */
+  private async coordinatorInvoker(
+    coordinatorScope: CoordinatorControlScope,
+  ): Promise<
+    { ok: true; invoke: ControlMcpInvoker } | { ok: false; status: 401 | 409; error: string }
+  > {
+    const snapshot = await this.invoke<unknown>("get_project_coordinator", {
+      projectId: coordinatorScope.projectId,
+    });
+    const workspace =
+      isRecord(snapshot) && isRecord(snapshot.workspace) ? snapshot.workspace : null;
+    const conversations =
+      workspace && Array.isArray(workspace.conversations) ? workspace.conversations : [];
+    const conversation = conversations.find(
+      (item) => isRecord(item) && item.id === coordinatorScope.conversationId,
+    );
+    if (
+      !workspace ||
+      workspace.id !== coordinatorScope.coordinatorId ||
+      !isRecord(conversation) ||
+      conversation.closedAt !== undefined ||
+      conversation.mailboxIncarnationId !== coordinatorScope.mailboxIncarnationId
+    ) {
+      return { ok: false, status: 401, error: "Coordinator credential is no longer valid" };
+    }
+    if (workspace.lifecycleState !== "ready") {
+      return { ok: false, status: 409, error: "Coordinator is paused or unavailable" };
+    }
+    const invoke: ControlMcpInvoker = async <T>(
+      command: string,
+      args: Record<string, unknown> = {},
+    ) => {
+      const projectId = typeof args.projectId === "string" ? args.projectId : undefined;
+      if (projectId && projectId !== coordinatorScope.projectId) {
+        throw new Error("Coordinator credential cannot access another project");
+      }
+      if (typeof args.environmentId === "string") {
+        const ownRuntime = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
+        if (args.environmentId !== ownRuntime) {
+          const target =
+            typeof args.nodeId === "string"
+              ? await createNodeTargets(this.invoke, coordinatorScope).targetOrSelf(args.nodeId)
+              : null;
+          const environment = target
+            ? await target.environment(args.environmentId)
+            : await this.invoke<unknown>("get_environment", {
+                environmentId: args.environmentId,
+              });
+          if (
+            !isRecord(environment) ||
+            environment.projectId !== (target?.projectId ?? coordinatorScope.projectId)
+          ) {
+            throw new Error("Coordinator credential cannot access that environment");
+          }
+          // The project home runs writable sessions in the checkout the
+          // coordinator may only read. Delegating to it would bypass that
+          // boundary, so it is never a worker.
+          if (environment.projectHome === true) {
+            throw new Error("Coordinator credential cannot act on the project checkout");
+          }
+        }
+      }
+      const denied = new Set([
+        "update_config",
+        "remove_project",
+        "merge_environment",
+        "delete_environment",
+        "write_file",
+        "move_file",
+        // Only the user approves a request; a coordinator only creates one.
+        "resolve_node_action_request",
+      ]);
+      if (denied.has(command)) throw new Error("Coordinator capability denied");
+      return this.invoke<T>(command, args);
+    };
+    return { ok: true, invoke };
+  }
+
+  private coordinatorServer(coordinatorScope: CoordinatorControlScope, invoke: ControlMcpInvoker) {
+    return () => createControlMcp(invoke, coordinatorScope, undefined, undefined);
+  }
+
+  /**
+   * Runs one coordinator tool in-process for a scheduled job, through the
+   * same scope revalidation, capability check and command boundary as an
+   * HTTP request with that coordinator's credential.
+   */
+  async callCoordinatorTool(
+    coordinatorScope: CoordinatorControlScope,
+    tool: string,
+    args: Record<string, unknown>,
+  ): Promise<InProcessToolResult> {
+    if (!coordinatorToolGranted(coordinatorScope, tool)) {
+      return { isError: true, text: "capability-denied: Coordinator capability denied" };
+    }
+    const checked = await this.coordinatorInvoker(coordinatorScope);
+    if (!checked.ok) return { isError: true, text: `capability-denied: ${checked.error}` };
+    return callToolInProcess(this.coordinatorServer(coordinatorScope, checked.invoke), tool, args);
+  }
+
+  /** The tools a coordinator scope lists, as its own `tools/list` would. */
+  async listCoordinatorTools(
+    coordinatorScope: CoordinatorControlScope,
+  ): Promise<InProcessToolInfo[]> {
+    const checked = await this.coordinatorInvoker(coordinatorScope);
+    if (!checked.ok) throw new Error(checked.error);
+    return listToolsInProcess(this.coordinatorServer(coordinatorScope, checked.invoke));
+  }
+
+  /** The policy of one operator credential, or null once it is revoked. */
+  credentialPolicy(credentialId: string): ControlMcpCredentialPolicy | null {
+    const credential = this.credentials.get(credentialId);
+    return credential
+      ? {
+          id: credential.id,
+          profile: credential.profile,
+          capabilities: credential.capabilities,
+          deniedActions: credential.deniedActions,
+        }
+      : null;
+  }
+
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://control-mcp.invalid");
     if (url.pathname !== CONTROL_MCP_PATH) {
@@ -442,30 +577,12 @@ export class ControlMcpServer {
       });
       return;
     }
+    let scopedInvoke: ControlMcpInvoker = this.invoke;
     if (coordinatorScope) {
-      const snapshot = await this.invoke<unknown>("get_project_coordinator", {
-        projectId: coordinatorScope.projectId,
-      });
-      const workspace =
-        isRecord(snapshot) && isRecord(snapshot.workspace) ? snapshot.workspace : null;
-      const conversations =
-        workspace && Array.isArray(workspace.conversations) ? workspace.conversations : [];
-      const conversation = conversations.find(
-        (item) => isRecord(item) && item.id === coordinatorScope.conversationId,
-      );
-      if (
-        !workspace ||
-        workspace.id !== coordinatorScope.coordinatorId ||
-        !isRecord(conversation) ||
-        conversation.closedAt !== undefined ||
-        conversation.mailboxIncarnationId !== coordinatorScope.mailboxIncarnationId
-      ) {
-        this.coordinatorCredentials.delete(presentedToken!);
-        jsonResponse(response, 401, { error: "Coordinator credential is no longer valid" });
-        return;
-      }
-      if (workspace.lifecycleState !== "ready") {
-        jsonResponse(response, 409, { error: "Coordinator is paused or unavailable" });
+      const checked = await this.coordinatorInvoker(coordinatorScope);
+      if (!checked.ok) {
+        if (checked.status === 401) this.coordinatorCredentials.delete(presentedToken!);
+        jsonResponse(response, checked.status, { error: checked.error });
         return;
       }
       // Expire abandoned credentials without interrupting a healthy,
@@ -477,63 +594,16 @@ export class ControlMcpServer {
       for (const message of messages) {
         if (!isRecord(message) || message.method !== "tools/call") continue;
         const requestedTool = isRecord(message.params) ? message.params.name : undefined;
-        if (typeof requestedTool !== "string") {
-          jsonResponse(response, 403, { error: "Coordinator capability denied" });
-          return;
-        }
-        const required = COORDINATOR_TOOL_CAPABILITY.get(requestedTool);
-        if (!required || !coordinatorScope.capabilities.includes(required)) {
+        if (
+          typeof requestedTool !== "string" ||
+          !coordinatorToolGranted(coordinatorScope, requestedTool)
+        ) {
           jsonResponse(response, 403, { error: "Coordinator capability denied" });
           return;
         }
       }
+      scopedInvoke = checked.invoke;
     }
-    const scopedInvoke: ControlMcpInvoker = coordinatorScope
-      ? async <T>(command: string, args: Record<string, unknown> = {}) => {
-          const projectId = typeof args.projectId === "string" ? args.projectId : undefined;
-          if (projectId && projectId !== coordinatorScope.projectId) {
-            throw new Error("Coordinator credential cannot access another project");
-          }
-          if (typeof args.environmentId === "string") {
-            const ownRuntime = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
-            if (args.environmentId !== ownRuntime) {
-              const target =
-                typeof args.nodeId === "string"
-                  ? await createNodeTargets(this.invoke, coordinatorScope).targetOrSelf(args.nodeId)
-                  : null;
-              const environment = target
-                ? await target.environment(args.environmentId)
-                : await this.invoke<unknown>("get_environment", {
-                    environmentId: args.environmentId,
-                  });
-              if (
-                !isRecord(environment) ||
-                environment.projectId !== (target?.projectId ?? coordinatorScope.projectId)
-              ) {
-                throw new Error("Coordinator credential cannot access that environment");
-              }
-              // The project home runs writable sessions in the checkout the
-              // coordinator may only read. Delegating to it would bypass that
-              // boundary, so it is never a worker.
-              if (environment.projectHome === true) {
-                throw new Error("Coordinator credential cannot act on the project checkout");
-              }
-            }
-          }
-          const denied = new Set([
-            "update_config",
-            "remove_project",
-            "merge_environment",
-            "delete_environment",
-            "write_file",
-            "move_file",
-            // Only the user approves a request; a coordinator only creates one.
-            "resolve_node_action_request",
-          ]);
-          if (denied.has(command)) throw new Error("Coordinator capability denied");
-          return this.invoke<T>(command, args);
-        }
-      : this.invoke;
     const pollGuard = coordinatorScope ? this.coordinatorPollGuard(coordinatorScope) : undefined;
     if (operatorCredential) this.credentials.markUsed(operatorCredential.id);
     const handler = createMcpHandler(

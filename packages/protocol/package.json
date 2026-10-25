@@ -118,6 +118,8 @@
     "./control-mcp": "./src/control-mcp.ts",
     "./testing/public-api-fixtures": "./src/testing/public-api-fixtures.ts",
     "./recurring-work": "./src/recurring-work.ts",
+    "./schedule-time": "./src/schedule-time.ts",
+    "./scheduled-jobs": "./src/scheduled-jobs.ts",
     "./resource-events": "./src/resource-events.ts",
     "./review-artifacts": "./src/review-artifacts.ts",
     "./review-evidence-frames": "./src/review-evidence-frames.ts",

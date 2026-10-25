@@ -365,6 +365,7 @@ Tools (always the same set; enforcement is at call time):
 | `ack_message` | Agent receipt |
 | `reply_message` | Derived destination; acks the parent |
 | `get_message_status` | Placement and receipts for mail this tab sent |
+| `create_schedule`, `list_schedules`, `cancel_schedule` | Mail (or a reminder to this tab) sent later by the backend, as this tab; see [scheduled-jobs.md](scheduled-jobs.md) |
 
 If the resolved mailbox has `canPull: false`, every tool returns
 `capability-denied`. Connecting the HTTP MCP server is not the same as

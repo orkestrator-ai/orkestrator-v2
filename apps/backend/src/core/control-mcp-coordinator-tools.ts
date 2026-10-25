@@ -25,6 +25,13 @@ import {
 import type { CoordinatorControlScope } from "./control-mcp-tools.js";
 import { environmentSummary, type ControlMcpInvoker } from "./control-shared-actions.js";
 import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.js";
+import { withScheduleActor } from "./commands-registry-scheduled-jobs.js";
+import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-jobs/tools.js";
+import type {
+  ScheduleOwner,
+  ScheduledJob,
+  ScheduledJobSummary,
+} from "@orkestrator/protocol/scheduled-jobs";
 
 /**
  * The tools only a coordinator credential has: repository context, workflow
@@ -57,6 +64,9 @@ export function registerCoordinatorWorkflowTools(
   };
   registerNodeTools(server, invoke, nodeToolScope);
   registerNodeFileTools(server, invoke, nodeToolScope);
+  registerScheduleTools(server, "coordinator", () =>
+    coordinatorScheduleBackend(invoke, coordinatorScope),
+  );
   server.registerTool(
     "get_repository_context",
     {
@@ -517,4 +527,54 @@ export function registerCoordinatorWorkflowTools(
       },
     );
   }
+}
+
+/**
+ * Schedules act for this conversation's coordinator. The owner is built from
+ * the authenticated scope and the stored conversation role, never from tool
+ * arguments, and travels to the command under an in-process symbol key.
+ */
+function coordinatorScheduleBackend(
+  invoke: ControlMcpInvoker,
+  scope: CoordinatorControlScope,
+): ScheduleToolBackend {
+  const owner = async (): Promise<ScheduleOwner> => {
+    const snapshot = await invoke<unknown>("get_project_coordinator", {
+      projectId: scope.projectId,
+    });
+    const workspace =
+      isRecord(snapshot) && isRecord(snapshot.workspace) ? snapshot.workspace : null;
+    const conversation = asArray(workspace?.conversations).find(
+      (item) => isRecord(item) && item.id === scope.conversationId,
+    );
+    const role = isRecord(conversation) && conversation.role === "side" ? "side" : "main";
+    return {
+      kind: "coordinator",
+      projectId: scope.projectId,
+      coordinatorId: scope.coordinatorId,
+      conversationId: scope.conversationId,
+      role,
+    };
+  };
+  return {
+    async create(input, requestId) {
+      return invoke<{ schedule: ScheduledJob; replayed: boolean }>(
+        "create_scheduled_job",
+        withScheduleActor({ ...input, requestId }, await owner()),
+      );
+    },
+    async list() {
+      const listed = await invoke<{ schedules: ScheduledJobSummary[] }>(
+        "list_scheduled_jobs",
+        withScheduleActor({}, await owner()),
+      );
+      return listed.schedules;
+    },
+    async cancel(scheduleId) {
+      return invoke<{ scheduleId: string; deleted: boolean }>(
+        "delete_scheduled_job",
+        withScheduleActor({ scheduleId }, await owner()),
+      );
+    },
+  };
 }

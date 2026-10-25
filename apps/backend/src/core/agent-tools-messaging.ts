@@ -29,7 +29,7 @@ function errorText(error: unknown): never {
   throw error;
 }
 
-async function assertCallerMailbox(
+export async function assertCallerMailbox(
   storage: StorageService,
   scope: AgentMessagingToolScope,
   claimedTabId?: string,

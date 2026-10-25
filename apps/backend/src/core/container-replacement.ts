@@ -1,4 +1,3 @@
-import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
 import { withContainerAdmission } from "./container-admission.js";
 import {
   MAX_RETAINED_STORAGE_SETS,
@@ -616,7 +615,7 @@ export async function replaceRuntimePreservingState(
   // No agent prompt reaches this environment while its runtime is replaced.
   // At most a few copies run at once across environments; the fence holds
   // while this one waits for a slot.
-  return withEnvironmentReplacement(request.environmentId, () =>
+  return context.runtime.environments.fence.withReplacement(request.environmentId, () =>
     withContainerAdmission("copy", () => replaceRuntimePreservingStateUnfenced(request, context)),
   );
 }

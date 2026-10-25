@@ -1204,6 +1204,59 @@ describe("CoordinatorPanel", () => {
     expect(badge.getAttribute("title")).not.toContain("worker-for-second");
   });
 
+  test("marks a delegated worker waiting on a person once its episode is announced", async () => {
+    const delegation = (id: string, resourceId: string) => ({
+      id,
+      coordinatorId: "coordinator-1",
+      projectId: "project-1",
+      conversationId: "conversation-1",
+      kind: "environment" as const,
+      resourceId,
+      requestId: id,
+      createdAt: new Date(0).toISOString(),
+      delegation: {
+        requestedAt: new Date(0).toISOString(),
+        workerTabId: "startup-agent",
+        state: "running" as const,
+      },
+    });
+    const quiet = delegation("quiet", "worker-quiet");
+    const blocked = delegation("blocked", "worker-blocked");
+    ensuredSnapshot = { ...snapshot, workflows: [quiet, blocked] };
+
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    const badge = () => screen.getByText(/Waiting on 2 workers/);
+    expect(badge().textContent).not.toContain("needs you");
+    expect(badge().getAttribute("data-workers-need-person")).toBeNull();
+
+    ensuredSnapshot = {
+      ...snapshot,
+      workflows: [
+        quiet,
+        {
+          ...blocked,
+          delegation: { ...blocked.delegation, waiting: { since: new Date(0).toISOString() } },
+        },
+      ],
+    };
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "coordinator",
+        id: "project-1",
+        projectId: "project-1",
+        revision: 2,
+      });
+    });
+    await waitFor(() => expect(badge().textContent).toContain("1 needs you"));
+    expect(badge().getAttribute("data-workers-need-person")).toBe("1");
+    const title = badge().getAttribute("title") ?? "";
+    expect(title).toContain(
+      "worker-blocked: waiting for you (an approval or a question in its tab)",
+    );
+    expect(title).not.toContain("worker-quiet: waiting for you");
+  });
+
   test("shows a side agent split into its own tab group beside the main coordinator", async () => {
     const base = snapshot.workspace.conversations[0]!;
     const side = {
@@ -1481,6 +1534,52 @@ describe("CoordinatorPanel", () => {
     expect(stored.activePaneId).toBe(right!.id);
     expect(collectCoordinatorLeaves(stored.root)[1]!.conversationIds).toEqual(["side-1", "side-3"]);
     expect(focusedCoordinatorConversationId(stored)).toBe("side-3");
+  });
+
+  test("New side agent names the empty unassigned side agents for the backend to close", async () => {
+    const base = snapshot.workspace.conversations[0]!;
+    const side = (id: string, sideOrdinal: number) => ({
+      ...base,
+      id,
+      tabId: `tab-${id}`,
+      title: `Side ${sideOrdinal}`,
+      role: "side" as const,
+      sideOrdinal,
+      agent: undefined,
+    });
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [
+          { ...base, role: "main" as const },
+          side("side-empty", 1),
+          side("side-typed", 2),
+        ],
+      },
+    };
+    const typedKey = createSessionKey(
+      coordinatorRuntimeId(snapshot.workspace.id, "side-typed"),
+      "tab-side-typed",
+    );
+    useNativeComposeStore.getState().updateDraft(typedKey, { text: "Not sent yet" });
+    createConversation.mockImplementationOnce(async () => ensuredSnapshot);
+    try {
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      const newButton = screen
+        .getAllByRole("button")
+        .find((button) => button.textContent?.includes("New side agent"))!;
+      fireEvent.click(newButton);
+      await waitFor(() => expect(createConversation).toHaveBeenCalled());
+      expect(createConversation.mock.calls[0] as unknown[]).toEqual([
+        "project-1",
+        undefined,
+        ["side-empty"],
+      ]);
+    } finally {
+      useNativeComposeStore.getState().clearDraft(typedKey);
+    }
   });
 
   test("closing the only tab of a split group collapses the group", async () => {

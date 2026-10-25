@@ -121,7 +121,7 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   status regions
   (verbosity, live-region timing during nudge bursts, `aria-description` on
   frame titles, Preview-mode frames, rotor and browse-mode navigation). The
-  400% zoom layout defect and the other findings are in
+  400% zoom layout defect and the other findings were fixed on 2026-10-25 in
   [0054-design-canvas-accessibility-findings.md](0054-design-canvas-accessibility-findings.md).
 - **Large-canvas client performance.** Done on 2026-10-22 on one host and
   build, including a 100-cycle leak check on the committed fixes that
@@ -547,10 +547,10 @@ in the phone project.
   - At 200% zoom and in a 320 px pane, nothing overflows and every control
     outside the canvas is reachable and unclipped.
   - The spec attaches `ariaSnapshot` captures of the four regions to each run.
-- **Not fixed.** These are in
-  [0054](0054-design-canvas-accessibility-findings.md): the 400% zoom layout,
-  label-in-name on inspector fields, and a silent first Enter on a row whose
-  frame has not rendered.
+- **Fixed later.** The 400% zoom layout, label-in-name on inspector fields,
+  and a silent first Enter on a row whose frame has not rendered were fixed
+  and asserted on 2026-10-25 in
+  [0054](0054-design-canvas-accessibility-findings.md).
 
 ### Client performance
 

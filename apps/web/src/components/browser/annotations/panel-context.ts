@@ -14,6 +14,8 @@ export type ShowOnPageResult =
   /** A different service/port: the user can open it explicitly. */
   | { status: "off-page"; route: string }
   | { status: "not-found"; reason: string; resolution?: WebAnnotationAnchorResolution }
+  /** The target is on the page but renders nothing (a closed dialog or menu). */
+  | { status: "hidden" }
   /** The saved address cannot be reconstructed; the user navigates and reselects. */
   | { status: "navigation-required"; reason: string }
   | { status: "timeout" }

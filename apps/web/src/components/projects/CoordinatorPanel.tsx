@@ -57,6 +57,8 @@ import {
 import * as backend from "@/lib/backend";
 import { cn, createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useStore } from "zustand";
@@ -404,6 +406,10 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
    *
    * Associations are project-wide, so the selected conversation identity is a
    * load-bearing filter rather than presentation state.
+   *
+   * `needsPerson` is the delegation's waiting episode, which status wakes
+   * record from the worker tab's own turn activity (never the environment
+   * aggregate) and announce as a coordinator change when it starts or ends.
    */
   const awaitingWorkers = useMemo(() => {
     if (!snapshot || !selected) return [];
@@ -424,6 +430,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             id: association.id,
             environmentId: association.resourceId,
             label: `${remote?.name ?? association.resourceId} on ${node?.view.displayName ?? association.nodeId}`,
+            needsPerson: Boolean(association.delegation.waiting),
           },
         ];
       }
@@ -433,10 +440,12 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           id: association.id,
           environmentId: association.resourceId,
           label: environment?.name ?? association.resourceId,
+          needsPerson: Boolean(association.delegation.waiting),
         },
       ];
     });
   }, [snapshot, selected, environments, nodes]);
+  const workersNeedingPerson = awaitingWorkers.filter((worker) => worker.needsPerson).length;
   const selectedSessionKey =
     snapshot && selected
       ? createSessionKey(coordinatorRuntimeId(snapshot.workspace.id, selected.id), selected.tabId)
@@ -577,8 +586,15 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const createConversation = () => {
     setOperation("conversation");
     setError(null);
+    // Empty, unassigned side agents close as the new one opens, so unused
+    // composers cannot use up the open-conversation limit.
+    const closeUnused = unusedCoordinatorConversationIds(
+      snapshot.workspace,
+      useNativeComposeStore.getState().drafts,
+      pendingLaunch?.conversationId,
+    );
     void backend
-      .createCoordinatorConversation(projectId)
+      .createCoordinatorConversation(projectId, undefined, closeUnused)
       .then((createdSnapshot) => {
         setSnapshot(createdSnapshot);
         const createdId = createdSnapshot.workspace.selectedConversationId;
@@ -732,13 +748,25 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           {awaitingWorkers.length > 0 ? (
             <span
               className="flex items-center gap-1.5 rounded bg-elevated px-1.5 py-1 text-[11px] text-muted-foreground"
+              data-awaiting-workers={awaitingWorkers.length}
+              data-workers-need-person={workersNeedingPerson || undefined}
               title={`Coordinator is idle. It will be woken once each of these workers finishes.\n${awaitingWorkers
-                .map((worker) => worker.label)
+                .map((worker) =>
+                  worker.needsPerson
+                    ? `${worker.label}: waiting for you (an approval or a question in its tab)`
+                    : worker.label,
+                )
                 .join("\n")}`}
             >
               <Hourglass className="size-3" />
               Waiting on {awaitingWorkers.length}{" "}
               {awaitingWorkers.length === 1 ? "worker" : "workers"}
+              {workersNeedingPerson > 0 ? (
+                <span className="flex items-center gap-1 text-amber-300">
+                  <AlertCircle className="size-3" aria-hidden="true" />
+                  {workersNeedingPerson} {workersNeedingPerson === 1 ? "needs" : "need"} you
+                </span>
+              ) : null}
             </span>
           ) : null}
           <div className="min-w-3 flex-1" />

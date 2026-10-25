@@ -257,7 +257,7 @@ export function createLifecycleHarness(options: LifecycleHarnessOptions = {}) {
     return localTarget(environmentId, { ...pr, hasMergeConflicts: false, ...overrides });
   };
 
-  /** Current durable targets, as `syncPrMonitorTracking` would build them. */
+  /** Current durable targets, as `PrMonitorRuntime.sync` would build them. */
   const targets = (ids: string[], overrides: Partial<PrMonitorTarget> = {}) =>
     ids.map((id) =>
       localTarget(id, { ...durable.get(id), hasMergeConflicts: false, ...overrides }),

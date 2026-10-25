@@ -884,6 +884,8 @@ export interface ProviderCommandCatalogue {
   revision?: number;
   generation?: string;
   freshness?: "push" | "ttl";
+  /** A `stale` list the provider completes when its session attaches. */
+  attachPending?: boolean;
 }
 
 export interface ProviderCommandRefreshResult {

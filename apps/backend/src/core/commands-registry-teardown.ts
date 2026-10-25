@@ -13,7 +13,6 @@ import {
 } from "./commands-helpers.js";
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
-import { deleteTerminalHistories } from "./terminal-history.js";
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 import {
   fenceRetainingCloseSessionId,
@@ -211,7 +210,7 @@ export function registerTeardownCommands(
       }
       for (const sessionId of sessionIds)
         context.runtime.terminals.explicitlyCloseSession(sessionId);
-      await deleteTerminalHistories({
+      await context.runtime.terminals.history.deleteHistories({
         dataDir: context.storage.getDataDir(),
         environmentId: environment.id,
         tabId: intent.tabId,

@@ -1,3 +1,30 @@
+import { rebindWindowPreviews } from "./preview-connection-backend.js";
+import type { WorkspaceContext } from "./window-workspace-target.js";
+
+/** Migrate all documents after a live binding changes its route or grant. */
+export function refreshWorkspaceRealm<
+  Manager extends { destroyAll(): void },
+  Transport extends { disposeAll(): Promise<void> },
+>(
+  context: {
+    target: WorkspaceContext["target"];
+    contents: { isDestroyed(): boolean; reload(): void };
+    previewConnectionId: string;
+    browserPreviewManager: Manager;
+    previewTransport: Transport;
+  },
+  target: WorkspaceContext["target"],
+  createPreviews: (connectionId: string) => { manager: Manager; previewTransport: Transport },
+): void {
+  if (context.contents.isDestroyed()) return;
+  context.target = target;
+  // Native previews must be recreated too: existing documents still request
+  // their old gateway origin. The renderer persists canonical loopback URLs
+  // and resolves them against the current gateway when it mounts again.
+  rebindWindowPreviews(context, context.previewConnectionId, createPreviews, console, true);
+  context.contents.reload();
+}
+
 /** The main process resources owned by a realm, independent of its document. */
 export interface RealmContext {
   contents: { id: number; isDestroyed(): boolean; isFocused(): boolean };

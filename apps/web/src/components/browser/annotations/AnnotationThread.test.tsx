@@ -20,6 +20,7 @@ import {
   panelState,
   seedBrowserLayout,
 } from "@/test/web-annotation-harness";
+import { showOnPageMessage } from "./AnnotationThread";
 
 let backend: FakeWebAnnotationBackend;
 let bus: ReturnType<typeof installFakeOrkestrator>;
@@ -291,5 +292,15 @@ describe("annotation threads and list", () => {
       expect(screen.queryByRole("button", { name: "Open note: Fresh" }) === null).toBe(true),
     );
     expect(screen.getByRole("button", { name: "Open note: Imported one" })).toBeTruthy();
+  });
+});
+
+describe("Show on page messages", () => {
+  test("a hidden target says so instead of claiming it was shown or asking to reselect", () => {
+    const message = showOnPageMessage({ status: "hidden" });
+    expect(message).toContain("hidden");
+    expect(message).toContain("closed dialog");
+    expect(message).not.toContain("Reselect");
+    expect(showOnPageMessage({ status: "shown" })).toBeNull();
   });
 });

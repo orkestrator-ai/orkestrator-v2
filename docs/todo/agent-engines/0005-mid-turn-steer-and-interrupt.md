@@ -105,9 +105,11 @@ OpenCode and Grok steer are blocked upstream and are recorded here.
 - **Grok steer** stays off. ACP v1 has no mid-turn input, and the Grok
   interjection extension stays behind its unsafe flag until an ACP equivalent
   exists.
-- Neither gets a coordinator-only workaround.
-  [0028-coordinator-consistency-gaps.md](../coordinator-and-multi-review/0028-coordinator-consistency-gaps.md) tracks the
-  coordinator side of the same gap.
+- Neither gets a coordinator-only workaround. Coordinators need nothing more:
+  they do not opt out of `actions.steer`, so they get steer here once it
+  exists. This is the only place the gap is tracked (moved from
+  [0028-coordinator-consistency-gaps.md](../coordinator-and-multi-review/0028-coordinator-consistency-gaps.md),
+  now closed).
 
 ### Qualification
 

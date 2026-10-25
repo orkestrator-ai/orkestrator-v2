@@ -285,3 +285,17 @@ A forced `@orkestrator/desktop` production build passed (21.6 seconds), as did
 `mise run format:check`, `mise run lint` and the backend, web and desktop
 typechecks. Both tracked lockfiles were verified current with
 `bun install --frozen-lockfile`.
+
+## Coordinator consistency validation — 2026-10-25
+
+The committed-tree command `mise run test:logged -- --name committed-consistency-suite -- mise run test`
+repeated the Pi preflight wait timeout in the unchanged owner:
+`cancel while Pi's preflight is held > acknowledges as pending and aborts the run the moment Pi accepts`
+failed after 2206.84 ms, followed by an unnamed cleanup hook timeout at 5001.97 ms.
+
+The complete owner passed unchanged with the package's normal preloads:
+`mise run test:logged -- --name pi-preflight-qualified -- bun test --cwd bridges/pi-bridge --preload ../../tests/setup-node.ts --preload ./src/testing/test-isolation.ts ./src/prompt-cancel-preflight.test.ts --parallel=1 --only-failures`
+(exit 0, 0.5 seconds). This confirms another intermittent aggregate recurrence;
+no bridge code, assertion, timeout or skip changed. Evidence is
+`orkestrator-test-run.iEyQ7i/bridges.log.gz` below the host temporary directory
+after aggregate completion.

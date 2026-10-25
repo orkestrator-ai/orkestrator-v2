@@ -172,34 +172,60 @@ function installBrowserPreviewPins(
     };
   };
 
-  const place = (): void => {
+  const sameRect = (left: Result["rect"], right: Result["rect"]): boolean =>
+    left === right ||
+    Boolean(
+      left &&
+      right &&
+      left.x === right.x &&
+      left.y === right.y &&
+      left.width === right.width &&
+      left.height === right.height,
+    );
+
+  const place = (): boolean => {
+    let changed = false;
     for (const pin of pins) {
       const connected = pin.element
         ? pin.element.isConnected
         : Boolean(pin.range?.startContainer.isConnected);
       const rect = pin.element ? kit.rectOf(pin.element) : pin.range ? kit.rectOf(pin.range) : null;
-      // A matched element that renders no box (inside a closed dialog) gets
-      // no pin, rather than one at the page's corner.
-      const box = pin.element ?? pin.range?.startContainer.parentElement ?? null;
+      // Ranges can render through display: contents parents with no own box.
+      // Their rectangles establish rendering; check the nearest box ancestor
+      // as well to reject subtrees such as a closed dialog.
+      let box = pin.element ?? pin.range?.startContainer.parentElement ?? null;
+      if (pin.range) {
+        while (box && window.getComputedStyle(box).display === "contents") box = box.parentElement;
+      }
       const rendered = !box || typeof box.checkVisibility !== "function" || box.checkVisibility();
-      if (pin.result.state !== "matched" || !connected || !rect || !rendered) {
+      const nextRect =
+        pin.result.state === "matched" &&
+        connected &&
+        rect &&
+        rendered &&
+        (!pin.range || rect.width > 0 || rect.height > 0)
+          ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+          : null;
+      if (!sameRect(pin.result.rect, nextRect)) changed = true;
+      pin.result.rect = nextRect;
+      if (!nextRect) {
         pin.node.style.display = "none";
         pin.outline.style.display = "none";
         continue;
       }
-      // The snapshot reports where the pin is drawn now, not where it resolved.
-      pin.result.rect = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       pin.node.style.display = "block";
       pin.outline.style.display = "block";
       Object.assign(pin.outline.style, {
-        left: `${rect.x}px`,
-        top: `${rect.y}px`,
-        width: `${rect.width}px`,
-        height: `${rect.height}px`,
+        left: `${nextRect.x}px`,
+        top: `${nextRect.y}px`,
+        width: `${nextRect.width}px`,
+        height: `${nextRect.height}px`,
       });
-      pin.node.style.left = `${Math.max(0, rect.x - 10)}px`;
-      pin.node.style.top = `${Math.max(0, rect.y - 10)}px`;
+      pin.node.style.left = `${Math.max(0, nextRect.x - 10)}px`;
+      pin.node.style.top = `${Math.max(0, nextRect.y - 10)}px`;
     }
+    if (changed) revision += 1;
+    return changed;
   };
 
   /** One bounded pass over every pin; returns whether any result changed. */
@@ -217,7 +243,7 @@ function installBrowserPreviewPins(
         state: resolution.state,
         rule: resolution.rule,
         candidateCount: resolution.candidateCount,
-        rect: resolution.state === "matched" ? resolution.rect : null,
+        rect: pin.result.rect,
       };
       const previousResult = pin.result;
       const previousTarget = pin.element ?? pin.range?.startContainer ?? null;
@@ -237,9 +263,9 @@ function installBrowserPreviewPins(
       diagnostics.byRule[next.rule] = (diagnostics.byRule[next.rule] ?? 0) + 1;
     }
     if (budget.exhausted) diagnostics.budgetExhausted += 1;
-    if (changed) revision += 1;
-    place();
-    return changed;
+    const moved = place();
+    if (changed && !moved) revision += 1;
+    return changed || moved;
   };
 
   for (const query of config.queries.slice(0, 50)) pins.push(makePin(query));

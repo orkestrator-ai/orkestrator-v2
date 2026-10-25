@@ -259,6 +259,30 @@ describe("Show on page", () => {
     });
   });
 
+  for (const rect of [null, undefined]) {
+    test(`a matched target with ${rect} geometry is hidden`, async () => {
+      const harness = createHarness();
+      const contents = await harness.attach("http://localhost:5173/settings");
+      contents.pinsResponse = () =>
+        JSON.stringify([
+          {
+            annotationId: "annotation-1",
+            state: "matched",
+            rule: "stable-id",
+            candidateCount: 1,
+            rect,
+          },
+        ]);
+      expect(
+        await harness.manager.showOnPage({
+          tabId: "browser-1",
+          pin: pin("annotation-1", "/settings"),
+        }),
+      ).toMatchObject({ outcome: "hidden", resolution: { state: "matched", rect: null } });
+      harness.manager.destroyAll();
+    });
+  }
+
   test("a redirect away from the route (expired login) asks the user to navigate", async () => {
     const harness = createHarness();
     const contents = await harness.attach("http://localhost:5173/settings");

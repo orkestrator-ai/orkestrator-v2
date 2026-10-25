@@ -1187,6 +1187,10 @@ test("text, region, and page modes capture end to end; embedded roots resolve to
       environmentId: s().environmentId,
     });
 
+  // The selected text's immediate parent has no box of its own.
+  await inPreview(
+    `(() => { const paragraph = document.querySelector('[data-testid="long-text"]'); const span = document.createElement("span"); span.style.display = "contents"; span.append(...paragraph.childNodes); paragraph.append(span); return true; })()`,
+  );
   // Text: a native drag selection inside the long paragraph. It is taller
   // than the viewport, so align its top and drag along a line in the middle
   // of the viewport, clear of the capture hint and the edges.
@@ -1208,7 +1212,27 @@ test("text, region, and page modes capture end to end; embedded roots resolve to
     // Exactly the page's own long text: nothing from neighbouring regions.
     expect(longText().includes(quote)).toBe(true);
   }
-  await saveCapture(text.descriptor.captureId, "Tighten this clause.");
+  const textNote = await saveCapture(text.descriptor.captureId, "Tighten this clause.");
+  const textPin = await pinQuery(textNote.annotationId);
+  await preview("showPins", { tabId: TAB_ID, pins: [textPin] });
+  expect(
+    await inPreview<string>(
+      `document.querySelector("[data-orkestrator-pins] [role='img']").style.display`,
+    ),
+  ).toBe("block");
+  // A range in a non-rendered subtree must still disappear.
+  await inPreview(
+    `document.querySelector('[data-testid="long-text"]').style.display = "none"; window.dispatchEvent(new Event("resize")); true`,
+  );
+  await expect
+    .poll(() =>
+      inPreview<string>(
+        `document.querySelector("[data-orkestrator-pins] [role='img']").style.display`,
+      ),
+    )
+    .toBe("none");
+  await preview("clearPins", TAB_ID);
+  await inPreview(`document.querySelector('[data-testid="long-text"]').style.display = ""; true`);
 
   // Region over the canvas chart; confirmed with Enter.
   expect((await start("region")).status).toBe("selecting");
@@ -1847,7 +1871,7 @@ test("pins and Show on page stay on the target or become explicit offscreen, in 
     );
     await preview("clearPins", TAB_ID);
     note(`modal closed pin: ${closed.state}/${closed.rule} badge=${badge}`);
-    expect(verdict(closed, await rectOf(confirm))).not.toBe("matched-wrong");
+    expect(closed).toMatchObject({ state: "matched", rect: null });
     expect(badge).toBe("none");
     const closedShow = await preview<{ outcome: string; resolution: any }>("showOnPage", {
       tabId: TAB_ID,

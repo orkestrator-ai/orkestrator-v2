@@ -332,7 +332,7 @@ describe("materialized evidence ownership and cleanup", () => {
     // Written where the materializer writes it, not at the brief's name.
     const written = materializedEvidencePath("req-1", attachment.relativePath)!;
     expect(attachment.materializedPath).toBe(`/workspace/${written}`);
-    expect(written).toBe(attachment.relativePath.replace(/([^/]+)$/, "req-1-$1"));
+    expect(written).not.toBe(attachment.relativePath);
     const file = join(worktree, written);
     await mkdir(join(worktree, ".orkestrator", "annotations"), { recursive: true });
     await writeFile(file, makePng(4, 3, 3));
@@ -340,6 +340,46 @@ describe("materialized evidence ownership and cleanup", () => {
     const bystander = join(worktree, attachment.relativePath);
     await writeFile(bystander, makePng(4, 3, 3));
     return { receipt, attachment, file, worktree, bystander };
+  }
+
+  for (const [settledId, activeId] of [
+    ["req:1", "req_1"],
+    ["r".repeat(120) + "a", "r".repeat(120) + "b"],
+  ]) {
+    test(`cleanup preserves legacy evidence shared with active ${activeId}`, async () => {
+      const { attachment, worktree } = await materializedRequest({ environmentType: "local" });
+      const legacy = `.orkestrator/annotations/${settledId!.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120)}-${attachment.relativePath.split("/").at(-1)}`;
+      const file = join(worktree, legacy);
+      await writeFile(file, makePng(4, 3, 3));
+      const store = await harness!.service.storage.environment(ENV_A);
+      await store.mutate((tx) => {
+        const base = tx.manifest.requests["req-1"]!;
+        tx.manifest.requests = {};
+        for (const [id, state] of [
+          [settledId!, "cancelled"],
+          [activeId!, "running"],
+        ] as const) {
+          tx.manifest.requests[id] = {
+            ...base,
+            id,
+            state,
+            selections: [],
+            settledAt: state === "cancelled" ? tx.now : null,
+            attachments: [{ ...attachment, materializedPath: `/workspace/${legacy}` }],
+          };
+        }
+        tx.markDirty();
+      });
+      expect((await harness!.service.collectGarbage(ENV_A)).removedEvidence).toBe(0);
+      expect(existsSync(file)).toBe(true);
+      // The old filename is still recognized once no active owner remains.
+      await store.mutate((tx) => {
+        delete tx.manifest.requests[activeId!];
+        tx.markDirty();
+      });
+      expect((await harness!.service.collectGarbage(ENV_A)).removedEvidence).toBe(1);
+      expect(existsSync(file)).toBe(false);
+    });
   }
 
   test("settled evidence is kept for the retention period, then removed and untracked", async () => {

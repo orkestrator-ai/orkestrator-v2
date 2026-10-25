@@ -155,7 +155,7 @@ export function parsePinsOutput(
       continue;
     if (results.has(entry.annotationId)) continue;
     const { state, rule, candidateCount } = entry;
-    const rect = entry.rect === null ? null : pickRect(entry.rect);
+    const rect = entry.rect == null ? null : pickRect(entry.rect);
     if (
       typeof state !== "string" ||
       !PAGE_STATES.has(state) ||
@@ -165,7 +165,7 @@ export function parsePinsOutput(
       !Number.isSafeInteger(candidateCount) ||
       candidateCount < 0 ||
       candidateCount > 1_000_000 ||
-      (state === "matched") !== (rect !== null) ||
+      (state !== "matched" && rect !== null) ||
       (rect !== null && !isWebAnnotationRect(rect))
     ) {
       continue;

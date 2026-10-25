@@ -381,7 +381,10 @@ export function useAnnotationPins({
         if (!resolution) return { status: "not-found", reason: "no match" };
         applyResults(() => resultMap(results), view);
         if (resolution.offPage) return { status: "off-page", route: annotation.page.route };
-        if (resolution.state === "matched" && !resolution.historical) return { status: "shown" };
+        if (resolution.state === "matched" && !resolution.historical) {
+          const rect = resolution.rect;
+          return { status: rect && (rect.width > 0 || rect.height > 0) ? "shown" : "hidden" };
+        }
         return { status: "not-found", reason: anchorStateLabel(resolution), resolution };
       } catch (error) {
         return {

@@ -917,9 +917,9 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
     // ended; only an idle session, or a later id with no live observation
     // (e.g. after a backend restart), settles it.
     const activity = this.turnActivity(environmentId, destination);
-    if (!laterTurn && activity === "waiting") {
+    if (!rolledOver && activity === "waiting") {
       const interactions = await this.pendingInteractions(request);
-      return observation("needs-input", {
+      return observation(request.state === "cancelling" ? "cancelling" : "needs-input", {
         ...confirmed,
         interactionIds: (interactions ?? request.interactions ?? []).map((item) => item.id),
         interactions: interactions ?? request.interactions ?? [],

@@ -33,6 +33,7 @@ import {
   type AgentInteractionRequest,
   type AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
+import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   WEB_ANNOTATION_COMMANDS as C,
@@ -377,16 +378,20 @@ async function awaitApproval(invoke: Invoke, target: Workspace, requestId: strin
   return request!.interactions!.find((item) => APPROVAL_KINDS.has(item.kind))!.id;
 }
 
+async function readProjection(invoke: Invoke, target: Workspace) {
+  return invoke<Pick<
+    NativeAgentSessionProjection,
+    "interactions" | "generation" | "connection"
+  > | null>("get_native_agent_projection", {
+    environmentId: target.environmentId,
+    agent: AGENT,
+    logicalSessionKey: target.destination.logicalSessionKey,
+    messageLimit: 20,
+  });
+}
+
 async function pendingInteraction(invoke: Invoke, target: Workspace, id: string) {
-  const projection = await invoke<{ interactions: AgentInteractionRequest[] } | null>(
-    "get_native_agent_projection",
-    {
-      environmentId: target.environmentId,
-      agent: AGENT,
-      logicalSessionKey: target.destination.logicalSessionKey,
-      messageLimit: 20,
-    },
-  );
+  const projection = await readProjection(invoke, target);
   return projection?.interactions.find((item) => item.id === id) ?? null;
 }
 
@@ -563,37 +568,56 @@ test("an annotation approval survives a switch, reload, stream loss and restart,
     const second = `req-disrupt-c-${suffix}`;
     await sendImplement(invoke, page, c, second);
     const doomed = await awaitApproval(invoke, c, second);
+    const doomedProjection = await readProjection(invoke, c);
+    expect(doomedProjection?.generation).toBeDefined();
+    const doomedInteraction = doomedProjection?.interactions.find((item) => item.id === doomed);
+    expect(doomedInteraction?.state).toBe("pending");
+    const staleAnswer = allowOnce(doomedInteraction!);
     status = await restartProfile("crash");
     invoke = await signIn(page, status);
-    const old = await pendingInteraction(invoke, c, doomed);
-    const deadAnswer = old
-      ? await answer(invoke, c, allowOnce(old))
-      : await answer(invoke, c, {
-          version: AGENT_INTERACTION_CONTRACT_VERSION,
-          interactionId: doomed,
-          sessionId: "unknown",
-          action: "deny",
-          resolvedAt: Date.now(),
-        });
+    expect(sourceState(c), "crash restart must not implicitly apply an approval").toBe("original");
+    // Recreate a connected provider authority before trying the stale answer:
+    // refusal by an offline session cannot qualify generation fencing.
+    await invoke("ensure_native_agent_session", {
+      environmentId: c.environmentId,
+      agent: AGENT,
+      logicalSessionKey: c.destination.logicalSessionKey,
+    });
+    let liveProjection: Awaited<ReturnType<typeof readProjection>> = null;
+    await expect
+      .poll(
+        async () => {
+          liveProjection = await readProjection(invoke, c);
+          return (
+            liveProjection?.connection === "connected" &&
+            liveProjection.generation !== doomedProjection!.generation
+          );
+        },
+        { timeout: 120_000, intervals: [2_000] },
+      )
+      .toBe(true);
+    expect(sourceState(c), "a new live generation must not replay the old approval").toBe(
+      "original",
+    );
+    const old = liveProjection!.interactions.find((item) => item.id === doomed) ?? null;
+    const deadAnswer = await answer(invoke, c, staleAnswer);
+    expect(deadAnswer, "an answer from the dead generation must be refused").not.toBe("applied");
+    expect(sourceState(c), "the stale answer must not edit source").toBe("original");
     const afterCrash = await readRequest(invoke, c, second);
     log("after crash restart", {
       state: afterCrash.state,
       interaction: old ? old.state : "absent",
       answer: deadAnswer,
+      generationChanged: liveProjection!.generation !== doomedProjection!.generation,
       source: sourceState(c),
     });
-    if (deadAnswer === "applied") {
-      // Only acceptable when the provider re-raised the same approval on a
-      // live generation (the projection showed it pending again).
-      expect(old?.state).toBe("pending");
-    }
     const final = await settle(invoke, c, second);
     log("crash case settled", {
       state: final.state,
       turnOutcome: final.turnOutcome ?? null,
       source: sourceState(c),
     });
-    if (deadAnswer !== "applied") expect(sourceState(c)).toBe("original");
+    expect(sourceState(c)).toBe("original");
   } finally {
     for (const target of created) {
       await invoke("stop_environment", { environmentId: target.environmentId }).catch(

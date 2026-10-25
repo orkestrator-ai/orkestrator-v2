@@ -999,14 +999,13 @@ test("Docker fixture live agent implements a note inside the container and its r
       type: "container-reported-file-checks",
       description: JSON.stringify(reported?.fileChecks ?? null),
     });
-    if (reported?.fileChecks) {
-      expect(reported.fileChecks).toEqual(
-        expect.arrayContaining([
-          { path: contentPath, status: "exists" },
-          { path: "annotation-app/not-created.ts", status: "missing" },
-        ]),
-      );
-    }
+    expect(reported, "agent report is required to qualify container file checks").toBeDefined();
+    expect(reported?.fileChecks).toEqual(
+      expect.arrayContaining([
+        { path: contentPath, status: "exists" },
+        { path: "annotation-app/not-created.ts", status: "missing" },
+      ]),
+    );
   } finally {
     // Leave the shared fixture container's source as the next run expects it.
     inContainer(setup.containerId, ["git", "checkout", "--", contentPath]);

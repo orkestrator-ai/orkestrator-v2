@@ -26,3 +26,25 @@ not establish the cause.
 
 Original evidence: host temporary directory
 `orkestrator-test-run.GSCek7/bridges.log.gz`, with the outer run under `orkestrator-test-run.iCAyRT`.
+
+
+## Annotation qualification validation, 2026-10-25
+
+The unchanged owner failed again during `annotation-suite` (`mise run test`),
+this time in `a cold app-server child > its first answer is stale until a
+settling re-read confirms the plugin skills`. Its exact-call-count settling
+wait at line 212 timed out after 2,067.66 ms. Codex reported 2356 pass, 40 skip
+and 1 fail across 88 files (72.69 seconds). The shared host capacity queue was
+also delaying this run's workspace group; that does not establish the cause of
+the test failure.
+
+The entire owner passed alone, with no source or timeout changes:
+
+```sh
+mise run test:logged -- --name annotation-codex-catalogue-check -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Exit status was 0; logged duration was 1.3 seconds. The annotation fixes do not
+change any bridge implementation. Aggregate evidence is in the host temporary
+directory `orkestrator-test-run.N5VXK9/bridges.log.gz`; the enclosing log is
+`orkestrator-test-run.gSVRr6/annotation-suite.log.gz`.

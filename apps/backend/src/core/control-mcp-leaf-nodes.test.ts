@@ -256,7 +256,7 @@ describe("aggregate MCP regressions", () => {
     expect(projects.projects).toContainEqual(
       expect.objectContaining({ id: finalProjectId, nodeId: mcp.leafId }),
     );
-    expect(projects.warnings).toEqual([]);
+    expect(projects.warnings ?? []).toEqual([]);
     const environments = content(
       await mcp.call(mcp.token, "list_environments", { nodeId: "all" }),
     ) as { environments: unknown[] };

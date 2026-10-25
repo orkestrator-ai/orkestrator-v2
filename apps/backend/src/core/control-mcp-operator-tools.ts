@@ -255,11 +255,15 @@ export async function operatorListProjects(caller: ControlMcpCaller) {
   return legacyResult({
     projects,
     total: projects.length,
-    nodes: pages.nodes,
-    warnings: pages.warnings,
-    unavailableNodes: pages.nodes
-      .filter((node) => !node.ok)
-      .map((node) => ({ nodeId: node.nodeId, node: node.name, reason: node.error?.message })),
+    ...(pages.nodes.length
+      ? {
+          nodes: pages.nodes,
+          unavailableNodes: pages.nodes
+            .filter((node) => !node.ok)
+            .map((node) => ({ nodeId: node.nodeId, node: node.name, reason: node.error?.message })),
+        }
+      : {}),
+    ...(pages.warnings.length ? { warnings: pages.warnings } : {}),
   });
 }
 

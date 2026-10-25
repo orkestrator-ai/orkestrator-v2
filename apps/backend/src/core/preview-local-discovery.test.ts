@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type AddressInfo } from "node:net";
 
-import type { ListenerOwnership, ManagedProcessRoot } from "./preview-listener-ownership.js";
+import {
+  LoopbackListenerOwnership,
+  type ListenerOwnership,
+  type ManagedProcessRoot,
+} from "./preview-listener-ownership.js";
+import { CommandFailedError } from "./shell.js";
 import { resolvePreviewTargetIntent } from "./preview-intent.js";
 import { spawnPty, type PtyProcess } from "./pty.js";
 import { TerminalRuntime } from "./terminal-runtime.js";
@@ -284,6 +289,178 @@ describe("local preview service discovery", () => {
     });
   });
 
+  test.each(["lsof", "ps"])(
+    "a transient %s failure automatically recovers without confirmation",
+    async (command) => {
+      await harness.addLocalEnvironment("a", { entryPort: 3000 });
+      let failing = true;
+      const checker = new LoopbackListenerOwnership({
+        roots: () => [{ environmentId: "a", pid: 100 }],
+        platform: "darwin",
+        processCacheMs: 0,
+        runCommand: async (name) => {
+          if (name === command && failing)
+            throw new CommandFailedError("timeout", { timedOut: true });
+          return {
+            stdout:
+              name === "lsof"
+                ? "p300\nf1\ntIPv4\nn127.0.0.1:3000\n"
+                : "100 1 started\n300 100 started\n",
+          };
+        },
+      });
+      const runtime = harness.newRuntime({
+        listenerOwnership: checker,
+        registry: { probeBackoffMs: [10, 10, 10] },
+      });
+      await runtime.init();
+      await runtime.registry.settle();
+      const { serviceId } = seeded(runtime.registry, "a").definition;
+      expect(runtime.registry.serviceSnapshot(serviceId)!.endpoint).toMatchObject({
+        listener: "unchecked",
+        failure: { retryable: true },
+      });
+      failing = false;
+      const deadline = Date.now() + 2000;
+      while (
+        runtime.registry.serviceSnapshot(serviceId)!.endpoint.state !== "available" &&
+        Date.now() < deadline
+      )
+        await Bun.sleep(5);
+      expect(runtime.registry.serviceSnapshot(serviceId)!).toMatchObject({
+        definition: { userOverride: false },
+        endpoint: { state: "available", ownership: "managed-process" },
+      });
+    },
+  );
+
+  test.each(["none", "unchecked", "other-environment"] as const)(
+    "TTL %s ownership loss starts a new retry window after readiness retries are exhausted",
+    async (attribution) => {
+      await harness.addLocalEnvironment("a", { entryPort: 3000 });
+      listeners.set(3000, { owner: "a", started: "t1" });
+      let now = 1000;
+      let failed = false;
+      let probes = 0;
+      const runtime = harness.newRuntime({
+        listenerOwnership: {
+          ...listenerOwnership,
+          attribute: async (environmentId, port) =>
+            failed
+              ? { attribution, retryable: true }
+              : listenerOwnership.attribute(environmentId, port),
+        },
+        registry: {
+          now: () => now,
+          verificationTtlMs: 10,
+          probeBackoffMs: [5],
+          readiness: {
+            probe: async () => {
+              probes += 1;
+              return {
+                tcp: { state: "failed", failure: "connection-refused" },
+                tls: { state: "skipped" },
+                http: { state: "skipped" },
+              };
+            },
+          },
+        },
+      });
+      await runtime.init();
+      await runtime.registry.settle();
+      const service = seeded(runtime.registry, "a");
+      const exhausted = Date.now() + 2000;
+      while (probes < 2 && Date.now() < exhausted) await Bun.sleep(5);
+      expect(probes).toBe(2);
+      failed = true;
+      now += 20;
+      await expect(
+        runtime.registry.acquireTarget(
+          service.definition.serviceId,
+          service.endpoint.endpointGeneration,
+        ),
+      ).rejects.toThrow();
+      failed = false;
+      listeners.set(3000, { owner: "a", started: "t2" });
+      const deadline = Date.now() + 2000;
+      while (
+        runtime.registry.serviceSnapshot(service.definition.serviceId)!.endpoint.state !==
+          "available" &&
+        Date.now() < deadline
+      )
+        await Bun.sleep(5);
+      expect(
+        runtime.registry.serviceSnapshot(service.definition.serviceId)!.endpoint.ownership,
+      ).toBe("managed-process");
+    },
+  );
+
+  test("confirmation replaces an in-flight resolution captured before userOverride", async () => {
+    await harness.addLocalEnvironment("a", { entryPort: 3000 });
+    const registry = await started();
+    const definition = seeded(registry, "a").definition;
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entering = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const original = listenerOwnership.attribute;
+    listenerOwnership.attribute = async () => {
+      entered();
+      await gate;
+      return { attribution: "unattributed" };
+    };
+    try {
+      const pending = registry.refresh(definition.serviceId);
+      await entering;
+      await registry.update(definition.serviceId, definition.definitionRevision, {});
+      const refreshed = registry.refresh(definition.serviceId);
+      release();
+      await pending;
+      expect(await refreshed).toMatchObject({
+        definition: { userOverride: true },
+        endpoint: { state: "available", ownership: "user-registered" },
+      });
+    } finally {
+      release();
+      listenerOwnership.attribute = original;
+    }
+  });
+
+  test("seeding preserves a different-kind user service on the entry port and its entry flag", async () => {
+    await harness.addLocalEnvironment("a");
+    const registry = await started();
+    const registered = await registry.register({
+      environmentId: "a",
+      targetKind: "backend-host",
+      applicationPort: 3000,
+      label: "shared",
+      entry: true,
+    });
+    if (registered.kind !== "definition") throw new Error("expected definition");
+    await harness.storage.updateEnvironment("a", { entryPort: 3000 });
+    await registry.settle();
+    const services = registry.snapshot({ environmentId: "a" }).services;
+    expect(services).toHaveLength(2);
+    expect(
+      services.find((s) => s.definition.targetKind === "backend-host")!.definition,
+    ).toMatchObject({
+      serviceId: registered.definition.serviceId,
+      entry: true,
+      provenance: "user",
+    });
+    expect(services.find((s) => s.definition.targetKind === "worktree")!.definition).toMatchObject({
+      entry: false,
+      provenance: "entry-port",
+      userOverride: false,
+    });
+    const again = await started();
+    expect(again.snapshot({ environmentId: "a" }).services).toHaveLength(2);
+  });
+
   test("without an ownership check a seeded service waits for confirmation", async () => {
     await harness.addLocalEnvironment("a", { entryPort: 3000 });
     const runtime = harness.newRuntime();
@@ -336,10 +513,11 @@ describe.skipIf(!realHost)("local preview service discovery on this host", () =>
   /** A shell running a dev server; resolves with the port the server took. */
   async function terminalRunningServer(
     port: number,
+    host = "127.0.0.1",
   ): Promise<{ shell: ChildProcess; port: number }> {
     // Report the bound address after a beat: Bun calls the listen callback of a
     // bind that then fails with EADDRINUSE.
-    const script = `const net=require("node:net");const s=net.createServer();const report=()=>setTimeout(()=>console.log("port "+s.address().port),150);s.once("error",()=>s.listen(${port + 1},"127.0.0.1",report));s.listen(${port},"127.0.0.1",report);`;
+    const script = `const net=require("node:net");const s=net.createServer();const report=()=>setTimeout(()=>console.log("port "+s.address().port),150);s.once("error",()=>s.listen({port:${port + 1},host:"${host}",ipv6Only:false},report));s.listen({port:${port},host:"${host}",ipv6Only:false},report);`;
     // "; true" keeps the shell as the server's parent instead of exec'ing it.
     const shell = spawn("/bin/sh", ["-c", `"${process.execPath}" -e '${script}'; true`], {
       detached: true,
@@ -360,6 +538,32 @@ describe.skipIf(!realHost)("local preview service discovery on this host", () =>
     process.kill(-shell.pid!, "SIGKILL");
     await exited;
   }
+
+  test("a dual-stack wildcard listener resolves the owning worktree over IPv4 and refuses another", async () => {
+    const server = await terminalRunningServer(0, "::");
+    await harness.addLocalEnvironment("a", { entryPort: server.port });
+    await harness.addLocalEnvironment("b", { entryPort: server.port });
+    const runtime = harness.newRuntime({
+      managedProcessRoots: () => [{ environmentId: "a", pid: server.shell.pid! }],
+      // Exercise auto selection through a real successful IPv4 handshake.
+      probeFamily: undefined,
+    });
+    await runtime.init();
+    await runtime.registry.settle();
+    const a = runtime.registry.snapshot({ environmentId: "a" }).services[0]!;
+    const b = runtime.registry.snapshot({ environmentId: "b" }).services[0]!;
+    expect(a.endpoint).toMatchObject({
+      state: "available",
+      addressFamily: "ipv4",
+      ownership: "managed-process",
+      listener: "this-environment",
+    });
+    expect(b.endpoint).toMatchObject({
+      state: "unavailable",
+      listener: "other-environment",
+      hostPort: null,
+    });
+  }, 20_000);
 
   test("two environments, a restart on the reused port, and an auto-incremented port", async () => {
     const port = await freePort();

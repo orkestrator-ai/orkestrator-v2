@@ -732,6 +732,16 @@ export class PreviewServiceRegistry {
       if (!this.runtime.has(definition.serviceId))
         this.runtime.set(definition.serviceId, this.newRuntime());
       if (previous) {
+        // Every revision invalidates captured definitions, including confirmation
+        // (userOverride) and readiness-only edits. Let the new resolve run now.
+        const entry = this.runtime.get(definition.serviceId)!;
+        entry.token += 1;
+        entry.jobController?.abort();
+        entry.job = null;
+        entry.probe = null;
+        entry.probeAttempt = 0;
+        if (entry.probeTimer) clearTimeout(entry.probeTimer);
+        entry.probeTimer = null;
         const targetChanged =
           previous.applicationPort !== definition.applicationPort ||
           previous.scheme !== definition.scheme ||
@@ -1127,6 +1137,9 @@ export class PreviewServiceRegistry {
       return;
     }
     if (entry.target) {
+      // Losing a verified binding starts a new ownership retry window, even
+      // when readiness probes exhausted the previous window.
+      entry.probeAttempt = 0;
       entry.target = null;
       entry.generationBindingKey = null;
       this.setEndpoint(serviceId, { endpointGeneration: entry.endpoint.endpointGeneration + 1 });

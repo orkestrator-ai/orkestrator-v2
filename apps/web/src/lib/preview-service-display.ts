@@ -100,6 +100,10 @@ export function serviceReadiness(snapshot: PreviewServiceSnapshot): {
     const category = endpoint.failure?.category;
     if (category === "environment-stopped") return { label: "stopped", tone: "problem" };
     if (category === "target-unmapped") return { label: "not published", tone: "problem" };
+    if (category === "target-unverified" && endpoint.listener === "other-environment")
+      return { label: "another environment's server", tone: "problem" };
+    if (category === "target-unverified" && requiresListenerOwner(definition))
+      return { label: "waiting for server", tone: "starting" };
     return { label: "unavailable", tone: "problem" };
   }
   const { tcp, http } = endpoint.readiness;
@@ -266,7 +270,7 @@ export function diagnoseService(
       title: `Waiting for this environment's server on port ${port}`,
       detail: `${why} This service came from the project's entry port, which every local environment shares, so it opens only a server this environment started. Confirm to show whatever listens on port ${port} instead.`,
       actions:
-        endpoint.listener === "unchecked"
+        endpoint.listener === "unchecked" && !endpoint.failure?.retryable
           ? ["confirm-association"]
           : ["retry", "confirm-association"],
     };

@@ -1024,7 +1024,10 @@ function PreviewIntentChooser({
     );
 
   const path = resolution?.path ?? "/";
-  const container = target.source === "container-terminal";
+  const container =
+    (resolution?.kind === "unregistered" && resolution.suggestion.targetKind === "container") ||
+    target.source === "container-terminal" ||
+    (target.source === "agent-link" && environment?.environmentType === "containerized");
   const relocations =
     resolution?.kind === "unregistered"
       ? relocationCandidates(services, resolution.suggestion)

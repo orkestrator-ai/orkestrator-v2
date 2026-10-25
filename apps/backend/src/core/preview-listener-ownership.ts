@@ -20,7 +20,11 @@ export type ListenerOwnership =
       /** Digest of the listener pid and its start time: changes whenever the server restarts. */
       processKey: string;
     }
-  | { attribution: Exclude<PreviewListenerAttribution, "this-environment"> };
+  | {
+      attribution: Exclude<PreviewListenerAttribution, "this-environment">;
+      /** An unchecked command failed transiently; retry without changing the association. */
+      retryable?: boolean;
+    };
 
 export interface ListenerOwnershipOptions {
   /** Live roots, read at call time. */
@@ -54,15 +58,42 @@ export function parseLsofPids(stdout: string): number[] {
   return Array.from(pids);
 }
 
-/**
- * `ss -H -ltnp` rows. A listener whose process this user cannot see has no
- * `users:` field: it exists, but has no pid to attribute.
+/** Only sockets capable of serving the selected loopback address participate.
+ * IPv6 wildcard sockets may be dual-stack, so include them for IPv4 too.
  */
-export function parseSsListeners(stdout: string): { pids: number[]; anonymous: boolean } {
+function servesLoopback(address: string, family: "ipv4" | "ipv6", type?: string): boolean {
+  const host = address.replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
+  if (host === "*" || host === "::") return type !== "IPv4" || family === "ipv4";
+  if (family === "ipv6") return host === "::1";
+  return host === "127.0.0.1" || host === "0.0.0.0" || host === "::ffff:127.0.0.1";
+}
+
+/** `lsof -F pftn`: keep each file's address, rather than attributing every PID on a port. */
+export function parseLsofListeners(stdout: string, family: "ipv4" | "ipv6") {
+  const pids = new Set<number>();
+  let pid: number | undefined;
+  let type: string | undefined;
+  for (const line of stdout.split("\n")) {
+    if (line.startsWith("p")) pid = Number(line.slice(1));
+    else if (line.startsWith("f")) type = undefined;
+    else if (line.startsWith("t")) type = line.slice(1);
+    else if (line.startsWith("n") && pid && servesLoopback(line.slice(1), family, type))
+      pids.add(pid);
+  }
+  return { pids: Array.from(pids), anonymous: false };
+}
+
+/** `ss -H -ltnp` rows, including listeners whose process is hidden. */
+export function parseSsListeners(stdout: string, family: "ipv4" | "ipv6" = "ipv4") {
   const pids = new Set<number>();
   let anonymous = false;
   for (const line of stdout.split("\n")) {
-    if (!line.trim()) continue;
+    const address = line.trim().split(/\s+/)[3];
+    if (
+      !address ||
+      !servesLoopback(address, family, address.startsWith("0.0.0.0:") ? "IPv4" : undefined)
+    )
+      continue;
     const found = Array.from(line.matchAll(/pid=(\d+)/g), (match) => Number(match[1]));
     if (found.length === 0) anonymous = true;
     for (const pid of found) pids.add(pid);
@@ -140,7 +171,7 @@ export class LoopbackListenerOwnership {
     this.checks += 1;
     if (this.platform !== "darwin" && this.platform !== "linux") return this.markUnchecked();
     const found = await this.findListeners(port, family);
-    if (!found) return this.markUnchecked();
+    if ("retryable" in found) return this.markUnchecked(found.retryable);
     const listeners = found.pids;
     if (listeners.length === 0) return { attribution: found.anonymous ? "unattributed" : "none" };
 
@@ -149,8 +180,8 @@ export class LoopbackListenerOwnership {
       processes = await this.listProcesses();
       // A listener newer than the shared listing is not in it yet.
       if (listeners.some((pid) => !processes.has(pid))) processes = await this.listProcesses(true);
-    } catch {
-      return this.markUnchecked();
+    } catch (error) {
+      return this.markUnchecked(!(error instanceof CommandFailedError && error.executableMissing));
     }
     const roots = new Map<number, string>();
     for (const root of this.options.roots()) {
@@ -180,41 +211,43 @@ export class LoopbackListenerOwnership {
 
   /**
    * Listener pids for one port: `lsof`, or on Linux hosts without it (minimal
-   * Debian and Arch installs) `ss` from iproute2. Null when neither can answer.
+   * Debian and Arch installs) `ss` from iproute2. Distinguishes unavailable tools from transient failures.
    */
   private async findListeners(
     port: number,
     family: "ipv4" | "ipv6",
-  ): Promise<{ pids: number[]; anonymous: boolean } | null> {
+  ): Promise<{ pids: number[]; anonymous: boolean } | { retryable: boolean }> {
     try {
       const { stdout } = await this.run(
         "lsof",
-        ["-nP", "-a", `-i${family === "ipv6" ? 6 : 4}TCP:${port}`, "-sTCP:LISTEN", "-Fp"],
+        ["-nP", "-a", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpftn"],
         { timeoutMs: this.timeoutMs },
       );
-      return { pids: parseLsofPids(stdout), anonymous: false };
+      return parseLsofListeners(stdout, family);
     } catch (error) {
       // lsof exits 1 when nothing matches. A missing binary or a timeout means
       // the backend cannot tell, which is not the same as "nobody".
-      if (!(error instanceof CommandFailedError) || error.timedOut) return null;
-      if (!error.executableMissing) return { pids: [], anonymous: false };
+      if (!(error instanceof CommandFailedError) || error.timedOut) return { retryable: true };
+      if (!error.executableMissing) {
+        if (error.stdout) return parseLsofListeners(error.stdout, family);
+        if (error.exitCode === 1) return { pids: [], anonymous: false };
+        return { retryable: true };
+      }
     }
-    if (this.platform !== "linux") return null;
+    if (this.platform !== "linux") return { retryable: false };
     try {
-      const { stdout } = await this.run(
-        "ss",
-        ["-H", "-ltnp", family === "ipv6" ? "-6" : "-4", `sport = :${port}`],
-        { timeoutMs: this.timeoutMs },
-      );
-      return parseSsListeners(stdout);
-    } catch {
-      return null;
+      const { stdout } = await this.run("ss", ["-H", "-ltnp", `sport = :${port}`], {
+        timeoutMs: this.timeoutMs,
+      });
+      return parseSsListeners(stdout, family);
+    } catch (error) {
+      return { retryable: !(error instanceof CommandFailedError && error.executableMissing) };
     }
   }
 
-  private markUnchecked(): ListenerOwnership {
+  private markUnchecked(retryable = false): ListenerOwnership {
     this.unchecked += 1;
-    return { attribution: "unchecked" };
+    return { attribution: "unchecked", retryable };
   }
 
   private ownerOf(

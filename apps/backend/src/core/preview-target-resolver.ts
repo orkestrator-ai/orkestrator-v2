@@ -452,7 +452,7 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
     });
     const found = this.options.listenerOwnership
       ? await this.options.listenerOwnership.attribute(environment.id, port, family)
-      : ({ attribution: "unchecked" } as const);
+      : ({ attribution: "unchecked", retryable: false } as const);
     const listener = found.attribution;
     if (found.attribution === "this-environment") {
       return { ok: true, target: target("managed-process", found.processKey), listener };
@@ -478,9 +478,9 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
       return {
         ok: false,
         listener,
-        recheck: listener !== "unchecked",
+        recheck: listener !== "unchecked" || found.retryable === true,
         error: previewError("target-unverified", {
-          retryable: listener !== "unchecked",
+          retryable: listener !== "unchecked" || found.retryable === true,
           message: why,
         }),
       };

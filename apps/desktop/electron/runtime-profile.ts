@@ -294,6 +294,37 @@ export function chromiumSwitchesForRuntime(
   return flavor === "agent-test" && platform === "darwin" ? ["use-mock-keychain"] : [];
 }
 
+/** When a window's preview partition retention passes run (`PreviewPartitionRetention.schedule`). */
+export const PREVIEW_RETENTION_TIMING = { delayMs: 60_000, intervalMs: 30 * 60_000 } as const;
+
+/**
+ * Agent-test runtimes only: run the retention passes every this many
+ * milliseconds (first pass included), so a real-window test can watch one
+ * clear a removed service's partition instead of waiting a minute.
+ */
+export const AGENT_TEST_PREVIEW_RETENTION_ENV = "ORKESTRATOR_AGENT_TEST_PREVIEW_RETENTION_MS";
+const AGENT_TEST_PREVIEW_RETENTION_MIN_MS = 100;
+
+/**
+ * Retention timing for this flavor. Every flavor but `agent-test` ignores the
+ * override, so a variable left in a user's environment cannot change how
+ * often an installed app clears site data. Malformed or out-of-range values
+ * keep the default.
+ */
+export function previewRetentionTimingForRuntime(
+  flavor: RuntimeFlavor,
+  env: NodeJS.ProcessEnv = process.env,
+): { delayMs: number; intervalMs: number } {
+  const fallback = { ...PREVIEW_RETENTION_TIMING };
+  if (flavor !== "agent-test") return fallback;
+  const value = env[AGENT_TEST_PREVIEW_RETENTION_ENV]?.trim() ?? "";
+  if (!/^\d{1,7}$/.test(value)) return fallback;
+  const ms = Number(value);
+  if (ms < AGENT_TEST_PREVIEW_RETENTION_MIN_MS || ms > PREVIEW_RETENTION_TIMING.intervalMs)
+    return fallback;
+  return { delayMs: ms, intervalMs: ms };
+}
+
 export function statusManifestPath(profile: RuntimeProfile): string {
   return path.join(profile.runtimeDir, "status.json");
 }

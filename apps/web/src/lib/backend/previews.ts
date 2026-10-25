@@ -97,6 +97,17 @@ export function registerPreviewService(
   return invoke("register_preview_service", { service, operationId: operationId() });
 }
 
+/**
+ * Confirm a generated service as the user's own registration. Any edit does
+ * this (`userOverride`); an empty patch changes nothing else.
+ */
+export function confirmPreviewService(
+  serviceId: string,
+  expectedRevision: number,
+): Promise<PreviewMutationResult> {
+  return updatePreviewService(serviceId, expectedRevision, {});
+}
+
 export function updatePreviewService(
   serviceId: string,
   expectedRevision: number,

@@ -84,7 +84,7 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
     if (!tabId || (lifecycle !== "running" && lifecycle !== "stopped")) {
       return { environment: lifecycle, tab: "unknown", ...(name ? { name } : {}) };
     }
-    const pending = await read<{ requestPending?: unknown }>(
+    const pending = await read<{ requestPending?: unknown; backgroundWorkPending?: unknown }>(
       this.deps,
       nodeId,
       "get_worker_request_state",
@@ -108,6 +108,7 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
       tab: entry?.state ?? "unknown",
       ...(name ? { name } : {}),
       requestPending,
+      backgroundWorkPending: pending !== "unavailable" && pending?.backgroundWorkPending === true,
     };
   }
 

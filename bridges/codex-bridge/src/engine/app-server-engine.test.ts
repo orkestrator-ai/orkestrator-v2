@@ -467,6 +467,43 @@ describe("thread lifecycle", () => {
     });
   });
 
+  test("lets a watched session ask questions on every thread entry point, and never an unattended one", async () => {
+    const h = harness({
+      "thread/start": () => ({ thread: thread("t1") }),
+      "thread/resume": () => ({ thread: thread("t1") }),
+      "thread/fork": () => ({ thread: thread("t2") }),
+    });
+    const policy = {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: true,
+      networkAccess: "full",
+    } as const;
+    const watched: EngineTurnConfig = { ...BUILD, policy };
+    await h.engine.start();
+    await h.engine.startThread({ config: watched });
+    await h.engine.resumeThread("t1", { config: watched, includeTurns: true });
+    await h.engine.forkThread("t1", watched);
+    for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
+      expect(
+        h.child().requests.find((request) => request.method === method)?.params.config,
+      ).toEqual({ "features.default_mode_request_user_input": true });
+    }
+
+    // Nobody sees a pipeline's question, so Codex keeps refusing it; an older
+    // backend that sends no policy changes nothing either.
+    for (const config of [{ ...BUILD, policy: { ...policy, id: "pipeline" as const } }, BUILD]) {
+      const unattended = harness({ "thread/start": () => ({ thread: thread("t1") }) });
+      await unattended.engine.start();
+      await unattended.engine.startThread({ config });
+      expect(
+        unattended.child().requests.find((request) => request.method === "thread/start")?.params
+          .config,
+      ).toBeUndefined();
+    }
+  });
+
   test("pins the checkout untrusted on every thread entry point when project resources are off", async () => {
     const h = harness({
       "thread/start": () => ({ thread: thread("t1") }),
@@ -490,7 +527,10 @@ describe("thread lifecycle", () => {
     for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
       expect(
         h.child().requests.find((request) => request.method === method)?.params.config,
-      ).toEqual({ projects: { "/tmp/workspace": { trust_level: "untrusted" } } });
+      ).toEqual({
+        projects: { "/tmp/workspace": { trust_level: "untrusted" } },
+        "features.default_mode_request_user_input": true,
+      });
     }
 
     const on = harness({ "thread/start": () => ({ thread: thread("t1") }) });
@@ -500,7 +540,7 @@ describe("thread lifecycle", () => {
     });
     expect(
       on.child().requests.find((request) => request.method === "thread/start")?.params.config,
-    ).toBeUndefined();
+    ).toEqual({ "features.default_mode_request_user_input": true });
   });
 
   test("disables the checkout's own skills on every thread entry point when project resources are off", async () => {
@@ -558,6 +598,7 @@ describe("thread lifecycle", () => {
         h.child().requests.find((request) => request.method === method)?.params.config,
       ).toEqual({
         projects: { "/tmp/workspace": { trust_level: "untrusted" } },
+        "features.default_mode_request_user_input": true,
         // The user's own disabled skill is listed again: the thread's list
         // replaces theirs, and must not switch it back on.
         skills: {
@@ -950,7 +991,7 @@ describe("thread lifecycle", () => {
     });
 
     const params = h.child().requests.find((request) => request.method === "thread/start")!.params;
-    expect(params.config).toBeUndefined();
+    expect(params.config).toEqual({ "features.default_mode_request_user_input": true });
   });
 
   test("refuses a coordinator thread when app-server does not confirm web search is off", async () => {
@@ -1037,6 +1078,8 @@ describe("thread lifecycle", () => {
       web_search: "cached",
       "features.standalone_web_search": false,
       projects: { "/tmp/workspace": { trust_level: "untrusted" } },
+      // A coordinator is a conversation, so it may ask the user a question.
+      "features.default_mode_request_user_input": true,
     });
 
     // `live` opens any URL the model names, and `disabled` is not what this

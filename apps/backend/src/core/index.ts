@@ -1,3 +1,7 @@
+import { workerSessionActivity } from "./worker-session-activity.js";
+import { ScheduledJobExecutor } from "./scheduled-jobs/executor.js";
+import { defaultOwnerLabel, ScheduledJobService } from "./scheduled-jobs/service.js";
+import { publicActionHandlers } from "./public-api/registry.js";
 import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
 import { coordinatorNodeContext } from "./nodes/node-context.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
@@ -29,6 +33,7 @@ import { openRegistryWriter } from "./registry-writer-lease.js";
 import { shutdownContainerLogService } from "./container-log-service.js";
 import { shutdownOomEventWatcher, startOomEventWatcher } from "./container-oom-events.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
+import { sweepOrphanEgressGateways } from "./egress-gateway.js";
 import { DesignService } from "./design/index.js";
 import { PreviewRuntime } from "./preview-runtime.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
@@ -42,6 +47,8 @@ import {
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
 import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
+import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
+import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { setHostClaudeLoginRefresher } from "./agent-accounts-containers.js";
 import {
@@ -215,6 +222,7 @@ export class OrkestratorBackend {
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
+  private containerLoginFileWatcher: ContainerLoginFileWatcher | null = null;
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
   private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
   /** Step 08 named due jobs; `null` on the rollback bundle. Never both. */
@@ -239,8 +247,12 @@ export class OrkestratorBackend {
         | "servicePort"
         | "issueStateSignal"
         | "issueWorktreeSignal"
+        | "callToolAs"
+        | "listToolsAs"
+        | "setScheduledJobs"
       >
     >;
+  private readonly scheduledJobs: ScheduledJobService;
   private readonly controlMcp: Pick<
     ControlMcpServer,
     | "getInfo"
@@ -253,7 +265,10 @@ export class OrkestratorBackend {
     | "revokeCoordinatorCredentials"
     | "start"
     | "stop"
-  >;
+  > &
+    Partial<
+      Pick<ControlMcpServer, "callCoordinatorTool" | "listCoordinatorTools" | "credentialPolicy">
+    >;
 
   constructor(options: {
     dataDir: string;
@@ -283,6 +298,9 @@ export class OrkestratorBackend {
           | "servicePort"
           | "issueStateSignal"
           | "issueWorktreeSignal"
+          | "callToolAs"
+          | "listToolsAs"
+          | "setScheduledJobs"
         >
       >;
     controlMcp?: Pick<
@@ -297,7 +315,10 @@ export class OrkestratorBackend {
       | "revokeCoordinatorCredentials"
       | "start"
       | "stop"
-    >;
+    > &
+      Partial<
+        Pick<ControlMcpServer, "callCoordinatorTool" | "listCoordinatorTools" | "credentialPolicy">
+      >;
     environmentLifecycleTasks?: EnvironmentLifecycleTaskTracker;
     /** Test seam: process state owned by this backend instance. */
     runtime?: BackendRuntime;
@@ -353,6 +374,11 @@ export class OrkestratorBackend {
       storage,
       emit: options.emit,
       strictDockerOwner: options.strictDockerOwner ?? false,
+      // Read at call time: `this.runtime` is assigned below.
+      managedProcessRoots: () => [
+        ...this.runtime.terminals.localProcessRoots(),
+        ...this.runtime.localServers.localProcessRoots(),
+      ],
     });
     this.agentTools =
       options.agentTools ?? new AgentToolsServer(storage, "0.0.0.0", this.workflowResults, design);
@@ -482,27 +508,14 @@ export class OrkestratorBackend {
       storage,
       () => this.controlMcp.getSettings(),
       undefined,
-      async (environmentId, tabId) => {
-        const logicalSessionKey = `env-${environmentId}:${tabId}`;
-        const session = (await storage.listNativeAgentSessions()).find(
-          (candidate) =>
-            candidate.environmentId === environmentId &&
-            candidate.logicalSessionKey === logicalSessionKey,
-        );
-        if (!session) return "unknown";
-        // The turn view: a worker whose turn ended but whose background tasks
-        // still run has answered, and its report must not wait for them. The
-        // raw state stays `working` until every task finishes, which held a
-        // report indefinitely when the turn-end edge itself was missed.
-        return this.nativeAgents.sessionTurnActivitySnapshot(
-          environmentId,
-          session.agent,
-          logicalSessionKey,
-        );
-      },
+      async (environmentId, tabId) =>
+        (await workerSessionActivity(storage, this.nativeAgents, environmentId, tabId)).turn,
       {
         lastAssistantExcerpt: (environmentId, tabId) =>
           this.lastAssistantExcerpt(environmentId, tabId),
+        workerBackgroundWork: async (environmentId, tabId) =>
+          (await workerSessionActivity(storage, this.nativeAgents, environmentId, tabId))
+            .backgroundWorkPending,
         waitingBlocker: (environmentId, tabId) => this.waitingBlocker(environmentId, tabId),
       },
     );
@@ -607,6 +620,8 @@ export class OrkestratorBackend {
       {
         changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
         localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
+        signInGuidance: (environmentId, agent) =>
+          containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
@@ -862,6 +877,9 @@ export class OrkestratorBackend {
       }
     ).setTranscriptArtifactToolHost?.(this.transcriptArtifacts);
     context.transcriptArtifacts = this.transcriptArtifacts;
+    this.scheduledJobs = this.createScheduledJobs(storage);
+    context.scheduledJobs = this.scheduledJobs;
+    this.agentTools.setScheduledJobs?.(this.scheduledJobs);
     // A publication changes its conversation's projected transcript (the
     // artifact part beside its call): views of that environment re-read.
     this.transcriptArtifacts.onLedgerChange((change) =>
@@ -916,9 +934,6 @@ export class OrkestratorBackend {
         workflowResultRollout: this.workflowResultRollout,
         resolveAgentToolConnection,
         assertAgentToolsReachable,
-        onInteractionObservation: (event) => {
-          this.nativeAgents.recordProviderInteractionObservation(event);
-        },
         workflowAdmission: this.workflowAdmission,
         artifactDispatch,
         artifactLedger,
@@ -937,9 +952,6 @@ export class OrkestratorBackend {
         workflowResultRollout: this.workflowResultRollout,
         resolveAgentToolConnection,
         assertAgentToolsReachable,
-        onInteractionObservation: (event) => {
-          this.nativeAgents.recordProviderInteractionObservation(event);
-        },
         workflowAdmission: this.workflowAdmission,
       },
     );
@@ -1280,6 +1292,11 @@ export class OrkestratorBackend {
       // Probe containers are never started; one left by an interrupted
       // manifest read is removed in the background.
       void cleanupStaleManifestProbes(this.context).catch(() => undefined);
+      // Egress gateways whose runtime is gone (removed by hand, or by an
+      // interrupted removal) are removed in the background too.
+      void sweepOrphanEgressGateways(dockerOwnerNamespace(this.context.storage.getDataDir())).catch(
+        () => undefined,
+      );
     }
     // Counts out-of-memory kills of this installation's containers for the
     // usage view; a read-only observer, stopped at shutdown.
@@ -1307,7 +1324,10 @@ export class OrkestratorBackend {
     // Monotonic deadlines do not count time the host spent asleep; on resume
     // every scheduler runs its overdue keys once instead of waiting it out.
     this.hostSuspendDetector ??= new HostSuspendDetector({
-      onSuspend: (suspendedMs) => recurringDiagnosticsRegistry.notifySuspension(suspendedMs),
+      onSuspend: (suspendedMs) => {
+        recurringDiagnosticsRegistry.notifySuspension(suspendedMs);
+        this.scheduledJobs.wake();
+      },
     });
     this.hostSuspendDetector.start();
     // Containers hold Claude logins access-only; this hands them each host
@@ -1319,6 +1339,9 @@ export class OrkestratorBackend {
     setHostClaudeLoginRefresher(() => keeper.refreshHostIfDue());
     setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
     keeper.start();
+    // Grok, OpenCode and Pi logins: pushed again whenever the host's file changes.
+    this.containerLoginFileWatcher ??= new ContainerLoginFileWatcher(this.context);
+    this.containerLoginFileWatcher.start();
     setLocalCodexLoginRefresher(createCodexLoginRefresher(this.context));
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
@@ -1809,6 +1832,9 @@ export class OrkestratorBackend {
       // opening so the user can diagnose it.
       console.warn("[backend] Failed to start control MCP:", error);
     });
+    // Backend-owned timing for scheduled jobs. Fires need the registry writer
+    // lease, the Control MCP (coordinator schedules) and the agent tools.
+    this.scheduledJobs.start();
     this.reserveOwnedPreviewPorts();
     // Node links reach other machines; they start after local recovery and
     // never block it.
@@ -1838,6 +1864,63 @@ export class OrkestratorBackend {
   }
 
   /** Orkestrator's own listeners can never be registered as preview targets. */
+  /** The scheduler and the executor that runs each fire as its owner. */
+  private createScheduledJobs(storage: StorageService): ScheduledJobService {
+    const handlers = publicActionHandlers();
+    const controlMcp = this.controlMcp;
+    const agentTools = this.agentTools;
+    const executor = new ScheduledJobExecutor({
+      invoke: (command, args) => this.invoke(command, args ?? {}),
+      storage: {
+        sendAgentMail: (sender, input) => storage.sendAgentMail(sender, input),
+        getCoordinatorWorkspace: (projectId) => storage.getCoordinatorWorkspace(projectId),
+      },
+      publicHandlers: () => handlers,
+      ...(controlMcp.callCoordinatorTool &&
+      controlMcp.listCoordinatorTools &&
+      controlMcp.credentialPolicy
+        ? {
+            controlMcp: {
+              credentialPolicy: (id: string) => controlMcp.credentialPolicy!(id),
+              callCoordinatorTool: (scope, tool, args) =>
+                controlMcp.callCoordinatorTool!(scope, tool, args),
+              listCoordinatorTools: (scope) => controlMcp.listCoordinatorTools!(scope),
+            },
+          }
+        : {}),
+      ...(agentTools.callToolAs && agentTools.listToolsAs
+        ? {
+            agentTools: {
+              callTool: (scope, tool, args) => agentTools.callToolAs!(scope, tool, args),
+              listTools: (scope) => agentTools.listToolsAs!(scope),
+            },
+          }
+        : {}),
+    });
+    return new ScheduledJobService({
+      store: storage.scheduledJobStore(),
+      executor,
+      // The registry writer lease is the data directory's single-writer
+      // guard: a second backend sharing it never fires schedules.
+      isWriter: () => this.context.registryWriterLease?.isHeld() ?? true,
+      ownerLabel: async (owner) => {
+        if (owner.kind === "control-mcp") {
+          const credential = controlMcp
+            .getSettings()
+            .credentials.find((item) => item.id === owner.credentialId);
+          return `MCP: ${credential?.label ?? owner.credentialId}`;
+        }
+        if (owner.kind === "agent") {
+          const environment = await storage.getEnvironment(owner.environmentId).catch(() => null);
+          return `Agent ${owner.tabId} in ${environment?.name ?? owner.environmentId}`;
+        }
+        return defaultOwnerLabel(owner);
+      },
+      log: (message, error) =>
+        console.warn(message, error instanceof Error ? error.message : (error ?? "")),
+    });
+  }
+
   private reserveOwnedPreviewPorts(): void {
     const ports: number[] = [];
     const agentToolsPort = (
@@ -1956,6 +2039,8 @@ export class OrkestratorBackend {
     this.hostSuspendDetector = null;
     this.claudeLoginKeeper?.stop();
     this.claudeLoginKeeper = null;
+    this.containerLoginFileWatcher?.stop();
+    this.containerLoginFileWatcher = null;
     setHostClaudeLoginRefresher(undefined);
     setLocalClaudeLoginRefresher(undefined);
     setLocalCodexLoginRefresher(undefined);
@@ -1972,6 +2057,9 @@ export class OrkestratorBackend {
     }
     this.activityJobs?.stop();
     this.activityJobs = null;
+    // Fires in flight finish; one cut short is re-claimed after a restart
+    // under the same request key, so it never acts twice.
+    const scheduledJobsStopped = this.scheduledJobs.stop().catch(() => undefined);
     this.coordinators.stopStatusWakes();
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.
@@ -1997,6 +2085,7 @@ export class OrkestratorBackend {
           console.warn("[backend] Failed to drain native agent work:", error);
         }
         await nodesStopped;
+        await scheduledJobsStopped;
         try {
           await this.buildPipelines.shutdown();
         } catch (error) {

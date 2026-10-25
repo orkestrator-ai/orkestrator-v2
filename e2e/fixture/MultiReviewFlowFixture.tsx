@@ -413,8 +413,10 @@ const STEP_LINES: Record<MultiReviewStepKind, string[]> = {
 async function fixtureStepTranscript(
   workflowId: string,
   step: MultiReviewStepKind,
+  messageCount = 40,
 ): Promise<MultiReviewStepTranscript> {
   const createdAt = new Date().toISOString();
+  const longTranscript = new URLSearchParams(window.location.search).has("longTranscript");
   return {
     workflowId,
     step,
@@ -423,14 +425,21 @@ async function fixtureStepTranscript(
     agent: "codex",
     model: "gpt-6-luna",
     transcript: "snapshot",
-    sourceToken: "fixture",
-    messages: STEP_LINES[step].map((text, index) => ({
-      id: `${step}-${index}`,
-      role: "assistant",
-      content: text,
-      createdAt,
-      parts: [{ type: "thinking", content: text }],
-    })),
+    sourceToken: `fixture-${messageCount}`,
+    messages: longTranscript
+      ? Array.from({ length: messageCount }, (_, index) => ({
+          id: `${step}-${index}`,
+          role: "assistant",
+          content: `Package transcript entry ${index + 1}. ${"Checked the validation command and recorded its output. ".repeat(8)}`,
+          createdAt,
+        }))
+      : STEP_LINES[step].map((text, index) => ({
+          id: `${step}-${index}`,
+          role: "assistant",
+          content: text,
+          createdAt,
+          parts: [{ type: "thinking", content: text }],
+        })),
   };
 }
 
@@ -438,8 +447,10 @@ export function MultiReviewFlowFixture() {
   const params = new URLSearchParams(window.location.search);
   const phase = (params.get("phase") ?? "reviewing") as FixturePhase;
   const count = Number(params.get("reviewers") ?? "4");
+  const packageControls = params.has("packageControls");
   const [workflow] = useState(() => {
     const snapshot = multiReviewFlowWorkflow(phase, count);
+    if (packageControls) snapshot.validationRun = undefined;
     if (params.has("manyFindings")) {
       snapshot.reviewers[0]!.report = {
         ...snapshot.reviewers[0]!.report!,
@@ -474,6 +485,11 @@ export function MultiReviewFlowFixture() {
       fixtureTranscript(workflowId, reviewerId, transcriptEntries.current),
     [],
   );
+  const loadStepTranscript = useCallback(
+    (workflowId: string, step: MultiReviewStepKind) =>
+      fixtureStepTranscript(workflowId, step, transcriptEntries.current),
+    [],
+  );
 
   useEffect(() => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
@@ -482,6 +498,36 @@ export function MultiReviewFlowFixture() {
 
   return (
     <main className="flex h-screen flex-col bg-background text-foreground">
+      {packageControls && (
+        <div>
+          <button
+            onClick={() => {
+              const current = useMultiReviewStore.getState().workflows.get(workflow.id)!;
+              const validationRun = multiReviewFlowWorkflow("preparing", count).validationRun!;
+              validationRun.results[0]!.command = `mise run ${"long-validation-command-".repeat(30)}`;
+              useMultiReviewStore.getState().replaceWorkflow({
+                ...current,
+                validationRun,
+                backendRevision: current.backendRevision + 1,
+              });
+            }}
+          >
+            Publish validation
+          </button>
+          <button
+            onClick={() => {
+              transcriptEntries.current += 1;
+              const current = useMultiReviewStore.getState().workflows.get(workflow.id)!;
+              useMultiReviewStore.getState().replaceWorkflow({
+                ...current,
+                backendRevision: current.backendRevision + 1,
+              });
+            }}
+          >
+            Append package transcript
+          </button>
+        </div>
+      )}
       {transcriptControls && (
         <button
           onClick={() => {
@@ -510,7 +556,7 @@ export function MultiReviewFlowFixture() {
           isActive={isActive}
           hydrateWorkflow={async () => workflow}
           loadReviewerTranscript={loadReviewerTranscript}
-          loadStepTranscript={fixtureStepTranscript}
+          loadStepTranscript={loadStepTranscript}
         />
       </div>
     </main>

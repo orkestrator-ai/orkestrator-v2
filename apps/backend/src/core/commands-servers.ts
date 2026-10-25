@@ -126,6 +126,7 @@ import {
   resolveCoordinatorRuntime,
 } from "./coordinator-runtime.js";
 import { drainContainerProcesses } from "./container-readiness.js";
+import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
 import { setLocalClaudeConfigDirectoryProvider } from "./tmux-session-manager.js";
 import {
   activeAgentAccountShellEnvironment,
@@ -1060,20 +1061,9 @@ async function startLocalServerAttempt(
       coordinatorId,
       conversationId: selectedConversation.id,
       mailboxIncarnationId: selectedConversation.mailboxIncarnationId,
-      // A side agent reads the project and talks to the main coordinator; it
-      // launches nothing, so every worker reports to one place.
-      capabilities:
-        selectedConversation.role === "side"
-          ? ["discovery", "mail"]
-          : [
-              "discovery",
-              "tickets",
-              "environments",
-              "jobs",
-              "build-pipelines",
-              "multi-review",
-              "mail",
-            ],
+      capabilities: coordinatorRoleCapabilities(
+        selectedConversation.role === "side" ? "side" : "main",
+      ),
     });
     env[ORKESTRATOR_AGENT_MCP_URL_ENV] = agentToolConnection.url;
     env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV] = agentToolConnection.token;
@@ -1520,6 +1510,15 @@ export async function deleteEnvironment(
             error instanceof Error ? error.name : "unknown",
           );
         });
+      // Schedules its agents own go with it; others' schedules aimed at it pause.
+      try {
+        context.scheduledJobs?.environmentDeleted(environmentId);
+      } catch (error) {
+        console.warn(
+          `[backend] scheduled job cleanup failed for ${environmentId}:`,
+          error instanceof Error ? error.name : "unknown",
+        );
+      }
       context.agentTools?.revokeEnvironment(environmentId);
       await seedFs.rm(seedFilesDir(storage.getDataDir(), environmentId), {
         recursive: true,

@@ -1240,6 +1240,7 @@ export function TerminalContainer({
         const target = linkBrowserTarget(
           useEnvironmentStore.getState().getEnvironmentById(environmentId),
           request.url,
+          request.origin ?? "terminal",
         );
         if (createBrowserTab(target, pane.id)) {
           usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);

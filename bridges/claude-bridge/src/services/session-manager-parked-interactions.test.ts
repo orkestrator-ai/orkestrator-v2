@@ -225,6 +225,19 @@ describe("MCP elicitations", () => {
     call.finish();
     await promptPromise;
   });
+
+  test("asks for question previews as Markdown, never HTML", async () => {
+    const session = createSession("question-previews");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "go");
+    const call = await nextQueryCall();
+
+    expect(call.options.toolConfig).toEqual({ askUserQuestion: { previewFormat: "markdown" } });
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+  });
 });
 
 /**

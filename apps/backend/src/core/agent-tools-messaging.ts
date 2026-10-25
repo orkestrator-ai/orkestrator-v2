@@ -29,7 +29,7 @@ function errorText(error: unknown): never {
   throw error;
 }
 
-async function assertCallerMailbox(
+export async function assertCallerMailbox(
   storage: StorageService,
   scope: AgentMessagingToolScope,
   claimedTabId?: string,
@@ -67,6 +67,12 @@ async function assertCallerMailbox(
   }
   if (!tabId) throw new AgentMailError("capability-denied", "No caller mailbox was resolved");
   const resolvedTabId = tabId;
+  if (!pullTabIds.includes(resolvedTabId)) {
+    throw new AgentMailError(
+      "capability-denied",
+      "The caller tab is not a live pull-capable mailbox in this environment",
+    );
+  }
   const mailbox = await storage.getAgentMailMailbox(scope.environmentId, resolvedTabId, {
     limit: 1,
   });

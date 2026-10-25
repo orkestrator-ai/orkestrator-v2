@@ -122,6 +122,53 @@ describe("the prompt deadline a paused request is capped by", () => {
       jest.useRealTimers();
     }
   });
+
+  test("runs on a pausable clock when the request can move its timeout", async () => {
+    const start = 1_800_000_000_000;
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(start));
+    try {
+      const moves: number[] = [];
+      let settle!: (value: unknown) => void;
+      const child = {
+        request: (
+          _method: string,
+          _params: unknown,
+          _timeoutMs: number,
+          _signal: AbortSignal | undefined,
+          onTimeoutArmed?: (rearm: (timeoutAt: number) => void) => void,
+        ) => {
+          onTimeoutArmed?.((timeoutAt) => moves.push(timeoutAt));
+          return new Promise((answer) => {
+            settle = answer;
+          });
+        },
+      } as unknown as AcpProcess;
+      const state = {
+        messages: [],
+        approvals: new Map(),
+        interactions: new Map(),
+      } as unknown as SessionState;
+
+      const answered = requestPromptWithRetriableProviderRetries(
+        state,
+        child,
+        { sessionId: "vendor-session", prompt: [] },
+        1,
+        undefined,
+      );
+      expect(state.promptTurnClock).toBeDefined();
+      expect(state.promptDeadlineAt).toBe(start + PROMPT_TIMEOUT_MS);
+      // Nothing is held, so the timeout the request armed is left alone.
+      expect(moves).toEqual([]);
+      settle({ stopReason: "end_turn" });
+      await answered;
+      expect(state.promptTurnClock).toBeUndefined();
+      expect(state.promptDeadlineAt).toBeUndefined();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
 
 describe("ACP bridge", () => {

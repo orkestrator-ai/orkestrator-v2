@@ -70,9 +70,10 @@ const CASES: Case[] = [
     approvalMode: "default",
     pausable: true,
   },
-  // No Codex question: the bridge runs every turn in Codex's Default
-  // collaboration mode, where Codex refuses `request_user_input` ("unavailable
-  // in Default mode"), so no real Codex turn can raise one today.
+  // Codex turns run in its Default collaboration mode; the bridge turns on
+  // `default_mode_request_user_input` for watched sessions so the question
+  // reaches the card. It carries a deadline, so it can be paused.
+  { id: "codex-question", agent: "codex", kind: "question", pausable: true },
   {
     id: "codex-approval",
     agent: "codex",
@@ -90,6 +91,7 @@ const CASES: Case[] = [
 
 const QUESTION_TOOL: Partial<Record<Platform, string>> = {
   claude: "AskUserQuestion tool",
+  codex: "request_user_input tool",
   grok: "ask_user_question tool",
   opencode: "question tool",
 };

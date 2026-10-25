@@ -25,7 +25,7 @@ function interactiveProvider(fake: ReturnType<typeof openCodeFake>) {
       authToken: "test-token",
       directory: "/workspace",
     },
-    { openCodeClient: fake.client, monitorRetryMs: 1, autoAnswerRequests: false },
+    { openCodeClient: fake.client, monitorRetryMs: 1 },
   );
 }
 

@@ -3,12 +3,12 @@
  *
  * Opt-in only: real OpenCode turns use the host's OpenCode credentials and may
  * cost money, so every case is skipped unless
- * `ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE=1`. The model is pinned through
- * `ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL` (required with the opt-in): the
- * shipped default `opencode/claude-sonnet-5` is rejected when its provider is
- * not connected (docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md),
- * so pin a model from a provider the host login has connected until that is
- * fixed. The build-pipeline case also needs a model that emits reasoning.
+ * `ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE=1`. No fixed default model ships: an
+ * unpinned native tab starts on the default the connected providers resolve
+ * (#985), and the spec reads that model back from the projection instead of
+ * assuming one. `ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL` (`<provider>/<model>`)
+ * pins the native tab when set. The build-pipeline case needs a model that
+ * emits reasoning, so it is skipped (not passed) unless the pin is set.
  *
  * Nothing at module scope or in a hook spawns `mise` or reads profile state:
  * with the opt-in unset every case is skipped before any of that runs, so the
@@ -49,7 +49,7 @@ type Projection = {
   sessionId?: string;
   turn: { phase: string; error?: string };
   messages: TranscriptMessage[];
-  composer?: { selectedModelId?: string };
+  composer?: { selectedModelId?: string; selectedReasoningId?: string };
 } | null;
 type LayoutTab = {
   id: string;
@@ -75,14 +75,14 @@ const LIVE_OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE === "1";
  */
 const SAFE_AGENT_INFO_ACTIONS = new Set(["Undo turn", "Redo turn", "Compact", "Fork session"]);
 
-function requirePinnedModel(): string {
+/** The pinned model, or undefined to let the connected providers resolve the default. */
+function optionalPinnedModel(): string | undefined {
   const model = process.env.ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL?.trim();
-  if (!model || !model.includes("/")) {
+  if (!model) return undefined;
+  if (!model.includes("/")) {
     throw new Error(
-      "ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE=1 requires ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL " +
-        "as <provider>/<model> from a provider your OpenCode login has connected, for example " +
-        "opencode-go/deepseek-v4.1-flash. The default opencode/claude-sonnet-5 fails when its " +
-        "provider is not connected (docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md).",
+      "ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL must be <provider>/<model> from a provider your " +
+        "OpenCode login has connected, for example opencode-go/deepseek-v4.1-flash.",
     );
   }
   return model;
@@ -218,7 +218,7 @@ test.describe("live OpenCode", () => {
   }) => {
     test.setTimeout(600_000);
     page.setDefaultTimeout(15_000);
-    const model = requirePinnedModel();
+    const pinnedModel = optionalPinnedModel();
     // Tall enough that the short transcript stays inside the virtualized window.
     await page.setViewportSize({ width: 1440, height: 2000 });
     const shareDialogs = guardAgainstShare(page);
@@ -238,8 +238,8 @@ test.describe("live OpenCode", () => {
       const [target, other] = environments as [Environment, Environment];
       await invoke("start_environment", { environmentId: target.id });
 
-      // An assigned OpenCode tab with the pinned model as its one-shot launch
-      // model, so the session is created on that model rather than the default.
+      // An assigned OpenCode tab. A pinned model is its one-shot launch model;
+      // without one the session starts on the connected providers' default.
       const tabId = "oc-live-tab";
       const sessionKey = `env-${target.id}:${tabId}`;
       const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
@@ -261,7 +261,7 @@ test.describe("live OpenCode", () => {
                 id: tabId,
                 type: "agent-native",
                 nativeAgentData: { environmentId: target.id, platform: "opencode", isLocal: true },
-                initialAgentModel: model,
+                ...(pinnedModel ? { initialAgentModel: pinnedModel } : {}),
               },
             ],
           },
@@ -282,8 +282,10 @@ test.describe("live OpenCode", () => {
               const current = await projection(logicalSessionKey);
               if (current?.turn.phase === "error") {
                 throw new Error(
-                  `OpenCode turn failed (${current.turn.error ?? "no error text"}); check that ` +
-                    "ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL belongs to a connected provider",
+                  `OpenCode turn failed (${current.turn.error ?? "no error text"}); ` +
+                    (pinnedModel
+                      ? "check that ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL belongs to a connected provider"
+                      : "the connected providers' default model failed; try pinning a connected model with ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL"),
                 );
               }
               return (
@@ -349,14 +351,17 @@ test.describe("live OpenCode", () => {
         await expect(input).toBeHidden();
         await waitForReply(sessionKey, first.expected);
         const settled = await projection(sessionKey);
-        expect(settled?.composer?.selectedModelId).toBe(model);
+        const selectedModelId = settled?.composer?.selectedModelId;
+        if (pinnedModel) expect(selectedModelId).toBe(pinnedModel);
+        expect(selectedModelId, "the session resolved no model").toMatch(/^[^/\s]+\/\S+$/);
         const reply = settled!.messages.find(
           (message) =>
             message.role === "assistant" &&
             typeof message.content === "string" &&
             message.content.includes(first.expected),
         );
-        expect(reply?.modelId).toBe(model);
+        // The model that actually answered is the one the composer shows.
+        expect(reply?.modelId).toBe(selectedModelId);
         await openEnvironment(target.name);
         await expect(page.getByText(first.expected).first()).toBeVisible({ timeout: 30_000 });
       });
@@ -387,7 +392,7 @@ test.describe("live OpenCode", () => {
         await waitForReply(sessionKey, second.expected);
         await expect(page.getByText(second.expected).first()).toBeVisible({ timeout: 30_000 });
         await agentInfoAction("Undo turn");
-        await expect(page.getByText("OpenCode session reverted", { exact: true })).toBeVisible({
+        await expect(page.getByText("Session reverted", { exact: true })).toBeVisible({
           timeout: 60_000,
         });
         await waitForIdle(sessionKey);
@@ -407,7 +412,7 @@ test.describe("live OpenCode", () => {
         await expect(page.getByText(second.expected).first()).toBeHidden({ timeout: 30_000 });
         await expect(page.getByText(first.expected).first()).toBeVisible();
         await agentInfoAction("Redo turn");
-        await expect(page.getByText("OpenCode revert undone", { exact: true })).toBeVisible({
+        await expect(page.getByText("Revert undone", { exact: true })).toBeVisible({
           timeout: 60_000,
         });
         await waitForReply(sessionKey, second.expected);
@@ -431,9 +436,12 @@ test.describe("live OpenCode", () => {
         await waitForIdle(sessionKey);
       });
 
-      await test.step("fork opens a new tab with the transcript", async () => {
-        const sourceSessionId = (await projection(sessionKey))?.sessionId;
+      await test.step("fork opens a new tab with the transcript, model and reasoning", async () => {
+        const source = await projection(sessionKey);
+        const sourceSessionId = source?.sessionId;
         expect(sourceSessionId).toBeTruthy();
+        const sourceModelId = source?.composer?.selectedModelId;
+        expect(sourceModelId).toBeTruthy();
         // Fork closes the panel and activates the new tab itself.
         await agentInfoAction("Fork session");
         await expect(infoDialog).toBeHidden({ timeout: 60_000 });
@@ -462,19 +470,37 @@ test.describe("live OpenCode", () => {
           )
           .toBe(true);
         const forkKey = `env-${target.id}:${forkTabId!}`;
-        // The model is deliberately not asserted on the fork: forks currently
-        // lose it (docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md).
+        // Before its first prompt the fork shows the source's model and
+        // reasoning profile (#975), whether or not OpenCode's `session.fork`
+        // filled in `Session.model`.
+        await expect
+          .poll(
+            async () => {
+              const composer = (await projection(forkKey))?.composer;
+              return {
+                modelId: composer?.selectedModelId,
+                reasoningId: composer?.selectedReasoningId,
+              };
+            },
+            { timeout: 60_000, message: "the fork did not keep the source's model" },
+          )
+          .toEqual({
+            modelId: sourceModelId,
+            reasoningId: source?.composer?.selectedReasoningId,
+          });
         await expect
           .poll(async () => assistantText((await projection(forkKey))?.messages ?? []), {
             timeout: 60_000,
           })
           .toMatch(new RegExp(`${first.expected}[\\s\\S]*${second.expected}`));
         // The compaction summary now ends the transcript; the later reply is
-        // the row least likely to be outside the virtualized window.
-        await expect(page.getByText(second.expected).first()).toBeVisible({ timeout: 30_000 });
+        // the row least likely to be outside the virtualized window. The
+        // source tab stays mounted behind the fork, so match only what shows.
+        const shownReply = page.getByText(second.expected).filter({ visible: true }).first();
+        await expect(shownReply).toBeVisible({ timeout: 30_000 });
         await page.reload();
         await openEnvironment(target.name);
-        await expect(page.getByText(second.expected).first()).toBeVisible({ timeout: 30_000 });
+        await expect(shownReply).toBeVisible({ timeout: 30_000 });
       });
 
       expect(shareDialogs(), "a Share… confirmation was opened").toBe(0);
@@ -493,7 +519,13 @@ test.describe("live OpenCode", () => {
   }) => {
     test.setTimeout(600_000);
     page.setDefaultTimeout(15_000);
-    const model = requirePinnedModel();
+    const model = optionalPinnedModel();
+    test.skip(
+      !model,
+      "needs ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL: the case asserts thinking rows, so it pins a " +
+        "connected model that emits reasoning rather than trusting the default",
+    );
+    if (!model) return;
     await page.setViewportSize({ width: 1440, height: 2000 });
     const shareDialogs = guardAgainstShare(page);
     const { status, invoke, fixture } = await openProfile(page);
@@ -518,8 +550,8 @@ test.describe("live OpenCode", () => {
         existingEnvironmentId: target.id,
         environmentType: "local",
         agentType: "opencode",
-        // Pinned on every step: the default model may belong to a provider
-        // that is not connected (doc 01), which fails the first turn.
+        // Pinned on every step: the case needs a model that emits reasoning,
+        // and the connected default need not.
         steps: { build: { agent: "opencode", model } },
         reviewers: [{ agent: "opencode", model }],
         maxIterations: 1,

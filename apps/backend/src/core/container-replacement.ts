@@ -18,6 +18,11 @@ import {
 } from "./constants.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand, spawnCommand } from "./shell.js";
+import {
+  prepareEgressGatewayForStart,
+  removeRuntimeContainer,
+  stopRuntimeContainer,
+} from "./egress-gateway.js";
 import { shutdownClaudeStatePolling } from "./tmux.js";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
@@ -532,7 +537,9 @@ export async function rollbackCandidate(
         ? search.containerIds
         : [];
   for (const id of containerIds) {
-    await runCommand("docker", ["rm", "-f", id], { timeoutMs: 60_000 }).catch(() => undefined);
+    await removeRuntimeContainer(id, dockerOwnerNamespace(context.storage.getDataDir())).catch(
+      () => undefined,
+    );
   }
   if (!candidateStorage?.volumes?.length) return undefined;
   const kept = await removeStorageVolumes(context, environmentId, candidateStorage);
@@ -571,7 +578,9 @@ export async function quiesceRuntime(
     const result = capabilities?.["graceful-shutdown"]
       ? await drainContainerProcesses(containerId)
       : null;
-    await runCommand("docker", ["stop", containerId], { timeoutMs: 60_000 });
+    // The runtime, then its egress gateway: a candidate's gateway binds the
+    // same fixed host ports.
+    await stopRuntimeContainer(containerId);
     return result;
   });
   shutdownClaudeStatePolling(containerId);
@@ -834,6 +843,9 @@ async function replaceRuntimePreservingStateUnfenced(
 
     // Health without dispatch: current-boot readiness and a mounted workspace.
     // No setup, agent launch or queued prompt runs before the commit.
+    await prepareEgressGatewayForStart(candidateId).catch((error: unknown) => {
+      throw candidateStartError(error);
+    });
     await runCommand("docker", ["start", candidateId], { timeoutMs: 60_000 }).catch(
       (error: unknown) => {
         throw candidateStartError(error);
@@ -845,7 +857,7 @@ async function replaceRuntimePreservingStateUnfenced(
     });
     // Stopped again before commit: the normal start path launches setup and
     // agent servers against the committed runtime, never against a candidate.
-    await runCommand("docker", ["stop", candidateId], { timeoutMs: 60_000 });
+    await stopRuntimeContainer(candidateId);
     await phase("candidate-healthy", {
       candidate: { ...candidate, ...(bootId ? { bootId } : {}) },
     });

@@ -65,6 +65,7 @@ export const PUBLIC_CAPABILITIES = Object.freeze([
   "settings",
   "tickets",
   "mail",
+  "schedules",
   "host",
 ] as const);
 
@@ -269,6 +270,97 @@ const createEnvironmentFields: Record<string, PublicJsonSchema> = {
     enum: ["restricted", "full"],
     description: "Container network access. Omitted: the project default.",
   },
+};
+
+const scheduleId = id("Scheduled job ID (sch_...), from schedule.list.");
+const scheduleTiming: Record<string, PublicJsonSchema> = {
+  at: {
+    type: "string",
+    minLength: 1,
+    maxLength: 64,
+    description:
+      "One-shot time: HH:MM (its next occurrence), YYYY-MM-DDTHH:MM (in timeZone), an ISO time with Z or an offset, or relative +15m, +2h, +1h30m. Give exactly one of at, cron and everySeconds.",
+  },
+  cron: {
+    type: "string",
+    minLength: 1,
+    maxLength: 200,
+    description:
+      "Recurring: five-field cron (minute hour day-of-month month day-of-week) or @hourly, @daily, @weekly, @monthly, evaluated in timeZone.",
+  },
+  everySeconds: {
+    type: "integer",
+    minimum: 60,
+    maximum: 366 * 24 * 60 * 60,
+    description: "Recurring: a fixed interval in seconds (elapsed time; DST does not move it).",
+  },
+  startAt: {
+    type: "string",
+    minLength: 1,
+    maxLength: 64,
+    description:
+      "With everySeconds: the first fire, in the forms at accepts. Default: one interval from now.",
+  },
+  timeZone: {
+    type: "string",
+    minLength: 1,
+    maxLength: 64,
+    description:
+      "IANA time zone for at and cron wall times, e.g. Europe/London. Default: the backend host's zone.",
+  },
+  catchUpMinutes: {
+    type: "integer",
+    minimum: 0,
+    maximum: 7 * 24 * 60,
+    description:
+      "A fire missed while the backend was down runs once on return if it is at most this many minutes late; later ones are skipped. Default 15.",
+  },
+};
+const scheduleAction: PublicJsonSchema = {
+  type: "object",
+  description:
+    "What fires. kind action: run one public action (action plus input; a mutation other than schedule.* and actions that always need confirmation). kind prompt: send prompt to an idle agent session (sessionId). kind launch: launch an environment like environment.launch; without baseCommit the base branch's newest commit is resolved when it fires.",
+  properties: {
+    kind: { type: "string", enum: ["action", "prompt", "launch"] },
+    action: {
+      type: "string",
+      enum: PUBLIC_ACTION_NAMES,
+      description: "kind action: the public action to run.",
+    },
+    input: {
+      type: "object",
+      additionalProperties: true,
+      description: "kind action: that action's input, as describe_action documents it.",
+    },
+    sessionId: { ...sessionId, description: "kind prompt: the target session (ses_...)." },
+    prompt,
+    mode: conversationMode,
+    projectId: { ...projectId, description: "kind launch: the project." },
+    type: environmentType,
+    agent: agentSelection.agent!,
+    model: agentSelection.model!,
+    reasoning: agentSelection.reasoning!,
+    name: createEnvironmentFields.name!,
+    baseBranch: {
+      type: "string",
+      minLength: 1,
+      maxLength: 500,
+      description: "kind launch: branch to start from. Default: the repository's base branch.",
+    },
+    baseCommit: {
+      ...createEnvironmentFields.baseCommit!,
+      description:
+        "kind launch: pin this commit on baseBranch instead of resolving the newest at fire time.",
+    },
+  },
+  required: ["kind"],
+  additionalProperties: false,
+};
+const scheduleName: PublicJsonSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 120,
+  description: "Short label shown in lists. Default: derived from the action.",
 };
 
 function settingValueSchema(descriptor: PublicSettingDescriptor): PublicJsonSchema {
@@ -983,6 +1075,28 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
         },
       ],
     },
+    "session.interaction.hold": {
+      capability: "interactions",
+      confirmation: "never",
+      input: schema(
+        {
+          sessionId,
+          interactionId: {
+            type: "string",
+            minLength: 1,
+            maxLength: 512,
+            description: "Interaction ID from session.interactions.",
+          },
+          held: {
+            type: "boolean",
+            description:
+              "true pauses the countdown (until the hold ceiling or the provider's own limit); false resumes it with a fresh window.",
+          },
+        },
+        ["sessionId", "interactionId", "held"],
+      ),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID, interactionId: "interaction-1", held: true }],
+    },
     "session.transcript": {
       capability: "sessions.read",
       confirmation: "never",
@@ -1189,6 +1303,124 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
         ["toEnvironmentId", "toTabId", "body"],
       ),
       examples: [{ toEnvironmentId: "env-1", toTabId: "startup-agent", body: "Rebase on main." }],
+    },
+    "schedule.list": {
+      capability: "schedules",
+      confirmation: "never",
+      input: schema({
+        projectId: {
+          ...projectId,
+          description: "Only schedules owned in or targeting this project.",
+        },
+        state: { type: "string", enum: ["active", "paused", "completed"] },
+        ownerKind: { type: "string", enum: ["operator", "control-mcp", "agent", "coordinator"] },
+        offset: { type: "integer", minimum: 0, maximum: 100_000 },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: PUBLIC_API_LIMITS.pageMaxItems,
+          description: "Rows per page (default 100).",
+        },
+      }),
+      examples: [{}, { state: "active" }],
+    },
+    "schedule.get": {
+      capability: "schedules",
+      confirmation: "never",
+      input: schema({ scheduleId }, ["scheduleId"]),
+      examples: [{ scheduleId: "sch_0123456789abcdef0123" }],
+    },
+    "schedule.create": {
+      capability: "schedules",
+      confirmation: "never",
+      input: schema(
+        {
+          name: scheduleName,
+          ...scheduleTiming,
+          paused: { type: "boolean", description: "Create it paused." },
+          action: scheduleAction,
+        },
+        ["action"],
+      ),
+      examples: [
+        {
+          at: "03:12",
+          action: {
+            kind: "action",
+            action: "mail.send",
+            input: {
+              toEnvironmentId: "env-1",
+              toTabId: "startup-agent",
+              body: "Resume the stalled workers.",
+            },
+          },
+        },
+        {
+          cron: "0 9 * * 1-5",
+          timeZone: "Europe/London",
+          action: {
+            kind: "prompt",
+            sessionId: EXAMPLE_SESSION_ID,
+            prompt: "Summarise yesterday's CI failures.",
+          },
+        },
+        {
+          at: "+2h",
+          action: {
+            kind: "launch",
+            projectId: "project-1",
+            type: "local",
+            agent: "claude",
+            prompt: "Run the nightly audit.",
+          },
+        },
+      ],
+    },
+    "schedule.update": {
+      capability: "schedules",
+      confirmation: "never",
+      input: schema(
+        {
+          scheduleId,
+          name: scheduleName,
+          ...scheduleTiming,
+          action: {
+            ...scheduleAction,
+            description: `Replace the action (owner's schedules only). ${scheduleAction.description}`,
+          },
+          expectedRevision: {
+            type: "integer",
+            minimum: 0,
+            description: "Apply only if the schedule's revision still matches.",
+          },
+        },
+        ["scheduleId"],
+      ),
+      examples: [{ scheduleId: "sch_0123456789abcdef0123", cron: "30 3 * * *" }],
+    },
+    "schedule.pause": {
+      capability: "schedules",
+      confirmation: "never",
+      input: schema({ scheduleId }, ["scheduleId"]),
+      examples: [{ scheduleId: "sch_0123456789abcdef0123" }],
+    },
+    "schedule.resume": {
+      capability: "schedules",
+      confirmation: "never",
+      input: schema({ scheduleId }, ["scheduleId"]),
+      examples: [{ scheduleId: "sch_0123456789abcdef0123" }],
+    },
+    "schedule.run": {
+      capability: "schedules",
+      confirmation: "never",
+      input: schema({ scheduleId }, ["scheduleId"]),
+      examples: [{ scheduleId: "sch_0123456789abcdef0123" }],
+    },
+    "schedule.delete": {
+      capability: "schedules",
+      confirmation: "never",
+      input: schema({ scheduleId }, ["scheduleId"]),
+      examples: [{ scheduleId: "sch_0123456789abcdef0123" }],
     },
     "run.get": {
       capability: "discovery",

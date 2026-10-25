@@ -22,6 +22,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | `docker/`, container lifecycle, firewall, Playwright in containers | [`docker/AGENTS.md`](docker/AGENTS.md) |
 | OpenCode provider, SDK pin or `patches/` | [`docs/architecture/agent-engines.md`](docs/architecture/agent-engines.md#maintaining-the-opencode-integration) |
 | Coordinator qualification (`coordinator-providers.ts`) | [`docs/architecture/coordinator.md`](docs/architecture/coordinator.md#changing-qualification) |
+| Scheduled jobs (`scheduled-jobs/`, `schedule.*` actions, schedule tools) | [`docs/architecture/scheduled-jobs.md`](docs/architecture/scheduled-jobs.md) |
 | Slash-command discovery or dispatch | [`docs/architecture/native-agent-commands.md`](docs/architecture/native-agent-commands.md) |
 | Agent SDK/CLI version bumps | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
@@ -200,7 +201,8 @@ the changed paths can affect instead of always running every suite:
   (`mise run test:browser`, or `mise run test:agent:browser:isolated` for
   real-stack flows), the design canvas (`mise run test:agent:design:isolated`),
   Electron main/preload/IPC (`mise run test:agent:electron`), Docker lifecycle
-  (`mise run test:agent:docker`), the published CLI
+  (`mise run test:agent:docker`), service preview origins, forwarding and
+  fixtures (`mise run test:preview:browser`), the published CLI
   (`mise run test:cli:scenarios`), and iOS (`mise run test:all`, macOS only).
   Omit them otherwise and say so in one limitation.
 
@@ -947,6 +949,7 @@ views stay sandboxed.
 | `docker/entrypoint.sh`         | Container entrypoint                                     |
 | `docker/workspace-setup.sh`    | Repo clone, `.env` files, project config, shown in terminal |
 | `docker/init-firewall.sh`      | Network firewall rules applied at startup                |
+| `docker/orkestrator-egress-gateway.sh` | Entrypoint of a restricted runtime's egress gateway |
 | `docker/update-firewall.sh`    | Operator-only allowlist edits via `docker exec --user root` |
 | `docker/runtime-env.sh`        | PATH/env snapshot so `docker exec` sees setup-time tools |
 | `docker/git-branch-helpers.sh` | Makes a bare `git push` publish and track the branch     |
@@ -1011,13 +1014,23 @@ Users and isolation:
   terminals with `docker exec --user orkroot`; `node` has no sudoers path to
   become `orkroot`.
 - Network firewall (iptables/ipset) for security isolation. `node` has
-  passwordless sudo for exactly three things: the image entrypoint
+  passwordless sudo for exactly two things: the image entrypoint
   (`/usr/local/bin/network-policy-entrypoint.sh`, which records the network
-  policy once, root-owned, before dropping to `node`),
-  `/usr/local/bin/init-firewall.sh`, and `/usr/local/bin/run-root-setup.sh`
-  (the latter only when the recorded mode is `full`). The container boundary,
-  not a reusable root shell, is what isolates an agent. Runtime allowlist edits use
-  `docker exec --user root /usr/local/bin/update-firewall.sh`.
+  policy once, root-owned, runs the firewall step as root and only then drops
+  to `node`) and `/usr/local/bin/run-root-setup.sh` (only when the recorded
+  mode is `full`). There is no grant for `init-firewall.sh`. The container
+  boundary, not a reusable root shell, is what isolates an agent. Runtime
+  allowlist edits use `docker exec --user root /usr/local/bin/update-firewall.sh`
+  in the container that owns the network namespace: the runtime's egress
+  gateway when it has one.
+- `/usr/local/bin/orkestrator-egress-gateway` is the entrypoint of a restricted
+  runtime's egress gateway: the same image, run as root with `NET_ADMIN` and a
+  tmpfs `/run`, records the policy (`network-policy-entrypoint.sh
+  --record-only`), applies the unchanged `init-firewall.sh` and idles. The
+  runtime joins its namespace with no added capability; the runtime's root
+  entrypoint then only verifies that the gateway rejects an unlisted
+  destination (`egress-unverified` / `egress-gateway-unavailable` boot
+  failures otherwise).
 
 ### Playwright
 
@@ -1141,10 +1154,17 @@ else is rejected outright. `full` mode skips the firewall entirely.
   for the next boot. Keep that state in
   root-only `/run/orkestrator-firewall/`; node owns `/run/orkestrator`.
 - The firewall limits destinations. It does not stop data leaving through an
-  allowed service. A root terminal (`orkroot`) has `NET_ADMIN` in restricted
-  mode too and can change the firewall; restricted mode constrains agents and
-  `node` terminals, not a user who opens a root shell. Full-mode containers
-  are not given `NET_ADMIN`.
+  allowed service. Where it runs depends on the image. A restricted runtime
+  from an image with `egress-gateway=1` (and network policy 2 or later) joins
+  the namespace of its own egress gateway, a small companion container that
+  holds `NET_ADMIN`, the environment network, the published ports and the
+  firewall (`apps/backend/src/core/egress-gateway.ts`); the runtime gets no
+  capability, so nothing in it, a root terminal included, can change the
+  rules. Older runtimes, and any created with `ORKESTRATOR_EGRESS=in-container`
+  (a rollout cap), keep the firewall inside the runtime with `NET_ADMIN`,
+  where a root terminal (`orkroot`) can change it. Full-mode containers get
+  neither `NET_ADMIN` nor a gateway. Do not describe a runtime with an
+  in-container firewall as unable to change it.
 
 ## Configuration Storage
 
@@ -1349,12 +1369,13 @@ seeding each one from the host installation when it has the same pinned version
 so the default normally costs a local copy rather than a download, and enabling
 that same selection in the profile so the platforms it provisions are the ones
 the app offers. Narrow it with `--agent-platforms cursor,grok` when a run does
-not need all five; the flag is rejected by `mise run dev`, which keeps the
-durable per-installation selection. Do not remove this to save startup time
-without checking what the run launches: Claude, Codex and OpenCode fall back to
-a PATH lookup, but Cursor and Grok resolve only through the managed toolchain,
-so a profile that provisions nothing fails their session creation with
-`enabled but not installed yet`. Anything the host cannot seed is downloaded at
+not need all six; the flag is rejected by `mise run dev`, which keeps the
+durable per-installation selection. An agent-test profile runs only agents
+present in its own managed toolchain. Claude, Codex, OpenCode and Pi fall back
+to a PATH lookup only outside agent-test profiles; inside one, a missing agent
+fails with `<Agent> is not installed in this agent-test profile's toolchain`.
+Cursor and Grok resolve only through the managed toolchain everywhere.
+Anything the host cannot seed is downloaded at
 startup, which needs network access; an agent-test profile that cannot prepare
 its toolchains logs the reason and exits rather than waiting on a retry dialog.
 

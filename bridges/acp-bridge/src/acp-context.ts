@@ -32,6 +32,7 @@ import {
 } from "@orkestrator/protocol/transcript-artifacts";
 import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import type { AcpTurnUsage } from "./usage.js";
+import type { PromptTurnClock } from "./acp-prompt-clock.js";
 import { formatAcpRpcError } from "./acp-errors.js";
 import { assertAcpSignedIn } from "./acp-credentials.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
@@ -44,6 +45,7 @@ import {
   undeclaredPromptCapabilities,
 } from "./acp-provider-config.js";
 import { createReadOnlyProfile } from "./acp-readonly-profile.js";
+import { grokQuestionTimeoutAtLaunch, type GrokQuestionTimeout } from "./acp-question-timeout.js";
 import { effectiveExecutionPolicy } from "./acp-policy.js";
 import {
   GrokMcpConfigWatcher,
@@ -470,11 +472,20 @@ export interface SessionState {
   turnStartedAt?: number;
   /**
    * When the in-flight `session/prompt` request times out: `PROMPT_TIMEOUT_MS`
-   * after it was sent, re-armed by every retry attempt. The timeout terminates
-   * the child and clears every parked request, so a paused request never holds
-   * past it. Undefined while no prompt request is outstanding. Never persisted.
+   * after it was sent, re-armed by every retry attempt, plus however long a
+   * parked request was held (`promptTurnClock`). The timeout terminates the
+   * child and clears every parked request, so it caps a request's countdown.
+   * Undefined while no prompt request is outstanding or while the clock is
+   * stopped for a held request. Never persisted.
    */
   promptDeadlineAt?: number;
+  /**
+   * The pausable clock behind `promptDeadlineAt` while a `session/prompt` is
+   * outstanding (`acp-prompt-clock.ts`). It stops while any parked request is
+   * held, so a paused card is not cut short by the turn's timeout, and
+   * `promptDeadlineAt` is undefined meanwhile. Never persisted.
+   */
+  promptTurnClock?: PromptTurnClock;
   /** A user cancellation suppresses any retriable-provider retry still in backoff. */
   retryCancelledPromptSequence?: number;
   /** `promptSequence` of the turn in which a held request expired unanswered. */
@@ -1002,6 +1013,12 @@ export class AcpProcess {
    * `servers_updated` listing reflects. Never rejects.
    */
   readonly mcpConfigAtSpawn: Promise<GrokMcpConfigFingerprint | undefined>;
+  /**
+   * How long this Grok child waits on its own `ask_user_question`, resolved
+   * at spawn from the environment and configuration it was started with (see
+   * `acp-question-timeout.ts`). Undefined for another provider.
+   */
+  readonly questionTimeout?: GrokQuestionTimeout;
   readonly clientMethods = new AcpClientMethods(workingDirectory);
   #diagnostics?: BridgeRunDiagnostics;
   #nextId = 1;
@@ -1070,9 +1087,16 @@ export class AcpProcess {
       this.mcpConfigAtSpawn = grokMcpConfigFingerprint(currentGrokMcpConfigFiles()).catch(
         () => undefined,
       );
+      const env = providerEnv(providerConfig, { trustProject });
+      if (providerConfig.id === "grok") {
+        this.questionTimeout = grokQuestionTimeoutAtLaunch(env, {
+          userConfig: grokMcpConfigFiles({ env, cwd: workingDirectory }).user,
+        });
+        Object.assign(env, this.questionTimeout.env);
+      }
       this.child = spawn(executable, args, {
         cwd: workingDirectory,
-        env: providerEnv(providerConfig, { trustProject }),
+        env,
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
@@ -1168,6 +1192,12 @@ export class AcpProcess {
     params: JsonObject,
     timeoutMs = RPC_TIMEOUT_MS,
     signal?: AbortSignal,
+    /**
+     * Receives, synchronously, a function that moves this request's timeout
+     * to an absolute time (the prompt turn's pausable clock uses it). It does
+     * nothing once the request has settled.
+     */
+    onTimeoutArmed?: (rearm: (timeoutAt: number) => void) => void,
   ): Promise<unknown> {
     if (this.#closed) return Promise.reject(new Error(`${provider} ACP process is not running`));
     const id = this.#nextId++;
@@ -1183,11 +1213,12 @@ export class AcpProcess {
         pending.cleanupAbort?.();
         reject(error);
       };
-      const timer = setTimeout(() => {
+      const onTimeout = () => {
         this.#diagnostics?.count("timeouts");
         fail(new Error(`${provider} ACP ${method} timed out`));
         void this.#terminateChild("rejected");
-      }, timeoutMs);
+      };
+      const timer = setTimeout(onTimeout, timeoutMs);
       timer.unref();
       let cleanupAbort: (() => void) | undefined;
       if (signal) {
@@ -1199,6 +1230,13 @@ export class AcpProcess {
         cleanupAbort = () => signal.removeEventListener("abort", onAbort);
       }
       this.#pending.set(id, { resolve: resolvePromise, reject, timer, cleanupAbort });
+      onTimeoutArmed?.((timeoutAt) => {
+        const pending = this.#pending.get(id);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        pending.timer = setTimeout(onTimeout, Math.max(0, timeoutAt - Date.now()));
+        pending.timer.unref();
+      });
       if (signal?.aborted) {
         fail(new Error(`${provider} ACP ${method} was cancelled`));
         return;

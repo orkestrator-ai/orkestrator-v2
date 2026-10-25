@@ -44,6 +44,7 @@ import type {
   DockerUnavailableReason,
 } from "@orkestrator/protocol/docker-availability";
 import { CommandFailedError, commandExists, runCommand } from "./shell.js";
+import { stopRuntimeContainer } from "./egress-gateway.js";
 import {
   DOCKER_IMAGE,
   DOCKER_LABEL_APP,
@@ -266,7 +267,7 @@ export function registerDockerCommands(
       await stopEnvironmentTask(assigned.id, context, () => undefined);
       return;
     }
-    await runCommand("docker", ["stop", id], { timeoutMs: 60_000 });
+    await stopRuntimeContainer(id);
   });
   register("docker_remove_container", async ({ containerId }, context) => {
     // A supplied id is not a request to discard an environment's workspace.

@@ -348,8 +348,11 @@ The preview suite uses a browser-local loopback proxy, throwaway certificates
 and fresh contexts; it changes neither system DNS nor the trust store. Chromium
 pins the test leaf. Firefox and WebKit bypass certificate validation only in
 those contexts. WebKit engine coverage does **not** qualify shipping Safari or
-iOS. The suite covers sibling reads/frames, visible links, hostile workers and
-same-service iframe returns through a synthetic external identity provider.
+iOS. The suite covers sibling reads/frames, visible links, hostile workers,
+same-service iframe returns through a synthetic external identity provider,
+`srcset`, source maps, SPA deep links and history, IndexedDB,
+BroadcastChannel, Cache and worker isolation, frame and popup handling, and
+an IPv6-only (`::1`) service.
 
 Live Tailscale Serve header preservation is a separate opt-in transport check:
 
@@ -437,7 +440,8 @@ the full matrix is a separate task:
 
 ```bash
 # Credential-free: read-only, local-lifecycle, retry-and-retention,
-# setup-failure, client-exit, exec, wrong-profile
+# setup-failure, client-exit, exec, wrong-profile, project-cascade,
+# project-init (container runs add foreign-owner and drop the local-only ones)
 mise run test:logged -- --name cli-scenarios -- mise run test:cli:scenarios
 
 # One scenario, keeping its root for inspection on failure
@@ -455,17 +459,23 @@ mise run test:cli:scenarios -- --environment-type container \
 ```
 
 `mise run test:agent:browser:isolated` includes `e2e/agent-testing/cli-ui.spec.ts`
-(CLI changes seen by an open and a reloaded renderer). Its live question test
-needs a profile started with Claude credentials:
+(CLI changes seen by an open and a reloaded renderer). Its live question and
+approval tests start their run on `ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT`
+(default `claude`; `ORKESTRATOR_AGENT_TEST_LIVE_CLI_MODEL` pins a model) and
+need a profile started with that provider's credentials. The approval test
+sets the environment's execution policy to ask (a host session otherwise
+auto-approves):
 
 ```bash
-mise run dev:test --profile qa-cli-live --fixture --credential-source claude --agent-platforms claude
+mise run dev:test --profile qa-cli-live --fixture --credential-source opencode --agent-platforms opencode
 ORKESTRATOR_AGENT_TEST_PROFILE=qa-cli-live ORKESTRATOR_AGENT_TEST_LIVE_CLI=1 \
+  ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT=opencode \
   mise run test:agent:browser -- e2e/agent-testing/cli-ui.spec.ts
 mise run dev:stop --profile qa-cli-live && mise run dev:reset --profile qa-cli-live
 ```
 
-The run manifest (IDs, exit codes, stages — no prompts or tokens) is written to
+The run manifest (IDs, exit codes, stages and, for a live turn, the pinned and
+reported model — no prompts or tokens) is written to
 `output/cli-scenarios/<run>/manifest.json`. Record live results in the
 [evidence log](../todo/cli-and-slash-commands/0014-cli-qualification.md#evidence-log), against the coverage
 table in [cli-testing.md](cli-testing.md#coverage-by-layer).
@@ -551,7 +561,8 @@ Generate the reference before making the change; no artifact is committed
   multi review its `WorkflowDueScheduler` (15 s reconciliation scan,
   per-workflow due passes). Each domain reports `storageReads` (store content
   decoded, cached or not, and uncached row queries) beside `storageStats`
-  (reuse of already-decoded records). The test holds every attempt to a
+  (reuse of already-decoded records) and `storageBytes` (what those reads
+  fetched from SQLite; cache-served reads fetch nothing). The test holds every attempt to a
   per-domain budget (`STORAGE_PER_ATTEMPT` in `recurring-baseline.test.ts`),
   so one extra read per pass fails it.
 
@@ -608,6 +619,24 @@ auth file and sends it only as a loopback request header. Stdout is a Markdown
 summary. Measured limits: the Electron window is a client (its renderer
 polls), bridges and Docker are not in the CPU/RSS totals, and detection is
 backend-side, a lower bound on change-to-visible.
+
+`--soak-cycles N` adds a lifecycle soak to every arm, after the window and the
+freshness probes. Each cycle creates, starts (to `ready`), stops, restarts and
+deletes one environment of each `--soak-environments` kind (`local` by
+default, `local,container` for both) through the CLI; a failed step still
+deletes its environment. Before and after the soak it reads the live
+footprint three times, 5 s apart: scheduler keys per owner and job kind,
+admission leases, container fetch and signal records, running recorded jobs,
+and event-stream and terminal subscribers. A gauge is a leak when its lowest
+reading after the settle is above its highest reading before the cycles. The
+run exits 1 when a soak step failed, a gauge leaked or the profile's logs hold
+a guard line.
+
+```bash
+mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --window-ms 60000 --freshness-probes 0 --soak-cycles 20 \
+  --soak-environments local,container --out output/benchmarks/recurring-soak.json
+```
 
 For transcript, projection and storage cost, use the
 [efficiency harness](efficiency-harness.md) (`mise run efficiency:baseline`).
@@ -1105,6 +1134,7 @@ Use the default suite plus the additional evidence relevant to the change:
 | User-visible or background renderer flow | Isolated-stack browser cycle, including inactive-environment rehydration |
 | Electron main/preload/IPC | Focused Electron tests plus `mise run test:agent:electron` |
 | Docker lifecycle or ownership | Local fixture coverage plus `mise run test:agent:docker` |
+| Service previews: private origins, publication, bootstrap, request forwarding, or the preview fixtures | `mise run test:preview:browser` (all three engines); add `mise run test:preview:docker` for target resolution, port publication or the relay, and `mise run test:agent:electron` for the desktop tunnel. See "Opt-in preview checks". |
 | iOS | `mise run test:all` on macOS with Xcode, or report that iOS was not run |
 
 For real-stack flows, artifact handling, authentication, and safe profile

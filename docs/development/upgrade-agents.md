@@ -777,6 +777,25 @@ hermetic `codex exec` exception.
    `SANDBOX_REFUSALS` in `apps/desktop/scripts/dev/coordinator-live.ts`, or
    the live coordinator suite fails Codex on create, edit and shell.
 
+   Then check that a watched session's question still reaches the card, on
+   the same kind of loopback endpoint and without credits:
+
+   ```bash
+   CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
+     RUN_LIVE_CODEX_APP_SERVER=1 \
+     bun test bridges/codex-bridge/src/app-server/live-request-user-input.test.ts
+   ```
+
+   Every Orkestrator turn runs in Codex's Default collaboration mode, which
+   refuses `request_user_input` unless the thread turns on the
+   under-development `default_mode_request_user_input` feature
+   (`codexRequestUserInputConfig`). The test expects 0.164.0's behaviour: an
+   interactive session's call parks as a pausable question, the turn waits for
+   the answer, and a `pipeline` session still gets "unavailable in Default
+   mode". If the feature is renamed or removed, the first case fails: find the
+   new switch, or take `question` back out of the Codex row in
+   `nativeAgentCapabilities()`.
+
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party
    HTTP MCP server that still speaks the 2025 protocol: the bridge relies on

@@ -200,6 +200,9 @@ export class PreviewTunnelServer {
       this.options.helloTimeoutMs ?? PREVIEW_TUNNEL_HELLO_TIMEOUT_MS,
     );
     // Liveness on Orkestrator's own protocol only; application bytes are never touched.
+    // Any frame from the client proves it is alive. A client that stopped
+    // reading (its browser is not consuming, e.g. paused media) cannot see
+    // this ping behind the queued data, so it sends its own pings instead.
     const ping = setInterval(() => {
       // Closing sockets cannot send pings. Let the WebSocket's drain deadline
       // and post-flush grace own termination, including peer-initiated closes.
@@ -215,7 +218,11 @@ export class PreviewTunnelServer {
       ws.ping();
     }, this.options.pingIntervalMs ?? 30_000);
     ping.unref?.();
-    ws.on("pong", () => (alive = true));
+    const markAlive = () => {
+      alive = true;
+    };
+    ws.on("pong", markAlive);
+    ws.on("ping", markAlive);
     ws.on("close", cleanup);
 
     const resumeOnDrain = (socket: Duplex) => {
@@ -355,6 +362,7 @@ export class PreviewTunnelServer {
     };
 
     ws.on("message", (data: Buffer, isBinary: boolean) => {
+      markAlive();
       if (state === "closed" || state === "closing") return;
       if (isBinary) {
         // Application bytes are only accepted after OPEN_OK; never buffered

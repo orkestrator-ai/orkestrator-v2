@@ -36,12 +36,11 @@ export interface InteractionRequest {
   generation: EngineGeneration;
   requestedAt: number;
   /**
-   * Whether the turn is waiting on this request.
-   *
-   * app-server publishes it as `isBlocking`; the older `autoResolutionMs` is
-   * deprecated in favour of it and is read only when `isBlocking` is absent.
-   * A non-blocking question is still shown, but it must not hold the turn's
-   * activity at `waiting`.
+   * The app-server wire hint, preserved independently of user attention.
+   * Default-mode questions can report false while the model waits for the
+   * answer. A parked question RPC still publishes waiting activity; transcript
+   * async questions use a separate path. The deprecated `autoResolutionMs` is
+   * read only when `isBlocking` is absent.
    */
   isBlocking: boolean;
   /** Absent for a question that waits indefinitely; moves on pause and resume. */

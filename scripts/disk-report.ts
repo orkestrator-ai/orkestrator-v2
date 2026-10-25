@@ -121,6 +121,51 @@ function isAncestorOfMain(repository: string, ref: string): boolean {
   );
 }
 
+/**
+ * Electron's `persist:` partitions for previews in a desktop profile: one per
+ * service (cleared by `PreviewPartitionRetention` once the service, its
+ * environment, node or connection is gone) and the shared legacy ones (one
+ * per window slot and connection, never cleared while the connection lives).
+ */
+export function previewPartitionRows(dataDir: string): ReportRow[] {
+  const partitions = path.join(dataDir, "Partitions");
+  const named = (prefix: string) =>
+    childDirectories(partitions).filter((directory) => path.basename(directory).startsWith(prefix));
+  let pending: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(path.join(dataDir, "preview-partitions-pending.json"), "utf8"),
+    );
+    if (Array.isArray(parsed)) pending = parsed.filter((name) => typeof name === "string");
+  } catch {
+    // No cleared partitions are waiting for the next start.
+  }
+  const service = named("orkestrator-preview-svc-");
+  const clearedService = service.filter((directory) => pending.includes(path.basename(directory)));
+  const shared = named("orkestrator-browser-previews-");
+  const clearedShared = shared.filter((directory) => pending.includes(path.basename(directory)));
+  return [
+    {
+      location: `${partitions}/orkestrator-preview-svc-*`,
+      bytes: diskUsage(service),
+      orphaned: `${clearedService.length} of ${service.length} cleared (${formatBytes(
+        diskUsage(clearedService),
+      )})`,
+      owner: "desktop (PreviewPartitionRetention)",
+      cleanup: "cleared when the service, node or connection goes; removed at the next start",
+    },
+    {
+      location: `${partitions}/orkestrator-browser-previews-*`,
+      bytes: diskUsage(shared),
+      orphaned: `${clearedShared.length} of ${shared.length} cleared (${formatBytes(
+        diskUsage(clearedShared),
+      )})`,
+      owner: "desktop (legacy URL tabs)",
+      cleanup: "only when the connection is forgotten; no retention window yet",
+    },
+  ];
+}
+
 export type ReportContext = {
   mainCheckout: string;
   homeDir: string;
@@ -305,6 +350,8 @@ export async function collectReport(context: ReportContext): Promise<ReportRow[]
       cleanup: "mise prune",
     });
   }
+
+  rows.push(...previewPartitionRows(context.dataDir));
 
   const tempLeftovers = childDirectories(context.tmpDir).filter((directory) =>
     path.basename(directory).startsWith("orkestrator-"),

@@ -79,8 +79,9 @@ export function EnvironmentPreviewServices({
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground">
           Browser tabs remember the service, not a host port, so they follow it when a container is
-          recreated. Services are generated from the entry port and TCP port mappings; register
-          others here.
+          recreated. Services are generated from the entry port (and, for containers, TCP port
+          mappings); register others here. A local environment's generated service opens only a
+          server started from its own terminals or agents.
         </p>
         <Button type="button" variant="outline" size="sm" onClick={() => setEditing("new")}>
           <Plus className="mr-1 h-4 w-4" />
@@ -190,6 +191,25 @@ export function EnvironmentPreviewServices({
                   <span>
                     {diagnosis.title}. {diagnosis.detail}
                   </span>
+                  {diagnosis.actions.includes("confirm-association") && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      className="h-6 px-2 text-[11px]"
+                      disabled={busy !== null}
+                      onClick={() =>
+                        void run(`confirm:${definition.serviceId}`, () =>
+                          backend.confirmPreviewService(
+                            definition.serviceId,
+                            definition.definitionRevision,
+                          ),
+                        )
+                      }
+                    >
+                      Show any process on port {definition.applicationPort}
+                    </Button>
+                  )}
                   {diagnosis.actions.includes("configure-mapping") &&
                     onAddPortMapping &&
                     definition.targetKind === "container" && (

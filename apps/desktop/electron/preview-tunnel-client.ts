@@ -3,6 +3,7 @@ import { Duplex } from "node:stream";
 import {
   encodePreviewTunnelFrame,
   parsePreviewTunnelServerFrame,
+  PREVIEW_TUNNEL_CLIENT_PING_MS,
   PREVIEW_TUNNEL_CLOSE,
   PREVIEW_TUNNEL_SUBPROTOCOL,
 } from "@orkestrator/protocol/preview-access";
@@ -26,6 +27,8 @@ export interface PreviewTunnelOpenOptions {
   connectTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   ca?: string;
+  /** Client heartbeat; defaults to `PREVIEW_TUNNEL_CLIENT_PING_MS`. */
+  pingIntervalMs?: number;
 }
 
 const CATEGORY_FOR_CLOSE: Record<number, PreviewErrorCategory> = {
@@ -42,12 +45,25 @@ const CATEGORY_FOR_CLOSE: Record<number, PreviewErrorCategory> = {
  * bounded frames and respect WebSocket backpressure; reads pause the socket
  * when the consumer is not reading. `end()` half-closes (EOF); `destroy()`
  * cancels. Nothing is buffered before the backend confirms `OPEN_OK`.
+ *
+ * While open it pings the backend, so a stream whose consumer stopped reading
+ * (paused media) is not mistaken for a dead peer: the backend's own pings
+ * wait behind the unread data.
  */
 export class PreviewTunnelStream extends Duplex {
   private closedByPeer = false;
+  private readonly heartbeat: ReturnType<typeof setInterval>;
 
-  constructor(private readonly ws: PreviewWebSocket) {
+  constructor(
+    private readonly ws: PreviewWebSocket,
+    options: { pingIntervalMs?: number } = {},
+  ) {
     super({ allowHalfOpen: true });
+    this.heartbeat = setInterval(() => {
+      if (this.ws.isOpen) this.ws.ping();
+    }, options.pingIntervalMs ?? PREVIEW_TUNNEL_CLIENT_PING_MS);
+    this.heartbeat.unref?.();
+    ws.on("close", () => clearInterval(this.heartbeat));
     ws.on("message", (data, binary) => {
       if (binary) {
         if (!this.push(data)) ws.pause();
@@ -101,6 +117,7 @@ export class PreviewTunnelStream extends Duplex {
   }
 
   override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    clearInterval(this.heartbeat);
     if (!this.closedByPeer && this.ws.isOpen) {
       this.ws.send(encodePreviewTunnelFrame({ type: "cancel" }), false);
       this.ws.close(PREVIEW_TUNNEL_CLOSE.normal);
@@ -150,7 +167,7 @@ export async function openPreviewTunnel(
         reject(error);
         return;
       }
-      const stream = new PreviewTunnelStream(ws);
+      const stream = new PreviewTunnelStream(ws, { pingIntervalMs: options.pingIntervalMs });
       resolve(stream);
     };
     const onMessage = (data: Buffer, binary: boolean) => {

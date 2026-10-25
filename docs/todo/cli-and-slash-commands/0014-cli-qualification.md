@@ -1,17 +1,18 @@
 # CLI qualification
 
-Checked against `main` at `b83ae534` (2026-10-22).
+Checked against `main` at `00a0cb82` (2026-10-25).
 
 Most shipped CLI behaviour has evidence at every layer: unit and contract
-tests, real-backend tests, packaged scenarios on Linux (local and container),
-live Claude, Codex and OpenCode runs, and a real browser. What is missing is
-the live qualification run for Pi, Cursor and Grok (the scenario can now
-drive them; see Qualification item 1), the macOS packaging and profile
-checks, and other-provider browser cards. The credential-free, container and
-live Claude, Codex and OpenCode matrices were re-run at `a5d338c1` on macOS
-with Docker Desktop and passed (see "Evidence log"). Until Pi, Cursor and
-Grok are qualified, scripts on those providers cannot use `run wait` as a
-success signal.
+tests, real-backend tests, packaged scenarios on Linux and macOS (local and
+container), live Claude, Codex and OpenCode runs, and a real browser. On
+2026-10-25 the macOS packaging and profile checks, the foreign-owner Docker
+decoy, the per-run model record, other-provider browser cards (OpenCode) and
+the scenario measurements were done (see "Evidence log"). What is still
+missing is the live qualification run for Pi, Cursor and Grok (the scenario
+can drive them; see Qualification item 1), which needs API-key credentials
+this host does not have, and the token cost of live runs. Until Pi, Cursor
+and Grok are qualified, scripts on those providers cannot use `run wait` as
+a success signal.
 
 ## Current state
 
@@ -37,17 +38,32 @@ success signal.
   and Claude/Codex bridges under test stay the packaged ones.
 - Scenarios in `packages/cli/scenarios/cases.ts`: `read-only`,
   `local-lifecycle`, `retry-and-retention`, `setup-failure`, `client-exit`,
-  `exec`, `wrong-profile` (credential-free) and `live-session` (opt-in).
-  `setup-failure` and `client-exit` are local only, so the container matrix
-  has five cases.
-- `wrong-profile` covers only a missing explicit profile. The foreign-owner
-  Docker decoy exists only as a fixture in
-  `e2e/agent-testing/browser-gateway.spec.ts`.
+  `exec`, `wrong-profile`, `project-cascade`, `project-init` and (container
+  only) `foreign-owner` (credential-free), plus `live-session` (opt-in).
+  `setup-failure`, `client-exit` and `project-init` are local only, so the
+  local matrix has nine cases and the container matrix seven.
+- `wrong-profile` covers a missing explicit profile. `foreign-owner` puts a
+  container and two volumes (one mounted, one unmounted) carrying every label
+  of the scenario's environment except the owner beside it, and checks that
+  `environment start`, `exec`, `list`, `stop` and `delete` leave all three
+  exactly as created and that exec runs in the owned container.
+- The run manifest records, per result, `backendReadyMs` (launch to the
+  backend's readiness line), and on a live run's `session start --wait`
+  entry `model: { requested, resolved }`: the pin (or `null`) and the model
+  the session reports in force through `session config get`
+  (`recordResolvedModel` in `cases.ts`, `RunManifest.annotate` in
+  `harness.ts`).
 - `e2e/agent-testing/cli-ui.spec.ts` checks CLI-made changes in an open and a
-  reloaded renderer. Its live question test is gated on
-  `ORKESTRATOR_AGENT_TEST_LIVE_CLI=1` and a Claude profile.
-- Recorded runs: Linux on 2026-09-26 and macOS with Docker Desktop on
-  2026-10-18, the second after SQLite storage (#969), native-agent provider and
+  reloaded renderer. Its live question and approval tests are gated on
+  `ORKESTRATOR_AGENT_TEST_LIVE_CLI=1` and run on
+  `ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT` (default `claude`; optional
+  `ORKESTRATOR_AGENT_TEST_LIVE_CLI_MODEL`). The approval test sets the
+  environment's execution policy to `approvals: "ask"`.
+- `mise run smoke:cli` checks the packed install's platform default config
+  directory (macOS `~/Library/Application Support/orkestrator-cli` under a
+  disposable `HOME`): 0700 directory, 0600 file, group-writable file refused.
+- Recorded runs: Linux on 2026-09-26, macOS with Docker Desktop on
+  2026-10-18 and 2026-10-25, the 2026-10-18 one after SQLite storage (#969), native-agent provider and
   transcript unification (#970, #971), the Claude bridge `sendPrompt` split
   (#984) and agent SDK upgrades (#935, #964). See "Evidence log".
 - Every isolated scenario backend runs with disposable provider homes
@@ -83,11 +99,13 @@ success signal.
    a credential-free packaged run reached each bridge (see "Evidence log").
    Flipping `PROVIDER_COMPLETION` and the `public-cli.md` matrix waits on
    Qualification item 1.
-2. **Record the resolved model per live run.** The run manifest holds IDs,
-   stages and exit codes only. An unpinned OpenCode run therefore leaves no
-   record of the model it used (2026-10-18), so the evidence log cannot pin
-   it. Add the session's resolved provider model to the manifest entry for
-   `session start`.
+2. **Done (2026-10-25): record the resolved model per live run.** After
+   `session start --wait`, `live-session` reads `session config get` and adds
+   `model: { requested, resolved }` to that manifest entry, also for a failed
+   turn; a failed read is recorded as `readError`, not fatal. Covered by
+   `packages/cli/tests/scenario-manifest.test.ts`. Live: an unpinned OpenCode
+   run recorded `opencode-go/gpt-5.6-luna`; Claude records its composer alias
+   `default` (see "Assumptions and decisions").
 3. **Done (2026-10-22): settle a provably unstarted local exec.** A local
    controller that exits before claiming `state.json` can settle `failed`
    (`exec-failed`, evidence `none`, "worker never started"). A timeout or
@@ -117,7 +135,7 @@ success signal.
 
 ### Qualification
 
-1. **Live `live-session` for Pi, Cursor and Grok**, local and container. Each
+1. **Open: live `live-session` for Pi, Cursor and Grok**, local and container. Each
    run needs the file assertion plus a follow-up turn. Look specifically for
    OpenCode-style false success: an idle status after a failed turn, or idle
    just after the prompt is accepted and before any answer exists. The
@@ -126,21 +144,41 @@ success signal.
    `capability-unavailable` until a provider is flipped: qualify by flipping
    the entry locally, running the scenario, and committing the flip only
    with a passing run. Check after each run that the host `~/.pi/agent`,
-   `~/.grok` and Cursor state are untouched.
-2. **macOS.** The credential-free matrix and the container matrix on Docker
-   Desktop (including the `exec` scenario) passed on 2026-10-18. Still open:
-   - Packed install: `mise run smoke:cli`.
-   - The config directory `~/Library/Application Support/orkestrator-cli` and
-     its permission checks.
-   - `--profile` discovery against a `dev:test` profile.
-3. **Browser.** Question and approval cards for a CLI-started run on providers
-   other than Claude. `cli-ui.spec.ts` checks only Claude live.
-4. **Foreign-owner Docker decoy through the CLI.** Add a scenario (or extend
-   `wrong-profile`) where a container labelled for another profile exists, and
-   assert the command neither falls back nor mutates it.
-5. **Optional measurement.** Scenario start-up time, time to failure evidence,
-   flake rate, cleanup failures and token cost, before claiming the CLI makes
-   testing faster. It does not shorten `mise run test`.
+   `~/.grok` and Cursor state are untouched. Still owed on 2026-10-25: this
+   host has no usable credentials. Pi's `auth.json` holds only an OAuth
+   entry (the harness keeps `api_key` entries only), there is no
+   `CURSOR_API_KEY` or `XAI_API_KEY`, and the host Grok login expired on
+   2026-10-23. To close: export `CURSOR_API_KEY`, `XAI_API_KEY` (or sign in
+   to Grok again) and add an `api_key` entry to Pi's `auth.json`, build the
+   bridges, then run the scenario per provider as described above.
+2. **Done (2026-10-25): macOS.** The credential-free matrix and the container
+   matrix on Docker Desktop passed on 2026-10-18 and again on 2026-10-25.
+   - Packed install: `mise run smoke:cli` passed on macOS.
+   - The config directory: `smoke-packed.ts` now runs the installed client
+     with a disposable `HOME` and no override and checks
+     `~/Library/Application Support/orkestrator-cli` is created 0700 with
+     `connections.json` 0600, that a group-writable file is refused (exit 4,
+     `connection-not-configured`), and that restoring 0600 works again.
+   - `--profile` discovery: every `cli-ui.spec.ts` call uses `--profile`
+     against a running `dev:test` profile; the spec passed on three macOS
+     profiles (`qa-0014`, `qa-0014-claude`, `qa-0014-codex`).
+3. **Done (2026-10-25): browser.** `cli-ui.spec.ts` runs its live tests on
+   any provider and gained an approval test. Both passed live on OpenCode
+   and on Claude. Codex raised neither a question nor an approval in build
+   mode on a host environment (both turns just completed), so there is no
+   Codex card to check that way; Pi, Cursor and Grok wait on the
+   credentials of item 1.
+4. **Done (2026-10-25): foreign-owner Docker decoy through the CLI.** The
+   `foreign-owner` container scenario (see "Current state"). A deliberate
+   `docker start` of the decoy made it fail at the next check, and its
+   cleanup removed the decoy.
+5. **Optional measurement.** Done for start-up time, time to failure
+   evidence, flake rate and cleanup failures (2026-10-25, "Evidence log").
+   Still open: token cost of a live run. The manifest records no usage. To
+   collect it, read the provider's usage for the scenario's session before
+   cleanup (the backend's `usage-history` store in the scenario data
+   directory) or from the provider's billing console for a dedicated key.
+   None of this shortens `mise run test`.
 
 Run prerequisites specific to the CLI scenarios (shared profile and
 credential setup is in
@@ -166,6 +204,9 @@ credential setup is in
   token. Credential-free runs clear inherited credential-source and host-home
   controls. Regression coverage includes fresh/stale OAuth refusal and host
   credential survival after scenario cleanup.
+- Browser card runs use a `dev:test` profile with the provider's
+  credentials (`--credential-source <agent>`); a profile stages the host
+  login without its refresh token, so OAuth logins are fine there.
 - Pi, Cursor and Grok: build the provider's bridge first (`mise run
   build:pi-bridge`, `build:cursor-bridge` or `build:acp-bridge`); the
   harness refuses an unbuilt one. Pi needs an `api_key` entry in its
@@ -188,8 +229,87 @@ credential setup is in
 
 Record each run with its date, commit, platform and versions, provider pins,
 command, result and limitations. Run artifacts are
-`output/cli-scenarios/<run>/manifest.json` (git-ignored; IDs, stages and exit
-codes only).
+`output/cli-scenarios/<run>/manifest.json` (git-ignored; IDs, stages, exit
+codes, backend start-up time and, for live turns, the pinned and reported
+model).
+
+- **2026-10-25, macOS arm64, review follow-up on `bab01b13`.** Bun 1.4.4,
+  worktree image `orkestrator-v2:dev-1af641a7170c` rebuilt with
+  `mise run docker:build:dev`.
+  - `mise run test:cli:scenarios`: local 9/9 pass (47 s including build),
+    manifest `2026-10-25T18-36-53-741Z-be5e1a2e`.
+  - `bun packages/cli/scripts/run-scenarios.ts --environment-type container
+    --docker-image orkestrator-v2:dev-1af641a7170c`: container 7/7 pass
+    (169 s), including the added unmounted foreign volume; manifest
+    `2026-10-25T18-39-29-682Z-8f32d1f8`. Both matrices record non-null
+    `backendReadyMs` for every case and no cleanup errors.
+  - Real Docker negative control: deleting the unmounted foreign volume
+    made `assertUnchanged` fail; all three decoy resources were then
+    verified absent, including idempotent cleanup of the removed volume.
+  - Deterministic tests cover container and volume removal errors/timeouts,
+    verified and already-absent cleanup, cleanup-only failure retention,
+    readiness measurement and manifest output, and answered-card polling
+    retries, deadline and empty/new pending interactions. These tests use
+    controlled Docker/backend responses and do not qualify live providers.
+  - Static checks, focused regressions and test ownership checks passed.
+    The repository suite exited 1 on the existing terminal-history pagination
+    timeout (5001.99 ms); its unchanged complete owner passed alone in 7.0 s.
+    The backend reported 11433 passed, 89 skipped, one failed and one error;
+    all other packages and groups passed. Recurrence and artifacts are in
+    [flake 0213](../../tests/flaky-tests/backend-services-and-tooling/0213-terminal-history-aggregate-timeout.md#cli-qualification-review-validation--2026-10-25).
+  - No provider turns or browser card checks were repeated for these
+    harness and documentation fixes.
+
+- **2026-10-25, macOS (Darwin 27.0.0, arm64), this file.** Branch
+  `todo-0014-cli-qualification-060fd6539163` on `00a0cb82`; Bun 1.4.4,
+  Docker Desktop Engine 29.9.2, image `orkestrator-v2:dev-1af641a7170c`,
+  Claude Code 2.1.304, OpenCode 1.19.0 (scenario, managed binary on `PATH`)
+  and 1.19.4 (profile toolchain). Host load average 24 to 64 throughout.
+  - Credential-free, local (`mise run test:cli:scenarios`): 9/9 pass, then
+    three more back-to-back runs, 27/27 pass (matrix 64 to 80 s). Container
+    (`--environment-type container --docker-image
+    orkestrator-v2:dev-1af641a7170c`): 7/7 pass including `foreign-owner`
+    (48.6 s), 191 s total. No cleanup errors, no decoys left.
+  - Measurements from the three repeated local runs (27 scenario runs):
+    backend start-up 1.4 to 4.4 s; time to setup-failure evidence 13 to
+    15 s; scenario durations 2 to 15 s; flake rate 0/27 (plus 0/16 in the
+    first local and container passes); cleanup failures 0. Token cost not
+    measured (item 5).
+  - `foreign-owner` alone: pass (19.8 s). With a `docker start` of the decoy
+    inserted, it failed at `[start] the foreign-owner decoy changed`, and
+    cleanup removed the decoy and its volume.
+  - Live `live-session`, local, unpinned: Claude pass (58.7 s; manifest
+    `model: { requested: null, resolved: "default" }`). OpenCode recorded
+    `resolved: "opencode-go/gpt-5.6-luna"`; start, file assertion,
+    follow-up, command listing, refusals and `--literal` passed, then the
+    `--attach` prompt settled `unknown` (exit 7) on both runs because it
+    never reached OpenCode. Filed as
+    [0166](0166-opencode-prompt-attachment-never-dispatched.md).
+  - `mise run smoke:cli`: pass, including the new platform config directory
+    check (`<tmp>/home/Library/Application Support/orkestrator-cli`).
+  - `cli-ui.spec.ts` on `dev:test` profiles (all calls through
+    `--profile`): `qa-0014` (`--credential-source opencode`): the two
+    credential-free tests passed; the live question and approval tests
+    first failed on the asynchronous-submit race (see "Assumptions and
+    decisions"), then both passed after the fix (1.6 min).
+    `qa-0014-claude`: 4 passed, 1 skipped (the Codex move test's own gate),
+    1.5 min. `qa-0014-codex` (`gpt-6-sol`): both live tests failed their
+    exit-6 precondition because Codex completed without asking. All three
+    profiles were stopped and reset.
+  - Host homes: the scenario runs use disposable provider homes; the
+    profiles stage host logins without refresh tokens.
+  - Checks: `mise run format:check`, `mise run lint` (exit 0; existing
+    warnings only) and `mise run typecheck` pass; `packages/cli` suite
+    259/259. Complete `mise run test`: exit 1 after about 27 minutes, solely on
+    `commands-file-copy.test.ts` (EPIPE in a container helper case this
+    branch does not touch); that file passed alone three times. Registered
+    as flake
+    [0910](../../tests/flaky-tests/environments-and-containers/0910-file-copy-container-helper-stdin-epipe.md).
+    Root/agent-support, bridges, the protocol lockfile and every other
+    workspace package passed. The aggregate remains failed.
+  - Not run: Pi, Cursor, Grok (no credentials, item 1); container
+    `live-session`; Linux (the 2026-09-26 run is still the latest Linux
+    evidence).
 
 - **2026-10-25, macOS (Darwin 27, arm64), 0017 command surface.** Branch
   `todo-0017-cli-command-surface-b2ac5c7a331e` on `ba7cc8d4`; Bun 1.4.4,
@@ -357,6 +477,61 @@ codes only).
     proves each scenario class is in
     [`cli-testing.md`](../../development/cli-testing.md#coverage-by-layer).
 
+## Assumptions and decisions
+
+- **Where the resolved model comes from (Code item 2).** Options: (a) the
+  public `session config get` (the composer's selected model); (b) parse
+  the transcript; (c) read provider state from the disposable home. Chose
+  (a): it is the public surface a script would use, works for every
+  provider and container runs, and needs no new API. Pro: no backend
+  change, request-independent. Con: it is the model the session reports in
+  force, which for Claude is the alias `default`, not a concrete model ID;
+  the transcript carries no model either. Recorded as is rather than
+  guessed.
+- **A failed model read does not fail the run.** Options: fail the scenario
+  or record `readError`. Chose recording: the turn's own outcome stays the
+  verdict, and a provider with no composer state would otherwise fail
+  qualification for an unrelated reason. Con: a missing model is only
+  visible in the manifest and the printed line.
+- **Decoy as a new container-only scenario (item 4)** rather than extending
+  `wrong-profile`. `wrong-profile` is a client-side selection check that
+  needs no Docker; the decoy needs a container environment and the
+  worktree image. The decoy carries every label a lookup by environment
+  could match (`app`, `environment-id`, `project-id`, `environment-name`)
+  and a foreign `orkestrator-owner`, plus mounted and unmounted volumes. The
+  unmounted volume can be deleted without Docker's in-use protection, so it
+  exposes an ownership regression that a mounted volume could mask. Cleanup
+  accepts only explicit already-absent responses, verifies absence and records
+  other Docker failures. Deterministic negative controls and cleanup failure
+  coverage are in `packages/cli/tests/scenario-docker-decoys.test.ts`; these
+  checks do not add live Docker qualification evidence. Con: it does not cover
+  a container reached by ID, which the CLI cannot name; the gateway check in
+  `browser-gateway.spec.ts` keeps covering that.
+- **Config directory check in `smoke:cli` (item 2)** rather than a unit
+  test (one exists: `defaultCliConfigDir` takes the platform) or a manual
+  check. The smoke runs the packed install, so it proves the shipped layout
+  and real `os.homedir()` resolution on whichever platform runs it. A
+  disposable `HOME` keeps the operator's own configuration untouched. Con:
+  the macOS branch is only proved when the smoke runs on macOS.
+- **Browser cards on OpenCode (item 3).** OpenCode is the only non-Claude
+  provider with usable credentials here for a profile that raises both
+  interactions; Codex was tried and does not ask in build mode. The live
+  tests became provider-parametrised instead of copied per provider. The
+  approval case uses the per-environment execution policy, because a host
+  session auto-approves by default. The first OpenCode run failed in the
+  test, not the product: the renderer submits asynchronously, so `run
+  wait` straight after the click still saw the answered interaction (exit
+  6); a CLI-only repro settled `succeeded` even with the resolve running
+  concurrently. The test now retries while only the answered interactions
+  are reported (bounded at 60 s).
+- **OpenCode `--attach` lost prompt filed as todo 0166**, not fixed here: it
+  belongs to todo 0017's attachment path and needs its own diagnosis. It
+  makes OpenCode's `live-session` fail after the parts this file owns
+  (start, file assertion, follow-up, model record) have passed.
+- **Item 5 narrowed, not finished.** Start-up, failure time, flake rate and
+  cleanup failures were measurable from the manifests; token cost was not,
+  and stays open.
+
 ## Constraints and rationale
 
 - Live runs are opt-in. Do not claim live or Docker coverage from scripted
@@ -387,6 +562,8 @@ codes only).
 
 ## Related
 
+- [0166-opencode-prompt-attachment-never-dispatched.md](0166-opencode-prompt-attachment-never-dispatched.md):
+  the OpenCode `--attach` failure found by this file's 2026-10-25 run.
 - [0017-cli-command-surface.md](0017-cli-command-surface.md): each new capability adds a
   scenario and, where the UI rehydrates, a `cli-ui.spec.ts` check.
 - [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)

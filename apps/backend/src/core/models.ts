@@ -731,8 +731,31 @@ export interface PersistedNativeAgentSession {
    * evidence that the turn did not finish on its own.
    */
   interruptedRequestIds?: string[];
+  /**
+   * The identity a later resume of this conversation names (Codex's thread id),
+   * as the provider last reported it for `providerSessionId`. Lets tab
+   * teardown keep a resumable identity when the open session can no longer be
+   * read. Deliberately not validated with the session record: read it only
+   * through {@link nativeAgentSessionResumeIdentity}, where a malformed or
+   * stale value reads as absent.
+   */
+  resumeIdentity?: { providerSessionId: string; resumableSessionId: string };
   createdAt: string;
   updatedAt: string;
+}
+
+/** The recorded resume identity, only while it still describes the mapped session. */
+export function nativeAgentSessionResumeIdentity(
+  session: Pick<PersistedNativeAgentSession, "providerSessionId" | "resumeIdentity">,
+): string | undefined {
+  const identity: unknown = session.resumeIdentity;
+  if (!identity || typeof identity !== "object") return undefined;
+  const { providerSessionId, resumableSessionId } = identity as Record<string, unknown>;
+  return providerSessionId === session.providerSessionId &&
+    typeof resumableSessionId === "string" &&
+    resumableSessionId.trim()
+    ? resumableSessionId.trim()
+    : undefined;
 }
 
 export interface PersistedNativeAgentRetiredDispatch {

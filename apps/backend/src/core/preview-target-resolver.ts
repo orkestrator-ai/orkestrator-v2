@@ -1,7 +1,9 @@
+import { parseNetworkModeOwner } from "./container-network-owner.js";
 import { connect } from "node:net";
 
 import {
   previewError,
+  requiresListenerOwner,
   type PreviewServiceDefinition,
 } from "@orkestrator/protocol/preview-services";
 
@@ -14,6 +16,7 @@ import {
   PI_BRIDGE_PORT,
 } from "./constants.js";
 import type { Environment } from "./models.js";
+import type { LoopbackListenerOwnership } from "./preview-listener-ownership.js";
 import type {
   PreviewResolution,
   PreviewTargetResolverPort,
@@ -43,6 +46,11 @@ export interface PreviewTargetResolverOptions {
   relay?: {
     available(environment: Environment): boolean;
   };
+  /**
+   * Who listens on a backend-loopback port (`preview-listener-ownership.ts`).
+   * Without it every loopback target is `user-registered` and `unchecked`.
+   */
+  listenerOwnership?: Pick<LoopbackListenerOwnership, "attribute" | "stats">;
 }
 
 export interface ContainerInspection {
@@ -51,6 +59,8 @@ export interface ContainerInspection {
   owner: string;
   environmentId: string;
   ports: Record<string, Array<{ HostIp?: string; HostPort?: string }> | null>;
+  /** The egress gateway whose namespace (and published ports) it shares. */
+  networkOwner?: string | null;
 }
 
 /** Docker's container API, CLI, and managed-bridge ports, plus well-known daemon ports. */
@@ -70,11 +80,11 @@ const CONTAINER_AGENT_PORTS = new Set([
 ]);
 
 const INSPECT_FORMAT =
-  '{{.Id}}\t{{.State.Status}}\t{{index .Config.Labels "orkestrator-owner"}}\t{{index .Config.Labels "environment-id"}}\t{{json .NetworkSettings.Ports}}';
+  '{{.Id}}\t{{.State.Status}}\t{{index .Config.Labels "orkestrator-owner"}}\t{{index .Config.Labels "environment-id"}}\t{{json .NetworkSettings.Ports}}\t{{.HostConfig.NetworkMode}}';
 
 export function parseContainerInspection(stdout: string): ContainerInspection | null {
   const line = stdout.trim().split("\n")[0] ?? "";
-  const [id, status, owner, environmentId, portsJson] = line.split("\t");
+  const [id, status, owner, environmentId, portsJson, networkMode = ""] = line.split("\t");
   if (!id || !status || portsJson === undefined) return null;
   let ports: ContainerInspection["ports"] = {};
   try {
@@ -90,6 +100,7 @@ export function parseContainerInspection(stdout: string): ContainerInspection | 
     owner: owner === "<no value>" ? "" : (owner ?? ""),
     environmentId: environmentId === "<no value>" ? "" : (environmentId ?? ""),
     ports,
+    networkOwner: parseNetworkModeOwner(networkMode),
   };
 }
 
@@ -177,6 +188,7 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
     return {
       cachedInspections: this.inspections.size,
       inflightInspections: this.inflightInspections,
+      ...this.options.listenerOwnership?.stats(),
     };
   }
 
@@ -198,9 +210,9 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
           };
         }
         if (environment.status !== "running") return this.stopped(environment);
-        return this.resolveLoopback(definition, "user-registered");
+        return this.resolveLoopback(definition, environment);
       case "backend-host":
-        return this.resolveLoopback(definition, "user-registered");
+        return this.resolveLoopback(definition, environment);
     }
   }
 
@@ -366,10 +378,33 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
         timeoutMs: this.inspectTimeoutMs,
         signal,
       })
-      .then(({ stdout }) => {
+      .then(async ({ stdout }) => {
         const parsed = parseContainerInspection(stdout);
         if (!parsed) throw new Error("Unrecognized docker inspect output");
-        return parsed;
+        if (!parsed.networkOwner) return parsed;
+        // A runtime behind an egress gateway publishes through the gateway,
+        // which owns the namespace; ownership stays the runtime's.
+        const owner = await this.options.runDocker(
+          [
+            "inspect",
+            "--type",
+            "container",
+            "--format",
+            "{{json .NetworkSettings.Ports}}",
+            parsed.networkOwner,
+          ],
+          { timeoutMs: this.inspectTimeoutMs, signal },
+        );
+        let ports: ContainerInspection["ports"] = {};
+        try {
+          const value: unknown = JSON.parse(owner.stdout.trim() || "{}");
+          if (value && typeof value === "object" && !Array.isArray(value)) {
+            ports = value as ContainerInspection["ports"];
+          }
+        } catch {
+          throw new Error("Unrecognized docker inspect output");
+        }
+        return { ...parsed, ports };
       })
       .catch((error: unknown): "missing" => {
         const message = error instanceof Error ? error.message : String(error);
@@ -393,45 +428,90 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
     return promise;
   }
 
+  /**
+   * Backend-loopback targets. The port is shared by every local environment on
+   * this machine, so an open port is never proof of ownership:
+   *
+   * - a listener started from this environment's terminal or agent resolves
+   *   as `managed-process`, keyed to that process so a restart rebinds;
+   * - a `worktree` service never opens a listener another environment started;
+   * - a generated (seeded) `worktree` service opens nothing else either, until
+   *   the user confirms it, which turns it into their own registration;
+   * - a user registration otherwise stays `user-registered`: whatever listens
+   *   on the port is shown, and diagnostics say so.
+   */
   private async resolveLoopback(
     definition: PreviewServiceDefinition,
-    ownership: "user-registered" | "managed-process",
+    environment: Environment,
   ): Promise<PreviewResolution> {
+    const port = definition.applicationPort;
     const reserved = await this.options.reservedPorts();
-    if (
-      ALWAYS_RESERVED.has(definition.applicationPort) ||
-      reserved.has(definition.applicationPort)
-    ) {
+    if (ALWAYS_RESERVED.has(port) || reserved.has(port)) {
       return {
         ok: false,
         error: previewError("forbidden", {
           layer: "binding",
-          message: `Port ${definition.applicationPort} belongs to Orkestrator or Docker and cannot be previewed.`,
+          message: `Port ${port} belongs to Orkestrator or Docker and cannot be previewed.`,
         }),
       };
     }
     let family: "ipv4" | "ipv6";
     if (definition.addressFamily === "ipv4") family = "ipv4";
     else if (definition.addressFamily === "ipv6") family = "ipv6";
-    else if (await this.probeFamily("127.0.0.1", definition.applicationPort, 500)) family = "ipv4";
-    else if (await this.probeFamily("::1", definition.applicationPort, 500)) family = "ipv6";
+    else if (await this.probeFamily("127.0.0.1", port, 500)) family = "ipv4";
+    else if (await this.probeFamily("::1", port, 500)) family = "ipv6";
     else family = "ipv4";
-    const host = family === "ipv6" ? "::1" : "127.0.0.1";
-    return {
-      ok: true,
-      target: {
-        transportKind: "backend-loopback",
-        host,
-        port: definition.applicationPort,
-        addressFamily: family,
-        containerId: null,
-        ownership,
-        bindingKey: `loopback:${family}:${definition.applicationPort}`,
-        tls:
-          definition.scheme === "https"
-            ? { servername: definition.tlsServerName ?? "localhost" }
-            : null,
-      },
-    };
+    const target = (
+      ownership: "user-registered" | "managed-process",
+      processKey?: string,
+    ): ResolvedPreviewTarget => ({
+      transportKind: "backend-loopback",
+      host: family === "ipv6" ? "::1" : "127.0.0.1",
+      port,
+      addressFamily: family,
+      containerId: null,
+      ownership,
+      bindingKey: `loopback:${family}:${port}${processKey ? `:process:${processKey}` : ""}`,
+      tls:
+        definition.scheme === "https"
+          ? { servername: definition.tlsServerName ?? "localhost" }
+          : null,
+    });
+    const found = this.options.listenerOwnership
+      ? await this.options.listenerOwnership.attribute(environment.id, port, family)
+      : ({ attribution: "unchecked", retryable: false } as const);
+    const listener = found.attribution;
+    if (found.attribution === "this-environment") {
+      return { ok: true, target: target("managed-process", found.processKey), listener };
+    }
+    if (listener === "other-environment" && definition.targetKind === "worktree") {
+      return {
+        ok: false,
+        listener,
+        recheck: true,
+        error: previewError("target-unverified", {
+          retryable: true,
+          message: `Port ${port} on the backend host is served by a process another environment started. It is not shown here.`,
+        }),
+      };
+    }
+    if (requiresListenerOwner(definition)) {
+      const why =
+        listener === "none"
+          ? `Nothing this environment started is listening on port ${port} yet.`
+          : listener === "unattributed"
+            ? `A process this environment did not start is listening on port ${port}.`
+            : `This backend host cannot check which process listens on port ${port}.`;
+      return {
+        ok: false,
+        listener,
+        recheck: listener !== "unchecked" || found.retryable === true,
+        error: previewError("target-unverified", {
+          retryable: listener !== "unchecked" || found.retryable === true,
+          message: why,
+        }),
+      };
+    }
+    return { ok: true, target: target("user-registered"), listener };
   }
 }

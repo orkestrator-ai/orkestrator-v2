@@ -9,7 +9,12 @@ import type {
   ClaudeInteractionRequest,
 } from "../types/index.js";
 import { eventEmitter } from "./event-emitter.js";
-import { MAX_DISPATCHED_REQUEST_IDS, updateSessionPreferences } from "./session-preferences.js";
+import {
+  MAX_DISPATCHED_REQUEST_IDS,
+  readSessionPreferences,
+  sessionPreferencesUnavailable,
+  updateSessionPreferences,
+} from "./session-preferences.js";
 
 import * as core from "./session-manager-core.js";
 import {
@@ -33,6 +38,7 @@ import {
   releaseQueryControl,
 } from "./session-manager-background-tasks.js";
 import { appendInterruptedNotice } from "./session-manager-messages.js";
+import { syncTurnInFlightMark } from "./session-manager-turn-interruption.js";
 type SessionActivity = core.SessionActivity;
 type PromptDispatchHandle = core.PromptDispatchHandle;
 /**
@@ -254,6 +260,57 @@ export function getPromptDispatchState(
     if (session.status === "running") return "processing";
   }
   return "new";
+}
+
+/** The transcript id of the user row an idle `/steer` reply records for a request. */
+export function idleSteerUserMessageId(requestId: string): string {
+  return `idle-steer:${requestId}`;
+}
+
+/**
+ * Would `POST /:id/prompt` refuse this id as `DISPATCH_OUTCOME_LOST_KIND`?
+ *
+ * For a resident session whose dispatch state is `new`: the id was restored
+ * from disk without an outcome. The route's other exception, an idle `/steer`
+ * answered locally, is recognised by the reply row it kept, because a read has
+ * no prompt text to test; that case is not lost (the route answers it
+ * processed). A pure read of the session record: no touch, no hydration.
+ */
+export function restoredDispatchClaimLost(
+  session: Pick<SessionState, "restoredDispatchedRequestIds" | "localTranscript"> | undefined,
+  requestId: string,
+): boolean {
+  if (!session?.restoredDispatchedRequestIds?.has(requestId)) return false;
+  const localReplyId = idleSteerUserMessageId(requestId);
+  return !session.localTranscript?.some((message) => message.id === localReplyId);
+}
+
+/**
+ * {@link restoredDispatchClaimLost} for a session this process has not
+ * registered yet (after a restart nothing materializes it until a tab reads
+ * it), answered from its durable preferences file. Materializing it would
+ * restore exactly this journal as `restoredDispatchedRequestIds`, with no
+ * outcome records, so the prompt route would refuse the id the same way.
+ * Reads the file only: the session is not registered, touched or hydrated.
+ * An unreadable file, or a resident session, answers false.
+ */
+export async function persistedDispatchClaimLost(
+  sessionId: string,
+  requestId: string,
+): Promise<boolean> {
+  if (sessions.has(sessionId)) return false;
+  const sdkSessionId = sdkSessionIdFromBridgeId(sessionId);
+  if (!sdkSessionId) return false;
+  let preferences: Awaited<ReturnType<typeof readSessionPreferences>>;
+  try {
+    preferences = await readSessionPreferences(sdkSessionId);
+  } catch {
+    return false;
+  }
+  if (!preferences || sessionPreferencesUnavailable(preferences)) return false;
+  if (!preferences.dispatchedRequestIds?.includes(requestId)) return false;
+  const localReplyId = idleSteerUserMessageId(requestId);
+  return !preferences.localTranscript?.some((entry) => entry.id === localReplyId);
 }
 
 /**
@@ -566,6 +623,7 @@ export function abortSession(sessionId: string): boolean {
     session.activity = undefined;
     session.thinkingTokens = undefined;
     releaseQueryControl(session);
+    syncTurnInFlightMark(session, { stopped: true });
 
     cleanupPendingInteractions(sessionId);
     // The stop is part of the conversation: without a row the transcript just

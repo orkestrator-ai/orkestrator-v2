@@ -1,16 +1,16 @@
 {
   "name": "@orkestrator/web",
-  "version": "2.22.3",
+  "version": "2.30.0-beta",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bunx tsc && bunx vite build && bun run scripts/precompress.ts",
+    "build": "bun check && bunx vite build && bun run scripts/precompress.ts",
     "dev": "bunx vite --host 127.0.0.1",
     "dev:web": "bunx vite --host 127.0.0.1",
     "preview": "bunx vite preview",
     "test": "bun test src --parallel",
     "test:workspace": "bun test src --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/web.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
-    "typecheck": "bunx tsc --noEmit"
+    "typecheck": "bun check"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -34,6 +34,8 @@
     "@radix-ui/react-switch": "^1.4.1",
     "@radix-ui/react-tabs": "^1.2.1",
     "@radix-ui/react-tooltip": "^1.4.1",
+    "@shikijs/langs": "4.5.0",
+    "@shikijs/themes": "4.5.0",
     "@tiptap/core": "3.32.0",
     "@tiptap/extension-code": "3.32.0",
     "@tiptap/extension-image": "3.32.0",
@@ -49,6 +51,7 @@
     "@xterm/xterm": "^6.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dompurify": "3.4.17",
     "lucide-react": "^1.56.0",
     "marked": "17.0.6",
     "monaco-editor": "^0.57.0",
@@ -56,9 +59,10 @@
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.14.5",
-    "react-virtuoso": "^4.18.19",
+    "react-virtuoso": "4.18.19",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
+    "shiki": "4.5.0",
     "sonner": "^2.0.8",
     "tailwind-merge": "^3.7.0",
     "unified": "^11.0.5",

@@ -40,7 +40,7 @@ afterAll(async () => {
 
 async function temporaryDirectory(prefix: string): Promise<string> {
   // Keep fixtures out of `tests/unit`. In-tree `.protocol-*` directories are
-  // visible to oxfmt, oxlint, git status, and sibling document scans.
+  // visible to `bun fmt`, oxlint, git status, and sibling document scans.
   const directory = await realpath(await mkdtemp(join(tmpdir(), prefix)));
   temporaryDirectories.push(directory);
   return directory;
@@ -593,7 +593,7 @@ describe("generator binary resolution", () => {
 describe("committed protocol bindings", () => {
   test("import specifiers are all resolvable under NodeNext", () => {
     // A single extensionless relative specifier anywhere in the tree breaks
-    // `tsc --noEmit` for the whole bridge, so assert the invariant directly.
+    // `bun check` for the whole bridge, so assert the invariant directly.
     const offenders: string[] = [];
     for (const relativePath of ["index.ts", "ClientRequest.ts", "v2/index.ts"]) {
       const source = readGenerated(join("typescript", relativePath));

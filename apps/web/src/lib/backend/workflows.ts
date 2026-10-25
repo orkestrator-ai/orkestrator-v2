@@ -395,6 +395,19 @@ export async function getMultiReviewStepTranscript(
   });
 }
 
+/** The body behind a step row, resolved against its authoritative owned session. */
+export async function getMultiReviewStepToolDetails(
+  workflowId: string,
+  step: MultiReviewStepKind,
+  detailRef: string,
+): Promise<NativeAgentToolDetails> {
+  return invoke<NativeAgentToolDetails>("get_multi_review_step_tool_details", {
+    workflowId,
+    step,
+    detailRef,
+  });
+}
+
 /** The body behind a reviewer row's deferred `detailRef`, read on expansion. */
 export async function getMultiReviewReviewerToolDetails(
   workflowId: string,
@@ -742,6 +755,15 @@ export async function updateNativeAgentControls<TMessage = unknown>(input: {
   return invoke("update_native_agent_controls", input);
 }
 
+export async function steerNativeAgentQueuedPrompt(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  messageId: string;
+}): Promise<NativeAgentSessionActionOutcome | null> {
+  return invoke("steer_native_agent_queued_prompt", input);
+}
+
 export async function performNativeAgentSessionAction(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;
@@ -781,6 +803,15 @@ export async function beginNativeAgentSignIn(input: {
   deviceCode?: boolean;
 }): Promise<{ url?: string; code?: string }> {
   return invoke("begin_native_agent_sign_in", input);
+}
+
+/** Abandon an in-tab sign-in so the provider stops waiting for it. */
+export async function cancelNativeAgentSignIn(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+}): Promise<{ cancelled: boolean }> {
+  return invoke("cancel_native_agent_sign_in", input);
 }
 
 export async function signOutNativeAgent(input: {
@@ -1196,18 +1227,6 @@ export async function enqueuePromptQueueMessage<T>(
   });
 }
 
-export async function requeuePromptQueueMessage<T>(
-  queueKey: string,
-  environmentId: string,
-  message: T,
-): Promise<PersistedPromptQueue<T>> {
-  return invoke<PersistedPromptQueue<T>>("requeue_prompt_queue_message", {
-    queueKey,
-    environmentId,
-    message,
-  });
-}
-
 export async function removePromptQueueMessage<T>(
   queueKey: string,
   environmentId: string,
@@ -1234,46 +1253,6 @@ export async function movePromptQueueMessage<T>(
     environmentId,
     messageId,
     direction,
-  });
-}
-
-export async function claimPromptQueueHead<T>(
-  queueKey: string,
-  environmentId: string,
-  expectedMessageId: string,
-): Promise<{
-  claimed: T | null;
-  claimToken: string | null;
-  queue: PersistedPromptQueue<T> | null;
-}> {
-  return invoke("claim_prompt_queue_head", {
-    queueKey,
-    environmentId,
-    expectedMessageId,
-  });
-}
-
-export async function acknowledgePromptQueueClaim<T>(
-  queueKey: string,
-  environmentId: string,
-  claimToken: string,
-): Promise<PersistedPromptQueue<T> | null> {
-  return invoke<PersistedPromptQueue<T> | null>("acknowledge_prompt_queue_claim", {
-    queueKey,
-    environmentId,
-    claimToken,
-  });
-}
-
-export async function rejectPromptQueueClaim<T>(
-  queueKey: string,
-  environmentId: string,
-  claimToken: string,
-): Promise<PersistedPromptQueue<T> | null> {
-  return invoke<PersistedPromptQueue<T> | null>("reject_prompt_queue_claim", {
-    queueKey,
-    environmentId,
-    claimToken,
   });
 }
 

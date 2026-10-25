@@ -7,12 +7,12 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.296`, Anthropic SDK `0.133.0`, CLI `2.1.296` |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.162.1` |
-| OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.0` |
-| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.37` (latest stable, verified 2026-10-13) |
-| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.52` (stable channel; verified 2026-10-13), ACP SDK `1.8.0` |
-| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.2.0` |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.309`, Anthropic SDK `1.2.0`, CLI `2.1.309` (npm `latest`, verified 2026-10-23) |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.164.0` |
+| OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.4` |
+| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.40` (npm `latest`, verified 2026-10-23) |
+| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.67` (stable channel; verified 2026-10-23), ACP SDK `2.0.1` |
+| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.4.0` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
 Verified against upstream stable releases on 2026-10-13.
@@ -28,8 +28,8 @@ every agent. Two things read it directly and therefore cannot drift from it:
 Two things cannot read it, and are a second copy held in step by tests:
 
 - **`docker/Dockerfile`** — an image build has no access to the manifest, so
-  each CLI's version is an `ARG` literal and Grok's and Pi's archive
-  digests are `sha256sum` literals.
+  each CLI's version is an `ARG` literal and OpenCode's, Grok's and Pi's
+  archive digests are `sha256sum` literals.
 - **SDK pins in `package.json`** — resolved by bun, not by the manifest.
 
 `every shipped agent, uniformly` in `tests/unit/version-drift.test.ts` is what
@@ -65,7 +65,7 @@ Still not enforced anywhere, by nature:
 Cursor's only agent pin is `@cursor/sdk`; see
 [Cursor (SDK bridge)](#cursor-sdk-bridge).
 
-Cursor 1.0.37 also has a Bun-export diagnostic seam patch registered in root
+Cursor 1.0.40 also has a Bun-export diagnostic seam patch registered in root
 `patchedDependencies`. Keep the pin, patch filename, registration, and lockfile
 aligned. The appended export references the SDK's minified stall-detector and
 execution-controller bindings: simply renaming the patch on upgrade is not
@@ -75,8 +75,10 @@ are found by their field lists: the stall detector opens with
 `timer;advisoryTimer;heartbeatOnlyTimer` and is assigned inside the lazy
 initializer that names `@anysphere/agent-client:stall-detector` (which the
 export must call first); the controller is the class opening with
-`serverStream;clientStream;controlledExecManager`. In 1.0.37 those are `eR0`,
-`Er0` and `aR0` (1.0.36: `aE0`, `Xn0`, `dE0`). Run the Cursor
+`serverStream;clientStream;controlledExecManager`. In 1.0.40 those are `W_0`,
+`x01` and `Z_0` (1.0.37: `eR0`, `Er0`, `aR0`; 1.0.36: `aE0`, `Xn0`, `dE0`).
+All three live in `dist/bundled/index.js`, and the controller loop is still
+`for await (let U of N) await this.clientStream.write(U)`. Run the Cursor
 SDK diagnostics tests and version-drift test, then build/vendor the bridge and
 verify the packaged Bun import exposes `__orkestratorDiagnosticsV1`. Do not
 enable raw SDK logs as a substitute for the bounded observer.
@@ -237,8 +239,7 @@ every backend-only host, then restart the service.
 
 - `@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}`
 - `@openai/codex@${CODEX_CLI_VERSION}`
-- OpenCode's installer with `--version "${OPENCODE_CLI_VERSION}"`
-- Grok Build and Pi as pinned archives, each verified against a
+- OpenCode, Grok Build and Pi as pinned archives, each verified against a
   literal SHA-256 in the same `RUN` block. Those digests are a **second,
   independent** set from the manifest's — the image does not read the manifest —
   so a version bumped in only one place fails the build rather than shipping an
@@ -356,7 +357,7 @@ Update the traced version only after doing the steps below.
    | --- | --- | --- |
    | Claude | The "Application data" table in the Claude Code docs (`claude-directory`); `strings` on the binary for the directory names | Transcripts are under `~/.claude/projects` and rewind snapshots under `~/.claude/file-history`. Anything new the docs list as needed for "resume, continue, and rewind" must be preserved |
    | Codex | `strings "$BIN" \| grep -E '_[0-9]+\.sqlite\|session_index\|archived_sessions\|CODEX_SQLITE_HOME'` | Rollouts are under `sessions/` and `archived_sessions/`. `CODEX_SQLITE_HOME` is still honoured, and every runtime database it relocates matches the `.codex/*.sqlite*` selection in `replacementCopyPlan`. Note any new versioned database name; `thread_history_1` and `goals_1` are examples |
-   | OpenCode | `strings "$BIN" \| grep -E 'OPENCODE_DB\|opencode\.db\|snapshot'` | `OPENCODE_DB` is still a full database path (`OPENCODE_DB_PATH`), sessions live only in that database, and `snapshot/` is still revert history rather than session state |
+   | OpenCode | `strings "$BIN" \| grep -E 'OPENCODE_DB\|opencode\.db\|snapshot'`, then `scripts/qualify-opencode-seeded-data.sh <dev image>` once the image is built | `OPENCODE_DB` is still a full database path (`OPENCODE_DB_PATH`), sessions live only in that database, and `snapshot/` is still revert history rather than session state. The script must still pass: a turn, diff and revert work with nothing seeded from the host data directory but `auth.json`, and nothing opens a host's `snapshot/` or `account.json` |
    | Pi | The pinned bundle's own docs: `sessions.md` and `environment-variables.md` under its `docs` directory | Sessions default to `~/.pi/agent/sessions`. The bridge passes `PI_SESSION_DIR` to `SessionManager` itself |
    | Cursor | `JsonlLocalAgentStore` and `getDefaultSdkStateRoot` in the bundled SDK | The store writes only under the root `cursor-bridge/src/sdk-runtime.ts` passes it, which sits under `CURSOR_BRIDGE_STATE_DIR` |
    | Grok | The help docs the CLI writes to `~/.grok/docs` (sessions and storage chapters), `CHANGELOG.md`, and `strings` for `GROK_HOME` | `session/load` needs only `~/.grok/sessions/<cwd>/<id>/` (`updates.jsonl` is authoritative). `active_sessions.json` lists live processes only and `worktrees.db` tracks only Grok's own worktrees |
@@ -379,10 +380,44 @@ Update the traced version only after doing the steps below.
      (`apps/backend/tests/container-live-replacement.test.ts`).
 
    Never mount a whole provider home, and never symlink a state path; see the
-   constraints in
-   [container-rebuild-state-preservation.md](../todo/container-rebuild-state-preservation.md).
+   [design constraints](../architecture/container-lifecycle.md#design-constraints).
 4. Set the provider's entry in `PROVIDER_STATE_TRACED_VERSIONS` to the new
    version and update the "Traced against" line under "Provider state".
+
+## Re-check OAuth refresh-token rotation
+
+Containers get Claude, Codex, Grok, OpenCode and Pi logins access-only, because a copy
+that refreshed with the host's refresh token would spend it and sign the host
+out (`packages/protocol/src/login-snapshots.ts`). OpenCode and Pi hold one
+login per model provider, and `NON_ROTATING_OAUTH_PROVIDERS` there lists the
+OAuth providers whose refresh token is reused rather than rotated, so a
+container may keep it whole. `restrict_imported_login` in
+`docker/entrypoint.sh` repeats the same list (a unit test keeps them equal).
+On every OpenCode or Pi bump, re-read each OAuth provider's refresh function:
+
+- Pi: `dist/auth/oauth/*.js` in `@earendil-works/pi-ai`. A provider whose
+  refresh returns the token it was given (`refresh: refreshToken`) is
+  non-rotating; one that stores the response's `refresh_token` rotates.
+- OpenCode: the built-in auth plugins under `packages/opencode/src/plugin/` at
+  the release tag (`openai/codex.ts`, `github-copilot/copilot.ts`, `xai.ts`),
+  and any new plugin `internalPlugins` loads.
+
+A new rotating provider needs no change (anything unlisted is access-only). A
+new non-rotating one, such as a token exchange like Copilot's, needs adding to
+both lists, or its container copy signs out when its short access token
+expires. Also check that `expires` is still in milliseconds and the refresh
+window (Pi refreshes five minutes early, OpenCode's xAI two) still fits inside
+`PROVIDER_AUTH_MIN_VALIDITY_MS`.
+
+On every Codex bump, run `bun scripts/codex-access-only-auth-probe.ts --codex
+<pinned binary>`. It hands the pinned Codex the access-only `auth.json` a
+coordinator home or container receives, built from a synthetic login against
+a local server, and reports every refresh attempt. On 0.164.0: no refresh for
+an access token more than five minutes from its `exp`, whatever
+`last_refresh` says; inside those five minutes, or after a 401, one attempt
+with the blank refresh token that fails and leaves the file untouched. A
+change there (a refresh before the window, or a rewritten file) needs
+`restrictCodexAuthSnapshot` and `TOKEN_REPLACEMENT_LEAD_MS` re-read.
 
 ## Claude
 
@@ -418,7 +453,15 @@ compilation alone does not prove the distributable bridge is complete.
 `bridges/claude-bridge/src/sdk-compatibility.test.ts` loads the real installed
 SDK in isolated processes and guards the feature-detected APIs that could
 otherwise disappear silently. It also checks the `AskUserQuestion` contract used
-under `bypassPermissions`.
+under `bypassPermissions`, and that every tool the read-only policy names
+(`READ_ONLY_TOOLS`, `WAITING_TOOLS` in `read-only-policy.ts`) is in the SDK's
+`BUILTIN_TOOL_NAMES` or `LEGACY_TOOL_NAME_ALIASES`: a rule naming a tool the CLI
+no longer has matches nothing.
+
+`CLAUDE_CONTEXT_CATEGORY_IDS` (`session-manager-core.ts`) maps the CLI's
+context-usage row ids onto the shared `NATIVE_AGENT_CONTEXT_CATEGORY_IDS`
+(`packages/protocol/src/native-agent.ts`). It is a `Record` over the SDK's id
+union, so a bump that adds a row id fails the typecheck until it is placed.
 
 ### How to upgrade Claude
 
@@ -524,6 +567,16 @@ under `bypassPermissions`.
    bun test bridges/claude-bridge/src/sdk-compatibility.test.ts
    bun test bridges/claude-bridge/src --parallel
    ```
+
+Last verified 2026-10-23 at Agent SDK 0.3.309 (`claudeCodeVersion` 2.1.309, so
+the SDK's CLI and the managed one are the same version) with CLI 2.1.309: the
+compatibility test including the `canUseTool` proof, `verify:claude:mcp-live`
+against both the SDK's CLI and the managed binary, the vendored build, the
+typecheck and the full bridge suite. No new SDK message type, `system`
+subtype or hook event; `ModelInfo` still has no Ultracode flag. `TaskOutput`
+left `WAITING_TOOLS`: 2.1.309 lists it among the names it does not offer.
+`claude-host-login-refresh.ts` is still as checked against 2.1.296 (it needs a
+container with a fake login).
 
 The compatibility test's deterministic CLI fixture does not authenticate or
 spend credits, but it is not a full real-CLI smoke test. Before release, start a
@@ -658,6 +711,23 @@ hermetic `codex exec` exception.
    `codexNetworkDeniedConfig` and `codexHostedNetworkLockGaps` together;
    until then coordinator threads are refused, which is the intended failure.
 
+   Since 0.164.0 a turn opens with a `generate: false` prewarm frame, which
+   the fakes skip. `features.incremental_tools`, on by default since 0.164.0,
+   writes each turn's tool declarations into the thread history, so a resumed
+   thread's request kept the build turn's `web__run` after a read-only reload
+   dropped it from the turn's own tools. Thread config cannot turn the
+   feature off, so every bridge launches app-server with
+   `features.incremental_tools=false`: each request then declares only the
+   current turn's tools and nothing is written to the history. The engine
+   fails closed around it. It reads the setting back through `config/read`
+   before a search-denied thread, and refuses a search-denied resume or fork
+   whose rollout, or any fork ancestor, still holds an `additional_tools`
+   record (a thread written while the feature was on). The read-only case
+   asserts that a resumed read-only request declares `web__run` nowhere, and
+   a second case proves the refusal on a history written with the feature
+   on. If a release renames the switch or starts writing declarations with it
+   off, these refuse search-denied sessions rather than leak search.
+
    The request looks the same in `cached` and `live` mode, so also run the
    canary, which copies the local auth file and spends three short turns. It
    proves `live` opens a page no index holds, `cached` does not, and a
@@ -681,10 +751,11 @@ hermetic `codex exec` exception.
      bun test bridges/codex-bridge/src/app-server/live-refused-calls.test.ts
    ```
 
-   It expects 0.162.1's behaviour: no item for a refused `apply_patch` or
+   It expects 0.164.0's behaviour: no item for a refused `apply_patch` or
    refused command, the cell and its refusal kept in the rollout, and the
    bridge showing each refused cell as a failed `exec` row in the order it
-   ran. If the refusals now arrive as items, `RefusedCellTail` can go. If
+   ran. It also pins the exception: a cell an interrupt stops (below) records
+   "aborted by user after …" with no item either, and gets no row. If the refusals now arrive as items, `RefusedCellTail` can go. If
    app-server stops reporting `thread.path`, or the rollout stops recording
    the cell, the rows disappear again. If the refusal wording changes,
    update `STRONG_REFUSAL_MARKERS` in
@@ -730,6 +801,31 @@ hermetic `codex exec` exception.
      RUN_LIVE_CODEX_STEER_CANARY=1 \
      bun test bridges/codex-bridge/src/app-server/live-contract.test.ts
    ```
+
+   Codex 0.164.0 made `features.code_mode_interrupt` and
+   `features.incremental_tools` stable and on by default. An interrupt now
+   stops a running code-mode cell: the rollout records `aborted by user after
+   1.5s` as the cell's output and no item. That is not a sandbox refusal, so
+   `RefusedCellTail` never reports it and a reload drops the cell's row (or,
+   when it recorded other work, keeps the row without claiming success).
+   `live-refused-calls.test.ts` pins it, interrupting through the engine
+   rather than the runtime, whose own stop closes the tail first.
+
+   Also new in 0.164.0, all handled without a canary:
+
+   - A resume that names no model keeps the thread's saved model instead of
+     the global default. The bridge still states a configured model on every
+     resume and turn, and otherwise binds the model app-server reports, so a
+     row's label matches what runs.
+   - `thread/readState/changed` (Codex's unread marker) is ignored;
+     Orkestrator keeps its own read state.
+   - `imageGeneration` items carry the image as `fileId` (an attachment-store
+     identity) or inline `result`, plus optional `inputImages` paths. The
+     bridge reads only `savedPath` and the input paths; a generation without
+     `savedPath` renders as its caption.
+   - Usage no longer double-counts reasoning tokens. The bridge passes the
+     counts through, so totals for comparable 0.164 turns read lower than
+     0.162's; nothing compensated for the old count.
 
    Codex 0.153.3 defaults new durable threads to paginated history and eagerly
    writes their rollout header, but `thread/read(includeTurns=true)` returns
@@ -788,6 +884,15 @@ through the backend workspace.
   signature change lands in `opencode-provider.ts`. The remaining backend
   `opencode-*.ts` files import v2 *types* only.
 
+OpenCode 1.19.1 discontinued session sharing upstream. OpenCode no longer
+advertises the `share` capability, the provider never calls
+`session.share`/`unshare` or reports a session's old `share.url` (those links
+are dead), and Agent Info shows Undo, Redo and Share from
+`capabilities.actions` rather than from the platform. A typed `/share` or
+`/unshare` is still refused as a terminal-only command so it never reaches the
+model as a prompt. If a release brings sharing back, re-add the capability and
+the two calls together.
+
 ### How to upgrade OpenCode
 
 1. Pick a release for which both the CLI assets and `@opencode-ai/sdk` package
@@ -812,7 +917,9 @@ through the backend workspace.
    inspect the installed client after `bun install`.
 4. Refresh and verify all four OpenCode artifact records using the shared
    binary procedure. Preserve the macOS `repairInvalidMacSignature` behavior and
-   do not add reproducible installed hashes for a locally re-signed file.
+   do not add reproducible installed hashes for a locally re-signed file. Copy
+   the two `linux` archive digests into the Dockerfile's `OPENCODE_SHA`
+   branches; `version-drift.test.ts` holds them to the manifest.
 5. Review the generated v2 types and compile the backend. Flat v2 request
    parameters such as `{ sessionID, parts }` must remain flat; do not migrate to
    the old nested `{ path, body }` API shape.
@@ -837,6 +944,22 @@ through the backend workspace.
    isolated XDG directories, verifies that CLI health reports the same version as the SDK
    pin, constructs the real v2 client, and lists sessions. It does not call a
    model or spend credits.
+
+   Then re-prove what MCP apply relies on, also without credentials:
+
+   ```bash
+   OPENCODE_CLI_PATH=/absolute/path/to/new/opencode \
+     mise run verify:opencode:mcp-live
+   ```
+
+   It checks that `instance.dispose` rebuilds a worktree's MCP servers from
+   its project file, stops the old server processes, drops runtime-added
+   entries and keeps sessions, and that the user files in
+   `$XDG_CONFIG_HOME/opencode` stay cached until the server restarts. If the
+   second test fails because the user file is reloaded, plan `opencode:user-*`
+   sources for the in-place reload too (`apply.ts`); if the first fails, MCP
+   apply's OpenCode reload no longer works. See
+   [`mcp-management.md`](../architecture/mcp-management.md) ("OpenCode reload").
 7. Smoke-test both UI native chat and a build-pipeline OpenCode phase. Exercise
    streaming, question and permission rehydration, abort, resume, and session
    status because those use different portions of the v2 client.
@@ -852,7 +975,7 @@ through the backend workspace.
    command and the local `opencode serve` spawn, and by an `ENV` in
    `docker/Dockerfile`. It suppresses the check and the notice; `/update`
    stays reachable from the command palette as a deliberate user action.
-   1.x now ships from upstream's `v1` branch; see `docs/todo/opencode-v2.md`.
+   1.x now ships from upstream's `v1` branch; see `docs/todo/agent-engines/0008-opencode-v2.md`.
 
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)
 and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).
@@ -872,9 +995,10 @@ published two ways:
   vendored: no published SDK file had imported it since `0.85.1`, and Pi
   `1.2.0` removed the experimental server stack and stopped publishing it.
   Check on each bump that every `@earendil-works/*` package an SDK file
-  imports (`pi-tui`, `pi-mcp`, `pi-codemode` as of `1.2.0`) is a declared
-  dependency of `pi-coding-agent`, which is what the vendor step follows —
-  the `0.85.0` failure mode was an undeclared import.
+  imports (`pi-tui`, `pi-mcp`, `pi-codemode` as of `1.4.0`, and
+  `pi-telemetry` through `pi-ai`) is a declared dependency of the package that
+  imports it, which is what the vendor step follows — the `0.85.0` failure
+  mode was an undeclared import.
 - `packages/toolchain/src/manifest.ts` — `PINNED_TOOLCHAIN_VERSIONS.pi`
   and four `bundleIntegrity` records.
 - `docker/Dockerfile` — `PI_CLI_VERSION` and the two Linux archive digests.
@@ -890,8 +1014,10 @@ Dockerfile pins the same archive digests the manifest does.
    Pin all three SDK packages at the **CLI's** version even when npm has a newer
    patch for some of them: `pi-ai` and `pi-agent-core` sometimes publish an
    extra patch (0.99.1) with no matching `pi-coding-agent` or `pi` release, and
-   `pi-coding-agent` depends on them by `^` range. An exact pin keeps the SDK
-   and the shipped binary on the set the release was tested with.
+   `pi-coding-agent` depended on them by `^` range. Since `1.3.0` Pi pins its
+   own packages exactly, so that reason is historical; keep the exact pins
+   anyway, so the SDK and the shipped binary stay on the set the release was
+   tested with and a bump that misses one of the three fails to install.
 2. Bump `PINNED_TOOLCHAIN_VERSIONS.pi` and `ARG PI_CLI_VERSION` to the same
    version.
 3. Refresh the four artifact records. Unlike the single-file agents, Pi ships a
@@ -924,7 +1050,15 @@ Dockerfile pins the same archive digests the manifest does.
    retryable `interrupted` structured result, instead of completed),
    `tool_execution_end.durationMs` (the card's `toolDurationMs`, nested
    `ctx.executeTool()` calls included) and `AssistantMessage.durationMs`
-   (summed per turn into the usage row's `apiDurationMs`).
+   (summed per turn into the usage row's `apiDurationMs`). Since 1.3 a call
+   whose arguments were not a JSON object (`ToolCall.argumentsError`) fails in
+   validation, before any `tool_call` hook, so the approval gate never parks
+   it; it arrives as a `tool_execution_end` error with `{}` input and no
+   `durationMs`, and the shared `toolError` carries Pi's text, received
+   arguments included. `summarization_retry_*` (a compaction's summary
+   request retried) render as the shared retry row, settled by
+   `compaction_end`. `src/sdk-session.test.ts` drives a real SDK session over a
+   scripted model stream for the behaviours a fake session cannot show.
 6. Review `src/models.ts` against `Model` and `ThinkingLevel`. A new thinking
    level that is not in `THINKING_LEVELS` is simply never offered. Remember the
    rule is asymmetric: `xhigh` and `max` need an *explicit* mapping, while every
@@ -950,7 +1084,13 @@ Dockerfile pins the same archive digests the manifest does.
      removes its FIFO entry rather than let the next delivery be credited to it.
    - **Nested tool calls.** A call another tool made through `ctx.executeTool()`
      (how `codemode` scripts call tools) carries `parentToolCallId`, which
-     `translate.ts` stamps as the shared `parentTaskUseId`.
+     `translate.ts` stamps as the shared `parentTaskUseId`. A resume has only
+     the calling result's `nestedCalls` record (ids `<caller>/<n>`, no
+     results), from which `replayNestedToolCalls` rebuilds the children.
+   - **Resumed tool loadout.** Since 1.3 a resume restores the active tools
+     the transcript recorded and activates extension tools it never
+     mentioned, which is how an MCP server added after a session was saved
+     reaches it on reattach.
 
    The `mcp.json` the bridge reads is Pi's own file, so `src/mcp-config.ts` must
    follow Pi's documented format (the `mcp.md` guide shipped inside the SDK package): `enabled: false`, `$NAME` /
@@ -964,6 +1104,11 @@ Dockerfile pins the same archive digests the manifest does.
    user server's `enabled`, names that differ only in `-`/`_` clash, and
    `auth: { provider }` on an HTTP server is refused in a project file and, in
    the user file, not launched (the bridge holds no Pi provider token).
+   Since 1.4.0 the loader strips one leading UTF-8 BOM before parsing
+   (`stripBom`); the bridge does the same, and the backend already does
+   because its `TextDecoder` drops the BOM on decode, so an editor save writes
+   the file back without one, as Pi's own editor does. A fixture needing bytes
+   `JSON.stringify` cannot produce is a `RawMcpConfigText`.
    Re-read that loader on each bump, then run both parity tests over the
    shared fixtures in `src/testing/mcp-config-fixtures.ts`:
    `src/mcp-config-upstream.test.ts` loads the pinned package's own
@@ -1091,7 +1236,16 @@ trusting a green result.
    ```
 
    A missing platform package does not fail the build; it fails at the first
-   transport call in a live session.
+   transport call in a live session. Since 1.0.40 `zod` is a *peer*
+   dependency the flat build still imports (`zod`, `zod/v3`, `zod/v4`,
+   `zod/v4-mini`); `bridges/cursor-bridge/scripts/vendor.ts` stages required peers, so
+   `dist/node_modules/zod` must be present too. Workspace `node_modules` can
+   mask a missing one on a dev host, so prove it from an isolated copy:
+
+   ```bash
+   cp -R bridges/cursor-bridge/dist /tmp/cursor-dist-check
+   bun -e 'await import("/tmp/cursor-dist-check/node_modules/@cursor/sdk/dist/bundled/index.js")'
+   ```
 5. Rebuild the container, which builds this bridge from the same lockfile:
 
    ```bash
@@ -1101,9 +1255,21 @@ trusting a green result.
 6. Smoke-test sign-in through the bridge's `--login` child, run a turn with tool
    calls and a diff, switch model and effort, cancel mid-turn, and check the
    inactive-environment path.
+   `src/login-no-open-browser.test.ts` runs the pinned SDK's login with a fake
+   system opener and fails if `NO_OPEN_BROWSER` no longer stops the launch: a
+   sign-in started from another machine's Settings relies on it (checked on
+   1.0.40).
 7. [Re-trace preserved provider state](#re-trace-preserved-provider-state):
    confirm the SDK's local agent store still writes only under the root
-   `cursorSdkStateDirectoryPath()` hands it.
+   `cursorSdkStateDirectoryPath()` hands it. (1.0.40 added an OS-temp
+   `cursor-transcripts-*` fallback for agent transcripts when the home
+   directory is not writable; those are not resume state.)
+8. Check how the SDK decides Max mode. Since 1.0.40 a send runs in Max mode
+   (premium billing) when every catalogue variant consistent with its
+   parameters is `isMaxMode`. `selectionIsMaxMode` in `src/models.ts` mirrors
+   that rule to publish the shared composer's `selectionPricing`, and the run's
+   reported `model.maxMode` becomes the turn's `pricingTier`; re-check both if
+   the SDK changes the rule.
 
 Sub-agent cards are the one behaviour to re-check by hand on every bump. The SDK
 reports children only through nested updates on the parent run, so a child is
@@ -1125,18 +1291,30 @@ nothing in CI can check. See
 `docs/architecture/agent-engines.md` for the bridge architecture.
 
 The bridge does pin the protocol's own package,
-`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`1.8.0`). It
+`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`2.0.1`). It
 supplies the wire types and `PROTOCOL_VERSION`, not a client: every request is
 still hand-written over the bridge's own JSON-RPC loop.
 `tests/unit/version-drift.test.ts` lists it as Grok's SDK pin with
 `tracksCli: false`, because it versions the protocol, not Grok. When bumping
-it, diff `dist/schema/types.gen.d.ts` against the previous release for changed
-session capabilities, `session/*` request shapes, prompt capabilities, stop
-reasons and session-update variants, then run the bridge typecheck and suite.
-1.5.1 → 1.8.0 changed only unstable surface the bridge does not use (MCP over
-ACP was reshaped; `subagent_update`, `session_message` and state updates were
-added); `session/close`, `session/resume`, `session/list`, `promptCapabilities`
-and `StopReason` are unchanged.
+it, diff `dist/v1/schema/types.gen.d.ts` (stable ACP v1) and
+`dist/v1/unstable/schema/types.gen.d.ts` against the previous release for
+changed session capabilities, `session/*` request shapes, prompt capabilities,
+stop reasons and session-update variants, then run the bridge typecheck and
+suite. 1.5.1 → 1.8.0 changed only unstable surface the bridge does not use (MCP
+over ACP was reshaped; `subagent_update`, `session_message` and state updates
+were added); `session/close`, `session/resume`, `session/list`,
+`promptCapabilities` and `StopReason` are unchanged.
+
+1.8.0 → 2.0.1 split the package by stability. The default import is now stable
+ACP v1 only, and `PROTOCOL_VERSION` there is still `1`; unstable types moved to
+`@agentclientprotocol/sdk/unstable` and ACP v2 to `…/experimental/v2`. Moved
+off the default import: `PromptResponse.usage` and `Usage`, the `acp` variant
+of `McpServer`, and the `plan_update`, `subagent_update` and `session_message`
+updates. The bridge's three imports (`acp-prompt.ts`, `acp-context.ts`,
+`acp-client-methods.ts`) are all still on the default export. It reads usage
+and every session update untyped, so moved types change nothing at runtime,
+and it builds only `http` MCP servers. Import from `/unstable` only for a
+surface the bridge really implements; never mix the v2 types into the v1 wire.
 
 The bridge launches Grok with `--always-approve agent stdio`. Grok 1.0.52 still
 asks over ACP for every edit, command, fetch and MCP call (MCP calls arrive as
@@ -1160,11 +1338,14 @@ grok --help | rg -- '--always-approve'
 # It must start and wait for JSON-RPC rather than exiting on an argv error.
 # Hold stdin open: at EOF it exits 0 at once, which proves nothing. Exit 124
 # (killed by the timeout, still alive) is the passing result.
+# macOS has no `timeout`. Without one, hold stdin open on a FIFO, start grok
+# in the background, and check its own pid is still alive after a few seconds.
 (sleep 4 | timeout 6 grok --always-approve agent stdio; echo "exit $?")
 
 # Then prove the handshake and a real `session/new` with the bridge's own params
 # (typed `headers` array, `additionalDirectories: []`). 1.0.44, 1.0.46 and
-# 1.0.52 answer both. Run it signed in (`grok login`): signed out, `session/new` ends
+# 1.0.52 answer both; 1.0.67 was checked signed out only (`initialize` answers,
+# the liveness probes stay up). Run it signed in (`grok login`): signed out, `session/new` ends
 # in `Authentication required`, and once signed in `authMethods[0]` (the id the
 # bridge authenticates with) is `cached_token` rather than `grok.com`.
 ```
@@ -1192,17 +1373,53 @@ default.
 ### What Grok declares versus what it does
 
 Re-check these against the real binary on a bump; the fake agents in the suite
-encode them and cannot notice a change. Last verified against 1.0.52.
+encode them and cannot notice a change. Each bullet says what was re-verified
+against 1.0.67 signed out (`initialize`, `--help`, `strings`, the changelog);
+anything that needs a session is still as last verified against 1.0.52.
 
-- **Images.** `initialize` answers `promptCapabilities.image: false`, but Grok
-  reads an inline ACP `image` block (a red PNG sent with no path in the text
-  was named correctly). The bridge refuses image attachments a provider does
-  not declare, so Grok is credited with the capability in
-  `undeclaredPromptCapabilities` (`bridges/acp-bridge/src/acp-provider-config.ts`).
-  Drop that entry once Grok declares `image: true` itself; if Grok ever stops
-  reading the block, remove it and set Grok's `attachments.images` to `false`
-  in `nativeAgentCapabilities`.
-- **`session/close`.** Advertised in `sessionCapabilities`. It answers
+- **Images.** Since 1.0.67 `initialize` answers `promptCapabilities.image:
+  true` (re-verified signed out; 1.0.52 answered `false` while reading the
+  block, and was credited in `undeclaredPromptCapabilities`, now empty, in
+  `bridges/acp-bridge/src/acp-provider-config.ts`). The bridge refuses image
+  attachments a provider does not declare, so the declaration now decides.
+  That 1.0.67 still describes an inline `image` block sent with no path in the
+  text needs a signed-in check. If Grok ever stops reading the block, set
+  Grok's `attachments.images` to `false` in `nativeAgentCapabilities`.
+- **Main-checkout approvals.** 1.0.67 lets a git worktree use its main
+  checkout's saved "always allow" answers by default
+  (`[features] worktree_inherits_main_approvals`), which would let a tool run
+  in an Orkestrator worktree without the permission request the bridge
+  answers from the execution policy. Every Grok child gets
+  `GROK_WORKTREE_INHERITS_MAIN_APPROVALS=false` (`POLICY_ENV` in
+  `acp-provider-config.ts`). The variable is in the 1.0.67 binary and its
+  bundled docs (absent from 1.0.52); the main checkout's "never allow" answers
+  still apply. A `requirements.toml` pin of the feature would override it.
+- **Session titles.** Grok's binary carries standard ACP
+  `session_info_update` (`title`, `updatedAt`). The bridge handles it
+  generically: the title, folded to one line of at most 512 bytes, is kept on
+  the session, persisted, and reported on `/status`, `/session/:id` and the
+  transcript summary, where the backend reads every bridge's title; `null`
+  clears it. Whether 1.0.67 actually sends it, and when, needs a signed-in turn.
+- **`/compact`.** Grok offers `/compact` in its command inventory, so its
+  capability row sets `actions.compact`: the bridge serves
+  `POST /session/:id/compact` by running that command through the prompt
+  route as a selected command (journaled, revalidated, never sent as text), and
+  answers 422 `command-unavailable` when the live inventory lacks it. That the
+  command really compacts over ACP (rather than being a TUI-only builtin)
+  needs a signed-in check. The binary also carries an
+  `x.ai/compact_conversation` extension request, unused.
+- **Background tasks.** Grok sends `x.ai/task_backgrounded` and
+  `x.ai/task_completed` (`task_id`, `exit_code`, `signal`, `tool_call_id`);
+  the bridge drops both. Mapping them needs a signed-in payload capture.
+- **Trust and hooks.** 1.0.64 runs only managed hooks in an untrusted folder,
+  and 1.0.59 lets a hook's `continue: false` stop the turn. A stop with no
+  policy refusal during the attempt is never continued, so neither changes
+  what the bridge sends (how a hook stop is reported over ACP is unverified).
+  Project trust is still `GROK_FOLDER_TRUST=0`, re-verified by
+  `conformance-execution-policy.test.ts` against the real 1.0.67 binary
+  (`ORKESTRATOR_POLICY_GROK_PATH`).
+- **`session/close`.** Advertised in `sessionCapabilities` (re-verified signed
+  out, with `list` and `resume`). It answers
   `_meta["x.ai/closeOutcome"]: "closed"` (`"notResident"` for an unknown id)
   and emits `_x.ai/sessions/changed` with the id under `removed`, but the
   conversation stays in `session/list` and `session/load` restores its
@@ -1285,6 +1502,19 @@ switch to another environment while it runs or waits for input, return after it
 finishes, and confirm that messages, status, questions/approvals, and controls
 rehydrate from authoritative backend state.
 
+Re-qualify slash commands for every provider whose pin moved, before the
+upgrade merges: the qualified rows in
+[`native-agent-commands.md`](../architecture/native-agent-commands.md#provider-support)
+name the versions they were proved on, and a pin they no longer match is an
+unproven claim. The scripted probes in `scripts/slash-probes/` need no
+Orkestrator profile and cost seconds (`codex-disabled-skills-probe.mjs` needs no
+sign-in; `pi-commands-probe.mjs` uses the host's Pi login by path and runs a few
+short model turns). For a Codex or Claude upgrade also run
+`e2e/agent-testing/slash-command-inactive.spec.ts` (see
+[`agent-testing.md`](agent-testing.md#live-slash-commands-in-an-inactive-environment)).
+Then update the pins in that section, or list what changed as unavailable with
+a reason.
+
 Before committing, search for both the old SDK and CLI version literals:
 
 ```bash
@@ -1310,7 +1540,7 @@ downgrade compatibility matters.
 Everything that is not an agent SDK or CLI (renderer and backend libraries,
 Electron, Bun, Docker image tools, CI actions) follows the same lockfile rules
 (AGENTS.md, *Updating Bun and lockfiles*) plus these. Outstanding upgrades are
-tracked in [`docs/todo/dependency-upgrades.md`](../todo/dependency-upgrades.md).
+tracked in [`docs/todo/cross-cutting/0032-dependency-upgrades.md`](../todo/cross-cutting/0032-dependency-upgrades.md).
 
 Finding what is outdated: `mise exec -- bun outdated --filter='*'` and
 `mise exec -- bun audit` (both read-only), then `npm view <pkg> dist-tags`.

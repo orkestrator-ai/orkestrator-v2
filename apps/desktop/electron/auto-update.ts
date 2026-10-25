@@ -1,5 +1,10 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import {
+  HOST_UPDATE_CHANNEL_TAGS,
+  hostUpdateChannelOfVersion,
+  type HostUpdateChannel,
+} from "@orkestrator/protocol/host-maintenance";
 import type { BrowserWindow, MessageBoxOptions, MessageBoxReturnValue } from "electron";
 
 /** First check shortly after launch, so it never competes with startup work. */
@@ -17,6 +22,7 @@ export type UpdateCheckResult = {
 
 /** What one check found, reported whether or not anyone asked for it. */
 export type UpdateCheckReport = {
+  channel?: HostUpdateChannel;
   latestVersion: string | null;
   updateAvailable: boolean | null;
   checkedAt: string;
@@ -37,6 +43,8 @@ export type UpdaterLike = {
   autoDownload: boolean;
   autoInstallOnAppQuit: boolean;
   allowPrerelease: boolean;
+  allowDowngrade: boolean;
+  channel: string | null;
   on(event: "update-downloaded", listener: (info: { version: string }) => void): unknown;
   on(event: "download-progress", listener: (info: { percent: number }) => void): unknown;
   on(event: "error", listener: (error: Error) => void): unknown;
@@ -88,6 +96,11 @@ export type AutoUpdateController = {
   installStaged(version: string): Promise<boolean>;
   /** Release the staged version after a remote job ends. */
   releaseRemoteStage(): void;
+  /**
+   * Follows `channel` from the next check. An update already downloaded from
+   * the previous channel still installs on quit.
+   */
+  setChannel(channel: HostUpdateChannel): void;
   stop(): void;
 };
 
@@ -122,6 +135,8 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
   let manualCheck = false;
   let checkInFlight: Promise<UpdateCheckResult | null> | null = null;
   let readinessRevision = 0;
+  let channelGeneration = 0;
+  let inFlightGeneration = 0;
   let initialTimer: NodeJS.Timeout | null = null;
   let intervalTimer: NodeJS.Timeout | null = null;
   // While a remote request stages an update, its countdown replaces the prompt.
@@ -131,7 +146,31 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
 
   updater.autoDownload = true;
   updater.autoInstallOnAppQuit = true;
-  updater.allowPrerelease = false;
+  let channel: HostUpdateChannel | null = null;
+
+  /**
+   * electron-updater's GitHub provider reads `/releases/latest` unless
+   * prereleases are allowed; with them, the `beta` channel takes the newest
+   * stable or beta release and `alpha` the newest of any. Stable names
+   * `latest` because a channel, once set, cannot be cleared.
+   */
+  function applyChannel(next: HostUpdateChannel): void {
+    if (channel === next) return;
+    channel = next;
+    channelGeneration += 1;
+    // Do not mutate a provider while its previous check/download is using it.
+    if (!checkInFlight) configureChannel(next);
+  }
+
+  function configureChannel(next: HostUpdateChannel): void {
+    updater.channel = HOST_UPDATE_CHANNEL_TAGS[next];
+    updater.allowPrerelease = next !== "stable";
+    // Setting a channel allows downgrades. Moving to a more stable channel
+    // must wait for that channel to overtake this version instead.
+    updater.allowDowngrade = false;
+  }
+  // The Local backend's record replaces this once its executor reads it.
+  applyChannel(hostUpdateChannelOfVersion(currentVersion) ?? "stable");
 
   async function promptToRestart(version: string): Promise<void> {
     if (promptedVersion === version) return;
@@ -184,30 +223,36 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
 
   function reportCheck(report: Omit<UpdateCheckReport, "checkedAt">): void {
     try {
-      options.onCheckResult?.({ ...report, checkedAt: new Date().toISOString() });
+      options.onCheckResult?.({
+        ...report,
+        channel: channel!,
+        checkedAt: new Date().toISOString(),
+      });
     } catch (error) {
       log.warn("[Updater] Reporting a check failed:", error);
     }
   }
 
-  async function performCheck(): Promise<UpdateCheckResult | null> {
+  async function performCheck(generation: number): Promise<UpdateCheckResult | null> {
     let result: UpdateCheckResult | null;
     try {
       result = await updater.checkForUpdates();
     } catch (error) {
       log.warn("[Updater] Update check failed:", error);
-      reportCheck({
-        latestVersion: null,
-        updateAvailable: null,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      if (generation === channelGeneration)
+        reportCheck({
+          latestVersion: null,
+          updateAvailable: null,
+          error: error instanceof Error ? error.message : String(error),
+        });
       throw error;
     }
-    reportCheck({
-      latestVersion: result?.updateInfo?.version ?? null,
-      updateAvailable: result?.isUpdateAvailable ?? false,
-      error: null,
-    });
+    if (generation === channelGeneration)
+      reportCheck({
+        latestVersion: result?.updateInfo?.version ?? null,
+        updateAvailable: result?.isUpdateAvailable ?? false,
+        error: null,
+      });
     // Observe the separate promise immediately, even for background checks.
     // The error event alone does not consume a rejected download promise.
     try {
@@ -217,18 +262,30 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
       log.warn("[Updater] Update download or staging failed:", error);
       throw new UpdateDownloadError(error);
     }
-    if (downloadedVersion) offerRestart(downloadedVersion);
+    if (generation === channelGeneration && downloadedVersion) offerRestart(downloadedVersion);
     return result;
   }
 
-  function check(): Promise<UpdateCheckResult | null> {
-    // Hold the operation through download/staging so a menu click and a timer
-    // cannot start competing downloads or misreport an in-flight update.
-    if (remoteReserved && !checkInFlight) return Promise.resolve(null);
-    checkInFlight ??= performCheck().finally(() => {
-      checkInFlight = null;
-    });
-    return checkInFlight;
+  async function check(): Promise<UpdateCheckResult | null> {
+    // Serialize downloads, but never answer a channel switch with an old check.
+    // Even old failures must finish before configuring and querying the new feed.
+    while (true) {
+      if (remoteReserved && !checkInFlight) return null;
+      if (!checkInFlight) {
+        configureChannel(channel!);
+        inFlightGeneration = channelGeneration;
+        checkInFlight = performCheck(inFlightGeneration).finally(() => {
+          checkInFlight = null;
+        });
+      }
+      const generation = inFlightGeneration;
+      try {
+        const result = await checkInFlight;
+        if (generation === channelGeneration) return result;
+      } catch (error) {
+        if (generation === channelGeneration) throw error;
+      }
+    }
   }
 
   return {
@@ -268,6 +325,10 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
     },
     releaseRemoteStage(): void {
       remoteReserved = false;
+    },
+    setChannel(next: HostUpdateChannel): void {
+      if (channel !== next) log.info(`[Updater] Following the ${next} channel`);
+      applyChannel(next);
     },
     async installStaged(version: string): Promise<boolean> {
       if (downloadedVersion !== version || checkInFlight) return false;

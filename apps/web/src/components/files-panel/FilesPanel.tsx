@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { FilesPanelHeader } from "./FilesPanelHeader";
 import { ChangesView } from "./ChangesView";
 import { AllFilesView } from "./AllFilesView";
+import { FilesPanelPullRequests } from "./FilesPanelPullRequests";
 import { FileActionDialog, type PendingFileAction } from "./FileActionDialog";
 import { useFilesPanelStore, useUIStore } from "@/stores";
+import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import { useFilesPanel, FileBatchActionError } from "@/hooks";
 import { ensureProjectHomeInStore } from "@/hooks/useFilesPanel";
 import type { CreateFileTabOptions } from "@/contexts";
@@ -33,6 +35,7 @@ export function FilesPanel() {
     fileActionPending,
     environmentId,
     projectScopeProjectId,
+    changeEnvironmentId,
     isLocalEnvironment,
     worktreePath,
   } = useFilesPanel();
@@ -76,9 +79,12 @@ export function FilesPanel() {
     [copyExternalFiles],
   );
 
-  useEffect(() => {
+  // A pending action belongs to the environment it was requested in.
+  const [actionEnvironmentId, setActionEnvironmentId] = useState(environmentId);
+  if (environmentId !== actionEnvironmentId) {
+    setActionEnvironmentId(environmentId);
     setPendingAction(null);
-  }, [environmentId]);
+  }
 
   const requestFileAction = (kind: PendingFileAction["kind"], path: string | string[]) => {
     const paths = Array.isArray(path) ? path : [path];
@@ -124,30 +130,39 @@ export function FilesPanel() {
 
   return (
     <div className="flex h-full flex-col bg-zinc-900">
-      <FilesPanelHeader onRefresh={refresh} />
-      <ScrollArea className="min-h-0 flex-1">
-        {activeTab === "changes" ? (
-          <ChangesView
-            onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
-            onRevert={(path) => requestFileAction("revert", path)}
-            onDelete={(path) => requestFileAction("delete", path)}
-            onOpenFile={onOpenFile}
-          />
-        ) : (
-          <AllFilesView
-            key={JSON.stringify([environmentId, worktreePath])}
-            onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
-            onRevert={(path) => requestFileAction("revert", path)}
-            onDelete={(path) => requestFileAction("delete", path)}
-            onMove={moveFileInTree}
-            onCopyFiles={copyFilesIntoTree}
-            onCreateFolder={createFolder}
-            onRename={renameFile}
-            movePending={fileActionPending !== null}
-            onOpenFile={onOpenFile}
-          />
-        )}
-      </ScrollArea>
+      <FilesPanelHeader
+        onRefresh={refresh}
+        changeEnvironmentId={changeEnvironmentId}
+        targetId={environmentId}
+      />
+      {!isFilesPanelFileTab(activeTab) ? (
+        <FilesPanelPullRequests targetId={environmentId} />
+      ) : (
+        <ScrollArea className="min-h-0 flex-1">
+          {activeTab === "changes" ? (
+            <ChangesView
+              environmentId={changeEnvironmentId}
+              onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
+              onRevert={(path) => requestFileAction("revert", path)}
+              onDelete={(path) => requestFileAction("delete", path)}
+              onOpenFile={onOpenFile}
+            />
+          ) : (
+            <AllFilesView
+              key={JSON.stringify([environmentId, worktreePath])}
+              onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
+              onRevert={(path) => requestFileAction("revert", path)}
+              onDelete={(path) => requestFileAction("delete", path)}
+              onMove={moveFileInTree}
+              onCopyFiles={copyFilesIntoTree}
+              onCreateFolder={createFolder}
+              onRename={renameFile}
+              movePending={fileActionPending !== null}
+              onOpenFile={onOpenFile}
+            />
+          )}
+        </ScrollArea>
+      )}
       <FileActionDialog
         action={pendingAction}
         targetRef={targetBranch}

@@ -1,92 +1,30 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test, type Mock } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import * as realBackend from "@/lib/backend";
-import * as realMonacoReact from "@monaco-editor/react";
-import * as realMonacoLoader from "@/lib/monaco-loader";
-import { useConfigStore } from "@/stores";
+import { exactCount, type ChangeMeasurement } from "@orkestrator/protocol/change-measurements";
+import {
+  environmentChangeResourceKey,
+  type ChangeDiffFileBody,
+  type ChangeDiffLine,
+  type ChangesGetDiffResult,
+  type ChangesResolveLiveDetailResult,
+  type DiffIdentity,
+} from "@orkestrator/protocol/change-resources";
+import { invoke } from "@/lib/native/backend";
+import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
+import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import type { ChangeDiffTarget } from "@/types/paneLayout";
+import { DiffViewerTab } from "./DiffViewerTab";
 
-const realBackendSnapshot = { ...realBackend };
-const realMonacoReactSnapshot = { ...realMonacoReact };
-const realMonacoLoaderSnapshot = { ...realMonacoLoader };
-type MockFileContent = Omit<realBackend.FileContent, "path"> & { path?: string };
+type InvokeArgs = Record<string, unknown> | undefined;
+type CommandHandler = (args: InvokeArgs) => unknown;
 
-const readLocalFileMock = mock(async (_worktreePath: string, _filePath: string) => ({
-  content: "local modified",
-  language: "typescript",
-}));
-const readLocalFileAtBranchMock = mock(
-  async (
-    _worktreePath: string,
-    _filePath: string,
-    _branch: string,
-  ): Promise<MockFileContent | null> => ({
-    content: "local original",
-    language: "typescript",
-  }),
-);
-const readContainerFileMock = mock(async (_containerId: string, _filePath: string) => ({
-  content: "container modified",
-  language: "javascript",
-}));
-const readFileAtBranchMock = mock(
-  async (
-    _containerId: string,
-    _filePath: string,
-    _branch: string,
-  ): Promise<MockFileContent | null> => ({
-    content: "container original",
-    language: "javascript",
-  }),
-);
+const invokeMock = invoke as unknown as Mock<
+  (command: string, args?: InvokeArgs) => Promise<unknown>
+>;
+let handlers: Record<string, CommandHandler> = {};
 
-interface MockDiffEditorProps {
-  language?: string;
-  original?: string;
-  modified?: string;
-  beforeMount?: (monaco: unknown) => void;
-  onMount?: (editor: unknown) => void;
-  options?: Record<string, unknown>;
-}
-
-let renderedDiffEditorProps: MockDiffEditorProps | null = null;
-let monacoConfigured = true;
-const ensureMonacoConfiguredMock = mock(async () => {});
-
-mock.module("@/lib/backend", () => ({
-  ...realBackendSnapshot,
-  readLocalFile: readLocalFileMock,
-  readLocalFileAtBranch: readLocalFileAtBranchMock,
-  readContainerFile: readContainerFileMock,
-  readFileAtBranch: readFileAtBranchMock,
-}));
-
-mock.module("@monaco-editor/react", () => ({
-  ...realMonacoReactSnapshot,
-  DiffEditor: (props: MockDiffEditorProps) => {
-    renderedDiffEditorProps = props;
-    return (
-      <div
-        data-testid="diff-editor"
-        data-language={props.language}
-        data-original={props.original}
-        data-modified={props.modified}
-        data-side-by-side={String(props.options?.renderSideBySide)}
-      />
-    );
-  },
-}));
-
-mock.module("@/lib/monaco-loader", () => ({
-  ...realMonacoLoaderSnapshot,
-  isMonacoConfigured: () => monacoConfigured,
-  ensureMonacoConfigured: ensureMonacoConfiguredMock,
-}));
-
-const { cacheImmutableDiffBaseForTests, DiffViewerTab, clearDiffBaseCacheForTests, formatBaseRef } =
-  await import("./DiffViewerTab");
-
+const RESOURCE_KEY = environmentChangeResourceKey("env-1");
 const originalMatchMedia = window.matchMedia;
-const originalConfig = useConfigStore.getState().config;
 let viewportWidth = 1024;
 const mediaQueryListeners = new Set<() => void>();
 
@@ -98,14 +36,10 @@ function installMatchMedia() {
     media: query,
     onchange: null,
     addEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
-      if (typeof listener === "function") {
-        mediaQueryListeners.add(listener as () => void);
-      }
+      if (typeof listener === "function") mediaQueryListeners.add(listener as () => void);
     },
     removeEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
-      if (typeof listener === "function") {
-        mediaQueryListeners.delete(listener as () => void);
-      }
+      if (typeof listener === "function") mediaQueryListeners.delete(listener as () => void);
     },
     addListener: () => undefined,
     removeListener: () => undefined,
@@ -120,53 +54,174 @@ function setViewportWidth(width: number) {
   });
 }
 
-const baseProps = {
-  filePath: "src/components/Button.tsx",
-  baseBranch: "main",
-  gitStatus: "M" as const,
-  isActive: true,
-};
+function measurement(overrides: Partial<ChangeMeasurement> = {}): ChangeMeasurement {
+  return {
+    schemaVersion: 1,
+    measurementId: "m-1",
+    worktreeId: "wt-1",
+    worktreeIncarnation: "inc-1",
+    scope: "thread-net",
+    logicalOwner: {},
+    baselineVersion: null,
+    beforeSnapshotId: "snap-a",
+    afterSnapshotId: "snap-b",
+    evidenceRefs: [],
+    capabilityRevision: null,
+    origin: "captured-endpoints",
+    algorithmPolicyId: "raw-lines-v1",
+    representationPolicyId: "raw-bytes-v1",
+    execution: "not-applicable",
+    executionOccurrence: "not-applicable",
+    effectClaim: "workspace-observed",
+    finality: "final",
+    consistency: "stable-observation",
+    boundary: { before: "fresh-before", after: "after-terminal" },
+    attribution: { basis: "workspace-observation", writerIsolation: "unknown", overlap: "unknown" },
+    completeness: { files: "complete", reasons: [], omittedFileCount: 0 },
+    totals: { additions: exactCount(7), deletions: exactCount(2), changedFiles: 1 },
+    diffIdentityId: null,
+    createdAt: "2026-10-20T00:00:00.000Z",
+    supersedesMeasurementId: null,
+    ...overrides,
+  };
+}
+
+function fileIdentity(
+  id: string,
+  options: { before?: string | null; after?: string | null; scope?: DiffIdentity["scope"] } = {},
+): DiffIdentity {
+  const before = options.before === undefined ? "src/app.ts" : options.before;
+  const after = options.after === undefined ? "src/app.ts" : options.after;
+  return {
+    id,
+    worktreeId: "wt-1",
+    worktreeIncarnation: "inc-1",
+    scope: options.scope ?? "thread-net",
+    measurementId: `m-${id}`,
+    algorithmPolicyId: "raw-lines-v1",
+    representationPolicyId: "raw-bytes-v1",
+    rendererPolicyId: "hunks-v1",
+    whitespacePolicy: "preserve",
+    kind: "file",
+    before: before
+      ? { state: "present", snapshotId: "snap-a", pathId: `p:${before}`, blobId: "blob-a" }
+      : { state: "absent" },
+    after: after
+      ? { state: "present", snapshotId: "snap-b", pathId: `p:${after}`, blobId: "blob-b" }
+      : { state: "absent" },
+    basePathDisplay: before,
+    targetPathDisplay: after,
+  };
+}
+
+function comparisonIdentity(id: string): DiffIdentity {
+  return {
+    id,
+    worktreeId: "wt-1",
+    worktreeIncarnation: "inc-1",
+    scope: "turn-net",
+    measurementId: `m-${id}`,
+    algorithmPolicyId: "raw-lines-v1",
+    representationPolicyId: "raw-bytes-v1",
+    rendererPolicyId: "hunks-v1",
+    whitespacePolicy: "preserve",
+    kind: "comparison",
+    beforeSnapshotId: "snap-a",
+    afterSnapshotId: "snap-b",
+  };
+}
+
+function line(type: ChangeDiffLine["type"], text: string): ChangeDiffLine {
+  return { type, text, oldLine: null, newLine: null };
+}
+
+function fileBody(
+  path: string,
+  lines: ChangeDiffLine[],
+  overrides: Partial<ChangeDiffFileBody> = {},
+): ChangeDiffFileBody {
+  return {
+    pathId: `p:${path}`,
+    oldPathDisplay: path,
+    newPathDisplay: path,
+    status: "modified",
+    fileKind: "text",
+    bodyAvailability: "available",
+    reasonKey: null,
+    hunks: [
+      { header: "@@ -1,2 +1,2 @@", oldStart: 1, oldLines: 2, newStart: 1, newLines: 2, lines },
+    ],
+    truncated: false,
+    ...overrides,
+  };
+}
+
+function diffBody(
+  identity: DiffIdentity,
+  files: ChangeDiffFileBody[],
+  options: { measurement?: ChangeMeasurement | null; nextCursor?: string | null } = {},
+): ChangesGetDiffResult {
+  return {
+    kind: "body",
+    identity,
+    measurement: options.measurement === undefined ? measurement() : options.measurement,
+    files,
+    nextCursor: options.nextCursor ?? null,
+    viewIdentityId: identity.id,
+  };
+}
+
+function calls(command: string): InvokeArgs[] {
+  return invokeMock.mock.calls.filter(([name]) => name === command).map(([, args]) => args);
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+  const promise = new Promise<T>((resolvePromise) => {
     resolve = resolvePromise;
-    reject = rejectPromise;
   });
-  return { promise, resolve, reject };
+  return { promise, resolve };
 }
 
+const historical: ChangeDiffTarget = {
+  kind: "historical",
+  diffIdentityId: "diff-h",
+  title: "app.ts",
+};
+const live: ChangeDiffTarget = {
+  kind: "live",
+  resourceKey: RESOURCE_KEY,
+  path: "src/app.ts",
+  title: "app.ts",
+};
+
 beforeEach(() => {
-  clearDiffBaseCacheForTests();
   viewportWidth = 1024;
   mediaQueryListeners.clear();
   installMatchMedia();
-  useConfigStore.setState({ config: originalConfig });
-  renderedDiffEditorProps = null;
-  monacoConfigured = true;
-  ensureMonacoConfiguredMock.mockReset();
-  ensureMonacoConfiguredMock.mockImplementation(async () => {});
-  readLocalFileMock.mockClear();
-  readLocalFileAtBranchMock.mockClear();
-  readContainerFileMock.mockClear();
-  readFileAtBranchMock.mockClear();
-  readLocalFileMock.mockImplementation(async () => ({
-    content: "local modified",
-    language: "typescript",
-  }));
-  readLocalFileAtBranchMock.mockImplementation(async () => ({
-    content: "local original",
-    language: "typescript",
-  }));
-  readContainerFileMock.mockImplementation(async () => ({
-    content: "container modified",
-    language: "javascript",
-  }));
-  readFileAtBranchMock.mockImplementation(async () => ({
-    content: "container original",
-    language: "javascript",
-  }));
+  resetChangeSubscriptionsForTests();
+  useChangeProjectionStore.setState({
+    projections: new Map(),
+    retiredOwners: new Map(),
+    transportRevision: 0,
+    deleted: new Set(),
+    contentGenerations: new Map(),
+    toolPresentations: new Map(),
+  });
+  handlers = {
+    // The shared subscription reads the environment projection; the viewer
+    // does not depend on it.
+    changes_get_view: () => ({
+      kind: "error",
+      error: { code: "unsupported-capability", reasonKey: "changes.error.unsupported" },
+    }),
+  };
+  invokeMock.mockClear();
+  invokeMock.mockImplementation(async (command: string, args?: InvokeArgs) => {
+    const handler = handlers[command];
+    if (!handler) throw new Error(`Unexpected command: ${command}`);
+    return handler(args);
+  });
 });
 
 afterEach(() => {
@@ -175,709 +230,446 @@ afterEach(() => {
 
 afterAll(() => {
   window.matchMedia = originalMatchMedia;
-  useConfigStore.setState({ config: originalConfig });
-  mock.module("@/lib/backend", () => realBackendSnapshot);
-  mock.module("@monaco-editor/react", () => realMonacoReactSnapshot);
-  mock.module("@/lib/monaco-loader", () => realMonacoLoaderSnapshot);
+  invokeMock.mockImplementation(() => Promise.resolve());
 });
 
-describe("DiffViewerTab content loading", () => {
-  test("loads modified and original content from a local worktree", async () => {
-    render(<DiffViewerTab {...baseProps} worktreePath="/repo" isLocalEnvironment />);
+/** Every backend call the viewer made; it never reads a file or a branch. */
+function expectOnlyChangeCommands() {
+  for (const [command] of invokeMock.mock.calls) expect(command.startsWith("changes_")).toBe(true);
+}
 
-    expect(screen.getByText("Loading diff...")).toBeTruthy();
-    const editor = await screen.findByTestId("diff-editor");
-    expect(readLocalFileMock).toHaveBeenCalledWith("/repo", baseProps.filePath);
-    expect(readLocalFileAtBranchMock).toHaveBeenCalledWith("/repo", baseProps.filePath, "main");
-    expect(editor.dataset.original).toBe("local original");
-    expect(editor.dataset.modified).toBe("local modified");
-    expect(editor.dataset.language).toBe("typescript");
+describe("DiffViewerTab historical targets", () => {
+  test("renders the backend hunks of exactly the named identity", async () => {
+    const identity = fileIdentity("diff-h");
+    handlers.changes_get_diff = () =>
+      diffBody(identity, [
+        fileBody("src/app.ts", [
+          line("context", "keep"),
+          line("remove", "old"),
+          line("add", "new"),
+        ]),
+      ]);
+
+    render(<DiffViewerTab target={historical} isActive />);
+
+    expect(await screen.findByText("+new")).toBeTruthy();
+    expect(screen.getByText("-old")).toBeTruthy();
+    expect(calls("changes_get_diff")).toEqual([{ diffIdentityId: "diff-h" }]);
+    expect(calls("changes_resolve_live_detail")).toHaveLength(0);
+    expectOnlyChangeCommands();
+
+    expect(screen.getByTestId("diff-viewer-scope").textContent).toBe("Thread changes");
+    expect(screen.getByTestId("diff-viewer-endpoints").textContent).toBe("Before → After");
+    expect(screen.getByTestId("diff-viewer-counts").textContent).toBe("+7 -2");
     expect(screen.getByText("Modified")).toBeTruthy();
+    // A historical diff is fixed: no reload and no jump to today's file.
+    expect(screen.queryByRole("button", { name: "Reload diff" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "View file" }) === null).toBe(true);
   });
 
-  test("loads modified and original content from a container", async () => {
-    render(<DiffViewerTab {...baseProps} containerId="container-1" />);
-
-    const editor = await screen.findByTestId("diff-editor");
-    expect(readContainerFileMock).toHaveBeenCalledWith("container-1", baseProps.filePath);
-    expect(readFileAtBranchMock).toHaveBeenCalledWith("container-1", baseProps.filePath, "main");
-    expect(editor.dataset.original).toBe("container original");
-    expect(editor.dataset.modified).toBe("container modified");
-    expect(editor.dataset.language).toBe("javascript");
-  });
-
-  test.each(["A", "?"] as const)(
-    "treats %s as a new file and skips the original read",
-    async (gitStatus) => {
-      render(<DiffViewerTab {...baseProps} containerId="container-1" gitStatus={gitStatus} />);
-
-      const editor = await screen.findByTestId("diff-editor");
-      expect(editor.dataset.original).toBe("");
-      expect(editor.dataset.modified).toBe("container modified");
-      expect(readFileAtBranchMock).not.toHaveBeenCalled();
-      expect(screen.getByText("New file")).toBeTruthy();
-    },
-  );
-
-  test("loads only the original content for a deleted file", async () => {
-    const onSwitchToFileView = mock(() => {});
-    render(
-      <DiffViewerTab
-        {...baseProps}
-        containerId="container-1"
-        gitStatus="D"
-        onSwitchToFileView={onSwitchToFileView}
-      />,
-    );
-
-    const editor = await screen.findByTestId("diff-editor");
-    expect(readContainerFileMock).not.toHaveBeenCalled();
-    expect(readFileAtBranchMock).toHaveBeenCalledWith("container-1", baseProps.filePath, "main");
-    expect(editor.dataset.original).toBe("container original");
-    expect(editor.dataset.modified).toBe("");
-    expect(editor.dataset.language).toBe("javascript");
-    expect(screen.getByText("Deleted")).toBeTruthy();
-    expect(screen.queryByTitle("View file") === null).toBe(true);
-  });
-
-  test("uses prop and plaintext language fallbacks for deleted files", async () => {
-    readFileAtBranchMock.mockImplementationOnce(async () => ({
-      content: "deleted ruby",
-      language: "",
-    }));
-    const view = render(
-      <DiffViewerTab {...baseProps} containerId="container-1" gitStatus="D" language="ruby" />,
-    );
-    expect((await screen.findByTestId("diff-editor")).dataset.language).toBe("ruby");
-
-    readFileAtBranchMock.mockImplementationOnce(async () => null);
-    view.rerender(
-      <DiffViewerTab {...baseProps} filePath="README" containerId="container-1" gitStatus="D" />,
-    );
-    await waitFor(() => {
-      expect(screen.getByTestId("diff-editor").dataset.language).toBe("plaintext");
-    });
-  });
-
-  test("uses the prop language and plaintext fallbacks when detection is absent", async () => {
-    readContainerFileMock.mockImplementation(async () => ({
-      content: "puts :ok",
-      language: "",
-    }));
-    const view = render(
-      <DiffViewerTab {...baseProps} containerId="container-1" gitStatus="A" language="ruby" />,
-    );
-
-    expect((await screen.findByTestId("diff-editor")).dataset.language).toBe("ruby");
-
-    view.rerender(
-      <DiffViewerTab {...baseProps} filePath="README" containerId="container-1" gitStatus="A" />,
-    );
-    await waitFor(() => {
-      expect(screen.getByTestId("diff-editor").dataset.language).toBe("plaintext");
-    });
-  });
-
-  test("reports missing environment paths for current and original reads", async () => {
-    const view = render(<DiffViewerTab {...baseProps} gitStatus="A" />);
-
-    expect(await screen.findByText("Failed to load diff")).toBeTruthy();
-    expect(screen.getByText("No container ID or worktree path available")).toBeTruthy();
-
-    view.rerender(<DiffViewerTab {...baseProps} gitStatus="D" />);
-    expect(await screen.findByText("Failed to load diff")).toBeTruthy();
-    expect(screen.getByText("No container ID or worktree path available")).toBeTruthy();
-  });
-
-  test("renders Error and non-Error backend failures", async () => {
-    readContainerFileMock.mockRejectedValueOnce(new Error("backend unavailable"));
-    const view = render(<DiffViewerTab {...baseProps} containerId="container-1" gitStatus="A" />);
-
-    expect(await screen.findByText("backend unavailable")).toBeTruthy();
-
-    readContainerFileMock.mockRejectedValueOnce("string failure");
-    view.rerender(
-      <DiffViewerTab
-        {...baseProps}
-        filePath="src/Other.ts"
-        containerId="container-1"
-        gitStatus="A"
-      />,
-    );
-    expect(await screen.findByText("string failure")).toBeTruthy();
-  });
-
-  test("renders container and local original-read failures", async () => {
-    readFileAtBranchMock.mockRejectedValueOnce(new Error("container base unavailable"));
-    const view = render(<DiffViewerTab {...baseProps} containerId="container-1" />);
-    expect(await screen.findByText("container base unavailable")).toBeTruthy();
-
-    readLocalFileAtBranchMock.mockRejectedValueOnce("local base unavailable");
-    view.rerender(
-      <DiffViewerTab
-        {...baseProps}
-        filePath="src/Local.ts"
-        containerId={undefined}
-        worktreePath="/repo"
-        isLocalEnvironment
-      />,
-    );
-    expect(await screen.findByText("local base unavailable")).toBeTruthy();
-  });
-
-  test("treats missing container and local base files as empty original content", async () => {
-    readFileAtBranchMock.mockImplementationOnce(async () => null);
-    const view = render(<DiffViewerTab {...baseProps} containerId="container-1" />);
-
-    let editor = await screen.findByTestId("diff-editor");
-    expect(editor.dataset.original).toBe("");
-    expect(editor.dataset.modified).toBe("container modified");
-
-    readLocalFileAtBranchMock.mockImplementationOnce(async () => null);
-    view.rerender(
-      <DiffViewerTab
-        {...baseProps}
-        filePath="src/LocalMissing.ts"
-        containerId={undefined}
-        worktreePath="/repo"
-        isLocalEnvironment
-      />,
-    );
-    editor = await screen.findByTestId("diff-editor");
-    await waitFor(() => expect(editor.dataset.modified).toBe("local modified"));
-    expect(editor.dataset.original).toBe("");
-  });
-
-  test("ignores a stale original read after the requested file changes", async () => {
-    const firstOriginalRead = deferred<realBackend.FileContent | null>();
-    readContainerFileMock.mockImplementation(async (_containerId, filePath) => ({
-      content: `${filePath} modified`,
-      language: filePath.endsWith("latest.ts") ? "typescript" : "javascript",
-    }));
-    readFileAtBranchMock.mockImplementation(async (_containerId, filePath) => {
-      if (filePath === "src/slow.ts") return firstOriginalRead.promise;
-      return {
-        path: filePath,
-        content: "latest original",
-        language: "typescript",
-      };
-    });
-
-    const view = render(
-      <DiffViewerTab {...baseProps} filePath="src/slow.ts" containerId="container-1" />,
-    );
-    await waitFor(() => {
-      expect(readFileAtBranchMock).toHaveBeenCalledWith("container-1", "src/slow.ts", "main");
-    });
-
-    view.rerender(
-      <DiffViewerTab {...baseProps} filePath="src/latest.ts" containerId="container-1" />,
-    );
-    const editor = await screen.findByTestId("diff-editor");
-    expect(editor.dataset.original).toBe("latest original");
-    expect(editor.dataset.modified).toBe("src/latest.ts modified");
-    expect(editor.dataset.language).toBe("typescript");
-
-    await act(async () => {
-      firstOriginalRead.resolve({
-        path: "src/slow.ts",
-        content: "stale original",
-        language: "javascript",
-      });
-      await firstOriginalRead.promise;
-    });
-    expect(screen.getByTestId("diff-editor").dataset.original).toBe("latest original");
-    expect(screen.getByTestId("diff-editor").dataset.language).toBe("typescript");
-    expect(screen.queryByText("Failed to load diff") === null).toBe(true);
-  });
-
-  test("ignores a stale original-read rejection after the requested file changes", async () => {
-    const firstOriginalRead = deferred<realBackend.FileContent | null>();
-    readFileAtBranchMock.mockImplementation(async (_containerId, filePath) => {
-      if (filePath === "src/slow-error.ts") return firstOriginalRead.promise;
-      return {
-        path: filePath,
-        content: "latest original",
-        language: "typescript",
-      };
-    });
-
-    const view = render(
-      <DiffViewerTab {...baseProps} filePath="src/slow-error.ts" containerId="container-1" />,
-    );
-    await waitFor(() => {
-      expect(readFileAtBranchMock).toHaveBeenCalledWith("container-1", "src/slow-error.ts", "main");
-    });
-
-    view.rerender(
-      <DiffViewerTab {...baseProps} filePath="src/latest.ts" containerId="container-1" />,
-    );
-    await waitFor(() => {
-      expect(screen.getByTestId("diff-editor").dataset.original).toBe("latest original");
-    });
-
-    await act(async () => {
-      firstOriginalRead.reject(new Error("stale base failure"));
-      try {
-        await firstOriginalRead.promise;
-      } catch {
-        // A cancelled request must not replace the latest successful state.
-      }
-    });
-    expect(screen.queryByText("stale base failure") === null).toBe(true);
-    expect(screen.getByTestId("diff-editor").dataset.original).toBe("latest original");
-  });
-
-  test("ignores a stale async completion after the requested file changes", async () => {
-    const firstRead = deferred<realBackend.FileContent>();
-    readContainerFileMock.mockImplementation(async (_containerId, filePath) => {
-      if (filePath === "src/slow.ts") return firstRead.promise;
-      return { content: "latest modified", language: "typescript" };
-    });
-    readFileAtBranchMock.mockImplementation(async (_containerId, filePath) => ({
-      content: `${filePath} original`,
-      language: "typescript",
-    }));
-
-    const view = render(
-      <DiffViewerTab {...baseProps} filePath="src/slow.ts" containerId="container-1" />,
-    );
-    expect(screen.getByText("Loading diff...")).toBeTruthy();
-
-    view.rerender(
-      <DiffViewerTab {...baseProps} filePath="src/latest.ts" containerId="container-1" />,
-    );
-    const editor = await screen.findByTestId("diff-editor");
-    expect(editor.dataset.modified).toBe("latest modified");
-    expect(editor.dataset.original).toBe("src/latest.ts original");
-
-    await act(async () => {
-      firstRead.resolve({
-        path: "src/slow.ts",
-        content: "stale modified",
-        language: "javascript",
-      });
-      await firstRead.promise;
-    });
-    expect(screen.getByTestId("diff-editor").dataset.modified).toBe("latest modified");
-    expect(screen.getByTestId("diff-editor").dataset.language).toBe("typescript");
-    expect(readFileAtBranchMock).not.toHaveBeenCalledWith("container-1", "src/slow.ts", "main");
-  });
-});
-
-describe("DiffViewerTab immutable base cache", () => {
-  test("reuses a commit-addressed base across tab remounts", async () => {
-    const props = {
-      ...baseProps,
-      baseBranch: "abcdef0000000000000000000000000000000000",
-      containerId: "container-1",
-    };
-    const firstView = render(<DiffViewerTab {...props} />);
-    await screen.findByTestId("diff-editor");
-    firstView.unmount();
-
-    const secondView = render(<DiffViewerTab {...props} />);
-    await screen.findByTestId("diff-editor");
-    secondView.unmount();
-
-    expect(readFileAtBranchMock).toHaveBeenCalledTimes(1);
-  });
-
-  test("does not cache a moving branch across tab remounts", async () => {
-    const props = {
-      ...baseProps,
-      baseBranch: "main",
-      containerId: "container-1",
-    };
-    const firstView = render(<DiffViewerTab {...props} />);
-    await screen.findByTestId("diff-editor");
-    firstView.unmount();
-
-    const secondView = render(<DiffViewerTab {...props} />);
-    await screen.findByTestId("diff-editor");
-    secondView.unmount();
-
-    expect(readFileAtBranchMock).toHaveBeenCalledTimes(2);
-  });
-
-  /**
-   * The backend only short-circuits a fetch for a *full* object name; anything
-   * shorter it resolves through `origin/<ref>`, which moves. Caching a hex-
-   * looking branch name here would pin a base that the backend keeps updating,
-   * for the life of the process.
-   */
-  test("does not cache a hex-shaped ref that is not a full object name", async () => {
-    for (const baseBranch of ["abcdef0", "defaced", "abcdef00000000000000000000000000000000000"]) {
-      readFileAtBranchMock.mockClear();
-      const props = { ...baseProps, baseBranch, containerId: "container-1" };
-
-      const firstView = render(<DiffViewerTab {...props} />);
-      await screen.findByTestId("diff-editor");
-      firstView.unmount();
-
-      const secondView = render(<DiffViewerTab {...props} />);
-      await screen.findByTestId("diff-editor");
-      secondView.unmount();
-
-      expect(readFileAtBranchMock).toHaveBeenCalledTimes(2);
-    }
-  });
-
-  test("caches a full object name regardless of case or surrounding space", async () => {
-    const props = {
-      ...baseProps,
-      baseBranch: " ABCDEF0000000000000000000000000000000000 ",
-      containerId: "container-1",
-    };
-    const firstView = render(<DiffViewerTab {...props} />);
-    await screen.findByTestId("diff-editor");
-    firstView.unmount();
-
-    const secondView = render(<DiffViewerTab {...props} />);
-    await screen.findByTestId("diff-editor");
-    secondView.unmount();
-
-    expect(readFileAtBranchMock).toHaveBeenCalledTimes(1);
-  });
-
-  test("evicts a rejected commit read so the next mount can retry", async () => {
-    readFileAtBranchMock.mockRejectedValueOnce(new Error("temporary base failure"));
-    const props = {
-      ...baseProps,
-      baseBranch: "abcdef0000000000000000000000000000000000",
-      containerId: "container-1",
-    };
-    const firstView = render(<DiffViewerTab {...props} />);
-    expect(await screen.findByText("temporary base failure")).toBeTruthy();
-    firstView.unmount();
-
-    const secondView = render(<DiffViewerTab {...props} />);
-    expect((await screen.findByTestId("diff-editor")).dataset.original).toBe("container original");
-    secondView.unmount();
-
-    expect(readFileAtBranchMock).toHaveBeenCalledTimes(2);
-  });
-
-  test("keeps container, worktree, file, and commit cache keys distinct", async () => {
-    const loadOnce = async (props: React.ComponentProps<typeof DiffViewerTab>) => {
-      const view = render(<DiffViewerTab {...props} />);
-      await screen.findByTestId("diff-editor");
-      view.unmount();
-    };
-
-    await loadOnce({
-      ...baseProps,
-      baseBranch: "abcdef0000000000000000000000000000000000",
-      containerId: "container-1",
-    });
-    await loadOnce({
-      ...baseProps,
-      baseBranch: "abcdef0000000000000000000000000000000000",
-      containerId: "container-2",
-    });
-    await loadOnce({
-      ...baseProps,
-      filePath: "src/Other.ts",
-      baseBranch: "abcdef0000000000000000000000000000000000",
-      containerId: "container-1",
-    });
-    await loadOnce({
-      ...baseProps,
-      baseBranch: "abcdef1000000000000000000000000000000000",
-      containerId: "container-1",
-    });
-    await loadOnce({
-      ...baseProps,
-      baseBranch: "abcdef0000000000000000000000000000000000",
-      worktreePath: "/repo",
-      isLocalEnvironment: true,
-    });
-
-    expect(readFileAtBranchMock).toHaveBeenCalledTimes(4);
-    expect(readFileAtBranchMock).toHaveBeenCalledWith(
-      "container-1",
-      baseProps.filePath,
-      "abcdef0000000000000000000000000000000000",
-    );
-    expect(readFileAtBranchMock).toHaveBeenCalledWith(
-      "container-2",
-      baseProps.filePath,
-      "abcdef0000000000000000000000000000000000",
-    );
-    expect(readFileAtBranchMock).toHaveBeenCalledWith(
-      "container-1",
-      "src/Other.ts",
-      "abcdef0000000000000000000000000000000000",
-    );
-    expect(readFileAtBranchMock).toHaveBeenCalledWith(
-      "container-1",
-      baseProps.filePath,
-      "abcdef1000000000000000000000000000000000",
-    );
-    expect(readLocalFileAtBranchMock).toHaveBeenCalledWith(
-      "/repo",
-      baseProps.filePath,
-      "abcdef0000000000000000000000000000000000",
-    );
-  });
-
-  test("bounds retained commit bases to 128 entries", async () => {
-    const branch = "abcdef0000000000000000000000000000000000";
-    const loadFile = (filePath: string) =>
-      cacheImmutableDiffBaseForTests(
-        `container\0container-1\0${branch}\0${filePath}`,
-        branch,
-        async () => {
-          const result = await readFileAtBranchMock("container-1", filePath, branch);
-          return result ? { ...result, path: filePath } : null;
+  test("labels renames with both paths and the resolved baseline", async () => {
+    const identity = fileIdentity("diff-h", { before: "src/old.ts", after: "src/new.ts" });
+    handlers.changes_get_diff = () =>
+      diffBody(
+        identity,
+        [
+          fileBody("src/new.ts", [line("add", "x")], {
+            oldPathDisplay: "src/old.ts",
+            status: "renamed",
+          }),
+        ],
+        {
+          measurement: measurement({
+            scope: "environment-net",
+            baselineVersion: "main@63d12576e9198f24bc2271a6a8c3702dfb391eae",
+          }),
         },
       );
 
-    for (let index = 0; index < 129; index += 1) {
-      await loadFile(`src/cache-${index}.ts`);
-    }
-    await loadFile("src/cache-0.ts");
+    render(<DiffViewerTab target={historical} isActive />);
 
-    const firstKeyCalls = readFileAtBranchMock.mock.calls.filter(
-      ([containerId, filePath, branch]) =>
-        containerId === "container-1" &&
-        filePath === "src/cache-0.ts" &&
-        branch === "abcdef0000000000000000000000000000000000",
+    await screen.findByText("+x");
+    expect(screen.getByText("src/old.ts renamed to src/new.ts")).toBeTruthy();
+    expect(screen.getByText("Renamed")).toBeTruthy();
+    expect(screen.getByTestId("diff-viewer-scope").textContent).toBe("Environment changes");
+    const endpoints = screen.getByTestId("diff-viewer-endpoints");
+    expect(endpoints.textContent).toBe("main@63d1257 → After");
+    expect(endpoints.getAttribute("title")).toBe(
+      "main@63d12576e9198f24bc2271a6a8c3702dfb391eae → After",
     );
-    expect(firstKeyCalls).toHaveLength(2);
-    expect(readFileAtBranchMock).toHaveBeenCalledTimes(130);
-  });
-});
-
-describe("DiffViewerTab editor lifecycle and controls", () => {
-  test("waits for Monaco configuration before mounting the diff editor", async () => {
-    monacoConfigured = false;
-    const configuration = deferred<void>();
-    ensureMonacoConfiguredMock.mockImplementationOnce(() => configuration.promise);
-
-    render(<DiffViewerTab {...baseProps} containerId="container-1" />);
-
-    expect(screen.getByText("Loading diff...")).toBeTruthy();
-    await waitFor(() => expect(readFileAtBranchMock).toHaveBeenCalledTimes(1));
-    expect(screen.queryByTestId("diff-editor") === null).toBe(true);
-
-    await act(async () => {
-      configuration.resolve();
-      await configuration.promise;
-    });
-    expect(await screen.findByTestId("diff-editor")).toBeTruthy();
   });
 
-  test("reports a Monaco configuration failure and retries", async () => {
-    monacoConfigured = false;
-    ensureMonacoConfiguredMock
-      .mockRejectedValueOnce(new Error("diff worker unavailable"))
-      .mockResolvedValueOnce(undefined);
-
-    render(<DiffViewerTab {...baseProps} containerId="container-1" />);
-
-    expect(await screen.findByText("Failed to load diff editor")).toBeTruthy();
-    expect(screen.queryByText("diff worker unavailable") === null).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-
-    expect(await screen.findByTestId("diff-editor")).toBeTruthy();
-    expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(2);
-  });
-
-  test("keeps the diff editor retry usable after a second consecutive failure", async () => {
-    monacoConfigured = false;
-    ensureMonacoConfiguredMock
-      .mockRejectedValueOnce(new Error("first diff failure"))
-      .mockRejectedValueOnce(new Error("second diff failure"))
-      .mockResolvedValueOnce(undefined);
-
-    render(<DiffViewerTab {...baseProps} containerId="container-1" />);
-
-    expect(await screen.findByText("Failed to load diff editor")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-
-    await waitFor(() => expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("Failed to load diff editor")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-
-    expect(await screen.findByTestId("diff-editor")).toBeTruthy();
-    expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(3);
-  });
-
-  test("ignores Monaco completion after the diff viewer unmounts", async () => {
-    monacoConfigured = false;
-    const configuration = deferred<void>();
-    ensureMonacoConfiguredMock.mockImplementationOnce(() => configuration.promise);
-    const view = render(<DiffViewerTab {...baseProps} containerId="container-1" />);
-
-    view.unmount();
-    await act(async () => {
-      configuration.resolve();
-      await configuration.promise;
+  test("shows an expired body as unavailable and never falls back to disk", async () => {
+    handlers.changes_get_diff = () => ({
+      kind: "error",
+      error: { code: "body-expired", reasonKey: "changes.error.body-expired" },
+      identityId: "diff-h",
     });
 
-    expect(renderedDiffEditorProps).toBeNull();
+    render(<DiffViewerTab target={historical} filePath="src/app.ts" isActive />);
+
+    expect(await screen.findByText("This diff is no longer available")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
+    expect(calls("changes_get_diff")).toHaveLength(1);
+    expectOnlyChangeCommands();
   });
 
-  test("disables diagnostics before mount and disposes the editor on unmount", async () => {
-    const setTypeScriptOptions = mock((_options: unknown) => {});
-    const setJavaScriptOptions = mock((_options: unknown) => {});
-    const setJsonOptions = mock((_options: unknown) => {});
-    const monaco = {
-      typescript: {
-        typescriptDefaults: { setDiagnosticsOptions: setTypeScriptOptions },
-        javascriptDefaults: { setDiagnosticsOptions: setJavaScriptOptions },
-      },
-      json: {
-        jsonDefaults: { setDiagnosticsOptions: setJsonOptions },
-      },
+  test("shows an unknown identity as not found", async () => {
+    handlers.changes_get_diff = () => ({
+      kind: "error",
+      error: { code: "not-found", reasonKey: "changes.error.not-found" },
+      identityId: "diff-h",
+    });
+
+    render(<DiffViewerTab target={historical} isActive />);
+
+    expect(await screen.findByText("This diff could not be found")).toBeTruthy();
+  });
+
+  test("retries a failed request for the same identity", async () => {
+    let attempt = 0;
+    handlers.changes_get_diff = () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("gateway offline");
+      return diffBody(fileIdentity("diff-h"), [fileBody("src/app.ts", [line("add", "back")])]);
     };
-    const dispose = mock(() => {});
-    const view = render(<DiffViewerTab {...baseProps} containerId="container-1" />);
-    await screen.findByTestId("diff-editor");
 
-    renderedDiffEditorProps?.beforeMount?.(monaco);
-    expect(setTypeScriptOptions).toHaveBeenCalledWith({
-      noSemanticValidation: true,
-      noSyntaxValidation: true,
-    });
-    expect(setJavaScriptOptions).toHaveBeenCalledWith({
-      noSemanticValidation: true,
-      noSyntaxValidation: true,
-    });
-    expect(setJsonOptions).toHaveBeenCalledWith({ validate: false });
+    render(<DiffViewerTab target={historical} isActive />);
 
-    renderedDiffEditorProps?.onMount?.({ dispose });
-    view.unmount();
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("gateway offline")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("+back")).toBeTruthy();
+    expect(calls("changes_get_diff")).toEqual([
+      { diffIdentityId: "diff-h" },
+      { diffIdentityId: "diff-h" },
+    ]);
   });
 
-  test("ignores disposal errors from an already-disposed editor", async () => {
-    const view = render(<DiffViewerTab {...baseProps} containerId="container-1" />);
-    await screen.findByTestId("diff-editor");
-    renderedDiffEditorProps?.onMount?.({
-      dispose: () => {
-        throw new Error("already disposed");
-      },
+  test("pages a multi-file comparison with Load more files", async () => {
+    const identity = comparisonIdentity("diff-h");
+    const totals = measurement({
+      scope: "turn-net",
+      totals: { additions: exactCount(12), deletions: exactCount(3), changedFiles: 2 },
     });
+    handlers.changes_get_diff = (args) =>
+      args?.cursor === "1"
+        ? diffBody(identity, [fileBody("b.ts", [line("add", "second")])], { measurement: totals })
+        : diffBody(identity, [fileBody("a.ts", [line("add", "first")])], {
+            measurement: totals,
+            nextCursor: "1",
+          });
 
-    expect(() => view.unmount()).not.toThrow();
+    render(<DiffViewerTab target={{ ...historical, title: "Turn 3" }} isActive />);
+
+    expect(await screen.findByText("+first")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "a.ts" })).toBeTruthy();
+    expect(screen.getByTestId("diff-viewer-counts").textContent).toBe("2 files+12 -3");
+    expect(screen.queryByText("+second") === null).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more files" }));
+
+    expect(await screen.findByText("+second")).toBeTruthy();
+    expect(screen.getByText("+first")).toBeTruthy();
+    expect(calls("changes_get_diff")).toEqual([
+      { diffIdentityId: "diff-h" },
+      { diffIdentityId: "diff-h", cursor: "1" },
+    ]);
+    expect(screen.queryByRole("button", { name: "Load more files" }) === null).toBe(true);
+    expect(screen.getByTestId("diff-viewer-counts").textContent).toBe("2 files+12 -3");
   });
 
-  test("switches diff modes, updates editor options, and opens file view", async () => {
-    const onSwitchToFileView = mock(() => {});
-    render(
-      <DiffViewerTab
-        {...baseProps}
-        containerId="container-1"
-        onSwitchToFileView={onSwitchToFileView}
-      />,
-    );
-    await screen.findByTestId("diff-editor");
+  test("requests the whitespace view without changing the canonical counts", async () => {
+    const identity = fileIdentity("diff-h");
+    handlers.changes_get_diff = (args) => {
+      const display = args?.display as { whitespace?: string } | undefined;
+      return display?.whitespace === "ignore-for-view"
+        ? {
+            ...diffBody(identity, [fileBody("src/app.ts", [line("add", "real change")])]),
+            viewIdentityId: "diff-h:ws-ignore",
+          }
+        : diffBody(identity, [
+            fileBody("src/app.ts", [
+              line("remove", "indented-old"),
+              line("add", "indented-new"),
+              line("add", "real change"),
+            ]),
+          ]);
+    };
 
+    render(<DiffViewerTab target={historical} isActive />);
+
+    expect(await screen.findByText("+indented-new")).toBeTruthy();
+    expect(screen.getByTestId("diff-viewer-counts").textContent).toBe("+7 -2");
+
+    const toggle = screen.getByRole("button", { name: "Hide whitespace changes" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(screen.queryByText("+indented-new") === null).toBe(true));
+    expect(screen.getByText("+real change")).toBeTruthy();
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(calls("changes_get_diff")).toEqual([
+      { diffIdentityId: "diff-h" },
+      { diffIdentityId: "diff-h", display: { whitespace: "ignore-for-view" } },
+    ]);
+    // The header still shows the measurement's totals, not the visible rows.
+    expect(screen.getByTestId("diff-viewer-counts").textContent).toBe("+7 -2");
+  });
+
+  test("lays the same rows out side by side or inline", async () => {
+    handlers.changes_get_diff = () =>
+      diffBody(fileIdentity("diff-h"), [
+        fileBody("src/app.ts", [line("remove", "old"), line("add", "new")]),
+      ]);
+
+    const { container } = render(<DiffViewerTab target={historical} isActive />);
+
+    await screen.findByText("+new");
     const sideBySide = screen.getByRole("button", { name: "Side by side" });
     const inline = screen.getByRole("button", { name: "Inline" });
     expect(sideBySide.getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("diff-editor").dataset.sideBySide).toBe("true");
+    expect(container.querySelector("pre") === null).toBe(true);
 
     fireEvent.click(inline);
     expect(inline.getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("diff-editor").dataset.sideBySide).toBe("false");
-
-    fireEvent.click(sideBySide);
-    expect(sideBySide.getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("diff-editor").dataset.sideBySide).toBe("true");
-
-    fireEvent.click(screen.getByTitle("View file"));
-    expect(onSwitchToFileView).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("pre")).not.toBeNull();
+    expect(calls("changes_get_diff")).toHaveLength(1);
   });
 
-  test("hides an inactive view without removing its authoritative content", async () => {
-    render(<DiffViewerTab {...baseProps} containerId="container-1" isActive={false} />);
+  test("hides an inactive view without dropping its content", async () => {
+    handlers.changes_get_diff = () =>
+      diffBody(fileIdentity("diff-h"), [fileBody("src/app.ts", [line("add", "kept")])]);
 
-    await screen.findByTestId("diff-editor");
-    const root = screen.getByTestId("diff-editor").parentElement?.parentElement;
-    expect(root?.className).toContain("pointer-events-none");
-    expect(root?.className).toContain("opacity-0");
-    expect(screen.getByTestId("diff-editor").dataset.modified).toBe("container modified");
-  });
+    render(<DiffViewerTab target={historical} isActive={false} />);
 
-  test("keeps inactive loading, error, and deleted branches hidden", async () => {
-    const pendingRead = deferred<realBackend.FileContent>();
-    readContainerFileMock.mockImplementationOnce(async () => pendingRead.promise);
-    const view = render(
-      <DiffViewerTab {...baseProps} containerId="container-1" gitStatus="A" isActive={false} />,
-    );
-
-    const loadingRoot = screen.getByText("Loading diff...").parentElement?.parentElement;
-    expect(loadingRoot?.className).toContain("pointer-events-none");
-    expect(loadingRoot?.className).toContain("opacity-0");
-
-    await act(async () => {
-      pendingRead.reject(new Error("inactive failure"));
-      try {
-        await pendingRead.promise;
-      } catch {
-        // The component converts this rejection into its error state.
-      }
-    });
-    const errorRoot = (await screen.findByText("Failed to load diff")).parentElement?.parentElement;
-    expect(errorRoot?.className).toContain("pointer-events-none");
-    expect(errorRoot?.className).toContain("opacity-0");
-
-    view.rerender(
-      <DiffViewerTab
-        {...baseProps}
-        filePath="src/Deleted.ts"
-        containerId="container-1"
-        gitStatus="D"
-        isActive={false}
-      />,
-    );
-    const deletedEditor = await screen.findByTestId("diff-editor");
-    const deletedRoot = deletedEditor.parentElement?.parentElement;
-    expect(deletedRoot?.className).toContain("pointer-events-none");
-    expect(deletedRoot?.className).toContain("opacity-0");
-    expect(deletedEditor.dataset.modified).toBe("");
-  });
-
-  test("switches exactly at 767px and restores the remembered desktop mode", async () => {
-    setViewportWidth(768);
-    render(<DiffViewerTab {...baseProps} containerId="container-1" />);
-    await screen.findByTestId("diff-editor");
-
-    fireEvent.click(screen.getByRole("button", { name: "Inline" }));
-    expect(screen.getByTestId("diff-editor").dataset.sideBySide).toBe("false");
-
-    setViewportWidth(767);
-    expect(screen.queryByRole("button", { name: "Side by side" }) === null).toBe(true);
-    expect(screen.getByTestId("diff-editor").dataset.sideBySide).toBe("false");
-
-    setViewportWidth(768);
-    expect(screen.getByRole("button", { name: "Inline" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
-    expect(screen.getByTestId("diff-editor").dataset.sideBySide).toBe("false");
-
-    fireEvent.click(screen.getByRole("button", { name: "Side by side" }));
-    expect(screen.getByTestId("diff-editor").dataset.sideBySide).toBe("true");
-    expect(renderedDiffEditorProps?.options).toMatchObject({
-      enableSplitViewResizing: true,
-      fontSize: 14,
-      useInlineViewWhenSpaceIsLimited: false,
-    });
+    expect(await screen.findByText("+kept")).toBeTruthy();
+    expect(screen.getByTestId("diff-viewer").className).toContain("opacity-0");
+    expect(screen.getByTestId("diff-viewer").className).toContain("pointer-events-none");
   });
 });
 
-describe("formatBaseRef", () => {
-  test.each([
-    ["63d12576e9198f24bc2271a6a8c3702dfb391eae", "63d1257"],
-    ["ABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD", "ABCDEFA"],
-    ["main", "main"],
-    ["feature/63d12576", "feature/63d12576"],
-    ["63d1257", "63d1257"],
-  ])("renders %s as %s", (baseBranch, expected) => {
-    expect(formatBaseRef(baseBranch)).toBe(expected);
+describe("DiffViewerTab live targets", () => {
+  function liveHandlers() {
+    let resolveCount = 0;
+    handlers.changes_resolve_live_detail = () => {
+      resolveCount += 1;
+      return {
+        kind: "identity",
+        identity: fileIdentity(`diff-live-${resolveCount}`, { scope: "environment-net" }),
+      } satisfies ChangesResolveLiveDetailResult;
+    };
+    handlers.changes_get_diff = (args) =>
+      diffBody(
+        fileIdentity(String(args?.diffIdentityId), { scope: "environment-net" }),
+        [fileBody("src/app.ts", [line("add", `body of ${String(args?.diffIdentityId)}`)])],
+        {
+          measurement: measurement({
+            scope: "environment-net",
+            baselineVersion: "main@63d12576e9198f24bc2271a6a8c3702dfb391eae",
+            finality: "provisional",
+          }),
+        },
+      );
+  }
+
+  test("resolves the current file to an identity and labels it as the workspace file", async () => {
+    liveHandlers();
+    const onSwitchToFileView = mock(() => {});
+
+    render(<DiffViewerTab target={live} isActive onSwitchToFileView={onSwitchToFileView} />);
+
+    expect(await screen.findByText("+body of diff-live-1")).toBeTruthy();
+    expect(calls("changes_resolve_live_detail")).toEqual([
+      { resourceKey: RESOURCE_KEY, path: "src/app.ts" },
+    ]);
+    expect(calls("changes_get_diff")).toEqual([{ diffIdentityId: "diff-live-1" }]);
+    expect(screen.getByTestId("diff-viewer-endpoints").textContent).toBe(
+      "vs main@63d1257 · Current workspace file",
+    );
+    expect(screen.getByTestId("diff-viewer-endpoints").getAttribute("title")).toBe(
+      "main@63d12576e9198f24bc2271a6a8c3702dfb391eae → Current workspace file",
+    );
+    expectOnlyChangeCommands();
+
+    fireEvent.click(screen.getByRole("button", { name: "View file" }));
+    expect(onSwitchToFileView).toHaveBeenCalledTimes(1);
+  });
+
+  test("reconnect and returning from an inactive environment resolve missed same-count edits", async () => {
+    liveHandlers();
+    const view = render(<DiffViewerTab target={live} isActive />);
+    await screen.findByText("+body of diff-live-1");
+    act(() => useChangeProjectionStore.getState().resync());
+    await screen.findByText("+body of diff-live-2");
+    view.rerender(<DiffViewerTab target={live} isActive={false} />);
+    act(() => useChangeProjectionStore.getState().resync());
+    view.rerender(<DiffViewerTab target={live} isActive />);
+    await screen.findByText("+body of diff-live-3");
+  });
+
+  test("hosts without change tracking show an explicit unsupported state", async () => {
+    handlers.changes_resolve_live_detail = () => {
+      throw new Error("unknown command");
+    };
+    render(<DiffViewerTab target={live} isActive />);
+    expect(await screen.findByText(/This host does not support change diffs/)).toBeTruthy();
+  });
+
+  test("re-resolves when the content generation names this file, and only then", async () => {
+    liveHandlers();
+    render(<DiffViewerTab target={live} isActive />);
+    await screen.findByText("+body of diff-live-1");
+
+    // Another file changed: nothing to do.
+    act(() => {
+      useChangeProjectionStore.getState().applyContentInvalidation(RESOURCE_KEY, 1, ["p:other.ts"]);
+    });
+    await act(async () => {});
+    expect(calls("changes_resolve_live_detail")).toHaveLength(1);
+
+    // This file changed: a new identity, resolved by the path id the backend named.
+    act(() => {
+      useChangeProjectionStore
+        .getState()
+        .applyContentInvalidation(RESOURCE_KEY, 2, ["p:other.ts", "p:src/app.ts"]);
+    });
+    expect(await screen.findByText("+body of diff-live-2")).toBeTruthy();
+    expect(calls("changes_resolve_live_detail")[1]).toEqual({
+      resourceKey: RESOURCE_KEY,
+      pathId: "p:src/app.ts",
+    });
+
+    // Every path may have changed.
+    act(() => {
+      useChangeProjectionStore.getState().applyContentInvalidation(RESOURCE_KEY, 3, null);
+    });
+    expect(await screen.findByText("+body of diff-live-3")).toBeTruthy();
+    expect(calls("changes_get_diff").map((args) => args?.diffIdentityId)).toEqual([
+      "diff-live-1",
+      "diff-live-2",
+      "diff-live-3",
+    ]);
+  });
+
+  test("ignores invalidations of another resource", async () => {
+    liveHandlers();
+    render(<DiffViewerTab target={live} isActive />);
+    await screen.findByText("+body of diff-live-1");
+
+    act(() => {
+      useChangeProjectionStore
+        .getState()
+        .applyContentInvalidation(environmentChangeResourceKey("env-2"), 5, null);
+    });
+    await act(async () => {});
+    expect(calls("changes_resolve_live_detail")).toHaveLength(1);
+  });
+
+  test("reloads on request", async () => {
+    liveHandlers();
+    render(<DiffViewerTab target={live} isActive />);
+    await screen.findByText("+body of diff-live-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reload diff" }));
+
+    expect(await screen.findByText("+body of diff-live-2")).toBeTruthy();
+  });
+
+  test("retries a stale revision without the pinned row", async () => {
+    handlers.changes_resolve_live_detail = (args) =>
+      args?.revision !== undefined
+        ? {
+            kind: "error",
+            error: { code: "stale-revision", reasonKey: "changes.error.stale-revision" },
+          }
+        : { kind: "identity", identity: fileIdentity("diff-fresh", { scope: "environment-net" }) };
+    handlers.changes_get_diff = () =>
+      diffBody(fileIdentity("diff-fresh"), [fileBody("src/app.ts", [line("add", "fresh")])]);
+
+    render(
+      <DiffViewerTab
+        target={{ ...live, path: undefined, pathId: "p:src/app.ts", rowId: "m-0:3", revision: 4 }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("+fresh")).toBeTruthy();
+    expect(calls("changes_resolve_live_detail")).toEqual([
+      { resourceKey: RESOURCE_KEY, pathId: "p:src/app.ts", rowId: "m-0:3", revision: 4 },
+      { resourceKey: RESOURCE_KEY, pathId: "p:src/app.ts" },
+    ]);
+  });
+
+  test("shows a stale row it cannot follow as unavailable", async () => {
+    handlers.changes_resolve_live_detail = () => ({
+      kind: "error",
+      error: { code: "stale-revision", reasonKey: "changes.error.stale-revision" },
+    });
+
+    render(
+      <DiffViewerTab
+        target={{
+          kind: "live",
+          resourceKey: RESOURCE_KEY,
+          rowId: "m-0:3",
+          revision: 4,
+          title: "x",
+        }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("The change list moved on")).toBeTruthy();
+    expect(calls("changes_resolve_live_detail")).toHaveLength(1);
+    expect(calls("changes_get_diff")).toHaveLength(0);
+  });
+
+  test("reports a resolve failure and retries", async () => {
+    let attempt = 0;
+    handlers.changes_resolve_live_detail = () => {
+      attempt += 1;
+      if (attempt === 1) {
+        return {
+          kind: "error",
+          error: { code: "unsupported-capability", reasonKey: "changes.error.runtime-unavailable" },
+        };
+      }
+      return { kind: "identity", identity: fileIdentity("diff-ok", { scope: "environment-net" }) };
+    };
+    handlers.changes_get_diff = () =>
+      diffBody(fileIdentity("diff-ok"), [fileBody("src/app.ts", [line("add", "ok")])]);
+
+    render(<DiffViewerTab target={live} isActive />);
+
+    expect(await screen.findByText("Diff unavailable")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("+ok")).toBeTruthy();
+  });
+
+  test("drops an older resolve that finishes after a newer one", async () => {
+    const first = deferred<ChangesResolveLiveDetailResult>();
+    let resolveCount = 0;
+    handlers.changes_resolve_live_detail = () => {
+      resolveCount += 1;
+      if (resolveCount === 1) return first.promise;
+      return { kind: "identity", identity: fileIdentity("diff-new") };
+    };
+    handlers.changes_get_diff = (args) =>
+      diffBody(fileIdentity(String(args?.diffIdentityId)), [
+        fileBody("src/app.ts", [line("add", String(args?.diffIdentityId))]),
+      ]);
+
+    render(<DiffViewerTab target={live} isActive />);
+    await waitFor(() => expect(calls("changes_resolve_live_detail")).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Reload diff" }));
+
+    expect(await screen.findByText("+diff-new")).toBeTruthy();
+    await act(async () => {
+      first.resolve({ kind: "identity", identity: fileIdentity("diff-old") });
+      await first.promise;
+    });
+    expect(screen.getByText("+diff-new")).toBeTruthy();
+    expect(calls("changes_get_diff").map((args) => args?.diffIdentityId)).toEqual(["diff-new"]);
   });
 });
 
@@ -886,226 +678,38 @@ describe("DiffViewerTab on a mobile viewport", () => {
     setViewportWidth(390);
   });
 
-  test("forces the inline view and hides the mode toggle", async () => {
-    const onSwitchToFileView = mock(() => {});
-    render(
-      <DiffViewerTab
-        {...baseProps}
-        containerId="container-1"
-        onSwitchToFileView={onSwitchToFileView}
-      />,
-    );
+  test("pins the inline layout, hides the mode toggle and shows only the basename", async () => {
+    handlers.changes_get_diff = () =>
+      diffBody(fileIdentity("diff-h", { before: null, after: "src/components/Button.tsx" }), [
+        fileBody("src/components/Button.tsx", [line("add", "button")], { status: "added" }),
+      ]);
 
-    expect((await screen.findByTestId("diff-editor")).dataset.sideBySide).toBe("false");
+    const { container } = render(<DiffViewerTab target={historical} isActive />);
+
+    await screen.findByText("+button");
     expect(screen.queryByRole("button", { name: "Side by side" }) === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Inline" }) === null).toBe(true);
-    fireEvent.click(screen.getByTitle("View file"));
-    expect(onSwitchToFileView).toHaveBeenCalledTimes(1);
-  });
+    expect(container.querySelector("pre")).not.toBeNull();
 
-  test("trims the editor chrome and wraps long lines", async () => {
-    render(<DiffViewerTab {...baseProps} containerId="container-1" />);
-    await screen.findByTestId("diff-editor");
-
-    const options = renderedDiffEditorProps?.options ?? {};
-    expect(options).toMatchObject({
-      readOnly: true,
-      renderSideBySide: false,
-      fontFamily: `"FiraCode Nerd Font", "Fira Code", monospace`,
-      automaticLayout: true,
-      ignoreTrimWhitespace: false,
-      fontSize: 12,
-      enableSplitViewResizing: false,
-      compactMode: true,
-      wordWrap: "on",
-      diffWordWrap: "on",
-      minimap: { enabled: false },
-      renderOverviewRuler: false,
-      overviewRulerLanes: 0,
-      overviewRulerBorder: false,
-      renderMarginRevertIcon: false,
-      renderGutterMenu: false,
-      glyphMargin: false,
-      folding: false,
-      lineDecorationsWidth: 12,
-      lineNumbersMinChars: 2,
-      scrollBeyondLastLine: false,
-      hideUnchangedRegions: {
-        enabled: true,
-        contextLineCount: 2,
-        minimumLineCount: 4,
-        revealLineCount: 10,
-      },
-      scrollbar: {
-        verticalScrollbarSize: 6,
-        horizontalScrollbarSize: 6,
-        useShadows: false,
-      },
-      padding: { top: 4, bottom: 24 },
-    });
-  });
-
-  test("preserves smaller configured fonts and reacts to appearance changes", async () => {
-    useConfigStore.setState((state) => ({
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          terminalAppearance: {
-            ...state.config.global.terminalAppearance,
-            fontFamily: "Monaco",
-            fontSize: 10,
-          },
-        },
-      },
-    }));
-    render(<DiffViewerTab {...baseProps} containerId="container-1" />);
-    await screen.findByTestId("diff-editor");
-    expect(renderedDiffEditorProps?.options).toMatchObject({
-      fontFamily: `"Monaco", "Fira Code", monospace`,
-      fontSize: 10,
-    });
-
-    act(() => {
-      useConfigStore.setState((state) => ({
-        config: {
-          ...state.config,
-          global: {
-            ...state.config.global,
-            terminalAppearance: {
-              ...state.config.global.terminalAppearance,
-              fontFamily: "Menlo",
-              fontSize: 11,
-            },
-          },
-        },
-      }));
-    });
-    await waitFor(() => {
-      expect(renderedDiffEditorProps?.options).toMatchObject({
-        fontFamily: `"Menlo", "Fira Code", monospace`,
-        fontSize: 11,
-      });
-    });
-  });
-
-  test("shows only the basename and the short base ref", async () => {
-    render(
-      <DiffViewerTab
-        {...baseProps}
-        baseBranch="63d12576e9198f24bc2271a6a8c3702dfb391eae"
-        containerId="container-1"
-        gitStatus="A"
-      />,
-    );
-    await screen.findByTestId("diff-editor");
-
-    const path = screen.getByTitle(baseProps.filePath);
-    expect(path.querySelector(".sr-only")?.textContent).toBe(baseProps.filePath);
-    const visualPath = path.querySelector('[aria-hidden="true"]');
-    expect(visualPath?.children.length).toBe(1);
-    expect(visualPath?.textContent).toBe("Button.tsx");
-    expect(screen.getByText("vs 63d1257")).toBeTruthy();
-    expect(screen.getByTitle("vs 63d12576e9198f24bc2271a6a8c3702dfb391eae")).toBeTruthy();
+    const path = screen.getByTitle("src/components/Button.tsx");
+    expect(path.querySelector(".sr-only")?.textContent).toBe("src/components/Button.tsx");
+    expect(path.querySelector('[aria-hidden="true"]')?.textContent).toBe("Button.tsx");
+    // The status stays available to assistive technology.
     expect(screen.getByText("New file").className).toContain("sr-only");
   });
 
-  test("lets a long ordinary base ref shrink before the action controls", async () => {
-    const baseBranch = "feature/a-realistically-very-long-mobile-branch-name";
-    render(
-      <DiffViewerTab
-        {...baseProps}
-        baseBranch={baseBranch}
-        containerId="container-1"
-        onSwitchToFileView={() => {}}
-      />,
+  test("restores the remembered desktop layout when the viewport widens", async () => {
+    handlers.changes_get_diff = () =>
+      diffBody(fileIdentity("diff-h"), [fileBody("src/app.ts", [line("add", "x")])]);
+
+    const { container } = render(<DiffViewerTab target={historical} isActive />);
+    await screen.findByText("+x");
+    expect(container.querySelector("pre")).not.toBeNull();
+
+    setViewportWidth(1024);
+    expect(screen.getByRole("button", { name: "Side by side" }).getAttribute("aria-pressed")).toBe(
+      "true",
     );
-    await screen.findByTestId("diff-editor");
-
-    const baseRef = screen.getByTitle(`vs ${baseBranch}`);
-    expect(baseRef.className).toContain("max-w-[35vw]");
-    expect(baseRef.className).toContain("shrink");
-    expect(baseRef.className).toContain("truncate");
-    expect(baseRef.textContent).toBe(`vs ${baseBranch}`);
+    expect(container.querySelector("pre") === null).toBe(true);
   });
-
-  test.each([
-    ["A", "New file", true],
-    ["M", "Modified", true],
-    ["D", "Deleted", false],
-  ] as const)(
-    "keeps the %s status accessible and handles file-view availability",
-    async (gitStatus, statusText, hasFileView) => {
-      render(
-        <DiffViewerTab
-          {...baseProps}
-          containerId="container-1"
-          gitStatus={gitStatus}
-          onSwitchToFileView={() => {}}
-        />,
-      );
-      await screen.findByTestId("diff-editor");
-
-      expect(screen.getByText(statusText).className).toContain("sr-only");
-      expect(Boolean(screen.queryByTitle("View file"))).toBe(hasFileView);
-    },
-  );
-});
-
-describe("DiffViewerTab path rendering", () => {
-  test.each([
-    {
-      name: "POSIX",
-      filePath: "src/components/Button.tsx",
-      directory: "src/components",
-      filenameSegment: "/Button.tsx",
-    },
-    {
-      name: "Windows",
-      filePath: String.raw`src\components\Button.tsx`,
-      directory: String.raw`src\components`,
-      filenameSegment: String.raw`\Button.tsx`,
-    },
-    {
-      name: "basename-only",
-      filePath: "README.md",
-      directory: null,
-      filenameSegment: "README.md",
-    },
-    {
-      name: "dot-directory",
-      filePath: ".playwright-mcp/page-2026-08-16T23-58-53-138Z.yml",
-      directory: ".playwright-mcp",
-      filenameSegment: "/page-2026-08-16T23-58-53-138Z.yml",
-    },
-  ])(
-    "renders and exposes the complete $name path",
-    async ({ filePath, directory, filenameSegment }) => {
-      render(
-        <DiffViewerTab
-          {...baseProps}
-          filePath={filePath}
-          containerId="container-1"
-          gitStatus="A"
-        />,
-      );
-      await screen.findByTestId("diff-editor");
-
-      const path = screen.getByTitle(filePath);
-      const accessiblePath = path.querySelector(".sr-only");
-      const visualPath = path.querySelector('[aria-hidden="true"]');
-      expect(path.hasAttribute("aria-label")).toBe(false);
-      expect(accessiblePath?.textContent).toBe(filePath);
-      expect(visualPath?.children.length).toBe(directory ? 2 : 1);
-      if (directory) {
-        expect(visualPath?.children[0]?.textContent).toBe(directory);
-        // The directory truncates RTL, which reorders a leading neutral "." to the
-        // visual end unless the text stays in its own LTR bidi isolate.
-        const isolate = visualPath?.children[0]?.querySelector("bdi");
-        expect(isolate?.getAttribute("dir")).toBe("ltr");
-        expect(isolate?.textContent).toBe(directory);
-      }
-      expect(visualPath?.lastElementChild?.textContent).toBe(filenameSegment);
-    },
-  );
 });

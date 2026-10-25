@@ -23,7 +23,6 @@ const previousApiKey = process.env.CURSOR_API_KEY;
 const previousStateDir = process.env.CURSOR_BRIDGE_STATE_DIR;
 const previousCredentialFile = process.env.CURSOR_BRIDGE_AUTH_FILE;
 const previousExecutionPolicy = process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
-const previousProjectSettings = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
 const previousMcpUrl = process.env.ORKESTRATOR_AGENT_MCP_URL;
 const previousMcpToken = process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
 const bridgeStateRoot = join(tmpdir(), `cursor-bridge-sdk-test-${process.pid}`);
@@ -155,6 +154,9 @@ const { useCursorModelsForTests } = await import("./models.js");
 const { useCursorCredentialRuntimeForTests } = await import("./credentials.js");
 const { clientSessionKeys, sessions } = await import("./state.js");
 const { setCursorMcpTimeoutsForTests, setCursorMcpTransportForTests } = await import("./mcp.js");
+const { useChangeEvidenceForTests } = await import("./change-evidence.js");
+const { ChangeEvidenceSpool } =
+  await import("@orkestrator/protocol/node/change-tracking/evidence-spool");
 
 const testStore = new FakeJsonlLocalAgentStore(
   join(bridgeStateRoot, "cursor-sdk"),
@@ -215,7 +217,6 @@ beforeEach(async () => {
   prewarmFails = false;
   warmWorkspaceReleases = 0;
   delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
-  delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
   delete process.env.ORKESTRATOR_AGENT_MCP_URL;
   delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
   setCursorMcpTransportForTests();
@@ -307,8 +308,6 @@ afterAll(() => {
   else process.env.CURSOR_BRIDGE_AUTH_FILE = previousCredentialFile;
   if (previousExecutionPolicy === undefined) delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
   else process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = previousExecutionPolicy;
-  if (previousProjectSettings === undefined) delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
-  else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previousProjectSettings;
   if (previousMcpUrl === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_URL;
   else process.env.ORKESTRATOR_AGENT_MCP_URL = previousMcpUrl;
   if (previousMcpToken === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
@@ -458,6 +457,26 @@ describe("ensureAgent", () => {
     await expect(ensureAgent(state)).resolves.toMatchObject({ agentId: "created-agent" });
     expect(prewarmOptions).toHaveLength(1);
     expect(state.workspaceWarmRelease).toBeUndefined();
+  });
+
+  test("the retired sandbox and project-settings env overrides change nothing", () => {
+    const host = {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+    } as const;
+    const before = resolveCursorExecutionPolicy(host);
+    process.env.CURSOR_BRIDGE_SANDBOX = "1";
+    process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
+    try {
+      expect(resolveCursorExecutionPolicy(host)).toEqual(before);
+      expect(before).toMatchObject({ sandbox: "none", projectResources: false });
+    } finally {
+      delete process.env.CURSOR_BRIDGE_SANDBOX;
+      delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+    }
   });
 
   test("reports unsupported approval semantics and fails deny-mode escalation closed", async () => {
@@ -753,8 +772,60 @@ describe("ensureAgent", () => {
     expect(state.hostedMcpTools).toBeUndefined();
   });
 
-  test("a read-only attach drops repository MCP servers even when project settings are opted in", async () => {
-    process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
+  test("a coordinator process hosts its research servers beside Orkestrator's tools", async () => {
+    setCursorMcpTransportForTests({
+      async connect(url) {
+        return {
+          tools: url.includes("context7")
+            ? [{ name: "query-docs", description: "Query docs" }]
+            : [{ name: "launch_environment", description: "Create a worker" }],
+          async call() {
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    const research = {
+      ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+      ORKESTRATOR_COORDINATOR_WEB_RESEARCH: "search-and-mcp",
+      ORKESTRATOR_COORDINATOR_RESEARCH_MCP: JSON.stringify([
+        { name: "context7", url: "https://mcp.context7.com/mcp" },
+      ]),
+    };
+    const previous = Object.fromEntries(
+      Object.keys(research).map((name) => [name, process.env[name]]),
+    );
+    Object.assign(process.env, research);
+    try {
+      const state = newSessionState();
+      state.readOnly = true;
+      state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
+
+      await ensureAgent(state);
+
+      expect(created[0]?.mcpServers).toBeUndefined();
+      expect(Object.keys(created[0]?.local?.customTools ?? {}).toSorted()).toEqual([
+        "context7__query-docs",
+        "launch_environment",
+      ]);
+      // Search follows the research setting; fetch never joins.
+      expect(created[0]?.tools).toEqual(expect.arrayContaining(["mcp", "webSearch"]));
+      expect(created[0]?.tools).not.toContain("webFetch");
+      expect(state.mcpServerNames).toEqual(["orkestrator", "context7"]);
+      expect(state.researchMcpServerNames).toEqual(["context7"]);
+      await detachAgent(state);
+      // Kept with `mcpServerNames`, so the inventory still names it correctly.
+      expect(state.researchMcpServerNames).toEqual(["context7"]);
+    } finally {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  test("a read-only attach drops repository MCP servers even when project resources are on", async () => {
     setCursorMcpTransportForTests({
       async connect() {
         return {
@@ -778,10 +849,20 @@ describe("ensureAgent", () => {
     );
     const connection = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
     try {
-      const interactive = newSessionState();
+      const interactive = newSessionState(undefined, {
+        id: "interactive-container",
+        sandbox: "container",
+        approvals: "auto-approve",
+        projectResources: true,
+        networkAccess: "full",
+      });
       interactive.agentMcp = connection;
       await ensureAgent(interactive);
-      expect(mcpServerNames(created[0])).toEqual(["orkestrator", "review-untrusted"]);
+      expect(mcpServerNames(created[0])).toEqual(["orkestrator"]);
+      expect(interactive.mcpServerNames?.sort()).toEqual(["orkestrator", "review-untrusted"]);
+      expect(created[0]?.local).toMatchObject({
+        settingSources: ["user", "project", "team", "plugins"],
+      });
 
       const state = newSessionState(undefined, {
         id: "coordinator-read-only",
@@ -2258,5 +2339,128 @@ describe("resumeSession", () => {
       approvals: "deny",
       projectResources: true,
     });
+  });
+});
+
+describe("change evidence from replayed history", () => {
+  let spool: InstanceType<typeof ChangeEvidenceSpool>;
+  let restoreEvidence: () => void;
+
+  beforeEach(() => {
+    spool = new ChangeEvidenceSpool();
+    restoreEvidence = useChangeEvidenceForTests(spool, "host-worker");
+  });
+
+  const fileTools = [
+    {
+      type: "toolCall",
+      message: {
+        type: "edit",
+        args: { path: "a.ts" },
+        result: { status: "success", value: { linesAdded: 1, linesRemoved: 1, diffString: "+ x" } },
+      },
+    },
+    {
+      type: "toolCall",
+      message: {
+        type: "write",
+        args: { path: "b.ts", fileText: "b\n" },
+        result: { status: "success", value: { path: "b.ts", linesCreated: 1, fileSize: 2 } },
+      },
+    },
+    {
+      type: "toolCall",
+      message: {
+        type: "delete",
+        args: { path: "c.ts" },
+        result: { status: "success", value: { fileSize: 1 } },
+      },
+    },
+  ];
+
+  test("history rebuilt without call ids produces no frames", async () => {
+    try {
+      runs = {
+        items: [
+          conversationRun([
+            {
+              type: "conversationTurn",
+              turn: { userMessage: { text: "change files" }, steps: fileTools },
+            },
+          ]),
+        ],
+      };
+      const state = await resumeSession("agent-evidence-history", undefined);
+
+      // The cards are there; nothing was matched to an operation.
+      expect(
+        state.messages.flatMap((message) =>
+          message.parts.flatMap((part) => (part.type === "tool-invocation" ? [part.toolName] : [])),
+        ),
+      ).toEqual(["edit", "write", "delete"]);
+      expect(spool.read(0).entries).toEqual([]);
+    } finally {
+      restoreEvidence();
+    }
+  });
+
+  test("a re-adopted run reports its tail by call id, as reconciliation, never measured", async () => {
+    try {
+      runs = {
+        items: [
+          {
+            id: "run-evidence-recovered",
+            status: "running",
+            createdAt: Date.now(),
+            supports: () => true,
+            async *stream() {
+              yield {
+                type: "tool-call-started",
+                callId: "edit-1",
+                toolCall: { type: "edit", args: { path: "a.ts" } },
+              };
+              yield {
+                type: "tool-call-completed",
+                callId: "edit-1",
+                toolCall: {
+                  type: "edit",
+                  args: { path: "a.ts" },
+                  result: { status: "success", value: { linesAdded: 2, linesRemoved: 0 } },
+                },
+              };
+            },
+            wait: async () => ({ status: "finished" }),
+            cancel: async () => undefined,
+            onDidChangeStatus: () => () => undefined,
+            conversation: async () => [
+              {
+                type: "conversationTurn",
+                turn: { userMessage: { text: "change files" }, steps: fileTools },
+              },
+            ],
+          },
+        ],
+      };
+      const state = await resumeSession("agent-evidence-recovered", undefined);
+      await state.recoveringRun;
+
+      const entries = spool.read(0).entries;
+      expect(entries.every((entry) => entry.type === "frame")).toBe(true);
+      const frames = entries.flatMap((entry) => (entry.type === "frame" ? [entry.frame] : []));
+      expect(
+        frames.map((frame) => [
+          frame.source.conversationId,
+          frame.source.callId,
+          frame.source.mode,
+          frame.source.turnId,
+          frame.event.kind === "tool" ? frame.event.phase : frame.event.kind,
+        ]),
+      ).toEqual([
+        [state.id, "edit-1", "reconciliation", undefined, "running"],
+        [state.id, "edit-1", "reconciliation", undefined, "succeeded"],
+      ]);
+    } finally {
+      restoreEvidence();
+    }
   });
 });

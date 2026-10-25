@@ -13,7 +13,8 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import type { PaneLeaf } from "@/types/paneLayout";
+import type { ChangeDiffTarget, PaneLeaf } from "@/types/paneLayout";
+import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import * as realClaudeTmuxChatTab from "@/components/claude/ClaudeTmuxChatTab";
 import * as realNativeAgent from "@/components/native-agent";
 import * as realBrowserTab from "@/components/browser/BrowserTab";
@@ -278,19 +279,19 @@ mock.module("@/components/terminal/FileViewerTab", () => ({
     tabId,
     environmentId,
     filePath,
-    baseBranch,
+    changeDiff,
   }: {
     tabId: string;
     environmentId?: string;
     filePath: string;
-    baseBranch?: string;
+    changeDiff?: ChangeDiffTarget;
   }) => (
     <div
       data-testid="file-viewer-tab"
       data-tab-id={tabId}
       data-environment-id={environmentId}
       data-file-path={filePath}
-      data-base-branch={baseBranch}
+      data-change-diff={changeDiff ? JSON.stringify(changeDiff) : undefined}
     />
   ),
 }));
@@ -524,43 +525,30 @@ describe("PaneLeafContainer", () => {
     paneRenderCount = 0;
   });
 
-  test("diff tabs follow matching persisted baselines, ignore stale pairs and fall back to the default branch", async () => {
-    const created = "a".repeat(40);
-    const advanced = "b".repeat(40);
+  test("routes diff tabs by their change target; legacy diff tabs show the environment's current file", async () => {
+    const historical: ChangeDiffTarget = {
+      kind: "historical",
+      diffIdentityId: "diff-1",
+      title: "own.txt",
+    };
     const pane: PaneLeaf = {
       kind: "leaf",
       id: "diff-pane",
-      activeTabId: "diff-tab",
+      activeTabId: "legacy-diff",
       tabs: [
         {
-          id: "diff-tab",
+          id: "legacy-diff",
           type: "file",
-          fileData: {
-            filePath: "own.txt",
-            isDiff: true,
-            baseBranch: "old-tab-branch",
-          },
+          fileData: { filePath: "own.txt", isDiff: true, gitStatus: "M", baseBranch: "old-branch" },
         },
+        {
+          id: "historical-diff",
+          type: "file",
+          fileData: { filePath: "own.txt", isDiff: true, changeDiff: historical },
+        },
+        { id: "plain-file", type: "file", fileData: { filePath: "own.txt" } },
       ],
     };
-    const update = (fields: Record<string, unknown>) =>
-      act(() => {
-        useEnvironmentStore.setState((state) => ({
-          environments: state.environments.map((env) => ({ ...env, ...fields })),
-        }));
-      });
-    update({
-      createdFromCommit: created,
-      diffBaseline: { createdFromCommit: created, commit: advanced },
-    });
-    useConfigStore.setState((state) => ({
-      config: {
-        ...state.config,
-        repositories: {
-          "project-1": { defaultBranch: "trunk" } as (typeof state.config.repositories)[string],
-        },
-      },
-    }));
     render(
       <PaneLeafContainer
         pane={pane}
@@ -569,15 +557,21 @@ describe("PaneLeafContainer", () => {
         isActive
       />,
     );
-    await waitFor(() =>
-      expect(screen.getByTestId("file-viewer-tab").getAttribute("data-base-branch")).toBe(advanced),
+
+    await waitFor(() => expect(screen.getAllByTestId("file-viewer-tab")).toHaveLength(3));
+    const targets = Object.fromEntries(
+      screen
+        .getAllByTestId("file-viewer-tab")
+        .map((tab) => [tab.getAttribute("data-tab-id"), tab.getAttribute("data-change-diff")]),
     );
-    update({ diffBaseline: { createdFromCommit: "c".repeat(40), commit: advanced } });
-    expect(screen.getByTestId("file-viewer-tab").getAttribute("data-base-branch")).toBe(created);
-    update({ diffBaseline: null });
-    expect(screen.getByTestId("file-viewer-tab").getAttribute("data-base-branch")).toBe(created);
-    update({ createdFromCommit: undefined });
-    expect(screen.getByTestId("file-viewer-tab").getAttribute("data-base-branch")).toBe("trunk");
+    expect(JSON.parse(targets["legacy-diff"] ?? "null")).toEqual({
+      kind: "live",
+      resourceKey: environmentChangeResourceKey("env-hidden"),
+      path: "own.txt",
+      title: "own.txt",
+    });
+    expect(JSON.parse(targets["historical-diff"] ?? "null")).toEqual(historical);
+    expect(targets["plain-file"]).toBeNull();
   });
 
   test("clicking the pane scopes the active pane update to its environment", () => {

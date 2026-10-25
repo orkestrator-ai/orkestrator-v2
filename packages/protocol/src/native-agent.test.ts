@@ -29,6 +29,7 @@ import {
   resolveNativeComposerSelectedModel,
   withResolvedNativeComposerModel,
   nativeAgentCapabilities,
+  reasoningOptionLabel,
   resolveReasoningId,
   BACKGROUND_TASK_ID_MAX_LENGTH,
   BACKGROUND_TASK_LAUNCH_SCAN_CHARS,
@@ -38,6 +39,8 @@ import {
   applyNativeAgentProjectionDelta,
   applyNativeAgentTranscriptDelta,
   isNativeAgentProjectionUpdate,
+  dispatchOutcomeLostMessage,
+  dispatchOutcomeLostOccurrenceId,
   isNativeAgentSessionStateUpdate,
   isNativeAgentTranscriptUpdate,
   nativeAsyncQuestionItemId,
@@ -110,6 +113,23 @@ describe("native agent capability table", () => {
       "permission",
       "mcp-form",
       "mcp-url",
+    ]);
+  });
+
+  test("pins Codex and Grok interaction capabilities", () => {
+    expect(nativeAgentCapabilities("codex").interactions?.kinds).toEqual([
+      "command-approval",
+      "file-approval",
+      "permission",
+      "mcp-form",
+      "mcp-url",
+    ]);
+    expect(nativeAgentCapabilities("grok").interactions?.kinds).toEqual([
+      "question",
+      "plan-approval",
+      "command-approval",
+      "file-approval",
+      "permission",
     ]);
   });
 
@@ -186,8 +206,9 @@ describe("native agent capability table", () => {
       // `fastModeAvailable` / `modes` decides per agent build.
       expect(nativeAgentCapabilities(platform).composer.speed).toBe(true);
       expect(nativeAgentCapabilities(platform).composer.mode).toBe(true);
+      // Grok compacts through its own `/compact`, run by the ACP bridge.
       expect(nativeAgentCapabilities(platform).actions).toEqual(
-        platform === "cursor" ? { steer: true, rewindMessages: true } : {},
+        platform === "cursor" ? { steer: true, rewindMessages: true } : { compact: true },
       );
     }
   });
@@ -411,6 +432,43 @@ describe("native agent projection synchronization", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  test("accepts setting and unsetting a retired dispatch in projection deltas", () => {
+    const delta = (setFields: Record<string, unknown>, unsetFields: string[]) =>
+      isNativeAgentProjectionUpdate({
+        syncVersion: 1,
+        status: "delta",
+        baseToken: "base",
+        token: "next",
+        historyEpoch: "epoch",
+        historyComplete: true,
+        delta: {
+          messageUpserts: [],
+          deletedMessageIds: [],
+          setFields,
+          unsetFields,
+          revision: 2,
+          generation: "generation-1",
+        },
+      });
+    expect(
+      delta(
+        {
+          retiredDispatch: {
+            requestId: "r-1",
+            retiredAt: "2026-10-23T10:00:00.000Z",
+            message: dispatchOutcomeLostMessage("claude"),
+          },
+        },
+        [],
+      ),
+    ).toBe(true);
+    expect(delta({}, ["retiredDispatch"])).toBe(true);
+    expect(dispatchOutcomeLostMessage("claude")).toBe(
+      "Claude Code could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.",
+    );
+    expect(dispatchOutcomeLostOccurrenceId("r-1")).toBe("dispatch-outcome-lost:r-1");
   });
 
   test("accepts async-question response state in projection deltas", () => {
@@ -835,6 +893,21 @@ describe("fallbackReasoningId", () => {
 
   test("returns undefined for an empty catalog", () => {
     expect(fallbackReasoningId([])).toBeUndefined();
+  });
+});
+
+describe("reasoningOptionLabel", () => {
+  test("labels every provider's effort ids from one vocabulary", () => {
+    expect(
+      ["none", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(
+        reasoningOptionLabel,
+      ),
+    ).toEqual(["None", "Off", "Minimal", "Low", "Medium", "High", "Extra high", "Max", "Ultra"]);
+  });
+
+  test("turns separators into spaces for provider-specific ids", () => {
+    expect(reasoningOptionLabel("max-thinking")).toBe("Max thinking");
+    expect(reasoningOptionLabel("deep__think")).toBe("Deep think");
   });
 });
 

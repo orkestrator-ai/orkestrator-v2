@@ -30,6 +30,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { hasNewCompletedReply, type RetentionMessage } from "./close-retention-replies";
+import { dismissSidebarTooltip } from "./sidebar-tooltip";
 
 type Status = {
   status: string;
@@ -124,8 +125,7 @@ function sidebarNavigator(page: Page, projectName: string) {
     }
     if (await expand.isVisible()) await expand.click();
     // A sidebar tooltip from the previous hover can sit over the entry.
-    await page.mouse.move(0, 0);
-    await page.keyboard.press("Escape");
+    await dismissSidebarTooltip(page, projectName);
     await entry.click();
   };
 }

@@ -106,7 +106,9 @@ afterAll(async () => {
   }
   if (networks.size > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
-});
+  // Removing a running container takes several seconds on a loaded host; the
+  // default hook timeout would abandon the cleanup part-way.
+}, 180_000);
 
 describe("C09 readiness belongs to the current boot", () => {
   live(
@@ -373,7 +375,12 @@ describe("C20 staged portable inputs", () => {
       await write(path.join(fixtureHome, ".claude", "CLAUDE.md"), "fixture memory");
       await write(path.join(fixtureHome, ".claude", "history.jsonl"), `${SENTINEL}-HISTORY`);
       await write(path.join(fixtureHome, ".claude", "projects", "p", "s.jsonl"), `${SENTINEL}-T`);
-      await write(path.join(fixtureHome, ".codex", "auth.json"), '{"fixture":true}');
+      // A Codex auth.json that holds no login is withheld at staging
+      // (login-snapshots); an API-key login is staged as it is.
+      await write(
+        path.join(fixtureHome, ".codex", "auth.json"),
+        '{"OPENAI_API_KEY":"fixture-not-a-key"}',
+      );
       await write(path.join(fixtureHome, ".codex", "sessions", "r.jsonl"), `${SENTINEL}-CODEX`);
       await write(path.join(fixtureHome, ".pi", "agent", "auth.json"), `${SENTINEL}-DISABLED-PI`);
       const saved = {
@@ -450,7 +457,7 @@ describe("C20 staged portable inputs", () => {
             "-c",
             "cat /home/node/.codex/auth.json; test -f /home/node/.claude/CLAUDE.md && echo claude-md",
           ]),
-        ).toBe('{"fixture":true}claude-md');
+        ).toBe('{"OPENAI_API_KEY":"fixture-not-a-key"}claude-md');
         await docker(["rm", "-f", containerId]);
       } finally {
         for (const [key, value] of [

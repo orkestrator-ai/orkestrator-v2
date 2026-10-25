@@ -12,6 +12,7 @@ import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 let snapshot: AgentAccountsSnapshot;
 let login: AgentAccountLoginProgress = { state: "idle" };
+const onAccountsChanged = mock(() => undefined);
 let startResult: AgentAccountLoginProgress = { state: "idle" };
 
 const usage: PlanUsageSnapshot = {
@@ -22,9 +23,9 @@ const usage: PlanUsageSnapshot = {
 };
 let usageResult: PlanUsageSnapshot = usage;
 
-mock.module("@/lib/native/backend", () => ({
-  invoke: mock((command: string, args: Record<string, unknown> = {}) => {
-    calls.push({ command, args });
+function answer(command: string, args: Record<string, unknown>): Promise<unknown> {
+  calls.push({ command, args });
+  {
     switch (command) {
       case "list_agent_accounts":
         return Promise.resolve(snapshot);
@@ -45,6 +46,14 @@ mock.module("@/lib/native/backend", () => ({
           })),
         };
         return Promise.resolve(snapshot);
+      case "rename_agent_account":
+        snapshot = {
+          ...snapshot,
+          accounts: snapshot.accounts.map((a) =>
+            a.id === args.accountId ? { ...a, label: String(args.label) } : a,
+          ),
+        };
+        return Promise.resolve(snapshot);
       case "remove_agent_account":
         snapshot = {
           ...snapshot,
@@ -60,6 +69,19 @@ mock.module("@/lib/native/backend", () => ({
       default:
         return Promise.resolve(undefined);
     }
+  }
+}
+
+mock.module("@/lib/native/backend", () => ({
+  invoke: mock((command: string, args: Record<string, unknown> = {}) => {
+    // Another machine's accounts are asked through the command node.
+    if (command === "invoke_on_node") {
+      calls.push({ command, args: { nodeId: args.nodeId, command: args.command } });
+      return answer(String(args.command), (args.args ?? {}) as Record<string, unknown>).then(
+        (result) => ({ outcome: "ok", result }),
+      );
+    }
+    return answer(command, args);
   }),
 }));
 
@@ -70,6 +92,7 @@ afterAll(() => {
 });
 
 const { AgentAccountsSection } = await import("./AgentAccountsSection");
+const { AccountMachineProvider } = await import("./account-machine");
 
 function account(overrides: Partial<AgentAccountSummary>): AgentAccountSummary {
   return {
@@ -88,6 +111,7 @@ const ADDED_ID = "11111111-2222-4333-8444-555555555555";
 
 beforeEach(() => {
   calls.length = 0;
+  onAccountsChanged.mockClear();
   usageResult = usage;
   login = { state: "idle" };
   snapshot = {
@@ -113,7 +137,7 @@ afterEach(() => {
 
 async function mount() {
   await act(async () => {
-    render(<AgentAccountsSection platform="codex" />);
+    render(<AgentAccountsSection platform="codex" onAccountsChanged={onAccountsChanged} />);
   });
 }
 
@@ -122,6 +146,55 @@ function accountOrder(): string[] {
 }
 
 describe("AgentAccountsSection", () => {
+  test("rename and removal notify the adjacent status reader", async () => {
+    await mount();
+    const added = await screen.findByRole("listitem", { name: "second@example.com" });
+    fireEvent.click(within(added).getByRole("button", { name: "Rename" }));
+    fireEvent.change(within(added).getByRole("textbox", { name: "Account name" }), {
+      target: { value: "Renamed account" },
+    });
+    fireEvent.click(within(added).getByRole("button", { name: "Save" }));
+    const renamed = await screen.findByRole("listitem", { name: "Renamed account" });
+    await waitFor(() => expect(onAccountsChanged).toHaveBeenCalledTimes(1));
+    fireEvent.click(within(renamed).getByRole("button", { name: "Remove" }));
+    fireEvent.click(within(renamed).getByRole("button", { name: "Confirm remove" }));
+    await waitFor(() => expect(onAccountsChanged).toHaveBeenCalledTimes(2));
+  });
+
+  test("acts on the chosen machine through the command node", async () => {
+    await act(async () => {
+      render(
+        <AccountMachineProvider value={{ machine: "node-leaf", name: "MBP3" }}>
+          <AgentAccountsSection platform="codex" />
+        </AccountMachineProvider>,
+      );
+    });
+    expect(await screen.findByText("Accounts on MBP3")).toBeTruthy();
+    expect(calls).toContainEqual({
+      command: "invoke_on_node",
+      args: { nodeId: "node-leaf", command: "list_agent_accounts" },
+    });
+    expect(calls.some((call) => call.command === "list_agent_accounts" && !call.args.nodeId)).toBe(
+      true,
+    );
+    const second = await screen.findByRole("listitem", { name: "second@example.com" });
+    await act(async () => {
+      fireEvent.click(within(second).getByRole("button", { name: "Use" }));
+    });
+    expect(calls).toContainEqual({
+      command: "invoke_on_node",
+      args: { nodeId: "node-leaf", command: "set_active_agent_account" },
+    });
+    // Nothing went to this window's own backend directly.
+    expect(
+      calls.filter(
+        (call, index) =>
+          call.command === "set_active_agent_account" &&
+          calls[index - 1]?.command !== "invoke_on_node",
+      ),
+    ).toEqual([]);
+  });
+
   test("forces a Claude usage reread when the credential refresh token changes", async () => {
     const view = render(<AgentAccountsSection platform="claude" reloadToken={0} />);
     await screen.findByText("5-hour limit");
@@ -148,6 +221,23 @@ describe("AgentAccountsSection", () => {
     view.rerender(<AgentAccountsSection platform="claude" reloadToken={1} />);
     expect(calls.filter((call) => call.command === "get_agent_account_usage")).toHaveLength(2);
   });
+  test("both active and inactive rows retain stale quotas with their timestamp and failure", async () => {
+    usageResult = {
+      ...usage,
+      stale: true,
+      fetchedAt: new Date(Date.now() - 3_600_000).toISOString(),
+      message: "Sign-in expired. Switch to this account to refresh usage.",
+    };
+    await mount();
+    for (const name of ["Host login", "second@example.com"]) {
+      const row = await screen.findByRole("listitem", { name });
+      expect(await within(row).findByText("40% used")).toBeTruthy();
+      expect(
+        within(row).getByText(/Last known usage, as of 1h ago\. Sign-in expired/),
+      ).toBeTruthy();
+    }
+  });
+
   test("lists only this platform's accounts with their identity and usage", async () => {
     await mount();
     const host = await screen.findByRole("listitem", { name: "Host login" });
@@ -158,6 +248,17 @@ describe("AgentAccountsSection", () => {
     expect(within(added).getByText("plus")).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("5-hour limit")).toHaveLength(2));
     expect(screen.queryAllByRole("listitem")).toHaveLength(2);
+  });
+
+  test("names the shared entries an account now keeps as its own copy", async () => {
+    snapshot.accounts[2] = { ...snapshot.accounts[2]!, privateEntries: ["config.toml", "rules"] };
+    await mount();
+    const added = await screen.findByRole("listitem", { name: "second@example.com" });
+    expect(
+      within(added).getByText(/No longer shared with the host login: config\.toml, rules\./),
+    ).toBeTruthy();
+    const host = screen.getByRole("listitem", { name: "Host login" });
+    expect(within(host).queryByText(/No longer shared/) === null).toBe(true);
   });
 
   test("lists the active account first, then the rest alphabetically", async () => {
@@ -180,6 +281,7 @@ describe("AgentAccountsSection", () => {
     fireEvent.click(within(added).getByRole("button", { name: "Use" }));
 
     await waitFor(() => expect(within(added).getByText("Active")).toBeTruthy());
+    expect(onAccountsChanged).toHaveBeenCalledTimes(1);
     expect(calls.find((c) => c.command === "set_active_agent_account")?.args).toEqual({
       platform: "codex",
       accountId: ADDED_ID,
@@ -236,6 +338,7 @@ describe("AgentAccountsSection", () => {
     });
 
     await waitFor(() => expect(screen.queryByLabelText("Account sign-in") === null).toBe(true));
+    expect(onAccountsChanged).toHaveBeenCalledTimes(1);
     expect(calls.filter((c) => c.command === "list_agent_accounts").length).toBeGreaterThan(
       listsBefore,
     );
@@ -252,7 +355,7 @@ describe("AgentAccountsSection", () => {
         operationId: "reauth-one",
       };
       await act(async () => {
-        render(<AgentAccountsSection platform="claude" />);
+        render(<AgentAccountsSection platform="claude" onAccountsChanged={onAccountsChanged} />);
         await clock.advance(0);
       });
       const add = await screen.findByRole("button", { name: /Add account/ });
@@ -263,6 +366,7 @@ describe("AgentAccountsSection", () => {
         await clock.advance(2_000);
       });
       expect((add as HTMLButtonElement).disabled).toBe(false);
+      expect(onAccountsChanged).toHaveBeenCalledTimes(1);
       if (state === "failed") expect(screen.getByText("Sign-in rejected")).toBeTruthy();
     },
   );

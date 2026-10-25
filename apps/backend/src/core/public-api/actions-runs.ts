@@ -6,7 +6,7 @@ import {
 } from "@orkestrator/protocol/public-api";
 import { PublicActionError } from "./errors.js";
 import { invalid, onlyActionKeys } from "./input.js";
-import { toReceipt, type PublicOperationRecord } from "./operation-ledger.js";
+import { intentFingerprint, toReceipt, type PublicOperationRecord } from "./operation-ledger.js";
 import { decodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { reconcileOperation } from "./reconciler.js";
 import { resolveSession } from "./sessions.js";
@@ -38,7 +38,11 @@ export async function loadOperation(
       { details: { namespace: lookup.namespace } },
     );
   }
-  if (lookup.status === "missing") throw new PublicActionError("not-found", "Operation not found");
+  // Another authority's operation is answered exactly like a missing one, so
+  // a credential cannot even learn that an operation ID exists.
+  if (lookup.status === "missing" || lookup.record.authority !== context.authority) {
+    throw new PublicActionError("not-found", "Operation not found");
+  }
   return lookup.record;
 }
 
@@ -47,81 +51,130 @@ interface RunGetInput {
   requestId?: string;
   action?: PublicActionName;
   namespace?: string;
+  submittedInput?: Record<string, unknown>;
 }
 
-const runGet: ReadActionHandler<RunGetInput> = {
-  kind: "read",
-  action: "run.get",
-  parse(input) {
-    onlyActionKeys(input, "run.get");
-    if (input.operationId !== undefined) {
-      if (typeof input.operationId !== "string") throw invalid("operationId must be a string");
+export function createRunReadHandlers(
+  handlerFor: (action: PublicActionName) => PublicActionHandler | undefined,
+): PublicActionHandler[] {
+  const runGet: ReadActionHandler<RunGetInput> = {
+    kind: "read",
+    action: "run.get",
+    parse(input) {
+      onlyActionKeys(input, "run.get");
+      if (input.operationId !== undefined) {
+        if (typeof input.operationId !== "string") throw invalid("operationId must be a string");
+        if (
+          input.requestId !== undefined ||
+          input.action !== undefined ||
+          input.namespace !== undefined ||
+          input.submittedInput !== undefined
+        ) {
+          throw invalid("Pass operationId or requestId, not both");
+        }
+        return { operationId: input.operationId };
+      }
+      if (!isPublicRequestId(input.requestId))
+        throw invalid("Pass operationId or a valid requestId");
+      if (input.action !== undefined && !isPublicActionName(input.action))
+        throw invalid("action is not a public action");
+      if (input.namespace !== undefined && !isPublicNamespace(input.namespace))
+        throw invalid("namespace is invalid");
       if (
-        input.requestId !== undefined ||
-        input.action !== undefined ||
-        input.namespace !== undefined
-      ) {
-        throw invalid("Pass operationId or requestId, not both");
-      }
-      return { operationId: input.operationId };
-    }
-    if (!isPublicRequestId(input.requestId)) throw invalid("Pass operationId or a valid requestId");
-    if (input.action !== undefined && !isPublicActionName(input.action))
-      throw invalid("action is not a public action");
-    if (input.namespace !== undefined && !isPublicNamespace(input.namespace))
-      throw invalid("namespace is invalid");
-    return {
-      requestId: input.requestId,
-      ...(input.action ? { action: input.action as PublicActionName } : {}),
-      ...(input.namespace ? { namespace: input.namespace as string } : {}),
-    };
-  },
-  async run(input, context) {
-    let record: PublicOperationRecord;
-    if (input.operationId) {
-      record = await loadOperation(context, input.operationId);
-    } else {
-      const found = await context.command.storage.findPublicOperationsByRequest(input.requestId!, {
-        ...(input.action ? { action: input.action } : {}),
-        ...(input.namespace ? { namespace: input.namespace } : {}),
-      });
-      if (found.expiredNamespace) {
-        throw new PublicActionError(
-          "history-expired",
-          "That request key's namespace has been retired; its outcome is no longer retained",
-          { details: { namespace: found.expiredNamespace } },
-        );
-      }
-      if (found.records.length === 0) {
-        // Not evidence that nothing ran: the request may never have reached
-        // this backend, or it may belong to another installation.
-        throw new PublicActionError("not-found", "No operation with that request key is retained");
-      }
-      if (found.records.length > 1) {
-        throw new PublicActionError(
-          "ambiguous-target",
-          "That request key was used for several operations; pass --action",
+        input.submittedInput !== undefined &&
+        (!input.action ||
+          !input.namespace ||
+          !input.submittedInput ||
+          typeof input.submittedInput !== "object" ||
+          Array.isArray(input.submittedInput))
+      )
+        throw invalid("submittedInput requires action, namespace and an input object");
+      return {
+        ...(input.submittedInput !== undefined
+          ? { submittedInput: input.submittedInput as Record<string, unknown> }
+          : {}),
+        requestId: input.requestId,
+        ...(input.action ? { action: input.action as PublicActionName } : {}),
+        ...(input.namespace ? { namespace: input.namespace as string } : {}),
+      };
+    },
+    async run(input, context) {
+      const handler = input.action ? handlerFor(input.action) : undefined;
+      if (input.submittedInput && (!handler || handler.kind !== "mutation"))
+        throw invalid("Recovery requires a mutation action");
+      const expected =
+        input.submittedInput && handler?.kind === "mutation"
+          ? handler.parse(input.submittedInput)
+          : undefined;
+      let record: PublicOperationRecord;
+      if (input.operationId) {
+        record = await loadOperation(context, input.operationId);
+      } else {
+        const found = await context.command.storage.findPublicOperationsByRequest(
+          input.requestId!,
           {
-            details: {
-              operations: found.records
-                .map((entry) => ({ operationId: entry.operationId, action: entry.action }))
-                .slice(0, 20),
-            },
+            authority: context.authority,
+            ...(input.action ? { action: input.action } : {}),
+            ...(input.namespace ? { namespace: input.namespace } : {}),
           },
         );
+        if (found.expiredNamespace) {
+          throw new PublicActionError(
+            "history-expired",
+            "That request key's namespace has been retired; its outcome is no longer retained",
+            { details: { namespace: found.expiredNamespace } },
+          );
+        }
+        const candidates = expected
+          ? found.records.filter((record) => record.scope === expected.scope)
+          : found.records;
+        if (candidates.length === 0) {
+          // Not evidence that nothing ran: the request may never have reached
+          // this backend, or it may belong to another installation.
+          throw new PublicActionError(
+            "not-found",
+            "No operation with that request key is retained",
+          );
+        }
+        if (candidates.length > 1) {
+          throw new PublicActionError(
+            "ambiguous-target",
+            "That request key was used for several operations; pass --action",
+            {
+              details: {
+                operations: candidates
+                  .map((entry) => ({ operationId: entry.operationId, action: entry.action }))
+                  .slice(0, 20),
+              },
+            },
+          );
+        }
+        record = candidates[0]!;
       }
-      record = found.records[0]!;
-    }
-    const fresh = await reconcileOperation(record, context);
-    return { result: null, receipt: toReceipt(fresh, false) };
-  },
-};
+      if (expected && input.action) {
+        if (
+          record.authority !== context.authority ||
+          record.scope !== expected.scope ||
+          record.fingerprint !== intentFingerprint(input.action, expected.intent)
+        ) {
+          throw new PublicActionError(
+            "request-conflict",
+            "The retained operation does not match the submitted scope and intent",
+          );
+        }
+      }
+      const fresh = await reconcileOperation(record, context);
+      return { result: fresh.result ?? null, receipt: toReceipt(fresh, false) };
+    },
+  };
 
-export const RUN_READ_HANDLERS: PublicActionHandler[] = [runGet];
+  return [runGet];
+}
 
 const PROMPT_RUN_ACTIONS: readonly PublicActionName[] = [
   "session.start",
   "session.prompt",
+  "session.command",
   "environment.launch",
   "session.steer",
 ];

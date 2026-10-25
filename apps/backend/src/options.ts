@@ -1,9 +1,9 @@
-import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { type AgentPlatform, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { currentToolchainBinDir, toolchainRootDir } from "@orkestrator/toolchain/layout";
+import { defaultToolchainBinDir } from "@orkestrator/toolchain/layout";
 import { assertSupportedPlatform, defaultDataDir } from "./data-dir.js";
 import { parseGatewayCompressionMode, type GatewayCompressionMode } from "./gateway.js";
 
@@ -23,6 +23,11 @@ export type BackendOptions = {
   port?: number;
   controlHost?: string;
   controlPort?: number;
+  /**
+   * Additional loopback-only client gateway (127.0.0.1) for SSH forwarding;
+   * 0 selects an ephemeral port. Never a control listener.
+   */
+  loopbackClientPort?: number;
   compression?: GatewayCompressionMode;
   allowNonTailscaleBind: boolean;
   allowedOrigins?: string[];
@@ -48,6 +53,11 @@ export type BackendOptions = {
   strictDockerOwner: boolean;
   strictGatewayPort: boolean;
   credentialSources: AgentPlatform[];
+  /**
+   * `--command-node`: command-node registration is always enabled. The
+   * desktop passes it for its local backend, which is always a command node.
+   */
+  commandNode: boolean;
 };
 
 function valueAfter(args: string[], name: string): string | undefined {
@@ -58,41 +68,7 @@ function valueAfter(args: string[], name: string): string | undefined {
   return value;
 }
 
-/**
- * Where a backend looks for the pinned agent binaries when nothing says.
- *
- * `orkestrator toolchain install` leaves `toolchains/bin/current` pointing at the
- * set it verified, so that is preferred once it exists. Before that, and for a
- * directory someone filled by hand, the plain `toolchains/bin` is what was always
- * searched. The choice is made at startup: a backend that was already running
- * when a new set was installed keeps the executables it resolved until restarted.
- *
- * The desktop app provisions the same data directory but hands its backend the
- * set directory directly and never writes `current`. A headless backend started
- * on that directory would find nothing in `toolchains/bin` itself, so when the
- * only thing there is a single non-empty set, that set is the answer. Several
- * sets are ambiguous and are left to `toolchain install` to resolve.
- */
-export function defaultToolchainBinDir(dataDir: string): string {
-  const current = currentToolchainBinDir(dataDir);
-  if (existsSync(current)) return realpathSync(current);
-  const binRoot = path.join(toolchainRootDir(dataDir), "bin");
-  return soleActivatedToolchainSet(binRoot) ?? binRoot;
-}
-
-function soleActivatedToolchainSet(binRoot: string): string | undefined {
-  try {
-    const entries = readdirSync(binRoot, { withFileTypes: true }).filter(
-      (entry) => !entry.name.startsWith("."),
-    );
-    const [only] = entries;
-    if (entries.length !== 1 || !only?.isDirectory()) return undefined;
-    const set = path.join(binRoot, only.name);
-    return readdirSync(set).length > 0 ? realpathSync(set) : undefined;
-  } catch {
-    return undefined;
-  }
-}
+export { defaultToolchainBinDir };
 
 export function defaultTailscaleExecutable(
   platform: NodeJS.Platform = process.platform,
@@ -154,6 +130,10 @@ export function parseOptions(
   const portValue = valueAfter(args, "--port") ?? env.ORKESTRATOR_GATEWAY_PORT;
   const port = parsePortOption(portValue, "--port");
   const controlPort = parsePortOption(valueAfter(args, "--control-port"), "--control-port");
+  const loopbackClientPort = parsePortOption(
+    valueAfter(args, "--loopback-client-port") ?? env.ORKESTRATOR_LOOPBACK_CLIENT_PORT,
+    "--loopback-client-port",
+  );
   const cliCompression = valueAfter(args, "--compression");
   const compression = parseGatewayCompressionMode(
     cliCompression ?? env.ORKESTRATOR_GATEWAY_COMPRESSION,
@@ -199,6 +179,7 @@ export function parseOptions(
     port,
     controlHost: valueAfter(args, "--control-host"),
     controlPort,
+    loopbackClientPort,
     compression,
     // "--unsafe-allow-non-tailscale-bind" is the pre-rename spelling; unknown
     // flags are ignored, so dropping it would strand existing service units.
@@ -214,6 +195,7 @@ export function parseOptions(
     tailscaleServe: args.includes("--tailscale-serve") || env.ORKESTRATOR_TAILSCALE_SERVE === "1",
     desktopWebClient: args.includes("--desktop-web-client"),
     desktopUpdater: args.includes("--desktop-updater"),
+    commandNode: args.includes("--command-node") || env.ORKESTRATOR_COMMAND_NODE === "1",
     standaloneUpdaterDir: valueAfter(args, "--standalone-updater"),
     tailscaleServePort,
     tailscaleExecutable:

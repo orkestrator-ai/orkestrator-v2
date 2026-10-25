@@ -5,12 +5,14 @@ import {
   composeModelId,
   DEFAULT_THINKING_LEVEL,
   emptyComposer,
+  hydrateComposer,
   listModels,
   modelLocalId,
   modelProviderId,
   normalizeAgentModel,
   reconcileComposerSelection,
   refreshModels,
+  resolveModel,
   thinkingLevel,
 } from "./models.js";
 import { setModelRuntimeFactoryForTests } from "./runtime.js";
@@ -210,5 +212,73 @@ describe("composer", () => {
     // must never keep claiming the unavailable model actually ran.
     expect(reconciled.selectedModelId).toBe("available/fallback");
     expect(reconciled.selectedReasoningId).toBe("high");
+  });
+});
+
+describe("default model", () => {
+  // The catalogue Pi 1.2.0 listed for a ChatGPT-backed `openai-codex` login,
+  // first entry first: that entry is the one the account cannot use. Pi 1.4.0
+  // no longer lists either id there; the shape, a first model the login
+  // refuses, is what these pin.
+  const spark = model({ provider: "openai-codex", id: "gpt-5.3-codex-spark" });
+  const gpt55 = model({ provider: "openai-codex", id: "gpt-5.5" });
+  const kimi = model({ provider: "opencode-go", id: "kimi-k3" });
+
+  function catalogue(models: Model<Api>[]): void {
+    setModelRuntimeFactoryForTests(
+      async () =>
+        ({
+          getAvailable: () => Promise.resolve(models),
+          getModel: () => undefined,
+          getProvider: () => undefined,
+        }) as unknown as ModelRuntime,
+    );
+    refreshModels();
+  }
+
+  test("opens a composer with no selection on the first preferred model offered", async () => {
+    catalogue([spark, gpt55, kimi]);
+
+    const composer = await hydrateComposer(emptyComposer(), undefined, [
+      "signed-out/model",
+      "openai-codex/gpt-5.5",
+      "opencode-go/kimi-k3",
+    ]);
+
+    expect(composer.selectedModelId).toBe("openai-codex/gpt-5.5");
+  });
+
+  test("keeps an explicit selection over every preference", async () => {
+    catalogue([spark, gpt55, kimi]);
+
+    const composer = await hydrateComposer(
+      { ...emptyComposer(), selectedModelId: "opencode-go/kimi-k3" },
+      undefined,
+      ["openai-codex/gpt-5.5"],
+    );
+
+    expect(composer.selectedModelId).toBe("opencode-go/kimi-k3");
+  });
+
+  test("falls back to the catalogue's first model when no preference is offered", async () => {
+    catalogue([spark, gpt55]);
+
+    expect((await hydrateComposer(emptyComposer())).selectedModelId).toBe(
+      "openai-codex/gpt-5.3-codex-spark",
+    );
+    expect(
+      (await hydrateComposer(emptyComposer(), undefined, ["signed-out/model"])).selectedModelId,
+    ).toBe("openai-codex/gpt-5.3-codex-spark");
+  });
+
+  test("resolves a missing or stale selection to the first preferred model offered", async () => {
+    catalogue([spark, gpt55, kimi]);
+
+    expect(await resolveModel(undefined, ["openai-codex/gpt-5.5"])).toBe(gpt55);
+    expect(await resolveModel("signed-out/model", ["signed-out/x", "opencode-go/kimi-k3"])).toBe(
+      kimi,
+    );
+    expect(await resolveModel(undefined, ["signed-out/model"])).toBe(spark);
+    expect(await resolveModel(undefined)).toBe(spark);
   });
 });

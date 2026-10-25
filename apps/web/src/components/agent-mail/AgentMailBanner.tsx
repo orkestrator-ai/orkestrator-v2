@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
 import { useAgentMailStore } from "@/stores/agentMailStore";
-import { openAgentMailForTab } from "./AgentMailButton";
+import { openAgentMailForTab } from "./agent-mail-ui";
 import {
   AGENT_MAIL_HOURLY_LIMIT_REASON,
   isAgentMailBudgetHeld,
@@ -96,7 +96,7 @@ export function AgentMailBanner({
       reportActionError("discard message", error);
     }
   };
-  const deliver = async (switchToIdle = false) => {
+  const deliver = async () => {
     const deliverable = pending ?? pullOnly;
     if (!deliverable) return;
     setActionError(undefined);
@@ -110,11 +110,7 @@ export function AgentMailBanner({
       return;
     }
     try {
-      // "Deliver now" releases this one message. Only the explicit "Switch to
-      // deliver when idle" action changes the tab's policy; writing it here
-      // would quietly replace an inherited policy with a per-tab override.
-      if (switchToIdle)
-        await backend.updateAgentMailboxPolicy({ environmentId, tabId, inject: "idle" });
+      // Releases this one message; the tab's delivery policy is unchanged.
       await backend.retryAgentMailInject(environmentId, tabId, deliverable.id);
       await refresh();
     } catch (error) {
@@ -169,21 +165,14 @@ export function AgentMailBanner({
           Resume
         </Button>
       )}
-      {(pullOnly || (pending && descriptor?.injectPolicy === "off")) && (
-        <Button size="sm" variant="ghost" onClick={() => openAgentMailForTab(environmentId, tabId)}>
-          Open inbox
-        </Button>
-      )}
       {(pending || pullOnly) && (
         <Button size="sm" variant="ghost" onClick={() => void deliver()}>
           Deliver now
         </Button>
       )}
-      {(pending || pullOnly) && descriptor?.injectPolicy === "off" && (
-        <Button size="sm" variant="ghost" onClick={() => void deliver(true)}>
-          Switch to deliver when idle
-        </Button>
-      )}
+      <Button size="sm" variant="ghost" onClick={() => openAgentMailForTab(environmentId, tabId)}>
+        View
+      </Button>
       <button
         type="button"
         aria-label="Dismiss agent mail notice"

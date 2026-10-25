@@ -2,6 +2,8 @@
 
 Status: Living — `apps/backend/src/core/github-cli-binary.ts`,
 `apps/backend/src/core/github-cli-setup.ts`,
+`apps/backend/src/core/github-credentials.ts`,
+`apps/backend/src/core/github-git-credentials.ts`,
 `apps/web/src/components/github/GitHubCliSetup.tsx`.
 
 PR detection, reviews, project creation from GitHub, the clone browser and
@@ -90,16 +92,52 @@ host GitHub CLI credentials** while that switch is on. With the reminder
 dismissed and `gh` signed out, it says so and offers **Remind me at startup**.
 Missing-`gh` errors from project creation and the clone browser point there.
 
-## Containers
+## Selected credential
 
 **Use host GitHub CLI credentials** (`useHostGitHubCredentials`, on unless set
-to false) decides where a container's GitHub token comes from: the host `gh`
-login, or the stored personal access token (`githubToken`).
-`get_container_github_credential_status` reports which source is in use and
-whether it has a token. The in-app sign-in only ever writes the host `gh`
-login.
+to false) selects the credential for backend GitHub API calls, host `gh`
+operations (including clone discovery, repository creation, PR detection,
+reviews, merges and branch deletion), and container token sync.
+
+- **Host mode** reads the stored `gh auth login` account. Both host token lookup
+  and authenticated host `gh` subprocesses remove inherited `GH_TOKEN` and
+  `GITHUB_TOKEN`, including overrides in caller-provided environments. Other
+  environment settings are preserved.
+- **PAT mode** uses the trimmed stored personal access token (`githubToken`).
+  Host `gh` subprocesses receive it as `GH_TOKEN`; inherited token variables
+  cannot override it. A missing, empty or whitespace-only PAT makes authenticated
+  operations fail with a Settings action before invoking `gh`; there is no host
+  account fallback. API resolution and container credential status likewise
+  report the selected token as unavailable.
+- **Project clone and initial push** also use the selected PAT. Their temporary
+  Git configuration clears host credential helpers and installs an HTTPS helper
+  that only supplies credentials for `https://github.com`. An exact per-transfer
+  URL rewrite supports SSH remotes chosen by the host's `gh` configuration.
+  The token is passed through the subprocess environment, never command arguments
+  or a saved remote URL. The helper ignores store/erase requests, so host
+  credential stores are not modified. Host mode keeps normal host Git credentials;
+  non-GitHub transfers keep their existing authentication.
+
+`github-credentials.ts` owns credential selection, host token lookup and the
+host `gh` environment. `github-git-credentials.ts` adapts the PAT for project
+Git transfers. `get_container_github_credential_status` reports the selected
+source and whether it has a token. The in-app sign-in only writes the host `gh`
+login; signing in does not replace a PAT or change the selected mode.
 
 ## Tests
+
+- `apps/backend/src/core/github-credentials.test.ts` — inherited-token isolation,
+  fail-closed missing PATs, host token lookup, selected-token resolution and
+  container credential status.
+- `apps/backend/src/core/github-cli-operations.test.ts` — selected credentials
+  through PR detection/check queries and local review, merge and branch-delete
+  runners, including caller-provided environments.
+- `apps/backend/src/core/github-project-credentials.integration.test.ts` — project
+  registry creation and discovery followed by private clone/push with distinct
+  host/PAT identities, real Git pack transfers through an isolated fake HTTPS
+  transport, helper scoping and token-free saved remotes.
+- `apps/backend/src/core/github-clone-browser.test.ts` — selected PAT discovery
+  and missing-PAT refusal before invoking `gh`.
 
 - `apps/backend/src/core/github-cli-setup.test.ts` — status, the login
   environment, the device flow, cancellation and the agent-test refusal.

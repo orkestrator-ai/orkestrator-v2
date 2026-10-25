@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/backend",
-  "version": "2.22.3",
+  "version": "2.30.0-beta",
   "private": true,
   "type": "module",
   "exports": {
@@ -14,17 +14,22 @@
     "start:web": "bun dist/main.js --fallback-host 127.0.0.1",
     "start:web-public": "bun dist/main.js --tailscale-serve --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev",
     "test": "bun test --preload ../../tests/setup-node.ts src tests --parallel",
-    "test:workspace": "bun test --preload ../../tests/setup-node.ts src tests --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/backend.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
-    "typecheck": "bunx tsc --noEmit -p tsconfig.json && bunx tsc --noEmit -p tsconfig.test.json"
+    "test:workspace": "bun test --preload ../../tests/setup-node.ts src tests --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/backend.json --update-timings} $ORKESTRATOR_BACKEND_TEST_IGNORE --parallel=${ORKESTRATOR_BACKEND_TEST_WORKERS:-${ORKESTRATOR_TEST_WORKERS:-2}}",
+    "typecheck": "bun check -p tsconfig.json && bun check -p tsconfig.test.json"
   },
   "dependencies": {
     "@modelcontextprotocol/node": "2.1.1",
     "@modelcontextprotocol/server": "2.3.1",
-    "@opencode-ai/sdk": "1.19.0",
+    "@opencode-ai/sdk": "1.19.4",
     "@orkestrator/protocol": "workspace:*",
     "@orkestrator/toolchain": "workspace:*",
     "@xterm/addon-serialize": "0.14.0",
     "@xterm/headless": "6.0.0",
+    "chart.js": "4.5.1",
+    "d3": "7.9.0",
+    "dompurify": "3.4.17",
+    "mermaid": "12.2.0",
+    "pdfjs-dist": "6.4.299",
     "playwright-core": "1.64.0",
     "sharp": "^0.35.5",
     "ws": "8.22.0",

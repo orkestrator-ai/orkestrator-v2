@@ -168,6 +168,7 @@ class EnvironmentRelay {
   private readyPromise: Promise<void>;
   private alive = true;
   private allowed = "";
+  private readonly onStdout = (chunk: Buffer) => this.onData(chunk);
 
   constructor(
     readonly environmentId: string,
@@ -212,7 +213,7 @@ class EnvironmentRelay {
       };
     });
     this.readyPromise.catch(() => undefined);
-    process.stdout.on("data", (chunk: Buffer) => this.onData(chunk));
+    process.stdout.on("data", this.onStdout);
     process.on("exit", () =>
       this.shutdown(
         previewFailure("backend-unavailable", {
@@ -333,6 +334,7 @@ class EnvironmentRelay {
   }
 
   private onData(chunk: Buffer): void {
+    if (!this.alive) return;
     this.buffer = this.buffer.length ? Buffer.concat([this.buffer, chunk]) : chunk;
     while (this.buffer.length >= HEADER) {
       const length = this.buffer.readUInt32BE(5);
@@ -407,6 +409,12 @@ class EnvironmentRelay {
   shutdown(error: Error, deliberate = false): void {
     if (!this.alive) return;
     this.alive = false;
+    // Stop reading a relay we gave up on: until SIGTERM lands it may keep
+    // writing, and nothing it sends may accumulate. Keep draining (and
+    // discarding) so it never blocks on a full pipe.
+    this.buffer = Buffer.alloc(0);
+    this.process.stdout.removeListener("data", this.onStdout);
+    this.process.stdout.resume();
     this.onFail(error);
     for (const pending of this.pendingOpens.values()) pending.reject(error);
     this.pendingOpens.clear();

@@ -571,7 +571,8 @@ describe("BrowserPreviewManager pins", () => {
           state: "matched",
           rule: "semantic-context",
           candidateCount: 1,
-          rect: null,
+          // Null geometry is a valid hidden match; malformed geometry is not.
+          rect: { x: 1, y: 2, width: -3, height: 4 },
         },
         {
           annotationId: "annotation-99",
@@ -619,6 +620,16 @@ describe("BrowserPreviewManager pins", () => {
       "annotation-3",
     ]);
     expect(Object.keys(contents.pinsConfig!.queries[0].target)).toEqual(["kind", "anchor"]);
+
+    // Diagnostics count what was returned, by state and rule only.
+    const diagnostics = await harness.manager.getCaptureDiagnostics();
+    expect(diagnostics.anchorResolutions).toEqual({
+      "matched|stable-id": 1,
+      "unsupported|none": 3,
+      "missing|route-mismatch": 1,
+      "stale|none": 1,
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("annotation-");
   });
 
   test("validates pin input bounds", async () => {

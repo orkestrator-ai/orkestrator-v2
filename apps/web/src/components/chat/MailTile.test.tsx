@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
+import { useAgentMailStore } from "@/stores/agentMailStore";
 import { MailTile, mailTileTone } from "./MailTile";
 
 const LONG_REPORT = Array.from(
@@ -188,5 +189,39 @@ describe("MailTile", () => {
     }
     expect(tile(container).innerHTML).not.toMatch(/\bw-\[\d+px\]/);
     expect(tile(container).firstElementChild!.className).toContain("min-w-0");
+  });
+
+  test("draws mail this agent sent with its delivery state", () => {
+    const { container } = render(
+      <MailTile
+        mail={mail({
+          direction: "out",
+          sender: "To Codex 2",
+          status: { label: "waiting to deliver", tone: "progress" },
+        })}
+        expansionKey="sent"
+      />,
+    );
+    expect(tile(container).dataset.mailTone).toBe("sent");
+    expect(screen.getByText("To Codex 2")).toBeTruthy();
+    expect(screen.getByText("waiting to deliver").dataset.mailStatus).toBe("progress");
+    expect(mailTileTone({ kind: "message", direction: "out" })).toBe("sent");
+  });
+
+  test("opens the conversation between sender and recipient", () => {
+    useAgentMailStore.setState({ panel: null });
+    render(
+      <MailTile mail={mail({ participants: ["env-2\0tab-2", "env-1\0tab-1"] })} expansionKey="c" />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
+    expect(useAgentMailStore.getState().panel).toEqual({
+      conversation: ["env-2\0tab-2", "env-1\0tab-1"],
+    });
+    useAgentMailStore.setState({ panel: null });
+  });
+
+  test("offers no conversation without both participants", () => {
+    render(<MailTile mail={mail()} expansionKey="none" />);
+    expect(screen.queryByRole("button", { name: "Open conversation" }) === null).toBe(true);
   });
 });

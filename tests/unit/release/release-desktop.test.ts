@@ -5,6 +5,8 @@ import path from "node:path";
 import {
   DEFAULT_NOTARY_KEYCHAIN_PROFILE,
   assertTaggedCheckout,
+  ensureReleaseTag,
+  releaseChannel,
   runDesktopRelease,
   type ReleaseRuntime,
 } from "../../../scripts/release-desktop";
@@ -12,30 +14,54 @@ import {
 const head = "a".repeat(40);
 const other = "b".repeat(40);
 const tag = "v2.19.9";
-const assets = [
-  "app.dmg",
-  "app.zip",
-  "latest-mac.yml",
-  "app.AppImage",
-  "app.pacman",
-  "latest-linux.yml",
-  "toolchain-pins.json",
-];
+/** A complete draft for a release whose updater feeds are `<feed>-*.yml`. */
+function assetsFor(feed: "latest" | "beta" | "alpha"): string[] {
+  return [
+    "app.dmg",
+    "app.zip",
+    `${feed}-mac.yml`,
+    "app.AppImage",
+    "app.pacman",
+    `${feed}-linux.yml`,
+    "toolchain-pins.json",
+  ];
+}
+const assets = assetsFor("latest");
 
 type FakeRelease = { id: number; draft: boolean; assets: string[] };
 
 const isReleaseList = (command: string[]) => command[1] === "api" && command.includes("--paginate");
 
-/** What the GitHub releases API lists for `tag`, as `gh api --jq` prints it. */
-function listing(releases: FakeRelease[]): string {
-  return releases.map((release) => JSON.stringify(release)).join("\n");
+/** A release for another tag, so the repository never lists as empty. */
+const UNRELATED_RELEASE = { id: 1, tag: "v2.0.0", draft: false, assets: [] };
+
+/**
+ * Every release the GitHub API lists, as `gh api --jq` prints it: `releases`
+ * for `releaseTag`, the `published` releases of other tags, and one unrelated
+ * release, because this repository always has some.
+ */
+function listing(
+  releases: FakeRelease[],
+  releaseTag: string = tag,
+  published: Array<{ id: number; tag: string }> = [],
+): string {
+  return [
+    ...releases.map((release) => ({ ...release, tag: releaseTag })),
+    ...published.map((release) => ({ ...release, draft: false, assets: [] })),
+    UNRELATED_RELEASE,
+  ]
+    .map((release) => JSON.stringify(release))
+    .join("\n");
 }
 
 function harness(
   overrides: Partial<ReleaseRuntime> = {},
   releases: FakeRelease[] = [{ id: 100, draft: true, assets: [...assets] }],
+  /** Every public release, as the listing of published releases prints them. */
+  published: Array<{ id: number; tag: string }> = [],
 ) {
   let nextId = Math.max(100, ...releases.map((release) => release.id)) + 1;
+  const releaseTag = overrides.releaseTag?.() ?? tag;
   const run = mock((command: string[], _env?: NodeJS.ProcessEnv) => {
     if (command[1] === "api" && command.includes("DELETE")) {
       const id = Number(command.at(-1)?.split("/").at(-1));
@@ -47,7 +73,9 @@ function harness(
   });
   const capture = mock((command: string[]) => {
     if (command[0] === "gh" && command[2] === "download") return "minimumSystemVersion: '22.0.0'\n";
-    if (command[0] === "gh" && isReleaseList(command)) return listing(releases);
+    if (command[0] === "gh" && isReleaseList(command)) {
+      return listing(releases, releaseTag, published);
+    }
     if (command[0] === "gh" && command.includes("POST")) {
       const id = nextId++;
       releases.push({ id, draft: true, assets: [] });
@@ -55,7 +83,8 @@ function harness(
     }
     if (command[1] === "status") return "";
     if (command[1] === "rev-parse") return head;
-    if (command[1] === "ls-remote") return `${head}\trefs/tags/${tag}`;
+    // Origin has whichever tag is asked for, on HEAD.
+    if (command[1] === "ls-remote") return `${head}\t${command[3]}`;
     throw new Error(`Unexpected command: ${command.join(" ")}`);
   });
   const runtime: ReleaseRuntime = {
@@ -70,6 +99,7 @@ function harness(
     prepareMacUpdateFeeds: () => ["release/latest-mac.yml"],
     writeToolchainPins: () => "release/toolchain-pins.json",
     npmHasVersion: () => false,
+    sleep: mock((_ms: number) => {}),
     ...overrides,
   };
   return { runtime, run, capture, releases };
@@ -101,7 +131,7 @@ function gitFixture() {
   writeFileSync(path.join(dir, ".gitignore"), "origin.git/\n");
   capture(["git", "add", ".gitignore"]);
   capture(["git", "commit", "-m", "fixture"]);
-  return { dir, capture };
+  return { dir, capture, run: (command: string[]) => void capture(command) };
 }
 
 describe("release checkout guards", () => {
@@ -158,6 +188,219 @@ describe("release checkout guards", () => {
           : head,
     );
     expect(() => assertTaggedCheckout(tag, capture)).toThrow("is not on origin");
+  });
+});
+
+describe("release tagging", () => {
+  test("the first machine tags the merged commit and pushes the tag; the second reuses it", () => {
+    const first = gitFixture();
+    first.capture(["git", "push", "origin", "HEAD:main"]);
+    ensureReleaseTag(tag, first.capture, first.run);
+    const head = first.capture(["git", "rev-parse", "HEAD"]);
+    expect(first.capture(["git", "ls-remote", "origin", `refs/tags/${tag}`])).toStartWith(head);
+    expect(() => assertTaggedCheckout(tag, first.capture)).not.toThrow();
+
+    // The other machine: the same origin and commit, without the local tag.
+    const second = gitFixture();
+    second.capture(["git", "remote", "set-url", "origin", path.join(first.dir, "origin.git")]);
+    second.capture(["git", "fetch", "--quiet", "origin", "main"]);
+    second.capture(["git", "reset", "--hard", "FETCH_HEAD"]);
+    expect(() => ensureReleaseTag(tag, second.capture, second.run)).not.toThrow();
+  });
+
+  test.each(["lightweight", "annotated"])(
+    "a second machine builds and publishes with only a remote %s tag",
+    (kind) => {
+      const git = gitFixture();
+      git.capture(
+        kind === "annotated"
+          ? ["git", "tag", "-a", tag, "-m", "annotated release"]
+          : ["git", "tag", tag],
+      );
+      git.capture(["git", "push", "origin", tag]);
+      const object = git.capture(["git", "rev-parse", `refs/tags/${tag}`]);
+      git.capture(["git", "tag", "-d", tag]);
+      const { runtime, run, capture } = harness();
+      const original = capture.getMockImplementation()!;
+      runtime.capture = (command) =>
+        command[0] === "git" ? git.capture(command) : original(command);
+      const running = run.getMockImplementation()!;
+      run.mockImplementation((command, env) => {
+        if (command[0] === "git") git.run(command);
+        else running(command, env);
+      });
+      runDesktopRelease(["build"], runtime);
+      expect(git.capture(["git", "rev-parse", `refs/tags/${tag}`])).toBe(object);
+      runDesktopRelease(["publish"], runtime);
+      expect(run).toHaveBeenCalledWith(["mise", "run", "publish:cli"]);
+    },
+  );
+
+  test("refuses to tag a commit that is not on origin/main", () => {
+    const { capture, run } = gitFixture();
+    capture(["git", "push", "origin", "HEAD:main"]);
+    capture(["git", "commit", "--allow-empty", "-m", "unmerged"]);
+    expect(() => ensureReleaseTag(tag, capture, run)).toThrow("is not on origin/main");
+    expect(capture(["git", "tag", "--list", tag])).toBe("");
+  });
+
+  test("refuses when the tag already names another commit, locally or on origin", () => {
+    const { capture, run } = gitFixture();
+    capture(["git", "push", "origin", "HEAD:main"]);
+    ensureReleaseTag(tag, capture, run);
+    capture(["git", "commit", "--allow-empty", "-m", "later"]);
+    capture(["git", "push", "origin", "HEAD:main"]);
+    expect(() => ensureReleaseTag(tag, capture, run)).toThrow("already exists locally");
+    capture(["git", "tag", "-d", tag]);
+    expect(() => ensureReleaseTag(tag, capture, run)).toThrow("on origin is on");
+  });
+
+  test("a build pushes a missing tag before it touches GitHub releases or packages", () => {
+    const { runtime, run, capture } = harness({}, []);
+    const original = capture.getMockImplementation()!;
+    capture.mockImplementation((command) => {
+      if (command[1] === "ls-remote" || command[1] === "fetch" || command[1] === "merge-base") {
+        return "";
+      }
+      if (command.includes("--verify")) throw new Error("no such tag");
+      return original(command);
+    });
+    runDesktopRelease(["build"], runtime);
+    expect(run.mock.calls.slice(0, 3).map(([command]) => command.join(" "))).toEqual([
+      `git tag ${tag}`,
+      `git push origin refs/tags/${tag}`,
+      "bun install --frozen-lockfile",
+    ]);
+    const tagged = capture.mock.calls.findIndex(([command]) => command[1] === "merge-base");
+    const drafted = capture.mock.calls.findIndex(([command]) => command.includes("POST"));
+    expect(tagged).toBeGreaterThan(-1);
+    expect(drafted).toBeGreaterThan(tagged);
+  });
+
+  test("refuses a dirty checkout before tagging", () => {
+    const { dir, capture, run } = gitFixture();
+    writeFileSync(path.join(dir, "dirty"), "fixture");
+    expect(() => ensureReleaseTag(tag, capture, run)).toThrow("uncommitted changes");
+  });
+});
+
+describe("release channels", () => {
+  test.each([
+    ["v2.23.0", "stable"],
+    ["v2.23.0-beta", "beta"],
+    ["v2.23.0-beta.2", "beta"],
+    ["v2.24.0-alpha", "unstable"],
+  ] as const)("%s ships to %s", (releaseTag, channel) => {
+    expect(releaseChannel(releaseTag)).toBe(channel);
+  });
+
+  test.each<[string[]]>([[["build"]], [["build", "--no-publish"]], [["publish"]]])(
+    "%j refuses a suffix no channel ships before any side effect",
+    (args) => {
+      const { runtime, run, capture } = harness({ releaseTag: () => "v2.23.0-rc.1" });
+      expect(() => runDesktopRelease(args, runtime)).toThrow("no update channel ships");
+      expect(run).not.toHaveBeenCalled();
+      expect(capture).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each([
+    ["v2.23.0-beta", "beta"],
+    ["v2.24.0-alpha.1", "alpha"],
+  ] as const)("publishes %s once its %s feeds are uploaded", (releaseTag, feed) => {
+    const { runtime, run } = harness({ releaseTag: () => releaseTag }, [
+      { id: 100, draft: true, assets: assetsFor(feed) },
+    ]);
+    runDesktopRelease(["publish"], runtime);
+    expect(run).toHaveBeenLastCalledWith([
+      "gh",
+      "release",
+      "edit",
+      releaseTag,
+      "--repo",
+      "orkestrator-ai/orkestrator-v2",
+      "--draft=false",
+      "--prerelease=true",
+      "--latest=false",
+    ]);
+  });
+
+  test("publishing an alpha turns every older published alpha back into a draft", () => {
+    const { runtime, run } = harness(
+      { releaseTag: () => "v2.24.0-alpha.3" },
+      [{ id: 100, draft: true, assets: assetsFor("alpha") }],
+      [
+        { id: 90, tag: "v2.24.0-alpha.2" },
+        { id: 80, tag: "v2.24.0-alpha" },
+        { id: 70, tag: "v2.23.0-beta" },
+        { id: 60, tag: "v2.22.0" },
+        // A newer alpha line is left alone.
+        { id: 95, tag: "v2.25.0-alpha" },
+      ],
+    );
+    runDesktopRelease(["publish", "--skip-npm"], runtime);
+    const commands = run.mock.calls.map(([command]) => command);
+    expect(commands[0]?.[2]).toBe("edit");
+    expect(commands.slice(1)).toEqual(
+      [90, 80].map((id) => [
+        "gh",
+        "api",
+        "--method",
+        "PATCH",
+        `repos/orkestrator-ai/orkestrator-v2/releases/${id}`,
+        "-F",
+        "draft=true",
+        "--silent",
+      ]),
+    );
+  });
+
+  test.each(["v2.23.0", "v2.23.0-beta"])("publishing %s hides no alpha", (releaseTag) => {
+    const { runtime, run, capture } = harness(
+      { releaseTag: () => releaseTag },
+      [
+        {
+          id: 100,
+          draft: true,
+          assets: assetsFor(releaseTag.includes("beta") ? "beta" : "latest"),
+        },
+      ],
+      [{ id: 90, tag: "v2.22.0-alpha" }],
+    );
+    runDesktopRelease(["publish", "--skip-npm"], runtime);
+    expect(run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
+    // Only the check that the draft is complete lists releases.
+    expect(capture.mock.calls.filter(([command]) => isReleaseList(command))).toHaveLength(1);
+  });
+
+  test("an alpha that cannot be hidden only warns: the new alpha is already public", () => {
+    const { runtime, run } = harness(
+      { releaseTag: () => "v2.24.0-alpha.2" },
+      [{ id: 100, draft: true, assets: assetsFor("alpha") }],
+      [{ id: 90, tag: "v2.24.0-alpha" }],
+    );
+    run.mockImplementation((command) => {
+      if (command.includes("PATCH")) throw new Error("HTTP 403");
+    });
+    expect(() => runDesktopRelease(["publish", "--skip-npm"], runtime)).not.toThrow();
+  });
+
+  test("refuses a beta whose drafts carry only the stable feeds", () => {
+    const { runtime, run } = harness({ releaseTag: () => "v2.23.0-beta" });
+    expect(() => runDesktopRelease(["publish"], runtime)).toThrow(
+      "is missing beta-mac.yml, beta-linux.yml or beta-linux-arm64.yml",
+    );
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test("a prerelease is published to npm too", () => {
+    const { runtime, run } = harness({ releaseTag: () => "v2.20.0-beta.1" }, [
+      { id: 100, draft: true, assets: assetsFor("beta") },
+    ]);
+    runDesktopRelease(["publish"], runtime);
+    expect(
+      run.mock.calls.map(([command]) => (command[0] === "mise" ? command.join(" ") : command[2])),
+    ).toEqual(["mise run publish:cli", "edit"]);
   });
 });
 
@@ -290,7 +533,7 @@ describe("desktop release commands", () => {
           ? `${other}\trefs/tags/${tag}`
           : head,
     );
-    expect(() => runDesktopRelease(["build"], runtime)).toThrow("on origin does not point at HEAD");
+    expect(() => runDesktopRelease(["build"], runtime)).toThrow("on origin is on");
     expect(run).not.toHaveBeenCalled();
   });
 
@@ -303,10 +546,12 @@ describe("desktop release commands", () => {
   });
 
   test.each([
-    ["v2.19.9", false],
-    ["v2.20.0-beta.1", true],
-  ] as const)("derives prerelease/latest flags from %s", (releaseTag, prerelease) => {
-    const { runtime, run } = harness({ releaseTag: () => releaseTag });
+    ["v2.19.9", false, "latest"],
+    ["v2.20.0-beta.1", true, "beta"],
+  ] as const)("derives prerelease/latest flags from %s", (releaseTag, prerelease, feed) => {
+    const { runtime, run } = harness({ releaseTag: () => releaseTag }, [
+      { id: 100, draft: true, assets: assetsFor(feed) },
+    ]);
     runDesktopRelease(["publish"], runtime);
     expect(run).toHaveBeenCalledWith([
       "gh",
@@ -350,12 +595,6 @@ describe("desktop release commands", () => {
     const skipped = harness();
     runDesktopRelease(["publish", "--skip-npm"], skipped.runtime);
     expect(skipped.run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
-  });
-
-  test("a prerelease is never published to npm", () => {
-    const { runtime, run } = harness({ releaseTag: () => "v2.20.0-beta.1" });
-    runDesktopRelease(["publish"], runtime);
-    expect(run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
   });
 
   test("refuses an already-public release", () => {
@@ -418,7 +657,7 @@ describe("draft release ownership", () => {
     const original = capture.getMockImplementation()!;
     let listings = 0;
     capture.mockImplementation((command) =>
-      isReleaseList(command) && ++listings === 2 ? "" : original(command),
+      isReleaseList(command) && ++listings === 2 ? listing([]) : original(command),
     );
     runDesktopRelease(["build"], runtime);
     expect(run.mock.calls.some(([command]) => command.includes("DELETE"))).toBe(false);
@@ -555,6 +794,64 @@ describe("draft release ownership", () => {
       expect(run).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("empty release listings", () => {
+  /** Makes the first `count` release listings come back empty, as GitHub's API intermittently does. */
+  function emptyListings(capture: ReturnType<typeof harness>["capture"], count: number) {
+    const original = capture.getMockImplementation()!;
+    let listings = 0;
+    capture.mockImplementation((command) =>
+      isReleaseList(command) && ++listings <= count ? "" : original(command),
+    );
+  }
+
+  test("a build retries an empty listing instead of creating a second draft", () => {
+    // v2.26.2-beta: an empty listing made a later build create a duplicate draft.
+    const { runtime, capture, releases } = harness();
+    emptyListings(capture, 2);
+    runDesktopRelease(["build"], runtime);
+    expect(capture.mock.calls.some(([command]) => command.includes("POST"))).toBe(false);
+    expect(releases.map((release) => release.id)).toEqual([100]);
+    expect(runtime.sleep).toHaveBeenCalledTimes(2);
+  });
+
+  test("a finished build retries an empty listing before uploading pins and feeds", () => {
+    // v2.26.2-beta: Linux uploaded everything, then reported its draft missing.
+    const { runtime, run, capture } = harness();
+    const original = capture.getMockImplementation()!;
+    let built = false;
+    capture.mockImplementation((command) => {
+      if (isReleaseList(command) && built) {
+        built = false;
+        return "";
+      }
+      return original(command);
+    });
+    const running = run.getMockImplementation()!;
+    run.mockImplementation((command, env) => {
+      running(command, env);
+      if (command[1] === "electron-builder") built = true;
+    });
+    runDesktopRelease(["build"], runtime);
+    expect(run.mock.calls.at(-1)?.[0].at(-1)).toBe("release/toolchain-pins.json");
+  });
+
+  test("publish retries an empty listing", () => {
+    const { runtime, run, capture } = harness();
+    emptyListings(capture, 1);
+    runDesktopRelease(["publish", "--skip-npm"], runtime);
+    expect(run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
+  });
+
+  test("gives up on a listing that stays empty, before any side effect", () => {
+    const { runtime, run, capture } = harness({}, []);
+    emptyListings(capture, Number.POSITIVE_INFINITY);
+    expect(() => runDesktopRelease(["build"], runtime)).toThrow("listed no releases at all");
+    expect(runtime.sleep).toHaveBeenCalledTimes(4);
+    expect(capture.mock.calls.some(([command]) => command.includes("POST"))).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+  });
 });
 
 test.each(["dirty", "wrong-head"])(

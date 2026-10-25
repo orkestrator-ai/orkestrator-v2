@@ -21,7 +21,7 @@ const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE;
 const args = process.argv.slice(2);
 const browser = path.basename(process.argv[1]) === "bunx";
 const task = browser ? "playwright" : args[1];
-fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR }) + "\\n");
+fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR, design: process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN, revisionTokens: process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS, idleObservation: process.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION }) + "\\n");
 if (task === "dev:test") {
   if (mode === "startup-fail") process.exit(3);
   fs.writeFileSync(path.join(root, "launcher"), String(process.pid));
@@ -69,6 +69,9 @@ if (task === "dev:test") {
             workers: string;
             coordinator?: string;
             multiReview?: string;
+            design?: string;
+            idleObservation?: string;
+            revisionTokens?: string;
           },
       );
   return { root, env, events };
@@ -258,4 +261,27 @@ test("isolated browser overrides an inherited live Multi Review opt-in", async (
   f.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW = "1";
   expect(await runIsolatedBrowser(f)).toBe(0);
   expect((await f.events()).find((event) => event.task === "playwright")?.multiReview).toBe("0");
+});
+
+test("isolated browser overrides an inherited live design opt-in", async () => {
+  const f = await fixture();
+  f.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN = "1";
+  expect(await runIsolatedBrowser(f)).toBe(0);
+  expect((await f.events()).find((event) => event.task === "playwright")?.design).toBe("0");
+});
+
+test("isolated browser overrides an inherited live idle-observation opt-in", async () => {
+  const f = await fixture();
+  f.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION = "1";
+  expect(await runIsolatedBrowser(f)).toBe(0);
+  expect((await f.events()).find((event) => event.task === "playwright")?.idleObservation).toBe(
+    "0",
+  );
+});
+
+test("isolated browser overrides an inherited live revision-token opt-in", async () => {
+  const f = await fixture();
+  f.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS = "1";
+  expect(await runIsolatedBrowser(f)).toBe(0);
+  expect((await f.events()).find((event) => event.task === "playwright")?.revisionTokens).toBe("0");
 });

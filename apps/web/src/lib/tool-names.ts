@@ -1,5 +1,3 @@
-import { isFileEditToolName } from "@orkestrator/protocol/tool-diff";
-
 /**
  * File-read tools, after separators are stripped.
  *
@@ -36,11 +34,6 @@ function formatToolDisplayLabel(label: string): string {
       return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
     })
     .join(" ");
-}
-
-/** Check if a tool name is a file-editing tool */
-export function isEditTool(toolName?: string): boolean {
-  return isFileEditToolName(toolName);
 }
 
 /** Check if a tool name is a file-read tool. */

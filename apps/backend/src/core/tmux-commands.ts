@@ -1,7 +1,3 @@
-import {
-  assertEnvironmentNotMoving,
-  beginEnvironmentAgentWork,
-} from "./environment-replacement-fence.js";
 import * as shared from "./tmux-shared.js";
 import * as hooks from "./tmux-hooks.js";
 import * as interactive from "./tmux-interactive.js";
@@ -34,6 +30,7 @@ import {
   AsyncMutex,
   TmuxSession,
   TmuxSessionManager,
+  type TmuxSessionTimingOptions,
   getLastTmuxOrphanSweepAt,
   getOrCreateSession,
   killEnvironmentTmuxSessions,
@@ -201,6 +198,8 @@ export function registerTmuxBackendCommands(
       prompt: string,
       context: CommandContext,
     ) => Promise<void>;
+    /** Tests step poll ticks and elapse command deadlines; production waits in real time. */
+    sessionTiming?: TmuxSessionTimingOptions;
   } = {},
 ): void {
   const workCommands = new Set([
@@ -219,7 +218,9 @@ export function registerTmuxBackendCommands(
   const register: RegisterCommand = (name, handler) =>
     registerCommand(name, async (args, context) => {
       if (!workCommands.has(name)) return handler(args, context);
-      const release = beginEnvironmentAgentWork(asString(args.environmentId, "environmentId"));
+      const release = context.runtime.environments.fence.beginAgentWork(
+        asString(args.environmentId, "environmentId"),
+      );
       try {
         return await handler(args, context);
       } finally {
@@ -269,7 +270,7 @@ export function registerTmuxBackendCommands(
         }
       }
       return tmuxManager.installLock(envId).runExclusive(async () => {
-        assertEnvironmentNotMoving(envId);
+        context.runtime.environments.fence.assertNotMoving(envId);
         const environment = await context.storage.getEnvironment(envId);
         if (!environment || environment.deletionRequestedAt) {
           throw new Error(`environment ${envId} is being deleted`);
@@ -280,7 +281,13 @@ export function registerTmuxBackendCommands(
           else await killOrphanSession(context, envId, tab);
         }
 
-        const session = await getOrCreateSession(context, envId, tab, resumeId);
+        const session = await getOrCreateSession(
+          context,
+          envId,
+          tab,
+          resumeId,
+          options.sessionTiming,
+        );
         if (firstPrompt) session.claimFirstPromptForNaming();
         await installWorkspaceHooks(session.backend, session.workspaceHookPaths);
         await session.startAfterHooksInstalled(
@@ -412,7 +419,7 @@ export function registerTmuxBackendCommands(
     // teardown. Deletion writes its tombstone before taking this same lock, so
     // a queued dispatch can never type into a pane after deletion has begun.
     await tmuxManager.installLock(envId).runExclusive(async () => {
-      assertEnvironmentNotMoving(envId);
+      context.runtime.environments.fence.assertNotMoving(envId);
       const environment = await context.storage.getEnvironment(envId);
       if (!environment || environment.deletionRequestedAt) {
         throw new Error(`environment ${envId} is being deleted`);
@@ -585,7 +592,7 @@ export function registerTmuxBackendCommands(
       const tab = asString(tabId, "tabId");
       const session = requireSession(envId, tab);
       if (!(await session.tmuxAlive())) throw new Error("tmux session not running");
-      assertEnvironmentNotMoving(envId);
+      context.runtime.environments.fence.assertNotMoving(envId);
       const environment = await context.storage.getEnvironment(envId);
       if (environment?.environmentType !== "local" && !environmentContainerId(environment)) {
         throw new Error("container environment has no container id");
@@ -600,10 +607,11 @@ export function registerTmuxBackendCommands(
   register("claude_tmux_start_interactive_terminal", ({ terminalSessionId }, context) =>
     interactiveTerminals.start(asString(terminalSessionId, "terminalSessionId"), context),
   );
-  register("claude_tmux_write_interactive_terminal", ({ terminalSessionId, data }) =>
+  register("claude_tmux_write_interactive_terminal", ({ terminalSessionId, data }, context) =>
     interactiveTerminals.write(
       asString(terminalSessionId, "terminalSessionId"),
       asString(data, "data"),
+      context,
     ),
   );
   register("claude_tmux_resize_interactive_terminal", ({ terminalSessionId, cols, rows }) =>

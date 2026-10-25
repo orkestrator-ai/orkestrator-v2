@@ -1,5 +1,6 @@
 import { gitHubCli } from "./github-cli-binary.js";
-import { beginEnvironmentMutation } from "./environment-replacement-fence.js";
+import { gitHubCliEnv } from "./github-credentials.js";
+import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import {
   reconcileProjectHomeEnvironment,
   isProjectHomeEnvironment,
@@ -26,11 +27,7 @@ import {
   type ReviewPackageReference,
   type ReviewValidationPlan,
 } from "@orkestrator/protocol/review-workflow";
-import {
-  deletingLocalServerEnvironments,
-  mergingEnvironments,
-  withContainerRuntimeCredential,
-} from "./commands-runtime-state.js";
+import { withContainerRuntimeCredential } from "./container-scripts.js";
 import { asString, asRecord, assertOnlyKeys } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
@@ -150,7 +147,11 @@ export function isRemoteBranchAlreadyDeletedError(message: string): boolean {
 
 export function createLocalGhRunner(cwd: string): GhCliRunner {
   return async (args, timeoutMs = 60_000) => {
-    const { stdout } = await runCommand(gitHubCli(), args, { cwd, timeoutMs });
+    const { stdout } = await runCommand(gitHubCli(), args, {
+      cwd,
+      timeoutMs,
+      env: await gitHubCliEnv(),
+    });
     return stdout;
   };
 }
@@ -193,13 +194,17 @@ export type ReviewPreparationFileNote = {
   reason: string;
 };
 
-export function createEnvironmentCommandRunner(environment: Environment): EnvironmentCommandRunner {
+/** `fence` is the backend's `context.runtime.environments.fence`; local commands hold a mutation on it. */
+export function createEnvironmentCommandRunner(
+  environment: Environment,
+  fence: Pick<EnvironmentMutationFence, "beginMutation">,
+): EnvironmentCommandRunner {
   if (environment.environmentType === "local") {
     if (!environment.worktreePath) {
       throw new Error("Local environment worktree is not available");
     }
     return async (command, args, timeoutMs = 60_000, env) => {
-      const release = beginEnvironmentMutation(environment.id);
+      const release = fence.beginMutation(environment.id);
       try {
         return (
           // `gh` on the host is the backend's resolved copy; inside a
@@ -208,7 +213,7 @@ export function createEnvironmentCommandRunner(environment: Environment): Enviro
             await runCommand(command === "gh" ? gitHubCli() : command, args, {
               cwd: environment.worktreePath,
               timeoutMs,
-              ...(env ? { env } : {}),
+              env: command === "gh" ? await gitHubCliEnv(env) : env,
             })
           ).stdout
         );
@@ -739,14 +744,25 @@ export function waitForContainerReviewPackageWrite(
   });
 }
 
+/**
+ * A review package check. A valid one also says how many validation artifacts
+ * it hashed and their bytes, beside the package's own `bytes`.
+ */
+export interface ReviewPackageVerification {
+  valid: boolean;
+  reason?: string;
+  artifacts?: number;
+  artifactBytes?: number;
+}
+
 export async function verifyEnvironmentReviewPackage(
   environmentId: string,
   reference: ReviewPackageReference,
   context: CommandContext,
-): Promise<{ valid: boolean; reason?: string }> {
+): Promise<ReviewPackageVerification> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-  const runner = createEnvironmentCommandRunner(environment);
+  const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
   try {
     await ensureReviewPackageIsGitExcluded(environment, runner, reference.filePath);
     const contents = await readEnvironmentWorkspaceFile(environment, runner, reference.filePath);
@@ -761,8 +777,8 @@ export async function verifyEnvironmentReviewPackage(
       return { valid: false, reason: "Review package SHA-256 changed" };
     }
     const pkg = JSON.parse(contents.toString("utf8")) as ReviewPackage;
-    await verifyValidationArtifacts(environment, runner, pkg.validation);
-    return { valid: true };
+    const artifacts = await verifyValidationArtifacts(environment, runner, pkg.validation);
+    return { valid: true, artifacts: artifacts.artifacts, artifactBytes: artifacts.bytes };
   } catch (error) {
     return {
       valid: false,
@@ -801,7 +817,7 @@ export async function verifyEnvironmentPullRequest(
     throw new Error("Pull request belongs to a different repository");
   }
 
-  const runner = createEnvironmentCommandRunner(environment);
+  const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
   const raw = await runner(
     "gh",
     ["pr", "view", submittedUrl, "--json", "url,headRefName,baseRefName,state"],
@@ -872,7 +888,7 @@ export async function generateLoopedReviewPackage(
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   const branch = validateGitRefName(targetBranch, "target branch");
-  const runner = createEnvironmentCommandRunner(environment);
+  const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
   const baseName = `origin/${branch}`;
   const [headOutput, baseOutput] = await Promise.all([
     runner("git", ["rev-parse", "--verify", "HEAD^{commit}"], 30_000),
@@ -1217,10 +1233,10 @@ async function runStoredEnvironmentMergeOnce<T>(
     }
     deleteBranch = false;
   }
-  if (environment.deletionRequestedAt || deletingLocalServerEnvironments.has(environment.id)) {
+  if (environment.deletionRequestedAt || context.runtime.environments.isDeleting(environment.id)) {
     throw new Error(`Environment is already being deleted: ${environment.id}`);
   }
-  if (mergingEnvironments.has(environment.id)) {
+  if (context.runtime.environments.isMerging(environment.id)) {
     throw new Error(`Environment is already being merged: ${environment.id}`);
   }
   if (environment.environmentType === "local") {
@@ -1234,7 +1250,7 @@ async function runStoredEnvironmentMergeOnce<T>(
     throw new Error("Container environment is not available");
   }
 
-  mergingEnvironments.add(environment.id);
+  context.runtime.environments.beginMerge(environment.id);
   try {
     await context.storage.updateEnvironment(environment.id, {
       lifecycleOperation: "merging",
@@ -1259,7 +1275,7 @@ async function runStoredEnvironmentMergeOnce<T>(
     // tombstone without a user delete racing through the middle.
     return await onResult(result);
   } finally {
-    mergingEnvironments.delete(environment.id);
+    context.runtime.environments.endMerge(environment.id);
     await context.storage
       .updateEnvironment(environment.id, {
         lifecycleOperation: null,

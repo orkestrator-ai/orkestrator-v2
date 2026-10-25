@@ -48,7 +48,10 @@ import type { BuildPipelineSupervisor } from "./build-pipeline-service-superviso
  */
 export type BuildPipelineStageDispatch = Pick<
   BuildPipelineSupervisor,
-  "startStage" | "dispatchPending" | "assertValidationWorktreeUnchanged"
+  | "startStage"
+  | "dispatchPending"
+  | "assertValidationWorktreeUnchanged"
+  | "remindMissingStageResult"
 >;
 
 export class BuildPipelineRecovery {
@@ -145,7 +148,7 @@ export class BuildPipelineRecovery {
       resolvedRequestId,
     );
     if (!result) {
-      await this.awaitStructuredResult(pipeline, session, "verification");
+      await this.awaitStructuredResult(pipeline, provider, session, "verification");
       return;
     }
     await this.stageSupervisor.assertValidationWorktreeUnchanged(pipeline, session);
@@ -183,7 +186,8 @@ export class BuildPipelineRecovery {
 
   /**
    * Records that a finished turn has not produced its structured result yet,
-   * and fails the pipeline once that has gone on too long.
+   * and, once that has gone on too long, sends the stage's one result reminder
+   * (tool mode only) or fails the pipeline.
    *
    * A null result is normal for a tick or two while the provider finalizes the
    * turn. It is also what a bridge returns for a result it no longer holds —
@@ -194,6 +198,7 @@ export class BuildPipelineRecovery {
    */
   async awaitStructuredResult(
     pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
     session: PipelineSession,
     label: string,
   ): Promise<void> {
@@ -204,6 +209,7 @@ export class BuildPipelineRecovery {
       return;
     }
     if (elapsed >= this.ctx.structuredResultDeadlineMs) {
+      if (await this.stageSupervisor.remindMissingStageResult(pipeline, provider, session)) return;
       throw new Error(`The ${label} finished without returning its required structured result`);
     }
   }

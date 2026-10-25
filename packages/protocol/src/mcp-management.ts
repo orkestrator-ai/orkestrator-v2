@@ -76,6 +76,14 @@ export const MCP_MANAGEMENT_LIMITS = {
   // provider reload at a time, and a newer apply supersedes the queued runtime
   // work it covers, so at most one reload per runtime is ever pending.
   queuedApplyTargets: 32,
+  /**
+   * One environment overlay record (inherited entries plus this environment's
+   * changes for one source). Two server maps at `subtreeMaxBytes` each, plus
+   * bookkeeping.
+   */
+  overlayRecordMaxBytes: 3 * 1024 * 1024,
+  /** Absolute command and `cwd` paths one container snapshot checks for existence. */
+  containerPathProbesMax: 32,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -150,7 +158,12 @@ export type McpApplyStrategy =
   | "next-query"
   /** Codex: one app-server per environment reloads MCP config process-wide. */
   | "process-reload"
-  /** OpenCode: a server per directory; applies at the next server start. */
+  /**
+   * OpenCode: a server per environment with an instance per directory. A
+   * worktree's instance is rebuilt in place while idle; a container's server
+   * applies at its next start. (The name predates the in-place rebuild and is
+   * kept so older renderers still recognise it.)
+   */
   | "directory-restart"
   /** Cursor: SDK agent reattaches between turns with fresh settings. */
   | "idle-reattach"
@@ -259,6 +272,104 @@ export interface McpConfigSource {
   trustReason?: string;
   /** How the file's layout affects some reader of it, e.g. a Pi bare map Pi's CLI ignores. */
   note?: string;
+  /**
+   * Environment-private sources only: what this environment changed relative
+   * to the configuration its container inherits, and whether the container's
+   * file still matches. Absent until the environment records a change.
+   */
+  overlay?: McpEnvironmentOverlayState;
+}
+
+/**
+ * The durable environment overlay of one container source.
+ *
+ * A container's provider homes are copies the entrypoint makes on every
+ * boot, so an edit made only inside the container is lost on the next start.
+ * The backend keeps this environment's changes (additions, replacements and
+ * removals, by server name) beside the inherited entries they were made
+ * against, and writes them back over every fresh copy.
+ */
+export interface McpEnvironmentOverlayState {
+  /** Bumped by every recorded change or resolution. */
+  revision: number;
+  /**
+   * - `in-sync`: the container's file holds the inherited servers with this
+   *   environment's changes.
+   * - `pending`: the container restarted outside Orkestrator's start path and
+   *   its file holds the inherited copy again; reapply writes the changes.
+   * - `diverged`: the file was edited inside the container after Orkestrator
+   *   last wrote it. Edits are blocked until the user imports or reapplies.
+   * - `corrupt`: the saved record is unreadable; reset restores verified backend defaults.
+   * - `conflict`: some changes were made against an inherited server that has
+   *   since changed or gone; those names keep the inherited value until the
+   *   user keeps this environment's version or takes the inherited one.
+   */
+  state: "in-sync" | "pending" | "diverged" | "conflict" | "corrupt";
+  /** Server names this environment added (absent from the inherited copy). */
+  added: string[];
+  /** Inherited server names this environment replaced. */
+  replaced: string[];
+  /** Inherited server names this environment removed; they stay removed after a rebuild. */
+  removed: string[];
+  conflicts: Array<{ name: string; reason: string }>;
+  /** When diverged: names whose in-container value differs from the expected one. */
+  divergedNames: string[];
+  /** Last time Orkestrator wrote or verified the container's file. */
+  materialisedAt?: string;
+}
+
+export type McpOverlayAction =
+  /** Adopt the in-container edits as this environment's changes. No write. */
+  | { kind: "import" }
+  /** Write this environment's changes over the container's file, discarding in-container edits. */
+  | { kind: "reapply" }
+  /** Resolve a conflict by keeping this environment's version over the new inherited one. */
+  | { kind: "keep-environment"; name: string }
+  /** Resolve a conflict by dropping this environment's change for the name. */
+  | { kind: "take-inherited"; name: string }
+  /** Drop every change this environment made and restore the inherited servers. */
+  | { kind: "reset" };
+
+export interface McpOverlayResolution {
+  targetId: string;
+  sourceId: string;
+  /** Revision of the container file the user looked at; a newer file refuses the action. */
+  expectedRevision: string | null;
+  action: McpOverlayAction;
+}
+
+export interface McpOverlayResolutionResult {
+  sourceRevision: string | null;
+  overlay: McpEnvironmentOverlayState | null;
+}
+
+/**
+ * What re-importing the backend user's current configuration into one
+ * container source would change. Names only; never values.
+ */
+export interface McpDefaultsRefreshPreview {
+  targetId: string;
+  sourceId: string;
+  sourceLabel: string;
+  /** Binds the refresh to exactly the files this preview read. */
+  previewToken: string;
+  /** Inherited servers the backend user added, changed or removed since the container copied them. */
+  added: string[];
+  changed: string[];
+  removed: string[];
+  /** This environment's changes that would conflict with the new inherited servers. */
+  conflicts: Array<{ name: string; reason: string }>;
+  /** In-container edits the refresh would overwrite. */
+  diverged: string[];
+  /** Nothing would change. */
+  unchanged: boolean;
+  warnings: string[];
+}
+
+export interface McpDefaultsRefreshRequest {
+  targetId: string;
+  sourceId: string;
+  previewToken: string;
 }
 
 export type McpDefinitionStatus =
@@ -312,6 +423,12 @@ export interface McpDefinitionSummary {
   /** Names of provider fields the basic form does not edit; values retained. */
   preservedFields: string[];
   secretCount: number;
+  /**
+   * Problems the row has where it runs that do not stop it being saved, such
+   * as a host-absolute command path missing from a container. Never values
+   * beyond what `command` already shows.
+   */
+  warnings?: string[];
 }
 
 export interface McpEditableArg {
@@ -572,6 +689,7 @@ export const MCP_MANAGEMENT_ERROR_CODES = [
   "invalid-request",
   "internal",
   "management-disabled",
+  "environment-diverged",
 ] as const;
 export type McpManagementErrorCode = (typeof MCP_MANAGEMENT_ERROR_CODES)[number];
 
@@ -718,6 +836,12 @@ const ERROR_DEFAULTS: Record<
     retryable: false,
     reload: true,
   },
+  "environment-diverged": {
+    message:
+      "This file was edited inside the container after Orkestrator last wrote it. Import those edits or reapply this environment's configuration first.",
+    retryable: false,
+    reload: true,
+  },
 };
 
 export function isMcpManagementErrorCode(value: unknown): value is McpManagementErrorCode {
@@ -784,7 +908,7 @@ export function mcpManagementErrorFromUnknown(error: unknown): McpManagementErro
 /** A *specifically unsupported* command from an older backend. */
 export function isUnknownMcpManagementCommandError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  return /Unknown (?:backend )?command:?\s*(?:list_mcp_management_targets|get_mcp_management_snapshot|get_mcp_definition|validate_mcp_mutation|mutate_mcp_definition|apply_mcp_configuration|get_mcp_operation|cancel_mcp_apply|get_mcp_management_rollout|set_mcp_management_rollout)/i.test(
+  return /Unknown (?:backend )?command:?\s*(?:list_mcp_management_targets|get_mcp_management_snapshot|get_mcp_definition|validate_mcp_mutation|mutate_mcp_definition|apply_mcp_configuration|get_mcp_operation|cancel_mcp_apply|get_mcp_management_rollout|set_mcp_management_rollout|resolve_mcp_environment_overlay|preview_mcp_environment_defaults|refresh_mcp_environment_defaults)/i.test(
     message,
   );
 }

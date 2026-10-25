@@ -69,7 +69,7 @@ interface Scenario {
 
 /** Runs one scenario on its own CLI; `build` gets the fixture servers for this run. */
 async function run(
-  build: (fixture: (name: string) => SdkMcpServersConfig[string]) => Scenario,
+  build: (fixture: (name: string, version?: string) => SdkMcpServersConfig[string]) => Scenario,
 ): Promise<McpSyncObservation> {
   const root = await mkdtemp(join(tmpdir(), "claude-mcp-sync-"));
   const home = join(root, "home");
@@ -79,10 +79,10 @@ async function run(
   mkdirSync(configDir, { recursive: true });
   mkdirSync(cwd, { recursive: true });
   appendFileSync(markers, "");
-  const scenario = build((name) => ({
+  const scenario = build((name, version = "1") => ({
     type: "stdio",
     command: process.execPath,
-    args: [FIXTURE, name, "1", markers],
+    args: [FIXTURE, name, version, markers],
   }));
   const writeFile = (servers: Record<string, unknown>) =>
     writeFileSync(
@@ -209,6 +209,23 @@ export async function runMcpSyncProbe(): Promise<Record<string, McpSyncObservati
           servers: { beta: fixture("beta") },
           key: "next",
           names: new Set(["beta"]),
+          required: [],
+        });
+      },
+    })),
+    // An edit of a server's configuration under the same name. The CLI
+    // connects the new process; whether it stops the old one is upstream
+    // behaviour (0039 item 8) the live test records.
+    replace: await run((fixture) => ({
+      file: { alpha: fixture("alpha") },
+      inline: { alpha: fixture("alpha") },
+      declared: ["alpha"],
+      act: async (runtime, writeFile) => {
+        writeFile({ alpha: fixture("alpha", "2") });
+        await syncClaudeRuntimeMcp(runtime, {
+          servers: { alpha: fixture("alpha", "2") },
+          key: "next",
+          names: new Set(["alpha"]),
           required: [],
         });
       },

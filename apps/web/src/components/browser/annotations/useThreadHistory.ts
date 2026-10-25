@@ -1,5 +1,6 @@
 /**
- * Thread history with backward paging (plan step 05 / step 03 `beforeSequence`).
+ * Thread history with backward paging (`web_annotation_entries` with
+ * `beforeSequence`).
  *
  * The synchronized snapshot carries the newest entry page. Older pages are
  * fetched on request and kept alongside every snapshot seen while the thread
@@ -7,7 +8,7 @@
  * by the thread's own entry limit. Supersession is recomputed across the
  * merged set because a snapshot only marks entries inside its own window.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   WEB_ANNOTATION_COMMANDS,
   WEB_ANNOTATION_LIMITS,
@@ -27,35 +28,49 @@ export function useThreadHistory(environmentId: string, data: WebAnnotationGetRe
   const [pagedNewer, setPagedNewer] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const annotationRef = useRef(annotationId);
-  const pagedOlderRef = useRef(pagedOlder);
-  pagedOlderRef.current = pagedOlder;
-  const pagedNewerRef = useRef(pagedNewer);
-  pagedNewerRef.current = pagedNewer;
+  // Invalidate every completion, including errors/finally, on identity changes
+  // and unmount. A generation also fences a switch away and back to the same note.
+  const generationRef = useRef(0);
+  useLayoutEffect(() => {
+    return () => {
+      generationRef.current += 1;
+    };
+  }, [environmentId, annotationId]);
 
-  useEffect(() => {
-    if (annotationRef.current !== annotationId) {
-      annotationRef.current = annotationId;
+  // Each snapshot is merged while rendering; a different note starts again.
+  const [historyFor, setHistoryFor] = useState({ environmentId, annotationId });
+  const [mergedData, setMergedData] = useState<WebAnnotationGetResult | null>(null);
+  const identityChanged =
+    environmentId !== historyFor.environmentId || annotationId !== historyFor.annotationId;
+  if (identityChanged || data !== mergedData) {
+    if (identityChanged) {
+      setHistoryFor({ environmentId, annotationId });
       setKnown(new Map());
+      setOlderCursor(null);
+      setNewerCursor(null);
       setPagedOlder(false);
       setPagedNewer(false);
+      setLoading(false);
       setError(null);
     }
-    if (!data) return;
-    setKnown((current) => {
-      const next = new Map(current);
-      for (const entry of data.entries) next.set(entry.id, entry);
-      return bound(next);
-    });
-    if (!pagedOlderRef.current) setOlderCursor(data.previousEntrySequence ?? null);
-    if (!pagedNewerRef.current) setNewerCursor(data.nextEntrySequence);
-  }, [annotationId, data]);
+    setMergedData(data);
+    if (data) {
+      setKnown((current) => {
+        const next = new Map(current);
+        for (const entry of data.entries) next.set(entry.id, entry);
+        return bound(next);
+      });
+      if (identityChanged || !pagedOlder) setOlderCursor(data.previousEntrySequence ?? null);
+      if (identityChanged || !pagedNewer) setNewerCursor(data.nextEntrySequence);
+    }
+  }
 
   const loadPage = useCallback(
     async (direction: "older" | "newer") => {
       if (!annotationId || loading) return;
       const cursor = direction === "older" ? olderCursor : newerCursor;
       if (cursor === null) return;
+      const generation = generationRef.current;
       setLoading(true);
       setError(null);
       try {
@@ -67,7 +82,7 @@ export function useThreadHistory(environmentId: string, data: WebAnnotationGetRe
             : { afterSequence: cursor }),
           limit: WEB_ANNOTATION_LIMITS.entryPageItems,
         });
-        if (annotationRef.current !== annotationId) return;
+        if (generationRef.current !== generation) return;
         if (page.resetRequired) {
           // History moved under us: start again from the current snapshot.
           setKnown(new Map((data?.entries ?? []).map((entry) => [entry.id, entry])));
@@ -90,9 +105,9 @@ export function useThreadHistory(environmentId: string, data: WebAnnotationGetRe
           setNewerCursor(page.nextSequence);
         }
       } catch (pageError) {
-        setError(describeWebAnnotationError(pageError));
+        if (generationRef.current === generation) setError(describeWebAnnotationError(pageError));
       } finally {
-        setLoading(false);
+        if (generationRef.current === generation) setLoading(false);
       }
     },
     [annotationId, data, environmentId, loading, newerCursor, olderCursor],

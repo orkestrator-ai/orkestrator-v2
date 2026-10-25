@@ -474,7 +474,8 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 ${ownedContainerInspect()}
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
-  if [ "$2" = "--user" ]; then exit 0; fi
+  # Only stdin syncs (\`exec -i\`) carry a payload; argument-only execs are not syncs.
+  if [ "$2" != "-i" ]; then exit 0; fi
   cat >> "$FAKE_DOCKER_EXEC_LOG.stdin"
   printf '\\n--sync--\\n' >> "$FAKE_DOCKER_EXEC_LOG.stdin"
   exit 0
@@ -613,6 +614,7 @@ exit 1
         // best-effort contract rather than failing earlier for another reason.
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ] && [ "$3" = "{{.State.Running}}" ]; then printf 'true\\n'; exit 0; fi
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
   if [ "$2" = "--user" ]; then exit 0; fi
@@ -656,6 +658,7 @@ exit 1
 
     await withFakeDocker(
       `#!/bin/sh
+if [ "$1" = "inspect" ] && [ "$3" = "{{.State.Running}}" ]; then printf 'true\\n'; exit 0; fi
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
   if [ "$2" = "--user" ]; then exit 0; fi

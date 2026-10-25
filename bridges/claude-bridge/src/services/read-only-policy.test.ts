@@ -67,6 +67,27 @@ describe("Claude coordinator read-only policy", () => {
     expect(sandbox.excludedCommands).toEqual([]);
     expect(sandbox.network).toMatchObject({ strictAllowlist: true, allowedDomains: [] });
     expect(sandbox.network.allowLocalBinding).toBe(false);
+    // Without a named checkout there is nothing to deny; the bridge always names one.
+    expect(sandbox.filesystem.denyWrite).toEqual([]);
+  });
+
+  test("the sandbox denies writes to the checkout, which its default would allow", () => {
+    const sandbox = claudeReadOnlySandbox(coordinatorPolicy, {
+      workspaces: ["/work/repo", "/private/work/repo", "/work/repo"],
+    });
+    expect(sandbox.filesystem.denyWrite).toEqual(["/work/repo", "/private/work/repo"]);
+    expect(sandbox.failIfUnavailable).toBe(true);
+  });
+
+  test("a host the launcher found without a sandbox asks for one without requiring it", () => {
+    const sandbox = claudeReadOnlySandbox(coordinatorPolicy, { commandSandbox: "unavailable" });
+    expect(sandbox.enabled).toBe(true);
+    expect(sandbox.failIfUnavailable).toBe(false);
+    // The escape hatch stays closed whether or not the sandbox starts.
+    expect(sandbox.allowUnsandboxedCommands).toBe(false);
+    expect(claudeReadOnlySandbox(coordinatorPolicy, { commandSandbox: "required" })).toMatchObject({
+      failIfUnavailable: true,
+    });
   });
 
   test("write and network tools are denied by the hook", async () => {
@@ -101,6 +122,25 @@ describe("Claude coordinator read-only policy", () => {
     expect(denied?.permissionDecision).toBe("deny");
   });
 
+  test("MCP rules use the CLI's normalised server name", async () => {
+    // The CLI names a `docs.search v2` server's tools `mcp__docs_search_v2__…`
+    // and matches an allow rule only against that spelling.
+    expect(claudeReadOnlyAllowedTools({ researchMcpServerNames: ["docs.search v2"] })).toContain(
+      "mcp__docs_search_v2__*",
+    );
+    const hook = createCoordinatorReadOnlyHook(coordinatorPolicy, ["docs.search v2"]);
+    const output = await hook(
+      {
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__docs_search_v2__query",
+        tool_input: {},
+      } as never,
+      undefined as never,
+      { signal: new AbortController().signal } as never,
+    );
+    expect(output).toEqual({});
+  });
+
   test("a command asking to leave the sandbox is denied", async () => {
     const decision = await decide("Bash", {
       command: "ls",
@@ -116,8 +156,7 @@ describe("Claude coordinator read-only policy", () => {
       "rg TODO src",
       "git status",
       "git log --oneline -5",
-      "/usr/bin/cat README.md",
-      "gh api repos/foo/bar",
+      "cat README.md",
     ]) {
       expect(isReadOnlyShellCommand(command).allowed).toBe(true);
       expect(await decide("Bash", { command })).toBeUndefined();
@@ -133,6 +172,119 @@ describe("Claude coordinator read-only policy", () => {
     ]) {
       expect(isReadOnlyShellCommand(command).allowed).toBe(false);
       expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
+    }
+  });
+
+  // Where the OS sandbox cannot start (Claude on Windows, Linux without
+  // bubblewrap) the hook is the whole boundary, so every one of these would be
+  // a write or a network call that nothing else stops.
+  test("reading programs with a writing argument are refused without any metacharacter", () => {
+    for (const command of [
+      // A second positional is an output file.
+      "uniq in.txt out.txt",
+      "uniq -c in.txt out.txt",
+      "xxd in.bin out.txt",
+      "xxd -r -c 16 dump.txt out.bin",
+      // Clustered or attached one-letter flags are the same flag.
+      "sort -no out.txt in.txt",
+      "sort -oout.txt in.txt",
+      "sort -T . big.txt",
+      "sort --compress-program=gzip big.txt",
+      "yq -iP .a=1 file.yaml",
+      "yq -s .name file.yaml",
+      "file -C -m magic",
+      "hostname evil",
+      // gawk writes and loads programs through options; only -F and -v pass.
+      "awk -i inplace NR==1 file",
+      "awk -iinplace NR==1 file",
+      "awk -f prog.awk file",
+      "awk -o file",
+      "awk --profile=prof.out NR==1 file",
+      // Git output files and programs chosen by argument.
+      "git diff --output=patch.diff",
+      "git log -p --output patch.diff",
+      "git show --ext-diff HEAD",
+      "git cat-file --filters HEAD:file",
+      "git --config-env=core.pager=HOME log",
+      "git grep -O TODO",
+      "git grep --open-files-in-pager=vim TODO",
+      // A path names whatever the checkout put there.
+      "bin/cat README.md",
+      "./ls",
+      "/usr/bin/cat README.md",
+    ]) {
+      const verdict = isReadOnlyShellCommand(command);
+      expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: false });
+    }
+  });
+
+  test("shell argument transformations and abbreviated writing flags are refused", async () => {
+    for (const command of [
+      "sort '-oout.txt' in.txt",
+      'git diff "--output=patch.diff"',
+      "find . '-delete'",
+      "git grep '-O' sh",
+      "awk '-i' inplace NR==1 file",
+      String.raw`sort \-oout.txt in.txt`,
+      String.raw`git diff --out\put=patch.diff`,
+      `sort -o'out.txt' in.txt`,
+      `git diff --out"put"=patch.diff`,
+      "uniq *.txt",
+      "uniq [ab].txt",
+      "xxd ?.bin",
+      "sort --out=x in",
+      "sort --comp=sh in",
+      "git grep --open=rm TODO",
+      "file --comp -m magic",
+    ]) {
+      expect({ command, allowed: isReadOnlyShellCommand(command).allowed }).toEqual({
+        command,
+        allowed: false,
+      });
+      expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
+    }
+    expect(isReadOnlyShellCommand("uniq in.txt").allowed).toBe(true);
+    expect(isReadOnlyShellCommand("git remote get-url origin").allowed).toBe(true);
+  });
+
+  test("network commands are refused because coordinator commands have no network", () => {
+    for (const command of [
+      "gh api repos/foo/bar",
+      "gh api -f title=x repos/foo/bar/issues",
+      "gh status",
+      "git ls-remote https://example.com/repo",
+      "git ls-remote --upload-pack=touch .",
+      "git fetch origin",
+      "git remote show origin",
+      "git remote show https://example.com/repo",
+      "curl https://example.com",
+    ]) {
+      const verdict = isReadOnlyShellCommand(command);
+      expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: false });
+      expect(verdict.reason).toContain("no network access");
+    }
+  });
+
+  test("the reading forms of hardened programs stay available", () => {
+    for (const command of [
+      "uniq in.txt",
+      "uniq -c -f 2 in.txt",
+      "xxd in.bin",
+      "xxd -c 16 -l 64 in.bin",
+      "sort -n in.txt",
+      "sort -t : -k 2 in.txt",
+      "yq .name file.yaml",
+      "awk NR==1 file",
+      "awk -F, NR==1 file",
+      "awk -F : -v n=1 NR==n file",
+      "hostname",
+      "git diff --stat",
+      "git log --output-indicator-new=+ -p",
+      "git grep -n TODO",
+      "file README.md",
+    ]) {
+      const verdict = isReadOnlyShellCommand(command);
+      expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: true });
     }
   });
 
@@ -200,9 +352,9 @@ describe("Claude coordinator read-only policy", () => {
     );
     // The reading forms of the same tools stay available.
     for (const command of [
-      "find . -name *.ts",
+      "find . -name file.ts",
       "sort in.txt",
-      "yq '.a' f.yaml",
+      "yq .a f.yaml",
       "fd -e ts",
       "rg TODO src",
       "date",
@@ -232,13 +384,12 @@ describe("Claude coordinator read-only policy", () => {
     for (const command of [
       "git branch",
       "git branch -a",
-      "git branch --list feature-*",
+      "git branch --list feature-a",
       "git branch --show-current",
       "git tag",
-      "git tag --list v1.*",
+      "git tag --list v1.0",
       "git remote",
       "git remote -v",
-      "git remote show origin",
       "git remote get-url origin",
       "git config user.email",
       "git config --global user.email",

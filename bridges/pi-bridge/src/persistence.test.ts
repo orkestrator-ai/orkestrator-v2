@@ -319,7 +319,14 @@ describe("loading", () => {
             turn: { inputTokens: 10, outputTokens: 5 },
             durationMs: 3_000,
             apiDurationMs: 2_000,
-            turns: [{ turnId: "t1", durationMs: 3_000, apiDurationMs: 2_000 }],
+            turns: [
+              {
+                turnId: "t1",
+                at: "2026-01-01T00:00:00.000Z",
+                durationMs: 3_000,
+                apiDurationMs: 2_000,
+              },
+            ],
             updatedAt: "2026-01-01T00:00:00Z",
           },
         },
@@ -333,7 +340,16 @@ describe("loading", () => {
     expect(restored.usage).toMatchObject({
       durationMs: 3_000,
       apiDurationMs: 2_000,
-      turns: [{ turnId: "t1", durationMs: 3_000, apiDurationMs: 2_000 }],
+      // `at` dates recorded usage, so a turn kept across a restart must not
+      // come back undated: the consumer would fall back to today.
+      turns: [
+        {
+          turnId: "t1",
+          at: "2026-01-01T00:00:00.000Z",
+          durationMs: 3_000,
+          apiDurationMs: 2_000,
+        },
+      ],
     });
   });
 
@@ -514,4 +530,31 @@ test("drops restored command rows that do not name a Pi binding", async () => {
   expect(sessions.get("restored-commands")?.slashCommands.map((command) => command.id)).toEqual([
     "pi:template:review",
   ]);
+});
+
+test("a preview's rows restore still marked as waiting for the attach", async () => {
+  const state = newSessionState();
+  state.slashCommands = [
+    {
+      name: "/review",
+      id: "pi:template:review",
+      executionKind: "provider-prompt",
+      source: "template",
+    },
+  ];
+  state.commandCatalogue = { status: "stale", revision: 1, attachPending: true };
+  sessions.set(state.id, state);
+  schedulePersist();
+  await drainPersistence();
+  const entry = (await readState()).sessions.find((session) => session.id === state.id);
+  expect(entry?.commandsAttachPending).toBe(true);
+
+  sessions.clear();
+  await loadPersistedState();
+  // Restored rows still lack extension commands, so the picker keeps saying so.
+  expect(sessions.get(state.id)?.commandCatalogue).toEqual({
+    status: "stale",
+    revision: 0,
+    attachPending: true,
+  });
 });

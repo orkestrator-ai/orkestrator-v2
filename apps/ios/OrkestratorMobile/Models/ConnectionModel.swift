@@ -79,7 +79,8 @@ final class ConnectionModel: ObservableObject {
     func connect(
         address addressValue: String,
         token tokenValue: String,
-        nickname nicknameValue: String? = nil
+        nickname nicknameValue: String? = nil,
+        select: Bool = true
     ) async throws -> ConnectionListPayload {
         let address = try validator.normalizedAddress(addressValue)
         let token = try validator.normalizedToken(tokenValue)
@@ -91,7 +92,7 @@ final class ConnectionModel: ObservableObject {
             nextVault.connections[index].token = token
             nextVault.connections[index].lastConnectedAt = Date()
             if let nickname { nextVault.connections[index].nickname = nickname }
-            nextVault.activeConnectionID = nextVault.connections[index].id
+            if select { nextVault.activeConnectionID = nextVault.connections[index].id }
         } else {
             let connection = RemoteConnection(
                 id: UUID(),
@@ -101,7 +102,9 @@ final class ConnectionModel: ObservableObject {
                 nickname: nickname
             )
             nextVault.connections.insert(connection, at: 0)
-            nextVault.activeConnectionID = connection.id
+            if select || nextVault.activeConnectionID == nil {
+                nextVault.activeConnectionID = connection.id
+            }
         }
         nextVault.connections.sort { $0.lastConnectedAt > $1.lastConnectedAt }
         try credentialStore.save(nextVault)

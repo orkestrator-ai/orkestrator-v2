@@ -15,6 +15,7 @@ import {
   providerArgv,
 } from "../../../../bridges/acp-bridge/src/acp-provider-config.js";
 import { coordinatorProcessPolicy as grokCoordinatorPolicy } from "../../../../bridges/acp-bridge/src/acp-policy.js";
+import { resolvePiMcpServers } from "../../../../bridges/pi-bridge/src/mcp-config.js";
 import {
   COORDINATOR_ASYNC_CONTRACT,
   type CoordinatorProviderTier,
@@ -25,6 +26,10 @@ import {
   nativeAgentPolicyDeniesWebSearch,
 } from "@orkestrator/protocol/native-agent";
 import { coordinatorWebResearchEnv } from "@orkestrator/protocol/coordinator-web-research";
+import {
+  COORDINATOR_LIVE_PLATFORMS,
+  COORDINATOR_LIVE_SCENARIOS,
+} from "../../../desktop/scripts/dev/coordinator-live.js";
 import { coordinatorProviderQualification } from "./coordinator-providers.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
@@ -39,7 +44,7 @@ import {
  * A platform reaches `enforced` only if its bridge actually translates the
  * coordinator policy into something the provider or the OS holds. These
  * assertions are the cheap, always-run half of that; the expensive half is the
- * real-stack read-only suite described in `docs/todo/coordinator-live-conformance.md`.
+ * real-stack read-only suite described in `docs/todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md`.
  */
 const coordinatorPolicy = resolveNativeAgentExecutionPolicy(
   { environmentType: "local", networkAccessMode: "restricted" },
@@ -87,6 +92,27 @@ describe("coordinator read-only conformance", () => {
       enabled: true,
       allowUnsandboxedCommands: false,
     });
+  });
+
+  // The live suite is the expensive half of every claim this table makes. A
+  // platform the coordinator offers, and above all one at `enforced`, has to
+  // have a live entry that runs every scenario, or its tier is a claim nothing
+  // ever checks against a real provider.
+  test("every offered platform, enforced ones included, is on the live suite's list", () => {
+    const live = new Set(COORDINATOR_LIVE_PLATFORMS.map((entry) => entry.platform));
+    const offered = everyPlatform.filter(
+      (platform) =>
+        coordinatorProviderQualification(platform, { host, enabledPlatforms: everyPlatform })
+          .available,
+    );
+    expect(offered.filter((platform) => !live.has(platform))).toEqual([]);
+    const enforced = everyPlatform.filter((platform) => tierOf(platform) === "enforced");
+    expect(enforced.length).toBeGreaterThan(0);
+    for (const platform of enforced) expect(live.has(platform)).toBe(true);
+    expect(COORDINATOR_LIVE_SCENARIOS).toContain("read-only");
+    expect(COORDINATOR_LIVE_SCENARIOS).toContain("async");
+    expect(COORDINATOR_LIVE_SCENARIOS).toContain("family");
+    expect(COORDINATOR_LIVE_SCENARIOS).toContain("peer");
   });
 
   // Hosted web search reaches the internet from the vendor's servers, so a
@@ -169,15 +195,49 @@ describe("coordinator read-only conformance", () => {
       claudeReadOnlyAllowedTools({ agentMcpServerNames: ["orkestrator"], policy: research }),
     ).toContain("WebSearch");
 
-    // OpenCode: search allowed by name, fetch denied last.
-    const openCode = openCodePermissionRules(effectiveOpenCodePolicy(research));
+    // OpenCode: search allowed by name, research tools by exact id, fetch
+    // denied last.
+    const openCode = openCodePermissionRules(effectiveOpenCodePolicy(research), {
+      researchTools: ["context7_query-docs"],
+    });
     expect(openCode.at(-1)).toEqual({ permission: "webfetch", pattern: "*", action: "deny" });
     expect(
       openCode.some((rule) => rule.permission === "websearch" && rule.action === "allow"),
     ).toBe(true);
+    expect(
+      openCode.some((rule) => rule.permission === "context7_query-docs" && rule.action === "allow"),
+    ).toBe(true);
 
-    // Grok has no verified fetch-only switch, so its coordinator stays off.
+    // Grok 1.0.67's hosted search opens any page (`open_page`), and no switch
+    // keeps search without it, so its coordinator stays off.
     expect(nativeAgentPolicyDeniesWebSearch(grokCoordinatorPolicy())).toBe(true);
+  });
+
+  // Research servers are remote HTTPS endpoints the launcher names. Claude and
+  // Codex load them from the launch environment (above), Cursor and Pi host
+  // them in the bridge (their own tests), and OpenCode registers them on its
+  // server at launch. Pi resolves them only under coordinator authority.
+  test("Pi resolves research servers only under the coordinator's process authority", async () => {
+    const env = {
+      ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+      ...coordinatorWebResearchEnv("search-and-mcp", [
+        { name: "context7", url: "https://mcp.context7.com/mcp" },
+      ]),
+    };
+    const resolve = (overrides: Record<string, string | undefined>) =>
+      resolvePiMcpServers({
+        agentDir: "/nonexistent/pi-agent",
+        cwd: "/nonexistent/project",
+        projectResources: false,
+        env: { ...env, ...overrides },
+      });
+    expect(await resolve({})).toContainEqual({
+      id: "context7",
+      scope: "research",
+      transport: "http",
+      url: "https://mcp.context7.com/mcp",
+    });
+    expect(await resolve({ ORKESTRATOR_BRIDGE_EXECUTION_POLICY: undefined })).toEqual([]);
   });
 
   test("a provider-configured platform denies, and says what it cannot hold", () => {

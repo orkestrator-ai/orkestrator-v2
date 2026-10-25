@@ -11,9 +11,11 @@ import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revis
  * Now the read goes to the provider's progressive snapshot surface with an
  * explicit message count and byte target, carrying the source token from the
  * previous response. When the provider says nothing changed, the response
- * carries no messages at all. Providers without that surface fall back to a
- * count-bounded legacy read with a hard byte guard; the fallback is measured so
- * it can be retired, not mistaken for efficient.
+ * carries no messages at all. Every reviewer provider (`HttpBridgeProvider`,
+ * `OpenCodeProvider`) has that surface; a bridge that predates `/transcript`
+ * is served lower down, by `readHttpBridgeTranscriptSnapshot`. The
+ * count-bounded compatibility read for providers without it was retired on
+ * 2026-10-25, so such a provider's read now fails instead.
  *
  * Where the provider serves lightweight summaries (bridge transcript v2), the
  * read asks for them: large tool bodies, diffs and inline images stay behind
@@ -22,7 +24,7 @@ import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revis
  * provider that answers raw bodies keeps rendering them inline as before.
  *
  * Every read leaves here as display messages: raw OpenCode `{ info, parts }`
- * rows from the count-bounded fallback and history pages are normalized by
+ * rows from snapshots and history pages are normalized by
  * the same normalizer the interactive tab uses (`opencode-display-transcript`),
  * so the renderer carries no OpenCode normalizer of its own.
  *
@@ -68,14 +70,12 @@ export const MAX_REVIEWER_TRANSCRIPT_TOKEN_LENGTH = 512;
 const TOKEN_VERSION = "rt1";
 
 export type ReviewerTranscriptRead =
-  | { kind: "unchanged"; sourceToken: string; fallback: false }
+  | { kind: "unchanged"; sourceToken: string }
   | {
       kind: "snapshot";
       messages: unknown[];
       truncated: boolean;
       sourceToken?: string;
-      /** True when the provider had no bounded snapshot surface. */
-      fallback: boolean;
       /** Encoded bytes of `messages`. */
       bytes: number;
       /** Cursor for the history before `messages[0]`, when it can be paged. */
@@ -250,123 +250,110 @@ export async function readReviewerTranscript(
     maxMessages: MAX_REVIEWER_TRANSCRIPT_MESSAGES,
     maxBytes: MAX_REVIEWER_TRANSCRIPT_BYTES,
   },
+  /**
+   * Further state the returned token must describe besides the provider's
+   * source (the reviewer conversation's artifact ledger revision). A token
+   * minted under another value is not offered to the provider, so its
+   * "unchanged" cannot hide that state's change.
+   */
+  tokenState?: string,
 ): Promise<ReviewerTranscriptRead> {
   const capable = provider as SnapshotCapable;
-  if (typeof capable.transcriptSnapshot === "function") {
-    const snapshot = await capable.transcriptSnapshot(providerSessionId, {
-      limit: limits.maxMessages,
-      targetBytes: limits.maxBytes,
-      // Details resolve through `readReviewerToolDetails`, so the display can
-      // take the lightweight form wherever the provider offers it.
-      ...(typeof capable.transcriptDetail === "function"
-        ? { representation: "summary" as const }
-        : {}),
-      ...(unwrapToken(providerSessionId, knownSourceToken)
-        ? { knownSourceToken: unwrapToken(providerSessionId, knownSourceToken) }
-        : {}),
-    });
-    if ("unchanged" in snapshot) {
-      const sourceToken = wrapToken(providerSessionId, snapshot.sourceToken);
-      // An unwrappable token cannot be sent back; answer with a snapshot the
-      // renderer can use instead of an unchanged it cannot follow up on.
-      if (sourceToken) return { kind: "unchanged", sourceToken, fallback: false };
-      return readReviewerTranscript(provider, providerSessionId, undefined, history, limits);
-    }
-    if (!Array.isArray(snapshot.messages)) {
-      throw new Error("The reviewer transcript snapshot was malformed");
-    }
-    // The provider aims for the target; the backend enforces it. The token
-    // still describes the provider's source, so an unchanged answer later
-    // correctly means "keep the bounded tail you already have".
-    const source =
-      snapshot.representation === "summary"
-        ? snapshot.messages.map(displayMessage)
-        : snapshot.messages;
-    const bounded = boundReviewerTranscript(normalizeOpenCodeDisplayEntries(source), limits);
-    const firstShown = source[source.length - bounded.messages.length];
-    const sourceToken = snapshot.sourceToken
-      ? wrapToken(providerSessionId, snapshot.sourceToken)
-      : undefined;
-    const truncated = bounded.truncated || snapshot.complete === false;
-    const historyEpoch = snapshot.historyEpoch ?? LEGACY_HISTORY_EPOCH;
-    let historyCursor: string | undefined;
-    if (history && truncated && historyEpoch.length <= MULTI_REVIEW_HISTORY_EPOCH_MAX_LENGTH) {
-      const owner = { sessionKey: history.key, providerSessionId };
-      /*
-       * A provider page cursor names the position of the snapshot's first
-       * message, so it is usable only while this window still starts there:
-       * a byte bound that dropped leading rows would leave a gap no page can
-       * fill. Those rows (and providers that cannot page) go through the
-       * joined fallback, which pages by message identity instead.
-       */
-      const direct =
-        snapshot.historyCursor &&
-        snapshot.historyEpoch !== undefined &&
-        typeof capable.transcriptPage === "function" &&
-        bounded.messages.length === snapshot.messages.length
-          ? encodeDirectHistoryCursor({
-              sessionKey: history.key,
-              providerSessionId,
-              historyEpoch: snapshot.historyEpoch,
-              providerCursor: snapshot.historyCursor,
-            })
-          : undefined;
-      historyCursor =
-        direct ??
-        joinedCursor(owner, historyEpoch, firstShown, {
-          // Nothing dropped here: only the provider knows older history exists.
-          providerIncomplete: !bounded.truncated,
-        });
-    }
-    const revisedMessages = reviewerRevisedMessages(snapshot, bounded.messages);
-    const heldIds = new Set(
-      [...bounded.messages, ...revisedMessages].map((row) => (row as { id?: unknown }).id),
-    );
-    const omitted =
-      snapshot.revisedMessages?.filter((row) => !heldIds.has((row as { id?: unknown }).id)) ?? [];
-    const historyReconciliationToken = omitted.length
-      ? revisedRowsReconciliationToken(0, [snapshot.historyReconciliationToken, ...omitted])
-      : snapshot.historyReconciliationToken;
-    return {
-      kind: "snapshot",
-      messages: bounded.messages,
-      truncated,
-      ...(sourceToken ? { sourceToken } : {}),
-      fallback: false,
-      bytes: bounded.bytes,
-      ...(historyCursor ? { historyCursor } : {}),
-      ...(history ? { historyEpoch } : {}),
-      ...(revisedMessages.length > 0 ? { revisedMessages } : {}),
-      ...(historyReconciliationToken ? { historyReconciliationToken } : {}),
-    };
+  const tokenScope = tokenState ? `${providerSessionId} state:${tokenState}` : providerSessionId;
+  if (typeof capable.transcriptSnapshot !== "function") {
+    throw new Error("The reviewer's provider has no bounded transcript snapshot surface");
   }
-  // Compatibility path for providers without a bounded snapshot surface. The
-  // provider is asked for no more messages than the tab can show, and the
-  // response is byte-bounded here; a transport that can only fetch the whole
-  // history still slices it before it reaches this module.
-  const messages = await provider.messages(providerSessionId, { limit: limits.maxMessages });
-  // Provider reads are raw (an OpenCode `{ info, parts }` envelope); the tab
-  // renders display messages. Bounded after normalizing, which is what ships;
-  // the cursor still names the raw message the next page searches for.
-  const bounded = boundReviewerTranscript(normalizeOpenCodeDisplayEntries(messages), limits);
-  // A full window may have had older history the limited read left behind.
-  const truncated = bounded.truncated || messages.length >= limits.maxMessages;
-  const historyCursor =
-    history && truncated
-      ? joinedCursor(
-          { sessionKey: history.key, providerSessionId },
-          LEGACY_HISTORY_EPOCH,
-          messages[messages.length - bounded.messages.length],
-        )
-      : undefined;
+  const snapshot = await capable.transcriptSnapshot(providerSessionId, {
+    limit: limits.maxMessages,
+    targetBytes: limits.maxBytes,
+    // Details resolve through `readReviewerToolDetails`, so the display can
+    // take the lightweight form wherever the provider offers it.
+    ...(typeof capable.transcriptDetail === "function"
+      ? { representation: "summary" as const }
+      : {}),
+    ...(unwrapToken(tokenScope, knownSourceToken)
+      ? { knownSourceToken: unwrapToken(tokenScope, knownSourceToken) }
+      : {}),
+  });
+  if ("unchanged" in snapshot) {
+    const sourceToken = wrapToken(tokenScope, snapshot.sourceToken);
+    // An unwrappable token cannot be sent back; answer with a snapshot the
+    // renderer can use instead of an unchanged it cannot follow up on.
+    if (sourceToken) return { kind: "unchanged", sourceToken };
+    return readReviewerTranscript(
+      provider,
+      providerSessionId,
+      undefined,
+      history,
+      limits,
+      tokenState,
+    );
+  }
+  if (!Array.isArray(snapshot.messages)) {
+    throw new Error("The reviewer transcript snapshot was malformed");
+  }
+  // The provider aims for the target; the backend enforces it. The token
+  // still describes the provider's source, so an unchanged answer later
+  // correctly means "keep the bounded tail you already have".
+  const source =
+    snapshot.representation === "summary"
+      ? snapshot.messages.map(displayMessage)
+      : snapshot.messages;
+  const bounded = boundReviewerTranscript(normalizeOpenCodeDisplayEntries(source), limits);
+  const firstShown = source[source.length - bounded.messages.length];
+  const sourceToken = snapshot.sourceToken
+    ? wrapToken(tokenScope, snapshot.sourceToken)
+    : undefined;
+  const truncated = bounded.truncated || snapshot.complete === false;
+  const historyEpoch = snapshot.historyEpoch ?? LEGACY_HISTORY_EPOCH;
+  let historyCursor: string | undefined;
+  if (history && truncated && historyEpoch.length <= MULTI_REVIEW_HISTORY_EPOCH_MAX_LENGTH) {
+    const owner = { sessionKey: history.key, providerSessionId };
+    /*
+     * A provider page cursor names the position of the snapshot's first
+     * message, so it is usable only while this window still starts there:
+     * a byte bound that dropped leading rows would leave a gap no page can
+     * fill. Those rows (and providers that cannot page) go through the
+     * joined fallback, which pages by message identity instead.
+     */
+    const direct =
+      snapshot.historyCursor &&
+      snapshot.historyEpoch !== undefined &&
+      typeof capable.transcriptPage === "function" &&
+      bounded.messages.length === snapshot.messages.length
+        ? encodeDirectHistoryCursor({
+            sessionKey: history.key,
+            providerSessionId,
+            historyEpoch: snapshot.historyEpoch,
+            providerCursor: snapshot.historyCursor,
+          })
+        : undefined;
+    historyCursor =
+      direct ??
+      joinedCursor(owner, historyEpoch, firstShown, {
+        // Nothing dropped here: only the provider knows older history exists.
+        providerIncomplete: !bounded.truncated,
+      });
+  }
+  const revisedMessages = reviewerRevisedMessages(snapshot, bounded.messages);
+  const heldIds = new Set(
+    [...bounded.messages, ...revisedMessages].map((row) => (row as { id?: unknown }).id),
+  );
+  const omitted =
+    snapshot.revisedMessages?.filter((row) => !heldIds.has((row as { id?: unknown }).id)) ?? [];
+  const historyReconciliationToken = omitted.length
+    ? revisedRowsReconciliationToken(0, [snapshot.historyReconciliationToken, ...omitted])
+    : snapshot.historyReconciliationToken;
   return {
     kind: "snapshot",
     messages: bounded.messages,
     truncated,
-    fallback: true,
+    ...(sourceToken ? { sourceToken } : {}),
     bytes: bounded.bytes,
     ...(historyCursor ? { historyCursor } : {}),
-    ...(history ? { historyEpoch: LEGACY_HISTORY_EPOCH } : {}),
+    ...(history ? { historyEpoch } : {}),
+    ...(revisedMessages.length > 0 ? { revisedMessages } : {}),
+    ...(historyReconciliationToken ? { historyReconciliationToken } : {}),
   };
 }
 

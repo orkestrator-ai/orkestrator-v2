@@ -1,6 +1,5 @@
 import { DOCKER_IMAGE } from "./constants.js";
 import { runCommand } from "./shell.js";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Environment } from "./models.js";
 import { dockerExec, isContainerRunning } from "./commands-container-exec.js";
 import type { CoordinatorConversation } from "@orkestrator/protocol/coordinator";
@@ -9,31 +8,9 @@ import {
   CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL,
   CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL,
   CONTAINER_WORKSPACE_PREPARE_SUPPORT_COMMAND,
-  LOCAL_SERVER_KILL_WAIT_MS,
-  LOCAL_SERVER_KINDS,
-  LOCAL_SERVER_SHUTDOWN_GRACE_MS,
-  configuredOpenCodeAgentTools,
-  environmentBaselineTasks,
-  localClaudeBridgeTokens,
-  localCodexBridgeTokens,
-  localCursorBridgeTokens,
-  localCursorCredentialFingerprints,
-  localGrokBridgeTokens,
-  localPiBridgeTokens,
-  localOpenCodeServerPasswords,
-  localServerEnvironmentOperations,
-  localServerProcesses,
-  localServerUnresponsiveSince,
-  localServerWorkingDirectories,
-  openCodeAgentToolsConfigurations,
-  terminateProcessTreeImpl,
-} from "./commands-runtime-state.js";
-import {
-  localAgentAccountIds,
-  localAgentAccountTokenExpiry,
-  loginlessLocalBridges,
-} from "./agent-account-bridge-state.js";
-import type { LocalServerKind } from "./commands-runtime-state.js";
+} from "./container-scripts.js";
+import { LOCAL_SERVER_KINDS } from "./local-server-runtime.js";
+import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import {
   coordinatorConversationIdFromRuntimeId,
@@ -114,10 +91,7 @@ export async function establishCreatedFromCommit(
 ): Promise<Environment> {
   if (environment.createdFromCommit) return environment;
 
-  const existing = environmentBaselineTasks.get(environment.id);
-  if (existing) return existing;
-
-  const task = (async () => {
+  return context.runtime.environments.joinBaselineCapture(environment.id, async () => {
     const current = (await context.storage.getEnvironment(environment.id)) ?? environment;
     if (current.createdFromCommit) return current;
 
@@ -142,13 +116,7 @@ export async function establishCreatedFromCommit(
       throw new Error(`Could not resolve environment creation commit: ${current.id}`);
     }
     return context.storage.updateEnvironment(current.id, { createdFromCommit: commit });
-  })().finally(() => {
-    if (environmentBaselineTasks.get(environment.id) === task) {
-      environmentBaselineTasks.delete(environment.id);
-    }
   });
-  environmentBaselineTasks.set(environment.id, task);
-  return task;
 }
 
 export async function ensureCreatedFromCommitBeforeSetup(
@@ -158,25 +126,6 @@ export async function ensureCreatedFromCommitBeforeSetup(
 ): Promise<Environment> {
   if (environment.setupScriptsComplete || environment.createdFromCommit) return environment;
   return establishCreatedFromCommit(environment, context, onPrepareOutput);
-}
-
-export function enqueueLocalServerEnvironmentOperation<T>(
-  environmentId: string,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const previous = localServerEnvironmentOperations.get(environmentId) ?? Promise.resolve();
-  const result = previous.then(operation, operation);
-  const tail = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  localServerEnvironmentOperations.set(environmentId, tail);
-  void tail.finally(() => {
-    if (localServerEnvironmentOperations.get(environmentId) === tail) {
-      localServerEnvironmentOperations.delete(environmentId);
-    }
-  });
-  return result;
 }
 
 export function localServerFields(kind: LocalServerKind): {
@@ -189,69 +138,6 @@ export function localServerFields(kind: LocalServerKind): {
   if (kind === "cursor") return { port: "localCursorPort", pid: "cursorBridgePid" };
   if (kind === "pi") return { port: "localPiPort", pid: "piBridgePid" };
   return { port: "localGrokPort", pid: "grokBridgePid" };
-}
-
-export function releaseLocalServerOwnership(
-  key: string,
-  child: ChildProcessWithoutNullStreams,
-): boolean {
-  if (localServerProcesses.get(key) !== child) return false;
-  localServerProcesses.delete(key);
-  localServerWorkingDirectories.delete(key);
-  localServerUnresponsiveSince.delete(key);
-  localAgentAccountIds.delete(key);
-  localAgentAccountTokenExpiry.delete(key);
-  loginlessLocalBridges.delete(key);
-  if (key.startsWith("codex:")) {
-    localCodexBridgeTokens.delete(key.slice("codex:".length));
-  } else if (key.startsWith("claude:")) {
-    localClaudeBridgeTokens.delete(key.slice("claude:".length));
-  } else if (key.startsWith("opencode:")) {
-    const environmentId = key.slice("opencode:".length);
-    localOpenCodeServerPasswords.delete(environmentId);
-    cancelOpenCodeAgentToolsConfiguration(`local:${environmentId}`);
-  } else if (key.startsWith("cursor:")) {
-    const environmentId = key.slice("cursor:".length);
-    localCursorBridgeTokens.delete(environmentId);
-    localCursorCredentialFingerprints.delete(environmentId);
-  } else if (key.startsWith("grok:")) {
-    localGrokBridgeTokens.delete(key.slice("grok:".length));
-  } else if (key.startsWith("pi:")) {
-    localPiBridgeTokens.delete(key.slice("pi:".length));
-  }
-  return true;
-}
-
-/**
- * Stops one owned server's whole process tree, agent CLIs included.
- *
- * `reason` is logged so an agent that vanished mid-turn can be traced back to
- * the decision that killed it. Short-lived probe bridges omit it.
- */
-export async function terminateLocalServerChild(
-  key: string,
-  child: ChildProcessWithoutNullStreams,
-  reason?: string,
-): Promise<void> {
-  if (reason) {
-    console.warn(`[local-server] Stopping ${key} (pid ${child.pid ?? "unknown"}): ${reason}`);
-  }
-  const exited = await terminateProcessTreeImpl(child, {
-    graceMs: LOCAL_SERVER_SHUTDOWN_GRACE_MS,
-    killWaitMs: LOCAL_SERVER_KILL_WAIT_MS,
-  });
-  if (!exited) {
-    // Keep the ownership entry so shutdown or a retry can target it again.
-    // Forgetting a process that is still alive recreates the orphan leak.
-    throw new Error(`Local server process tree did not exit: ${key}`);
-  }
-  releaseLocalServerOwnership(key, child);
-}
-
-export function cancelOpenCodeAgentToolsConfiguration(key: string): void {
-  openCodeAgentToolsConfigurations.get(key)?.controller.abort();
-  openCodeAgentToolsConfigurations.delete(key);
-  configuredOpenCodeAgentTools.delete(key);
 }
 
 export function aggregateRejectedResults(
@@ -268,11 +154,12 @@ export async function stopLocalServerUnlocked(
   kind: LocalServerKind,
 ): Promise<void> {
   const key = `${kind}:${environmentId}`;
+  const localServers = context.runtime.localServers;
   if (kind === "opencode") {
-    cancelOpenCodeAgentToolsConfiguration(`local:${environmentId}`);
+    localServers.openCodeAgentTools.cancel(`local:${environmentId}`);
   }
-  const child = localServerProcesses.get(key);
-  if (child) await terminateLocalServerChild(key, child, "stop requested");
+  const child = localServers.process(key);
+  if (child) await localServers.terminate(key, child, "stop requested");
   const { port, pid } = localServerFields(kind);
   const fields = { [port]: null, [pid]: null };
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);

@@ -215,3 +215,48 @@ describe("RecurringDiagnosticsRegistry fetch policies", () => {
     );
   });
 });
+
+describe("RecurringDiagnosticsRegistry signals", () => {
+  test("reports each signal source's health and skips one that throws", () => {
+    const registry = new RecurringDiagnosticsRegistry();
+    const status = {
+      containers: 2,
+      states: { unarmed: 0, arming: 0, armed: 0, confirmed: 1, demoted: 1, unsupported: 0 },
+      fallback: 1,
+      demotions: { "missed-change": 1 },
+      rings: 4,
+    };
+    const unregister = registry.addSignalSource("claude-state-signal", { status: () => status });
+    registry.addSignalSource("container-worktree-signal", {
+      status: () => {
+        throw new Error("faulty source");
+      },
+    });
+    const snapshot = registry.snapshot(new RecurringWorkMetrics({ enabled: false }));
+    expect(snapshot.signals).toEqual([{ name: "claude-state-signal", status }]);
+    expect(snapshot.faultedSources).toBe(1);
+    unregister();
+    unregister();
+    expect(
+      registry
+        .snapshot(new RecurringWorkMetrics({ enabled: false }))
+        .signals.map((signal) => signal.name),
+    ).toEqual([]);
+  });
+
+  test("the process-wide registry carries both production signal sources", async () => {
+    const { recurringWorkDiagnostics } = await import("./recurring-diagnostics.js");
+    await import("./tmux-poll.js");
+    const { DiffStatsTracking } = await import("./diff-stats-tracking.js");
+    const tracking = new DiffStatsTracking({ emit: () => undefined });
+    try {
+      const names = recurringWorkDiagnostics(
+        new RecurringWorkMetrics({ enabled: false }),
+      ).signals.map((signal) => signal.name);
+      expect(names).toContain("claude-state-signal");
+      expect(names).toContain("container-worktree-signal");
+    } finally {
+      tracking.shutdown();
+    }
+  });
+});

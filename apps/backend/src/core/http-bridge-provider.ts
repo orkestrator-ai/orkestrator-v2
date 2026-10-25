@@ -7,6 +7,7 @@ import type {
   ProviderActivityObservation,
   ProviderActivityState,
   ProviderActiveSteerRun,
+  ProviderCommonDependencies,
   ProviderCreateSessionOptions,
   ProviderDispatchStatus,
   ProviderExecutionMode,
@@ -55,6 +56,7 @@ import {
   INTERACTIVE_RUNTIME_METADATA_TTL_MS,
   isTransientHttpStatus,
   MAX_TRACKED_INTERACTION_SESSIONS,
+  commandCatalogueRevisionField,
   nonEmptyString,
   normalizeProviderRateLimits,
   normalizeProviderRuntimeSummary,
@@ -75,7 +77,9 @@ import {
   assertOkWithErrorDetail,
   throwExplainedTurnFailure,
   boundedJson,
+  promptDispatchUnavailableError,
   bridgeFetch,
+  normalizeProviderAuthNotice,
   normalizeProviderReadiness,
   fetchSessionSnapshot,
   readProviderActivityObservation,
@@ -87,7 +91,10 @@ import {
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 import { HttpBridgeTranscriptReader } from "./http-bridge-transcript-reader.js";
 import { HttpBridgeActivityBatchReader } from "./http-bridge-activity-batch.js";
+import { bridgeChangeEvidenceSource } from "./http-bridge-change-evidence.js";
 import { readAcpTurnTerminalError } from "./http-bridge-turn-outcome.js";
+import { HttpBridgeObservationWakeup } from "./http-bridge-observation-stream.js";
+import { readBridgeResumableSessions } from "./http-bridge-resumable-sessions.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: HttpBridgeAgent;
@@ -113,20 +120,31 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   private readonly transcripts: HttpBridgeTranscriptReader;
   /** Scoped to this connection, so a restarted bridge re-detects the batch route. */
   private readonly activityBatchReader: HttpBridgeActivityBatchReader;
+  /** The bridge's change-evidence spool (docs/architecture/change-tracking.md). */
+  readonly changeEvidenceSource: ReturnType<typeof bridgeChangeEvidenceSource>;
   /** Grok only: see {@link readAcpTurnTerminalError}. */
   readonly turnTerminalError?: (sessionId: string, requestId: string) => Promise<string | null>;
+  /** Claude and Codex: the bridge event stream as the idle wakeup. */
+  private readonly observationWakeup: HttpBridgeObservationWakeup;
 
   constructor(
     private readonly connection: BridgeConnection,
     private readonly fetchImpl: typeof fetch,
     stageImages?: HttpBridgeProviderDependencies["stageImages"],
+    observationHint?: ProviderCommonDependencies["onObservationHint"],
   ) {
     this.agent = connection.agent as HttpBridgeAgent;
+    this.observationWakeup = new HttpBridgeObservationWakeup(
+      connection,
+      fetchImpl,
+      observationHint,
+    );
     this.transcripts = new HttpBridgeTranscriptReader(this.agent, connection, fetchImpl);
     this.stageImages = stageImages;
     this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
     this.catalogAdapter = new HttpBridgeCatalogAdapter(this.agent, connection, fetchImpl);
     this.activityBatchReader = new HttpBridgeActivityBatchReader(connection, fetchImpl);
+    this.changeEvidenceSource = bridgeChangeEvidenceSource(connection, fetchImpl);
     this.interactions = this.interactionAdapter;
     if (this.agent === "grok") {
       this.turnTerminalError = (sessionId, requestId) =>
@@ -136,6 +154,15 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   private contextUsage(value: unknown) {
     return contextUsageWithPlanUsage(this.agent, value, this.connection.accountId ?? "unknown");
+  }
+
+  /** See `AgentSessionProvider.observationStreamLive` and `HttpBridgeObservationWakeup`. */
+  observationStreamLive(): boolean {
+    return this.observationWakeup.live();
+  }
+
+  dispose(): void {
+    this.observationWakeup.close();
   }
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
@@ -241,7 +268,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const body = asRecord(
       await boundedJson(response, `${this.agent} dispatch status`).catch(() => null),
     );
-    return body?.dispatch === "dispatched" ? "dispatched" : "unknown";
+    // `lost` is additive: a bridge that predates it answers `unknown` there.
+    return body?.dispatch === "dispatched" || body?.dispatch === "lost" ? body.dispatch : "unknown";
   }
 
   async activeSteerRun(sessionId: string): Promise<ProviderActiveSteerRun> {
@@ -345,18 +373,15 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         `${this.agent} prompt dispatch outcome is unknown (HTTP ${response.status})`,
       );
     }
-    // A session can briefly disappear while a bridge reconciles a restarted
-    // provider, and an idle status read can race with another client starting a
-    // turn. Both are retryable dispatch races, not validation rejections that
-    // should park the user's prompt indefinitely.
+    // Missing sessions after restart and raced turns are retryable refusals.
+    // Preserve the bridge's reason: changing a launch-only setting can require
+    // the user to wait for background work to finish or stop it first.
     if (
       response.status === 404 ||
       response.status === 409 ||
       isTransientHttpStatus(response.status)
     ) {
-      throw new ProviderUnavailableError(
-        `${this.agent} prompt dispatch is temporarily unavailable (HTTP ${response.status})`,
-      );
+      throw await promptDispatchUnavailableError(this.agent, response);
     }
     if (!response.ok) {
       // Bridges answer terminal rejections with an actionable message. Surface it
@@ -727,9 +752,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         composer: composer as unknown as NativeAgentComposerState,
         ...(readiness ? { readiness } : {}),
         providerRevision: providerRevision as number,
-        ...(Number.isSafeInteger(payload?.commandRevision)
-          ? { commandCatalogueRevision: payload!.commandRevision as number }
-          : {}),
+        ...commandCatalogueRevisionField(payload?.commandRevision),
         ...(contextUsage ? { contextUsage } : {}),
         ...(policy ? { policy } : {}),
         ...(runtime ? { runtime } : {}),
@@ -821,9 +844,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       }
       const codexContextUsage = this.contextUsage(payload.contextUsage);
       const codexReadiness = normalizeProviderReadiness(payload.readiness);
+      const codexAuthNotice = normalizeProviderAuthNotice(payload.authNotice);
       const codexNotices = snapshotNotices({
         transcriptTruncated: transcript.truncated,
         ...(runtime ? { runtime } : {}),
+        ...(codexAuthNotice ? { auth: codexAuthNotice } : {}),
       });
       const phase: NativeAgentTurnPhase | undefined =
         rawPhase === "cancelling"
@@ -863,9 +888,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ...(Number.isSafeInteger(payload.engineGeneration)
           ? { providerGeneration: payload.engineGeneration as number }
           : {}),
-        ...(Number.isSafeInteger(payload.commandRevision)
-          ? { commandCatalogueRevision: payload.commandRevision as number }
-          : {}),
+        ...commandCatalogueRevisionField(payload.commandRevision),
         ...(codexContextUsage ? { contextUsage: codexContextUsage } : {}),
         ...(codexReadiness ? { readiness: codexReadiness } : {}),
         ...(isNativeAgentExecutionPolicy(config?.policy) ? { policy: config.policy } : {}),
@@ -942,9 +965,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const claudeContextUsage = this.contextUsage(payload.contextUsage);
     const claudeTurnActivity = claudeTurnActivityFromPayload(payload);
     const claudeReadiness = normalizeProviderReadiness(payload.readiness);
+    const claudeAuthNotice = normalizeProviderAuthNotice(payload.authNotice);
     const claudeNotices = snapshotNotices({
       transcriptTruncated: transcript.truncated,
       ...(runtime ? { runtime } : {}),
+      ...(claudeAuthNotice ? { auth: claudeAuthNotice } : {}),
     });
     return {
       status,
@@ -962,6 +987,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ...(typeof payload.turnStartedAt === "number" && Number.isFinite(payload.turnStartedAt)
         ? { turnStartedAt: payload.turnStartedAt }
         : {}),
+      // Claude publishes its inventory revision on `GET /session/:id`, as the
+      // other bridges do on `/status`; without it this path never revalidates
+      // on `commands_changed`.
+      ...commandCatalogueRevisionField(payload.commandRevision),
       ...(claudeTurnActivity ? { turnActivity: claudeTurnActivity } : {}),
       ...(claudeReadiness ? { readiness: claudeReadiness } : {}),
       ...(claudeContextUsage ? { contextUsage: claudeContextUsage } : {}),
@@ -1083,53 +1112,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
-  async listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
-    const response = await bridgeFetch(this.connection, "/session/list", {}, this.fetchImpl);
-    // The ACP bridge answers 410 with the reason the agent cannot list its own
-    // history. Dropping that body would reduce a specific, actionable message
-    // to a bare status code in front of the user.
-    await assertOkWithErrorDetail(response, `${this.agent} resumable session list`);
-    const payload = asRecord(
-      await boundedJson(response, `${this.agent} resumable session list`, {
-        remaining: 2 * 1024 * 1024,
-      }),
-    );
-    if (!payload || !Array.isArray(payload.sessions)) {
-      throw new ProviderUnavailableError(`${this.agent} returned a malformed session list`);
-    }
-    return payload.sessions.slice(0, 512).flatMap((candidate) => {
-      const session = asRecord(candidate);
-      const id = nonEmptyString(session?.id);
-      if (!id) return [];
-      const createdAt = nonEmptyString(session?.createdAt);
-      const updatedAt = nonEmptyString(session?.updatedAt) ?? nonEmptyString(session?.lastActivity);
-      const status =
-        session?.status === "running" || session?.status === "error" || session?.status === "idle"
-          ? session.status
-          : undefined;
-      const messageCount = Number.isSafeInteger(session?.messageCount)
-        ? (session!.messageCount as number)
-        : undefined;
-      const providerDetail = nonEmptyString(session?.detail);
-      const parentId = nonEmptyString(session?.parentId);
-      const branchLabel = nonEmptyString(session?.branchLabel);
-      return [
-        {
-          sessionId: id,
-          ...(typeof session?.title === "string" ? { title: session.title } : {}),
-          ...(createdAt && Number.isFinite(Date.parse(createdAt)) ? { createdAt } : {}),
-          ...(updatedAt && Number.isFinite(Date.parse(updatedAt)) ? { updatedAt } : {}),
-          ...(status ? { status } : {}),
-          ...(messageCount !== undefined
-            ? { detail: `${messageCount} message${messageCount === 1 ? "" : "s"}` }
-            : providerDetail
-              ? { detail: providerDetail.slice(0, 256) }
-              : {}),
-          ...(parentId ? { parentId: parentId.slice(0, 512) } : {}),
-          ...(branchLabel ? { branchLabel: branchLabel.slice(0, 256) } : {}),
-        },
-      ];
-    });
+  listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
+    return readBridgeResumableSessions(this.agent, this.connection, this.fetchImpl);
   }
 
   slashCommands(sessionId?: string) {
@@ -1166,6 +1150,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   beginSignIn(options?: { deviceCode?: boolean }) {
     return this.catalogAdapter.beginSignIn(options);
+  }
+
+  cancelSignIn() {
+    return this.catalogAdapter.cancelSignIn();
   }
 
   signOut() {
@@ -1309,8 +1297,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     sessionId: string,
     action: ProviderNativeAgentSessionAction,
   ): Promise<NativeAgentSessionActionOutcome> {
-    if (this.agent === "grok") {
-      throw new PromptRejectedError(`${this.agent} does not support session actions`);
+    // The ACP bridge serves only `compact`, by running the agent's own
+    // `/compact` (422 `command-unavailable` when the agent offers none).
+    if (this.agent === "grok" && action.kind !== "compact") {
+      throw new PromptRejectedError(`${this.agent} does not support ${action.kind}`);
     }
     const base = `/session/${encodeURIComponent(sessionId)}`;
     if (action.kind === "compact") {

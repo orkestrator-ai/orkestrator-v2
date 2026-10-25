@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { adaptAppServerItem, planUpdateToTodoList, userMessageClientId } from "./item-adapter.js";
+import {
+  MAX_IMAGE_GENERATION_INPUTS,
+  adaptAppServerItem,
+  planUpdateToTodoList,
+  userMessageClientId,
+} from "./item-adapter.js";
 
 describe("item adapter edge cases", () => {
   test("preserves supported agent-message phases and drops unknown phases", () => {
@@ -115,12 +120,59 @@ describe("item adapter edge cases", () => {
         ],
       }).item,
     ).toMatchObject({
-      status: "failed",
+      // A declined patch never ran; it is no longer folded into `failed`.
+      status: "declined",
       changes: [
         { path: "a.ts", kind: "delete" },
         { path: "b.ts", kind: "update" },
       ],
     });
+  });
+
+  test("keeps every file change's payload, rename and real status", () => {
+    const changes = [
+      { path: "/w/new.ts", kind: { type: "add" }, diff: "export const a = 1;\n" },
+      { path: "/w/gone.ts", kind: { type: "delete" }, diff: "old\n" },
+      {
+        path: "/w/old.ts",
+        kind: { type: "update", move_path: "/w/moved.ts" },
+        diff: "@@ -1 +1 @@\n-a\n+b\n\n\nMoved to: /w/moved.ts",
+      },
+      {
+        path: "/w/plain.ts",
+        kind: { type: "update", move_path: null },
+        diff: "@@ -1 +1 @@\n-x\n+y\n",
+      },
+    ];
+    expect(
+      adaptAppServerItem({ id: "patch", type: "fileChange", status: "inProgress", changes }).item,
+    ).toEqual({
+      id: "patch",
+      type: "file_change",
+      // In progress stays in progress: it is a proposal, not an applied edit.
+      status: "in_progress",
+      changes: [
+        { path: "/w/new.ts", kind: "add", diff: "export const a = 1;\n" },
+        { path: "/w/gone.ts", kind: "delete", diff: "old\n" },
+        {
+          path: "/w/old.ts",
+          kind: "update",
+          diff: "@@ -1 +1 @@\n-a\n+b\n\n\nMoved to: /w/moved.ts",
+          move_path: "/w/moved.ts",
+        },
+        { path: "/w/plain.ts", kind: "update", diff: "@@ -1 +1 @@\n-x\n+y\n" },
+      ],
+    });
+    for (const [status, expected] of [
+      ["completed", "completed"],
+      ["failed", "failed"],
+      ["declined", "declined"],
+      ["inProgress", "in_progress"],
+    ] as const) {
+      expect(
+        adaptAppServerItem({ id: "patch", type: "fileChange", status, changes: [] }).item,
+      ).toMatchObject({ status: expected });
+    }
   });
 
   test("retains structured MCP results and maps unknown status to pending", () => {
@@ -374,6 +426,59 @@ describe("item adapter edge cases", () => {
         source: "generated",
       },
     });
+  });
+
+  test("renders an attachment-backed generation (codex 0.164) as a caption, never by id or bytes", () => {
+    // `fileId` names Codex's attachment store, not a file; `result` is base64.
+    for (const backing of [{ fileId: "file_abc123" }, { result: "iVBORw0KGgo=" }]) {
+      expect(
+        adaptAppServerItem({
+          id: "img-3",
+          type: "imageGeneration",
+          status: "completed",
+          revisedPrompt: "a lighthouse at dusk",
+          failure: null,
+          ...backing,
+        }),
+      ).toEqual({
+        item: { id: "img-3", type: "image", text: "a lighthouse at dusk", source: "generated" },
+      });
+    }
+  });
+
+  test("keeps a generation's input images as distinct absolute paths, bounded", () => {
+    const inputImages = [
+      { path: "/workspace/in/a.png", sha256: "aa" },
+      { path: "/workspace/in/a.png", sha256: "aa" },
+      { path: "relative/b.png", sha256: "bb" },
+      { sha256: "cc" },
+      "not-a-record",
+      ...Array.from({ length: MAX_IMAGE_GENERATION_INPUTS + 2 }, (_, index) => ({
+        path: `/workspace/in/${index}.png`,
+        sha256: String(index),
+      })),
+    ];
+    const adapted = adaptAppServerItem({
+      id: "img-4",
+      type: "imageGeneration",
+      status: "completed",
+      revisedPrompt: null,
+      failure: null,
+      fileId: "file_def456",
+      savedPath: "/workspace/out/edit.png",
+      inputImages,
+    });
+
+    expect(adapted.item).toMatchObject({
+      type: "image",
+      text: "Generated image",
+      path: "/workspace/out/edit.png",
+      source: "generated",
+    });
+    const paths = (adapted.item as { input_paths?: string[] }).input_paths!;
+    expect(paths).toHaveLength(MAX_IMAGE_GENERATION_INPUTS);
+    expect(paths.slice(0, 2)).toEqual(["/workspace/in/a.png", "/workspace/in/0.png"]);
+    expect(JSON.stringify(adapted)).not.toContain("sha256");
   });
 
   test("renders a viewed image titled by its file name", () => {

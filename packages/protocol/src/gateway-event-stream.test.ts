@@ -40,6 +40,14 @@ describe("SSE framing", () => {
     expect(parseSseBlock("id: a:3")).toEqual({ id: "a:3", data: null });
   });
 
+  test("keeps a named event, last line winning", () => {
+    expect(parseSseBlock("event: one\nevent: session.idle\nid: 4\ndata: {}")).toEqual({
+      id: "4",
+      data: "{}",
+      event: "session.idle",
+    });
+  });
+
   test("reassembles frames split across chunks, including CRLF boundaries", () => {
     const decoder = new SseFrameDecoder();
     expect(decoder.push('data: {"event":"a"')).toEqual([]);
@@ -102,6 +110,27 @@ describe("SSE framing", () => {
       controller.abort();
     });
     expect(seen).toEqual(["a"]);
+  });
+
+  test("an abort ends a read waiting on a silent connection", async () => {
+    const controller = new AbortController();
+    // Opens and then never sends or closes, as a half-open route does.
+    const silent = new ReadableStream<Uint8Array>({ start() {} });
+    const reading = readSseStream(silent, controller.signal, () => undefined);
+    setTimeout(() => controller.abort(), 5);
+    await reading;
+  });
+
+  test("reports every chunk, keepalive comments included", async () => {
+    let chunks = 0;
+    await readSseStream(
+      streamOf([": keepalive\n\n", "data: a\n\n"]),
+      new AbortController().signal,
+      () => undefined,
+      undefined,
+      () => chunks++,
+    );
+    expect(chunks).toBeGreaterThanOrEqual(2);
   });
 });
 

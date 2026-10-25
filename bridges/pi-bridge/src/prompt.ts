@@ -28,7 +28,14 @@ import { schedulePersist } from "./persistence.js";
 import { boundTranscript } from "./transcript.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
 import {
+  beginEvidenceTurn,
+  forgetEvidenceTurn,
+  recordTurnEnded,
+  recordTurnRunning,
+} from "./change-evidence.js";
+import {
   cancelRequestedFor,
+  piRunId,
   releasePromptClaim,
   setSteerJournal,
   type JsonObject,
@@ -119,7 +126,7 @@ export function setStartupTimeoutForTests(timeoutMs?: number): void {
 /**
  * Apply a cancel to a prompt Pi has not accepted yet.
  *
- * Pinned SDK 1.2.0 (`dist/core/agent-session.js`): preflight has two stages.
+ * Pinned SDK 1.4.0 (`dist/core/agent-session.js`): preflight has two stages.
  * Before `_startRun` (input handlers, auth) no run is active, so `abort()`
  * reaches nothing and returns at once. `_startRun` then marks the run active
  * and resets `_agentRunAbortRequested` *before* `_prepareRun` (auto-compaction,
@@ -196,6 +203,10 @@ export async function dispatchPrompt(
     ? `${input.prompt}\n\n${structuredPromptInstruction(input.schema)}`
     : input.prompt;
   const promptSequence = state.promptSequence;
+  // The turn the change evidence names; the same id `publicSession` reports
+  // as `turnId` while it runs.
+  const evidenceTurnId = piRunId(state);
+  beginEvidenceTurn(state, evidenceTurnId);
   // Captured before the first await: every later check refers to this token,
   // never to whatever claim happens to be current when it runs.
   const claim = state.promptClaim;
@@ -234,6 +245,7 @@ export async function dispatchPrompt(
       preflightResult: () => announceAccepted(true),
     });
   } catch (error) {
+    forgetEvidenceTurn(state, evidenceTurnId);
     if (commandRun && state.commandRun === commandRun) state.commandRun = undefined;
     diagnostics?.terminalSettled("rejected");
     diagnostics?.streamSettled("rejected");
@@ -270,13 +282,24 @@ export async function dispatchPrompt(
   const acceptance = await withinStartupDeadline(accepted, startupDeadlineMs);
   if (acceptance === "timeout") {
     const error = new PromptStartupTimeoutError(startupDeadlineMs);
-    abandonStartup(state, session, claim, accepted, settled, input, diagnostics, error);
+    abandonStartup(
+      state,
+      session,
+      claim,
+      accepted,
+      settled,
+      input,
+      diagnostics,
+      error,
+      evidenceTurnId,
+    );
     throw error;
   }
   if (claim !== undefined && state.promptStartup?.claim === claim) state.promptStartup = undefined;
   if (!acceptance) {
     // Pi refused the prompt outright. Surface whatever it refused with, rather
     // than a generic rejection: it is the only thing that says why.
+    forgetEvidenceTurn(state, evidenceTurnId);
     await settled;
     if (commandRun && state.commandRun === commandRun) state.commandRun = undefined;
     diagnostics?.terminalSettled("rejected");
@@ -292,6 +315,7 @@ export async function dispatchPrompt(
   }
 
   diagnostics?.sent(state.id);
+  recordTurnRunning(state, evidenceTurnId);
   // `abort()` stops a model run, but nothing can stop an extension command's
   // handler. Cancelling one settles the turn here instead of leaving the tab
   // running until the handler chooses to return.
@@ -416,6 +440,7 @@ function abandonStartup(
   input: DispatchInput,
   diagnostics: ReturnType<typeof createBridgeDiagnostics>,
   error: PromptStartupTimeoutError,
+  evidenceTurnId: string,
 ): void {
   state.status = "error";
   state.error = error.message;
@@ -461,6 +486,8 @@ function abandonStartup(
         if (ran) journal(state, input.requestId, "failed");
         else state.promptJournal.delete(input.requestId);
       }
+      if (ran) recordTurnEnded(state, evidenceTurnId, "failed");
+      else forgetEvidenceTurn(state, evidenceTurnId);
       releasePromptClaim(state, claim);
       state.revision += 1;
       boundTranscript(state);
@@ -566,6 +593,7 @@ function finishTurn(state: SessionState, session: AgentSession, input: DispatchI
     return;
   }
   settleTurn(state, session);
+  recordTurnEnded(state, piRunId(state), cancelled ? "cancelled" : "succeeded");
   // A cancelled turn is not an error: someone asked for it, and the partial
   // transcript is the honest record of what ran. It is not a completed one
   // either — whatever text it stopped on is not its answer.
@@ -631,6 +659,7 @@ function failTurn(
   input: DispatchInput,
 ): void {
   settleTurn(state, session);
+  recordTurnEnded(state, piRunId(state), "failed");
   state.status = "error";
   state.error = errorText(error);
   recordUsage(state, input);
@@ -737,6 +766,9 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
         (turn.cacheWriteTokens ?? 0);
     const turnEntry = {
       turnId,
+      // Pi reports usage several times within a turn, so the first sighting
+      // of this turn id is what dates it.
+      at: previous?.turns?.find((entry) => entry.turnId === turnId)?.at ?? new Date().toISOString(),
       ...(turnCost === undefined ? {} : { costUsd: turnCost }),
       ...(turn.inputTokens === undefined ? {} : { inputTokens: turn.inputTokens }),
       ...(turn.outputTokens === undefined ? {} : { outputTokens: turn.outputTokens }),

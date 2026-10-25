@@ -2,15 +2,17 @@
 
 Status: Living — HTML/CSS design workspace with recoverable operations
 (protocol v2). Outstanding work:
-[design-canvas-qualification.md](../todo/design-canvas-qualification.md),
-[design-operation-recovery-edges.md](../todo/design-operation-recovery-edges.md)
-and [design-agent-conversation-links.md](../todo/design-agent-conversation-links.md).
+[0036-design-canvas-qualification.md](../todo/design-canvas/0036-design-canvas-qualification.md),
+[0037-design-operation-recovery-edges.md](../todo/design-canvas/0037-design-operation-recovery-edges.md)
+and [0038-design-agent-conversation-links.md](../todo/design-canvas/0038-design-agent-conversation-links.md).
 
 Use **New design workspace** (the paintbrush in the environment toolbar). The
-dialog has two modes: **New design** (optionally with Claude or Codex, or a
-blank canvas with no agent) and **Import** (`.orkdes`). There is no library
-or status panel: a saved design is an `.orkdes` file in the repository, and
-clicking one anywhere a file opens (file tree, quick open, chat links) opens it
+dialog has three tabs: **New design** (optionally with Claude or Codex, or a
+blank canvas with no agent), **Open design** (a host `.orkdes` picker,
+`design_import_host_file`, with an upload fallback) and **Saved designs**
+(`DesignLibrary.tsx`: search, rename, duplicate, trash, restore and purge of
+this environment's private canvases). A design saved to the repository is an
+`.orkdes` file, and clicking one anywhere a file opens (file tree, quick open, chat links) opens it
 in the design canvas instead of a text tab. A canvas this environment already
 made from that exact file content is reused; any other file is imported as a new
 canvas that remembers the file as its save location (`design_open_file`,
@@ -101,7 +103,27 @@ Edits are **recoverable operations** (`design/service.ts`,
 
 Outcomes: `committed`, `no-op` (equal values: no revision, history or content
 hint), `rejected` (typed failure), `canceled`, `interrupted` (the backend
-restarted before commit — never replayed), `expired`, `unknown`. Failures carry
+restarted before commit — never replayed), `expired`, `unknown`.
+
+A dead owner's unsettled entry is `interrupted`, with one exception: a
+duplicate commits its copy under an id derived from its token
+(`tokenUuid`) before it writes the source receipt, so when that copy exists
+the operation is `committed` with `createdCanvasId`, also when the source
+write failed in-process (`committedDuplicate` in
+`design/service-lifecycle.ts`). Restart recovery, `status`, `execute`,
+`cancel` and a running peer all answer this way (`deadOutcome` in
+`design/service.ts`). The copy also wins on the live owner: when the source
+receipt cannot be saved, execute still answers `committed` and keeps the
+pending entry; `status` and every later execute (also after the entry's TTL)
+answer from the copy, and the next duplicate prepared on that canvas first
+records the missing receipt, refusing with `unknown-outcome` only while that
+write still fails. A never-migrated legacy canvas has nowhere to keep a
+receipt and is never migrated by recovery, so its dead owners' pending entries
+stay in the pending file as their outcomes (`retainedOutcomes`): status,
+execute, cancel and a correlated retry answer `interrupted` from them, prepare
+keeps them while they fit the per-canvas pending bounds (the oldest give way
+to new edits and then answer `unknown`), and the commit that migrates the
+canvas turns them into receipts. Failures carry
 a code (`conflict`, `invalid-input`, `invalid-content`,
 `renderer-unavailable`, `capacity`, `deadline`, `deleted`, `not-found`,
 `expired-operation`, `unknown-outcome`, `export-collision`,
@@ -167,8 +189,15 @@ generation fails its jobs exactly once. Health distinguishes missing
 executable, launch failure, saturation, recovery and ready, and is probed on
 demand (cached 60 s).
 
-Playwright exposes no browser process handle, so a hung `close()` is bounded
-by the cleanup deadline rather than a process kill.
+Each generation's browser is a Playwright browser server on loopback
+(`launchDesignBrowser`: `chromium.launchServer({ host: "127.0.0.1" })` and
+`chromium.connect`), because a browser from `chromium.launch()` exposes no
+process. Retiring a generation, including one whose connection dropped while
+its server may still run, closes the server within the cleanup deadline;
+a close that hangs or fails is followed by `BrowserServer.kill()`, also
+bounded. The endpoint's path is a random GUID that the renderer never logs. The fault
+test in `renderer.test.ts` stops a real browser with `SIGSTOP` and checks that
+shutdown kills it.
 
 ## Validation
 
@@ -253,9 +282,23 @@ the frame in blue; Delete/Backspace deletes it — undoable, and confirmed first
 on legacy canvases; a canvas-background click or Escape deselects), Escape
 priority (gesture → preview → element selection → frame selection → drawers),
 design undo only when the canvas owns the shortcut. Narrow panes use
-Layers/Inspector drawers. **Preview** mode routes scroll and hover into the
-frame while links, forms, navigation, scripts and network stay blocked; Escape
-inside the frame returns to Inspect.
+Layers/Inspector drawers. Short panes (under 400 px, about 400% zoom) keep the
+Layers and inspector toggles and the design name in the toolbar and move every
+other tool into a **More design tools** menu; there the inspector scrolls as
+one column and the Layers heading and filter note are visually hidden, so the
+panels keep their height (WCAG 1.4.10). Zoom steps keep the menu open; other
+items run after it closes, so focus returns to its trigger. **Preview** mode
+routes scroll and hover into the frame while links, forms, navigation, scripts
+and network stay blocked; Escape inside the frame returns to Inspect.
+
+Inspector fields are named by their visible label ("Fill", "Align items"),
+not the CSS property, so speech input can use what it sees (WCAG 2.5.3); the
+property is in the field's `data-property` and the label's tooltip, and tests
+and tooling address fields through it. Enter on a Layers row whose frame has
+not rendered brings the frame into view, announces that it is loading and
+selects the layer when the frame renders; selecting anything else or moving to
+another frame first drops the wait, and after 10 s it is dropped with an
+announcement.
 
 ## Save, export and download
 
@@ -303,16 +346,62 @@ include the legacy message plus a typed JSON failure.
 
 ## Agent context
 
-A canvas remembers bounded links (≤8) to the conversations that worked on it
-(environment + tab id, platform, role design/implementation). **Ask agent**
-adds a removable, revisioned design-context annotation to a conversation's
-draft without sending it (images pasted into its note or brief are added to
-that draft's attachments); the agent is told to re-read the canvas before
-editing, and every edit is still revision checked. **Use as implementation
-reference** prepares a reviewable handoff draft for an ordinary conversation;
-nothing is submitted, approved, committed or deployed automatically. Closing a
-native tab ends its conversation, so a link to a closed tab offers a new
-conversation instead of a silent replacement.
+A canvas remembers bounded links (≤8) to the conversations that worked on it:
+the tab id the conversation was last opened in, the identity to resume it by
+once that tab closes, platform, role design/implementation, creation time and an optional
+checkpoint. Never a transcript, credential or copy of native status. **Ask
+agent** adds a removable, revisioned design-context annotation to a
+conversation's draft without sending it (images pasted into its note or brief
+are added to that draft's attachments), including a brand-new tab's draft:
+the unassigned composer shows and sends annotations like every other native
+composer. The agent is told to re-read the canvas before editing, and every
+edit is still revision checked. **Use as implementation reference** prepares a
+reviewable handoff draft for an ordinary conversation; nothing is submitted,
+approved, committed or deployed automatically.
+
+Links survive tab closure, because closing a native tab retains its
+conversation (see [Tab close and conversation retention](../../AGENTS.md#tab-close-and-conversation-retention)).
+Code: `apps/backend/src/core/design/session-links.ts`,
+`apps/web/src/components/design/design-session-links.ts`.
+
+- **Session identity.** A new conversation has no session until its first
+  send, so a link starts with only its tab id, which names the backend's
+  native-session mapping (`env-<environmentId>:<tabId>`) only while the tab
+  is open: tab teardown retires that mapping. Teardown
+  (`commands-registry-teardown.ts`) therefore records on every link naming the
+  tab the identity a resume needs: Codex's thread id, read from the session
+  before it is closed (`NativeAgentService.resumableSessionIdIfRunning`,
+  observe only), and the provider session id for Claude, which resumes by it.
+  An identity that cannot be read is not recorded rather than guessed. The
+  link is written after the provider-session teardown lock is released (a
+  resume holds its canvas lane while waiting for that lock), and recording
+  never fails the close.
+- **Link states.** `design_session_link_states` reads each link's tab mapping
+  from storage (no bridge, no liveness route, nothing that defeats idle
+  detachment) and reports `retained` or `missing`; it writes nothing. The
+  dialog asks once when it opens and again on **Retry**, never on a timer, and
+  shows: open (the tab is in this client's pane layout), can be resumed
+  (closed, the link records a session), no conversation to resume (closed and
+  nothing recorded: it never started, or it closed before links kept
+  sessions; remove it or start a new conversation), could not check (the
+  backend failed or did not answer within 8 seconds: **Retry**, never a
+  replacement; a late answer still replaces it) and closed (a backend older
+  than this command, or an agent without resume). Native agents have no
+  archive state yet ([0006](../todo/agent-engines/0006-session-titles-and-history.md)).
+- **Resume conversation.** A closed link that can be resumed is offered ahead
+  of a new conversation, alone or as the destination for new context
+  ("Resume and add to composer"). The resume tab id is derived from the link
+  (`design-resume-<linkId>-<hash of its current tab id>`). `design_session_resume`
+  then, in the canvas lane, compare-and-sets the link's tab, resumes the
+  recorded session for the new tab through the ordinary native-agent resume
+  (`resumeProjectionSession`: environment ownership, a provider that still has
+  the session, never an empty replacement) and moves the link only when that
+  succeeded, returning the live session the tab adopts. A lost conversation is
+  therefore an error in the dialog, not a broken tab. Two clients resuming
+  together send the same tab id: the second waits on the lane and gets the
+  first one's link and live session without resuming again. The tab opens with
+  `resumeSessionId` and `requireExistingResumeSession` and no initial prompt,
+  so the design's opening prompt is never sent again.
 
 ## Bounds
 
@@ -326,15 +415,29 @@ credentials or prompts.
 ## Tests
 
 Backend: the `core/design/` `service`, `operations`, `history`, `lifecycle`,
-`sync`, `records`, `exports`, `export-writer`, `renderer` and `mcp` tests, and
-`commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
+`sync`, `records`, `exports`, `export-writer`, `renderer`, `mcp`,
+`cross-process`, `host-file` and `session-links` tests,
+`commands-registry-teardown` (a closing tab records its session on design
+links) and `commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
 plus one real-Chromium renderer test). Backend tests reach a storage bound
 (change log, history entries) by lowering it with `withDesignLimit`, not with
 hundreds of fsynced commits, and check the shipped bound in memory. A test
 that counts hints after an HTML edit first holds the background validation
 with `renderer.block`. Web: controller, drafts, viewport,
-canvas tab, inspector, layer tree, history/export, entry and agent
-context tests. Browser: `e2e/DesignCanvas.spec.ts` runs the real runtime and
+canvas tab, inspector, layer tree, history/export, entry, agent context and
+`design-session-links` (link states, resume tab ids, concurrent resume)
+tests. Browser: `e2e/DesignCanvas.spec.ts` runs the real runtime and
 command registry at desktop and phone widths;
-`e2e/agent-testing/design-canvas.spec.ts` runs against the isolated stack.
-`scripts/benchmark-design.ts` measures transfer, commit and latency fixtures.
+`e2e/agent-testing/design-canvas.spec.ts` runs against the isolated stack, and
+`e2e/agent-testing/design-live.spec.ts` (opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1`)
+runs the full tool cycle, Ask agent, an approval, the handoff and closing and
+resuming the design conversation with real Claude and Codex.
+`e2e/DesignCanvasAccessibility.spec.ts` runs a keyboard-only journey with focus
+survival, accessibility-tree, label-in-name, reduced-motion, 200% and 400% zoom
+and narrow-pane checks, and
+`e2e/agent-testing/design-canvas-electron.spec.ts` (`mise run test:agent:electron`)
+drives the canvas in the real Electron window. The opt-in
+`core/design/export-container.test.ts` (`ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE`)
+exports from a running container and interrupts it.
+`scripts/benchmark-design.ts` measures transfer, commit and latency fixtures,
+and `e2e/perf/design-canvas-perf.ts` measures the client in a real browser.

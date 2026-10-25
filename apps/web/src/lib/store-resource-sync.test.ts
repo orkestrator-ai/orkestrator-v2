@@ -1,7 +1,8 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import * as portalTransport from "@/lib/portal/portal-transport";
 import type { Environment } from "@/types";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
 
@@ -204,6 +205,55 @@ afterEach(() => {
 });
 
 describe("agent-mail binding", () => {
+  test("authoritative resync repairs cached transcript metadata after missing mailbox events", async () => {
+    detach?.();
+    const mailboxId = "env-1\0tab-1";
+    useConfigStore.getState().updateGlobalConfig({
+      agentMessaging: {
+        ...useConfigStore.getState().config.global.agentMessaging!,
+        enabled: true,
+      },
+    });
+    useAgentMailStore.setState({
+      mailboxes: new Map([
+        [
+          mailboxId,
+          {
+            descriptor: { mailboxId, environmentId: "env-1", tabId: "tab-1" },
+            messages: [],
+            revision: 1,
+          } as never,
+        ],
+      ]),
+    });
+    const refreshMailboxes = mock(async () => undefined);
+    useAgentMailStore.setState({ refreshMailboxes });
+    detach = startTestStoreResourceSync({
+      getAgentMailSummary: async () => ({
+        revision: 2,
+        mailboxes: [
+          {
+            mailboxId,
+            projectId: "project-1",
+            environmentId: "env-1",
+            tabId: "tab-1",
+            revision: 2,
+            unreadCount: 0,
+            userUnseenCount: 0,
+            agentUnackedCount: 0,
+            pendingInjectCount: 0,
+            failedInjectCount: 0,
+          },
+        ],
+      }),
+    });
+    // Cursor expiry requests an authoritative resync; no mailbox event is replayed.
+    requestResourceResync();
+    await waitForState(() => refreshMailboxes.mock.calls.length === 1, "observed mailbox resync");
+    expect(refreshMailboxes).toHaveBeenCalledWith([{ environmentId: "env-1", tabId: "tab-1" }]);
+    expect(useAgentMailStore.getState().sent.size).toBe(0);
+  });
+
   test("adopts authoritative summaries only while messaging is enabled", async () => {
     detach?.();
     const getAgentMailSummary = mock(async () => ({
@@ -3252,5 +3302,45 @@ describe("detach", () => {
     await tick();
 
     expect(hydratePromptQueuesForEnvironment).not.toHaveBeenCalled();
+  });
+});
+
+describe("command-node config events in leaf windows", () => {
+  test("refreshes inherited preferences and disposes a listener whose readiness resolves after stop", async () => {
+    let handler: ((payload: unknown) => unknown) | undefined;
+    let ready!: () => void;
+    const unlisten = mock(() => undefined);
+    window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf", nodeName: "Leaf", path: "direct" };
+    const portalListen = spyOn(portalTransport, "portalListen").mockImplementation(
+      (_event, callback) => {
+        handler = (payload) => callback({ payload } as never);
+        return new Promise((resolve) => {
+          ready = () => resolve(unlisten);
+        });
+      },
+    );
+    try {
+      const config = structuredClone(useConfigStore.getState().config);
+      config.global.terminalScrollback = 8765;
+      const getConfig = mock(async () => config);
+      const stop = startTestStoreResourceSync({ getConfig });
+      handler?.({ resource: "project" });
+      expect(getConfig).not.toHaveBeenCalled();
+      handler?.({ resource: "config" });
+      await waitForState(
+        () => useConfigStore.getState().config.global.terminalScrollback === 8765,
+        "command-node config refresh",
+      );
+      expect(getConfig).toHaveBeenCalledTimes(1);
+      stop();
+      handler?.({ resource: "config" });
+      expect(getConfig).toHaveBeenCalledTimes(1);
+      ready();
+      await tick(0);
+      expect(unlisten).toHaveBeenCalledTimes(1);
+    } finally {
+      portalListen.mockRestore();
+      delete window.orkestratorWorkspaceTarget;
+    }
   });
 });

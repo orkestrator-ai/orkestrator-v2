@@ -19,12 +19,10 @@ import type {
   ClaudeMessage,
   ClaudeMessagePart,
   QuestionInfo,
-  ToolDiffMetadata,
 } from "@/lib/claude-types";
 import { ERROR_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
 import type { FileMention } from "@/types";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
-import { filePathFromToolInput, toolDiffFromToolInput } from "@orkestrator/protocol/tool-diff";
 import {
   tmuxElicitationDraftKey,
   tmuxPlanDraftKey,
@@ -782,7 +780,7 @@ function applyLine(state: TmuxTabState, line: TranscriptLine): TmuxTabState {
       ? line.timestamp
       : undefined;
 
-  const parts = contentToParts(content, line.taskSnapshots);
+  const parts = contentToParts(content, line.taskSnapshots, line.toolDiffs);
 
   const allToolResults =
     role === "user" && parts.length > 0 && parts.every((p) => p.type === "tool-result");
@@ -832,6 +830,8 @@ function contentToParts(
    * merged back, exactly as the bridge does in Native Mode.
    */
   taskSnapshots?: TranscriptLine["taskSnapshots"],
+  /** Diff sides per tool use id, mapped by the backend from each tool's input. */
+  toolDiffs?: TranscriptLine["toolDiffs"],
 ): ClaudeMessagePart[] {
   if (typeof content === "string") {
     const cleaned = cleanUserText(content);
@@ -865,7 +865,7 @@ function contentToParts(
           toolArgs,
           toolState: "pending",
           toolTitle: c.name,
-          toolDiff: buildToolDiff(c.name, toolArgs),
+          toolDiff: c.id ? toolDiffs?.[c.id] : undefined,
         });
         break;
       }
@@ -918,23 +918,6 @@ function cleanUserText(text: string): string {
     // Defensive fallback for stripped-ESC byte that arrived as plain text.
     .replace(/�\[[0-9;?]*[A-Za-z]/g, "");
   return stripped.trim();
-}
-
-/**
- * Derive `toolDiff` metadata from a raw `tool_use.input` payload so the
- * `EditToolPart` renderer can show the file path and diff/line-count.
- */
-function buildToolDiff(
-  toolName: string | undefined,
-  input: Record<string, unknown>,
-): ToolDiffMetadata | undefined {
-  const sides = toolDiffFromToolInput(toolName, input);
-  if (sides) return sides;
-
-  // Not a tool this mapping recognises. A path on its own is still worth
-  // surfacing so a read-like tool can name the file it touched.
-  const filePath = filePathFromToolInput(input);
-  return filePath ? { filePath } : undefined;
 }
 
 function toolResultText(raw: string | Array<{ type: string; text?: string }> | undefined): string {

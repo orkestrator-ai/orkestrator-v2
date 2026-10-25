@@ -1,6 +1,7 @@
 import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { BackgroundTaskSnapshot } from "../../types/index.js";
 import { sessionHealth } from "../../types/index.js";
+import { claudeToolResultOutcomes, recordClaudeToolResult } from "../change-evidence.js";
 import { commandChangeProbe } from "../command-changes.js";
 import { eventEmitter } from "../event-emitter.js";
 import {
@@ -63,6 +64,9 @@ export function handleUserMessage(turn: TurnState, message: SDKMessage): void {
       toolTracker.setCommandChanges(toolUseId, pending);
     }
   }
+  for (const outcome of claudeToolResultOutcomes(sdkUserMessage)) {
+    recordClaudeToolResult(outcome.callId, outcome.isError);
+  }
   let settledProvisionalTask = false;
   for (const outcome of bashToolResultOutcomes(sdkUserMessage, toolTracker)) {
     if (outcome.launch) {
@@ -96,8 +100,8 @@ export function handleUserMessage(turn: TurnState, message: SDKMessage): void {
   // tracked tool to "success" so the UI doesn't show a red failure for
   // something the user explicitly approved. Capture a continuation
   // re-prompt so Claude doesn't just abandon the turn. See the comment
-  // block where `stream.planApprovedThisTurn` is declared for full context.
-  if (stream.planApprovedThisTurn) {
+  // on `TurnState.planApprovedThisTurn` for full context.
+  if (turn.planApprovedThisTurn) {
     for (const tool of toolTracker.getTools()) {
       if (tool.toolName === "ExitPlanMode" && tool.toolState === "failure" && tool.toolUseId) {
         console.warn(
@@ -109,8 +113,8 @@ export function handleUserMessage(turn: TurnState, message: SDKMessage): void {
           output: "Plan approved by the user. Proceeding with implementation.",
           error: undefined,
         });
-        if (!stream.pendingPlanApprovalContinuation) {
-          stream.pendingPlanApprovalContinuation =
+        if (!turn.pendingPlanApprovalContinuation) {
+          turn.pendingPlanApprovalContinuation =
             "The user has approved your plan. Please proceed with implementing it now. You are no longer in plan mode and may write, edit, and run commands as needed.";
         }
       }

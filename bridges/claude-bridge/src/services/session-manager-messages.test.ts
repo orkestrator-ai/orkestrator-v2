@@ -1,9 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { ToolTracker, parseMessageContent } from "./session-manager-messages.js";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
+import {
+  RECORDED_ARTIFACT_ERROR_CODE,
+  RECORDED_PUBLICATION_ID,
+  RECORDED_PUBLISH_ARTIFACT_ARGS,
+  SUCCESSFUL_PUBLISH_CONTRACT,
+  publishArtifactCallContract,
+  recordedArtifactCallToolResult,
+} from "@orkestrator/protocol/testing/artifact-tool-fixtures";
+import { ToolTracker, parseMcpToolName, parseMessageContent } from "./session-manager-messages.js";
 import {
   captureEvents,
   createSession,
   getSession,
+  mockGetMcpServerNames,
+  mockGetMcpServersForSdk,
   nextQueryCall,
   runPromptWithMessages,
   sendPrompt,
@@ -237,5 +248,102 @@ describe("prompt suggestions", () => {
     }
 
     expect(getSession(session.id)?.promptSuggestion).toBeUndefined();
+  });
+});
+
+describe("parseMcpToolName", () => {
+  test("reads Claude Code's mcp__server__tool form, including the Orkestrator server", () => {
+    expect(parseMcpToolName("mcp__orkestrator__publish_artifact")).toEqual({
+      isMcpTool: true,
+      mcpServerName: "orkestrator",
+    });
+    expect(parseMcpToolName("mcp__team_tools__search", new Set(["team_tools"]))).toEqual({
+      isMcpTool: true,
+      mcpServerName: "team_tools",
+    });
+  });
+
+  test("keeps the legacy single-underscore form and non-MCP names", () => {
+    expect(parseMcpToolName("mcp_team_tools_search", new Set(["team_tools"]))).toEqual({
+      isMcpTool: true,
+      mcpServerName: "team_tools",
+    });
+    expect(parseMcpToolName("Read")).toEqual({ isMcpTool: false });
+  });
+});
+
+describe("transcript artifact tools", () => {
+  /*
+   * The web client places a published artifact beside the successful
+   * `publish_artifact` call that names it, reading the call's name and
+   * arguments, never its output. Replay the recorded SDK frames through a
+   * real turn and check the projected part keeps both.
+   */
+  async function publishThroughTurn(isError: boolean) {
+    mockGetMcpServerNames.mockImplementationOnce(async () => new Set(["orkestrator"]));
+    mockGetMcpServersForSdk.mockImplementationOnce(async () => ({
+      orkestrator: { type: "http", url: "http://localhost/mcp" },
+    }));
+    const result = recordedArtifactCallToolResult(isError);
+    const { session, call } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "artifact-assistant-1",
+        message: {
+          id: "msg_artifact_1",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_publish_1",
+              name: "mcp__orkestrator__publish_artifact",
+              input: { ...RECORDED_PUBLISH_ARTIFACT_ARGS },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        uuid: "artifact-user-1",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_publish_1",
+              content: result.content,
+              ...(isError ? { is_error: true } : {}),
+            },
+          ],
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+    const part = session.messages
+      .flatMap((message) => message.parts)
+      .find((candidate) => candidate.toolUseId === "toolu_publish_1");
+    return { call, part };
+  }
+
+  test("a successful publish projects a recognisable call with its arguments", async () => {
+    const { call, part } = await publishThroughTurn(false);
+
+    expect(part).toBeDefined();
+    expect(publishArtifactCallContract(part!)).toEqual({ ...SUCCESSFUL_PUBLISH_CONTRACT });
+    expect(part!.mcpServerName).toBe("orkestrator");
+    expect(part!.toolOutput).toContain(RECORDED_PUBLICATION_ID);
+    // Auto-allowed alongside the mail tools, never by whitelisting the server.
+    for (const name of ARTIFACT_TOOL_NAMES) {
+      expect(call.options.allowedTools).toContain(`mcp__orkestrator__${name}`);
+    }
+    expect(call.options.allowedTools).not.toContain("mcp__orkestrator");
+  });
+
+  test("a refused publish is not a success and keeps its error code", async () => {
+    const { part } = await publishThroughTurn(true);
+
+    expect(part).toBeDefined();
+    const contract = publishArtifactCallContract(part!);
+    expect(contract.tool).toBe("publish_artifact");
+    expect(contract.toolState).not.toBe("success");
+    expect(part!.toolError).toContain(RECORDED_ARTIFACT_ERROR_CODE);
   });
 });

@@ -59,6 +59,22 @@ describe("recurring-work baseline harness", () => {
     );
   });
 
+  test("a confirmed worktree signal leaves a quiet container only its safety scan", async () => {
+    const base = DEFAULT_SCENARIOS.find((entry) => entry.id === "env1-container-c1")!;
+    const timers = await runScenario({ ...base, id: "timers", claudeStateSignal: true }, SHORT);
+    const signals = await runScenario(
+      { ...base, id: "signals", claudeStateSignal: true, worktreeSignal: true },
+      SHORT,
+    );
+    const minutes = SHORT.idleMs / 60_000;
+    // 15 s background scans plus a status exec per panel read past 3 s.
+    expect(timers.idle["diff-scan"]?.started).toBeGreaterThan(4 * minutes);
+    // One 60 s safety scan a minute, and the panel reads are all served.
+    expect(signals.idle["diff-scan"]?.started).toBe(minutes);
+    expect(signals.idle["file-tree-read"]?.started ?? 0).toBeLessThanOrEqual(minutes);
+    expect(signals.idle["tmux-poll"]?.started).toBe(timers.idle["tmux-poll"]?.started);
+  });
+
   test("comparison reports every differing counter", async () => {
     const input = DEFAULT_SCENARIOS[0]!;
     const baseline = await runBaseline({
@@ -123,12 +139,14 @@ describe("driven native observation baseline (step 07)", () => {
 
 // Storage reads plus stats each workflow attempt may cost, from the current
 // supervisors (whole-store ticks list the store and read each active record;
-// looped review reads a record's row four times and claims it once per pass).
+// looped review reads a record's row four times and claims it once per pass;
+// a multi-review pass reads its record ten times, under either driver).
 // Raise one only for a reviewed reason.
 const STORAGE_PER_ATTEMPT = {
-  rollback: { "feature-planning": 3, "build-pipeline": 4, "looped-review": 12 },
-  keyed: { "feature-planning": 1, "build-pipeline": 2, "looped-review": 5 },
+  rollback: { "feature-planning": 3, "build-pipeline": 4, "looped-review": 12, "multi-review": 10 },
+  keyed: { "feature-planning": 1, "build-pipeline": 2, "looped-review": 5, "multi-review": 10 },
 } as const;
+const DOMAINS = ["feature-planning", "build-pipeline", "looped-review", "multi-review"] as const;
 
 describe("driven workflow supervision baseline (step 08)", () => {
   test("is deterministic, content-free, and keyed selection no longer scales with history", async () => {
@@ -140,15 +158,18 @@ describe("driven workflow supervision baseline (step 08)", () => {
     expect(serialized).not.toContain("env-");
     expect(serialized).not.toContain("synthetic");
     const { rollback, keyed } = first.modes;
+    const records = fixture.completedPerStore + fixture.activePerStore;
     for (const domain of ["build-pipeline", "looped-review"] as const) {
       // The whole-store tick enumerates every record every tick…
       expect(rollback[domain].recordsScanned).toBeGreaterThanOrEqual(
-        (fixture.windowMs / 1_500) * (fixture.completedPerStore + fixture.activePerStore),
+        (fixture.windowMs / 1_500) * records,
       );
-      // …the keyed driver only at start and every 30 s.
-      expect(keyed[domain].recordsScanned).toBe(
-        4 * (fixture.completedPerStore + fixture.activePerStore),
-      );
+    }
+    // …multi review's due scheduler at start and every 15 s…
+    expect(rollback["multi-review"].recordsScanned).toBe((1 + fixture.windowMs / 15_000) * records);
+    for (const domain of ["build-pipeline", "looped-review", "multi-review"] as const) {
+      // …and the keyed driver only at start and every 30 s.
+      expect(keyed[domain].recordsScanned).toBe(4 * records);
     }
     for (const domain of ["feature-planning", "build-pipeline", "looped-review"] as const) {
       // Active work is supervised at the same cadence in both modes.
@@ -156,10 +177,15 @@ describe("driven workflow supervision baseline (step 08)", () => {
         Math.abs(keyed[domain].providerReads - rollback[domain].providerReads),
       ).toBeLessThanOrEqual(fixture.activePerStore * 2);
     }
+    // Both multi-review drivers observe running reviewers every 3 s plus the
+    // same stable jitter, and every pass reads each reviewer.
+    expect(keyed["multi-review"].providerReads).toBeGreaterThan(0);
+    expect(keyed["multi-review"].providerReads).toBe(rollback["multi-review"].providerReads);
+    expect(keyed["multi-review"].providerReads % 2).toBe(0);
     // Every attempt reads storage, and none reads more than its budget, cache
     // or not: one extra read per attempt breaks a budget.
     for (const mode of ["rollback", "keyed"] as const) {
-      for (const domain of ["feature-planning", "build-pipeline", "looped-review"] as const) {
+      for (const domain of DOMAINS) {
         const counts = first.modes[mode][domain];
         const storage = counts.storageReads + counts.storageStats;
         expect(storage).toBeGreaterThanOrEqual(counts.attempts);

@@ -819,6 +819,34 @@ describe("terminal run usage", () => {
     expect(publicContextUsage(state)).not.toHaveProperty("estimated");
   });
 
+  test("records the pricing tier the SDK says the run actually billed at", async () => {
+    const tierFor = async (model: { id: string; maxMode?: boolean } | undefined) => {
+      const state = runningSession();
+      const run: FollowableRun = {
+        async *stream() {},
+        cancel: async () => undefined,
+        wait: async () => ({
+          id: "run-tier",
+          status: "finished",
+          ...(model ? { model } : {}),
+          usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+        }),
+      };
+      await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+      return publicContextUsage(state)?.turns?.at(-1);
+    };
+
+    // 1.0.40 sets `maxMode` on the resolved selection when the catalogue
+    // forces Max mode; a selection without it was sent at the standard rate.
+    expect(await tierFor({ id: "gpt-5", maxMode: true })).toMatchObject({
+      turnId: "run-tier",
+      pricingTier: "premium",
+    });
+    expect(await tierFor({ id: "gpt-5" })).toMatchObject({ pricingTier: "standard" });
+    // No resolved model is no evidence, so nothing is claimed.
+    expect(await tierFor(undefined)).not.toHaveProperty("pricingTier");
+  });
+
   test("publishes Cursor Grok tokens before account usage catches up", async () => {
     const state = runningSession();
     state.composer.selectedModelId = "grok-4.6";
@@ -1210,6 +1238,7 @@ describe("cumulative agent usage", () => {
           requestId: "request-1",
           modelId: "cursor/model",
           durationMs: 42,
+          pricingTier: "premium",
         },
       ],
       updatedAt: new Date(1).toISOString(),
@@ -1256,9 +1285,51 @@ describe("cumulative agent usage", () => {
           requestId: "request-1",
           modelId: "cursor/model",
           durationMs: 42,
+          // The account read has no tier of its own, so the run's is kept.
+          pricingTier: "premium",
         },
       ],
     });
+  });
+
+  test("keeps a republished run's original time instead of re-dating it", async () => {
+    const state = runningSession();
+    const ranEarlier = "2026-08-03T22:30:00.000Z";
+    state.usage = {
+      turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      turns: [{ turnId: "run-1", at: ranEarlier }],
+      updatedAt: new Date(1).toISOString(),
+    };
+
+    await refreshAgentUsage(
+      state,
+      usageAgent(async () => ({
+        ...usageReport(3_000, 125),
+        runs: [
+          {
+            runId: "run-1",
+            usage: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+            cost: { rawCostCents: 20, chargedCents: 12 },
+          },
+          {
+            runId: "run-2",
+            usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+            cost: { rawCostCents: 2, chargedCents: 2 },
+          },
+        ],
+      })),
+      state.promptSequence,
+      100,
+      100,
+    );
+
+    // This builder rebuilds every run the agent republishes. `at` is what
+    // dates recorded usage, so a run that already has one keeps it; only a
+    // run seen for the first time is dated now.
+    const turns = publicContextUsage(state).turns ?? [];
+    expect(turns.find((entry) => entry.turnId === "run-1")?.at).toBe(ranEarlier);
+    expect(turns.find((entry) => entry.turnId === "run-2")?.at).toBeDefined();
+    expect(turns.find((entry) => entry.turnId === "run-2")?.at).not.toBe(ranEarlier);
   });
 
   test("does not let a late usage read overwrite a newer turn", async () => {

@@ -2,12 +2,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { BUILD_PIPELINE_TRANSCRIPT_STORE_LAYOUTS } from "./build-pipeline-transcript-layout.js";
 import { NATIVE_AGENT_DISPLAY_TAIL_STORE_LAYOUTS } from "./native-agent-display-tail-layout.js";
+import { changeLedgerMigration } from "./change-tracking/ledger-schema.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { snapshotBeforeMigration } from "./storage-backups.js";
 import { recordShapeUpgradeMigration } from "./storage-record-upgrades.js";
 import {
   WEB_ANNOTATION_STORE_LAYOUT,
   WEB_ANNOTATION_STORE_PREFIX,
 } from "./web-annotation-store-layout.js";
+import { USAGE_HISTORY_STORE_LAYOUTS } from "./usage-history-layout.js";
+import {
+  TRANSCRIPT_ARTIFACT_ENGINE_STORE_LAYOUTS,
+  TRANSCRIPT_ARTIFACT_STORE_LAYOUT,
+  TRANSCRIPT_ARTIFACT_STORE_PREFIX,
+} from "./transcript-artifacts/store-layout.js";
 import {
   StorageDatabase,
   type StorageDatabaseOptions,
@@ -63,6 +71,13 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "preview-services": { kind: "envelope", collections: ["definitions"] },
   "preview-settings": { kind: "document" },
   "backend-identity": { kind: "document" },
+  "backend-profile": { kind: "document" },
+  "node-registry": { kind: "document" },
+  "node-attachments": { kind: "document" },
+  "node-summaries": { kind: "document" },
+  "node-outcomes": { kind: "document" },
+  "node-mail": { kind: "document" },
+  "node-action-requests": { kind: "document" },
   "agent-accounts": { kind: "document" },
   "public-operations/index": { kind: "document" },
   "environment-cleanup-ledger": { kind: "envelope", collections: ["entries"] },
@@ -79,12 +94,16 @@ const ENGINE_STORE_LAYOUTS: Record<string, StoreLayout> = {
   "storage-deletion-fences": { kind: "record" },
   "storage-legacy-json-cleanups": { kind: "document" },
   "host-maintenance": { kind: "document" },
+  "compatibility-path-usage": { kind: "document" },
   ...NATIVE_AGENT_DISPLAY_TAIL_STORE_LAYOUTS,
   ...BUILD_PIPELINE_TRANSCRIPT_STORE_LAYOUTS,
+  ...TRANSCRIPT_ARTIFACT_ENGINE_STORE_LAYOUTS,
+  ...USAGE_HISTORY_STORE_LAYOUTS,
 };
 
 const PREFIX_STORE_LAYOUTS: ReadonlyArray<readonly [string, StoreLayout]> = [
   [WEB_ANNOTATION_STORE_PREFIX, WEB_ANNOTATION_STORE_LAYOUT],
+  [TRANSCRIPT_ARTIFACT_STORE_PREFIX, TRANSCRIPT_ARTIFACT_STORE_LAYOUT],
 ];
 
 const PUBLIC_OPERATION_NAMESPACE = /^public-operations\/ns-[0-9]{13}-[a-f0-9]{8}$/;
@@ -194,6 +213,7 @@ export const STORAGE_MIGRATIONS: readonly StorageMigration[] = [
     },
   },
   recordShapeUpgradeMigration,
+  changeLedgerMigration,
 ];
 
 function legacyArtifacts(entries: readonly string[], baseName: string): string[] {
@@ -505,15 +525,34 @@ function purgeExpiredLegacyJson(archiveRoot: string, now: number): void {
   }
 }
 
-/** Opens the backend database for `dataDir`, importing legacy JSON once. */
+/**
+ * Charges a connection's reads to recurring work. Storage is charged by what
+ * the caller got, not where the rows came from: a read served from the
+ * revision-validated cache still parses every row, so an extra read shows
+ * however warm the cache is. Bytes are charged only for content fetched from
+ * the database, which is what tells a cache miss from a cache-served read.
+ */
+const RECURRING_STORAGE_OBSERVERS: Required<
+  Pick<StorageDatabaseOptions, "observe" | "observeFetch">
+> = {
+  observe: (event) => recurringWorkMetrics.work(event === "read" ? "storage-read" : "storage-stat"),
+  observeFetch: (length) => recurringWorkMetrics.bytes(length),
+};
+
+/**
+ * Opens the backend database for `dataDir`, importing legacy JSON once. Every
+ * connection reports its reads to {@link recurringWorkMetrics} unless the
+ * caller passes its own observers.
+ */
 export function openBackendDatabase(
   dataDir: string,
-  options: Pick<StorageDatabaseOptions, "observe"> = {},
+  options: Pick<StorageDatabaseOptions, "observe" | "observeFetch"> = {},
 ): StorageDatabase {
   const database = new StorageDatabase(dataDir, {
     layoutFor: storeLayout,
     migrations: STORAGE_MIGRATIONS,
     beforeMigrate: (opened, from) => snapshotBeforeMigration(opened, dataDir, from),
+    ...RECURRING_STORAGE_OBSERVERS,
     ...options,
   });
   try {

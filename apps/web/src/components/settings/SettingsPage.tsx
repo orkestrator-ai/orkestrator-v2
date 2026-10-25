@@ -1,4 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useFederation } from "@/components/federation/FederationProvider";
+import { MachineDot } from "@/components/federation/MachineDot";
+import { useCommandNode } from "@/components/federation/useCommandNode";
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import {
@@ -16,33 +19,40 @@ import {
   SlidersHorizontal,
   Cable,
   MessagesSquare,
-  RadioTower,
+  Network,
   MonitorPlay,
   Volume2,
   Server,
   HardDrive,
-  Download,
+  ChartArea,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { DiskUsageSettings } from "./DiskUsageSettings";
-import { UpdatesSettings } from "./UpdatesSettings";
+import { UsageSettings } from "./usage/UsageSettings";
 import { McpSettings } from "./McpSettings";
 import { ProviderMcpSettings } from "./mcp-servers/ProviderMcpSettings";
 import { PreviewSettings } from "./PreviewSettings";
 import { WebAnnotationSettings } from "./WebAnnotationSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { MessagingSettings } from "./MessagingSettings";
-import { ConnectionsSettings } from "./ConnectionsSettings";
+import { MachinesSettings } from "./machines/MachinesSettings";
 import { SoundsSettings } from "./SoundsSettings";
+import {
+  AccountMachineProvider,
+  useAccountMachineStore,
+  useResolvedAccountMachine,
+} from "./account-machine";
+import { MachineConfigProvider } from "./settings-config";
+import { SettingsMachineStrip } from "./SettingsMachineStrip";
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
 
 const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
-  { id: "updates", label: "Updates", icon: <Download className="h-4 w-4" /> },
+  { id: "machines", label: "Machines", icon: <Network className="h-4 w-4" /> },
   { id: "disk-usage", label: "Disk usage", icon: <HardDrive className="h-4 w-4" /> },
-  { id: "connections", label: "Connections", icon: <RadioTower className="h-4 w-4" /> },
+  { id: "usage", label: "Usage", icon: <ChartArea className="h-4 w-4" /> },
   { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
   { id: "platforms", label: "Platforms", icon: <Boxes className="h-4 w-4" /> },
   { id: "review", label: "Review", icon: <Eye className="h-4 w-4" /> },
@@ -90,12 +100,97 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "debug", label: "Debug", icon: <Bug className="h-4 w-4" /> },
 ];
 
+/**
+ * Sections only the command node has: its machines, the preferences every
+ * machine inherits from it, this client's own web server, and the Control
+ * MCP server, whose credentials never cross to another node.
+ */
+const COMMAND_NODE_SECTIONS: ReadonlySet<GlobalSettingsSection | ""> = new Set([
+  "machines",
+  "review",
+  "messaging",
+  "web-client",
+  "mcp",
+]);
+
 interface SettingsPageProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultSection?: GlobalSettingsSection;
   /** Changes on every section request; see FullscreenSettingsLayout. */
   sectionRequest?: number;
+}
+
+/** Names the owner of the settings and machine tools shown in this section. */
+export function SettingsScopeBanner({
+  section,
+  machine,
+}: {
+  section: GlobalSettingsSection | "";
+  /** The machine picked in the header; without one, the machine on screen. */
+  machine?: { name: string; colorToken: string } | null;
+}) {
+  const { enabled, boundMachine } = useFederation();
+  const commandNode = useCommandNode();
+  if (!commandNode || !section || (!enabled && section !== "machines")) return null;
+  const shownMachine = machine ?? boundMachine;
+  const workspaceName =
+    shownMachine?.name ?? (commandNode.workspaceHere ? commandNode.name : "this machine");
+  const inherited = section === "review" || section === "messaging";
+  const mixed = [
+    "defaults",
+    "terminal",
+    "claude",
+    "codex",
+    "cursor",
+    "grok",
+    "opencode",
+    "pi",
+  ].includes(section);
+  const ownerName = section === "machines" || inherited ? commandNode.name : workspaceName;
+  return (
+    <div
+      className="mb-5 flex max-w-4xl items-start gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400"
+      data-testid="settings-scope"
+    >
+      <MachineDot
+        colorToken={
+          section === "machines" || inherited
+            ? commandNode.colorToken
+            : (shownMachine?.colorToken ?? commandNode.colorToken)
+        }
+        machineName={ownerName}
+        className="mt-1"
+      />
+      <span>
+        {section === "machines" ? (
+          enabled ? (
+            <>
+              Command node: <strong>{commandNode.name}</strong>. These are the machines it controls.
+            </>
+          ) : (
+            <>
+              This window is on <strong>{commandNode.name}</strong>.
+            </>
+          )
+        ) : inherited ? (
+          <>
+            Preferences for <strong>{commandNode.name}</strong>, inherited by work on every machine
+            it controls.
+          </>
+        ) : mixed ? (
+          <>
+            Preferences come from <strong>{commandNode.name}</strong>. Machine-specific settings,
+            accounts and tools belong to <strong>{workspaceName}</strong>.
+          </>
+        ) : (
+          <>
+            Machine settings for <strong>{workspaceName}</strong>. Changes apply to this machine.
+          </>
+        )}
+      </span>
+    </div>
+  );
 }
 
 export function SettingsPage({
@@ -108,6 +203,8 @@ export function SettingsPage({
   const isLoading = useConfigStore((state) => state.isLoading);
   const setLoading = useConfigStore((state) => state.setLoading);
   const [initialLoadDone, setInitialLoadDone] = useState(false);
+  const resolved = useResolvedAccountMachine();
+  const choose = useAccountMachineStore((state) => state.choose);
 
   // Load config when page opens
   useEffect(() => {
@@ -136,39 +233,82 @@ export function SettingsPage({
       menuItems={MENU_ITEMS}
       defaultSection={defaultSection}
       sectionRequest={sectionRequest}
-    >
-      {(activeSection) =>
-        // Skills is a read-only browser of the host's skill directories, not a
-        // config form, so it bypasses the auto-saving settings form.
-        activeSection === "updates" ? (
-          <UpdatesSettings />
-        ) : activeSection === "disk-usage" ? (
-          <DiskUsageSettings />
-        ) : activeSection === "skills" ? (
-          <SkillsSettings />
-        ) : activeSection === "connections" ? (
-          <ConnectionsSettings />
-        ) : activeSection === "mcp" ? (
-          <McpSettings />
-        ) : activeSection === "mcp-servers" ? (
-          <ProviderMcpSettings />
-        ) : activeSection === "previews" ? (
-          <div className="space-y-8">
-            <PreviewSettings />
-            <WebAnnotationSettings />
-          </div>
-        ) : activeSection === "messaging" ? (
-          <MessagingSettings />
-        ) : isLoading && !initialLoadDone ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-          </div>
-        ) : activeSection === "sounds" ? (
-          <SoundsSettings />
-        ) : (
-          <GlobalSettings activeSection={activeSection} />
-        )
+      headerStart={
+        resolved.options.length > 1
+          ? (activeSection) => (
+              <SettingsMachineStrip
+                options={resolved.options}
+                selected={resolved.machine}
+                locked={COMMAND_NODE_SECTIONS.has(activeSection)}
+                onSelect={choose}
+              />
+            )
+          : undefined
       }
+    >
+      {(activeSection) => {
+        const locked = COMMAND_NODE_SECTIONS.has(activeSection);
+        const machine = locked ? null : resolved.machine;
+        const option = resolved.options.find((candidate) => candidate.nodeId === machine);
+        return (
+          <MachineSettings key={machine ?? "command-node"} machine={machine} option={option}>
+            <SettingsScopeBanner section={activeSection} machine={option} />
+            {
+              // Skills is a read-only browser of the host's skill directories, not a
+              // config form, so it bypasses the auto-saving settings form.
+              activeSection === "machines" ? (
+                <MachinesSettings />
+              ) : activeSection === "disk-usage" ? (
+                <DiskUsageSettings />
+              ) : activeSection === "usage" ? (
+                <UsageSettings />
+              ) : activeSection === "skills" ? (
+                <SkillsSettings />
+              ) : activeSection === "mcp" ? (
+                <McpSettings />
+              ) : activeSection === "mcp-servers" ? (
+                <ProviderMcpSettings />
+              ) : activeSection === "previews" ? (
+                <div className="space-y-8">
+                  <PreviewSettings />
+                  <WebAnnotationSettings />
+                </div>
+              ) : activeSection === "messaging" ? (
+                <MessagingSettings />
+              ) : isLoading && !initialLoadDone ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : activeSection === "sounds" ? (
+                <SoundsSettings />
+              ) : (
+                <GlobalSettings activeSection={activeSection} />
+              )
+            }
+          </MachineSettings>
+        );
+      }}
     </FullscreenSettingsLayout>
+  );
+}
+
+/**
+ * Everything inside acts on `machine`. Its key remounts the sections per
+ * machine, so nothing read from one machine stays on screen for another.
+ */
+export function MachineSettings({
+  machine,
+  option,
+  children,
+}: {
+  machine: string | null;
+  option: { name: string } | undefined;
+  children: React.ReactNode;
+}) {
+  const value = useMemo(() => ({ machine, name: option?.name ?? null }), [machine, option?.name]);
+  return (
+    <AccountMachineProvider value={value}>
+      <MachineConfigProvider machine={machine}>{children}</MachineConfigProvider>
+    </AccountMachineProvider>
   );
 }

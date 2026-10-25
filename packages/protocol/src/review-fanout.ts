@@ -161,6 +161,13 @@ export interface ReviewerRecord extends ReviewerModelSelection {
   provisionalFindings?: ReviewerProvisionalFinding[];
   /** Cumulative tokens consumed by this reviewer's provider session. */
   tokenCount?: number;
+  /**
+   * Prompt-cache read tokens the provider reported for this reviewer's
+   * session, a count only. Claude, Codex and OpenCode report a session total;
+   * Pi and Cursor report their latest turn, so this is the largest value seen.
+   * It is what measures whether a panel's shared prompt prefix is cached.
+   */
+  cacheReadTokens?: number;
   /** Bounded terminal polls while a provider reconciles its exact cumulative total. */
   usageFinalizationPolls?: number;
   startedAt?: string;
@@ -184,6 +191,11 @@ export interface ReviewWorktreeSnapshotRecord {
  * session to reuse, so it records one here.
  */
 export interface ReviewConsolidationSession {
+  /** One durable continuation after a provider restart cut the turn short. */
+  restartContinuationSent?: boolean;
+  /** The one durable reminder to submit a missing tool-mode report was spent. */
+  resultReminderSent?: boolean;
+  continuationPrompt?: string;
   sessionKey: string;
   providerSessionId: string;
   requestId: string;
@@ -204,6 +216,46 @@ export interface ReviewConsolidationSession {
   progressAt?: string;
   progressDigest?: string;
   stalledSince?: string;
+}
+
+/**
+ * How much a panel's reviewers overlapped, from the source IDs a certified
+ * consolidated report cited. IDs are resolved to counts here and nothing else
+ * is kept: no finding text, file, model or reviewer ID.
+ *
+ * The certified report keeps model labels but not source IDs, so these counts
+ * are computed when consolidation is accepted and stored beside the report.
+ */
+export interface ReviewPanelOverlapV1 {
+  version: 1;
+  /** Reviewers whose reports were consolidated. */
+  reviewers: number;
+  /** Issues and coverage gaps the reviewers reported. */
+  sourceFindings: number;
+  /** Source findings at least one consolidated finding cited. The rest were dropped. */
+  citedSourceFindings: number;
+  /** Issues and coverage gaps in the consolidated report. */
+  consolidatedFindings: number;
+  /** Consolidated findings that only one reviewer substantiated. */
+  singleSourceFindings: number;
+  /** One entry per consolidated reviewer, in configuration order. */
+  positions: ReviewPanelOverlapPosition[];
+}
+
+export interface ReviewPanelOverlapPosition {
+  /** One-based configured reviewer position. It carries no priority. */
+  position: number;
+  sourceFindings: number;
+  citedSourceFindings: number;
+  /** Consolidated findings citing at least one of this reviewer's findings. */
+  consolidatedFindings: number;
+  /** Consolidated findings this reviewer alone substantiated. */
+  singleSourceFindings: number;
+  /**
+   * Consolidated findings no earlier-positioned reviewer substantiated: what
+   * this position added to a panel of the positions before it.
+   */
+  novelFindings: number;
 }
 
 /** Everything a fan-out owner persists between supervisor ticks. */
@@ -254,6 +306,14 @@ function optionalFinalUsagePollCount(value: unknown): boolean {
       (value as number) >= 0 &&
       (value as number) <= REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS)
   );
+}
+
+function count(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function optionalCount(value: unknown): boolean {
+  return value === undefined || count(value);
 }
 
 function optionalProgressDigest(value: unknown): boolean {
@@ -319,6 +379,7 @@ const REVIEWER_KEYS = [
   "restartContinuationSent",
   "error",
   "tokenCount",
+  "cacheReadTokens",
   "usageFinalizationPolls",
   "progressAt",
   "progressDigest",
@@ -365,10 +426,8 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
       typeof value.restartContinuationSent === "boolean") &&
     optionalPollCount(value.idleResultPolls) &&
     optionalString(value.error, 4_096) &&
-    (value.tokenCount === undefined ||
-      (typeof value.tokenCount === "number" &&
-        Number.isSafeInteger(value.tokenCount) &&
-        value.tokenCount >= 0)) &&
+    optionalCount(value.tokenCount) &&
+    optionalCount(value.cacheReadTokens) &&
     optionalFinalUsagePollCount(value.usageFinalizationPolls) &&
     optionalDate(value.progressAt) &&
     optionalProgressDigest(value.progressDigest) &&
@@ -470,6 +529,9 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
   return (
     record(value) &&
     hasOnlyKeys(value, [
+      "restartContinuationSent",
+      "resultReminderSent",
+      "continuationPrompt",
       "sessionKey",
       "providerSessionId",
       "requestId",
@@ -489,6 +551,10 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
       "progressDigest",
       "stalledSince",
     ]) &&
+    (value.restartContinuationSent === undefined ||
+      typeof value.restartContinuationSent === "boolean") &&
+    (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
+    optionalString(value.continuationPrompt, 100_000) &&
     nonBlank(value.sessionKey) &&
     nonBlank(value.providerSessionId) &&
     nonBlank(value.requestId) &&
@@ -513,6 +579,59 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
     optionalProgressDigest(value.progressDigest) &&
     optionalDate(value.stalledSince)
   );
+}
+
+const OVERLAP_POSITION_KEYS = [
+  "position",
+  "sourceFindings",
+  "citedSourceFindings",
+  "consolidatedFindings",
+  "singleSourceFindings",
+  "novelFindings",
+] as const;
+
+/**
+ * Structural check only. A count that is internally inconsistent is a
+ * measurement bug, and it must not make the workflow holding it unreadable.
+ */
+export function isReviewPanelOverlap(value: unknown): value is ReviewPanelOverlapV1 {
+  if (
+    !record(value) ||
+    !hasOnlyKeys(value, [
+      "version",
+      "reviewers",
+      "sourceFindings",
+      "citedSourceFindings",
+      "consolidatedFindings",
+      "singleSourceFindings",
+      "positions",
+    ]) ||
+    value.version !== 1 ||
+    !count(value.reviewers) ||
+    value.reviewers > REVIEW_FANOUT_MAX_REVIEWERS ||
+    !count(value.sourceFindings) ||
+    !count(value.citedSourceFindings) ||
+    !count(value.consolidatedFindings) ||
+    !count(value.singleSourceFindings) ||
+    !Array.isArray(value.positions) ||
+    value.positions.length !== value.reviewers
+  ) {
+    return false;
+  }
+  let previous = 0;
+  return value.positions.every((entry: unknown) => {
+    if (
+      !record(entry) ||
+      !hasOnlyKeys(entry, OVERLAP_POSITION_KEYS) ||
+      !OVERLAP_POSITION_KEYS.every((key) => count(entry[key])) ||
+      (entry.position as number) <= previous ||
+      (entry.position as number) > REVIEW_FANOUT_MAX_REVIEWERS
+    ) {
+      return false;
+    }
+    previous = entry.position as number;
+    return true;
+  });
 }
 
 export function isReviewFanoutState(value: unknown): value is ReviewFanoutState {

@@ -3,6 +3,10 @@ import { useEffect, useMemo, useRef, useCallback, useState, type MouseEvent } fr
 import type { BrowserPreviewOpenLinkEvent } from "@orkestrator/protocol/browser-preview";
 import { isMultiReviewTerminalPhase } from "@orkestrator/protocol/multi-review";
 import {
+  gitHubPullRequestKey,
+  isGitHubPullRequestRef,
+} from "@orkestrator/protocol/github-pull-requests";
+import {
   DndContext,
   KeyboardSensor,
   PointerSensor,
@@ -73,6 +77,11 @@ import {
 } from "@/types/paneLayout";
 import { rendererDebugLog } from "@/lib/debug-log";
 import { resolveWorkspaceRelativeFilePath } from "@/lib/workspace-file-path";
+import {
+  fileTabChangeDiffTarget,
+  legacyLiveDiffTarget,
+  sameChangeDiffTarget,
+} from "./change-diff-target";
 
 import {
   MAX_SETUP_SESSION_BIND_ATTEMPTS,
@@ -1281,6 +1290,54 @@ export function TerminalContainer({
           onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
         });
 
+      // A pull request has one tab per environment: opening it again focuses
+      // that tab (with the requested view) rather than counting a new one.
+      if (type === "pull-request") {
+        const request = options?.pullRequest;
+        if (!request || !isGitHubPullRequestRef(request.ref)) return false;
+        const key = gitHubPullRequestKey(request.ref);
+        const openTab = allTabs.find(
+          (tab) =>
+            tab.type === "pull-request" &&
+            tab.pullRequestData &&
+            gitHubPullRequestKey(tab.pullRequestData.ref) === key,
+        );
+        const store = usePaneLayoutStore.getState();
+        if (openTab) {
+          const pane = store.findPaneWithTab(openTab.id, environmentId);
+          if (!pane) return false;
+          store.updateTabPullRequest(
+            openTab.id,
+            { view: request.view ?? "summary", reopen: true },
+            environmentId,
+          );
+          store.setActivePane(pane.id, environmentId);
+          store.setActiveTab(pane.id, openTab.id, environmentId);
+          return true;
+        }
+        if (allTabs.length >= MAX_TABS) {
+          showTabLimitReachedToast(MAX_TABS);
+          return false;
+        }
+        addTab(
+          activePaneId,
+          {
+            id: createUniqueTabId("pull-request"),
+            type: "pull-request",
+            pullRequestData: {
+              ref: {
+                owner: request.ref.owner,
+                repo: request.ref.repo,
+                number: request.ref.number,
+              },
+              view: request.view ?? "summary",
+            },
+          },
+          environmentId,
+        );
+        return true;
+      }
+
       // Selected durable workflows use caller-owned ids as idempotent focus
       // intents. Other callers retain collision reporting so they can roll back
       // any state they created specifically for a new tab.
@@ -1604,6 +1661,7 @@ export function TerminalContainer({
   // Handler for creating file viewer tabs
   const handleCreateFileTab = useCallback(
     (filePath: string, options?: CreateFileTabOptions) => {
+      const requestedDiff = options?.changeDiff;
       // For container environments, need containerId and running state
       // For local environments, need worktreePath
       const canCreateForContainer = containerId && isContainerRunning;
@@ -1611,9 +1669,13 @@ export function TerminalContainer({
       if (!canCreateForContainer && !canCreateForLocal) return;
 
       const workspaceRoot = isLocalEnvironment ? worktreePath : "/workspace";
-      const relativeFilePath = workspaceRoot
+      const resolvedFilePath = workspaceRoot
         ? resolveWorkspaceRelativeFilePath(filePath, workspaceRoot)
         : null;
+      // A change diff's path is a label (a historical path may no longer
+      // exist, or belong to an earlier worktree); keep it when it does not
+      // resolve inside this workspace.
+      const relativeFilePath = resolvedFilePath ?? (requestedDiff ? filePath : null);
       if (!relativeFilePath) {
         toast.error("Could not open file", {
           description: "The link does not point to a file inside this workspace.",
@@ -1621,22 +1683,33 @@ export function TerminalContainer({
         return;
       }
 
+      // What the diff view shows. Callers that only ask for `isDiff` get the
+      // explicit current-workspace-file target for this environment.
+      let changeDiff =
+        requestedDiff ??
+        (options?.isDiff ? legacyLiveDiffTarget(environmentId, relativeFilePath) : undefined);
+      if (changeDiff?.kind === "live" && changeDiff.path !== undefined && workspaceRoot) {
+        const livePath = resolveWorkspaceRelativeFilePath(changeDiff.path, workspaceRoot);
+        if (livePath) changeDiff = { ...changeDiff, path: livePath };
+      }
+
       // Accepted design paths open in the canvas; other paths use the text editor.
-      if (!options?.isDiff && isDesignFilePath(relativeFilePath)) {
+      if (!changeDiff && isDesignFilePath(relativeFilePath)) {
         void openDesignFile(environmentId, relativeFilePath, handleCreateTab);
         return;
       }
 
       const allTabs = getAllTabs(environmentId);
-      // Check if file is already open - need to match both path AND diff mode
-      // Note: This intentionally allows the same file to be open twice if one is in
-      // diff mode and one is in regular file mode, as they serve different purposes
-      const existingTab = allTabs.find(
-        (t) =>
-          t.type === "file" &&
-          t.fileData?.filePath === relativeFilePath &&
-          (t.fileData?.isDiff ?? false) === (options?.isDiff ?? false),
-      );
+      // A diff tab is reused only for the same target (historical identity, or
+      // live resource + file); a plain file tab only for the same path. The same
+      // file may therefore be open once as a file and once per diff target.
+      const existingTab = allTabs.find((t) => {
+        if (t.type !== "file" || !t.fileData) return false;
+        const openTarget = fileTabChangeDiffTarget(t.fileData, environmentId);
+        if (changeDiff)
+          return openTarget !== undefined && sameChangeDiffTarget(openTarget, changeDiff);
+        return openTarget === undefined && t.fileData.filePath === relativeFilePath;
+      });
       if (existingTab) {
         if (options?.lineNumber) {
           navigateFileTab(existingTab.id, options.lineNumber, options.columnNumber, environmentId);
@@ -1676,9 +1749,10 @@ export function TerminalContainer({
           containerId: isLocalEnvironment ? undefined : (containerId ?? undefined),
           worktreePath: isLocalEnvironment ? worktreePath : undefined,
           isLocalEnvironment,
-          isDiff: options?.isDiff,
+          isDiff: changeDiff ? true : options?.isDiff,
           gitStatus: validatedGitStatus,
           baseBranch: undefined,
+          ...(changeDiff ? { changeDiff } : {}),
           ...(options?.lineNumber
             ? {
                 lineNumber: options.lineNumber,
@@ -1694,8 +1768,8 @@ export function TerminalContainer({
         newTabId,
         "path:",
         relativeFilePath,
-        "isDiff:",
-        options?.isDiff,
+        "diff:",
+        changeDiff?.kind ?? false,
         "isLocal:",
         isLocalEnvironment,
         "for environment:",

@@ -168,6 +168,41 @@ describe("SystemUsageIndicator", () => {
     useProjectStore.setState({ projects: [] });
   });
 
+  test("remote mode applies initial and subsequent requests and reports user dismissals", () => {
+    const onOpenChange = mock(() => undefined);
+    const onDismiss = mock(() => undefined);
+    const remote = (seq: number, open: boolean) => ({
+      request: { seq, open, inset: 6 },
+      onOpenChange,
+      onDismiss,
+    });
+    const { rerender } = render(<SystemUsageIndicator remote={remote(1, true)} />);
+    const dialog = screen.getByRole("dialog", { name: "Environment process usage" });
+    expect(screen.getByTestId("realm-system-usage-panel")).toBeTruthy();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(onOpenChange).toHaveBeenLastCalledWith(true);
+    expect(screen.queryByRole("button", { name: "Open environment process usage" }) === null).toBe(
+      true,
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Close environment process usage" }),
+    );
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    rerender(<SystemUsageIndicator remote={remote(2, true)} />);
+    expect(
+      screen
+        .getByRole("dialog", { name: "Environment process usage" })
+        .contains(document.activeElement),
+    ).toBe(true);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+    rerender(<SystemUsageIndicator remote={remote(3, true)} />);
+    rerender(<SystemUsageIndicator remote={remote(4, false)} />);
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+  });
+
   test("renders rounded CPU, RAM, GPU and disk readings", async () => {
     render(<SystemUsageIndicator />);
 

@@ -124,64 +124,6 @@ const enqueuePromptQueueMessageMock = mock(
     ]),
 );
 
-const requeuePromptQueueMessageMock = mock(
-  async (queueKey: string, environmentId: string, message: { id: string }) => {
-    const current = useClaudeTmuxStore
-      .getState()
-      .getQueuedMessages(promptQueueSessionKey(queueKey));
-    return promptQueueSnapshot(
-      queueKey,
-      environmentId,
-      current.some((candidate) => candidate.id === message.id) ? current : [message, ...current],
-    );
-  },
-);
-
-const claimedPromptMessages = new Map<
-  string,
-  { id: string; text?: string; attachments?: unknown[] }
->();
-
-const acknowledgePromptQueueClaimMock = mock(
-  async (queueKey: string, environmentId: string, claimToken: string) => {
-    claimedPromptMessages.delete(claimToken);
-    return promptQueueSnapshot(
-      queueKey,
-      environmentId,
-      useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
-    );
-  },
-);
-
-const rejectPromptQueueClaimMock = mock(
-  async (queueKey: string, environmentId: string, claimToken: string) => {
-    const claimed = claimedPromptMessages.get(claimToken);
-    claimedPromptMessages.delete(claimToken);
-    const current = useClaudeTmuxStore
-      .getState()
-      .getQueuedMessages(promptQueueSessionKey(queueKey));
-    return promptQueueSnapshot(queueKey, environmentId, claimed ? [claimed, ...current] : current);
-  },
-);
-
-const claimPromptQueueHeadMock = mock(
-  async (
-    queueKey: string,
-    environmentId: string,
-    _expectedMessageId: string,
-    candidateMessages: Array<{ id: string; text?: string; attachments?: unknown[] }>,
-  ) => {
-    const claimed = candidateMessages[0] ?? null;
-    const claimToken = claimed ? `claim-${claimed.id}` : null;
-    if (claimed && claimToken) claimedPromptMessages.set(claimToken, claimed);
-    return {
-      claimed,
-      claimToken,
-      queue: promptQueueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
-    };
-  },
-);
-
 const removePromptQueueMessageMock = mock(
   async (queueKey: string, environmentId: string, messageId: string) => {
     const current = useClaudeTmuxStore
@@ -411,11 +353,7 @@ mock.module("@/components/claude/ClaudeTmuxInteractiveTerminal", () => ({
 }));
 
 mock.module("@/lib/backend", () => ({
-  claimPromptQueueHead: claimPromptQueueHeadMock,
-  acknowledgePromptQueueClaim: acknowledgePromptQueueClaimMock,
-  rejectPromptQueueClaim: rejectPromptQueueClaimMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
-  requeuePromptQueueMessage: requeuePromptQueueMessageMock,
   removePromptQueueMessage: removePromptQueueMessageMock,
   movePromptQueueMessage: movePromptQueueMessageMock,
   retryPromptQueueDispatch: retryPromptQueueDispatchMock,
@@ -445,7 +383,9 @@ mock.module("@/components/chat/FileMentionMenu", () => ({
 mock.module("react-virtuoso", () => ({
   ...realReactVirtuosoSnapshot,
   Virtuoso: forwardRef<any, any>((props, ref) => {
-    lastVirtuosoProps = props;
+    useEffect(() => {
+      lastVirtuosoProps = props;
+    }, [props]);
     const scrollerRef = useReactRef<HTMLDivElement>(null);
 
     useImperativeHandle(
@@ -481,8 +421,8 @@ mock.module("react-virtuoso", () => ({
           visibleData.map((item: any, localIndex: number) => {
             const index = offset + localIndex;
             return (
-              <div key={props.computeItemKey?.(index, item) ?? index}>
-                {props.itemContent(index, item)}
+              <div key={props.computeItemKey?.((props.firstItemIndex ?? 0) + index, item) ?? index}>
+                {props.itemContent((props.firstItemIndex ?? 0) + index, item)}
               </div>
             );
           })
@@ -766,21 +706,6 @@ describe("ClaudeTmuxChatTab", () => {
           message,
         ]),
     );
-    requeuePromptQueueMessageMock.mockReset();
-    requeuePromptQueueMessageMock.mockImplementation(
-      async (queueKey: string, environmentId: string, message: { id: string }) => {
-        const current = useClaudeTmuxStore
-          .getState()
-          .getQueuedMessages(promptQueueSessionKey(queueKey));
-        return promptQueueSnapshot(
-          queueKey,
-          environmentId,
-          current.some((candidate) => candidate.id === message.id)
-            ? current
-            : [message, ...current],
-        );
-      },
-    );
     removePromptQueueMessageMock.mockReset();
     removePromptQueueMessageMock.mockImplementation(
       async (queueKey: string, environmentId: string, messageId: string) => {
@@ -825,51 +750,6 @@ describe("ClaudeTmuxChatTab", () => {
         useClaudeTmuxStore.getState().getQueuedMessages(sessionKey),
       );
     });
-    claimedPromptMessages.clear();
-    acknowledgePromptQueueClaimMock.mockReset();
-    acknowledgePromptQueueClaimMock.mockImplementation(
-      async (queueKey: string, environmentId: string, claimToken: string) => {
-        claimedPromptMessages.delete(claimToken);
-        return promptQueueSnapshot(
-          queueKey,
-          environmentId,
-          useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
-        );
-      },
-    );
-    rejectPromptQueueClaimMock.mockReset();
-    rejectPromptQueueClaimMock.mockImplementation(
-      async (queueKey: string, environmentId: string, claimToken: string) => {
-        const claimed = claimedPromptMessages.get(claimToken);
-        claimedPromptMessages.delete(claimToken);
-        const current = useClaudeTmuxStore
-          .getState()
-          .getQueuedMessages(promptQueueSessionKey(queueKey));
-        return promptQueueSnapshot(
-          queueKey,
-          environmentId,
-          claimed ? [claimed, ...current] : current,
-        );
-      },
-    );
-    claimPromptQueueHeadMock.mockReset();
-    claimPromptQueueHeadMock.mockImplementation(
-      async (
-        queueKey: string,
-        environmentId: string,
-        _expectedMessageId: string,
-        candidateMessages: Array<{ id: string }>,
-      ) => {
-        const claimed = candidateMessages[0] ?? null;
-        const claimToken = claimed ? `claim-${claimed.id}` : null;
-        if (claimed && claimToken) claimedPromptMessages.set(claimToken, claimed);
-        return {
-          claimed,
-          claimToken,
-          queue: promptQueueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
-        };
-      },
-    );
     startSessionMock.mockClear();
     getStatusMock.mockClear();
     getStatusMock.mockImplementation(async () => null);
@@ -2310,6 +2190,7 @@ describe("ClaudeTmuxChatTab", () => {
     const fableOption = await screen.findByText("Fable");
     await act(async () => {
       fireEvent.click(fableOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -2346,6 +2227,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     await act(async () => {
       fireEvent.click(defaultOption!);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -2381,6 +2263,7 @@ describe("ClaudeTmuxChatTab", () => {
     const haikuOption = await screen.findByText("Haiku");
     await act(async () => {
       fireEvent.click(haikuOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
     fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
 
@@ -2641,6 +2524,7 @@ describe("ClaudeTmuxChatTab", () => {
     const haikuOption = await screen.findByText("Haiku");
     await act(async () => {
       fireEvent.click(haikuOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -2681,6 +2565,7 @@ describe("ClaudeTmuxChatTab", () => {
     const haikuOption = await screen.findByText("Haiku");
     await act(async () => {
       fireEvent.click(haikuOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -2722,6 +2607,7 @@ describe("ClaudeTmuxChatTab", () => {
     const fableOption = await screen.findByText("Fable");
     await act(async () => {
       fireEvent.click(fableOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -2769,6 +2655,7 @@ describe("ClaudeTmuxChatTab", () => {
     const fableOption = await screen.findByText("Fable");
     await act(async () => {
       fireEvent.click(fableOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -2796,6 +2683,7 @@ describe("ClaudeTmuxChatTab", () => {
     const maxOption = await screen.findByText("Max");
     await act(async () => {
       fireEvent.click(maxOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
@@ -2975,6 +2863,7 @@ describe("ClaudeTmuxChatTab", () => {
     const lowOption = await screen.findByText("Low");
     await act(async () => {
       fireEvent.click(lowOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3005,6 +2894,7 @@ describe("ClaudeTmuxChatTab", () => {
     const lowOption = await screen.findByText("Low");
     await act(async () => {
       fireEvent.click(lowOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3051,6 +2941,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     await act(async () => {
       fireEvent.click(fastItem);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3106,6 +2997,7 @@ describe("ClaudeTmuxChatTab", () => {
         name: /^Normal Standard speed/,
       }),
     );
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     await waitFor(() => {
       expect(switchFastModeMock).toHaveBeenCalledWith("tab-1", false, "env-1");
     });
@@ -3187,8 +3079,10 @@ describe("ClaudeTmuxChatTab", () => {
         name: /^Fast Lower latency/,
       }),
     );
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*⚡/ }));
     fireEvent.click(await screen.findByText("Haiku"));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
 
     await waitFor(() => {
@@ -3279,6 +3173,7 @@ describe("ClaudeTmuxChatTab", () => {
           name: /^Fast Lower latency/,
         }),
       );
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3332,6 +3227,7 @@ describe("ClaudeTmuxChatTab", () => {
           name: /^Fast Lower latency/,
         }),
       );
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
     await waitFor(() => expect(screen.getByRole("button", { name: /⚡/ })).toBeTruthy());
@@ -3339,6 +3235,7 @@ describe("ClaudeTmuxChatTab", () => {
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*⚡/ }));
     await act(async () => {
       fireEvent.click(await screen.findByText("Sonnet"));
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3389,11 +3286,13 @@ describe("ClaudeTmuxChatTab", () => {
           name: /^Fast Lower latency/,
         }),
       );
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*⚡/ }));
     await act(async () => {
       fireEvent.click(await screen.findByText("Sonnet"));
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3443,11 +3342,13 @@ describe("ClaudeTmuxChatTab", () => {
           name: /^Fast Lower latency/,
         }),
       );
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*⚡/ }));
     await act(async () => {
       fireEvent.click(await screen.findByText("Sonnet"));
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3494,6 +3395,7 @@ describe("ClaudeTmuxChatTab", () => {
     const haikuOption = await screen.findByText("Haiku");
     await act(async () => {
       fireEvent.click(haikuOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
 
     expect(screen.queryByRole("button", { name: /\(High\)/ }) === null).toBe(true);
@@ -3544,6 +3446,7 @@ describe("ClaudeTmuxChatTab", () => {
     const xhighOption = await screen.findByText("Extra High");
     await act(async () => {
       fireEvent.click(xhighOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
     expect(screen.getByRole("button", { name: /\(Extra High\)/ })).toBeTruthy();
 
@@ -3553,6 +3456,7 @@ describe("ClaudeTmuxChatTab", () => {
     const sonnetOption = await screen.findByText("Sonnet");
     await act(async () => {
       fireEvent.click(sonnetOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
 
     expect(screen.getByRole("button", { name: /\(High\)/ })).toBeTruthy();
@@ -3755,6 +3659,7 @@ describe("ClaudeTmuxChatTab", () => {
     const miniOption = await screen.findByText("Mini");
     await act(async () => {
       fireEvent.click(miniOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
 
     // "high" isn't in Mini's level list, so the stored preference snaps to

@@ -136,6 +136,69 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline(snapshot())).toBe(true);
   });
 
+  test("validates persisted session cache reads and review overlap", () => {
+    const overlap = {
+      version: 1,
+      reviewers: 1,
+      sourceFindings: 1,
+      citedSourceFindings: 1,
+      consolidatedFindings: 1,
+      singleSourceFindings: 1,
+      positions: [
+        {
+          position: 1,
+          sourceFindings: 1,
+          citedSourceFindings: 1,
+          consolidatedFindings: 1,
+          singleSourceFindings: 1,
+          novelFindings: 1,
+        },
+      ],
+    };
+    const withSession = (fields: Record<string, unknown>) => ({
+      ...snapshot(),
+      sessions: [
+        {
+          phase: "review",
+          iteration: 1,
+          sessionKey: "review-1",
+          sdkSessionId: "session-1",
+          status: "idle",
+          startedAt: snapshot().createdAt,
+          label: "Consolidation",
+          ...fields,
+        },
+      ],
+      currentSessionIndex: 0,
+    });
+    expect(isBuildPipeline(withSession({}))).toBe(true);
+    for (const cacheReadTokens of [0, 8_000, Number.MAX_SAFE_INTEGER]) {
+      expect(isBuildPipeline(withSession({ cacheReadTokens, reviewOverlap: overlap }))).toBe(true);
+    }
+    for (const cacheReadTokens of [
+      -1,
+      0.5,
+      Number.NaN,
+      Infinity,
+      Number.MAX_SAFE_INTEGER + 1,
+      "8",
+      null,
+    ]) {
+      expect(isBuildPipeline(withSession({ cacheReadTokens }))).toBe(false);
+    }
+    for (const reviewOverlap of [
+      null,
+      {},
+      { ...overlap, version: 2 },
+      { ...overlap, sourceFindings: -1 },
+      { ...overlap, reviewers: 2 },
+      { ...overlap, title: "finding text" },
+      { ...overlap, positions: [{ ...overlap.positions[0], novelFindings: 0.5 }] },
+    ]) {
+      expect(isBuildPipeline(withSession({ reviewOverlap }))).toBe(false);
+    }
+  });
+
   test("accepts interactive-request as a fail-closed workflow failure", () => {
     expect(
       isBuildPipeline({

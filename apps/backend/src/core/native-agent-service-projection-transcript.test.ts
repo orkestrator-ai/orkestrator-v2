@@ -15,10 +15,16 @@ import {
   nativeAgentSessionStorageKey,
 } from "./native-agent-service.js";
 
+import {
+  RECORDED_PUBLISH_ARTIFACT_ARGS,
+  SUCCESSFUL_PUBLISH_CONTRACT,
+  publishArtifactCallContract,
+} from "@orkestrator/protocol/testing/artifact-tool-fixtures";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
 import { adaptAppServerItem } from "../../../../bridges/codex-bridge/src/app-server/item-adapter.js";
 import { itemToParts } from "../../../../bridges/codex-bridge/src/messages/normalization.js";
+import { projectionInternals } from "./native-agent-service-test-collaborators.js";
 
 describe("NativeAgentService transcript projection", () => {
   test("turns provider-reported temp images into exact session-scoped lazy reads", async () => {
@@ -936,13 +942,7 @@ describe("NativeAgentService transcript projection", () => {
         expect(detailRef).toBeString();
 
         // Simulate capacity eviction of exactly this entry.
-        (
-          service as unknown as {
-            toolDetailCache: Map<string, unknown>;
-            toolDetailCacheBytes: number;
-          }
-        ).toolDetailCache.clear();
-        (service as unknown as { toolDetailCacheBytes: number }).toolDetailCacheBytes = 0;
+        projectionInternals(service).evictToolDetails();
         const snapshotsBefore = snapshots;
 
         expect(
@@ -1000,13 +1000,7 @@ describe("NativeAgentService transcript projection", () => {
         expect(detailRef).toBeString();
 
         // Simulate capacity eviction of exactly this entry.
-        (
-          service as unknown as {
-            toolDetailCache: Map<string, unknown>;
-            toolDetailCacheBytes: number;
-          }
-        ).toolDetailCache.clear();
-        (service as unknown as { toolDetailCacheBytes: number }).toolDetailCacheBytes = 0;
+        projectionInternals(service).evictToolDetails();
         const snapshotsBefore = snapshots;
 
         expect(
@@ -1030,16 +1024,7 @@ describe("NativeAgentService transcript projection", () => {
       },
       async ({ service }) => {
         const inlineFileUrl = `data:image/png;base64,${"c".repeat(NATIVE_FILE_DETAIL_MAX_BYTES)}`;
-        const projected = (
-          service as unknown as {
-            projectionPart(
-              sessionKey: string,
-              messageId: string,
-              raw: unknown,
-              partPath: string,
-            ): Record<string, unknown>;
-          }
-        ).projectionPart(
+        const projected = projectionInternals(service).projectionPart(
           "session",
           "message",
           { type: "image", content: "enormous.png", fileUrl: inlineFileUrl },
@@ -1089,11 +1074,7 @@ describe("NativeAgentService transcript projection", () => {
             parts: Array<{ detailRef?: string }>;
           }
         ).parts.map((part) => part.detailRef!);
-        const cache = (
-          service as unknown as {
-            toolDetailCache: Map<string, unknown>;
-          }
-        ).toolDetailCache;
+        const cache = projectionInternals(service).toolDetailCache;
         expect(cache.has(refs[0]!)).toBe(false);
 
         await expect(
@@ -1154,6 +1135,87 @@ describe("NativeAgentService transcript projection", () => {
         });
         expect(details.toolOutput).toBeUndefined();
         expect(details.toolError).toBe("Tool details exceeded the deferred display limit.");
+      },
+    );
+  });
+
+  test("redacts the artifact scope grant from projected tool arguments, including cached reads", async () => {
+    const grant = "oag1.AAAAAAAAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+    const messages = [
+      {
+        id: "assistant-artifact",
+        role: "assistant" as const,
+        content: "",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "publish",
+            toolName: "orkestrator_publish_artifact",
+            toolState: "success",
+            toolArgs: { ...RECORDED_PUBLISH_ARTIFACT_ARGS, scopeCapability: grant },
+          },
+          {
+            type: "tool-invocation",
+            content: "create",
+            toolName: "create_artifact",
+            toolTitle: "orkestrator:create_artifact",
+            toolState: "running",
+            toolArgs: { requestKey: "k-2", scopeCapability: "not-a-grant-but-still-secret" },
+          },
+          {
+            // Another server's tool with the same argument name is not ours to rewrite…
+            type: "tool-invocation",
+            content: "other",
+            toolName: "mcp__other__create_artifact",
+            toolState: "success",
+            toolArgs: { scopeCapability: "their-value" },
+          },
+          {
+            // …unless the value is shaped like an Orkestrator artifact grant.
+            type: "tool-invocation",
+            content: "echo",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: { command: "echo", scopeCapability: grant },
+          },
+        ],
+        createdAt: "2026-10-20T10:00:00.000Z",
+      },
+    ];
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-artifact-grant-redaction-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:tab-artifact",
+        };
+        await service.ensureSession(identity);
+        for (let read = 0; read < 2; read += 1) {
+          const projection = await service.getProjection(identity);
+          const parts = (
+            projection!.messages[0] as { parts: Array<{ toolArgs?: Record<string, unknown> }> }
+          ).parts;
+          expect(parts[0]!.toolArgs).toEqual({
+            ...RECORDED_PUBLISH_ARTIFACT_ARGS,
+            scopeCapability: "[redacted]",
+          });
+          expect(publishArtifactCallContract(parts[0]!)).toEqual({
+            ...SUCCESSFUL_PUBLISH_CONTRACT,
+          });
+          expect(parts[1]!.toolArgs?.scopeCapability).toBe("[redacted]");
+          expect(parts[2]!.toolArgs?.scopeCapability).toBe("their-value");
+          expect(parts[3]!.toolArgs?.scopeCapability).toBe("[redacted]");
+          expect(JSON.stringify(projection)).not.toContain(grant);
+        }
+        // The provider's own row is not mutated.
+        expect(messages[0]!.parts[0]!.toolArgs.scopeCapability).toBe(grant);
       },
     );
   });

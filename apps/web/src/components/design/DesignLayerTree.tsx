@@ -121,6 +121,29 @@ function frameStates(meta: DesignFrameMeta | undefined, pending: boolean): strin
   return states;
 }
 
+/** Where a frame's layers can be read from right now. */
+function frameSourceOf(
+  current: DesignLayerTreeProps,
+  frameId: string,
+): FrameSource | "bridge" | "backend" {
+  const frame = current.frames.find((candidate) => candidate.id === frameId);
+  if (!frame) return "unavailable";
+  const bridge = current.getBridge(frameId);
+  if (
+    bridge &&
+    !bridge.closed &&
+    bridge.renderedContentId === contentKey(frame, current.metas[frameId])
+  )
+    return "bridge";
+  if (current.liveFrames.has(frameId)) return "wait";
+  return current.legacy ? "unavailable" : "backend";
+}
+
+function readinessOf(current: DesignLayerTreeProps, frameId: string): FrameSource {
+  const source = frameSourceOf(current, frameId);
+  return source === "bridge" || source === "backend" ? "ready" : source;
+}
+
 function parentRowIndex(rows: readonly LayerRow[], index: number): number {
   const level = rows[index]!.level;
   for (let cursor = index - 1; cursor >= 0; cursor--)
@@ -144,20 +167,18 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
     onFrameAction,
   } = props;
   const latest = useRef(props);
-  latest.current = props;
-  const treeRef = useRef<LayerTreeState>(createLayerTree());
-  const [version, setVersion] = useState(0);
-  const mounted = useRef(true);
+  useLayoutEffect(() => {
+    latest.current = props;
+  });
+  // treeRef is the latest tree for handlers and effects; `committed` re-renders with it.
+  const [committed, setCommitted] = useState<LayerTreeState>(createLayerTree);
+  const treeRef = useRef(committed);
+  // Always set state: layout effects can commit while a StrictMode or Activity
+  // remount has not rerun passive effects, and the render must not lag the ref.
   const commit = useCallback((next: LayerTreeState) => {
     if (next === treeRef.current) return;
     treeRef.current = next;
-    if (mounted.current) setVersion((value) => value + 1);
-  }, []);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
+    setCommitted(next);
   }, []);
 
   const frameIds = useMemo(() => frames.map((frame) => frame.id), [frames]);
@@ -168,36 +189,42 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
     () => frames.map((frame) => [frame.id, structureKey(frame, metas[frame.id], legacy)] as const),
     [frames, metas, legacy],
   );
-  // Derived synchronously so a structure change never renders old paths for a frame.
-  treeRef.current = syncFrameKeys(treeRef.current, identities);
-  const tree = treeRef.current;
+  // Derived while rendering so a structure change never renders old paths for a frame.
+  const tree = useMemo(() => syncFrameKeys(committed, identities), [committed, identities]);
+  // Handlers and the effects below read the same synced tree (or a newer one).
+  useLayoutEffect(() => {
+    treeRef.current =
+      treeRef.current === committed ? tree : syncFrameKeys(treeRef.current, identities);
+  }, [committed, identities, tree]);
 
-  const sourceOf = useCallback((frameId: string): FrameSource | "bridge" | "backend" => {
-    const current = latest.current;
-    const frame = current.frames.find((candidate) => candidate.id === frameId);
-    if (!frame) return "unavailable";
-    const bridge = current.getBridge(frameId);
-    if (
-      bridge &&
-      !bridge.closed &&
-      bridge.renderedContentId === contentKey(frame, current.metas[frameId])
-    )
-      return "bridge";
-    if (current.liveFrames.has(frameId)) return "wait";
-    return current.legacy ? "unavailable" : "backend";
-  }, []);
-  const readiness = useCallback(
-    (frameId: string): FrameSource => {
-      const source = sourceOf(frameId);
-      return source === "bridge" || source === "backend" ? "ready" : source;
-    },
-    [sourceOf],
+  const sourceOf = useCallback((frameId: string) => frameSourceOf(latest.current, frameId), []);
+  const readiness = useCallback((frameId: string) => readinessOf(latest.current, frameId), []);
+
+  // The keyboard-active row and its frame; a selection made elsewhere moves them.
+  const selectionFrame = selection?.frameId;
+  const selectionSelector = selection?.element.selector;
+  const [activeKey, setActiveKey] = useState<string | null>(() =>
+    selectionFrame ? layerRowKey(selectionFrame, selectionSelector ?? "") : null,
   );
-
-  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [activeFrame, setActiveFrame] = useState<string | null>(selectionFrame ?? null);
+  const [revealedSelection, setRevealedSelection] = useState({
+    frameId: selectionFrame,
+    selector: selectionSelector,
+  });
+  if (
+    revealedSelection.frameId !== selectionFrame ||
+    revealedSelection.selector !== selectionSelector
+  ) {
+    setRevealedSelection({ frameId: selectionFrame, selector: selectionSelector });
+    if (selectionFrame) {
+      setActiveKey(layerRowKey(selectionFrame, selectionSelector ?? ""));
+      setActiveFrame(selectionFrame);
+    }
+  }
   const activeKeyRef = useRef(activeKey);
-  activeKeyRef.current = activeKey;
-  const activeFrame = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    activeKeyRef.current = activeKey;
+  }, [activeKey]);
   const selectionKey = selection
     ? layerRowKey(selection.frameId, selection.element.selector)
     : null;
@@ -237,15 +264,14 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
       const current = latest.current;
       const key = contentKey(frame, current.metas[frameId]);
       let pending: Promise<DesignHierarchyPage>;
+      let bridge: DesignFrameBridge | undefined;
       if (source === "bridge") {
-        const bridge = current.getBridge(frameId)!;
-        pending = bridge
-          .ask<DesignHierarchyPage>({ op: "hierarchyPage", ...query })
-          .then((page) => {
-            if (bridge.renderedContentId !== key)
-              throw new StaleHierarchyError("Frame re-rendered");
-            return page;
-          });
+        bridge = current.getBridge(frameId)!;
+        const asked = bridge;
+        pending = asked.ask<DesignHierarchyPage>({ op: "hierarchyPage", ...query }).then((page) => {
+          if (asked.renderedContentId !== key) throw new StaleHierarchyError("Frame re-rendered");
+          return page;
+        });
       } else {
         const loader = current.loadHierarchy ?? designApi.hierarchy;
         const expected = current.metas[frameId]?.structureId;
@@ -259,6 +285,14 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
         (page) => commit(applyPage(treeRef.current, request, page, protectedBranches())),
         (error: unknown) => {
           if (!isCurrentRequest(treeRef.current, request)) return;
+          if (bridge?.closed) {
+            // The frame was culled or re-rendered mid-load: forget the branch so
+            // it is asked again from whichever source is ready (the backend for
+            // a culled frame, the new bridge once it renders).
+            const failed = failLoad(treeRef.current, request, errorMessage(error));
+            commit(clearBranch(failed, request.frameId, request.branch));
+            return;
+          }
           if (error instanceof StaleHierarchyError) {
             commit(
               failLoad(
@@ -283,13 +317,9 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
   );
 
   // Auto-expansion: selection/focus reveal their frame; small canvases open live frames once.
-  const selectionFrame = selection?.frameId;
-  const selectionSelector = selection?.element.selector;
   useLayoutEffect(() => {
     if (!selectionFrame) return;
     commit(revealPath(treeRef.current, selectionFrame, selectionSelector));
-    setActiveKey(layerRowKey(selectionFrame, selectionSelector ?? ""));
-    activeFrame.current = selectionFrame;
   }, [commit, selectionFrame, selectionSelector]);
   useLayoutEffect(() => {
     if (focusedFrameId) commit(setExpanded(treeRef.current, focusedFrameId, ROOT_BRANCH, true));
@@ -314,7 +344,17 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
     }
     if (state !== treeRef.current) commit(state);
     for (const load of loads) startLoad(load.frameId, load.branch, false);
-  }, [commit, frameIds, liveFrames, readiness, renderedVersion, startLoad, version, metas, legacy]);
+  }, [
+    commit,
+    frameIds,
+    liveFrames,
+    readiness,
+    renderedVersion,
+    startLoad,
+    committed,
+    metas,
+    legacy,
+  ]);
 
   // Rows: filtered (loaded rows only) or the expanded tree.
   const [filter, setFilter] = useState("");
@@ -324,7 +364,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
     [filtering, tree, frameIds, filter],
   );
   // Readiness reads bridges through a ref; this snapshot makes it a real memo input.
-  const sourceKey = frameIds.map((frameId) => readiness(frameId)).join(",");
+  const sourceKey = frameIds.map((frameId) => readinessOf(props, frameId)).join(",");
   const rows = useMemo(() => {
     if (filtered) return filtered.rows;
     const sources = sourceKey.split(",");
@@ -337,8 +377,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
 
   // Roving tabindex target: the active row, else its frame, else the selection, else the first row.
   let activeIndex = activeKey !== null ? (indexByKey.get(activeKey) ?? -1) : -1;
-  if (activeIndex < 0 && activeFrame.current)
-    activeIndex = indexByKey.get(frameRowKey(activeFrame.current)) ?? -1;
+  if (activeIndex < 0 && activeFrame) activeIndex = indexByKey.get(frameRowKey(activeFrame)) ?? -1;
   if (activeIndex < 0 && selectionKey) activeIndex = indexByKey.get(selectionKey) ?? -1;
   if (activeIndex < 0 && rows.length) activeIndex = 0;
   const activeRowKey = activeIndex >= 0 ? rows[activeIndex]!.key : null;
@@ -374,6 +413,15 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
   const rowElements = useRef(new Map<string, HTMLElement>());
   const focusRequest = useRef<string | null>(null);
   const focusWithin = useRef(false);
+  // Rows are keyed by `data-row-key`, so one stable callback registers them all.
+  const registerRow = useCallback((element: HTMLDivElement | null) => {
+    const key = element?.dataset.rowKey;
+    if (!element || key === undefined) return;
+    rowElements.current.set(key, element);
+    return () => {
+      rowElements.current.delete(key);
+    };
+  }, []);
   useLayoutEffect(() => {
     const target = focusRequest.current;
     focusRequest.current = null;
@@ -408,7 +456,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
       const row = rows[index];
       if (!row) return;
       setActiveKey(row.key);
-      activeFrame.current = row.frameId;
+      setActiveFrame(row.frameId);
       focusRequest.current = row.key;
       ensureVisible(index);
     },
@@ -435,7 +483,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
   const activate = useCallback(
     (row: LayerRow) => {
       setActiveKey(row.key);
-      activeFrame.current = row.frameId;
+      setActiveFrame(row.frameId);
       if (row.kind === "frame") onFocusFrame(row.frameId);
       else if (row.kind === "layer") onSelectElement(row.frameId, row.layer.selector);
       else if (row.kind === "more") startLoad(row.frameId, row.branch, true);
@@ -520,15 +568,11 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
       tabIndex,
       "aria-level": row.level,
       "data-row-key": row.key,
-      ref: (element: HTMLDivElement | null) => {
-        if (element) rowElements.current.set(row.key, element);
-        else rowElements.current.delete(row.key);
-      },
       onFocus: () => {
         props.onFocusRow?.(row.frameId);
         if (row.key !== activeRowKey) {
           setActiveKey(row.key);
-          activeFrame.current = row.frameId;
+          setActiveFrame(row.frameId);
         }
       },
       className:
@@ -551,6 +595,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
         <div
           key={row.key}
           {...common}
+          ref={registerRow}
           aria-label={label}
           aria-expanded={row.expanded}
           aria-setsize={row.setsize}
@@ -649,6 +694,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
         <div
           key={row.key}
           {...common}
+          ref={registerRow}
           aria-label={layer.label === layer.tag ? layer.label : `${layer.label} (${layer.tag})`}
           aria-expanded={row.expandable && !filtering ? row.expanded : undefined}
           aria-selected={selected}
@@ -698,7 +744,12 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
           ? "Bring the frame into view to load more"
           : "";
       return (
-        <div key={row.key} {...common} aria-label={`${summary}${reason ? `. ${reason}` : ""}`}>
+        <div
+          key={row.key}
+          {...common}
+          ref={registerRow}
+          aria-label={`${summary}${reason ? `. ${reason}` : ""}`}
+        >
           <span aria-hidden className="size-4 shrink-0" />
           <button
             type="button"
@@ -720,6 +771,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
       <div
         key={row.key}
         {...common}
+        ref={registerRow}
         aria-label={row.message}
         aria-busy={row.state === "loading" || row.state === "wait" || undefined}
       >
@@ -755,7 +807,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
 
   return (
     <nav aria-label="Design hierarchy" className="flex min-w-0 flex-1 flex-col p-2 text-xs">
-      <h3 className="mb-2 text-muted-foreground">Layers</h3>
+      <h3 className="design-hierarchy-note mb-2 text-muted-foreground">Layers</h3>
       <input
         type="search"
         value={filter}
@@ -768,7 +820,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
       />
       <p
         id={`${canvasId}-layer-filter-scope`}
-        className="mb-1 text-[10px] text-muted-foreground"
+        className="design-hierarchy-note mb-1 text-[10px] text-muted-foreground"
         aria-live="polite"
       >
         {filtered

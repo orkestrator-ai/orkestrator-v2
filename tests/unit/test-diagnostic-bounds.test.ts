@@ -386,6 +386,10 @@ describe("bounded test diagnostics", () => {
       expect(source).toContain("register-dom.ts");
       expect(source).toContain("setup.ts");
     }
+    const backendConfig = Bun.TOML.parse(
+      await readFile(path.join(root, "apps/backend/bunfig.toml"), "utf8"),
+    ) as { test?: { preload?: string[] } };
+    expect(backendConfig.test?.preload).toEqual(["../../tests/setup-node.ts"]);
     for (const manifest of [
       "apps/backend/package.json",
       "apps/desktop/package.json",

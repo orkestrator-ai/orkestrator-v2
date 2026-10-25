@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Plus, RefreshCw } from "lucide-react";
 
 import {
@@ -6,6 +6,8 @@ import {
   AGENT_PLATFORM_LABELS,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
+import { useFederation } from "@/components/federation/FederationProvider";
+import { isWindowMachine, useAccountMachine } from "@/components/settings/account-machine";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -16,7 +18,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  consumeMcpSettingsIntent,
+  peekMcpSettingsIntent,
+  settleMcpSettingsIntent,
   onMcpSettingsIntent,
   type McpSettingsIntent,
 } from "@/lib/mcp-settings-navigation";
@@ -27,6 +30,8 @@ import { McpApplyStatus } from "./McpApplyStatus";
 import { McpDiscardDialog } from "./McpDiscardDialog";
 import { McpEntryDialog, type McpEntryAction } from "./McpEntryDialogs";
 import { McpErrorNotice } from "./McpErrorNotice";
+import { McpLiveJoinNotice } from "./McpLiveJoinNotice";
+import { joinLiveMcpServer, type McpLiveServerRef } from "./mcp-live-join";
 import { applyBlockedReason, writeBlockedReason } from "./mcp-rollout";
 import { McpServerEditor, type McpEditorMode } from "./McpServerEditor";
 import { McpSourceList } from "./McpSourceList";
@@ -34,20 +39,65 @@ import { useMcpSnapshot, useMcpTargets } from "./useMcpManagement";
 
 const BACKEND_CONTEXT = "backend";
 
+/** The live row a link came from; only a link that names a server has one. */
+function liveServerRef(intent: McpSettingsIntent): McpLiveServerRef | null {
+  if (!intent.serverName) return null;
+  return {
+    provider: intent.provider ?? "claude",
+    environmentId: intent.environmentId ?? null,
+    serverName: intent.serverName,
+    ...(intent.serverScope ? { scope: intent.serverScope } : {}),
+    ...(intent.logicalSessionKey ? { logicalSessionKey: intent.logicalSessionKey } : {}),
+  };
+}
+
 /**
  * Servers the coding agents connect to, per provider. Deliberately separate
  * from Control MCP (inbound access to Orkestrator itself).
  */
 export function ProviderMcpSettings() {
-  const initialIntent = useMemo<McpSettingsIntent>(() => consumeMcpSettingsIntent() ?? {}, []);
+  // Read during render, taken after commit: a discarded first render must not
+  // lose the link that opened this section.
+  const [pendingIntent] = useState(peekMcpSettingsIntent);
+  const initialIntent: McpSettingsIntent = pendingIntent ?? {};
+  useEffect(() => settleMcpSettingsIntent(pendingIntent), [pendingIntent]);
   const [provider, setProvider] = useState<AgentPlatform>(initialIntent.provider ?? "claude");
   const [contextId, setContextId] = useState<string>(
     initialIntent.environmentId ?? BACKEND_CONTEXT,
   );
-  const [highlight, setHighlight] = useState<string | undefined>(initialIntent.serverName);
+  const [liveRef, setLiveRef] = useState<McpLiveServerRef | null>(() =>
+    liveServerRef(initialIntent),
+  );
   const [editor, setEditor] = useState<McpEditorMode | null>(null);
   const [entryAction, setEntryAction] = useState<McpEntryAction | null>(null);
-  const environments = useEnvironmentStore((state) => state.environments);
+  const { machine } = useAccountMachine();
+  const { portalState } = useFederation();
+  const ownEnvironments = useEnvironmentStore((state) => state.environments);
+  // Only the bound backend uses the window store; other backends, including
+  // the command node in a leaf window, use their portal summaries.
+  const environments = useMemo(() => {
+    if (!isWindowMachine(machine)) {
+      const nodeId = machine ?? portalState.selfId;
+      const node =
+        nodeId === portalState.selfId
+          ? portalState.self
+          : portalState.nodes.find((candidate) => candidate.nodeId === nodeId);
+      return (node?.environments ?? [])
+        .filter((environment) => !environment.deleting)
+        .map((environment) => ({
+          id: environment.ref.environmentId,
+          name: environment.name,
+          local: environment.environmentType === "local",
+        }));
+    }
+    return ownEnvironments
+      .filter((environment) => !environment.deletionRequestedAt)
+      .map((environment) => ({
+        id: environment.id,
+        name: environment.name,
+        local: environment.environmentType === "local",
+      }));
+  }, [machine, ownEnvironments, portalState.nodes, portalState.self, portalState.selfId]);
   // Whether the open editor/dialog holds unsaved input. A draft belongs to
   // one exact target, so switching target must discard it — explicitly.
   const dirtyRef = useRef(false);
@@ -72,7 +122,9 @@ export function ProviderMcpSettings() {
     else run();
   };
   const guardSwitchRef = useRef(guardSwitch);
-  guardSwitchRef.current = guardSwitch;
+  useLayoutEffect(() => {
+    guardSwitchRef.current = guardSwitch;
+  });
   const restoreFocus = () => {
     const element = returnFocusRef.current;
     returnFocusRef.current = null;
@@ -95,7 +147,7 @@ export function ProviderMcpSettings() {
         guardSwitchRef.current(() => {
           if (intent.provider) setProvider(intent.provider);
           setContextId(intent.environmentId ?? BACKEND_CONTEXT);
-          setHighlight(intent.serverName);
+          setLiveRef(liveServerRef(intent));
         }),
       ),
     [],
@@ -126,6 +178,7 @@ export function ProviderMcpSettings() {
   const current = snapshot && snapshot.target.targetId === target?.targetId ? snapshot : null;
 
   const selectContext = (next: string) => guardSwitch(() => setContextId(next));
+  const liveJoin = current && liveRef ? joinLiveMcpServer(current, liveRef) : null;
 
   if (targetsState.status === "unsupported" || snapshotState.status === "unsupported") {
     return (
@@ -193,14 +246,11 @@ export function ProviderMcpSettings() {
               <SelectItem value={BACKEND_CONTEXT}>
                 Backend user (shared by every environment)
               </SelectItem>
-              {environments
-                .filter((environment) => !environment.deletionRequestedAt)
-                .map((environment) => (
-                  <SelectItem key={environment.id} value={environment.id}>
-                    {environment.name}{" "}
-                    {environment.environmentType === "local" ? "(worktree)" : "(container)"}
-                  </SelectItem>
-                ))}
+              {environments.map((environment) => (
+                <SelectItem key={environment.id} value={environment.id}>
+                  {environment.name} {environment.local ? "(worktree)" : "(container)"}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
@@ -310,9 +360,18 @@ export function ProviderMcpSettings() {
             </Button>
           </div>
 
+          {liveRef && liveJoin && liveJoin.kind !== "other-target" ? (
+            <McpLiveJoinNotice liveRef={liveRef} join={liveJoin} snapshot={current} />
+          ) : null}
+
           <McpSourceList
             snapshot={current}
-            highlightName={highlight}
+            highlightEntryId={
+              liveJoin?.kind === "saved" || liveJoin?.kind === "injected"
+                ? liveJoin.entryId
+                : undefined
+            }
+            onReload={reload}
             onEdit={(definition, trigger) =>
               openDialog(trigger, () => setEditor({ kind: "edit", entryId: definition.entryId }))
             }

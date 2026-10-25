@@ -1,11 +1,11 @@
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
   COORDINATOR_WEB_RESEARCH_ENV,
+  coordinatorResearchMcpServersFromEnv,
   coordinatorWebResearchEnv,
   coordinatorWebResearchSetting,
   normalizeCoordinatorResearchMcpServers,
 } from "@orkestrator/protocol/coordinator-web-research";
-import { assertEnvironmentNotMoving } from "./environment-replacement-fence.js";
 import {
   formatContainerLifecycleError,
   parseContainerLifecycle,
@@ -17,13 +17,20 @@ import {
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { removeOpenCodeCommandChangeJournals } from "./opencode-command-changes.js";
 import {
+  OPENCODE_STARTUP_STDERR_TAIL_BYTES,
+  isOpenCodeDatabaseLockedError,
+  openCodeDatabaseLockedError,
+  openCodeStderrReportsLockedDatabase,
+} from "./opencode-host-start.js";
+import {
   CLAUDE_PINNED_RUNTIME_ENV,
   OPENCODE_PINNED_RUNTIME_ENV,
 } from "@orkestrator/protocol/terminal-agent-launch";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
-import { existsSync } from "node:fs";
+import { existsSync, promises as seedFs } from "node:fs";
+import { seedFilesDir } from "./nodes/node-files.js";
 import path from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
   APP_VERSION,
   CLAUDE_BRIDGE_PORT,
@@ -35,21 +42,12 @@ import {
   OPENCODE_SERVER_PORT,
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
-import {
-  ORKESTRATOR_AGENT_MCP_SERVER_NAME,
-  ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
-  ORKESTRATOR_AGENT_MCP_URL_ENV,
-} from "./agent-tools.js";
+import { ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV } from "./agent-tools.js";
 import { cleanupEnvironmentTmux, shutdownClaudeStatePolling } from "./tmux.js";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import {
-  enqueueLocalServerEnvironmentOperation,
   coordinatorBridgeEnvironmentFields,
   localServerFields,
-  releaseLocalServerOwnership,
-  terminateLocalServerChild,
-  cancelOpenCodeAgentToolsConfiguration,
-  aggregateRejectedResults,
   stopLocalServerUnlocked,
   stopLocalServersForEnvironmentUnlocked,
 } from "./commands-local-server-lifecycle.js";
@@ -59,52 +57,17 @@ import {
   waitForLocalServerHealth,
   openCodeHealthHeaders,
   bearerBridgeHeaders,
-  agentToolConnectionFingerprint,
 } from "./commands-server-health.js";
+import type { OpenCodeAgentToolsState } from "./opencode-agent-tools.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Environment } from "./models.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 import {
-  localServerProcesses,
-  localCodexBridgeTokens,
-  localClaudeBridgeTokens,
-  localOpenCodeServerPasswords,
-  localCursorBridgeTokens,
-  localGrokBridgeTokens,
-  localPiBridgeTokens,
-  localCursorCredentialFingerprints,
-  openCodeAgentToolsConfigurations,
-  configuredOpenCodeAgentTools,
   BRIDGE_TOKEN_PATTERN,
-  localServerEnvironmentOperations,
-  localServerUnresponsiveSince,
-  localServerWorkingDirectories,
-  containerBridgeOperations,
-  deletingLocalServerEnvironments,
-  mergingEnvironments,
-  mergeCleanupRecoveryTasks,
   retryableBridgeStartupError,
-  LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS,
-  LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS,
   LOCAL_SERVER_KINDS,
-  isLocalServerShutdownRequested,
-  requestLocalServerShutdown,
-  getLocalServerShutdownPromise,
-  setLocalServerShutdownPromise,
-  spawnLocalServerCommandImpl,
-} from "./commands-runtime-state.js";
-import {
-  localAgentAccountIds,
-  localAgentAccountTokenExpiry,
-  loginlessLocalBridges,
-  staleLoginLocalBridges,
-} from "./agent-account-bridge-state.js";
-import {
-  prMonitorService,
-  invalidatePendingPrMonitorSync,
-  setMergeCleanupScheduler,
-} from "./commands-pr-monitor.js";
+} from "./local-server-runtime.js";
 import {
   resolveCodexBinary,
   resolveOpenCodeBinary,
@@ -112,11 +75,6 @@ import {
   resolveManagedAcpBinary,
   resolveBunBinary,
 } from "./commands-agent-support.js";
-import {
-  cleanupTerminalSessionsForEnvironment,
-  terminateTerminalSessionsForEnvironment,
-} from "./commands-terminal.js";
-import { deleteTerminalHistories } from "./terminal-history.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 import { environmentCleanupLedger } from "./environment-cleanup-ledger.js";
 import { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } from "./environment-cleanup.js";
@@ -125,7 +83,6 @@ import {
   assertDockerContainerOwned,
   cleanupEnvironmentSetupState,
   enqueueEnvironmentLifecycleOperation,
-  invalidateEnvironmentStartDedupe,
   deleteMergedEnvironmentRemoteBranch,
 } from "./commands-environment.js";
 import { getHostPort } from "./commands-container-exec.js";
@@ -137,12 +94,16 @@ import {
   resolveCursorHostCredentialMaterial,
 } from "./host-agent-credentials.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
-import type { OpenCodeAgentToolsOutcome, LocalServerKind } from "./commands-runtime-state.js";
+import { createBridgeOutputForwarder } from "./bridge-output-redaction.js";
+import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import {
+  COORDINATOR_COMMAND_SANDBOX_ENV,
   COORDINATOR_EXECUTION_POLICY,
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
+import { configureOpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
 
 /** Provider-neutral process authority every coordinator bridge honours. */
 export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";
@@ -158,8 +119,7 @@ export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECU
  */
 export const ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV = "ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT";
 import { realpath } from "node:fs/promises";
-import { chmod, copyFile, lstat, mkdir, rename, rm } from "node:fs/promises";
-import { homedir } from "node:os";
+import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { sanitizeCoordinatorError } from "./coordinator-service.js";
 import {
   coordinatorRuntimeUnavailableMessage,
@@ -171,68 +131,75 @@ import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,
   applyCoordinatorClaudeAccount,
+  readCoordinatorCodexLogin,
+  coordinatorHostCodexHome,
   localBridgeIsOnActiveAccount,
   resolveActiveAgentAccount,
   stripInheritedAgentCredentials,
+  type CoordinatorAgentAccount,
 } from "./agent-accounts-active.js";
+
+/**
+ * How long an unresponsive bridge with a turn or background work in progress is
+ * left alone before it is replaced anyway. Replacing it kills that work, so a
+ * stall this long is treated as a hang rather than load.
+ */
+export const LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS = 2 * 60_000;
+/** A gap this long starts a new run of failed health checks. */
+export const LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS = 30_000;
 
 /** Deletion drains briefly: the container is removed right after. */
 const DELETION_DRAIN_GRACE_SECONDS = 5;
 
 /**
- * A private Claude configuration directory holding only the credential.
+ * A coordinator's private Claude configuration directory, empty of anything
+ * the user authored.
  *
- * Mirrors `prepareCoordinatorCodexHome`. Claude's own config directory holds
- * `settings.json` (which can declare hooks), `plugins/` and MCP server
- * definitions; copying any of them would let a user's own configuration run
- * code inside a session whose whole purpose is not to change the checkout.
+ * Claude's own config directory holds `settings.json` (which can declare
+ * hooks), `plugins/` and MCP server definitions; copying any of them would let
+ * a user's own configuration run code inside a session whose whole purpose is
+ * not to change the checkout. No login is copied either: the active account's
+ * access token is handed over instead (`applyCoordinatorClaudeAccount`).
  */
-export async function prepareCoordinatorClaudeHome(
-  destination: string,
-  source = process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(homedir(), ".claude"),
-): Promise<void> {
+export async function prepareCoordinatorClaudeHome(destination: string): Promise<void> {
   await mkdir(destination, { recursive: true, mode: 0o700 });
   await chmod(destination, 0o700);
-  for (const filename of [".credentials.json", "credentials.json"]) {
-    const sourceFile = path.join(source, filename);
-    const sourceStat = await lstat(sourceFile).catch(() => null);
-    if (!sourceStat) continue;
-    if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
-      throw new Error("Claude credential file must be a regular file, not a symbolic link");
-    }
-    const destinationFile = path.join(destination, filename);
-    const temporary = `${destinationFile}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-    try {
-      await copyFile(sourceFile, temporary);
-      await chmod(temporary, 0o600);
-      await rename(temporary, destinationFile);
-    } finally {
-      await rm(temporary, { force: true }).catch(() => undefined);
-    }
-  }
 }
 
+/**
+ * A coordinator's private Codex home, holding only an access-only copy of the
+ * active login (`coordinatorCodexLogin`): never the refresh token, which Codex
+ * rotates and would retire from the account's own login on a coordinator's
+ * refresh. Returns the handed-over token's expiry, or `loginless` when there
+ * was no usable login to hand over.
+ */
 export async function prepareCoordinatorCodexHome(
   destination: string,
-  source = process.env.CODEX_HOME?.trim() || path.join(homedir(), ".codex"),
-): Promise<void> {
+  source = coordinatorHostCodexHome(),
+): Promise<Omit<CoordinatorAgentAccount, "accountId">> {
   await mkdir(destination, { recursive: true, mode: 0o700 });
   await chmod(destination, 0o700);
+  const destinationAuth = path.join(destination, "auth.json");
+  // The directory outlives a launch: drop an earlier login before anything
+  // below can fail, so no stale or earlier account's login stays behind.
+  await rm(destinationAuth, { force: true });
   const sourceAuth = path.join(source, "auth.json");
   const sourceStat = await lstat(sourceAuth).catch(() => null);
-  if (!sourceStat) return;
+  if (!sourceStat) return { loginless: true };
   if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
     throw new Error("Codex authentication file must be a regular file, not a symbolic link");
   }
-  const destinationAuth = path.join(destination, "auth.json");
+  const login = await readCoordinatorCodexLogin({ accountId: "default", home: source });
+  if (!login.text) return { loginless: true };
   const temporary = `${destinationAuth}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   try {
-    await copyFile(sourceAuth, temporary);
+    await writeFile(temporary, login.text, { mode: 0o600, flag: "wx" });
     await chmod(temporary, 0o600);
     await rename(temporary, destinationAuth);
   } finally {
     await rm(temporary, { force: true }).catch(() => undefined);
   }
+  return login.tokenExpiresAt ? { tokenExpiresAt: login.tokenExpiresAt } : {};
 }
 
 async function coordinatorCodexRuntime(executable: string): Promise<{
@@ -295,11 +262,18 @@ export async function waitForLocalServerStartup(
   headers?: Record<string, string>,
 ): Promise<void> {
   let settled = false;
+  // Only OpenCode's is read: its servers share one database on the host, and
+  // the one failure worth retrying names itself only on stderr.
+  let stderrTail = "";
+  const onStderr = (data: Buffer | string) => {
+    stderrTail = (stderrTail + data.toString()).slice(-OPENCODE_STARTUP_STDERR_TAIL_BYTES);
+  };
 
   await new Promise<void>((resolve, reject) => {
     const cleanup = () => {
       child.off("error", onError);
       child.off("exit", onExit);
+      if (kind === "opencode") child.stderr.off("data", onStderr);
     };
     const complete = (error?: Error) => {
       if (settled) return;
@@ -310,15 +284,19 @@ export async function waitForLocalServerStartup(
     };
     const onError = (error: Error) => complete(error);
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      const message = `${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`;
       complete(
-        new Error(
-          `${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`,
-        ),
+        kind === "opencode" && openCodeStderrReportsLockedDatabase(stderrTail)
+          ? openCodeDatabaseLockedError(
+              `${message}: another OpenCode process held its database (database is locked)`,
+            )
+          : new Error(message),
       );
     };
 
     child.once("error", onError);
     child.once("exit", onExit);
+    if (kind === "opencode") child.stderr.on("data", onStderr);
     waitForLocalServerHealth(port, kind, headers).then(
       () => complete(),
       (error: unknown) => {
@@ -337,44 +315,16 @@ export function getBridgePath(
   return path.join(context.resourceRoot, bridgeName);
 }
 
-export function enqueueContainerBridgeOperation<T>(
-  agent: LocalServerKind,
-  containerId: string,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const key = `${agent}:${containerId}`;
-  const previous = containerBridgeOperations.get(key) ?? Promise.resolve();
-  const result = previous.then(operation, operation);
-  const tail = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  containerBridgeOperations.set(key, tail);
-  void tail.finally(() => {
-    if (containerBridgeOperations.get(key) === tail) {
-      containerBridgeOperations.delete(key);
-    }
-  });
-  return result;
-}
+export { enqueueContainerBridgeOperation } from "./container-bridge-operations.js";
 
-export function assertLocalServerStartAllowed(environmentId: string): void {
-  if (isLocalServerShutdownRequested()) {
+export function assertLocalServerStartAllowed(
+  context: CommandContext,
+  environmentId: string,
+): void {
+  if (context.runtime.localServers.isShuttingDown()) {
     throw new Error("Backend is shutting down; local servers cannot be started");
   }
-  if (deletingLocalServerEnvironments.has(environmentId)) {
-    throw new Error(`Environment is being deleted: ${environmentId}`);
-  }
-}
-
-/** Per-process renderer credentials for the given native server kind. */
-export function localBridgeTokens(kind: LocalServerKind): Map<string, string> {
-  if (kind === "codex") return localCodexBridgeTokens;
-  if (kind === "claude") return localClaudeBridgeTokens;
-  if (kind === "cursor") return localCursorBridgeTokens;
-  if (kind === "grok") return localGrokBridgeTokens;
-  if (kind === "pi") return localPiBridgeTokens;
-  return localOpenCodeServerPasswords;
+  context.runtime.environments.assertNotDeleting(environmentId);
 }
 
 export function localServerPort(
@@ -446,9 +396,10 @@ export async function peekLocalAgentBridgeState(
   | { status: "absent" }
   | { status: "unresponsive" }
 > {
-  const child = localServerProcesses.get(`${kind}:${environmentId}`);
+  const localServers = context.runtime.localServers;
+  const child = localServers.process(`${kind}:${environmentId}`);
   if (!child || child.killed || !child.pid) return { status: "absent" };
-  const authToken = localBridgeTokens(kind).get(environmentId);
+  const authToken = localServers.bridgeToken(kind, environmentId);
   if (!authToken) return { status: "absent" };
   const environment = await localRuntimeEnvironment(environmentId, context);
   const port = localServerPort(environment, kind);
@@ -464,9 +415,7 @@ export async function peekLocalAgentBridgeState(
   );
   if (healthy) {
     const key = `${kind}:${environmentId}`;
-    if (localServerUnresponsiveSince.get(key)?.child === child) {
-      localServerUnresponsiveSince.delete(key);
-    }
+    localServers.clearUnresponsive(key, child);
     return { status: "running", port, authToken };
   }
   return child.exitCode === null && child.signalCode === null
@@ -647,304 +596,25 @@ export async function fetchAcpNormalizedModelsAtResult(
   }
 }
 
-export async function configureOpenCodeAgentTools(
-  port: number,
-  password: string,
-  connection: AgentToolConnection,
-  directory: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const url = new URL(`http://127.0.0.1:${port}/mcp`);
-  url.searchParams.set("directory", directory);
-  const headers = openCodeHealthHeaders(password);
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      ...headers,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      name: ORKESTRATOR_AGENT_MCP_SERVER_NAME,
-      config: {
-        type: "remote",
-        url: connection.url,
-        enabled: true,
-        oauth: false,
-        // Orkestrator's endpoint is on the same host. Do not inherit
-        // OpenCode's 30-second connect/catalog default for this optional tool.
-        timeout: 3_000,
-        headers: {
-          Authorization: `Bearer ${connection.token}`,
-        },
-      },
-    }),
-    signal: openCodeAgentToolsAbortSignal(5_000, signal),
-  });
-  if (!response.ok) {
-    // Never include the response body: OpenCode may echo the submitted MCP
-    // config, which contains the project-scoped bearer credential.
-    throw new Error(
-      `OpenCode rejected the Orkestrator agent tools configuration (${response.status})`,
-    );
-  }
-
-  const payload = await readBoundedOpenCodeResponse(response);
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new Error("OpenCode returned an invalid MCP status response");
-  }
-  const status = readOpenCodeAgentToolsStatus(payload);
-  if (status === null) {
-    throw new Error("OpenCode omitted the Orkestrator MCP status");
-  }
-  if (status !== "connected") {
-    // Treat transitional states as unsuccessful too: startup must not advertise
-    // a server whose ticket tools are not usable yet. Do not include the remote
-    // error field because it may echo connection configuration or credentials.
-    const safeStatus =
-      typeof status === "string" && /^[a-z][a-z0-9_-]{0,31}$/.test(status) ? status : "invalid";
-    throw new Error(`OpenCode did not connect the Orkestrator agent tools (${safeStatus})`);
-  }
-}
-
-export function openCodeAgentToolsAbortSignal(
-  timeoutMs: number,
-  signal?: AbortSignal,
-): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
-export function readOpenCodeAgentToolsStatus(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return null;
-  }
-  const entry = (payload as Record<string, unknown>)[ORKESTRATOR_AGENT_MCP_SERVER_NAME];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
-  const status = (entry as Record<string, unknown>).status;
-  return typeof status === "string" ? status : null;
-}
-
-export const MAX_OPENCODE_MCP_STATUS_BYTES = 64 * 1024;
-
-export async function readBoundedOpenCodeResponse(response: Response): Promise<unknown> {
-  if (!response.body) {
-    throw new Error("OpenCode returned an empty MCP status response");
-  }
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_OPENCODE_MCP_STATUS_BYTES) {
-    await response.body.cancel().catch(() => undefined);
-    throw new Error("OpenCode MCP status response is too large");
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let bytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > MAX_OPENCODE_MCP_STATUS_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error("OpenCode MCP status response is too large");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = Buffer.concat(
-    chunks.map((chunk) => Buffer.from(chunk)),
-    bytes,
-  ).toString("utf8");
-  try {
-    return JSON.parse(body);
-  } catch {
-    throw new Error("OpenCode returned an invalid MCP status response");
-  }
-}
-
-export const OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS: readonly number[] = [
-  250, 500, 1_000, 2_000, 4_000,
-];
-export let openCodeAgentToolsRetryDelaysMs = OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS;
-
 /**
- * How long a recorded outcome suppresses another POST.
- *
- * A `connected` memo must expire: OpenCode can drop, disable or fail the entry
- * while the server keeps running on the same port and password, so the
- * fingerprint alone can never notice. Re-POSTing periodically is the only
- * re-verification left now that a status GET is known to be unable to identify
- * the configured URL or credential. An `unavailable` outcome gets a shorter
- * cooldown so a repeated status read cannot restart the retry cycle back to
- * back.
+ * The connection a live local OpenCode server's Orkestrator MCP entry is kept
+ * on: the one it was launched with. Only an ordinary environment launched
+ * before that was recorded falls back to its Agent Tools connection. A
+ * coordinator runtime never does: its entry is the scoped Control MCP
+ * credential, and swapping in a tab credential would leave it with mail and
+ * ticket tools but none of its delegation tools.
  */
-export const OPENCODE_AGENT_TOOLS_CONNECTED_TTL_MS = 5 * 60_000;
-export const OPENCODE_AGENT_TOOLS_UNAVAILABLE_COOLDOWN_MS = 30_000;
-export let openCodeAgentToolsConnectedTtlMs = OPENCODE_AGENT_TOOLS_CONNECTED_TTL_MS;
-export let openCodeAgentToolsUnavailableCooldownMs = OPENCODE_AGENT_TOOLS_UNAVAILABLE_COOLDOWN_MS;
-
-export function openCodeAgentToolsMemoWindowMs(state: OpenCodeAgentToolsOutcome["state"]): number {
-  return state === "connected"
-    ? openCodeAgentToolsConnectedTtlMs
-    : openCodeAgentToolsUnavailableCooldownMs;
-}
-
-/** Reported by the local and container OpenCode status commands. */
-export type OpenCodeAgentToolsState = "pending" | "connected" | "unavailable";
-
-/**
- * What the backend last observed about a generation's ticket tools.
- *
- * An in-flight generation reads `pending` rather than the previous cycle's
- * failure, but a live `connected` memo keeps reading `connected` while a TTL
- * re-verification runs — a periodic re-POST must not flap the indicator.
- */
-export function openCodeAgentToolsState(key: string): OpenCodeAgentToolsState {
-  const recorded = configuredOpenCodeAgentTools.get(key);
-  if (recorded?.state === "connected") return "connected";
-  if (openCodeAgentToolsConfigurations.has(key)) return "pending";
-  return recorded ? "unavailable" : "pending";
-}
-
-export function openCodeAgentToolsFingerprint(
-  port: number,
-  password: string,
-  connection: AgentToolConnection,
-  directory: string,
-): string {
-  return createHash("sha256")
-    .update(String(port))
-    .update("\0")
-    .update(password)
-    .update("\0")
-    .update(directory)
-    .update("\0")
-    .update(agentToolConnectionFingerprint(connection))
-    .digest("hex");
-}
-
-export function waitForOpenCodeAgentToolsRetry(
-  delayMs: number,
-  signal: AbortSignal,
-): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(finish, delayMs);
-    timer.unref?.();
-    signal.addEventListener("abort", finish, { once: true });
-    function finish(): void {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", finish);
-      resolve();
-    }
-  });
-}
-
-/**
- * Reconcile the optional Orkestrator MCP entry without extending native chat
- * startup. One task per server generation retries transient connect/catalog
- * failures; the terminal outcome is recorded so ordinary status reads do no I/O
- * and can report degraded ticket tools. Recorded outcomes expire, so a
- * long-lived server that later drops the entry is re-reconciled.
- */
-export function scheduleOpenCodeAgentToolsConfiguration(
-  key: string,
-  port: number,
-  password: string,
-  connection: AgentToolConnection,
-  directory: string,
-): void {
-  const fingerprint = openCodeAgentToolsFingerprint(port, password, connection, directory);
-  const recorded = configuredOpenCodeAgentTools.get(key);
-  if (recorded?.fingerprint === fingerprint) {
-    if (Date.now() - recorded.at < openCodeAgentToolsMemoWindowMs(recorded.state)) {
-      return;
-    }
-  } else if (recorded) {
-    // The outcome map always describes the current generation, so a status read
-    // never reports the previous port/credential's verdict.
-    configuredOpenCodeAgentTools.delete(key);
-  }
-
-  const current = openCodeAgentToolsConfigurations.get(key);
-  if (current?.fingerprint === fingerprint) return;
-  current?.controller.abort();
-
-  const controller = new AbortController();
-  const delays = openCodeAgentToolsRetryDelaysMs;
-  const task = (async () => {
-    for (let attempt = 0; attempt <= delays.length; attempt += 1) {
-      try {
-        await configureOpenCodeAgentTools(port, password, connection, directory, controller.signal);
-        if (!controller.signal.aborted) {
-          configuredOpenCodeAgentTools.set(key, {
-            fingerprint,
-            state: "connected",
-            at: Date.now(),
-          });
-        }
-        return;
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        if (attempt === delays.length) {
-          // Record the failure rather than only logging it: the status commands
-          // report this so a session does not silently run without the ticket
-          // tools it was told it would have.
-          configuredOpenCodeAgentTools.set(key, {
-            fingerprint,
-            state: "unavailable",
-            at: Date.now(),
-          });
-          console.warn(
-            `[backend] OpenCode agent tools remain unavailable for ${key}:`,
-            conciseError(error),
-          );
-          return;
-        }
-        await waitForOpenCodeAgentToolsRetry(delays[attempt]!, controller.signal);
-        // An abort during the backoff resolves rather than throwing, so the
-        // cancellation has to be observed here instead of via the next fetch.
-        if (controller.signal.aborted) return;
-      }
-    }
-  })();
-  const configuration = { fingerprint, controller, task };
-  openCodeAgentToolsConfigurations.set(key, configuration);
-  void task.finally(() => {
-    if (openCodeAgentToolsConfigurations.get(key) === configuration) {
-      openCodeAgentToolsConfigurations.delete(key);
-    }
-  });
-}
-
-export function resetOpenCodeAgentToolsTuning(): void {
-  openCodeAgentToolsRetryDelaysMs = OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS;
-  openCodeAgentToolsConnectedTtlMs = OPENCODE_AGENT_TOOLS_CONNECTED_TTL_MS;
-  openCodeAgentToolsUnavailableCooldownMs = OPENCODE_AGENT_TOOLS_UNAVAILABLE_COOLDOWN_MS;
-}
-
-export function setOpenCodeAgentToolsRetryDelays(delays: readonly number[]): void {
-  openCodeAgentToolsRetryDelaysMs = delays;
-}
-
-export function setOpenCodeAgentToolsMemoWindows(
-  connectedTtlMs: number,
-  unavailableCooldownMs: number,
-): void {
-  openCodeAgentToolsConnectedTtlMs = connectedTtlMs;
-  openCodeAgentToolsUnavailableCooldownMs = unavailableCooldownMs;
-}
-
-export function cancelAllOpenCodeAgentToolsConfigurations(): void {
-  for (const configuration of openCodeAgentToolsConfigurations.values()) {
-    configuration.controller.abort();
-  }
-  openCodeAgentToolsConfigurations.clear();
-  configuredOpenCodeAgentTools.clear();
+function openCodeReconcileConnection(
+  environmentId: string,
+  env: Pick<Environment, "id" | "projectId">,
+  context: CommandContext,
+): AgentToolConnection | undefined {
+  const launched = context.runtime.localServers.openCodeAgentTools.launchConnection(
+    `local:${environmentId}`,
+  );
+  if (launched) return launched;
+  if (coordinatorIdFromRuntimeId(environmentId)) return undefined;
+  return context.agentTools?.connection(env.id, env.projectId, "host");
 }
 
 // Child-scoped launch authority; weak keys release exited process records.
@@ -955,7 +625,30 @@ export async function startLocalServerUnlocked(
   context: CommandContext,
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
-  assertEnvironmentNotMoving(environmentId);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await startLocalServerAttempt(environmentId, context, kind);
+    } catch (error) {
+      // A failed attempt has already stopped its server and cleared its
+      // fields, so the next one starts clean.
+      const delayMs = isOpenCodeDatabaseLockedError(error)
+        ? context.runtime.localServers.openCodeHostStart.lockedStartRetryDelayMs(attempt)
+        : undefined;
+      if (delayMs === undefined || context.runtime.localServers.isShuttingDown()) throw error;
+      console.warn(
+        `[local-server] opencode:${environmentId} lost the shared OpenCode database at startup; retrying in ${delayMs}ms`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+async function startLocalServerAttempt(
+  environmentId: string,
+  context: CommandContext,
+  kind: LocalServerKind,
+): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
+  context.runtime.environments.fence.assertNotMoving(environmentId);
   const key = `${kind}:${environmentId}`;
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
   const researchConfig = coordinatorId ? (await context.storage.loadConfig()).global : undefined;
@@ -970,12 +663,12 @@ export async function startLocalServerUnlocked(
     kind === "cursor" ? await resolveCursorHostCredentialMaterial(context) : undefined;
   const cursorApiKey = cursorCredentials?.apiKey;
   const cursorCredentialFingerprint = cursorCredentials?.fingerprint;
-  const existing = localServerProcesses.get(key);
+  const localServers = context.runtime.localServers;
+  const existing = localServers.process(key);
   if (existing && !existing.killed && existing.pid) {
     const env = await localRuntimeEnvironment(environmentId, context);
     const port = localServerPort(env, kind);
-    const tokens = localBridgeTokens(kind);
-    const authToken = tokens?.get(environmentId);
+    const authToken = localServers.bridgeToken(kind, environmentId);
     const healthHeaders = authToken
       ? kind === "opencode"
         ? openCodeHealthHeaders(authToken)
@@ -985,9 +678,9 @@ export async function startLocalServerUnlocked(
       : undefined;
     const credentialMatches =
       kind !== "cursor" ||
-      localCursorCredentialFingerprints.get(environmentId) === cursorCredentialFingerprint;
+      localServers.cursorCredentialFingerprint(environmentId) === cursorCredentialFingerprint;
     const workingDirectoryMatches =
-      Boolean(env?.worktreePath) && localServerWorkingDirectories.get(key) === env?.worktreePath;
+      Boolean(env?.worktreePath) && localServers.workingDirectory(key) === env?.worktreePath;
     const accountMatches = await localBridgeIsOnActiveAccount(key, kind, environmentId, context);
     let replaceReason: string;
     if (coordinatorId && coordinatorResearchLaunches.get(existing) !== researchSignature) {
@@ -1003,7 +696,8 @@ export async function startLocalServerUnlocked(
     } else if (!credentialMatches) {
       replaceReason = "Cursor credentials changed";
     } else if (!accountMatches) {
-      replaceReason = "the active agent account changed";
+      replaceReason =
+        kind === "opencode" ? "a provider login changed" : "the active agent account changed";
     } else if (!workingDirectoryMatches) {
       replaceReason = "worktree path changed";
     } else if (!port) {
@@ -1012,18 +706,22 @@ export async function startLocalServerUnlocked(
       replaceReason = "this backend does not hold the bridge's auth token";
     } else {
       const isAlive = () =>
-        localServerProcesses.get(key) === existing &&
+        localServers.process(key) === existing &&
         existing.exitCode === null &&
         existing.signalCode === null;
       const health = await confirmRunningServerHealth(port, healthHeaders, isAlive);
       if (health.healthy) {
-        localServerUnresponsiveSince.delete(key);
-        if (kind === "opencode" && env?.worktreePath && context.agentTools) {
-          scheduleOpenCodeAgentToolsConfiguration(
+        localServers.clearUnresponsive(key);
+        const reconcileConnection =
+          kind === "opencode" && env?.worktreePath
+            ? openCodeReconcileConnection(environmentId, env, context)
+            : undefined;
+        if (reconcileConnection && env?.worktreePath) {
+          void localServers.openCodeAgentTools.schedule(
             `local:${environmentId}`,
             port,
             authToken,
-            context.agentTools.connection(env.id, env.projectId, "host"),
+            reconcileConnection,
             env.worktreePath,
           );
         }
@@ -1038,14 +736,14 @@ export async function startLocalServerUnlocked(
         replaceReason = "bridge process exited";
       } else {
         replaceReason = `health check failed ${health.failedProbes} consecutive times`;
-        const marker = localServerUnresponsiveSince.get(key);
+        const marker = localServers.unresponsiveMarker(key);
         const now = Date.now();
         const since =
           marker?.child === existing &&
           now - marker.lastFailureAt <= LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS
             ? marker.since
             : now;
-        localServerUnresponsiveSince.set(key, { child: existing, since, lastFailureAt: now });
+        localServers.markUnresponsive(key, { child: existing, since, lastFailureAt: now });
         const unresponsiveForMs = now - since;
         if (
           unresponsiveForMs < LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS &&
@@ -1068,7 +766,7 @@ export async function startLocalServerUnlocked(
         }
       }
     }
-    await terminateLocalServerChild(key, existing, `replacing bridge: ${replaceReason}`);
+    await localServers.terminate(key, existing, `replacing bridge: ${replaceReason}`);
   }
 
   // Resolved before the worktree check so an unassigned or unqualified
@@ -1135,6 +833,7 @@ export async function startLocalServerUnlocked(
   // bridge consult these too, so only the coordinator branch may set them.
   delete env[COORDINATOR_WEB_RESEARCH_ENV];
   delete env[COORDINATOR_RESEARCH_MCP_ENV];
+  delete env[COORDINATOR_COMMAND_SANDBOX_ENV];
   if (coordinatorId) {
     // Coordinator authority is always freshly issued for this exact
     // conversation. Never inherit a token from the backend's own environment
@@ -1145,10 +844,6 @@ export async function startLocalServerUnlocked(
     // to run any session under a weaker policy, whatever a request body or a
     // persisted record says, so a permissive record cannot survive a restart.
     env[ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV] = COORDINATOR_EXECUTION_POLICY;
-    // Inherited from the backend process, this opt-in would otherwise load
-    // `.cursor/mcp.json` into every Cursor attach. A coordinator is already
-    // read-only; close the deprecated override the same way Pi closes its own.
-    env.CURSOR_BRIDGE_PROJECT_SETTINGS = "0";
     // Created here rather than on first paste: a bridge canonicalizes this root
     // before it reads through it, and a directory that does not exist yet is
     // indistinguishable from one that is not allowed.
@@ -1161,6 +856,11 @@ export async function startLocalServerUnlocked(
     // Process authority like the execution policy: read once at launch, so a
     // changed setting replaces an idle bridge before the next turn.
     Object.assign(env, researchEnv);
+    // The same probe the qualification table used, so a bridge requires the
+    // OS sandbox exactly where the platform was offered on the strength of it.
+    env[COORDINATOR_COMMAND_SANDBOX_ENV] = defaultCoordinatorHostCapabilities().claudeSandbox
+      ? "required"
+      : "unavailable";
   }
 
   if (kind === "opencode") {
@@ -1238,15 +938,17 @@ export async function startLocalServerUnlocked(
         coordinatorConversationId!,
         "codex-home",
       );
-      // Only the login is copied: from the active account's directory, or
-      // the host's when no account was added.
+      // Only the login is copied, access-only: from the active account's
+      // directory, or the host's when no account was added.
       const account = await resolveActiveAgentAccount(context, "codex");
       if (account.home) stripInheritedAgentCredentials(env);
-      // The directory outlives a launch: drop an earlier account's login.
-      await rm(path.join(coordinatorCodexHome, "auth.json"), { force: true });
-      await prepareCoordinatorCodexHome(coordinatorCodexHome, account.home);
+      const login = await prepareCoordinatorCodexHome(coordinatorCodexHome, account.home);
       env.CODEX_HOME = coordinatorCodexHome;
       launchedAccountId = account.accountId;
+      launchedTokenExpiresAt = login.tokenExpiresAt;
+      // An inherited API key still serves turns without a login file.
+      launchedLoginless =
+        login.loginless === true && !env.CODEX_API_KEY?.trim() && !env.OPENAI_API_KEY?.trim();
     } else {
       launchedAccountId = await applyActiveAgentAccountEnvironment(context, "codex", env);
     }
@@ -1260,13 +962,6 @@ export async function startLocalServerUnlocked(
     // account. Containers are handed an explicit path instead, and an
     // agent-test profile the host's `auth.json` alone when Pi is authorized.
     await applyPiHostCredentialEnvironment(context, env);
-    if (coordinatorId) {
-      // Pi's project resources are arbitrary TypeScript from the checkout, and
-      // a coordinator points at the user's own repository rather than a
-      // disposable clone. The bridge already reads the policy for this; the
-      // explicit `0` also closes the deprecated env override.
-      env.PI_BRIDGE_PROJECT_RESOURCES = "0";
-    }
     env.PI_SESSION_DIR = environmentStateDirectory(
       context.storage.getDataDir(),
       "pi-bridge-sessions",
@@ -1355,7 +1050,7 @@ export async function startLocalServerUnlocked(
   // storage, port allocation, or packaged-path discovery. Recheck before any
   // scoped credential or bridge token is allocated so a rejected start cannot
   // leave valid, unused authority behind.
-  assertLocalServerStartAllowed(environmentId);
+  assertLocalServerStartAllowed(context, environmentId);
 
   if (coordinatorId && selectedConversation && context.controlMcp?.getSettings().running) {
     context.controlMcp.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
@@ -1384,33 +1079,35 @@ export async function startLocalServerUnlocked(
     env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV] = agentToolConnection.token;
   }
 
-  const tokens = localBridgeTokens(kind);
-  if (tokens) {
-    const authToken = randomBytes(32).toString("base64url");
-    env[
-      kind === "codex"
-        ? "CODEX_BRIDGE_TOKEN"
-        : kind === "claude"
-          ? "CLAUDE_BRIDGE_TOKEN"
-          : kind === "opencode"
-            ? "OPENCODE_SERVER_PASSWORD"
-            : kind === "pi"
-              ? "PI_BRIDGE_TOKEN"
-              : kind === "cursor"
-                ? "CURSOR_BRIDGE_TOKEN"
-                : "ACP_BRIDGE_TOKEN"
-    ] = authToken;
-    if (kind === "opencode") env.OPENCODE_SERVER_USERNAME = "opencode";
-    tokens.set(environmentId, authToken);
-  }
+  const bridgeToken = randomBytes(32).toString("base64url");
+  env[
+    kind === "codex"
+      ? "CODEX_BRIDGE_TOKEN"
+      : kind === "claude"
+        ? "CLAUDE_BRIDGE_TOKEN"
+        : kind === "opencode"
+          ? "OPENCODE_SERVER_PASSWORD"
+          : kind === "pi"
+            ? "PI_BRIDGE_TOKEN"
+            : kind === "cursor"
+              ? "CURSOR_BRIDGE_TOKEN"
+              : "ACP_BRIDGE_TOKEN"
+  ] = bridgeToken;
+  if (kind === "opencode") env.OPENCODE_SERVER_USERNAME = "opencode";
+  localServers.recordBridgeToken(kind, environmentId, bridgeToken);
 
   const args =
     kind === "opencode"
       ? ["serve", "--port", String(port), "--hostname", "127.0.0.1"]
       : [bridgeEntrypoint];
+  // Held from spawn until healthy or failed; see `opencode-host-start.ts`.
+  const releaseOpenCodeHostStart =
+    kind === "opencode" ? await localServers.openCodeHostStart.acquire() : () => undefined;
   let child: ChildProcessWithoutNullStreams;
   try {
-    child = spawnLocalServerCommandImpl(command, args, {
+    // Shutdown may have begun while this start waited for the host's turn.
+    assertLocalServerStartAllowed(context, environmentId);
+    child = localServers.spawn(command, args, {
       cwd,
       env,
       // A dedicated group lets shutdown reach ordinary descendants immediately.
@@ -1418,34 +1115,31 @@ export async function startLocalServerUnlocked(
       detached: process.platform !== "win32",
     });
   } catch (error) {
-    tokens?.delete(environmentId);
+    releaseOpenCodeHostStart();
+    localServers.forgetBridgeToken(kind, environmentId);
     if (coordinatorId && selectedConversation) {
       context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
     }
     if (kind === "cursor") {
-      localCursorCredentialFingerprints.delete(environmentId);
+      localServers.recordCursorCredentialFingerprint(environmentId, undefined);
     }
     throw error;
   }
   if (kind === "cursor" && cursorCredentialFingerprint) {
-    localCursorCredentialFingerprints.set(environmentId, cursorCredentialFingerprint);
+    localServers.recordCursorCredentialFingerprint(environmentId, cursorCredentialFingerprint);
   }
-  localServerProcesses.set(key, child);
+  localServers.adoptProcess(key, child, {
+    workingDirectory: environment.worktreePath,
+    accountId: launchedAccountId,
+    tokenExpiresAt: launchedTokenExpiresAt,
+    loginless: launchedLoginless,
+  });
   if (coordinatorId) coordinatorResearchLaunches.set(child, researchSignature);
-  localServerWorkingDirectories.set(key, environment.worktreePath);
-  if (launchedAccountId) localAgentAccountIds.set(key, launchedAccountId);
-  else localAgentAccountIds.delete(key);
-  staleLoginLocalBridges.delete(key);
-  if (launchedTokenExpiresAt) localAgentAccountTokenExpiry.set(key, launchedTokenExpiresAt);
-  else localAgentAccountTokenExpiry.delete(key);
-  if (launchedLoginless) loginlessLocalBridges.add(key);
-  else loginlessLocalBridges.delete(key);
-  child.stdout.on("data", (data) => console.debug(`[${kind}:${environmentId}] ${data.toString()}`));
-  child.stderr.on("data", (data) => console.error(`[${kind}:${environmentId}] ${data.toString()}`));
+  forwardBridgeOutput(child, `[${kind}:${environmentId}]`);
   child.once("exit", () => {
     // An unhealthy child may exit after its replacement has already claimed the
     // key. Only the process that still owns the entry may remove it.
-    if (!releaseLocalServerOwnership(key, child)) return;
+    if (!localServers.releaseOwnership(key, child)) return;
     if (coordinatorId && selectedConversation) {
       context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
       void context.storage
@@ -1468,27 +1162,62 @@ export async function startLocalServerUnlocked(
 
   const { port: field, pid: pidField } = localServerFields(kind);
   try {
-    const authToken = tokens?.get(environmentId);
-    await waitForLocalServerStartup(
-      child,
-      port,
-      kind,
-      authToken
-        ? kind === "opencode"
-          ? openCodeHealthHeaders(authToken)
-          : kind === "cursor" || kind === "grok" || kind === "pi"
-            ? bearerBridgeHeaders(authToken)
-            : undefined
-        : undefined,
-    );
+    const authToken = localServers.bridgeToken(kind, environmentId);
+    try {
+      await waitForLocalServerStartup(
+        child,
+        port,
+        kind,
+        authToken
+          ? kind === "opencode"
+            ? openCodeHealthHeaders(authToken)
+            : kind === "cursor" || kind === "grok" || kind === "pi"
+              ? bearerBridgeHeaders(authToken)
+              : undefined
+          : undefined,
+      );
+    } finally {
+      releaseOpenCodeHostStart();
+    }
     if (kind === "opencode" && authToken && agentToolConnection) {
-      scheduleOpenCodeAgentToolsConfiguration(
+      localServers.openCodeAgentTools.recordLaunchConnection(
+        `local:${environmentId}`,
+        agentToolConnection,
+      );
+      const configured = localServers.openCodeAgentTools.schedule(
         `local:${environmentId}`,
         port,
         authToken,
         agentToolConnection,
         environment.worktreePath,
       );
+      // Ticket tools are optional for an ordinary chat, which must not wait on
+      // them. Every coordinator action is a Control MCP tool, so its server is
+      // not ready until they are connected; a first turn sent sooner told the
+      // user its delegation tools did not exist.
+      if (coordinatorId && (await configured) !== "connected") {
+        throw retryableBridgeStartupError(
+          "The OpenCode coordinator could not connect its Orkestrator tools",
+        );
+      }
+      // Research servers before the first turn too, so the permission rules
+      // a new session is created with already allow their tools. Optional:
+      // a server that does not connect leaves the coordinator without it.
+      if (coordinatorId) {
+        await configureOpenCodeCoordinatorResearch({
+          serverKey: `local:${environmentId}`,
+          port,
+          password: authToken,
+          directory: environment.worktreePath,
+          servers: coordinatorResearchMcpServersFromEnv(env),
+          signal: AbortSignal.timeout(15_000),
+        }).catch((error: unknown) => {
+          console.warn(
+            `[backend] OpenCode coordinator research servers are unavailable for ${environmentId}:`,
+            conciseError(error),
+          );
+        });
+      }
     }
     if (coordinatorId) {
       await context.storage.mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
@@ -1515,7 +1244,7 @@ export async function startLocalServerUnlocked(
   } catch (error) {
     let terminationError: unknown;
     try {
-      await terminateLocalServerChild(
+      await localServers.terminate(
         key,
         child,
         `startup did not complete: ${error instanceof Error ? error.message : "unknown error"}`,
@@ -1561,7 +1290,7 @@ export async function startLocalServerUnlocked(
     }
     throw error;
   }
-  const authToken = tokens?.get(environmentId);
+  const authToken = localServers.bridgeToken(kind, environmentId);
   return {
     port,
     pid: child.pid ?? 0,
@@ -1575,11 +1304,11 @@ export function startLocalServer(
   context: CommandContext,
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
-  assertLocalServerStartAllowed(environmentId);
-  return enqueueLocalServerEnvironmentOperation(environmentId, async () => {
+  assertLocalServerStartAllowed(context, environmentId);
+  return context.runtime.localServers.enqueueEnvironmentOperation(environmentId, async () => {
     // Shutdown may have begun while this start was queued behind an earlier
     // lifecycle operation.
-    if (isLocalServerShutdownRequested()) {
+    if (context.runtime.localServers.isShuttingDown()) {
       throw new Error("Backend is shutting down; local servers cannot be started");
     }
     return startLocalServerUnlocked(environmentId, context, kind);
@@ -1591,7 +1320,7 @@ export function stopLocalServer(
   context: CommandContext,
   kind: LocalServerKind,
 ): Promise<void> {
-  return enqueueLocalServerEnvironmentOperation(environmentId, () =>
+  return context.runtime.localServers.enqueueEnvironmentOperation(environmentId, () =>
     stopLocalServerUnlocked(environmentId, context, kind),
   );
 }
@@ -1601,14 +1330,14 @@ export async function deleteEnvironment(
   context: CommandContext,
   options: { allowWhileMerging?: boolean } = {},
 ): Promise<void> {
-  if (isLocalServerShutdownRequested()) {
+  if (context.runtime.localServers.isShuttingDown()) {
     throw new Error("Backend is shutting down; environments cannot be deleted");
   }
-  if (mergingEnvironments.has(environmentId) && !options.allowWhileMerging) {
+  if (context.runtime.environments.isMerging(environmentId) && !options.allowWhileMerging) {
     throw new Error(`Environment is currently being merged: ${environmentId}`);
   }
   try {
-    await enqueueLocalServerEnvironmentOperation(environmentId, async () => {
+    await context.runtime.localServers.enqueueEnvironmentOperation(environmentId, async () => {
       const { storage } = context;
       const environment = await storage.getEnvironment(environmentId);
       // A lifecycle record written by a newer version may reference storage
@@ -1620,6 +1349,12 @@ export async function deleteEnvironment(
             "This environment was changed by a newer version of Orkestrator. Update Orkestrator before deleting it.",
           ),
         );
+      }
+      // Deleting removes the container, its volumes and its network, so it
+      // needs the registry writer like every other container mutation. A
+      // backend opened over a newer writer's data directory is read-only.
+      if (environment?.environmentType === "containerized") {
+        context.registryWriterLease?.assertHeld();
       }
       if (environment?.containerId) {
         await assertDockerContainerOwned(environment.containerId, context);
@@ -1651,7 +1386,8 @@ export async function deleteEnvironment(
       await stopEnvironmentExecWorkers(environmentId, context);
       // Waits for every terminal tree, including setup's build descendants, so
       // nothing re-creates files in the worktree after it is removed below.
-      const survivingTerminals = await terminateTerminalSessionsForEnvironment(environmentId);
+      const survivingTerminals =
+        await context.runtime.terminals.terminateSessionsForEnvironment(environmentId);
       if (survivingTerminals.length > 0) {
         console.warn(
           `[backend] ${survivingTerminals.length} terminal process tree(s) outlived termination for ${environmentId}`,
@@ -1660,7 +1396,7 @@ export async function deleteEnvironment(
           "Terminal process trees are still running; environment deletion can be retried",
         );
       }
-      await deleteTerminalHistories({
+      await context.runtime.terminals.history.deleteHistories({
         dataDir: storage.getDataDir(),
         environmentId,
       });
@@ -1681,7 +1417,9 @@ export async function deleteEnvironment(
         // Retire state polling before removing the container, or the next tick
         // execs into something that no longer exists.
         shutdownClaudeStatePolling(environment.containerId);
-        cancelOpenCodeAgentToolsConfiguration(`container:${environment.containerId}`);
+        context.runtime.localServers.openCodeAgentTools.cancel(
+          `container:${environment.containerId}`,
+        );
         // Bridges and agents get the drain's SIGTERM, so they settle their
         // journals and deny parked approvals before the forced removal. A
         // stopped container has nothing to drain and is not exec'd into.
@@ -1773,7 +1511,20 @@ export async function deleteEnvironment(
           error instanceof Error ? error.name : "unknown",
         );
       });
+      // Fences and removes the environment's artifact records, bytes and grants.
+      await context.transcriptArtifacts
+        ?.deleteEnvironment(environmentId)
+        .catch((error: unknown) => {
+          console.warn(
+            `[backend] transcript artifact cleanup failed for ${environmentId}:`,
+            error instanceof Error ? error.name : "unknown",
+          );
+        });
       context.agentTools?.revokeEnvironment(environmentId);
+      await seedFs.rm(seedFilesDir(storage.getDataDir(), environmentId), {
+        recursive: true,
+        force: true,
+      });
       await storage.removeEnvironment(environmentId);
       // Bridges were stopped above, so nothing is writing bridge state now.
       if (cleanup) await runEnvironmentCleanupStep(cleanup, "state-dirs", context);
@@ -1781,20 +1532,20 @@ export async function deleteEnvironment(
       // A terminal start that began before the tombstone may have been awaiting
       // storage or filesystem I/O during the first sweep. Close anything that
       // became visible before deletion completed.
-      cleanupTerminalSessionsForEnvironment(environmentId);
-      await deleteTerminalHistories({
+      context.runtime.terminals.cleanupSessionsForEnvironment(environmentId);
+      await context.runtime.terminals.history.deleteHistories({
         dataDir: storage.getDataDir(),
         environmentId,
       });
-      cleanupEnvironmentSetupState(environmentId);
+      cleanupEnvironmentSetupState(context, environmentId);
       // Releases the watcher and discards the counts. This is the one case where
       // discarding is right: the worktree they described is gone.
       context.runtime.diffStats.invalidatePendingSync();
       context.runtime.diffStats.service.untrack(environmentId);
       // The PR belonged to a branch whose environment is gone; polling it would
       // resurrect state for an id no client can display.
-      invalidatePendingPrMonitorSync();
-      prMonitorService.untrack(environmentId);
+      context.runtime.prMonitor.invalidatePendingSync();
+      context.runtime.prMonitor.service.untrack(environmentId);
       if (environment?.worktreePath)
         context.runtime.diffStats.gitFetchScheduler.forget(environment.worktreePath);
       // Its clone is gone; a fetch still running for it can no longer stamp.
@@ -1825,151 +1576,65 @@ export function deleteEnvironmentTask(
   // Every reason to refuse the delete is evaluated before the tombstone is
   // reserved. Reserving first would block local-server starts and merges for
   // the whole queue wait on behalf of a delete that was never going to run.
-  if (isLocalServerShutdownRequested()) {
+  const environments = context.runtime.environments;
+  if (context.runtime.localServers.isShuttingDown()) {
     return Promise.reject(new Error("Backend is shutting down; environments cannot be deleted"));
   }
-  if (mergingEnvironments.has(environmentId) && !options.allowWhileMerging) {
+  if (environments.isMerging(environmentId) && !options.allowWhileMerging) {
     return Promise.reject(new Error(`Environment is currently being merged: ${environmentId}`));
-  }
-  if (deletingLocalServerEnvironments.has(environmentId)) {
-    return Promise.reject(new Error(`Environment is already being deleted: ${environmentId}`));
   }
   // Reserve deletion before queueing. Local server starts consult this guard,
   // so work admitted after delete cannot recreate a process behind cleanup.
-  deletingLocalServerEnvironments.add(environmentId);
-  invalidateEnvironmentStartDedupe(environmentId);
+  if (!environments.beginDelete(environmentId)) {
+    return Promise.reject(new Error(`Environment is already being deleted: ${environmentId}`));
+  }
+  environments.invalidateStartDedupe(environmentId);
   try {
     return enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
       deleteEnvironment(environmentId, context, options),
     ).finally(() => {
-      deletingLocalServerEnvironments.delete(environmentId);
+      environments.endDelete(environmentId);
     });
   } catch (error) {
-    deletingLocalServerEnvironments.delete(environmentId);
+    environments.endDelete(environmentId);
     throw error;
   }
 }
+
+// tmux cannot import the account modules without a cycle; the owner registers.
+setLocalClaudeConfigDirectoryProvider(
+  async (context) => (await activeAgentAccountShellEnvironment(context)).CLAUDE_CONFIG_DIR,
+);
 
 /**
  * Resumes only the unambiguous follow-up half of a persisted merge-and-cleanup
  * workflow. A backend restart must never resubmit an ambiguous GitHub merge;
  * exact-URL PR monitoring first establishes `prState: "merged"`, then this
  * continuation can safely retry deletion.
+ *
+ * The PR monitor observes merges but cannot import this module (it would be a
+ * cycle), so the backend passes this function to `BackendRuntime` as
+ * `prMonitor.scheduleMergeCleanup` (`index.ts`, `tests/command-fixtures.ts`).
  */
-// Registered at module scope: the PR monitor observes merges and hands them
-// back here, without importing this module.
-// tmux cannot import the account modules without a cycle; the owner registers.
-setLocalClaudeConfigDirectoryProvider(
-  async (context) => (await activeAgentAccountShellEnvironment(context)).CLAUDE_CONFIG_DIR,
-);
-setMergeCleanupScheduler((environmentId, context) =>
-  scheduleMergeCleanupRecovery(environmentId, context),
-);
-
 export function scheduleMergeCleanupRecovery(environmentId: string, context: CommandContext): void {
-  if (mergeCleanupRecoveryTasks.has(environmentId)) return;
-
-  const task = (async () => {
-    const environment = await context.storage.getEnvironment(environmentId);
-    if (
-      !environment?.cleanupAfterMergeRequestedAt ||
-      environment.cleanupAfterMergeError ||
-      (environment.prState !== "merged" && !environment.deletionRequestedAt)
-    ) {
-      return;
-    }
-    await deleteEnvironmentTask(environmentId, context);
-  })()
-    .catch((error) => {
+  context.runtime.environments.scheduleMergeCleanupRecovery(environmentId, () =>
+    (async () => {
+      const environment = await context.storage.getEnvironment(environmentId);
+      if (
+        !environment?.cleanupAfterMergeRequestedAt ||
+        environment.cleanupAfterMergeError ||
+        (environment.prState !== "merged" && !environment.deletionRequestedAt)
+      ) {
+        return;
+      }
+      await deleteEnvironmentTask(environmentId, context);
+    })().catch((error) => {
       console.warn(
         `[backend] Failed to resume merge cleanup for ${environmentId}:`,
         conciseError(error),
       );
-    })
-    .finally(() => {
-      if (mergeCleanupRecoveryTasks.get(environmentId) === task) {
-        mergeCleanupRecoveryTasks.delete(environmentId);
-      }
-    });
-
-  mergeCleanupRecoveryTasks.set(environmentId, task);
-}
-
-export async function waitForLocalServerEnvironmentOperations(
-  timeoutMs?: number,
-): Promise<boolean> {
-  const drain = async () => {
-    while (localServerEnvironmentOperations.size > 0) {
-      await Promise.allSettled(new Set(localServerEnvironmentOperations.values()));
-    }
-  };
-
-  if (timeoutMs === undefined) {
-    await drain();
-    return true;
-  }
-  if (timeoutMs <= 0) {
-    return localServerEnvironmentOperations.size === 0;
-  }
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<false>((resolve) => {
-    timer = setTimeout(() => resolve(false), timeoutMs);
-    timer.unref?.();
-  });
-  try {
-    return await Promise.race([drain().then(() => true as const), deadline]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-/**
- * Closes admission for everything that would start new owned processes, without
- * waiting for any of it to drain.
- *
- * Shutdown drains lifecycle work first, and that drain can run for minutes on
- * queued Docker operations. Leaving local-server and delete admission open for
- * that whole window would let work start that the subsequent drain then has to
- * clean up — or that a SIGKILL leaves orphaned.
- */
-export function closeLocalServerAdmission(): void {
-  requestLocalServerShutdown();
-  cancelAllOpenCodeAgentToolsConfigurations();
-}
-
-/**
- * Drains every local agent server still owned by this backend process.
- *
- * `operationDrainTimeoutMs` bounds only the queue drain. Once it expires,
- * shutdown still snapshots and terminates every child already owned by this
- * process. Admission was closed before the wait, and queued starts re-check that
- * gate when they run, so skipping a stuck tail cannot admit a new child later.
- */
-export async function shutdownLocalServers(
-  options: { operationDrainTimeoutMs?: number } = {},
-): Promise<void> {
-  const existingShutdown = getLocalServerShutdownPromise();
-  if (existingShutdown) return existingShutdown;
-  requestLocalServerShutdown();
-
-  const attempt = (async () => {
-    await waitForLocalServerEnvironmentOperations(options.operationDrainTimeoutMs);
-    const owned = [...localServerProcesses.entries()];
-    const results = await Promise.allSettled(
-      owned.map(([key, child]) => terminateLocalServerChild(key, child, "backend shutting down")),
-    );
-    aggregateRejectedResults(results, "Failed to shut down all local servers");
-  })();
-  setLocalServerShutdownPromise(attempt);
-
-  try {
-    await attempt;
-  } catch (error) {
-    // A retained process can be targeted by an explicit retry.
-    if (getLocalServerShutdownPromise() === attempt) setLocalServerShutdownPromise(null);
-    throw error;
-  }
+    }),
+  );
 }
 
 export async function readLocalServerStatus(
@@ -1988,26 +1653,23 @@ export async function readLocalServerStatus(
   // The owned child can exit while storage is being read. Re-read ownership
   // after the await so an exit handler that released the process cannot leave
   // this snapshot claiming that a dead child is still running.
-  const child = localServerProcesses.get(key);
+  const localServers = context.runtime.localServers;
+  const child = localServers.process(key);
   const port = localServerPort(env, kind);
   const { pid: pidField } = localServerFields(kind);
   const persistedPid = env?.[pidField];
   const pid = typeof persistedPid === "number" ? persistedPid : undefined;
-  const authToken = localBridgeTokens(kind)?.get(environmentId);
-  if (
-    kind === "opencode" &&
-    child &&
-    !child.killed &&
-    port &&
-    authToken &&
-    env?.worktreePath &&
-    context.agentTools
-  ) {
-    scheduleOpenCodeAgentToolsConfiguration(
+  const authToken = localServers.bridgeToken(kind, environmentId);
+  const reconcileConnection =
+    kind === "opencode" && child && !child.killed && port && authToken && env?.worktreePath
+      ? openCodeReconcileConnection(environmentId, env, context)
+      : undefined;
+  if (reconcileConnection && port && authToken && env?.worktreePath) {
+    void localServers.openCodeAgentTools.schedule(
       `local:${environmentId}`,
       port,
       authToken,
-      context.agentTools.connection(env.id, env.projectId, "host"),
+      reconcileConnection,
       env.worktreePath,
     );
   }
@@ -2020,7 +1682,7 @@ export async function readLocalServerStatus(
     // Only meaningful for a live server: a stopped one has no MCP state to
     // report, and a crashed one's last verdict describes a process that is gone.
     ...(running && kind === "opencode" && context.agentTools
-      ? { agentTools: openCodeAgentToolsState(`local:${environmentId}`) }
+      ? { agentTools: localServers.openCodeAgentTools.state(`local:${environmentId}`) }
       : {}),
   };
 }
@@ -2040,7 +1702,7 @@ export function getLocalServerStatus(
   // Serialize it behind any in-flight start/stop so callers never observe the
   // child and credential before the healthy port has been persisted (or a
   // replacement child paired with the previous child's stale port).
-  return enqueueLocalServerEnvironmentOperation(environmentId, () =>
+  return context.runtime.localServers.enqueueEnvironmentOperation(environmentId, () =>
     readLocalServerStatus(environmentId, context, kind),
   );
 }
@@ -2060,4 +1722,20 @@ export async function allocateLocalPort(): Promise<number> {
     });
     server.once("error", reject);
   });
+}
+
+/**
+ * Forward a local bridge's output to the console, which Debug logging writes
+ * to disk, scrubbed of credential-shaped text and reassembled into whole lines.
+ */
+export function forwardBridgeOutput(
+  child: Pick<ChildProcessWithoutNullStreams, "stdout" | "stderr">,
+  prefix: string,
+): void {
+  const stdout = createBridgeOutputForwarder((text) => console.debug(`${prefix} ${text}`));
+  const stderr = createBridgeOutputForwarder((text) => console.error(`${prefix} ${text}`));
+  child.stdout.on("data", stdout.push);
+  child.stderr.on("data", stderr.push);
+  child.stdout.once("end", stdout.flush);
+  child.stderr.once("end", stderr.flush);
 }

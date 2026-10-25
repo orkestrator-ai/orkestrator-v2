@@ -1,7 +1,9 @@
 import type { NativeMessage, NativeMessagePart } from "./native-message-types";
 import {
   AGENT_MAIL_TRUST_CLASSES,
+  agentMailboxId,
   agentMailKind,
+  agentMailParticipantKey,
   normalizeAgentMailNotice,
   type AgentMailMessage,
   type MailActor,
@@ -138,7 +140,7 @@ export function isClientOnlyNativeMessage(message: Pick<NativeMessage, "id">): b
 type PeerMailDisplayMessage = Pick<
   AgentMailMessage,
   "id" | "from" | "trust" | "subject" | "body" | "createdAt" | "notice"
->;
+> & { to?: { environmentId: string; tabId: string } };
 
 const PEER_MAIL_CARRIER_OPEN = '<orkestrator-peer-message version="1">';
 const PEER_MAIL_CARRIER_CLOSE = "</orkestrator-peer-message>";
@@ -150,7 +152,8 @@ export function isPeerMailCarrierContent(content: string): boolean {
   return content.trimStart().startsWith(PEER_MAIL_CARRIER_OPEN);
 }
 
-function peerMailSenderLabel(from: MailActor): string {
+/** The name a transcript gives a mail sender. */
+export function agentMailSenderLabel(from: MailActor): string {
   return from.kind === "user"
     ? "You"
     : from.kind === "external"
@@ -159,12 +162,14 @@ function peerMailSenderLabel(from: MailActor): string {
         ? "Orkestrator workflow"
         : from.kind === "coordinator"
           ? from.title || "Project coordinator"
-          : from.title || `${from.environmentId} / ${from.tabId}`;
+          : from.kind === "node"
+            ? `${from.title || (from.role === "coordinator" ? "Project coordinator" : from.tabId)} on ${from.nodeName}`
+            : from.title || `${from.environmentId} / ${from.tabId}`;
 }
 
 export function createPeerMailNativeMessage(message: PeerMailDisplayMessage): NativeMessage {
   const kind = agentMailKind(message);
-  const sender = peerMailSenderLabel(message.from);
+  const sender = agentMailSenderLabel(message.from);
   // The heading occupies exactly one line of `content`; see
   // `splitPeerMailNativeMessageContent`.
   const subject = message.subject?.replace(/\s*[\r\n]+\s*/g, " ");
@@ -193,6 +198,14 @@ export function createPeerMailNativeMessage(message: PeerMailDisplayMessage): Na
       warning,
       body: message.body,
       ...(notice ? { notice } : {}),
+      ...(message.to
+        ? {
+            participants: [
+              agentMailParticipantKey(message.from),
+              agentMailboxId(message.to.environmentId, message.to.tabId),
+            ] as [string, string],
+          }
+        : {}),
     },
   };
 }
@@ -239,7 +252,18 @@ function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage
     from.kind !== "external" &&
     from.kind !== "tab" &&
     from.kind !== "coordinator" &&
-    from.kind !== "system"
+    from.kind !== "system" &&
+    from.kind !== "node"
+  )
+    return null;
+  if (
+    from.kind === "node" &&
+    (typeof from.nodeId !== "string" ||
+      typeof from.nodeName !== "string" ||
+      (from.role !== "coordinator" && from.role !== "agent") ||
+      typeof from.projectId !== "string" ||
+      typeof from.environmentId !== "string" ||
+      typeof from.tabId !== "string")
   )
     return null;
   if (
@@ -264,8 +288,12 @@ function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage
   )
     return null;
   const notice = from.kind === "system" ? normalizeAgentMailNotice(value.notice) : null;
+  const to = record(value.to)
+    ? { environmentId: value.to.environmentId as string, tabId: value.to.tabId as string }
+    : undefined;
   return createPeerMailNativeMessage({
     id: value.messageId,
+    ...(to ? { to } : {}),
     from: from as MailActor,
     trust: value.trust as AgentMailMessage["trust"],
     ...(typeof value.subject === "string" ? { subject: value.subject } : {}),

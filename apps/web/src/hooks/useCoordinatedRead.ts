@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   getReadCoordinator,
   readKeyId,
@@ -78,23 +78,26 @@ export function useCoordinatedRead<T>({
   const coordinator = injectedCoordinator ?? getReadCoordinator();
   const keyId = readKeyId(key);
   const [state, setState] = useState<ReadState<T> | null>(null);
+  // A disabled subscription reports no state. The effect below disposes it,
+  // so nothing sets the state again until it is re-enabled.
+  if (!enabled && state !== null) setState(null);
   const keyRef = useRef(key);
-  keyRef.current = key;
   const readRef = useRef(read);
-  readRef.current = read;
   const demandRef = useRef(demand);
-  demandRef.current = demand;
   const classifyRef = useRef(classifyError);
-  classifyRef.current = classifyError;
   const onStateRef = useRef(onState);
-  onStateRef.current = onState;
+  // Latest options, published at commit and before the effects below read them.
+  useLayoutEffect(() => {
+    keyRef.current = key;
+    readRef.current = read;
+    demandRef.current = demand;
+    classifyRef.current = classifyError;
+    onStateRef.current = onState;
+  });
   const handleRef = useRef<ReadSubscription<T> | null>(null);
 
   useEffect(() => {
-    if (!enabled) {
-      setState(null);
-      return;
-    }
+    if (!enabled) return;
     const handle = coordinator.subscribe<T>({
       key: keyRef.current,
       read: (context) => readRef.current(context),

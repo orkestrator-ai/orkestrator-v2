@@ -1,4 +1,8 @@
 import type { GatewayTokenSettings, WebClientStatus } from "@/types";
+import {
+  clearLegacyWorkspaceTarget,
+  readStoredWorkspace,
+} from "@/lib/portal/workspace-target-storage";
 import { getGatewayBaseUrl, resolveGatewayApiUrl } from "@/lib/gateway-url";
 import {
   configureDirectGatewayTransport,
@@ -6,6 +10,7 @@ import {
 } from "@/lib/native/gateway-auth-transport";
 import { readClipboardImageDimensions } from "@/lib/clipboard-image";
 import { GatewayHttpError } from "@/lib/native/gateway-http-error";
+import { clearProtectedRichContent } from "@/lib/chat/rich-content-reset";
 import {
   GATEWAY_EVENT_CURSOR_PARAM,
   GatewayEventStreamState,
@@ -47,7 +52,14 @@ export const TERMINAL_TRANSPORT_STORAGE_KEY = "orkestrator-terminal-transport";
 const TERMINAL_FILTER_NARROW_DELAY_MS = 50;
 
 type EventCallback<T> = (payload: T) => unknown;
-type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
+type GatewayWindow = Pick<
+  Window,
+  | "location"
+  | "orkestrator"
+  | "orkestratorGateway"
+  | "orkestratorPortal"
+  | "orkestratorWorkspaceTarget"
+>;
 
 const browserGatewayDisposers = new WeakMap<object, (reason?: unknown) => void>();
 
@@ -71,6 +83,7 @@ async function readBrowserClipboardImage(): Promise<{
 }
 
 export interface BrowserGatewayOptions {
+  unavailableReason?: string;
   baseUrl?: string;
   token?: string;
   replaceExisting?: boolean;
@@ -214,8 +227,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let browserTerminalEventSourceOpen = false;
   let bearerToken = options.token?.trim() || undefined;
   const baseUrl = normalizedBaseUrl(options.baseUrl);
-  const apiUrl = (pathname: string): string =>
-    baseUrl ? `${baseUrl}${pathname}` : resolveGatewayApiUrl(pathname);
+  const apiUrl = (pathname: string): string => {
+    if (options.unavailableReason) throw new Error(options.unavailableReason);
+    return baseUrl ? `${baseUrl}${pathname}` : resolveGatewayApiUrl(pathname);
+  };
 
   const requestHeaders = (headers?: Record<string, string>): Record<string, string> | undefined => {
     const result = { ...headers };
@@ -223,7 +238,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     return Object.keys(result).length > 0 ? result : undefined;
   };
 
-  const credentials = bearerToken || baseUrl ? ("omit" as const) : ("same-origin" as const);
+  const crossOrigin =
+    baseUrl && new URL(baseUrl, window.location.href).origin !== window.location.origin;
+  const credentials = bearerToken || crossOrigin ? ("omit" as const) : ("same-origin" as const);
   const websocketTerminalsEnabled = terminalTransportEnabled(options);
   let terminalSocket: TerminalWebSocketClient | null = null;
   let disposeAgentTestActivity: () => void = () => undefined;
@@ -233,6 +250,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
   const applyGatewayToken = (token: string): void => {
     const normalizedToken = token.trim();
+    // New credentials: rich content derived under the old ones is dropped.
+    if ((normalizedToken || undefined) !== bearerToken) clearProtectedRichContent("credentials");
     bearerToken = normalizedToken || undefined;
     terminalSocket?.updateToken(normalizedToken);
     updateDirectGatewayToken(normalizedToken);
@@ -266,6 +285,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     if (!agentTestSessionActive || credentialLapseHandled) return;
     credentialLapseHandled = true;
     disposeAgentTestActivity();
+    // The session ended: protected rich content must not outlive it.
+    clearProtectedRichContent("logout");
     if (options.onCredentialLapsed) {
       options.onCredentialLapsed();
       return;
@@ -1152,6 +1173,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     },
 
     listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
+      if (options.unavailableReason) return () => undefined;
       const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
       listeners.set(event, callbackSet);
       callbackSet.add(callback as EventCallback<unknown>);
@@ -1287,6 +1309,8 @@ export function installBrowserGatewayApi(
       browserGatewayDisposers.get(targetWindow.orkestrator)?.(
         new Error("Browser gateway replaced"),
       );
+      // A replaced gateway may be another backend or other credentials.
+      clearProtectedRichContent("gateway-replaced");
     }
     if (baseUrl && options.token) {
       configureDirectGatewayTransport(baseUrl, options.token.trim());
@@ -1295,18 +1319,49 @@ export function installBrowserGatewayApi(
     targetWindow.orkestrator = createBrowserGatewayApi({
       ...options,
       baseUrl,
-      reportBootMetrics: true,
+      reportBootMetrics: !options.unavailableReason,
       // Only an isolated development profile can hold an agent-test session, and
       // its Vite instance is the only one given a profile id. Probing anywhere
       // else would spend a request per boot on a route that is always 404 —
       // including on every production gateway client.
       agentTestSessionActivity:
         options.agentTestSessionActivity ??
-        Boolean(import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim()),
+        (!options.unavailableReason && Boolean(import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim())),
     });
   }
 }
 
+/**
+ * Browser and iOS: a workspace realm (a frame showing another node's
+ * workspace in the window's central region) is that node's client —
+ * directly with the workspace's client grant, or through the command node's
+ * relay with this page's own session — while its portal stays the command
+ * node that served the page. The window itself is always the command node's.
+ */
+export function workspaceTargetGatewayOptions(
+  targetWindow: GatewayWindow = window,
+): BrowserGatewayOptions {
+  if (targetWindow.orkestrator) return {};
+  const workspace = readStoredWorkspace();
+  if (!workspace) {
+    if (targetWindow === window && window.top === window) clearLegacyWorkspaceTarget();
+    return {};
+  }
+  targetWindow.orkestratorWorkspaceTarget = {
+    nodeId: workspace.nodeId,
+    nodeName: workspace.nodeName,
+    path: workspace.path,
+    ...(workspace.routeKind ? { routeKind: workspace.routeKind } : {}),
+    ...(workspace.via ? { via: workspace.via } : {}),
+  };
+  targetWindow.orkestratorPortal = createBrowserGatewayApi({
+    baseUrl: targetWindow.location.origin,
+  });
+  return workspace.token
+    ? { baseUrl: workspace.baseUrl, token: workspace.token }
+    : { baseUrl: workspace.baseUrl };
+}
+
 if (typeof window !== "undefined") {
-  installBrowserGatewayApi();
+  installBrowserGatewayApi(window, workspaceTargetGatewayOptions());
 }

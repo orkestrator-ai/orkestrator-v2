@@ -14,6 +14,8 @@ import {
   MAX_NATIVE_AGENT_DRIFT_KIND_LENGTH,
   NATIVE_AGENT_NOTICE_SEVERITIES,
   NATIVE_AGENT_NOTICE_SOURCES,
+  isNativeAgentContextCategoryId,
+  isNativeAgentPricingTier,
   normalizeNativeAgentRuntimeSteerJournal,
   type NativeAgentContextUsage,
   type NativeAgentNotice,
@@ -82,6 +84,13 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
 
 export function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** A bridge snapshot's `commandRevision`, as the projection's catalogue revision. */
+export function commandCatalogueRevisionField(revision: unknown): {
+  commandCatalogueRevision?: number;
+} {
+  return Number.isSafeInteger(revision) ? { commandCatalogueRevision: revision as number } : {};
 }
 
 /**
@@ -191,6 +200,7 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
         return [];
       return [
         {
+          ...(isNativeAgentContextCategoryId(category.id) ? { id: category.id } : {}),
           name: category.name.slice(0, 128),
           tokens: category.tokens,
           ...(typeof category.color === "string" ? { color: category.color.slice(0, 64) } : {}),
@@ -227,6 +237,13 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
       }
       if (typeof turn.requestId === "string") normalized.requestId = turn.requestId.slice(0, 256);
       if (typeof turn.modelId === "string") normalized.modelId = turn.modelId.slice(0, 256);
+      // Re-serialized rather than copied, so an unparseable value is dropped
+      // here instead of reaching a consumer that buckets usage by it.
+      if (typeof turn.at === "string") {
+        const at = new Date(turn.at);
+        if (!Number.isNaN(at.getTime())) normalized.at = at.toISOString();
+      }
+      if (isNativeAgentPricingTier(turn.pricingTier)) normalized.pricingTier = turn.pricingTier;
       return [normalized];
     });
     if (turns.length > 0) usage.turns = turns;

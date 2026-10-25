@@ -1,3 +1,4 @@
+import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { environmentBrowserTarget } from "@/lib/preview-service-entry";
 import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
 import {
@@ -64,8 +65,15 @@ import { findProjectHomeEnvironment } from "@/lib/project-home";
 import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
-import { onGlobalSettingsRequest, type GlobalSettingsSection } from "@/lib/settings-navigation";
+import {
+  onGlobalSettingsCloseRequest,
+  onGlobalSettingsRequest,
+  requestGlobalSettings,
+  type GlobalSettingsSection,
+} from "@/lib/settings-navigation";
+import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import type { ResolveLaunchResult } from "./ActionBar.types";
+import { useAccountMachineStore } from "@/components/settings/account-machine";
 
 /**
  * A Create PR launch that has not yet produced a pull request.
@@ -148,6 +156,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const toggleFilesPanelStore = useFilesPanelStore((state) => state.togglePanel);
   const openFilesPanelOnAllFiles = useFilesPanelStore((state) => state.openPanelOnAllFiles);
   const changes = useFilesPanelStore((state) => state.changes);
+  // The Files button's dot follows the environment's backend measurement; the
+  // panel's legacy list is only the fallback for a backend without one.
+  const changeProjection = useEnvironmentChangeProjection(selectedEnvironmentId);
+  const hasChanges = changeProjection ? changeProjection.badge.visible : changes.length > 0;
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
   const toggleSidebar = useUIStore((state) => state.toggleSidebar);
 
@@ -200,9 +212,23 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   );
 
   const updateGlobalSettingsOpen = useCallback((open: boolean) => {
+    // Settings belong to the command node: a workspace realm opens its window's.
+    if (open && isWorkspaceRealm()) {
+      requestGlobalSettings("general");
+      return;
+    }
     setGlobalSettingsOpen(open);
-    if (!open) setGlobalSettingsDefaultSection(undefined);
+    if (!open) {
+      setGlobalSettingsDefaultSection(undefined);
+      // The next visit follows the machine on screen again.
+      useAccountMachineStore.getState().choose(undefined);
+    }
   }, []);
+
+  useEffect(
+    () => onGlobalSettingsCloseRequest(() => updateGlobalSettingsOpen(false)),
+    [updateGlobalSettingsOpen],
+  );
   const resolveLaunchEnvironmentIdRef = useRef<string | null>(null);
   const selectedEnvironmentIdRef = useRef(selectedEnvironmentId);
   selectedEnvironmentIdRef.current = selectedEnvironmentId;
@@ -2353,6 +2379,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     toggleFilesPanel,
     canToggleFilesPanel,
     changes,
+    hasChanges,
     sidebarOpen,
     toggleSidebar,
     repoSettingsProjectId,

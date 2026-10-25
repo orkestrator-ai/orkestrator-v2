@@ -101,6 +101,25 @@ trimmed copy and lose it once a newer row pushes it out of the live tail. A
 tool result, denial or command change rebuilds the row holding that call
 (`refreshToolRows`), not only the newest one.
 
+`session-manager-prompt-stream.test.ts` drives the stream (`PromptStream`)
+directly on a bare session; extend it with any new row rule. When touching it:
+
+- **The delta path allocates nothing new.** `applyPartialAssistantMessage` and
+  the flush scheduling run once per token: no new closures, objects or `Date`
+  calls there. The block lookup refills one reused target per stream.
+- **Rows are compared by identity** (`dirtyRows`, `rowOfMessage`,
+  `sharedRows`). Never copy a row or rebuild those maps.
+- **A released turn and its successor share rows** through the module-level
+  `sessionStreamRows`, keyed by session and reset when `session.messages` is
+  replaced.
+- **Coalescing.** Deltas land in their row at once; the rebuild and emit happen
+  at most once per `STREAM_EVENT_COALESCE_MS`, and every non-delta frame
+  flushes first. `finalizeTurn` must call `clearFlushTimer`, or a finished
+  turn publishes late.
+- **Turn flags belong on `TurnState`.** The plan-mode re-prompt flags
+  (`planApprovedThisTurn` and the two pending prompts) live on the turn, where
+  the code that reads them is, not on the stream.
+
 ## Session catalogue and transport
 
 When touching the session catalogue (`session-manager-catalog.ts`):
@@ -123,7 +142,7 @@ When touching the session catalogue (`session-manager-catalog.ts`):
 - **The no-control fallback costs a process.** `createProbe()` spawns a whole
   Claude CLI, so `commandInventory` caches the catalogue the way `mcpInventory`
   already did. The backend re-reads both on every session projection
-  (`native-agent-service-projection.ts`), so an uncached fallback is one spawn
+  (`native-agent-transcript-projection.ts`), so an uncached fallback is one spawn
   per turn boundary rather than a one-off.
 - **Every SDK frame has a declared fate.** `HANDLED_SDK_MESSAGE_TYPES` and
   `SYSTEM_SUBTYPE_DISPOSITIONS` (`src/types/index.ts`) are `Record`s over the
@@ -154,7 +173,7 @@ When touching the session catalogue (`session-manager-catalog.ts`):
 
 `src/services/read-only-policy.ts` holds the read-only boundary for shell,
 because no tool-name rule can separate `git log` from `git commit` — which is
-why `capabilityPolicy`'s `shell.mutate` maps to no tool names at all. Two
+why `capabilityPolicy`'s `shell.mutate` maps to no tool names at all. Three
 invariants keep it honest:
 
 - **The command checked must be the command that runs.** `COMPOSITION_PATTERN`
@@ -163,8 +182,21 @@ invariants keep it honest:
   `ls\nrm -rf .` to a harmless-looking `ls`.
 - **The program name is not the whole command.** A program that launches another
   program does not belong in `READ_ONLY_COMMANDS` whatever it is called — `env`
-  is absent for that reason. Where a reading tool has a writing flag, name it in
-  `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`, `yq -i`) rather than dropping
-  the tool. Git subcommands whose effect depends on their arguments belong in
+  is absent for that reason, and a path (`bin/cat`) names whatever the checkout
+  put there, so programs run by bare name only. Where a reading tool has a
+  writing flag, name it in `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`,
+  `yq -i`) rather than dropping the tool; a one-letter flag there also matches
+  inside a cluster or with its value attached (`-no out`, `-oout`). A tool that
+  writes a positional (`uniq in out`) belongs in `POSITIONAL_LIMITS`, and one
+  with too many writing options to list (gawk) in `OPTION_ALLOWLISTS`. Git
+  subcommands whose effect depends on their arguments belong in
   `CONDITIONAL_GIT_SUBCOMMANDS`, not the flat read-only set: `branch`, `tag`,
   `remote` and `config` all read in one form and write in another.
+- **Assume no sandbox behind it.** The SDK sandbox lets a command write its
+  working directory, which for a coordinator is the user's checkout, so
+  `claudeReadOnlySandbox` denies writes there (`filesystem.denyWrite`). Where
+  the sandbox cannot start at all (Windows, Linux without bubblewrap and
+  socat; the launcher says so in `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`)
+  this allowlist is the whole boundary. A command it admits must neither write
+  nor reach the network on its own, which is why `gh`, `curl` and
+  `git ls-remote` are refused rather than left to the sandbox.

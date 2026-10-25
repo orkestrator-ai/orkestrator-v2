@@ -20,6 +20,16 @@ import {
 import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
 import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-annotation-tools.js";
+import {
+  ARTIFACT_ONLY_SERVER_INSTRUCTIONS,
+  ARTIFACT_TOOL_INSTRUCTIONS,
+  registerTranscriptArtifactTools,
+  type TranscriptArtifactToolHost,
+} from "./transcript-artifacts/tools.js";
+import {
+  ORKESTRATOR_ARTIFACT_MCP_PATH,
+  ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+} from "@orkestrator/protocol/transcript-artifacts";
 
 const MAX_MCP_REQUEST_BYTES = 512 * 1024;
 const MAX_TITLE_LENGTH = 500;
@@ -35,10 +45,39 @@ const MAX_COMMENT_OUTPUT_BYTES = 24 * 1024;
 const AGENT_MCP_PATH = "/mcp";
 /** Claude terminal state doorbell (`orkestrator-state-signal`); carries no state. */
 export const CLAUDE_STATE_SIGNAL_PATH = "/claude-state-signal";
+/** Container worktree doorbell (`orkestrator-worktree-signal`); carries no paths or content. */
+export const WORKTREE_SIGNAL_PATH = "/worktree-signal";
+/**
+ * What a worktree ring asks for, from its `X-Orkestrator-Signal` header. Every
+ * reason makes the receiver do at least a full rescan; none can make it trust
+ * a stale result. Anything unrecognised is `change`.
+ */
+export type WorktreeSignalReason = "ready" | "change" | "overflow" | "lost";
+const WORKTREE_SIGNAL_REASONS = new Set<WorktreeSignalReason>([
+  "ready",
+  "change",
+  "overflow",
+  "lost",
+]);
 
 export const ORKESTRATOR_AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
 export const ORKESTRATOR_AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
 export const ORKESTRATOR_AGENT_MCP_SERVER_NAME = "orkestrator";
+
+/**
+ * Forget an agent tool connection this backend inherited rather than issued.
+ *
+ * A backend started from inside an agent session (a CLI scenario, an agent's
+ * `dev:test` profile) inherits that session's URL and token. Bridges, exec
+ * workers and catalogue probes all spread `process.env`, so without this every
+ * agent of the nested backend could act as the parent tab on the parent
+ * Orkestrator's tickets and mail. A backend only ever hands out connections
+ * it issued itself.
+ */
+export function dropInheritedAgentToolConnection(env: NodeJS.ProcessEnv = process.env): void {
+  delete env[ORKESTRATOR_AGENT_MCP_URL_ENV];
+  delete env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV];
+}
 
 export type AgentToolConnection = {
   design?: boolean;
@@ -46,6 +85,8 @@ export type AgentToolConnection = {
   token: string;
   /** Signed one-attempt argument used with the persistent OpenCode broker. */
   workflowResultCapability?: string;
+  /** A workflow turn's artifact-only connection (see `ProviderSendOptions.agentMcp`). */
+  artifacts?: { token: string };
 };
 
 export type AgentToolScope = {
@@ -262,6 +303,7 @@ async function createAgentToolServer(
   workflowResults?: WorkflowResultService,
   webAnnotations?: { host: WebAnnotationToolHost; limiter: WebAnnotationToolLimiter } | null,
   provisionalFindings?: ProvisionalFindingSink | null,
+  artifacts?: TranscriptArtifactToolHost | null,
 ): Promise<McpServer> {
   if (scope.workflowResultBroker) {
     const server = new McpServer(
@@ -335,6 +377,10 @@ async function createAgentToolServer(
   // Annotation tools bind to the tab named by the credential; an
   // environment-wide credential cannot identify an assigned request.
   const annotationTools = webAnnotations && scope.tabId ? webAnnotations : null;
+  // Artifact tools are ordinary tools of this general server only; the
+  // workflow-result branches above returned without them. Environment-wide
+  // credentials must additionally present a per-turn artifact grant.
+  const artifactTools = artifacts?.toolsEnabled() ? artifacts : null;
   const server = new McpServer(
     { name: "orkestrator", version: "1.0.0" },
     {
@@ -345,7 +391,8 @@ async function createAgentToolServer(
         messagingInstructions +
         (annotationTools
           ? " Browser annotation tools read the annotation request assigned to this session and optionally report its result; they never resolve annotations."
-          : ""),
+          : "") +
+        (artifactTools ? ARTIFACT_TOOL_INSTRUCTIONS : ""),
     },
   );
 
@@ -503,6 +550,35 @@ async function createAgentToolServer(
     },
   );
 
+  if (artifactTools) registerTranscriptArtifactTools(server, artifactTools, scope);
+
+  return server;
+}
+
+/**
+ * The artifact-only server of a backend workflow turn (`/artifact-mcp`).
+ *
+ * Its bearer token is the turn's artifact grant, minted at dispatch for the
+ * workflow session's own conversation and revoked when the turn settles. It
+ * lists the artifact tools and nothing else, and every call is authorized
+ * with that grant, so it carries no workflow-result, Kanban or mail authority
+ * and the workflow-result credential beside it carries no artifact authority.
+ */
+function createArtifactOnlyServer(
+  host: TranscriptArtifactToolHost,
+  scope: { environmentId: string; projectId: string },
+  grant: string,
+): McpServer {
+  const server = new McpServer(
+    { name: ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME, version: "1.0.0" },
+    { instructions: ARTIFACT_ONLY_SERVER_INSTRUCTIONS },
+  );
+  registerTranscriptArtifactTools(
+    server,
+    host,
+    { environmentId: scope.environmentId, projectId: scope.projectId },
+    { boundGrant: grant },
+  );
   return server;
 }
 
@@ -523,13 +599,18 @@ export class AgentToolsServer {
   }
   private readonly credentialsByEnvironment = new Map<string, StoredCredential>();
   private readonly scopesByDigest = new Map<string, AgentToolScope>();
-  private readonly stateSignalsByDigest = new Map<string, () => void>();
+  /** Doorbell credentials, each valid on exactly the route it was issued for. */
+  private readonly stateSignalsByDigest = new Map<
+    string,
+    { path: string; ring: (reason: WorktreeSignalReason) => void }
+  >();
   private lifecycle: Promise<void> = Promise.resolve();
   private designRequests = 0;
   private readonly mailRateWindows = new Map<string, number[]>();
   private webAnnotationToolHost: WebAnnotationToolHost | null = null;
   private readonly webAnnotationToolLimiter = new WebAnnotationToolLimiter();
   private provisionalFindingSink: ProvisionalFindingSink | null = null;
+  private transcriptArtifactToolHost: TranscriptArtifactToolHost | null = null;
 
   constructor(
     private readonly storage: StorageService,
@@ -685,15 +766,34 @@ export class AgentToolsServer {
    * server listens.
    */
   issueStateSignal(onSignal: () => void): StateSignalCredential | null {
+    return this.issueSignal(CLAUDE_STATE_SIGNAL_PATH, () => onSignal());
+  }
+
+  /**
+   * The same kind of credential for a container worktree watcher
+   * (`orkestrator-worktree-signal`). It rings only `/worktree-signal`, and a
+   * Claude state credential never rings it.
+   */
+  issueWorktreeSignal(
+    onSignal: (reason: WorktreeSignalReason) => void,
+  ): StateSignalCredential | null {
+    return this.issueSignal(WORKTREE_SIGNAL_PATH, onSignal);
+  }
+
+  private issueSignal(
+    path: string,
+    ring: (reason: WorktreeSignalReason) => void,
+  ): StateSignalCredential | null {
     if (!this.server || !this.port) return null;
     const token = randomBytes(32).toString("base64url");
     const digest = credentialDigest(token);
-    this.stateSignalsByDigest.set(digest, onSignal);
+    const entry = { path, ring };
+    this.stateSignalsByDigest.set(digest, entry);
     return {
-      url: `http://host.docker.internal:${this.port}${CLAUDE_STATE_SIGNAL_PATH}`,
+      url: `http://host.docker.internal:${this.port}${path}`,
       token,
       revoke: () => {
-        if (this.stateSignalsByDigest.get(digest) === onSignal) {
+        if (this.stateSignalsByDigest.get(digest) === entry) {
           this.stateSignalsByDigest.delete(digest);
         }
       },
@@ -712,6 +812,19 @@ export class AgentToolsServer {
   /** Where Multi Review reviewers' `report_finding` calls go. */
   setProvisionalFindingSink(sink: ProvisionalFindingSink | null): void {
     this.provisionalFindingSink = sink;
+  }
+
+  /**
+   * Installs (or removes, with null) the transcript artifact tool host. Tools
+   * are advertised on the general server only, never to workflow-result
+   * credentials.
+   */
+  setTranscriptArtifactToolHost(host: TranscriptArtifactToolHost | null): void {
+    this.transcriptArtifactToolHost = host;
+  }
+
+  hasTranscriptArtifactTools(): boolean {
+    return this.transcriptArtifactToolHost?.toolsEnabled() === true;
   }
 
   hasWebAnnotationTools(): boolean {
@@ -764,7 +877,11 @@ export class AgentToolsServer {
     consumeAgentMailRateLimit(this.mailRateWindows, scope, kind);
   }
 
-  private handleStateSignal(request: IncomingMessage, response: ServerResponse): void {
+  private handleStateSignal(
+    request: IncomingMessage,
+    response: ServerResponse,
+    path: string,
+  ): void {
     // A doorbell has no body. Discard anything sent rather than buffer it.
     request.resume();
     if (request.method !== "POST") {
@@ -773,20 +890,84 @@ export class AgentToolsServer {
       return;
     }
     const token = bearerToken(request);
-    const ring = token ? this.stateSignalsByDigest.get(credentialDigest(token)) : undefined;
-    if (!ring) {
+    const entry = token ? this.stateSignalsByDigest.get(credentialDigest(token)) : undefined;
+    if (!entry || entry.path !== path) {
       jsonResponse(response, 401, { error: "Invalid state signal credential" });
       return;
     }
-    ring();
+    const header = request.headers["x-orkestrator-signal"];
+    const reason = typeof header === "string" ? header.trim() : "";
+    entry.ring(
+      WORKTREE_SIGNAL_REASONS.has(reason as WorktreeSignalReason)
+        ? (reason as WorktreeSignalReason)
+        : "change",
+    );
     response.writeHead(204, { "cache-control": "no-store" });
     response.end();
   }
 
+  /**
+   * `/artifact-mcp`: authenticated only by a live artifact grant. Agent tool
+   * and workflow-result credentials are refused here, and a grant is refused
+   * on `/mcp`, so neither authority can stand in for the other.
+   */
+  private async handleArtifactMcp(request: IncomingMessage, response: ServerResponse) {
+    if (request.method !== "POST") {
+      request.resume();
+      response.writeHead(405, { allow: "POST", "cache-control": "no-store" });
+      response.end();
+      return;
+    }
+    const host = this.transcriptArtifactToolHost;
+    if (!host?.toolsEnabled() || typeof host.authenticateArtifactGrant !== "function") {
+      request.resume();
+      jsonResponse(response, 404, { error: "Artifact tools are not enabled" });
+      return;
+    }
+    const grant = bearerToken(request);
+    const scope = grant ? host.authenticateArtifactGrant(grant) : null;
+    if (!grant || !scope) {
+      request.resume();
+      jsonResponse(
+        response,
+        401,
+        { error: "Invalid artifact tools credential" },
+        { "www-authenticate": 'Bearer realm="orkestrator-artifact-tools"' },
+      );
+      return;
+    }
+    let body: unknown;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        jsonResponse(response, 413, { error: error.message });
+        return;
+      }
+      if (error instanceof InvalidJsonBodyError) {
+        jsonResponse(response, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    const handler = createMcpHandler(() => createArtifactOnlyServer(host, scope, grant), {
+      legacy: "stateless",
+    });
+    try {
+      await toNodeHandler(handler)(request, response, body);
+    } finally {
+      await handler.close().catch(() => undefined);
+    }
+  }
+
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://agent-tools.invalid");
-    if (url.pathname === CLAUDE_STATE_SIGNAL_PATH) {
-      this.handleStateSignal(request, response);
+    if (url.pathname === CLAUDE_STATE_SIGNAL_PATH || url.pathname === WORKTREE_SIGNAL_PATH) {
+      this.handleStateSignal(request, response, url.pathname);
+      return;
+    }
+    if (url.pathname === ORKESTRATOR_ARTIFACT_MCP_PATH) {
+      await this.handleArtifactMcp(request, response);
       return;
     }
     if (url.pathname !== AGENT_MCP_PATH && !(url.pathname === "/design-mcp" && this.design)) {
@@ -878,6 +1059,7 @@ export class AgentToolsServer {
                   ? { host: this.webAnnotationToolHost, limiter: this.webAnnotationToolLimiter }
                   : null,
                 this.provisionalFindingSink,
+                this.transcriptArtifactToolHost,
               ),
         { legacy: "stateless" },
       );

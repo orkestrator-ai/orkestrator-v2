@@ -37,6 +37,7 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import type { ArtifactPublication } from "@orkestrator/protocol/transcript-artifacts";
 import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import type {
@@ -148,6 +149,9 @@ const consolidatedReport: StructuredReviewReport = {
 };
 
 class Provider implements BuildPipelineProvider {
+  async dispatchStatus(_sessionId: string, requestId: string) {
+    return this.sends.has(requestId) ? ("dispatched" as const) : ("unknown" as const);
+  }
   readonly agent: BuildPipelineProvider["agent"] = "claude";
   readonly creates: Array<{ label: string; options?: ProviderCreateSessionOptions }> = [];
   readonly sends = new Map<string, { prompt: string; options: ProviderSendOptions }>();
@@ -292,6 +296,17 @@ class Provider implements BuildPipelineProvider {
         : {}),
     };
   }
+  /**
+   * The bounded snapshot surface every reviewer provider has, served from the
+   * same messages. It never answers unchanged.
+   */
+  transcriptSnapshot?: (
+    sessionId: string,
+    options: { limit: number },
+  ) => Promise<{ messages: unknown[]; complete: boolean }> = async (sessionId, options) => {
+    const messages = await this.messages(sessionId, { limit: options.limit });
+    return { messages: messages.slice(-options.limit), complete: messages.length < options.limit };
+  };
   async messages(_sessionId: string, options?: { limit?: number }): Promise<unknown[]> {
     this.messagesCalls += 1;
     this.messageOptions.push(options);
@@ -538,6 +553,108 @@ test("MultiReviewService exposes an authoritative reviewer transcript read model
   });
 });
 
+test("MultiReviewService places a reviewer's own publications beside their publish calls", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  const publishRow = (id: string, toolUseId: string, artifactId: string) => ({
+    id,
+    role: "assistant",
+    content: "",
+    parts: [
+      {
+        type: "tool-invocation",
+        toolName: "mcp__orkestrator-artifacts__publish_artifact",
+        toolUseId,
+        toolState: "success",
+        toolArgs: { artifactId, expectedRevision: 1 },
+      },
+    ],
+  });
+  provider.messagesValue = [
+    publishRow("assistant-1", "toolu_own", "art_own"),
+    publishRow("assistant-2", "toolu_other", "art_other"),
+  ];
+  const publications: ArtifactPublication[] = [];
+  const publication = (
+    owner: { environmentId: string; conversationKey: string },
+    artifactId: string,
+    toolCallId: string,
+  ): ArtifactPublication => {
+    const publicationId = `pub_mr${String(publications.length + 1).padStart(8, "0")}`;
+    return {
+      schemaVersion: 1,
+      publicationId,
+      artifactId,
+      revision: 1,
+      receiptId: `rcpt_${publicationId}`,
+      owner: { backendId: "backend-test", projectId: "project-1", ...owner },
+      conversationSequence: publications.length + 1,
+      publishedAt: "2026-10-20T00:00:01.000Z",
+      anchor: { toolCallId },
+      ref: {
+        schemaVersion: 1,
+        artifactId,
+        revision: 1,
+        publicationId,
+        kind: "chart",
+        title: "Findings chart",
+        summary: "A chart the reviewer published.",
+        provenance: { backendId: "backend-test", origin: "agent" },
+      },
+    };
+  };
+  // A ledger that returns everything: the read path must refuse what it does not own.
+  const artifactLedger = () => ({
+    publicationsForConversation: () => publications,
+    ledgerRevision: () => publications.length,
+  });
+
+  await withService(
+    "env-reviewer-artifacts",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () =>
+        Boolean((await snapshot(started.id))?.reviewers[0]?.providerSessionId),
+      );
+      const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+      // Read once before anything is published: the next read must still see
+      // the publications, because the ledger revision moved.
+      const before = await service.reviewerTranscript(started.id, reviewer.id);
+      expect(before.messages.flatMap((row) => (row as { parts: unknown[] }).parts)).toHaveLength(2);
+
+      publications.push(
+        publication(
+          { environmentId: started.environmentId, conversationKey: reviewer.sessionKey! },
+          "art_own",
+          "toolu_own",
+        ),
+        // Another reviewer's conversation and another environment never appear.
+        publication(
+          { environmentId: started.environmentId, conversationKey: `${reviewer.sessionKey}-x` },
+          "art_other",
+          "toolu_other",
+        ),
+        publication(
+          { environmentId: "env-elsewhere", conversationKey: reviewer.sessionKey! },
+          "art_other",
+          "toolu_other",
+        ),
+      );
+      const read = await service.reviewerTranscript(started.id, reviewer.id);
+      const kinds = (read.messages as Array<{ parts: Array<{ type: string }> }>).map((row) =>
+        row.parts.map((part) => part.type),
+      );
+      expect(kinds).toEqual([["tool-invocation", "artifact"], ["tool-invocation"]]);
+      expect(
+        (read.messages[0] as { parts: Array<{ artifact?: { artifactId: string } }> }).parts[1]
+          ?.artifact?.artifactId,
+      ).toBe("art_own");
+    },
+    { serviceOptions: { artifactLedger } },
+  );
+});
+
 test("MultiReviewService pages earlier reviewer history bound to the reviewer's session", async () => {
   const provider = new Provider(false);
   provider.statusValue = "running";
@@ -653,6 +770,8 @@ test("MultiReviewService keeps reviewer usage monotonic and rejects malformed to
 
 test("MultiReviewService treats transcript-derived usage failures as non-fatal", async () => {
   const provider = new Provider(false);
+  // Exercises the messages-based progress and usage path.
+  delete provider.transcriptSnapshot;
   provider.statusValue = "running";
   provider.usageMessageLimit = 64;
   provider.usageFromMessages = () => {
@@ -4719,6 +4838,156 @@ test("a second restart during a step's continuation fails the step", async () =>
   );
 });
 
+/*
+ * A step's bridge that dies mid-turn is unreachable until the next pass
+ * reconnects. That is an observation fault, as it is for a reviewer: the step
+ * keeps its request, and the reconnected bridge's own report (here, that a
+ * restart cut the turn short) decides what happens next.
+ */
+test("MultiReviewService reconnects a step whose bridge became unreachable", async () => {
+  class DeadBridgeProvider extends Provider {
+    down = false;
+    override async status(sessionId: string): Promise<ProviderStatus> {
+      if (this.down) throw new ProviderUnreachableError("claude bridge is not reachable");
+      return super.status(sessionId);
+    }
+  }
+  const provider = new DeadBridgeProvider(false);
+  const environmentId = "env-step-unreachable";
+  const scope = { environmentId, projectId: "project-1" };
+  let creations = 0;
+  let startupFailures = 0;
+  await withService(
+    environmentId,
+    provider,
+    async ({ service, start, snapshot, workflowResults }) => {
+      const started = await start();
+      const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+        Boolean(workflow.reviewers[0]?.requestId),
+      );
+      await workflowResults!.submit(scope, reviewing.reviewers[0]!.requestId!, cleanReport);
+      const consolidating = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) =>
+          workflow.activeRequest?.kind === "consolidate" && workflow.activeRequest.state === "sent",
+      );
+      const firstRequestId = consolidating.activeRequest!.requestId;
+      const sessionId = (consolidating.reviewSession ?? consolidating.fixSession)!
+        .providerSessionId;
+
+      provider.down = true;
+      await service.advanceNow(started.id);
+      const reconnecting = (await snapshot(started.id))!;
+      expect(reconnecting.phase).toBe("consolidating");
+      expect(reconnecting.error).toBeUndefined();
+      expect(reconnecting.activeRequest).toMatchObject({
+        requestId: firstRequestId,
+        state: "sent",
+      });
+      expect(reconnecting.activeRequest?.idleResultPolls).toBeGreaterThanOrEqual(1);
+      expect(provider.aborted).toEqual([]);
+
+      startupFailures = 2;
+      for (let pass = 0; pass < 2; pass++) {
+        await service.advanceNow(started.id);
+        const waiting = (await snapshot(started.id))!;
+        expect(waiting.phase).toBe("consolidating");
+        expect(waiting.activeRequest).toMatchObject({ requestId: firstRequestId, state: "sent" });
+        expect(waiting.activeRequest!.idleResultPolls).toBeGreaterThan(
+          reconnecting.activeRequest!.idleResultPolls!,
+        );
+      }
+      expect(startupFailures).toBe(0);
+      // The restarted bridge reports the turn cut short; the step continues it.
+      const creationsBeforeReconnect = creations;
+      provider.down = false;
+      provider.sessionFailures.set(sessionId, "Claude restarted before this turn finished.");
+      provider.restartInterrupted.add(sessionId);
+      const queued = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.activeRequest?.restartContinuationSent === true,
+      );
+      expect(creations).toBeGreaterThan(creationsBeforeReconnect);
+      expect(queued.phase).toBe("consolidating");
+      expect(queued.activeRequest?.requestId).not.toBe(firstRequestId);
+    },
+    {
+      toolMode: true,
+      createProvider: async () => {
+        creations += 1;
+        if (startupFailures > 0) {
+          startupFailures -= 1;
+          throw Object.assign(new Error("bridge startup backoff"), { retryable: true });
+        }
+        return provider;
+      },
+    },
+  );
+});
+
+test.each(["status", "startup"] as const)(
+  "MultiReviewService bounds unreachable step %s failures",
+  async (failureAt) => {
+    class DeadBridgeProvider extends Provider {
+      down = false;
+      override async status(sessionId: string): Promise<ProviderStatus> {
+        if (this.down) throw new ProviderUnreachableError("claude bridge is not reachable");
+        return super.status(sessionId);
+      }
+    }
+    const provider = new DeadBridgeProvider(false);
+    const environmentId = "env-step-unreachable-bound";
+    await withService(
+      environmentId,
+      provider,
+      async ({ service, start, snapshot, workflowResults }) => {
+        const started = await start();
+        const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+          Boolean(workflow.reviewers[0]?.requestId),
+        );
+        await workflowResults!.submit(
+          { environmentId, projectId: "project-1" },
+          reviewing.reviewers[0]!.requestId!,
+          cleanReport,
+        );
+        await advanceUntil(
+          service,
+          snapshot,
+          started.id,
+          (workflow) =>
+            workflow.activeRequest?.kind === "consolidate" &&
+            workflow.activeRequest.state === "sent",
+        );
+        provider.down = true;
+        const failed = await advanceUntil(
+          service,
+          snapshot,
+          started.id,
+          (workflow) => workflow.phase === "failed",
+        );
+        expect(failed.error).toContain(
+          failureAt === "startup"
+            ? "provider stayed unreachable: bridge startup backoff"
+            : "provider stayed unreachable: claude bridge is not reachable",
+        );
+        expect(failed.activeRequest?.idleResultPolls).toBeGreaterThan(1);
+      },
+      {
+        toolMode: true,
+        createProvider: async () => {
+          if (provider.down && failureAt === "startup")
+            throw Object.assign(new Error("bridge startup backoff"), { retryable: true });
+          return provider;
+        },
+      },
+    );
+  },
+);
+
 // Start the two step runners directly: Fix here exercises the persisted legacy
 // structured-step path, rather than the newer interactive addressing handoff.
 async function startFollowUpStep(
@@ -5467,6 +5736,22 @@ test("MultiReviewService derives all provenance labels from cited source IDs", a
         "codex/default",
       ]);
       expect(ready?.consolidatedReport?.issues[0]).not.toHaveProperty("reviewSourceIds");
+      // The source IDs are gone from the stored report, so overlap is counted
+      // at certification: both reviewers substantiated every finding.
+      const findings =
+        consolidatedReport.issues.length + consolidatedReport.testCoverageGaps.length;
+      expect(ready?.consolidationOverlap).toMatchObject({
+        version: 1,
+        reviewers: 2,
+        sourceFindings: findings * 2,
+        citedSourceFindings: findings * 2,
+        consolidatedFindings: findings,
+        singleSourceFindings: 0,
+      });
+      expect(ready?.consolidationOverlap?.positions.map((entry) => entry.novelFindings)).toEqual([
+        findings,
+        0,
+      ]);
       const consolidation = [...provider.sends.values()].find((sent) =>
         sent.prompt.includes("<multi-review-reports-json>"),
       );
@@ -8046,6 +8331,7 @@ test.each(["reviewer", "prepare", "retry", "stale-retry"] as const)(
       reviewer.resultReminderSent = true;
       reviewer.restartContinuationSent = true;
       reviewer.schemaRepairAttempts = 1;
+      reviewer.cacheReadTokens = 600;
       reviewer.status = "failed";
       reviewer.error = "The reviewer finished without submitting its report";
       if (kind === "retry" || kind === "stale-retry") workflow.phase = "failed";
@@ -8075,6 +8361,8 @@ test.each(["reviewer", "prepare", "retry", "stale-retry"] as const)(
       expect(reset.reviewers[0]?.restartContinuationSent).toBeUndefined();
       expect(reset.reviewers[0]?.schemaRepairAttempts).toBeUndefined();
       expect(reset.reviewers[0]?.status).toBe("pending");
+      expect(reset.reviewers[0]).not.toHaveProperty("cacheReadTokens");
+      expect((await snapshot(started.id))?.reviewers[0]).not.toHaveProperty("cacheReadTokens");
       expect(reset.reviewers[0]?.providerSessionId).toBeUndefined();
       expect(provider.aborted).toContain(oldSession);
       expect((await snapshot(started.id))?.reviewers[0]?.resultReminderSent).toBeUndefined();
@@ -8089,6 +8377,7 @@ test.each(["reviewer", "prepare", "retry", "stale-retry"] as const)(
         expect(fresh.requestId).not.toBe(oldRequest);
         expect(fresh.resultReminderSent).toBeUndefined();
         expect(fresh.restartContinuationSent).toBeUndefined();
+        expect(fresh).not.toHaveProperty("cacheReadTokens");
         expect(provider.sends.get(fresh.requestId!)?.prompt).toContain(
           "You are independent reviewer",
         );
@@ -8170,6 +8459,7 @@ test("MultiReviewService rewinds consolidation when a completed reviewer is rest
         };
       });
       const ready = (await snapshot(started.id))!;
+      expect(ready.consolidationOverlap).toBeDefined();
       const reviewerSessionId = ready.reviewers[0]!.providerSessionId!;
       const fixSessionId = ready.fixSession!.providerSessionId;
       const reviewerSessionKey = ready.reviewers[0]!.sessionKey!;
@@ -8181,6 +8471,8 @@ test("MultiReviewService rewinds consolidation when a completed reviewer is rest
       expect(restarted.reviewers[0]?.report).toBeUndefined();
       expect(restarted.reviewers[0]?.tokenCount).toBeUndefined();
       expect(restarted.consolidatedReport).toBeUndefined();
+      expect(restarted.consolidationOverlap).toBeUndefined();
+      expect((await snapshot(started.id))?.consolidationOverlap).toBeUndefined();
       expect(restarted.fixSession).toBeUndefined();
       expect(restarted.activeRequest).toBeUndefined();
       expect(restarted.stepRuntimes?.prepare).toBeDefined();
@@ -8196,6 +8488,7 @@ test("MultiReviewService rewinds consolidation when a completed reviewer is rest
         return workflow?.phase === "interactive" && workflow.addressPromptPending !== true;
       });
       const reconsolidated = (await snapshot(started.id))!;
+      expect(reconsolidated.consolidationOverlap).toBeDefined();
       expect(reconsolidated.reviewers[0]?.providerSessionId).not.toBe(reviewerSessionId);
       expect(reconsolidated.fixSession?.providerSessionId).not.toBe(fixSessionId);
       expect(reconsolidated.fixSession?.sessionKey).toStartWith(
@@ -8331,6 +8624,7 @@ test("MultiReviewService restarts preparation and reruns reviewers and consolida
         return (await snapshot(started.id))?.phase === "ready";
       });
       const ready = (await snapshot(started.id))!;
+      expect(ready.consolidationOverlap).toBeDefined();
       const reviewerSessionId = ready.reviewers[0]!.providerSessionId!;
 
       const restarted = await service.restartStep(started.id, "prepare", {
@@ -8346,6 +8640,8 @@ test("MultiReviewService restarts preparation and reruns reviewers and consolida
       });
       expect(restarted.reviewPackage).toBeUndefined();
       expect(restarted.consolidatedReport).toBeUndefined();
+      expect(restarted.consolidationOverlap).toBeUndefined();
+      expect((await snapshot(started.id))?.consolidationOverlap).toBeUndefined();
       expect(restarted.reviewers[0]).toMatchObject({ status: "pending" });
       expect(restarted.reviewers[0]?.providerSessionId).toBeUndefined();
 
@@ -8357,6 +8653,7 @@ test("MultiReviewService restarts preparation and reruns reviewers and consolida
       expect(rerun.reviewers[0]?.providerSessionId).not.toBe(reviewerSessionId);
       expect(rerun.reviewers[0]?.status).toBe("completed");
       expect(rerun.consolidatedReport).toBeDefined();
+      expect(rerun.consolidationOverlap).toBeDefined();
     },
     { packageFlow: true },
   );
@@ -8755,6 +9052,7 @@ test("MultiReviewService restarts consolidation without rerunning completed revi
       return (await snapshot(started.id))?.phase === "ready";
     });
     const ready = (await snapshot(started.id))!;
+    expect(ready.consolidationOverlap).toBeDefined();
     const reviewerSessionId = ready.reviewers[0]!.providerSessionId!;
     const consolidationSessionId = ready.reviewSession!.providerSessionId;
 
@@ -8775,6 +9073,8 @@ test("MultiReviewService restarts consolidation without rerunning completed revi
       providerSessionId: reviewerSessionId,
     });
     expect(restarted.consolidatedReport).toBeUndefined();
+    expect(restarted.consolidationOverlap).toBeUndefined();
+    expect((await snapshot(started.id))?.consolidationOverlap).toBeUndefined();
 
     await waitUntil(async () => {
       await service.advanceNow(started.id);
@@ -8784,6 +9084,7 @@ test("MultiReviewService restarts consolidation without rerunning completed revi
     expect(rerun.reviewers[0]?.providerSessionId).toBe(reviewerSessionId);
     expect(rerun.reviewSession?.providerSessionId).not.toBe(consolidationSessionId);
     expect(rerun.consolidatedReport).toBeDefined();
+    expect(rerun.consolidationOverlap).toBeDefined();
 
     const preparationRestart = await service.restartStep(started.id, "prepare");
     expect(preparationRestart.reviewModel).toEqual(preparationModel);
@@ -9587,6 +9888,8 @@ test("MultiReviewService warns when an idle background reviewer stops making pro
 
 test("MultiReviewService gives a fresh reviewer baseline a grace clock", async () => {
   const provider = new Provider();
+  // Exercises the messages-based progress and usage path.
+  delete provider.transcriptSnapshot;
   provider.statusValue = "running";
   provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Fresh progress" }];
   await withService(
@@ -9725,6 +10028,8 @@ test("MultiReviewService fails a consolidation session whose transcript stopped 
 
 test("MultiReviewService gives a fresh consolidation baseline a grace clock", async () => {
   const provider = new Provider();
+  // Exercises the messages-based progress and usage path.
+  delete provider.transcriptSnapshot;
   provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Fresh merge" }];
   provider.statusOverrides.set("session-2", "running");
   await withService(
@@ -10951,6 +11256,7 @@ test("stale-snapshot retry abandons both separate review and fix sessions", asyn
         return (await snapshot(started.id))?.phase === "ready";
       });
       const ready = (await snapshot(started.id))!;
+      expect(ready.consolidationOverlap).toBeDefined();
       const oldFixSessionKey = ready.fixSessionKey;
 
       await mutateStoredWorkflow(storage, started.id, (workflow) => {
@@ -10975,6 +11281,8 @@ test("stale-snapshot retry abandons both separate review and fix sessions", asyn
       expect(retried.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(true);
       expect(retried.reviewers.every((reviewer) => reviewer.report === undefined)).toBe(true);
       expect(retried.consolidatedReport).toBeUndefined();
+      expect(retried.consolidationOverlap).toBeUndefined();
+      expect((await snapshot(started.id))?.consolidationOverlap).toBeUndefined();
       expect(retried.fixSessionKey).not.toBe(oldFixSessionKey);
       expect(provider.aborted).toContain(ready.reviewSession!.providerSessionId);
       expect(provider.aborted).toContain("provider-stale-fix");
@@ -11227,6 +11535,8 @@ test("retrying consolidation restarts its numbers and preserves preparation's", 
 
 test("fix-session usage falls back to the transcript and never fails the turn", async () => {
   const provider = new Provider();
+  // Exercises the messages-based progress and usage path.
+  delete provider.transcriptSnapshot;
   provider.statusValue = "running";
   provider.usageMessageLimit = 32;
   provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Preparing" }];
@@ -11257,6 +11567,8 @@ test("fix-session usage falls back to the transcript and never fails the turn", 
 
 test("throttles transcript-derived fix-session usage to the progress probe cadence", async () => {
   const provider = new Provider();
+  // Exercises the messages-based progress and usage path.
+  delete provider.transcriptSnapshot;
   provider.statusValue = "running";
   provider.usageMessageLimit = 64;
   provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Preparing" }];
@@ -11727,3 +12039,133 @@ test.each(["queued", "dispatch"] as const)(
     );
   },
 );
+
+for (const kind of ["prepare", "consolidate", "fix"] as const) {
+  test.each([false, true])(
+    `${kind} reconciles a recovered dispatch before observing the old restart (continuation %s)`,
+    async (continuation) => {
+      const provider = new Provider(false);
+      provider.statusValue = "running";
+      const environmentId = `env-dispatch-proof-${kind}-${continuation}`;
+      await withService(
+        environmentId,
+        provider,
+        async (context) => {
+          const { service, storage, snapshot, workflowResults } = context;
+          let first: MultiReviewWorkflow;
+          if (kind === "consolidate") {
+            const selection = { agent: "codex" as const, model: "default" };
+            const started = await context.start([selection], selection);
+            const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+              Boolean(workflow.reviewers[0]?.requestId),
+            );
+            provider.statusValue = "idle";
+            await workflowResults!.submit(
+              { environmentId, projectId: "project-1" },
+              reviewing.reviewers[0]!.requestId!,
+              cleanReport,
+            );
+            first = await advanceUntil(
+              service,
+              snapshot,
+              started.id,
+              (workflow) =>
+                workflow.activeRequest?.kind === "consolidate" &&
+                workflow.activeRequest.state === "sent",
+            );
+          } else {
+            first = await startFollowUpStep(kind, context, environmentId, true);
+          }
+          provider.statusValue = "running";
+          const sessionId = (first.reviewSession ?? first.fixSession)!.providerSessionId;
+          const initial = provider.sends.get(first.activeRequest!.requestId)!;
+          let current = first;
+          if (continuation) {
+            provider.sessionFailures.set(sessionId, "provider restarted the original request");
+            provider.restartInterrupted.add(sessionId);
+            await service.advanceNow(first.id);
+            current = (await snapshot(first.id))!;
+            expect(current.activeRequest).toMatchObject({
+              state: "prepared",
+              restartContinuationSent: true,
+            });
+          } else {
+            // Restore the checkpoint before send accepted the original request.
+            provider.sends.delete(first.activeRequest!.requestId);
+          }
+          const requestId = current.activeRequest!.requestId;
+          const prompt = current.activeRequest!.continuationPrompt;
+          current.activeRequest!.state = "dispatching";
+          const stored = (await storage.getMultiReviewWorkflow(first.id))!;
+          await storage.saveMultiReviewWorkflow(
+            first.id,
+            environmentId,
+            1,
+            current,
+            stored.revision,
+          );
+          await service.shutdown();
+          const restored = new MultiReviewService(storage, stableReviewInvoker, {
+            autoAdvance: false,
+            provider: async () => provider,
+            workflowResults,
+            resolveAgentToolConnection: () => ({
+              url: "http://127.0.0.1:1234/mcp",
+              token: "test-token",
+            }),
+          });
+          try {
+            await restored.init();
+            const statusCalls = provider.statusCalls;
+            await restored.advanceNow(first.id);
+            const parked = (await snapshot(first.id))!;
+            expect(parked.phase).toBe(first.phase);
+            expect(parked.activeRequest).toMatchObject({ requestId, state: "dispatching" });
+            expect(parked.activeRequest!.continuationPrompt).toBe(prompt);
+            expect(parked.activeRequest!.resultReminderSent).toBeUndefined();
+            expect(provider.statusCalls).toBe(statusCalls);
+            expect(provider.sends.has(requestId)).toBe(false);
+            if (!continuation) {
+              const failed = await advanceUntil(
+                restored,
+                snapshot,
+                first.id,
+                (workflow) => workflow.phase === "failed",
+              );
+              expect(failed.error).toContain("dispatch acceptance could not be confirmed");
+              expect(failed.activeRequest!.state).toBe("dispatching");
+              expect(failed.activeRequest!.resultReminderSent).toBeUndefined();
+              return;
+            }
+            // The old owner's pending send lands. It is only now safe to inspect
+            // the session, whose old restart notice clears when the turn starts.
+            await provider.send(sessionId, prompt!, { ...initial.options, requestId });
+            // Request acceptance can precede the session's visible transition.
+            const settlingProvider: BuildPipelineProvider = provider;
+            settlingProvider.settleTurn = async () => false;
+            await restored.advanceNow(first.id);
+            expect((await snapshot(first.id))!.phase).toBe(first.phase);
+            delete settlingProvider.settleTurn;
+            provider.sessionFailures.delete(sessionId);
+            provider.restartInterrupted.delete(sessionId);
+            await restored.advanceNow(first.id);
+            expect((await snapshot(first.id))!.activeRequest).toMatchObject({
+              requestId,
+              state: "sent",
+              restartContinuationSent: true,
+            });
+            expect((await snapshot(first.id))!.phase).toBe(first.phase);
+            provider.sessionFailures.set(sessionId, "a second request was interrupted");
+            provider.restartInterrupted.add(sessionId);
+            await restored.advanceNow(first.id);
+            expect((await snapshot(first.id))!.phase).toBe("failed");
+            expect((await snapshot(first.id))!.error).toContain("a second request was interrupted");
+          } finally {
+            await restored.shutdown();
+          }
+        },
+        { toolMode: true },
+      );
+    },
+  );
+}

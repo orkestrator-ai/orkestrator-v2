@@ -1,5 +1,9 @@
 import type { TabType } from "@/contexts";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type {
+  GitHubPullRequestRef,
+  GitHubPullRequestViewTab,
+} from "@orkestrator/protocol/github-pull-requests";
 import {
   isNativeAgentTabData,
   type NativeAgentTabData as ProtocolNativeAgentTabData,
@@ -65,7 +69,33 @@ export interface FileTabData {
   gitStatus?: GitFileStatus;
   /** Target branch for comparison (e.g., "main") */
   baseBranch?: string;
+  /**
+   * Backend change-tracking target for a diff tab
+   * (docs/architecture/change-tracking.md). When present the tab renders
+   * backend hunks for exactly this identity instead of comparing files.
+   */
+  changeDiff?: ChangeDiffTarget;
 }
+
+/**
+ * What a diff tab shows. A historical target names an immutable diff
+ * identity and never re-reads today's file; a live target names a row (or
+ * path) of an environment projection and is re-resolved when its content
+ * changes.
+ */
+export type ChangeDiffTarget =
+  | { kind: "historical"; diffIdentityId: string; title: string }
+  | {
+      kind: "live";
+      resourceKey: string;
+      /** Opaque row path id from a projection row, or… */
+      pathId?: string;
+      /** …a plain path (worktree-relative or absolute); the backend resolves it. */
+      path?: string;
+      rowId?: string;
+      revision?: number;
+      title: string;
+    };
 
 // Data for Claude tmux chat tabs (CLI driven under tmux, native-style UI)
 export interface ClaudeTmuxData {
@@ -112,10 +142,22 @@ export interface MultiReviewTabData {
   isLocal?: boolean;
 }
 
+// Data for in-app GitHub pull request tabs
+export interface PullRequestTabData {
+  ref: GitHubPullRequestRef;
+  view?: GitHubPullRequestViewTab;
+  /** Last known title, for the tab label before the view loads. */
+  title?: string;
+  /** Bumped when the tab is opened again, so its view re-applies `view`. */
+  openRequest?: number;
+}
+
 // Data for backend-local browser preview tabs
 export interface BrowserTabData {
   /** User-facing backend-local URL. An empty string opens the browser start screen. */
   url: string;
+  /** Identity of the URL write, retained through layout acknowledgements. */
+  navigationRequestId?: string;
   /**
    * Durable navigation history for the iframe preview. A native (Electron)
    * preview keeps its history in Chromium, so `BrowserTab` neither maintains
@@ -212,6 +254,8 @@ export interface TabInfo {
   multiReviewTabData?: MultiReviewTabData;
   /** Data for browser tabs */
   browserData?: BrowserTabData;
+  /** Data for pull request tabs */
+  pullRequestData?: PullRequestTabData;
   designCanvasData?: { canvasId: string };
   /** Initial prompt to send to agent (only for claude/opencode tabs) */
   initialPrompt?: string;

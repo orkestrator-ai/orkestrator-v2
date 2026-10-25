@@ -45,6 +45,8 @@ const ERROR_EXPLANATIONS: Record<NativeAgentCommandCatalogueErrorCode, string> =
   malformed: "The agent sent a list that couldn't be read.",
   "too-large": "The agent's command list was too large.",
   "provider-error": "The agent reported an error.",
+  "outdated-bridge":
+    "This environment's agent bridge is too old to list commands. Restart the environment, or rebuild a container, to update it.",
 };
 
 const REFRESH_EXPLANATIONS: Record<NativeAgentCommandRefreshOutcome, string> = {
@@ -54,6 +56,10 @@ const REFRESH_EXPLANATIONS: Record<NativeAgentCommandRefreshOutcome, string> = {
   unsupported: "This agent can't reload its commands.",
   failed: "Refresh failed.",
 };
+
+/** A list read before the session started; the provider adds the rest on attach. */
+const ATTACH_PENDING_DETAIL =
+  "More commands load when the session starts; refresh to load them now.";
 
 function bounded(text: string): string {
   return text.length > DETAIL_MAX_LENGTH ? `${text.slice(0, DETAIL_MAX_LENGTH - 1)}…` : text;
@@ -69,6 +75,7 @@ function catalogueDetail(
   if (catalogue.status === "unavailable" || catalogue.status === "stale") {
     if (catalogue.error) parts.push(ERROR_EXPLANATIONS[catalogue.error.code]);
   }
+  if (catalogue.status === "stale" && catalogue.attachPending) parts.push(ATTACH_PENDING_DETAIL);
   if (
     catalogue.lastRefresh &&
     (showRefresh || catalogue.status === "stale" || catalogue.status === "unavailable")

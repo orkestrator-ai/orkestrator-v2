@@ -7,19 +7,28 @@
  * read-only bypass, the pending cap, the timeout — every one of which must
  * deny rather than approve — and pausing that timeout.
  *
- * The gate is read per call rather than at import, so this holds whatever
- * order the suite happens to load these modules in. Time is Bun's fake clock,
+ * The gate follows each session's execution policy, so the sessions here are
+ * created under `ask`. Time is Bun's fake clock,
  * which also moves `Date.now`, so the default five-minute window and the
  * day-long hold ceiling are proven without waiting for either.
  */
 import { describe, expect, jest, test } from "bun:test";
 import { AGENT_INTERACTION_HOLD_CEILING_MS as CEILING } from "@orkestrator/protocol/agent-interactions";
 
-process.env.PI_BRIDGE_REQUIRE_APPROVAL = "1";
-
 const { holdApproval, publicApprovals, requestToolApproval, resolveApproval } =
   await import("./interactions.js");
-const { newSessionState } = await import("./agent-session.js");
+const { newSessionState: newBareSessionState } = await import("./agent-session.js");
+
+/** A session whose execution policy turns the approval gate on. */
+function newSessionState() {
+  return newBareSessionState(undefined, {
+    id: "interactive-host",
+    sandbox: "none",
+    approvals: "ask",
+    projectResources: false,
+    networkAccess: "full",
+  });
+}
 const { approvalTimeoutMs, MAX_PENDING_APPROVALS } = await import("./config.js");
 
 const HOUR = 60 * 60 * 1000;
@@ -267,22 +276,16 @@ describe("pausing an approval's deadline", () => {
 });
 
 test("read-only reviews deny commands, writes and unknown tools even with approvals disabled", async () => {
-  const previous = process.env.PI_BRIDGE_REQUIRE_APPROVAL;
-  process.env.PI_BRIDGE_REQUIRE_APPROVAL = "0";
-  try {
-    const state = newSessionState();
-    state.readOnly = true;
-    for (const tool of ["bash", "write", "edit", "custom-extension"]) {
-      expect(await requestToolApproval(state, tool, tool, {})).toMatchObject({ block: true });
-    }
-    expect(await requestToolApproval(state, "read", "read", {})).toEqual({ block: false });
-    expect(state.approvals.size).toBe(0);
-    state.readOnly = false;
-    expect(await requestToolApproval(state, "fix", "edit", {})).toEqual({ block: false });
-  } finally {
-    if (previous === undefined) delete process.env.PI_BRIDGE_REQUIRE_APPROVAL;
-    else process.env.PI_BRIDGE_REQUIRE_APPROVAL = previous;
+  // No policy runs as the host default, auto-approve.
+  const state = newBareSessionState();
+  state.readOnly = true;
+  for (const tool of ["bash", "write", "edit", "custom-extension"]) {
+    expect(await requestToolApproval(state, tool, tool, {})).toMatchObject({ block: true });
   }
+  expect(await requestToolApproval(state, "read", "read", {})).toEqual({ block: false });
+  expect(state.approvals.size).toBe(0);
+  state.readOnly = false;
+  expect(await requestToolApproval(state, "fix", "edit", {})).toEqual({ block: false });
 });
 
 test("a coordinator cannot reach the network through an extension's web tool", async () => {
@@ -290,22 +293,15 @@ test("a coordinator cannot reach the network through an extension's web tool", a
   // extensions are not loaded for a coordinator). The gate is a name
   // allowlist, so any such tool is refused before it runs, approvals or not.
   const { coordinatorProcessPolicy } = await import("./agent-session.js");
-  const previous = process.env.PI_BRIDGE_REQUIRE_APPROVAL;
-  process.env.PI_BRIDGE_REQUIRE_APPROVAL = "0";
-  try {
-    const state = newSessionState();
-    state.policy = coordinatorProcessPolicy();
-    state.readOnly = true;
-    for (const tool of ["web_search", "web_fetch", "webfetch", "fetch", "browser"]) {
-      expect(
-        await requestToolApproval(state, tool, tool, { url: "https://example.com" }),
-      ).toMatchObject({ block: true });
-    }
-    expect(state.approvals.size).toBe(0);
-  } finally {
-    if (previous === undefined) delete process.env.PI_BRIDGE_REQUIRE_APPROVAL;
-    else process.env.PI_BRIDGE_REQUIRE_APPROVAL = previous;
+  const state = newBareSessionState();
+  state.policy = coordinatorProcessPolicy();
+  state.readOnly = true;
+  for (const tool of ["web_search", "web_fetch", "webfetch", "fetch", "browser"]) {
+    expect(
+      await requestToolApproval(state, tool, tool, { url: "https://example.com" }),
+    ).toMatchObject({ block: true });
   }
+  expect(state.approvals.size).toBe(0);
 });
 
 test("coordinator read-only allows Orkestrator MCP tools and still denies the rest", async () => {
@@ -352,6 +348,92 @@ test("coordinator read-only allows Orkestrator MCP tools and still denies the re
   } finally {
     // Process-global transport. Cleared in a `finally` so a failing assertion
     // cannot leave it installed for every later file in the run.
+    setPiMcpTransportForTests();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a coordinator may call its research servers' tools, by exact registered name only", async () => {
+  const { preparePiMcp, publicPiMcpServers, setPiMcpTransportForTests } = await import("./mcp.js");
+  const { mkdir, mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "pi-mcp-coord-research-"));
+  const agentDir = join(root, "agent");
+  await mkdir(agentDir, { recursive: true });
+  // A user server under the research name must not stand in for it: it is a
+  // local program, and the gate would otherwise admit its tools by name.
+  await writeFile(
+    join(agentDir, "mcp.json"),
+    JSON.stringify({ mcpServers: { context7: { command: "local-context7" } } }),
+  );
+  const connected: { id: string; scope: string; transport: string; url?: string }[] = [];
+  setPiMcpTransportForTests({
+    async connect(server) {
+      connected.push({
+        id: server.id,
+        scope: server.scope,
+        transport: server.transport,
+        ...(server.url ? { url: server.url } : {}),
+      });
+      return {
+        tools: server.id === "orkestrator" ? [{ name: "send_message" }] : [{ name: "query-docs" }],
+        async call() {
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+        async close() {},
+      };
+    },
+  });
+  const state = newSessionState();
+  state.readOnly = true;
+  state.policy = {
+    id: "coordinator-read-only",
+    sandbox: "provider",
+    approvals: "deny",
+    projectResources: false,
+    networkAccess: "restricted",
+  };
+  state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "coordinator-token" };
+  const env = {
+    ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+    ORKESTRATOR_COORDINATOR_WEB_RESEARCH: "search-and-mcp",
+    ORKESTRATOR_COORDINATOR_RESEARCH_MCP: JSON.stringify([
+      { name: "context7", url: "https://mcp.context7.com/mcp" },
+    ]),
+  };
+  try {
+    await preparePiMcp(state, { agentDir, cwd: root, env });
+    expect(connected).toContainEqual({
+      id: "context7",
+      scope: "research",
+      transport: "http",
+      url: "https://mcp.context7.com/mcp",
+    });
+    expect(connected.some((server) => server.transport === "stdio")).toBe(false);
+    expect(await requestToolApproval(state, "docs", "mcp_context7_query-docs", {})).toEqual({
+      block: false,
+    });
+    // Same server, a name it never registered.
+    expect(
+      await requestToolApproval(state, "other", "mcp_context7_resolve-library-id", {}),
+    ).toMatchObject({ block: true });
+    expect(await requestToolApproval(state, "bash", "bash", {})).toMatchObject({ block: true });
+    // Configured in Orkestrator's settings, so reported as Orkestrator's.
+    expect(publicPiMcpServers(state).find((server) => server.id === "context7")?.scope).toBe(
+      "orkestrator",
+    );
+
+    // Without the coordinator's process authority the research variables are
+    // ignored, so a worker's read-only review never gains a remote server.
+    connected.length = 0;
+    const { ORKESTRATOR_BRIDGE_EXECUTION_POLICY: _policy, ...workerEnv } = env;
+    await preparePiMcp(state, { agentDir, cwd: root, env: workerEnv });
+    expect(connected.some((server) => server.scope === "research")).toBe(false);
+    expect(await requestToolApproval(state, "docs", "mcp_context7_query-docs", {})).toMatchObject({
+      block: true,
+    });
+  } finally {
     setPiMcpTransportForTests();
     await rm(root, { recursive: true, force: true });
   }
@@ -565,6 +647,75 @@ test("a read-only reviewer may use its own attempt's result tools under every ap
       expect(await requestToolApproval(state, "submit", "submit_review_report", own)).toMatchObject(
         { block: true },
       );
+      state.approvals.clear();
+    }
+  } finally {
+    setPiMcpTransportForTests();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a read-only workflow turn may use its own artifact-only server's tools", async () => {
+  const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
+  const { mkdir, mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "pi-mcp-artifacts-"));
+  await mkdir(join(root, "agent"), { recursive: true });
+  const connected: Array<{ id: string; url?: string; authorization?: string }> = [];
+  setPiMcpTransportForTests({
+    async connect(server) {
+      connected.push({
+        id: server.id,
+        url: server.url,
+        authorization: server.headers?.Authorization,
+      });
+      return {
+        tools:
+          server.id === "orkestrator-artifacts"
+            ? [{ name: "publish_artifact" }, { name: "create_artifact" }]
+            : [{ name: "submit_review_report" }],
+        async call() {
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+        async close() {},
+      };
+    },
+  });
+  try {
+    for (const approvals of ["auto-approve", "ask", "deny"] as const) {
+      connected.length = 0;
+      const state = newSessionState();
+      state.readOnly = true;
+      state.policy = {
+        id: "pipeline",
+        sandbox: "none",
+        approvals,
+        projectResources: false,
+        networkAccess: "full",
+      };
+      state.agentMcp = {
+        url: "http://127.0.0.1:4567/mcp",
+        token: "attempt-capability",
+        artifacts: { token: "oag1.turn-grant" },
+      };
+      await preparePiMcp(state, { agentDir: join(root, "agent"), cwd: root, env: {} });
+
+      expect(connected).toContainEqual({
+        id: "orkestrator-artifacts",
+        url: "http://127.0.0.1:4567/artifact-mcp",
+        authorization: "Bearer oag1.turn-grant",
+      });
+      expect(await requestToolApproval(state, "pub", "publish_artifact", {})).toEqual({
+        block: false,
+      });
+      // The read-only gate still holds for everything else.
+      expect(await requestToolApproval(state, "edit", "edit", {})).toMatchObject({ block: true });
+      // An explicit deny still wins.
+      state.policy = { ...state.policy, toolPolicy: { deny: ["publish_artifact"] } };
+      expect(await requestToolApproval(state, "pub", "publish_artifact", {})).toMatchObject({
+        block: true,
+      });
       state.approvals.clear();
     }
   } finally {

@@ -64,6 +64,33 @@ describe("thread and turn lifecycle", () => {
     ]);
   });
 
+  test("modelProvider/authRecovery* become thread-scoped auth recovery events", () => {
+    const params = { threadId: "t1", turnId: "turn-1", provider: "openai", message: " Renewing " };
+    expect(reduce("modelProvider/authRecoveryStarted", params)).toEqual([
+      {
+        kind: "thread.authRecovery",
+        threadId: "t1",
+        phase: "started",
+        message: "Renewing",
+        provider: "openai",
+        engineGeneration: 1,
+        handle: "handle-1",
+      },
+    ]);
+    expect(reduce("modelProvider/authRecoveryCompleted", { threadId: "t1" })).toEqual([
+      {
+        kind: "thread.authRecovery",
+        threadId: "t1",
+        phase: "completed",
+        engineGeneration: 1,
+        handle: "handle-1",
+      },
+    ]);
+    expect(reduce("modelProvider/authRecoveryStarted", { message: "no thread" })).toEqual([]);
+    expect(isIgnoredNotification("modelProvider/authRecoveryStarted")).toBe(false);
+    expect(isIgnoredNotification("modelProvider/authRecoveryCompleted")).toBe(false);
+  });
+
   test("drops malformed model notifications", () => {
     for (const params of [
       {},
@@ -824,6 +851,19 @@ describe("unknown and ignored notifications", () => {
     );
     expect(result.events).toEqual([]);
     expect(result.unknownMethod).toBeUndefined();
+  });
+
+  test("thread/readState/changed (codex 0.164) is ignored rather than counted as drift", () => {
+    const result = reduceNotification(
+      notify("thread/readState/changed", {
+        threadId: "t1",
+        readState: { firstUnread: { type: "turn", turnId: "turn-1" }, revision: "r1" },
+      }),
+      1,
+    );
+    expect(result.events).toEqual([]);
+    expect(result.unknownMethod).toBeUndefined();
+    expect(isIgnoredNotification("thread/readState/changed")).toBe(true);
   });
 
   test("every realtime notification is ignored, so voice cannot inflate the drift counter", () => {

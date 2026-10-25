@@ -1,5 +1,7 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { AppConfig } from "@/types";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { portalStore } from "@/lib/portal/portal-store";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
@@ -538,6 +540,31 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
+  test("seeds the workspace catalogue when requested", async () => {
+    const cache = { schemaVersion: 1 as const };
+    invokeMock.mockResolvedValue(cache);
+
+    await expect(getAgentModelCatalogCache(undefined, { seed: true })).resolves.toEqual(cache);
+    expect(invokeMock).toHaveBeenCalledWith("get_agent_model_catalog_cache", { seed: true });
+  });
+
+  test("reads and seeds the selected machine's catalogue", async () => {
+    const cache = { schemaVersion: 1 as const };
+    const machine = "catalogue-node" as BackendId;
+    const remote = spyOn(portalStore, "invokeOnNode").mockResolvedValue(cache);
+    try {
+      await expect(getAgentModelCatalogCache(machine)).resolves.toEqual(cache);
+      await expect(getAgentModelCatalogCache(machine, { seed: true })).resolves.toEqual(cache);
+      expect(remote.mock.calls).toEqual([
+        [machine, "get_agent_model_catalog_cache", {}],
+        [machine, "get_agent_model_catalog_cache", { seed: true }],
+      ]);
+      expect(invokeMock).not.toHaveBeenCalled();
+    } finally {
+      remote.mockRestore();
+    }
+  });
+
   test("distinguishes successful, empty, and failed ensured catalogue outcomes", async () => {
     const piModels = [
       {
@@ -873,7 +900,6 @@ describe("backend setup wrappers", () => {
     await backendWrappers.getPromptQueue("codex\u0000env-1:tab-1");
     await backendWrappers.listPromptQueues("env-1");
     await backendWrappers.enqueuePromptQueueMessage("codex\u0000env-1:tab-1", "env-1", message);
-    await backendWrappers.requeuePromptQueueMessage("codex\u0000env-1:tab-1", "env-1", message);
     await backendWrappers.movePromptQueueMessage(
       "codex\u0000env-1:tab-1",
       "env-1",
@@ -881,9 +907,6 @@ describe("backend setup wrappers", () => {
       "up",
     );
     await backendWrappers.removePromptQueueMessage("codex\u0000env-1:tab-1", "env-1", "message-1");
-    await backendWrappers.claimPromptQueueHead("codex\u0000env-1:tab-1", "env-1", "message-1");
-    await backendWrappers.acknowledgePromptQueueClaim("codex\u0000env-1:tab-1", "env-1", "claim-1");
-    await backendWrappers.rejectPromptQueueClaim("codex\u0000env-1:tab-1", "env-1", "claim-2");
     await backendWrappers.retryPromptQueueDispatch("codex\u0000env-1:tab-1");
 
     expect(invokeMock.mock.calls).toEqual([
@@ -891,14 +914,6 @@ describe("backend setup wrappers", () => {
       ["list_prompt_queues", { environmentId: "env-1" }],
       [
         "enqueue_prompt_queue_message",
-        {
-          queueKey: "codex\u0000env-1:tab-1",
-          environmentId: "env-1",
-          message,
-        },
-      ],
-      [
-        "requeue_prompt_queue_message",
         {
           queueKey: "codex\u0000env-1:tab-1",
           environmentId: "env-1",
@@ -920,30 +935,6 @@ describe("backend setup wrappers", () => {
           queueKey: "codex\u0000env-1:tab-1",
           environmentId: "env-1",
           messageId: "message-1",
-        },
-      ],
-      [
-        "claim_prompt_queue_head",
-        {
-          queueKey: "codex\u0000env-1:tab-1",
-          environmentId: "env-1",
-          expectedMessageId: "message-1",
-        },
-      ],
-      [
-        "acknowledge_prompt_queue_claim",
-        {
-          queueKey: "codex\u0000env-1:tab-1",
-          environmentId: "env-1",
-          claimToken: "claim-1",
-        },
-      ],
-      [
-        "reject_prompt_queue_claim",
-        {
-          queueKey: "codex\u0000env-1:tab-1",
-          environmentId: "env-1",
-          claimToken: "claim-2",
         },
       ],
       [
@@ -1327,7 +1318,7 @@ describe("backend setup wrappers", () => {
     invokeMock.mockResolvedValueOnce(result);
 
     await expect(propagateGithubCredentialsToContainers()).resolves.toBe(result);
-    expect(invokeMock.mock.calls).toEqual([["propagate_github_token_to_containers"]]);
+    expect(invokeMock.mock.calls).toEqual([["propagate_github_token_to_containers", {}]]);
   });
 
   test("reports the backend-selected GitHub credential source and availability", async () => {
@@ -1951,6 +1942,8 @@ describe("backend command wrapper coverage", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockImplementation(async (command: unknown) => {
+      // Machine-scoped wrappers reach the same boundary through the portal.
+      if (command === "invoke_on_node") return { outcome: "ok", result: undefined };
       if (command === "read_file_base64") return btoa("binary");
       if (command === "await_bridge_ready") {
         return { status: "ready", port: 4321, authToken: "token" };
@@ -2250,6 +2243,11 @@ describe("backend command wrapper coverage", () => {
       "getNativeAgentProjectionUpdate",
       "getNativeAgentMessagePage",
       "getMultiReviewReviewerHistoryPage",
+      // Test seam for the cached change-tracking capabilities, not a command.
+      "resetChangeTrackingCapabilitiesForTests",
+      // Validate the machine profile they return; covered below.
+      "getBackendProfile",
+      "updateBackendProfile",
     ]);
     const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
       typeof value === "function" && !specialWrappers.has(name)
@@ -2261,9 +2259,29 @@ describe("backend command wrapper coverage", () => {
     for (const [name, wrapper] of commandWrappers) {
       invokeMock.mockClear();
       const args = Array.from({ length: wrapper.length }, () => "value");
-      await wrapper(...args);
+      // Only reaching invoke is asserted. A wrapper that takes a machine routes
+      // a "value" machine through the command node and then rejects the mock's
+      // empty answer, after the call.
+      await wrapper(...args).catch(() => undefined);
       expect(invokeMock.mock.calls.length, `${name} must call invoke`).toBeGreaterThan(0);
     }
+  });
+
+  test("machine profile wrappers validate the profile the machine returns", async () => {
+    const profile = { revision: 2, displayName: "Mac mini", colorToken: "violet", updatedAt: "t" };
+    invokeMock.mockResolvedValueOnce(profile);
+    await expect(backendWrappers.getBackendProfile()).resolves.toEqual(profile);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_backend_profile");
+    invokeMock.mockResolvedValueOnce({ ...profile, revision: 3, colorToken: "teal" });
+    await expect(
+      backendWrappers.updateBackendProfile({ expectedRevision: 2, colorToken: "teal" }),
+    ).resolves.toMatchObject({ revision: 3, colorToken: "teal" });
+    expect(invokeMock).toHaveBeenLastCalledWith("update_backend_profile", {
+      expectedRevision: 2,
+      colorToken: "teal",
+    });
+    invokeMock.mockResolvedValueOnce({ ...profile, colorToken: "#ff0000" });
+    await expect(backendWrappers.getBackendProfile()).rejects.toThrow("palette token");
   });
 
   test("validates and forwards resource revision manifest knowledge", async () => {

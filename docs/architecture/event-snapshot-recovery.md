@@ -64,7 +64,8 @@ landed. Resume never reopens a closed terminal or replays discarded input.
 
 Terminal output (generation/revision snapshot protocol with explicit desync)
 and native-agent transcript windows keep their own existing contracts and are
-out of scope here.
+out of scope here. The transcript window contract is in
+[native-transcripts.md](native-transcripts.md).
 
 A domain revision gap is evidence of a missed event only because the owner
 emits every revision to every subscriber of that event name on the main
@@ -213,7 +214,7 @@ State convergence and notifications are separate contracts.
 | Current | Without the snapshot command | `unsupported`: live events only until a reconnect. |
 | Before step 11 | Current | Extra optional fields are ignored; the unconditional snapshot shape is unchanged. |
 
-## Native observation invalidations (step 07)
+## Native observation invalidations
 
 The native session view is not an event-folded view: its state comes from its
 own progressive reads (transcript/state/discovery tokens). The stamped
@@ -225,14 +226,47 @@ duplicate is ignored, and a malformed or partial stamp drops the announcement.
 Reconnects are still covered by the coordinator's reconnect reconcile and
 `onResourceResync`.
 
+Two things are announced in the same stamp sequence: an activity transition,
+and a **content change** (`reason: "content"`, `state` equal to
+`previous_state`). The second exists for Claude and Codex, whose idle view
+changes without a transition (a background task reporting, an async question
+landing). Their bridges report an opaque `contentRevision` on the no-touch
+activity read; the backend announces when it moves while the session is idle
+or its composer is released, never while a turn runs. It is a view
+invalidation only: no turn-edge consumer (workflows, PR probes, mail, the
+coordinator) reads it.
+
 Quiet idle-view backoff relies on this, so it is enabled only for providers
-whose idle view cannot change without an announced transition
+whose idle view cannot change without an announcement
 (`NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS`) and only against a backend that
-advertises `observationEventVersions`. Coverage:
+advertises `observationEventVersions`. Claude and Codex
+(`NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS`) also need the session's
+`turn.quietObservation`, which the backend sets only while its last
+observation carried a content revision; a view of an older bridge keeps the
+baseline. A view's own reads must not invalidate it: a discovery-section
+renewal (every 30 s) and an expired model-catalogue refresh announce a
+`native-agent-session` change only when what a view shows changed (not for a
+retained value that only went stale, and not for the runtime drift counter),
+since any such hint re-reads the view and restarts its backoff.
+
+Several mounted views of one session share one coordinated read
+(`native-session-shared-reads.ts`): one timer and dirty flag per session, and
+within each read identical requests are sent once. Each view still applies the
+answer into its own fenced state.
+
+Coverage:
 `apps/web/src/lib/native-observation-events.test.ts` (gap, reset, duplicate,
 legacy, malformed), `apps/web/src/hooks/useNativeAgentSession.observation.test.tsx`
 (quiet schedule, immediate read on an announcement, gap re-read, older backend
-and unqualified provider keep the baseline), `packages/protocol/src/native-agent-observation.test.ts`.
+keeps the baseline, Claude only with `quietObservation`, a content
+announcement reads at once, two views share one read per round),
+`apps/web/src/lib/native-session-shared-reads.test.ts`,
+`packages/protocol/src/native-agent-observation.test.ts`,
+`apps/backend/src/core/native-agent-service-reconciliation.test.ts` (content
+announcements in the stamp sequence),
+`apps/backend/src/core/native-agent-service-progressive.test.ts` (unchanged
+discovery and catalogue renewals, stale-only flips and drift stay silent). The
+live per-provider run is `e2e/agent-testing/idle-observation-live.spec.ts`.
 
 ## Worktree snapshot revisions (step 03)
 

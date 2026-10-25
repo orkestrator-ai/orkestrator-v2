@@ -43,6 +43,7 @@ import {
 import type { OpenCodeCommandChangeOptions } from "./opencode-command-changes.js";
 import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME } from "./agent-tools.js";
 import { MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS } from "./opencode-snapshots.js";
 import {
@@ -96,6 +97,10 @@ export interface OpenCodeProviderDependencies {
    * `directory` this backend can read: see `opencode-command-changes.ts`.
    */
   commandChanges?: OpenCodeCommandChangeOptions;
+  /** A coordinator's research tool ids, read when permission rules are built. */
+  coordinatorResearchToolIds?: () => readonly string[];
+  ensureCoordinatorResearch?: () => Promise<void>;
+  invalidateCoordinatorResearch?: () => void;
 }
 
 export async function optionalOpenCodeSdkCall(
@@ -292,9 +297,15 @@ const OPENCODE_COORDINATOR_TOOL_PERMISSIONS = Object.freeze(
   COORDINATOR_CONTROL_TOOL_NAMES.map((name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`),
 );
 
-/** A worker's Orkestrator mail tools, in OpenCode's `<server>_<tool>` naming. */
+/**
+ * A worker's always-allowed Orkestrator tools — mail and transcript artifacts,
+ * which write only to Orkestrator's own stores — in OpenCode's
+ * `<server>_<tool>` naming.
+ */
 const OPENCODE_AGENT_MAIL_PERMISSIONS = Object.freeze(
-  AGENT_MAIL_TOOL_NAMES.map((name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`),
+  [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map(
+    (name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`,
+  ),
 );
 
 /**
@@ -431,7 +442,16 @@ export function openCodeRulesBlockNetwork(
   return ["bash", "webfetch"].every((permission) => action(permission) === "deny");
 }
 
-export function openCodePermissionRules(policy: NativeAgentExecutionPolicy) {
+export function openCodePermissionRules(
+  policy: NativeAgentExecutionPolicy,
+  options: {
+    /**
+     * A coordinator's research server tools, by the exact ids OpenCode
+     * registered them under (`opencode-coordinator-research.ts`).
+     */
+    researchTools?: readonly string[];
+  } = {},
+) {
   const action =
     policy.approvals === "auto-approve"
       ? ("allow" as const)
@@ -444,6 +464,7 @@ export function openCodePermissionRules(policy: NativeAgentExecutionPolicy) {
           ...OPENCODE_READ_ONLY_PERMISSIONS,
           ...OPENCODE_COORDINATOR_TOOL_PERMISSIONS,
           ...(nativeAgentPolicyDeniesWebSearch(policy) ? [] : OPENCODE_SEARCH_PERMISSIONS),
+          ...(options.researchTools ?? []),
         ]
       : [];
   // A worker can always report back: its mail tools are allowed whatever the
@@ -707,15 +728,41 @@ export function waitForOpenCodeRetry(ms: number, signal: AbortSignal): Promise<v
 }
 
 /** Keep plain prompt tool masks consistent with the session permission grant. */
+/**
+ * Per-prompt tool options: the read-only turn's tool map, and the trusted
+ * `system` instruction carrying this turn's artifact grant when one exists.
+ */
 export function openCodePromptToolOptions(
-  options: Pick<ProviderSendOptions, "readOnly" | "workflowResultTool">,
+  options: Pick<ProviderSendOptions, "readOnly" | "workflowResultTool" | "artifactGrant">,
   reviewEnabled: boolean,
-): { tools?: Record<string, boolean> } {
-  if (!options.readOnly || reviewEnabled) return {};
+): { tools?: Record<string, boolean>; system?: string } {
+  const system = options.artifactGrant
+    ? { system: openCodeArtifactGrantInstruction(options.artifactGrant) }
+    : {};
+  if (!options.readOnly || reviewEnabled) return system;
   return {
+    ...system,
     tools: {
       ...OPENCODE_READ_ONLY_TURN_TOOLS,
       ...openCodeWorkflowResultTurnTools(options.workflowResultTool),
     },
   };
+}
+
+/**
+ * Trusted per-turn instruction carrying the artifact-only `scopeCapability`.
+ *
+ * OpenCode's Orkestrator tool connection is environment-wide, so the artifact
+ * tools cannot tell which conversation called them. The backend mints a grant
+ * bound to this conversation and turn and hands it to the model through the
+ * prompt's system field (not the visible user text). The grant authorizes
+ * artifact operations only, expires, and is revoked when the turn settles.
+ */
+export function openCodeArtifactGrantInstruction(grant: string): string {
+  return [
+    "Orkestrator transcript-artifact tools (create_artifact, update_artifact, preview_artifact,",
+    "publish_artifact, get_artifact, get_artifact_operation, cancel_artifact_operation) require",
+    `the argument scopeCapability set exactly to "${grant}" in this turn.`,
+    "It authorizes artifact operations for this conversation only. Do not repeat it in replies.",
+  ].join(" ");
 }

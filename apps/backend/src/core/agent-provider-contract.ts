@@ -49,6 +49,12 @@ export interface ProviderActivityObservation {
   readyForInput?: boolean;
   /** A released root turn still owes a response, independently of composer readiness. */
   completionPending?: boolean;
+  /**
+   * Opaque revision of what the session view shows beyond its activity
+   * (`SessionActivityObservation.contentRevision`). A bridge that reports it
+   * lets the backend announce a change to an idle session's view.
+   */
+  contentRevision?: string;
 }
 
 /**
@@ -80,8 +86,8 @@ export interface ProviderSessionObservation {
   /**
    * Set beside `status: "error"` when the provider itself stopped the turn
    * partway, not the model: `restart` means a provider restart cut it short
-   * and the same session can continue it. Only the Codex bridge reports one
-   * today; an unknown value is dropped, so that turn fails as before.
+   * and the same session can continue it. The Codex and Claude bridges report
+   * one; an unknown value is dropped, so that turn fails as before.
    */
   interruption?: ProviderTurnInterruption;
 }
@@ -231,8 +237,10 @@ export async function readProviderStatus(
     return observation;
   } catch (error) {
     if (error instanceof ProviderSessionFailedError) {
+      const settled = requestId ? await provider.settleTurn?.(sessionId, requestId) : undefined;
       return {
         status: "error",
+        ...(settled !== undefined ? { turnSettled: settled } : {}),
         error: error.detail,
         ...(error.interruption ? { interruption: error.interruption } : {}),
       };
@@ -252,13 +260,20 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
  * What a provider can still prove about one dispatch request id.
  *
  * `dispatched` is an assertion, not a guess: the provider holds a durable
- * record that this exact id was accepted. Everything else — no record, a record
- * that predates a provider restart, an unreadable journal — is `unknown`, so a
- * lost record can never be mistaken for a prompt that was never sent.
+ * record that this exact id was accepted. `lost` is the other assertion: an
+ * earlier provider process recorded the id, this one cannot tell whether its
+ * turn ran, and it will refuse the id for good (the read-only twin of a prompt
+ * refused with `requestIdRetired`). Neither is "never sent". Everything else —
+ * no record, an unreadable journal, a provider that predates `lost` — is
+ * `unknown`, so a lost record can never be mistaken for a prompt that was never
+ * sent.
  */
-export type ProviderDispatchStatus = "dispatched" | "unknown";
-/** Steering additionally reports positive evidence that a queued instruction was removed. */
-export type ProviderSteerDispatchStatus = ProviderDispatchStatus | "absent";
+export type ProviderDispatchStatus = "dispatched" | "unknown" | "lost";
+/**
+ * Steering reports positive evidence that a queued instruction was removed,
+ * and never `lost`: a steer journal has no retired state.
+ */
+export type ProviderSteerDispatchStatus = "dispatched" | "unknown" | "absent";
 
 /** The provider run a backend-owned steer may still target. */
 export type ProviderActiveSteerRun =
@@ -315,6 +330,12 @@ export interface ProviderSendOptions {
   /** Exact workflow-result MCP tool to expose for this turn, when present. */
   workflowResultTool?: string;
   /**
+   * Artifact-only `scopeCapability` for this turn, for providers whose
+   * Orkestrator tool connection is environment-wide. Delivered to the agent
+   * as trusted dispatch instructions; never logged or shown in transcripts.
+   */
+  artifactGrant?: string;
+  /**
    * The result key of the attempt `workflowResultTool` belongs to. Bridges that
    * gate tools themselves (Grok, Pi) let that attempt's tools through a
    * read-only turn only for calls naming this key.
@@ -359,6 +380,13 @@ export interface ProviderSendOptions {
     token: string;
     /** Signed one-attempt argument for providers using a persistent MCP broker. */
     workflowResultCapability?: string;
+    /**
+     * A backend workflow turn's artifact-only connection: the bridge adds an
+     * `orkestrator-artifacts` MCP server at this connection's origin
+     * (`/artifact-mcp`) authenticated by `token`, the turn's artifact grant.
+     * Never logged or shown in transcripts.
+     */
+    artifacts?: { token: string };
   };
 }
 
@@ -551,7 +579,8 @@ export interface AgentSessionProvider {
    * Ask whether the provider already holds this request id.
    *
    * Read-only. It exists so an ambiguous dispatch can be settled from the
-   * provider's own durable journal instead of being parked for the user.
+   * provider's own durable journal instead of being parked for the user:
+   * `dispatched` confirms it, `lost` retires it, `unknown` leaves it parked.
    */
   dispatchStatus?(sessionId: string, requestId: string): Promise<ProviderDispatchStatus>;
   /**
@@ -609,6 +638,12 @@ export interface AgentSessionProvider {
   observeActivityBatch?(
     sessionIds: readonly string[],
   ): Promise<ReadonlyMap<string, ProviderActivityBatchEntry> | "unsupported">;
+  /**
+   * This provider's canonical change-evidence producer (a bridge spool or the
+   * backend OpenCode adapter), pulled by change tracking after each activity
+   * read. See docs/architecture/change-tracking.md.
+   */
+  changeEvidenceSource?(environmentId: string): ChangeEvidenceSourceLike | null;
   /**
    * Whether this provider's backend-held event stream is connected right now,
    * so a turn started by anyone else will be reported through
@@ -753,15 +788,23 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
   /**
    * Bridge-level MCP configuration reload that never starts an agent process:
    * `not-running` when nothing is running to reload, `unsupported` when the
-   * bridge predates the route. Session-free, so it survives a bridge restart.
+   * bridge predates the route, `busy` when the provider itself refused
+   * because work is running (OpenCode's directory instance is only disposed
+   * while idle). Session-free, so it survives a bridge restart.
    */
-  reloadMcpConfiguration?(): Promise<"reloaded" | "not-running" | "unsupported">;
+  reloadMcpConfiguration?(): Promise<"reloaded" | "not-running" | "unsupported" | "busy">;
   authStatus?(): Promise<NativeAgentAuthStatus>;
   /**
    * `deviceCode` asks for a flow without a loopback callback, for a browser
    * that is not on the agent's machine. A platform without one ignores it.
    */
   beginSignIn?(options?: { deviceCode?: boolean }): Promise<{ url?: string; code?: string }>;
+  /**
+   * Abandon the sign-in `beginSignIn` started, releasing the provider's side
+   * of it. `cancelled` is false when nothing was open or the platform has no
+   * cancel; either way the pending sign-in is gone afterwards.
+   */
+  cancelSignIn?(): Promise<{ cancelled: boolean }>;
   signOut?(): Promise<void>;
   setSessionTitle?(sessionId: string, title: string): Promise<void>;
   /** Drop provider-side model/command caches so the next read re-discovers. */
@@ -841,6 +884,8 @@ export interface ProviderCommandCatalogue {
   revision?: number;
   generation?: string;
   freshness?: "push" | "ttl";
+  /** A `stale` list the provider completes when its session attaches. */
+  attachPending?: boolean;
 }
 
 export interface ProviderCommandRefreshResult {
@@ -878,4 +923,24 @@ export interface ProviderCommonDependencies {
    * applied as activity themselves. Must not throw or await.
    */
   onObservationHint?: (sessionId: string | undefined) => void;
+}
+
+/**
+ * Structural twin of change tracking's `EvidenceSource`, declared here so the
+ * provider contract does not import the change-tracking service.
+ */
+export interface ChangeEvidenceSourceLike {
+  sourceKey: string;
+  environmentId: string;
+  provider: string;
+  read(
+    cursor: number,
+    epoch: string | null,
+  ): Promise<
+    import("@orkestrator/protocol/change-evidence").ChangeEvidenceReadResponse | "unsupported"
+  >;
+  body(id: string): Promise<Uint8Array | null>;
+  ack(
+    request: import("@orkestrator/protocol/change-evidence").ChangeEvidenceAckRequest,
+  ): Promise<void>;
 }

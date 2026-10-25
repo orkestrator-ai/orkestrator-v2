@@ -1,3 +1,4 @@
+import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { describe, expect, test } from "bun:test";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-types";
 import type { NativeMessage } from "./native-message-types";
@@ -2487,6 +2488,167 @@ describe("native message adapters", () => {
     ]);
   });
 
+  test("always hides a marked path block, even when the file part spells the file differently", () => {
+    const rawContent = buildInitialPromptWithAttachmentReferences("Why do I need separate apps?", [
+      { name: "clipboard.png", path: "/workspace/.orkestrator/clipboard/clipboard.png" },
+    ]);
+    const message: NativeMessage = {
+      id: "native-marked-path-reference",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-10-21T11:49:31.000Z",
+      parts: [
+        { type: "text", content: rawContent },
+        { type: "file", content: "clipboard.png", fileUrl: "data:image/png;base64,QUJD" },
+      ],
+    };
+
+    const normalized = normalizeNativeMessage(message);
+
+    expect(normalized.content).toBe("Why do I need separate apps?");
+    expect(normalized.parts).toEqual([
+      { type: "text", content: "Why do I need separate apps?" },
+      { type: "file", content: "clipboard.png", fileUrl: "data:image/png;base64,QUJD" },
+    ]);
+  });
+
+  test("shows the files of a marked path block when no structured part carries them", () => {
+    const rawContent = buildInitialPromptWithAttachmentReferences("Use the requirements", [
+      { name: "requirements.md", path: "/workspace/.orkestrator/initial-prompt/requirements.md" },
+    ]);
+    const message: NativeMessage = {
+      id: "native-marked-path-only",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-10-21T11:49:31.000Z",
+      parts: [{ type: "text", content: rawContent }],
+    };
+
+    expect(normalizeNativeMessage(message).parts).toEqual([
+      { type: "text", content: "Use the requirements" },
+      {
+        type: "file",
+        content: "/workspace/.orkestrator/initial-prompt/requirements.md",
+        filename: "requirements.md",
+      },
+    ]);
+  });
+
+  test.each(["native", "claude"] as const)(
+    "%s retains marker-only documents beside structured or XML images after hydration",
+    (provider) => {
+      for (const structured of [false, true]) {
+        for (const prompt of ["", "Implement this"]) {
+          const image = { name: "shot.png", path: "/work/Client: Demo/shot.png" };
+          const document = {
+            name: "requirements: v2.md",
+            path: "/work/Client: Demo/requirements: v2.md",
+          };
+          const content =
+            buildInitialPromptWithAttachmentReferences(prompt, [image, document]) +
+            (structured
+              ? ""
+              : `\n<attached-files><attachment type="image" path="${image.path}" filename="${image.name}" /></attached-files>`);
+          const message: NativeMessage = {
+            id: "mixed-startup",
+            role: "user",
+            content,
+            createdAt: "2026-10-21T12:00:00Z",
+            parts: [
+              { type: "text", content },
+              ...(structured
+                ? [
+                    {
+                      type: "file" as const,
+                      content: image.path,
+                      fileUrl: "file:///work/Client:%20Demo/shot.png",
+                      filename: image.name,
+                    },
+                  ]
+                : []),
+            ],
+          };
+          const normalize = provider === "native" ? normalizeNativeMessage : normalizeClaudeMessage;
+          const normalized = normalize(message);
+          expect(normalized.content).toBe(prompt);
+          expect(normalized.parts.filter((part) => part.type === "file")).toHaveLength(2);
+          expect(normalized.parts).toContainEqual({
+            type: "file",
+            content: document.path,
+            filename: document.name,
+          });
+          expect(normalize(JSON.parse(JSON.stringify(message)))).toEqual(normalized);
+          expect(normalizeNativeMessage(normalized)).toEqual(normalized);
+        }
+      }
+    },
+  );
+
+  test("does not duplicate OpenCode attachment image parts", () => {
+    const content = buildInitialPromptWithAttachmentReferences("Compare", [
+      { name: "shot.png", path: "/workspace/shot.png" },
+      { name: "notes.md", path: "/workspace/notes.md" },
+    ]);
+    for (const fileUrl of ["file:///workspace/shot.png", "data:image/png;base64,QUJD"]) {
+      const image = {
+        type: "image" as const,
+        imageSource: "attachment" as const,
+        content: "shot.png",
+        fileUrl,
+      };
+      const normalized = normalizeNativeMessage({
+        id: "opencode",
+        role: "user",
+        content,
+        createdAt: "2026-10-21T12:00:00Z",
+        parts: [{ type: "text", content }, image],
+      });
+      expect(normalized.parts).toHaveLength(3);
+      expect(normalized.parts).toEqual(
+        expect.arrayContaining([
+          { type: "text", content: "Compare" },
+          image,
+          { type: "file", content: "/workspace/notes.md", filename: "notes.md" },
+        ]),
+      );
+    }
+  });
+
+  test("does not conflate different absolute paths with the same filename", () => {
+    const content = buildInitialPromptWithAttachmentReferences("Compare", [
+      { name: "shot.png", path: "/work/one/shot.png" },
+      { name: "shot.png", path: "/work/two/shot.png" },
+    ]);
+    const normalized = normalizeNativeMessage({
+      id: "same-name",
+      role: "user",
+      content,
+      createdAt: "2026-10-21T12:00:00Z",
+      parts: [{ type: "file", content: "/work/one/shot.png" }],
+    });
+    expect(
+      normalized.parts.filter((part) => part.type === "file").map((part) => part.content),
+    ).toEqual(["/work/one/shot.png", "/work/two/shot.png"]);
+  });
+
+  test.each([true, false])(
+    "literal marker text does not synthesize files (closed: %s)",
+    (closed) => {
+      const content =
+        "<orkestrator-attachment-paths>\n- fake.png: /work/fake.png" +
+        (closed ? "\n</orkestrator-attachment-paths>" : "");
+      const message: NativeMessage = {
+        id: "literal",
+        role: "user",
+        content,
+        createdAt: "2026-10-21T12:00:00Z",
+        parts: [{ type: "text", content }],
+      };
+      expect(normalizeNativeMessage(message)).toEqual(message);
+      expect(normalizeClaudeMessage(message)).toMatchObject({ content, parts: message.parts });
+    },
+  );
+
   test("preserves initial-prompt path references without a structured file part", () => {
     const rawContent =
       "Use the requirements\n\n" +
@@ -3778,7 +3940,41 @@ describe("coalesceAdjacentToolMessages", () => {
     ...extra,
   });
 
-  test("merges consecutive tool-only messages in the same minute into one tool group", () => {
+  test("a coalesced run keeps its id as history merges in front and calls append behind", () => {
+    const m2 = toolMessage("m2", "2026-09-03T10:43:20.000Z");
+    const m3 = toolMessage("m3", "2026-09-03T10:43:30.000Z");
+    const first = coalesceAdjacentToolMessages([m2, m3]);
+    expect(first.map((row) => row.id)).toEqual(["m2"]);
+    // A history page merges m1 in front: the row is not renamed to m1.
+    const m1 = toolMessage("m1", "2026-09-03T10:43:01.000Z");
+    const paged = coalesceAdjacentToolMessages([m1, m2, m3]);
+    expect(paged.map((row) => row.id)).toEqual(["m2"]);
+    expect(paged[0]!.earliestSourceMessageId).toBe("m1");
+    // A live call appends behind, and the tail member is a new object.
+    const m4 = toolMessage("m4", "2026-09-03T10:44:00.000Z");
+    const live = coalesceAdjacentToolMessages([m1, m2, { ...m3 }, m4]);
+    expect(live.map((row) => row.id)).toEqual(["m2"]);
+    // Unchanged inputs give the same row object (memoized rendering holds).
+    expect(coalesceAdjacentToolMessages([m1, m2, m3])[0]).toBe(paged[0]);
+  });
+
+  test("a run that splits never gives two rows one id", () => {
+    const a = toolMessage("a", "2026-09-03T10:43:01.000Z");
+    const b = toolMessage("b", "2026-09-03T10:43:02.000Z");
+    const c = toolMessage("c", "2026-09-03T10:43:03.000Z");
+    expect(coalesceAdjacentToolMessages([a, b, c]).map((row) => row.id)).toEqual(["a"]);
+    const prose: NativeMessage = {
+      id: "prose",
+      role: "assistant",
+      content: "Between",
+      createdAt: "2026-09-03T10:43:02.500Z",
+      parts: [{ type: "text", content: "Between" }],
+    };
+    const ids = coalesceAdjacentToolMessages([a, b, prose, c]).map((row) => row.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("merges consecutive tool-only messages into one tool group", () => {
     const rows = normalizeNativeMessages([
       toolMessage("m1", "2026-09-03T10:43:01.000Z", ["Read", "Read"]),
       toolMessage("m2", "2026-09-03T10:43:20.000Z", ["Todo Write"]),
@@ -3814,13 +4010,21 @@ describe("coalesceAdjacentToolMessages", () => {
     expect(rows.map((row) => row.id)).toEqual(["m1", "text", "m2"]);
   });
 
-  test("does not merge tool messages in different minutes", () => {
+  test("merges tool messages regardless of how far apart they are", () => {
     const rows = normalizeNativeMessages([
       toolMessage("m1", "2026-09-03T10:43:50.000Z", ["Grep"]),
       toolMessage("m2", "2026-09-03T10:44:05.000Z", ["Read"]),
+      toolMessage("m3", "2026-09-03T10:52:00.000Z", ["Bash"]),
     ]);
 
-    expect(rows.map((row) => row.id)).toEqual(["m1", "m2"]);
+    expect(rows.map((row) => row.id)).toEqual(["m1"]);
+    expect(rows[0]?.createdAt).toBe("2026-09-03T10:52:00.000Z");
+    expect(rows[0]?.latestSourceMessageId).toBe("m3");
+    const group = rows[0]?.parts[0];
+    expect(group?.type).toBe("tool-group");
+    if (group?.type === "tool-group") {
+      expect(group.parts).toHaveLength(3);
+    }
   });
 
   test("does not merge when models differ", () => {

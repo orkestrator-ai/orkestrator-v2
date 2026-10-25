@@ -19,6 +19,7 @@ interface ProjectState {
   deletingProjects: Set<string>;
   setDeleting: (projectId: string, deleting: boolean) => void;
   isLoading: boolean;
+  hasLoaded: boolean;
   error: string | null;
 
   // Actions
@@ -49,12 +50,13 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       return { deletingProjects };
     }),
   isLoading: false,
+  hasLoaded: false,
   error: null,
 
   // Actions
   setProjects: (projects) => {
     advanceProjectMutationVersion();
-    set({ projects: sortByOrder(projects) });
+    set({ projects: sortByOrder(projects), hasLoaded: true });
   },
 
   addProject: (project) => {
@@ -133,6 +135,6 @@ export const applyProjectSnapshot = (
     return false;
   }
 
-  useProjectStore.setState({ projects: sortByOrder(projects) });
+  useProjectStore.setState({ projects: sortByOrder(projects), hasLoaded: true });
   return true;
 };

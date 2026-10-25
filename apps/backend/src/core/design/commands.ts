@@ -1,7 +1,14 @@
 import { extname, isAbsolute } from "node:path";
 import { z } from "zod";
 import { DESIGN_MAX_DOCUMENT_BYTES } from "@orkestrator/protocol/design-canvas";
-import type { DesignCommandResult } from "@orkestrator/protocol/design-operations";
+import {
+  BUILD_PIPELINE_AGENTS,
+  type BuildPipelineAgent,
+} from "@orkestrator/protocol/build-pipeline";
+import type {
+  DesignCommandResult,
+  DesignSessionLink,
+} from "@orkestrator/protocol/design-operations";
 import { DesignError, toDesignFailure } from "./errors.js";
 import {
   exportPreview,
@@ -14,6 +21,7 @@ import { readDesignHostFile } from "./host-file.js";
 import { designId, revision } from "./schemas.js";
 import { purge } from "./service-lifecycle.js";
 import type { DesignService } from "./service.js";
+import type { DesignSessionResumer } from "./session-links.js";
 import { runDesignAction } from "./tools.js";
 import { validate as validateFrame } from "./validation.js";
 
@@ -36,7 +44,115 @@ async function typed<T>(work: () => Promise<T>): Promise<DesignCommandResult<T>>
  */
 export interface DesignCommandContext {
   design?: DesignService;
-  storage: { getEnvironment(environmentId: string): Promise<unknown> };
+  /** The native-agent session APIs a link resume goes through; absent from narrow harnesses. */
+  nativeAgents?: {
+    resumeProjectionSession(input: {
+      environmentId: string;
+      agent: BuildPipelineAgent;
+      logicalSessionKey: string;
+      providerSessionId: string;
+    }): Promise<unknown>;
+  };
+  storage: {
+    getEnvironment(environmentId: string): Promise<unknown>;
+    /** The backend's durable native-session record; absent from narrow harnesses. */
+    getNativeAgentSession?(key: string): Promise<{
+      environmentId: string;
+      agent: string;
+      logicalSessionKey: string;
+      providerSessionId: string;
+    } | null>;
+  };
+}
+
+export interface DesignCommandOptions {
+  /** How the backend keys native-session records (`nativeAgentSessionStorageKey`). */
+  nativeSessionKey?: (
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ) => string;
+}
+
+function linkAgent(link: DesignSessionLink): BuildPipelineAgent | null {
+  return BUILD_PIPELINE_AGENTS.find((candidate) => candidate === link.platform) ?? null;
+}
+
+/** The renderer's `createSessionKey(environmentId, tabId)`. */
+function tabSessionKey(environmentId: string, tabId: string): string {
+  return `env-${environmentId}:${tabId}`;
+}
+
+/**
+ * Reads the native-session mapping of a tab. Storage only, never a bridge.
+ * Tab teardown retires the mapping, so a closed tab reads as missing; its
+ * session identity was recorded on the link during that teardown.
+ */
+function nativeSessionReader(
+  context: DesignCommandContext,
+  options: DesignCommandOptions,
+  environmentId: string,
+) {
+  const read = context.storage.getNativeAgentSession?.bind(context.storage);
+  const key = options.nativeSessionKey;
+  if (!read || !key)
+    throw new DesignError("unsupported", "This backend cannot report linked conversations", {
+      retry: "never",
+    });
+  return async (link: DesignSessionLink, tabId: string) => {
+    const agent = linkAgent(link);
+    if (!agent) return null;
+    const logicalSessionKey = tabSessionKey(environmentId, tabId);
+    const session = await read(key(environmentId, agent, logicalSessionKey));
+    // The key is a digest of these fields; checking them keeps a record from
+    // another environment from ever answering for this one.
+    if (
+      !session ||
+      session.environmentId !== environmentId ||
+      session.agent !== agent ||
+      session.logicalSessionKey !== logicalSessionKey ||
+      !session.providerSessionId
+    )
+      return null;
+    return session.providerSessionId;
+  };
+}
+
+/**
+ * Resume through the ordinary native-agent API: it checks the environment
+ * owns the session and that the provider still has it, and it never creates
+ * an empty replacement.
+ */
+function nativeResumer(
+  context: DesignCommandContext,
+  options: DesignCommandOptions,
+  environmentId: string,
+): DesignSessionResumer {
+  const mapped = nativeSessionReader(context, options, environmentId);
+  const nativeAgents = context.nativeAgents;
+  if (!nativeAgents)
+    throw new DesignError("unsupported", "This backend cannot resume conversations", {
+      retry: "never",
+    });
+  return {
+    mapped,
+    async resume(link, tabId) {
+      const agent = linkAgent(link);
+      if (!agent || !link.sessionId)
+        throw new DesignError("invalid-input", "This conversation cannot be resumed", {
+          retry: "never",
+        });
+      await nativeAgents.resumeProjectionSession({
+        environmentId,
+        agent,
+        logicalSessionKey: tabSessionKey(environmentId, tabId),
+        providerSessionId: link.sessionId,
+      });
+      const providerSessionId = await mapped(link, tabId);
+      if (!providerSessionId) throw new Error("The resumed session was not recorded");
+      return providerSessionId;
+    },
+  };
 }
 
 export type DesignCommandRegistrar = (
@@ -56,7 +172,10 @@ async function authorized(args: Record<string, unknown>, context: DesignCommandC
   return { design: context.design as DesignService, environmentId };
 }
 
-export function registerDesignCommandHandlers(register: DesignCommandRegistrar) {
+export function registerDesignCommandHandlers(
+  register: DesignCommandRegistrar,
+  options: DesignCommandOptions = {},
+) {
   // Legacy v1 surface: untyped errors, legacy shapes. The UI acts as the user.
   register("design_action", async (args, context) => {
     const { design, environmentId } = await authorized(args, context);
@@ -368,6 +487,35 @@ export function registerDesignCommandHandlers(register: DesignCommandRegistrar) 
         designId.parse(args.canvasId),
         link,
         z.string().max(40).optional().parse(args.replaceId),
+      );
+    }),
+  );
+  register("design_session_link_states", async (args, context) =>
+    typed(async () => {
+      const { design, environmentId } = await authorized(args, context);
+      const read = nativeSessionReader(context, options, environmentId);
+      return design.sessionLinkStates(
+        environmentId,
+        designId.parse(args.canvasId),
+        async (link) => {
+          const providerSessionId = await read(link, link.tabId);
+          return providerSessionId ? { providerSessionId } : null;
+        },
+      );
+    }),
+  );
+  register("design_session_resume", async (args, context) =>
+    typed(async () => {
+      const { design, environmentId } = await authorized(args, context);
+      return design.resumeSessionLink(
+        environmentId,
+        designId.parse(args.canvasId),
+        {
+          linkId: z.string().min(1).max(40).parse(args.linkId),
+          expectedTabId: z.string().min(1).max(200).parse(args.expectedTabId),
+          tabId: z.string().min(1).max(200).parse(args.tabId),
+        },
+        nativeResumer(context, options, environmentId),
       );
     }),
   );

@@ -155,7 +155,7 @@ export function parsePinsOutput(
       continue;
     if (results.has(entry.annotationId)) continue;
     const { state, rule, candidateCount } = entry;
-    const rect = entry.rect === null ? null : pickRect(entry.rect);
+    const rect = entry.rect == null ? null : pickRect(entry.rect);
     if (
       typeof state !== "string" ||
       !PAGE_STATES.has(state) ||
@@ -165,7 +165,7 @@ export function parsePinsOutput(
       !Number.isSafeInteger(candidateCount) ||
       candidateCount < 0 ||
       candidateCount > 1_000_000 ||
-      (state === "matched") !== (rect !== null) ||
+      (state !== "matched" && rect !== null) ||
       (rect !== null && !isWebAnnotationRect(rect))
     ) {
       continue;
@@ -191,6 +191,8 @@ function targetLabel(query: BrowserPreviewAnchorQuery): string {
 
 export class BrowserPreviewPinSessions {
   private readonly tabs = new Map<string, PinnedTab>();
+  /** Resolutions returned to the renderer, by `state|rule` (closed vocabularies). */
+  private readonly resolutionCounts = new Map<string, number>();
   /** Tabs whose pins were cleared by a document change and not yet re-requested. */
   private readonly invalidated = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -240,6 +242,13 @@ export class BrowserPreviewPinSessions {
   }
 
   async showPins(value: BrowserPreviewPinsInput): Promise<BrowserPreviewAnchorResult[]> {
+    return this.resolvePins(value, true);
+  }
+
+  private async resolvePins(
+    value: BrowserPreviewPinsInput,
+    count: boolean,
+  ): Promise<BrowserPreviewAnchorResult[]> {
     const input = pinsInput(value);
     const handle = this.handle(input.tabId);
     const generation = handle.generation;
@@ -348,7 +357,19 @@ export class BrowserPreviewPinSessions {
         this.ensureTimer();
       }
     }
-    return this.results(tab);
+    const results = this.results(tab);
+    if (count) for (const result of results) this.countResolution(result.resolution);
+    return results;
+  }
+
+  private countResolution(resolution: WebAnnotationAnchorResolution): void {
+    const key = `${resolution.state}|${resolution.rule}`;
+    this.resolutionCounts.set(key, (this.resolutionCounts.get(key) ?? 0) + 1);
+  }
+
+  /** Content-free counters for diagnostics: resolutions by state and rule. */
+  anchorResolutionCounts(): Record<string, number> {
+    return Object.fromEntries(this.resolutionCounts);
   }
 
   private results(tab: PinnedTab): BrowserPreviewAnchorResult[] {
@@ -538,10 +559,12 @@ export class BrowserPreviewPinSessions {
       resolution?: WebAnnotationAnchorResolution,
     ): BrowserPreviewShowOnPageResult => {
       const generation = this.options.preview(input.tabId)?.generation ?? handle.generation;
+      const resolved = resolution ?? this.resolution(generation, "missing", "none");
+      this.countResolution(resolved);
       return {
         outcome: result,
         navigated,
-        resolution: resolution ?? this.resolution(generation, "missing", "none"),
+        resolution: resolved,
         documentGeneration: generation,
       };
     };
@@ -580,15 +603,24 @@ export class BrowserPreviewPinSessions {
 
     let last: WebAnnotationAnchorResolution | null = null;
     for (;;) {
-      const results = await this.showPins({
-        tabId: input.tabId,
-        pins: [input.pin, ...(input.pins ?? [])],
-        focusedAnnotationId: input.pin.annotationId,
-        scrollIntoView: true,
-      });
+      const results = await this.resolvePins(
+        {
+          tabId: input.tabId,
+          pins: [input.pin, ...(input.pins ?? [])],
+          focusedAnnotationId: input.pin.annotationId,
+          scrollIntoView: true,
+        },
+        false,
+      );
       last =
         results.find((entry) => entry.annotationId === input.pin.annotationId)?.resolution ?? null;
-      if (last?.state === "matched") return outcome("shown", navigated, last);
+      if (last?.state === "matched") {
+        // A target that renders no box (inside a closed dialog, a collapsed
+        // menu) matched, but there is nothing on screen to show.
+        const rect = last.rect;
+        const rendered = rect !== null && rect !== undefined && (rect.width > 0 || rect.height > 0);
+        return outcome(rendered ? "shown" : "hidden", navigated, last);
+      }
       // Late-rendering pages: only a missing target is worth waiting for.
       if (last && last.state !== "missing") return outcome("not-found", navigated, last);
       if (last?.rule === "route-mismatch") return outcome("navigation-required", navigated, last);

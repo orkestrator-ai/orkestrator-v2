@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -38,7 +46,7 @@ import type { BrowserTabData } from "@/types/paneLayout";
 import { AnnotatedPreviewArea, AnnotationsButton } from "./annotations/BrowserAnnotationsLayout";
 import { currentPageForManualUrl } from "./annotations/format";
 import { useBrowserAnnotations } from "./annotations/useBrowserAnnotations";
-import { errorMessage, useBlockingOverlay } from "./browser-tab-hooks";
+import { errorMessage, useAddressBarShortcut, useBlockingOverlay } from "./browser-tab-hooks";
 import { ServiceBrowserTab } from "./ServiceBrowserTab";
 
 interface BrowserTabProps {
@@ -89,13 +97,6 @@ function ManualBrowserTab({
   refreshRequestId = 0,
 }: BrowserTabProps) {
   const updateTabBrowserUrl = usePaneLayoutStore((state) => state.updateTabBrowserUrl);
-  const setActivePane = usePaneLayoutStore((state) => state.setActivePane);
-  const activePaneId = usePaneLayoutStore(
-    (state) => state.environments.get(environmentId)?.activePaneId,
-  );
-  const owningPaneId = usePaneLayoutStore(
-    (state) => state.findPaneWithTab(tabId, environmentId)?.id,
-  );
   const nativeBrowserPreview = hasNativeBrowserPreview();
   const previewPublicationAvailable = usePreviewServiceStore(
     (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
@@ -115,18 +116,24 @@ function ManualBrowserTab({
   // history lives in Chromium (see `moveThroughHistory`). The refs are the
   // authoritative cursor for the handlers that mutate it, so a second click or
   // a submit that lands before React re-renders still reads what the previous
-  // one wrote. They are written only from those handlers, never during render.
+  // one wrote. Those handlers write them alongside the state; otherwise they
+  // follow the committed state, never during render.
   const [history, setHistory] = useState<string[]>(
     () => data.history ?? (data.url ? [data.url] : []),
   );
   const [historyIndex, setHistoryIndex] = useState(() => data.historyIndex ?? (data.url ? 0 : -1));
   const historyRef = useRef(history);
   const historyIndexRef = useRef(historyIndex);
+  useLayoutEffect(() => {
+    historyRef.current = history;
+    historyIndexRef.current = historyIndex;
+  }, [history, historyIndex]);
   const [loadRevision, setLoadRevision] = useState(0);
   const [isLoading, setIsLoading] = useState(Boolean(data.url));
   const [error, setError] = useState<string | null>(null);
   const previousRefreshRequestId = useRef(refreshRequestId);
-  const locallyPersistedUrl = useRef<string | null>(null);
+  /** The address this tab just persisted, so its echo through `data` is not a reset. */
+  const [locallyPersistedUrl, setLocallyPersistedUrl] = useState<string | null>(null);
   const addressInputRef = useRef<HTMLInputElement | null>(null);
   const previewHostRef = useRef<HTMLDivElement | null>(null);
   const nativeAttachedRef = useRef(false);
@@ -194,35 +201,50 @@ function ManualBrowserTab({
       if (navigatedDisplayUrl === currentUrl) return;
       setAddress(navigatedDisplayUrl);
       setCurrentUrl(navigatedDisplayUrl);
-      locallyPersistedUrl.current = navigatedDisplayUrl;
+      setLocallyPersistedUrl(navigatedDisplayUrl);
       updateTabBrowserUrl(tabId, navigatedDisplayUrl, environmentId);
     },
     [applyNativeSurfaceState, currentUrl, environmentId, tabId, updateTabBrowserUrl],
   );
 
-  useEffect(() => {
-    const followsLocalNavigation = locallyPersistedUrl.current === data.url;
-    locallyPersistedUrl.current = null;
+  // The persisted tab changed (restored, or another client navigated it):
+  // follow it while rendering. The echo of a navigation made here keeps the
+  // tracked history it already updated.
+  const [syncedData, setSyncedData] = useState(data);
+  if (
+    data.url !== syncedData.url ||
+    data.history !== syncedData.history ||
+    data.historyIndex !== syncedData.historyIndex
+  ) {
+    setSyncedData(data);
+    const followsLocalNavigation = locallyPersistedUrl === data.url;
+    setLocallyPersistedUrl(null);
     setAddress(data.url);
     setCurrentUrl(data.url);
     if (!followsLocalNavigation) {
-      const nextHistory = data.history ?? (data.url ? [data.url] : []);
-      const nextIndex = data.historyIndex ?? (data.url ? 0 : -1);
-      historyRef.current = nextHistory;
-      historyIndexRef.current = nextIndex;
-      setHistory(nextHistory);
-      setHistoryIndex(nextIndex);
+      setHistory(data.history ?? (data.url ? [data.url] : []));
+      setHistoryIndex(data.historyIndex ?? (data.url ? 0 : -1));
       setIsLoading(Boolean(data.url));
       setError(null);
     }
-  }, [data.history, data.historyIndex, data.url]);
+  }
 
+  // A refresh request reloads the page once per id. Loading state and the
+  // iframe reload are set while rendering; the effect below reaches the
+  // native preview and ends any selection.
+  const [handledRefreshRequestId, setHandledRefreshRequestId] = useState(refreshRequestId);
+  if (refreshRequestId !== handledRefreshRequestId) {
+    setHandledRefreshRequestId(refreshRequestId);
+    if (refreshRequestId > 0 && currentUrl) {
+      setIsLoading(true);
+      if (!nativeBrowserPreview) setLoadRevision((revision) => revision + 1);
+    }
+  }
   useEffect(() => {
     const refreshChanged = refreshRequestId !== previousRefreshRequestId.current;
     previousRefreshRequestId.current = refreshRequestId;
     if (refreshChanged && refreshRequestId > 0 && currentUrl) {
       stopAnnotationForPageChange();
-      setIsLoading(true);
       if (nativeBrowserPreview && nativeAttachedRef.current) {
         void reloadBrowserPreview(tabId)
           .then(applyNativeState)
@@ -230,8 +252,6 @@ function ManualBrowserTab({
             setIsLoading(false);
             setError(errorMessage(reloadError));
           });
-      } else if (!nativeBrowserPreview) {
-        setLoadRevision((revision) => revision + 1);
       }
     }
   }, [
@@ -251,51 +271,13 @@ function ManualBrowserTab({
     );
   }, [applyNativeState, browserPreviewSupported, nativeBrowserPreview]);
 
-  const focusAddressBar = useCallback(() => {
-    addressInputRef.current?.focus();
-    addressInputRef.current?.select();
-  }, []);
-
-  useEffect(() => {
-    if (!isActive || !browserPreviewSupported) return;
-
-    return window.orkestrator?.listen<string>("browser-preview-focus-address", (requestedTabId) => {
-      if (requestedTabId !== tabId) return;
-      if (owningPaneId) {
-        setActivePane(owningPaneId, environmentId);
-      }
-      focusAddressBar();
-    });
-  }, [
-    environmentId,
-    focusAddressBar,
-    browserPreviewSupported,
-    isActive,
-    owningPaneId,
-    setActivePane,
+  useAddressBarShortcut({
     tabId,
-  ]);
-
-  useEffect(() => {
-    if (!browserPreviewSupported || !isActive || activePaneId !== owningPaneId) return;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const isAddressShortcut =
-        event.key.toLowerCase() === "l" &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey;
-      if (!isAddressShortcut) return;
-
-      event.preventDefault();
-      focusAddressBar();
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [activePaneId, browserPreviewSupported, focusAddressBar, isActive, owningPaneId]);
+    environmentId,
+    isActive,
+    enabled: browserPreviewSupported,
+    inputRef: addressInputRef,
+  });
 
   const resolution = useMemo(() => {
     if (!currentUrl || !browserPreviewSupported) {
@@ -336,7 +318,7 @@ function ManualBrowserTab({
       setCurrentUrl(next.displayUrl);
       setIsLoading(true);
       if (!nativeBrowserPreview) setLoadRevision((revision) => revision + 1);
-      locallyPersistedUrl.current = next.displayUrl;
+      setLocallyPersistedUrl(next.displayUrl);
 
       if (recordHistory && nativeBrowserPreview) {
         // Chromium recorded this navigation in its own history, so the address is
@@ -384,7 +366,9 @@ function ManualBrowserTab({
     ],
   );
 
-  navigateRef.current = navigate;
+  useLayoutEffect(() => {
+    navigateRef.current = navigate;
+  }, [navigate]);
 
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
@@ -647,7 +631,7 @@ function ManualBrowserTab({
             className="h-8 w-8 shrink-0"
             aria-label="Open preview DevTools"
             title="Open preview DevTools"
-            disabled={!resolved || !nativeAttachedRef.current}
+            disabled={!resolved || !nativeAttached}
             onClick={() => {
               void openBrowserPreviewDevTools(tabId)
                 .then(applyNativeState)

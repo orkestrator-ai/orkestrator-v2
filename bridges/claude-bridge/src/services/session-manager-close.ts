@@ -19,6 +19,7 @@ import {
   waitForPendingPromptDispatchClaim,
 } from "./session-manager-lifecycle.js";
 import { takeQueryControls } from "./session-manager-background-tasks.js";
+import { clearTurnInFlightMarkForClose } from "./session-manager-turn-interruption.js";
 
 export type RetainingCloseOutcome = "closed" | "missing";
 
@@ -115,6 +116,8 @@ export function closeSessionRetainingHistory(
       throw new SessionCloseNotConfirmedError("A racing prompt dispatch did not settle");
     }
     forgetPromptDispatchesForSession(sessionId);
+    // The close stopped the turn on purpose; a restart did not cut it short.
+    clearTurnInFlightMarkForClose(session);
     if (sessions.get(sessionId) === session) sessions.delete(sessionId);
     return "closed";
   })();

@@ -4848,6 +4848,8 @@ describe("sendPrompt", () => {
         turns: [
           {
             turnId: expect.any(String),
+            // When the turn was finalized; what dates recorded usage.
+            at: expect.any(String),
             costUsd: 0,
             inputTokens: 12,
             outputTokens: 3,

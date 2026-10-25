@@ -1,15 +1,20 @@
 import type { PublicActionName, PublicCapabilities } from "@orkestrator/protocol/public-api";
 import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
+import { ATTENTION_HANDLERS } from "./actions-attention.js";
+import { CHANGE_HANDLERS } from "./actions-changes.js";
 import { createCapabilitiesHandler, DISCOVERY_HANDLERS } from "./actions-discovery.js";
 import { ENVIRONMENT_HANDLERS } from "./actions-environments.js";
 import { EXEC_HANDLERS } from "./actions-exec.js";
 import { HOST_HANDLERS } from "./actions-host.js";
 import { LAUNCH_HANDLERS } from "./actions-launch.js";
+import { MAIL_HANDLERS } from "./actions-mail.js";
 import { PROJECT_HANDLERS } from "./actions-projects.js";
-import { RUN_READ_HANDLERS, RUN_RECOVERY_HANDLERS } from "./actions-runs.js";
+import { createRunReadHandlers, RUN_RECOVERY_HANDLERS } from "./actions-runs.js";
+import { SESSION_COMMAND_HANDLERS } from "./actions-session-commands.js";
 import { SESSION_CONTROL_HANDLERS } from "./actions-session-controls.js";
 import { SESSION_HANDLERS } from "./actions-sessions.js";
 import { SETTINGS_HANDLERS } from "./actions-settings.js";
+import { TICKET_HANDLERS } from "./actions-tickets.js";
 import { TRANSCRIPT_HANDLERS } from "./actions-transcript.js";
 import { registerPublicActionCommand } from "./dispatch.js";
 // Side-effect import: registers the prompt-run reconcilers.
@@ -24,31 +29,46 @@ import type { PublicActionHandler } from "./types.js";
  * already-accepted operations keep working through `run.*`.
  */
 export function publicActionHandlers(): PublicActionHandler[] {
-  return [
+  const handlers: PublicActionHandler[] = [
     ...DISCOVERY_HANDLERS,
     ...PROJECT_HANDLERS,
     ...ENVIRONMENT_HANDLERS,
     ...SETTINGS_HANDLERS,
     ...LAUNCH_HANDLERS,
     ...SESSION_HANDLERS,
+    ...SESSION_COMMAND_HANDLERS,
     ...SESSION_CONTROL_HANDLERS,
     ...TRANSCRIPT_HANDLERS,
-    ...RUN_READ_HANDLERS,
+    ...CHANGE_HANDLERS,
+    ...ATTENTION_HANDLERS,
+    ...TICKET_HANDLERS,
+    ...MAIL_HANDLERS,
     ...RUN_RECOVERY_HANDLERS,
     ...EXEC_HANDLERS,
     ...HOST_HANDLERS,
   ];
+  handlers.push(
+    ...createRunReadHandlers((action) => handlers.find((handler) => handler.action === action)),
+  );
+  return handlers;
 }
 
+/**
+ * Optional features. Each names the action or input that carries it, and is
+ * withdrawn by removing that handler or input, never by flipping this alone:
+ * `project.remove` `cascade`, `project.init`, `attachments` on
+ * `session.prompt`/`session.start`, `session.commands`/`session.command`
+ * (with `literal` on prompts), and `enqueue`.
+ */
 export function publicFeatures(): PublicCapabilities["features"] {
   return {
     transcriptFollow: "poll",
     exec: { local: true, container: true },
-    projectCascadeRemove: false,
-    localProjectInit: false,
-    promptAttachments: false,
-    selectedSlashCommands: false,
-    enqueue: false,
+    projectCascadeRemove: true,
+    localProjectInit: true,
+    promptAttachments: true,
+    selectedSlashCommands: true,
+    enqueue: true,
   };
 }
 
@@ -57,7 +77,7 @@ export function buildPublicHandlerTable(
   features: () => PublicCapabilities["features"] = publicFeatures,
 ): Map<PublicActionName, PublicActionHandler> {
   const table = new Map<PublicActionName, PublicActionHandler>();
-  const capabilities = createCapabilitiesHandler(() => new Set(table.keys()), features);
+  const capabilities = createCapabilitiesHandler(() => table, features);
   for (const handler of [capabilities, ...handlers]) {
     if (table.has(handler.action))
       throw new Error(`Duplicate public action handler: ${handler.action}`);

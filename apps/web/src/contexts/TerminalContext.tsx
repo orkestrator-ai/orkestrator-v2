@@ -18,7 +18,8 @@ export type CreatableTabType =
   | "browser"
   | "design-canvas"
   | "looped-review"
-  | "multi-review";
+  | "multi-review"
+  | "pull-request";
 export type AgentLaunchModeOverride = "cli" | "native" | "tmux";
 
 // All tab types including file viewer and native agent tabs
@@ -31,7 +32,8 @@ export type TabType =
   | "claude-tmux"
   | "claude-build"
   | "looped-review"
-  | "multi-review";
+  | "multi-review"
+  | "pull-request";
 
 // Maximum number of tabs allowed (matches Ctrl+1-9 shortcuts)
 export const MAX_TABS = MAX_TABS_PER_ENVIRONMENT;
@@ -70,6 +72,8 @@ export interface CreateTabOptions {
   initialFastMode?: boolean;
   /** Initial backend-local address for browser tabs. */
   initialUrl?: string;
+  /** The pull request a `pull-request` tab shows, and the view to open on. */
+  pullRequest?: import("@/types/paneLayout").PullRequestTabData;
   /** Existing authoritative workflow opened by a looped-review tab. */
   loopedReviewId?: string;
   /** Existing authoritative workflow opened by a Multi Review tab. */
@@ -91,6 +95,8 @@ export interface CreateFileTabOptions {
   /** One-based source location to reveal after opening the file. */
   lineNumber?: number;
   columnNumber?: number;
+  /** Open a backend-rendered change diff (historical identity or live row). */
+  changeDiff?: import("@/types/paneLayout").ChangeDiffTarget;
 }
 
 interface TerminalContextValue {

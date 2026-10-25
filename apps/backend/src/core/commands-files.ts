@@ -1,4 +1,8 @@
-import { gitHubCli } from "./github-cli-binary.js";
+import {
+  claudeLoginLookupOptions,
+  getHostClaudeCredentials as readHostClaudeCredentials,
+} from "./claude-host-credentials.js";
+export { getClaudeOAuthAccessToken } from "./claude-host-credentials.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import { constants as fsConstants, promises as fs } from "node:fs";
@@ -22,26 +26,29 @@ import {
 } from "./path-safety.js";
 import { randomUUID } from "node:crypto";
 import { INITIAL_PROMPT_STAGING_DIRECTORY } from "./prompt-attachments.js";
-import { WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS } from "./commands-runtime-state.js";
 import type { Environment, AppConfig } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
+  AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV,
   CONTAINER_GITHUB_CREDENTIAL_FILE,
   CONTAINER_CLAUDE_CREDENTIAL_FILE,
   CONTAINER_CURSOR_API_KEY_FILE,
   CONTAINER_CURSOR_CREDENTIAL_DIR,
-  HOST_CLAUDE_KEYCHAIN_SERVICE,
-  CONTAINER_UNTRACKED_STATS_SCANNER,
-} from "./commands-runtime-state.js";
+} from "./agent-credential-files.js";
+import { CONTAINER_UNTRACKED_STATS_SCANNER } from "./container-scripts.js";
 import type { GitFetchScheduler } from "./git-fetch-scheduler.js";
 import {
   CONTAINER_FETCH_STDERR_BYTES,
   CONTAINER_REPO_IDENTITY_SNIPPET,
   CONTAINER_REPO_MARKER,
+  CONTAINER_REPO_PROBE_SCRIPT,
   containerRepoId,
+  parseContainerRepoProbe,
   type ContainerGitFetchPolicy,
 } from "./container-git-fetch.js";
+import type { WorkAdmissionPool } from "./work-admission.js";
+import { worktreeTargetKey } from "./worktree-adhoc-reads.js";
 import type { WorktreeRemoteFreshness } from "@orkestrator/protocol/worktree-snapshots";
 import {
   UNTRACKED_SCAN_CONCURRENCY,
@@ -51,6 +58,11 @@ import {
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+
+export const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [
+  ".orkestrator",
+  ".claude/settings.local.json",
+] as const;
 
 export const MAX_FILE_TREE_NODES = 5_000;
 
@@ -316,6 +328,10 @@ export type GitFileChange = {
   additions: number;
   deletions: number;
   status: string;
+  /** Git reported no line counts; `additions`/`deletions` are 0 for old readers. */
+  binary?: true;
+  /** Listed but not counted (scan cap, unreadable, too large); counts are 0 for old readers. */
+  countOmitted?: true;
 };
 
 export function splitNulTerminatedGitFields(output: string, label: string): string[] {
@@ -328,8 +344,8 @@ export function splitNulTerminatedGitFields(output: string, label: string): stri
 
 export function parseGitNumstat(
   numstatOutput: string,
-): Map<string, { additions: number; deletions: number }> {
-  const stats = new Map<string, { additions: number; deletions: number }>();
+): Map<string, { additions: number; deletions: number; binary?: true }> {
+  const stats = new Map<string, { additions: number; deletions: number; binary?: true }>();
   const fields = splitNulTerminatedGitFields(numstatOutput, "git numstat output");
   for (let index = 0; index < fields.length;) {
     const header = fields[index++] ?? "";
@@ -361,6 +377,7 @@ export function parseGitNumstat(
     stats.set(filePath, {
       additions: additions === "-" ? 0 : Number.parseInt(additions, 10) || 0,
       deletions: deletions === "-" ? 0 : Number.parseInt(deletions, 10) || 0,
+      ...(additions === "-" || deletions === "-" ? { binary: true as const } : {}),
     });
   }
   return stats;
@@ -387,7 +404,12 @@ export function parseGitFileChanges(
     if (!filePath || (isRenameOrCopy && !originalPath)) {
       throw new Error("Malformed git name-status output: empty path");
     }
-    const fileStats = stats.get(filePath) ?? { additions: 0, deletions: 0 };
+    const fileStats: { additions: number; deletions: number; binary?: true } = stats.get(
+      filePath,
+    ) ?? {
+      additions: 0,
+      deletions: 0,
+    };
     changes.push({
       path: filePath,
       originalPath,
@@ -396,6 +418,7 @@ export function parseGitFileChanges(
       additions: fileStats.additions,
       deletions: fileStats.deletions,
       status,
+      ...(fileStats.binary ? { binary: true as const } : {}),
     });
   }
   return changes;
@@ -427,7 +450,8 @@ export function parseContainerUntrackedStats(output: string): GitFileChange[] {
     }
     const additionsText = field.slice(0, separator);
     const filePath = field.slice(separator + 1);
-    if (!/^\d+$/.test(additionsText) || !filePath) {
+    // "-" marks a binary file and "?" one the scanner did not count.
+    if (!/^(\d+|-|\?)$/.test(additionsText) || !filePath) {
       throw new Error("Malformed container untracked stats record");
     }
     return {
@@ -435,9 +459,11 @@ export function parseContainerUntrackedStats(output: string): GitFileChange[] {
       originalPath: undefined,
       filename: path.basename(filePath),
       directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
-      additions: Number.parseInt(additionsText, 10),
+      additions: /^\d+$/.test(additionsText) ? Number.parseInt(additionsText, 10) : 0,
       deletions: 0,
       status: "?",
+      ...(additionsText === "-" ? { binary: true as const } : {}),
+      ...(additionsText === "?" ? { countOmitted: true as const } : {}),
     };
   });
 }
@@ -458,6 +484,7 @@ export const GIT_STATUS_UNTRACKED_MARKER = gitStatusMarker("ORKESTRATOR_UNTRACKE
 export const GIT_STATUS_END_MARKER = gitStatusMarker("ORKESTRATOR_END");
 export const GIT_STATUS_MISSING_REF_MARKER = gitStatusMarker("ORKESTRATOR_TARGET_REF_NOT_FOUND");
 export const GIT_STATUS_BASELINE_MARKER = gitStatusMarker("ORKESTRATOR_BASELINE");
+export const GIT_STATUS_BASE_OID_MARKER = gitStatusMarker("ORKESTRATOR_BASE_OID");
 
 /**
  * Builds the single shell program that collects a container's git status.
@@ -479,6 +506,10 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
   const untrackedScanner = `node -e ${quoteShell(CONTAINER_UNTRACKED_STATS_SCANNER)} -- ${MAX_BINARY_FILE_BYTES} ${UNTRACKED_SCAN_MAX_FILES}`;
   return `
       set -e -o pipefail
+      # Read-only, like the local scan: an opportunistic index refresh is a
+      # write the container's worktree watcher would ring for, so every scan
+      # would schedule its own rescan.
+      export GIT_OPTIONAL_LOCKS=0
       # A bare 'exit 0' here would come back as exit 1: this runs under 'bash -l',
       # whose ~/.bash_logout calls 'clear_console -q', and that fails with no
       # console attached. Under 'set -e' the failing logout hook replaces the
@@ -526,11 +557,12 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
         exit 0
       fi
       printf '\\036ORKESTRATOR_BASELINE\\037%s' "$baseline"
+      printf '\\036ORKESTRATOR_BASE_OID\\037%s' "$(git rev-parse --verify --quiet "$base^{commit}")"
       end_ref=${includeWorkingTree ? "" : "HEAD"}
       printf '\\036ORKESTRATOR_NAME_STATUS\\037'
-      git diff --name-status -z -M "$base" $end_ref | base64 -w0
+      git -c diff.autoRefreshIndex=false diff --name-status -z -M "$base" $end_ref | base64 -w0
       printf '\\036ORKESTRATOR_NUMSTAT\\037'
-      git diff --numstat -z -M "$base" $end_ref | base64 -w0
+      git -c diff.autoRefreshIndex=false diff --numstat -z -M "$base" $end_ref | base64 -w0
       printf '\\036ORKESTRATOR_UNTRACKED\\037'
       ${includeWorkingTree ? `git status --porcelain=v1 -z --untracked-files=all | ${untrackedScanner} | base64 -w0` : ""}
       printf '\\036ORKESTRATOR_END\\037'
@@ -599,8 +631,11 @@ export type ContainerGitStatusEnvelope =
       repoId: string;
       /** How the base resolved; absent from responses without the section. */
       baseline?: "tracking" | "local";
+      /** Resolved comparison commit; absent from responses without the section. */
+      baseOid?: string;
       changes: GitFileChange[];
       truncated: boolean;
+      ambiguousPaths?: string[];
     };
 
 /**
@@ -637,9 +672,24 @@ export function parseContainerGitStatusEnvelope(
     baseline = value;
     rest = rest.slice(next);
   }
+  let baseOid: string | undefined;
+  if (rest.startsWith(GIT_STATUS_BASE_OID_MARKER)) {
+    const next = rest.indexOf(GIT_STATUS_FRAME_START, GIT_STATUS_BASE_OID_MARKER.length);
+    const value = next === -1 ? "" : rest.slice(GIT_STATUS_BASE_OID_MARKER.length, next);
+    if (!/^[0-9a-f]{40,64}$/.test(value))
+      throw new Error("Malformed container git status response");
+    baseOid = value;
+    rest = rest.slice(next);
+  }
   if (rest.length === 0) throw new Error("Malformed container git status response");
   const detailed = parseContainerGitStatusSections(rest, includeWorkingTree);
-  return { kind: "ok", repoId, ...(baseline ? { baseline } : {}), ...detailed };
+  return {
+    kind: "ok",
+    repoId,
+    ...(baseline ? { baseline } : {}),
+    ...(baseOid ? { baseOid } : {}),
+    ...detailed,
+  };
 }
 
 export function parseContainerGitStatusResponse(
@@ -664,7 +714,7 @@ export function parseContainerGitStatusResponseDetailed(
 function parseContainerGitStatusSections(
   output: string,
   includeWorkingTree: boolean,
-): { changes: GitFileChange[]; truncated: boolean } {
+): { changes: GitFileChange[]; truncated: boolean; ambiguousPaths?: string[] } {
   // A workspace that is not a git repository exits before emitting any frame.
   if (output.length === 0) return { changes: [], truncated: false };
   const nameStatusStart = output.indexOf(GIT_STATUS_NAME_STATUS_MARKER);
@@ -689,10 +739,17 @@ function parseContainerGitStatusSections(
     output.slice(numstatStart + GIT_STATUS_NUMSTAT_MARKER.length, untrackedStart),
     "container git numstat section",
   );
-  const changes = parseGitFileChanges(nameStatusOutput, numstatOutput);
+  // The script diffs without refreshing the index (it must not write), so
+  // name-status may report stat-only modifications. Numstat checks contents
+  // and omits them, as in the local scan.
+  const changedPaths = parseGitNumstat(numstatOutput);
+  const changes = parseGitFileChanges(nameStatusOutput, numstatOutput).filter(
+    (change) => change.status !== "M" || changedPaths.has(change.path),
+  );
   if (!includeWorkingTree) return { changes, truncated: false };
 
   const existingPaths = new Set(changes.map((change) => change.path));
+  const ambiguousPaths: string[] = [];
   const untrackedOutput = decodeGitStatusSection(
     output.slice(untrackedStart + GIT_STATUS_UNTRACKED_MARKER.length, endStart),
     "container untracked section",
@@ -700,10 +757,15 @@ function parseContainerGitStatusSections(
   const untracked = parseContainerUntrackedStats(untrackedOutput);
   for (const change of untracked) {
     if (!existingPaths.has(change.path)) changes.push(change);
+    else ambiguousPaths.push(change.path);
   }
   // The scanner stops opening files past the same cap the host applies locally,
   // so the record count is what says whether any went uncounted.
-  return { changes, truncated: untracked.length > UNTRACKED_SCAN_MAX_FILES };
+  return {
+    changes,
+    truncated: untracked.length > UNTRACKED_SCAN_MAX_FILES,
+    ...(ambiguousPaths.length > 0 ? { ambiguousPaths } : {}),
+  };
 }
 
 /** Rate-limits the `git fetch` a local read makes before resolving its baseline. */
@@ -741,7 +803,13 @@ export async function getContainerGitStatusDetailed(
   targetBranch: string,
   includeWorkingTree: boolean,
   deps: ContainerGitStatusDeps,
-): Promise<{ changes: GitFileChange[]; truncated: boolean; remote?: WorktreeRemoteFreshness }> {
+): Promise<{
+  changes: GitFileChange[];
+  truncated: boolean;
+  remote?: WorktreeRemoteFreshness;
+  baseOid?: string;
+  ambiguousPaths?: string[];
+}> {
   const ref = validateGitRefName(targetBranch, "target branch");
   const script = buildContainerGitStatusScript(ref, includeWorkingTree);
   let envelope = parseContainerGitStatusEnvelope(
@@ -775,7 +843,13 @@ export async function getContainerGitStatusDetailed(
         ? "local-ref"
         : "tracking-ref";
   const remote = deps.fetches.observe({ containerId, repoId: envelope.repoId, ref }, baseline);
-  return { changes: envelope.changes, truncated: envelope.truncated, remote };
+  return {
+    changes: envelope.changes,
+    truncated: envelope.truncated,
+    remote,
+    ...(envelope.baseOid ? { baseOid: envelope.baseOid } : {}),
+    ...(envelope.ambiguousPaths ? { ambiguousPaths: envelope.ambiguousPaths } : {}),
+  };
 }
 
 /**
@@ -784,43 +858,76 @@ export async function getContainerGitStatusDetailed(
  * The three git reads are independent of each other, so they run together: the
  * status read used to wait for both diffs to finish before starting, which cost
  * a whole round of process spawn and git startup for nothing.
+ *
+ * The reads are read-only: `--no-optional-locks` stops `git status` from
+ * opportunistically refreshing and rewriting the index; `diff.autoRefreshIndex`
+ * must also be disabled because `git diff` can refresh stat-only changes even
+ * with optional locks disabled. That rewrite is an
+ * index change the worktree watcher must treat as a hint, so without the flag
+ * every watcher-driven scan scheduled its own redundant rescan (and took
+ * `index.lock`, which can collide with the user's own Git commands).
  */
 export async function getLocalGitStatusDetailed(
   worktreePath: string,
   targetBranch: string,
   includeUncommitted: boolean,
   fetches: LocalGitFetches,
-): Promise<{ changes: GitFileChange[]; truncated: boolean }> {
+): Promise<{
+  changes: GitFileChange[];
+  truncated: boolean;
+  /** The immutable commit the comparison resolved to, when it resolved. */
+  baseOid?: string;
+  /** Untracked paths also present in the tracked diff (index-membership overlap). */
+  ambiguousPaths?: string[];
+}> {
   validateGitRefName(targetBranch, "target branch");
   await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
 
   const base = await resolveLocalGitBase(worktreePath, targetBranch, fetches);
   const endRef = includeUncommitted ? [] : ["HEAD"];
-  const [nameStatus, numstat, porcelain] = await Promise.all([
-    runCommand("git", ["-C", worktreePath, "diff", "--name-status", "-z", "-M", base, ...endRef], {
+  const git = ["--no-optional-locks", "-c", "diff.autoRefreshIndex=false", "-C", worktreePath];
+  const [nameStatus, numstat, porcelain, baseOid] = await Promise.all([
+    runCommand("git", [...git, "diff", "--name-status", "-z", "-M", base, ...endRef], {
       timeoutMs: 60_000,
     }),
-    runCommand("git", ["-C", worktreePath, "diff", "--numstat", "-z", "-M", base, ...endRef], {
+    runCommand("git", [...git, "diff", "--numstat", "-z", "-M", base, ...endRef], {
       timeoutMs: 60_000,
     }),
     includeUncommitted
-      ? runCommand(
-          "git",
-          ["-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-          { timeoutMs: 60_000 },
-        )
+      ? runCommand("git", [...git, "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+          timeoutMs: 60_000,
+        })
       : Promise.resolve({ stdout: "" }),
+    runCommand("git", ["-C", worktreePath, "rev-parse", "--verify", "-q", `${base}^{commit}`], {
+      timeoutMs: 10_000,
+    }).then(
+      (result) => result.stdout.trim() || undefined,
+      () => undefined,
+    ),
   ]);
 
-  const changes = parseGitFileChanges(nameStatus.stdout, numstat.stdout);
-  if (!includeUncommitted) return { changes, truncated: false };
+  // Without autoRefreshIndex, name-status may report stat-only modifications.
+  // Numstat checks contents and omits them, while retaining real zero-line
+  // changes (empty files, mode changes and binary files) as explicit records.
+  const changedPaths = parseGitNumstat(numstat.stdout);
+  const changes = parseGitFileChanges(nameStatus.stdout, numstat.stdout).filter(
+    (change) => change.status !== "M" || changedPaths.has(change.path),
+  );
+  const resolved = baseOid && /^[0-9a-f]{40,64}$/.test(baseOid) ? { baseOid } : {};
+  if (!includeUncommitted) return { changes, truncated: false, ...resolved };
 
   const existingPaths = new Set(changes.map((change) => change.path));
   const untrackedPaths: string[] = [];
+  const ambiguousPaths: string[] = [];
   for (const line of porcelain.stdout.split("\0").filter(Boolean)) {
     if (!line.startsWith("?? ")) continue;
     const filePath = line.slice(3);
-    if (existingPaths.has(filePath)) continue;
+    if (existingPaths.has(filePath)) {
+      // Removed from the index but still on disk: the tracked diff already
+      // lists it, so it is not double counted — but the result is ambiguous.
+      ambiguousPaths.push(filePath);
+      continue;
+    }
     untrackedPaths.push(filePath);
   }
 
@@ -837,10 +944,11 @@ export async function getLocalGitStatusDetailed(
   const additionsPerPath = await mapWithConcurrency(
     scanned,
     UNTRACKED_SCAN_CONCURRENCY,
-    (filePath) => countLocalFileLines(worktreePath, filePath).catch(() => 0),
+    (filePath) => countLocalFileLinesDetailed(worktreePath, filePath).catch(() => null),
   );
 
   untrackedPaths.forEach((filePath, index) => {
+    const counted = additionsPerPath[index];
     changes.push({
       path: filePath,
       originalPath: undefined,
@@ -848,13 +956,22 @@ export async function getLocalGitStatusDetailed(
       directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
       // Files past the cap are still listed - the user must be able to see them
       // in the Files panel - they just carry no line count.
-      additions: additionsPerPath[index] ?? 0,
+      additions: counted?.kind === "text" ? counted.lines : 0,
       deletions: 0,
       status: "?",
+      ...(counted?.kind === "binary" ? { binary: true as const } : {}),
+      ...(!counted || counted.kind === "too-large" || counted.kind === "other"
+        ? { countOmitted: true as const }
+        : {}),
     });
   });
 
-  return { changes, truncated };
+  return {
+    changes,
+    truncated,
+    ...resolved,
+    ...(ambiguousPaths.length > 0 ? { ambiguousPaths } : {}),
+  };
 }
 
 /**
@@ -895,6 +1012,21 @@ export async function mapWithConcurrency<T, R>(
  * identical counts for identical content.
  */
 export async function countLocalFileLines(rootPath: string, relativePath: string): Promise<number> {
+  const counted = await countLocalFileLinesDetailed(rootPath, relativePath);
+  return counted.kind === "text" ? counted.lines : 0;
+}
+
+/**
+ * {@link countLocalFileLines}, keeping why a file has no count: binary (a NUL
+ * byte) and oversized files are not "zero lines", and the environment
+ * projection must not present them as such.
+ */
+export async function countLocalFileLinesDetailed(
+  rootPath: string,
+  relativePath: string,
+): Promise<
+  { kind: "text"; lines: number } | { kind: "binary" } | { kind: "too-large" } | { kind: "other" }
+> {
   const target = validateRelativeFilePath(relativePath, "git status path");
   const fullPath = path.join(rootPath, target);
   recurringWorkMetrics.work("file-read");
@@ -908,7 +1040,9 @@ export async function countLocalFileLines(rootPath: string, relativePath: string
   );
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size === 0 || stat.size > MAX_BINARY_FILE_BYTES) return 0;
+    if (!stat.isFile()) return { kind: "other" };
+    if (stat.size === 0) return { kind: "text", lines: 0 };
+    if (stat.size > MAX_BINARY_FILE_BYTES) return { kind: "too-large" };
 
     const buffer = Buffer.allocUnsafe(FILE_LINE_COUNT_CHUNK_BYTES);
     let total = 0;
@@ -922,10 +1056,10 @@ export async function countLocalFileLines(rootPath: string, relativePath: string
       total += bytesRead;
       // The file can grow between the stat and the read; stop rather than let an
       // actively-written log turn one poll into an unbounded scan.
-      if (total > MAX_BINARY_FILE_BYTES) return 0;
+      if (total > MAX_BINARY_FILE_BYTES) return { kind: "too-large" };
       for (let index = 0; index < bytesRead; index += 1) {
         const byte = buffer[index]!;
-        if (byte === 0) return 0;
+        if (byte === 0) return { kind: "binary" };
         if (byte === 0x0d) {
           separators += 1;
           previousWasCarriageReturn = true;
@@ -939,7 +1073,7 @@ export async function countLocalFileLines(rootPath: string, relativePath: string
       }
     }
 
-    return separators + (lastByte !== 0x0d && lastByte !== 0x0a ? 1 : 0);
+    return { kind: "text", lines: separators + (lastByte !== 0x0d && lastByte !== 0x0a ? 1 : 0) };
   } finally {
     await handle.close().catch(() => undefined);
   }
@@ -956,11 +1090,31 @@ export async function gitRefExists(worktreePath: string, refName: string): Promi
   );
 }
 
+async function hasOriginRemote(projectPath: string): Promise<boolean> {
+  return runCommand("git", ["-C", projectPath, "remote", "get-url", "origin"], {
+    timeoutMs: 10_000,
+  }).then(
+    () => true,
+    () => false,
+  );
+}
+
 export async function resolveRemoteWorktreeStartPoint(
   projectPath: string,
   baseBranch: string,
+  options: { localOnly?: boolean } = {},
 ): Promise<string> {
   const branch = validateGitRefName(baseBranch, "base branch");
+  // A local-only project (`project init`) has no remote at all: its own branch
+  // is the base. Any other checkout without an origin is misconfigured and
+  // still fails below rather than silently starting from local state.
+  if (options.localOnly && !(await hasOriginRemote(projectPath))) {
+    const localRef = `refs/heads/${branch}`;
+    if (!(await gitRefExists(projectPath, localRef))) {
+      throw new Error(`Base branch not found: ${branch}`);
+    }
+    return localRef;
+  }
   try {
     await runRemoteGit("fetch", ["origin", branch], { cwd: projectPath, timeoutMs: 120_000 });
   } catch (error) {
@@ -1792,7 +1946,62 @@ export const CONTAINER_SAFE_MUTATION_FUNCTIONS = [
   "}",
 ].join("\n");
 
-/** Container-owned Git/SSH configuration; excluded from the host runRemoteGit boundary. */
+export interface ContainerRevertDeps {
+  /** Runs a script in the container (`dockerExec`). */
+  exec: (containerId: string, script: string) => Promise<string>;
+  fetches: Pick<ContainerGitFetchPolicy, "knownRepoId" | "refreshForAction">;
+  /** The shared `git-docker-scan` pool, so the fetch never overlaps a scan of the container. */
+  admission?: Pick<WorkAdmissionPool, "run"> | null;
+}
+
+/**
+ * `revert_container_file`: refresh the comparison base through the container
+ * fetch policy, then revert. The policy's fetch replaces the script's old
+ * inline `git fetch ... || true` and keeps its contract: the revert waits for
+ * one bounded fetch, and nothing about that fetch (refused admission, a
+ * failing remote, a failed identity probe) stops the revert, which then
+ * resolves the base from local refs exactly as the old script did after a
+ * failed fetch.
+ */
+export async function revertContainerFile(
+  containerId: string,
+  target: string,
+  branch: string,
+  deps: ContainerRevertDeps,
+): Promise<void> {
+  const refresh = async () => {
+    const repoId =
+      deps.fetches.knownRepoId(containerId) ??
+      parseContainerRepoProbe(await deps.exec(containerId, CONTAINER_REPO_PROBE_SCRIPT));
+    await deps.fetches.refreshForAction({ containerId, repoId, ref: branch });
+  };
+  try {
+    if (deps.admission) {
+      await deps.admission.run(
+        {
+          kind: "git-fetch-container",
+          priority: "interactive",
+          target: worktreeTargetKey({ containerId }),
+        },
+        refresh,
+      );
+    } else {
+      await refresh();
+    }
+  } catch {
+    // As before: a fetch that could not run leaves the local refs to decide.
+  }
+  await deps.exec(containerId, containerRevertFileCommand(target, branch));
+}
+
+/**
+ * Reverts one path to the comparison base, resolved exactly as before:
+ * `origin/<branch>`, then the local `<branch>`. The fetch that used to run
+ * inline here (`git fetch origin "$branch" || true`) is now the caller's, through
+ * `ContainerGitFetchPolicy.refreshForAction` (see `revertContainerFile`), so
+ * the script itself never touches the network. Container-owned Git/SSH
+ * configuration; excluded from the host runRemoteGit boundary.
+ */
 export function containerRevertFileCommand(target: string, branch: string): string {
   return `
     set -euo pipefail
@@ -1800,7 +2009,6 @@ export function containerRevertFileCommand(target: string, branch: string): stri
     branch=${quoteShell(branch)}
     target=${quoteShell(target)}
     ${CONTAINER_SAFE_MUTATION_FUNCTIONS}
-    git fetch origin "$branch" >/dev/null 2>&1 || true
     if git rev-parse --verify --quiet "origin/$branch^{commit}" >/dev/null; then
       base="origin/$branch"
     elif git rev-parse --verify --quiet "$branch^{commit}" >/dev/null; then
@@ -2055,45 +2263,6 @@ export function buildSyncContainerGitHubCredentialCommand(
 
 export const SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND = buildSyncContainerGitHubCredentialCommand();
 
-export async function getHostGitHubToken(): Promise<string | undefined> {
-  try {
-    const { stdout } = await runCommand(
-      gitHubCli(),
-      ["auth", "token", "--hostname", "github.com"],
-      {
-        timeoutMs: 10_000,
-      },
-    );
-    return stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export async function resolveContainerGitHubToken(
-  globalConfig: AppConfig["global"],
-): Promise<string | undefined> {
-  if (globalConfig.useHostGitHubCredentials !== false) {
-    return getHostGitHubToken();
-  }
-  return globalConfig.githubToken?.trim() || undefined;
-}
-
-export async function getContainerGitHubCredentialStatus(
-  globalConfig: AppConfig["global"],
-): Promise<{ source: "host-cli" | "pat"; available: boolean }> {
-  if (globalConfig.useHostGitHubCredentials !== false) {
-    return {
-      source: "host-cli",
-      available: Boolean(await getHostGitHubToken()),
-    };
-  }
-  return {
-    source: "pat",
-    available: Boolean(globalConfig.githubToken?.trim()),
-  };
-}
-
 export async function syncContainerGitHubCredential(
   containerId: string,
   token: string | undefined,
@@ -2110,7 +2279,8 @@ export async function syncContainerGitHubCredential(
 }
 
 /**
- * Materializes the host's Claude Code OAuth credential inside a container.
+ * Materializes the host's Claude Code OAuth credential inside a container,
+ * access-only (`restrictClaudeCredentialsSnapshot`; callers restrict it).
  *
  * Unlike Codex, whose token lives in `~/.codex/auth.json` and therefore rides
  * the read-only `/codex-home` mount straight into the container, Claude Code on
@@ -2121,7 +2291,8 @@ export async function syncContainerGitHubCredential(
  * The payload is piped over stdin rather than passed as a `docker create` env
  * var: an env var is readable from `docker inspect` and `/proc/1/environ` for
  * the life of the container, and would go stale the first time the OAuth token
- * refreshed. Syncing on every start also re-arms a refreshed token.
+ * refreshed. The backend re-syncs on every start, every bridge start and every
+ * host renewal (`container-claude-login-keeper.ts`).
  */
 export function buildSyncContainerClaudeCredentialCommand(
   credentialFile = CONTAINER_CLAUDE_CREDENTIAL_FILE,
@@ -2153,172 +2324,18 @@ export function buildSyncContainerClaudeCredentialCommand(
 
 export const SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND = buildSyncContainerClaudeCredentialCommand();
 
-const MAX_HOST_AGENT_CREDENTIAL_BYTES = 1024 * 1024;
-
-/**
- * Reads one named Keychain record, preferring an explicit login-Keychain path.
- *
- * The explicit path is what makes an isolated agent-test profile deterministic:
- * its HOME holds no Keychain preferences, so an unqualified lookup would resolve
- * against whatever the launching session happens to default to. A host that is
- * not isolated has no such requirement and may legitimately keep the record in a
- * keychain other than `login.keychain-db`, so it retries the default search list
- * — which is what an unqualified lookup did before the path was pinned — rather
- * than reporting a logged-in user as signed out.
- */
-async function readMacKeychainPassword(
-  service: string,
-  homeDir: string,
-  account?: string,
-  allowDefaultSearchList = false,
-): Promise<string | undefined> {
-  const args = ["find-generic-password"];
-  if (account) args.push("-a", account);
-  args.push("-s", service, "-w");
-  const attempts = [[...args, path.join(homeDir, "Library", "Keychains", "login.keychain-db")]];
-  if (allowDefaultSearchList) attempts.push(args);
-  for (const attempt of attempts) {
-    try {
-      const { stdout } = await runCommand("security", attempt, { timeoutMs: 10_000 });
-      const value = stdout.trim();
-      // An empty or oversized payload is not a reason to stop looking; a second
-      // keychain may still hold the real record.
-      if (!value || Buffer.byteLength(value) > MAX_HOST_AGENT_CREDENTIAL_BYTES) continue;
-      return value;
-    } catch {
-      // A missing item and a declined access prompt look identical from here.
-    }
-  }
-  return undefined;
-}
-
-/**
- * Reads the host's Claude Code credential, preferring the macOS Keychain.
- *
- * Returns the raw credential JSON, or undefined when the host has no usable
- * credential. A non-JSON or empty Keychain payload is discarded rather than
- * forwarded, so a corrupt entry cannot overwrite a working in-container login.
- *
- * `keychainService` and `configDirOnly` read one added account's login: its
- * Keychain entry is named after its directory, and falling back to
- * `~/.claude` would report the host login as that account's.
- */
+// Keep the backend's command runner for its cancellation and test seams; the
+// read-only lookup is also used by the CLI harness before replacing homes.
 export async function getHostClaudeCredentials(
   platform: NodeJS.Platform = process.platform,
   homeDir: string = os.homedir(),
   configDir?: string,
-  options: {
-    allowDefaultKeychainSearchList?: boolean;
-    keychainService?: string;
-    configDirOnly?: boolean;
-  } = {},
+  options: Parameters<typeof readHostClaudeCredentials>[3] = {},
 ): Promise<string | undefined> {
-  const isUsable = (value: string | undefined): string | undefined => {
-    const trimmed = value?.trim();
-    if (!trimmed || trimmed === "{}") return undefined;
-    try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return undefined;
-      }
-      return Object.keys(parsed as Record<string, unknown>).length > 0 ? trimmed : undefined;
-    } catch {
-      return undefined;
-    }
-  };
-
-  if (platform === "darwin") {
-    const fromKeychain = isUsable(
-      await readMacKeychainPassword(
-        options.keychainService ?? HOST_CLAUDE_KEYCHAIN_SERVICE,
-        homeDir,
-        undefined,
-        options.allowDefaultKeychainSearchList === true,
-      ),
-    );
-    if (fromKeychain) return fromKeychain;
-  }
-
-  // `CLAUDE_CONFIG_DIR` first, because that is where Claude Code itself keeps
-  // the on-disk credential when it is set. An agent-test profile runs with an
-  // isolated HOME but is pointed at the host configuration, so reading only
-  // `homeDir` would look inside the empty isolated home and report no login.
-  const directories = options.configDirOnly
-    ? [configDir]
-    : [configDir, path.join(homeDir, ".claude")];
-  for (const directory of directories) {
-    if (!directory) continue;
-    try {
-      const found = isUsable(await fs.readFile(path.join(directory, ".credentials.json"), "utf-8"));
-      if (found) return found;
-    } catch {
-      // Try the next location; a missing file is not an error here.
-    }
-  }
-  return undefined;
-}
-
-/**
- * Grace period applied to a recorded OAuth expiry.
- *
- * The token is read once, at bridge start, and never refreshed. One that lapses
- * during startup would be indistinguishable from a broken login, so treat the
- * final moments of its life as already expired.
- */
-const CLAUDE_OAUTH_EXPIRY_SKEW_MS = 30_000;
-
-/**
- * Extracts the single OAuth access token that may be handed to one bridge.
- *
- * An expired token is treated as no token at all. It is a non-empty bearer
- * credential that the CLI prefers over every other source, so forwarding a
- * lapsed one turns a stale host login into opaque authentication failures
- * instead of the signed-out state the agent reports clearly. A credential that
- * records no expiry is not evidence of expiry, so only a real timestamp that has
- * already passed rejects.
- */
-export function getClaudeOAuthAccessToken(
-  credentials: string | undefined,
-  now: number = Date.now(),
-): string | undefined {
-  if (!credentials) return undefined;
-  try {
-    const parsed = JSON.parse(credentials) as {
-      claudeAiOauth?: { accessToken?: unknown; expiresAt?: unknown };
-    };
-    const accessToken = parsed.claudeAiOauth?.accessToken;
-    if (typeof accessToken !== "string") return undefined;
-    const expiresAt = parsed.claudeAiOauth?.expiresAt;
-    if (
-      typeof expiresAt === "number" &&
-      Number.isFinite(expiresAt) &&
-      expiresAt <= now + CLAUDE_OAUTH_EXPIRY_SKEW_MS
-    ) {
-      return undefined;
-    }
-    const trimmed = accessToken.trim();
-    return trimmed && Buffer.byteLength(trimmed) <= MAX_HOST_AGENT_CREDENTIAL_BYTES
-      ? trimmed
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export async function syncContainerClaudeCredential(
-  containerId: string,
-  credentials: string | undefined,
-): Promise<void> {
-  if (!credentials) return;
-  await runCommand(
-    "docker",
-    ["exec", "-i", containerId, "bash", "-lc", SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND],
-    {
-      stdin: credentials,
-      timeoutMs: 30_000,
-      redactValues: [credentials],
-    },
-  );
+  return readHostClaudeCredentials(platform, homeDir, configDir, options, async (args) => {
+    const { stdout } = await runCommand("security", args, { timeoutMs: 10_000 });
+    return stdout;
+  });
 }
 
 /**
@@ -2367,20 +2384,40 @@ export async function resolveContainerClaudeCredentials(
   return readRuntimeHostClaudeCredentials();
 }
 
+/**
+ * The configuration directory holding this runtime's host Claude login, and
+ * whether `CLAUDE_CONFIG_DIR` named it explicitly. An agent-test profile reads
+ * the directory the desktop recorded from the shell `dev:test` started in; any
+ * other runtime its own inherited `CLAUDE_CONFIG_DIR`, which its launches pass on.
+ */
+export function runtimeHostClaudeConfigDir(env: NodeJS.ProcessEnv = process.env): {
+  configDir: string | undefined;
+  explicit: boolean;
+} {
+  const agentTestDir = env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim();
+  if (agentTestDir) {
+    return {
+      configDir: agentTestDir,
+      explicit: env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV] === "1",
+    };
+  }
+  const configDir = env.CLAUDE_CONFIG_DIR?.trim() || undefined;
+  return { configDir, explicit: Boolean(configDir) };
+}
+
 /** The host login this runtime's Claude launches use, without the container opt-out. */
 export async function readRuntimeHostClaudeCredentials(): Promise<string | undefined> {
   const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
-  return getHostClaudeCredentials(
-    process.platform,
-    agentTestHostHome || os.homedir(),
-    process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim() ||
-      process.env.CLAUDE_CONFIG_DIR?.trim() ||
-      undefined,
+  const { configDir, explicit } = runtimeHostClaudeConfigDir();
+  return getHostClaudeCredentials(process.platform, agentTestHostHome || os.homedir(), configDir, {
     // Only an agent-test profile needs the lookup pinned to one keychain file.
     // An ordinary install runs as the logged-in user and may keep the record
     // outside `login.keychain-db`, so it keeps the default search list.
-    { allowDefaultKeychainSearchList: !agentTestHostHome },
-  );
+    allowDefaultKeychainSearchList: !agentTestHostHome,
+    // The entry Claude itself reads for that directory, so a profile started
+    // from an added account's shell spends that account, not the default one.
+    ...claudeLoginLookupOptions(configDir, explicit),
+  });
 }
 
 // `docker cp` behaves like `cp -a`: it preserves the staging tree's modes and

@@ -13,6 +13,14 @@
  * `../testing/fixtures/` and it is picked up here.
  */
 import { describe, expect, test } from "bun:test";
+import {
+  RECORDED_ARTIFACT_ERROR_CODE,
+  RECORDED_PUBLICATION_ID,
+  RECORDED_PUBLISH_ARTIFACT_ARGS,
+  SUCCESSFUL_PUBLISH_CONTRACT,
+  publishArtifactCallContract,
+  recordedArtifactCallToolResult,
+} from "@orkestrator/protocol/testing/artifact-tool-fixtures";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { NotificationRecorder } from "./notification-recorder.js";
@@ -325,5 +333,89 @@ describe("NotificationRecorder", () => {
     await recorder.flush();
     expect(writes).toHaveLength(0);
     expect(recorder.getStats().linesDropped).toBe(1);
+  });
+});
+
+describe("transcript artifact tool calls", () => {
+  /*
+   * The web client anchors a published artifact on the successful
+   * `publish_artifact` call naming it, by the call's name and arguments. The
+   * item shape mirrors a recorded `McpToolCall` (code-mode calls carry an
+   * `exec-` id and `readOnlyHint`).
+   */
+  const THREAD = "01960000-0000-7000-8000-0000000000a1";
+  const notify = (method: string, params: Record<string, unknown>) =>
+    JSON.stringify({ jsonrpc: "2.0", method, params });
+
+  function publishLines(isError: boolean): string[] {
+    const recorded = recordedArtifactCallToolResult(isError);
+    const item = {
+      id: "exec-0193-artifact-publish",
+      type: "mcpToolCall",
+      server: "orkestrator",
+      tool: "publish_artifact",
+      arguments: { ...RECORDED_PUBLISH_ARTIFACT_ARGS },
+      readOnlyHint: false,
+    };
+    return [
+      notify("thread/started", { thread: { id: THREAD, cwd: "/replay/workspace" } }),
+      notify("turn/started", { threadId: THREAD, turn: { id: "turn-artifact" } }),
+      notify("item/started", {
+        threadId: THREAD,
+        turnId: "turn-artifact",
+        item: { ...item, status: "inProgress" },
+      }),
+      notify("item/completed", {
+        threadId: THREAD,
+        turnId: "turn-artifact",
+        item: {
+          ...item,
+          // app-server reports an `isError` MCP result as a failed call that
+          // still carries the result content, with no separate error.
+          status: isError ? "failed" : "completed",
+          result: {
+            content: recorded.content,
+            structuredContent: recorded.structuredContent,
+            _meta: null,
+          },
+          error: null,
+          durationMs: 41,
+        },
+      }),
+      notify("turn/completed", {
+        threadId: THREAD,
+        turn: { id: "turn-artifact", status: "completed" },
+      }),
+    ];
+  }
+
+  async function publishPart(isError: boolean) {
+    const summary = await replayRecording(publishLines(isError));
+    expect(summary.unsupportedItemTypes).toEqual([]);
+    const part = summary.turns[0]?.parts.find(
+      (candidate) => candidate.toolUseId === "exec-0193-artifact-publish",
+    );
+    expect(part).toBeDefined();
+    return part!;
+  }
+
+  test("a successful publish renders a recognisable call with its arguments", async () => {
+    const part = await publishPart(false);
+
+    expect(publishArtifactCallContract(part)).toEqual({ ...SUCCESSFUL_PUBLISH_CONTRACT });
+    expect(part.toolName).toBe("publish_artifact");
+    expect(part.toolTitle).toBe("orkestrator:publish_artifact");
+    expect(part.toolOutput).toContain(RECORDED_PUBLICATION_ID);
+  });
+
+  test("a refused publish is not a success and keeps its error code", async () => {
+    const part = await publishPart(true);
+    const contract = publishArtifactCallContract(part);
+
+    expect(contract.tool).toBe("publish_artifact");
+    expect(contract.toolState).not.toBe("success");
+    expect(`${part.toolError ?? ""}\n${part.toolOutput ?? ""}`).toContain(
+      RECORDED_ARTIFACT_ERROR_CODE,
+    );
   });
 });

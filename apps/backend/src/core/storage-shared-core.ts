@@ -58,11 +58,13 @@ import {
   normalizeAgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
+import { DEFAULT_ALLOWED_DOMAINS } from "@orkestrator/protocol/network-allowlist";
 import {
   DEFAULT_DEBUG_LOG_RETENTION_DAYS,
   normalizeDebugLogRetentionDays,
 } from "@orkestrator/protocol/debug-logging";
 import { MAX_SSH_AGENT_SOCKET_PATH_CHARS } from "@orkestrator/protocol/ssh-agent-socket";
+import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
 import {
   DEFAULT_NOTIFICATION_SOUND_SETTINGS,
   normalizeNotificationSoundSettings,
@@ -166,7 +168,6 @@ export const MAX_FRONTEND_AGENT_ACTIVITY_OBSERVERS = 32;
 export const MAX_PANE_LAYOUT_ROOT_BYTES = 256 * 1024;
 export const MAX_PANE_LAYOUT_SELECTION_INTENT_BYTES = 64 * 1024;
 export const MAX_PANE_LAYOUT_SELECTION_ENTRIES = 1_024;
-export const PROMPT_QUEUE_CLAIM_LEASE_MS = 5 * 60 * 1000;
 export const MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES = 4 * 1024;
 export const MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES = 1024;
 
@@ -525,28 +526,6 @@ export const MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES = 32 * 1024 * 102
 export const MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES = 400 * 1024;
 export const MAX_SESSIONS_PER_ENVIRONMENT = 20;
 
-export const DEFAULT_ALLOWED_DOMAINS = [
-  "github.com",
-  "api.github.com",
-  "registry.npmjs.org",
-  "nodejs.org",
-  "bun.sh",
-  "mise.jdx.dev",
-  "mise-versions.jdx.dev",
-  "aube.jdx.dev",
-  "api.anthropic.com",
-  "sentry.io",
-  "statsig.anthropic.com",
-  "statsig.com",
-  "marketplace.visualstudio.com",
-  "vscode.blob.core.windows.net",
-  "update.code.visualstudio.com",
-  "mcp.context7.com",
-  // Playwright browser downloads. The image ships its own pinned Chromium, so
-  // this only matters when a project pins a different Playwright version.
-  "cdn.playwright.dev",
-];
-
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -827,6 +806,7 @@ export function isPersistedPromptQueue(
       (isRecord(value.inFlight) &&
         Object.hasOwn(value.inFlight, "message") &&
         isNonBlankString(value.inFlight.requestId) &&
+        (value.inFlight.steer === undefined || value.inFlight.steer === true) &&
         typeof value.inFlight.reservedAt === "string" &&
         Number.isFinite(Date.parse(value.inFlight.reservedAt)) &&
         (value.inFlight.submittingAt === undefined ||
@@ -1015,6 +995,11 @@ export function isPersistedNativeAgentSession(
         isNonBlankString(value.pendingSteer.expectedRunId) &&
         Buffer.byteLength(value.pendingSteer.expectedRunId, "utf8") <= 512 &&
         (value.pendingSteer.state === "prepared" || value.pendingSteer.state === "unknown") &&
+        (value.pendingSteer.sourceQueue === undefined || value.pendingSteer.sourceQueue === true) &&
+        (value.pendingSteer.queueSettlement === undefined ||
+          (value.pendingSteer.sourceQueue === true &&
+            typeof value.pendingSteer.queueSettlement === "string" &&
+            ["applied", "restore", "discard"].includes(value.pendingSteer.queueSettlement))) &&
         typeof value.pendingSteer.createdAt === "string" &&
         Number.isFinite(Date.parse(value.pendingSteer.createdAt)) &&
         (() => {
@@ -1677,6 +1662,13 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     path.isAbsolute(global.sshAgentSocketPath.trim())
       ? global.sshAgentSocketPath.trim()
       : undefined;
+  const defaultProjectsDirectory =
+    typeof global.defaultProjectsDirectory === "string" &&
+    global.defaultProjectsDirectory.trim().length <= MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS &&
+    !global.defaultProjectsDirectory.includes("\0") &&
+    path.isAbsolute(global.defaultProjectsDirectory.trim())
+      ? global.defaultProjectsDirectory.trim()
+      : undefined;
   const agentMessaging = normalizeAgentMessagingSettings(
     global.agentMessaging,
     config.schemaVersion === 2
@@ -1798,6 +1790,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global.terminalHistoryGlobalRetentionMb === terminalHistoryRetention.globalMb &&
     global.terminalHistoryRetentionDays === terminalHistoryRetention.days &&
     global.sshAgentSocketPath === sshAgentSocketPath &&
+    global.defaultProjectsDirectory === defaultProjectsDirectory &&
     global.useHostGitHubCredentials === useHostGitHubCredentials &&
     JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms) &&
     JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels) &&
@@ -1826,6 +1819,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       terminalHistoryGlobalRetentionMb: terminalHistoryRetention.globalMb,
       terminalHistoryRetentionDays: terminalHistoryRetention.days,
       sshAgentSocketPath,
+      defaultProjectsDirectory,
       useHostGitHubCredentials,
       enabledAgentPlatforms,
       favoriteModels,

@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import { GITHUB_CLONE_REPOSITORY_PAGE_SIZE } from "@orkestrator/protocol/github-clone";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
+import { setGitHubCliConfigSource } from "./github-credentials.js";
+import type { AppConfig } from "./models.js";
 import { CommandFailedError, type runCommand } from "./shell.js";
 
 type Run = typeof runCommand;
@@ -241,6 +243,49 @@ describe("GitHub listing edge cases", () => {
       else process.env.GH_HOST = previous;
     }
   });
+
+  test("runs GitHub lookups as the stored PAT when it is the selected credential", async () => {
+    const calls: Call[] = [];
+    setGitHubCliConfigSource(
+      async () =>
+        ({ useHostGitHubCredentials: false, githubToken: "stored_pat" }) as AppConfig["global"],
+    );
+    try {
+      const run = runner(
+        ({ args }) =>
+          args.includes("user") ? "octocat" : args.includes("graphql") ? pageJson([]) : "",
+        calls,
+      );
+      await listGitHubCloneAccounts(run);
+      await listGitHubCloneRepositories("octocat", run);
+      const apiCalls = calls.filter((call) => call.args[0] === "api");
+      expect(apiCalls).toHaveLength(3);
+      for (const call of apiCalls) expect(call.options?.env?.GH_TOKEN).toBe("stored_pat");
+    } finally {
+      setGitHubCliConfigSource(undefined);
+    }
+  });
+
+  test.each([undefined, "", "   "])(
+    "missing PAT %j refuses discovery before gh runs",
+    async (githubToken) => {
+      setGitHubCliConfigSource(
+        async () => ({ useHostGitHubCredentials: false, githubToken }) as AppConfig["global"],
+      );
+      const run = runner(() => "host-account");
+      try {
+        await expect(listGitHubCloneAccounts(run)).rejects.toThrow(
+          "personal access token is missing",
+        );
+        await expect(listGitHubCloneRepositories("acme", run)).rejects.toThrow(
+          "personal access token is missing",
+        );
+        expect(run).not.toHaveBeenCalled();
+      } finally {
+        setGitHubCliConfigSource(undefined);
+      }
+    },
+  );
 
   test("rejects malformed JSON and non-array repository output", async () => {
     for (const [output, message] of [

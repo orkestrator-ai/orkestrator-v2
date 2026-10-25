@@ -1,192 +1,25 @@
+import {
+  BUILD,
+  PLAN,
+  HOSTED_NETWORK_LOCKED,
+  harness,
+  thread,
+  settle,
+} from "./app-server-engine-test-harness.js";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { coordinatorCapabilityPolicy } from "@orkestrator/protocol/coordinator-web-research";
 import { afterEach, describe, test, expect, spyOn } from "bun:test";
-import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  AppServerEngine,
-  CODEX_SIGN_IN_EXPIRED_NOTICE,
-  ROOT_THREAD_SOURCE_KINDS,
-} from "./app-server-engine.js";
-import type { AppServerSupervisorOptions } from "../app-server/process-supervisor.js";
-import { FakeReadable, FakeWritable } from "../app-server/testing/fake-app-server.js";
-import type { EngineEvent, EngineTurnConfig } from "./types.js";
+import { CODEX_SIGN_IN_EXPIRED_NOTICE, ROOT_THREAD_SOURCE_KINDS } from "./app-server-engine.js";
+import type { EngineTurnConfig } from "./types.js";
 import {
   AUTH_SECRET_CANARIES,
   captureOutput,
   expectNothingSecretLogged,
 } from "../../../../tests/helpers/auth-secret-canaries.js";
-
-const BUILD: EngineTurnConfig = { mode: "build", model: "gpt-5.6-sol", cwd: "/tmp/workspace" };
-const PLAN: EngineTurnConfig = { mode: "plan", cwd: "/tmp/workspace" };
-
-/** What app-server's `config/read` reports once `-c web_search="disabled"` is applied. */
-const HOSTED_NETWORK_LOCKED = () => ({
-  config: { web_search: "disabled", features: { standalone_web_search: false } },
-  origins: {},
-  layers: null,
-});
-
-/**
- * A scripted app-server child. Handlers may be replaced per test, and
- * notifications can be injected to model the real interleaving of a response with
- * the events it triggers.
- */
-class ScriptedChild extends EventEmitter {
-  readonly stdin = new FakeWritable();
-  readonly stdout = new FakeReadable();
-  readonly stderr = { setEncoding() {}, on() {} };
-  exitCode: number | null = null;
-  signalCode: string | null = null;
-  readonly requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-
-  constructor(
-    readonly pid: number,
-    private readonly handlers: Record<string, (params: Record<string, unknown>) => unknown>,
-  ) {
-    super();
-    const write = this.stdin.write.bind(this.stdin);
-    this.stdin.write = (chunk: string, callback?: (error?: Error | null) => void) => {
-      const result = write(chunk, callback);
-      queueMicrotask(() => this.answer(chunk));
-      return result;
-    };
-  }
-
-  private answer(chunk: string): void {
-    let message: { id?: unknown; method?: unknown; params?: unknown };
-    try {
-      message = JSON.parse(chunk.trim());
-    } catch {
-      return;
-    }
-    const method = String(message.method ?? "");
-    if (!method) return;
-    this.requests.push({ method, params: (message.params ?? {}) as Record<string, unknown> });
-    if (message.id === undefined) return;
-
-    const handler = this.handlers[method];
-    if (!handler) {
-      this.stdout.pushMessage({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: { code: -32601, message: `unknown ${method}` },
-      });
-      return;
-    }
-    const respondWithError = (error: unknown) => {
-      this.stdout.pushMessage({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: {
-          code: (error as { rpcCode?: number }).rpcCode ?? -32603,
-          message: error instanceof Error ? error.message : String(error),
-        },
-      });
-    };
-    try {
-      const result = handler((message.params ?? {}) as Record<string, unknown>);
-      if (result instanceof Promise) {
-        void result.then(
-          (value) => this.stdout.pushMessage({ jsonrpc: "2.0", id: message.id, result: value }),
-          respondWithError,
-        );
-      } else {
-        this.stdout.pushMessage({ jsonrpc: "2.0", id: message.id, result });
-      }
-    } catch (error) {
-      respondWithError(error);
-    }
-  }
-
-  notify(method: string, params: unknown): void {
-    this.stdout.pushMessage({ jsonrpc: "2.0", method, params });
-  }
-
-  kill(signal: string): boolean {
-    this.exit(null, signal);
-    return true;
-  }
-
-  exit(code: number | null, signal: string | null = null): void {
-    if (this.exitCode !== null || this.signalCode !== null) return;
-    this.exitCode = code;
-    this.signalCode = signal;
-    this.stdout.end();
-    this.emit("exit", code, signal);
-  }
-}
-
-const INITIALIZE = () => ({
-  userAgent: "orkestrator/0.145.0 (test)",
-  codexHome: "/tmp/codex-home",
-  platformFamily: "unix",
-  platformOs: "macos",
-});
-
-function thread(id: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id,
-    sessionId: id,
-    cwd: "/tmp/workspace",
-    preview: "hello",
-    source: "appServer",
-    parentThreadId: null,
-    createdAt: 1_700_000_000,
-    updatedAt: 1_700_000_100,
-    name: null,
-    turns: [],
-    ...extra,
-  };
-}
-
-interface Harness {
-  engine: AppServerEngine;
-  children: ScriptedChild[];
-  events: EngineEvent[];
-  child: () => ScriptedChild;
-}
-
-function harness(
-  handlers: Record<string, (params: Record<string, unknown>) => unknown> = {},
-  engineOptions: Partial<ConstructorParameters<typeof AppServerEngine>[0]> = {},
-): Harness {
-  const children: ScriptedChild[] = [];
-  const merged = { initialize: INITIALIZE, ...handlers };
-  let index = 0;
-
-  const engine = new AppServerEngine({
-    codexPath: "/fake/codex",
-    cwd: "/tmp/workspace",
-    codexHome: "/tmp/codex-home",
-    clientInfo: { name: "orkestrator", title: "Orkestrator", version: "2.4.9" },
-    interruptTimeoutMs: 30,
-    // The engine always owns its own supervisor wiring; only the process spawn
-    // and timings are overridden here.
-    supervisorOverrides: {
-      pidFileEnabled: false,
-      shutdownGraceMs: 10,
-      backoffScheduleMs: [1],
-      refreshEnvironment: async () => undefined,
-      spawnProcess: (() => {
-        index += 1;
-        const child = new ScriptedChild(1000 + index, merged);
-        children.push(child);
-        return child;
-      }) as unknown as AppServerSupervisorOptions["spawnProcess"],
-    },
-    ...engineOptions,
-  });
-
-  const events: EngineEvent[] = [];
-  engine.subscribe((event) => events.push(event));
-
-  return { engine, children, events, child: () => children.at(-1)! };
-}
-
-const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe("device login", () => {
   const deviceLogin = {
@@ -285,6 +118,204 @@ describe("device login", () => {
   );
 });
 
+describe("login cancel", () => {
+  const browserLogin = {
+    type: "chatgpt",
+    loginId: AUTH_SECRET_CANARIES.oauthCode,
+    authUrl: "https://auth.example.test/authorize",
+  };
+
+  test("cancels the open browser login with its own id, once, and logs nothing", async () => {
+    const h = harness({
+      "account/login/start": () => browserLogin,
+      "account/login/cancel": () => ({ status: "canceled" }),
+      "account/read": () => ({ account: null }),
+    });
+    await h.engine.start();
+    try {
+      await h.engine.beginAccountLogin("browser");
+      // An account read with no device-code display must not forget the login.
+      await h.engine.readAccount();
+      const { result, output } = await captureOutput(() => h.engine.cancelAccountLogin());
+      expect(result).toBe("canceled");
+      expect(h.child().requests.filter((r) => r.method === "account/login/cancel")).toEqual([
+        { method: "account/login/cancel", params: { loginId: browserLogin.loginId } },
+      ]);
+      expectNothingSecretLogged(output, "Codex login cancel");
+      expect(await h.engine.cancelAccountLogin()).toBe("none");
+      expect(h.child().requests.filter((r) => r.method === "account/login/cancel")).toHaveLength(1);
+    } finally {
+      await h.engine.stop();
+    }
+  });
+
+  test("cancels a login whose start response arrives after cancellation", async () => {
+    let resolveStart!: (value: unknown) => void;
+    const response = new Promise((resolve) => {
+      resolveStart = resolve;
+    });
+    const h = harness({
+      "account/login/start": () => response,
+      "account/login/cancel": () => ({ status: "canceled" }),
+      "account/read": () => ({ account: null }),
+    });
+    await h.engine.start();
+    try {
+      const starting = h.engine.beginAccountLogin("device-code");
+      await settle();
+      const cancelling = h.engine.cancelAccountLogin();
+      resolveStart({
+        loginId: "late-login",
+        verificationUrl: "https://auth.example.test/device",
+        userCode: "TEST-CODE",
+      });
+      await starting;
+      expect(await cancelling).toBe("canceled");
+      expect(h.child().requests.filter((r) => r.method === "account/login/cancel")).toEqual([
+        { method: "account/login/cancel", params: { loginId: "late-login" } },
+      ]);
+      expect(await h.engine.readAccount()).not.toHaveProperty("pendingSignIn");
+      expect(await h.engine.cancelAccountLogin()).toBe("none");
+    } finally {
+      await h.engine.stop();
+    }
+  });
+
+  test("retains the login and expiry after a rejected cancel so retry uses the same ID", async () => {
+    let attempts = 0;
+    const h = harness({
+      "account/login/start": () => ({
+        loginId: "retry-login",
+        verificationUrl: "https://auth.example.test/device",
+        userCode: "TEST-CODE",
+      }),
+      "account/login/cancel": () => {
+        if (++attempts === 1) throw new Error("cancel unavailable");
+        return { status: "canceled" };
+      },
+      "account/read": () => ({ account: null }),
+    });
+    await h.engine.start();
+    try {
+      await h.engine.beginAccountLogin("device-code");
+      const before = await h.engine.readAccount();
+      const timer = (h.engine as unknown as { pendingSignInTimer: unknown }).pendingSignInTimer;
+      await expect(h.engine.cancelAccountLogin()).rejects.toThrow("cancel unavailable");
+      expect(await h.engine.readAccount()).toEqual(before);
+      expect((h.engine as unknown as { pendingSignInTimer: unknown }).pendingSignInTimer).toBe(
+        timer,
+      );
+      expect(await h.engine.cancelAccountLogin()).toBe("canceled");
+      expect(
+        h
+          .child()
+          .requests.filter((r) => r.method === "account/login/cancel")
+          .map((r) => r.params.loginId),
+      ).toEqual(["retry-login", "retry-login"]);
+      expect(await h.engine.readAccount()).not.toHaveProperty("pendingSignIn");
+    } finally {
+      await h.engine.stop();
+    }
+  });
+
+  test.each([false, true])(
+    "an older cancellation cannot erase a newer login (reject=%s)",
+    async (reject) => {
+      let finishCancel!: () => void;
+      let login = 0;
+      const h = harness({
+        "account/login/start": () => ({
+          loginId: `login-${++login}`,
+          verificationUrl: "https://auth.example.test/device",
+          userCode: `CODE-${login}`,
+        }),
+        "account/login/cancel": () =>
+          new Promise((resolve, fail) => {
+            finishCancel = () =>
+              reject ? fail(new Error("cancel unavailable")) : resolve({ status: "canceled" });
+          }),
+        "account/read": () => ({ account: null }),
+      });
+      await h.engine.start();
+      try {
+        await h.engine.beginAccountLogin("device-code");
+        const cancelling = h.engine.cancelAccountLogin();
+        void cancelling.catch(() => undefined);
+        await settle();
+        await h.engine.beginAccountLogin("device-code");
+        finishCancel();
+        if (reject) await expect(cancelling).rejects.toThrow("cancel unavailable");
+        else expect(await cancelling).toBe("canceled");
+        expect(await h.engine.readAccount()).toMatchObject({ pendingSignIn: { code: "CODE-2" } });
+        const next = h.engine.cancelAccountLogin();
+        void next.catch(() => undefined);
+        await settle();
+        expect(
+          h
+            .child()
+            .requests.filter((r) => r.method === "account/login/cancel")
+            .at(-1)?.params,
+        ).toEqual({ loginId: "login-2" });
+        finishCancel();
+        if (reject) await expect(next).rejects.toThrow("cancel unavailable");
+        else expect(await next).toBe("canceled");
+      } finally {
+        await h.engine.stop();
+      }
+    },
+  );
+
+  test("clears the pending device code and reports a login app-server already closed", async () => {
+    const h = harness({
+      "account/login/start": () => ({
+        type: "chatgptDeviceCode",
+        loginId: "login-device",
+        verificationUrl: "https://auth.example.test/device",
+        userCode: "TEST-CODE",
+      }),
+      "account/login/cancel": () => ({ status: "notFound" }),
+      "account/read": () => ({ account: null }),
+    });
+    await h.engine.start();
+    try {
+      await h.engine.beginAccountLogin("device-code");
+      expect(await h.engine.readAccount()).toHaveProperty("pendingSignIn");
+      expect(await h.engine.cancelAccountLogin()).toBe("none");
+      expect(await h.engine.readAccount()).not.toHaveProperty("pendingSignIn");
+    } finally {
+      await h.engine.stop();
+    }
+  });
+
+  test.each(["completed", "logout", "none-started"])(
+    "sends no cancel when the login is not open (%s)",
+    async (reason) => {
+      const h = harness({
+        "account/login/start": () => browserLogin,
+        "account/login/cancel": () => ({ status: "canceled" }),
+        "account/logout": () => ({}),
+        "account/read": () => ({ account: null }),
+      });
+      await h.engine.start();
+      try {
+        if (reason !== "none-started") await h.engine.beginAccountLogin("browser");
+        if (reason === "completed") {
+          h.child().notify("account/login/completed", {
+            loginId: browserLogin.loginId,
+            success: false,
+          });
+          await settle();
+        }
+        if (reason === "logout") await h.engine.logoutAccount();
+        expect(await h.engine.cancelAccountLogin()).toBe("none");
+        expect(h.child().requests.some((r) => r.method === "account/login/cancel")).toBe(false);
+      } finally {
+        await h.engine.stop();
+      }
+    },
+  );
+});
+
 describe("account usage", () => {
   test("reads and allowlists account token windows", async () => {
     const h = harness({
@@ -365,6 +396,29 @@ describe("thread lifecycle", () => {
     expect((await h.engine.resumeThread("t1", { config: BUILD })).model).toBeUndefined();
   });
 
+  test("a resume names the session's model, or adopts the one the thread kept", async () => {
+    // Codex 0.164 resumes a thread on its own saved model, not the global
+    // default. A configured model is still stated on every resume; an unset
+    // one is left to the thread, and the model app-server reports is bound so
+    // the transcript labels what the next turn will run.
+    const h = harness({
+      "thread/resume": (params) => ({
+        thread: thread("t1"),
+        model: (params as { model?: string }).model ?? "gpt-6-astra",
+      }),
+    });
+    await h.engine.start();
+
+    const named = await h.engine.resumeThread("t1", { config: BUILD });
+    const unset = await h.engine.resumeThread("t1", { config: PLAN });
+
+    const resumes = h.child().requests.filter((r) => r.method === "thread/resume");
+    expect(resumes[0]!.params).toMatchObject({ threadId: "t1", model: "gpt-5.6-sol" });
+    expect(resumes[1]!.params).not.toHaveProperty("model");
+    expect(named.model).toBe("gpt-5.6-sol");
+    expect(unset.model).toBe("gpt-6-astra");
+  });
+
   test("thread/start passes explicit policy and clears the service tier", async () => {
     const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
     await h.engine.start();
@@ -381,6 +435,196 @@ describe("thread lifecycle", () => {
       // silently inherited.
       serviceTier: null,
     });
+  });
+
+  test("adds a workflow turn's artifact-only server under its own grant", async () => {
+    const h = harness({
+      "thread/start": () => ({ thread: thread("t1") }),
+    });
+    const config: EngineTurnConfig = {
+      ...BUILD,
+      workflowResultTool: "submit_review_report",
+      agentMcp: {
+        url: "http://127.0.0.1:4567/mcp",
+        token: "attempt-secret",
+        artifacts: { token: "oag1.turn-grant" },
+      },
+    };
+    await h.engine.start();
+    await h.engine.startThread({ config });
+    const sent = h.child().requests.find((request) => request.method === "thread/start")?.params
+      .config as Record<string, Record<string, unknown>>;
+    expect(sent["mcp_servers.orkestrator-artifacts"]).toEqual({
+      url: "http://127.0.0.1:4567/artifact-mcp",
+      http_headers: { Authorization: "Bearer oag1.turn-grant" },
+      required: false,
+      startup_timeout_sec: 3,
+      default_tools_approval_mode: "approve",
+    });
+    // The attempt's result server keeps its own credential.
+    expect(sent["mcp_servers.orkestrator"]?.http_headers).toEqual({
+      Authorization: "Bearer attempt-secret",
+    });
+  });
+
+  test("pins the checkout untrusted on every thread entry point when project resources are off", async () => {
+    const h = harness({
+      "thread/start": () => ({ thread: thread("t1") }),
+      "thread/resume": () => ({ thread: thread("t1") }),
+      "thread/fork": () => ({ thread: thread("t2") }),
+    });
+    const policy = {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      networkAccess: "full",
+    } as const;
+    const off: EngineTurnConfig = { ...BUILD, policy: { ...policy, projectResources: false } };
+    await h.engine.start();
+    await h.engine.startThread({ config: off });
+    await h.engine.resumeThread("t1", { config: off, includeTurns: true });
+    await h.engine.forkThread("t1", off);
+
+    // A resumed or forked thread is rebuilt from its rollout with these
+    // settings, so each one must carry the pin, not only the first start.
+    for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
+      expect(
+        h.child().requests.find((request) => request.method === method)?.params.config,
+      ).toEqual({ projects: { "/tmp/workspace": { trust_level: "untrusted" } } });
+    }
+
+    const on = harness({ "thread/start": () => ({ thread: thread("t1") }) });
+    await on.engine.start();
+    await on.engine.startThread({
+      config: { ...BUILD, policy: { ...policy, projectResources: true } },
+    });
+    expect(
+      on.child().requests.find((request) => request.method === "thread/start")?.params.config,
+    ).toBeUndefined();
+  });
+
+  test("disables the checkout's own skills on every thread entry point when project resources are off", async () => {
+    const skills = {
+      data: [
+        {
+          cwd: "/tmp/workspace",
+          errors: [],
+          skills: [
+            {
+              name: "repo-skill",
+              path: "/tmp/workspace/.codex/skills/a/SKILL.md",
+              scope: "repo",
+              enabled: true,
+            },
+            {
+              name: "mine",
+              path: "/home/u/.agents/skills/mine/SKILL.md",
+              scope: "user",
+              enabled: true,
+            },
+            {
+              name: "off",
+              path: "/home/u/.agents/skills/off/SKILL.md",
+              scope: "user",
+              enabled: false,
+            },
+          ],
+        },
+      ],
+    };
+    const h = harness({
+      "skills/list": () => skills,
+      "thread/start": () => ({ thread: thread("t1") }),
+      "thread/resume": () => ({ thread: thread("t1") }),
+      "thread/fork": () => ({ thread: thread("t2") }),
+    });
+    const config: EngineTurnConfig = {
+      ...BUILD,
+      policy: {
+        id: "interactive-host",
+        sandbox: "none",
+        approvals: "auto-approve",
+        projectResources: false,
+        networkAccess: "full",
+      },
+    };
+    await h.engine.start();
+    await h.engine.startThread({ config });
+    await h.engine.resumeThread("t1", { config, includeTurns: true });
+    await h.engine.forkThread("t1", config);
+
+    for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
+      expect(
+        h.child().requests.find((request) => request.method === method)?.params.config,
+      ).toEqual({
+        projects: { "/tmp/workspace": { trust_level: "untrusted" } },
+        // The user's own disabled skill is listed again: the thread's list
+        // replaces theirs, and must not switch it back on.
+        skills: {
+          config: [
+            { path: "/tmp/workspace/.codex/skills/a/SKILL.md", enabled: false },
+            { path: "/home/u/.agents/skills/off/SKILL.md", enabled: false },
+          ],
+        },
+      });
+    }
+    expect(
+      h
+        .child()
+        .requests.filter((request) => request.method === "skills/list")
+        .map((r) => r.params),
+    ).toEqual(Array(3).fill({ cwds: ["/tmp/workspace"], forceReload: true }));
+  });
+
+  test("fails closed when skills/list is not supported", async () => {
+    const h = harness({
+      "skills/list": () => {
+        const error = new Error("unknown skills/list");
+        (error as Error & { rpcCode: number }).rpcCode = -32601;
+        throw error;
+      },
+    });
+    await h.engine.start();
+    await expect(
+      h.engine.startThread({
+        config: {
+          ...BUILD,
+          policy: {
+            id: "interactive-host",
+            sandbox: "none",
+            approvals: "auto-approve",
+            projectResources: false,
+            networkAccess: "full",
+          },
+        },
+      }),
+    ).rejects.toThrow("without skills/list");
+    expect(h.child().requests.some((r) => r.method === "thread/start")).toBe(false);
+  });
+
+  test("refuses a thread whose project skills cannot be listed", async () => {
+    const h = harness({
+      "skills/list": () => {
+        throw new Error("skills unavailable");
+      },
+      "thread/start": () => ({ thread: thread("t1") }),
+    });
+    await h.engine.start();
+    await expect(
+      h.engine.startThread({
+        config: {
+          ...BUILD,
+          policy: {
+            id: "interactive-host",
+            sandbox: "none",
+            approvals: "auto-approve",
+            projectResources: false,
+            networkAccess: "full",
+          },
+        },
+      }),
+    ).rejects.toThrow("skills unavailable");
+    expect(h.child().requests.some((request) => request.method === "thread/start")).toBe(false);
   });
 
   test("passes a tab-scoped MCP header without overriding ordinary approvals", async () => {
@@ -422,9 +666,12 @@ describe("thread lifecycle", () => {
           http_headers: { Authorization: "Bearer tab-secret" },
           required: false,
           startup_timeout_sec: 3,
-          // Only the mail tools bypass the ordinary approval policy.
+          // Only the mail and artifact tools bypass the ordinary approval policy.
           tools: Object.fromEntries(
-            AGENT_MAIL_TOOL_NAMES.map((name) => [name, { approval_mode: "approve" }]),
+            [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map((name) => [
+              name,
+              { approval_mode: "approve" },
+            ]),
           ),
         },
       });
@@ -574,6 +821,57 @@ describe("thread lifecycle", () => {
     expect(turn.config).toBeUndefined();
   });
 
+  test("a search-denied resume or fork is refused while the history still declares tools", async () => {
+    const denied: EngineTurnConfig = {
+      ...BUILD,
+      sandbox: "read-only",
+      networkAccessEnabled: false,
+      policy: {
+        id: "pipeline",
+        sandbox: "provider",
+        approvals: "auto-approve",
+        projectResources: true,
+        capabilityPolicy: { deny: ["network"] },
+        networkAccess: "restricted",
+      },
+    };
+    const checked: string[] = [];
+    for (const verdict of ["declares", "unknown"] as const) {
+      const h = harness(
+        {
+          "thread/resume": () => ({ thread: thread("t1") }),
+          "thread/fork": () => ({ thread: thread("t2") }),
+          "thread/unsubscribe": () => ({ status: "unsubscribed" }),
+        },
+        {
+          toolHistoryVerdict: async (threadId) => {
+            checked.push(threadId);
+            return verdict;
+          },
+        },
+      );
+      await h.engine.start();
+      await expect(h.engine.resumeThread("t1", { config: denied })).rejects.toThrow(
+        "a turn with web search off was refused",
+      );
+      // The resumed thread is let go, so no turn can reach it.
+      const methods = h.child().requests.map((request) => request.method);
+      expect(methods.at(-1)).toBe("thread/unsubscribe");
+      // A fork is refused before it exists, and its source is left loaded.
+      await expect(h.engine.forkThread("t1", denied)).rejects.toThrow("web search off");
+      expect(h.child().requests.some((request) => request.method === "thread/fork")).toBe(false);
+      expect(
+        h
+          .child()
+          .requests.map((request) => request.method)
+          .at(-1),
+      ).toBe(methods.at(-1));
+      // Search is allowed on a build turn, so its history is not consulted.
+      await h.engine.resumeThread("t1", { config: BUILD });
+    }
+    expect(checked).toEqual(["t1", "t1", "t1", "t1"]);
+  });
+
   test("a network-denied policy turns hosted web search off on the thread", async () => {
     const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
     const config: EngineTurnConfig = {
@@ -598,9 +896,14 @@ describe("thread lifecycle", () => {
     expect(params.config).toEqual({
       web_search: "disabled",
       "features.standalone_web_search": false,
+      // Project resources are off, so the checkout's own `.codex` stays out.
+      projects: { "/tmp/workspace": { trust_level: "untrusted" } },
     });
-    // Not a coordinator process, so there is no process setting to read back.
-    expect(h.child().requests.some((request) => request.method === "config/read")).toBe(false);
+    // Not a coordinator process: the search mode is the thread's own, so only
+    // the process's tool-history setting is read back (codex 0.164).
+    expect(h.child().requests.filter((request) => request.method === "config/read")).toHaveLength(
+      1,
+    );
   });
 
   test("keeps hosted web search off alongside a scoped MCP connection", async () => {
@@ -684,6 +987,7 @@ describe("thread lifecycle", () => {
 
     // An app-server that cannot answer at all is refused the same way.
     const unanswered = harness({
+      "config/read": undefined as unknown as () => unknown,
       "thread/start": () => ({
         thread: thread("t1"),
         activePermissionProfile: { id: "coordinator-conversation-1" },
@@ -712,7 +1016,11 @@ describe("thread lifecycle", () => {
     };
     const started = (webSearch: string) =>
       harness({
-        "config/read": () => ({ config: { web_search: webSearch }, origins: {}, layers: null }),
+        "config/read": () => ({
+          config: { web_search: webSearch, features: { incremental_tools: false } },
+          origins: {},
+          layers: null,
+        }),
         "thread/start": () => ({
           thread: thread("t1"),
           activePermissionProfile: { id: "coordinator-conversation-1" },
@@ -728,6 +1036,7 @@ describe("thread lifecycle", () => {
     expect(params.config).toEqual({
       web_search: "cached",
       "features.standalone_web_search": false,
+      projects: { "/tmp/workspace": { trust_level: "untrusted" } },
     });
 
     // `live` opens any URL the model names, and `disabled` is not what this
@@ -2167,6 +2476,107 @@ describe("runtime health", () => {
     expect(health.protocol.serverRequests).toMatchObject({ pending: 0, awaitingUser: 0 });
   });
 
+  test("follows every MCP status page, for the inventory and the health snapshot", async () => {
+    const pages: Record<string, { data: unknown[]; nextCursor: string | null }> = {
+      "": { data: [{ name: "a", tools: {} }], nextCursor: "p2" },
+      p2: { data: [{ name: "b", tools: {} }], nextCursor: "p3" },
+      p3: { data: [{ name: "c", tools: {} }], nextCursor: null },
+    };
+    const h = harness({
+      ...HEALTH_HANDLERS,
+      "mcpServerStatus/list": (params) => pages[String(params.cursor ?? "")]!,
+    });
+    await h.engine.start();
+
+    const inventory = (await h.engine.listMcpServers("t1")) as {
+      data: Array<{ name: string }>;
+      nextCursor: string | null;
+    };
+    expect(inventory.data.map((entry) => entry.name)).toEqual(["a", "b", "c"]);
+    expect(inventory.nextCursor).toBeNull();
+    const calls = h
+      .child()
+      .requests.filter((entry) => entry.method === "mcpServerStatus/list")
+      .map((entry) => entry.params);
+    expect(calls.map((params) => params.cursor)).toEqual([undefined, "p2", "p3"]);
+    expect(calls.every((params) => params.threadId === "t1")).toBe(true);
+
+    const health = (await h.engine.getRuntimeHealth("t1")) as {
+      mcp: { data: Array<{ name: string }> };
+    };
+    expect(health.mcp.data.map((entry) => entry.name)).toEqual(["a", "b", "c"]);
+  });
+
+  test.each([null, { unexpected: true }, "invalid"])(
+    "a malformed later MCP page (%j) preserves preceding pages and stops paging",
+    async (data) => {
+      const h = harness({
+        ...HEALTH_HANDLERS,
+        "mcpServerStatus/list": (params) =>
+          params.cursor
+            ? { data, nextCursor: "unread" }
+            : { data: [{ name: "a", tools: {} }], nextCursor: "p2" },
+      });
+      await h.engine.start();
+      const inventory = (await h.engine.listMcpServers("t1")) as {
+        data: Array<{ name: string }>;
+        nextCursor: string;
+      };
+      expect(inventory.data.map((entry) => entry.name)).toEqual(["a"]);
+      expect(inventory.nextCursor).toBe("unread");
+      const health = (await h.engine.getRuntimeHealth("t1")) as {
+        mcp: { data: Array<{ name: string }> };
+        skills: unknown;
+        hooks: unknown;
+      };
+      expect(health.mcp.data.map((entry) => entry.name)).toEqual(["a"]);
+      expect(health.skills).toMatchObject({ data: [{ skills: [{ name: "review" }] }] });
+      expect(health.hooks).not.toHaveProperty("error");
+      const calls = h.child().requests.filter((entry) => entry.method === "mcpServerStatus/list");
+      expect(calls.map((entry) => entry.params.cursor)).toEqual([undefined, "p2", undefined, "p2"]);
+      expect(calls.every((entry) => entry.params.threadId === "t1")).toBe(true);
+    },
+  );
+
+  test("a rejected later MCP page rejects inventory and degrades only the health MCP panel", async () => {
+    const h = harness({
+      ...HEALTH_HANDLERS,
+      "mcpServerStatus/list": (params) => {
+        if (params.cursor) throw new Error("later page unavailable");
+        return { data: [{ name: "a", tools: {} }], nextCursor: "p2" };
+      },
+    });
+    await h.engine.start();
+    await expect(h.engine.listMcpServers("t1")).rejects.toThrow("later page unavailable");
+    const health = (await h.engine.getRuntimeHealth("t1")) as Record<string, unknown>;
+    expect(health.mcp).toEqual({ error: "Unavailable" });
+    expect(health.skills).toMatchObject({ data: [{ skills: [{ name: "review" }] }] });
+    expect(health.hooks).not.toHaveProperty("error");
+    expect(health.rateLimits).not.toHaveProperty("error");
+    const calls = h.child().requests.filter((entry) => entry.method === "mcpServerStatus/list");
+    expect(calls.map((entry) => entry.params.cursor)).toEqual([undefined, "p2", undefined, "p2"]);
+    expect(calls.every((entry) => entry.params.threadId === "t1")).toBe(true);
+  });
+
+  test("stops at the MCP status page bound and keeps the cursor", async () => {
+    let served = 0;
+    const h = harness({
+      "mcpServerStatus/list": () => {
+        served += 1;
+        return { data: [{ name: `s${served}`, tools: {} }], nextCursor: `after-${served}` };
+      },
+    });
+    await h.engine.start();
+
+    const inventory = (await h.engine.listMcpServers()) as {
+      data: unknown[];
+      nextCursor: string | null;
+    };
+    expect(served).toBe(10);
+    expect(inventory.data).toHaveLength(10);
+    expect(inventory.nextCursor).toBe("after-10");
+  });
+
   test("scopes the MCP list to the whole environment when no thread is given", async () => {
     const h = harness(HEALTH_HANDLERS);
     await h.engine.start();
@@ -2196,7 +2606,11 @@ describe("runtime health", () => {
   });
 
   test("every sub-request failing still returns a renderable snapshot", async () => {
-    const h = harness();
+    const h = harness({
+      "skills/list": () => {
+        throw new Error("skills unavailable");
+      },
+    });
     await h.engine.start();
 
     const health = (await h.engine.getRuntimeHealth()) as Record<string, unknown>;
@@ -3346,6 +3760,47 @@ describe("account sign-in", () => {
     await flush(h);
 
     expect(h.engine.isAccountSignInRequired()).toBe(true);
+  });
+
+  describe("an account read refused with 401", () => {
+    // Codex 0.162 with an access-only login past its expiry (checked live).
+    const refused = () => {
+      throw new Error("workspace routing discovery unauthorized (401)");
+    };
+
+    test("reports the sign-out it stands for", async () => {
+      const h = harness({ "account/read": refused });
+      await h.engine.start();
+      expect(await h.engine.readAccount()).toMatchObject({
+        account: null,
+        requiresOpenaiAuth: true,
+      });
+      expect(h.engine.isAccountSignInRequired()).toBe(true);
+    });
+
+    test("confirms the sign-out an unauthorized turn asks about", async () => {
+      const h = harness({ "account/read": refused });
+      await h.engine.start();
+      h.child().notify("error", {
+        threadId: "t1",
+        turnId: "turn-1",
+        error: { message: "Unauthorized", codexErrorInfo: "unauthorized" },
+        willRetry: false,
+      });
+      await flush(h);
+      expect(h.engine.isAccountSignInRequired()).toBe(true);
+    });
+
+    test("other account read failures stay unconfirmed", async () => {
+      const h = harness({
+        "account/read": () => {
+          throw new Error("account service unavailable (503)");
+        },
+      });
+      await h.engine.start();
+      await expect(h.engine.readAccount()).rejects.toThrow("503");
+      expect(h.engine.isAccountSignInRequired()).toBe(false);
+    });
   });
 
   describe("a model that is answering outweighs a signed-out account read", () => {

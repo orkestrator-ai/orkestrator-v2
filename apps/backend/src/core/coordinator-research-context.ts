@@ -36,9 +36,9 @@ export async function loadCoordinatorResearch(storage: {
  * The coordinator context line that says what research is available.
  *
  * Search and research servers are described as "if your tools include it":
- * Grok and Pi have no hosted search a coordinator may use, and only Claude
- * and Codex load research servers today, so the agent has to check rather
- * than be promised a tool it does not have.
+ * Grok and Pi have no hosted search a coordinator may use, Grok loads no
+ * research servers, and a server that did not connect is simply absent, so
+ * the agent has to check rather than be promised a tool it does not have.
  */
 export function coordinatorResearchLine(research: CoordinatorResearch): string {
   const base =

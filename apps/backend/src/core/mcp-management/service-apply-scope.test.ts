@@ -70,6 +70,56 @@ async function saveAndApply(provider: AgentPlatform, sourceId: string, targetId?
   );
 }
 
+describe("host project files under a project-resources policy", () => {
+  // Live-confirmed for Cursor 1.0.37 on 2026-10-18: with the environment's
+  // policy on, the host bridge loaded and called a server from the worktree's
+  // `.cursor/mcp.json` while this catalogue still said "excluded".
+  for (const [provider, file] of [
+    ["cursor", ".cursor/mcp.json"],
+    ["pi", ".pi/mcp.json"],
+  ] as const) {
+    test(`${provider}: the project file is loaded and applied when the environment turns project resources on`, async () => {
+      fixture.write(
+        `worktree/${file}`,
+        JSON.stringify({ mcpServers: { proj: { command: "proj-server" } } }),
+      );
+      const target = await targetIdFor(fixture, provider, "environment");
+      let snapshot = await fixture.service.snapshot({ targetId: target });
+      const sourceId = `${provider}:project`;
+      expect(snapshot.sources.find((source) => source.sourceId === sourceId)?.trust).toBe(
+        "excluded",
+      );
+
+      fixture.environment.agentSettings = { executionPolicy: { projectResources: true } };
+      snapshot = await fixture.service.snapshot({ targetId: target });
+      expect(snapshot.sources.find((source) => source.sourceId === sourceId)?.trust).toBe(
+        "allowed",
+      );
+      expect(
+        snapshot.definitions.find(
+          (definition) => definition.sourceId === sourceId && definition.name === "proj",
+        )?.status,
+      ).toBe("effective");
+
+      session(provider, "env-env-1:tab-a", { projectResources: true });
+      const result = await saveAndApply(provider, sourceId, target);
+      expect(result.operation.apply.runtimes.map((runtime) => runtime.state)).toEqual([
+        "pending-next-turn",
+      ]);
+    });
+  }
+
+  test("a session whose own policy excludes project resources stays blocked", async () => {
+    fixture.environment.agentSettings = { executionPolicy: { projectResources: true } };
+    session("cursor", "env-env-1:tab-a", { projectResources: false });
+    const target = await targetIdFor(fixture, "cursor", "environment");
+    const result = await saveAndApply("cursor", "cursor:project", target);
+    expect(result.operation.apply.runtimes.map((runtime) => runtime.state)).toEqual([
+      "blocked-policy",
+    ]);
+  });
+});
+
 describe("apply scope", () => {
   test("coordinator sessions under a runtime id are reported, not dropped", async () => {
     const coordinator = coordinatorRuntimeId("coord-1", "conv-1");

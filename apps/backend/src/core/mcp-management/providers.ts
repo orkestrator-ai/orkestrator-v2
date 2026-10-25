@@ -5,8 +5,9 @@
  * Paths mirror the launchers, bridges and the pinned provider binaries, not
  * the vendors' documentation in general: the Claude bridge reads
  * `homedir()/.claude.json` regardless of `CLAUDE_CONFIG_DIR`, so that is the
- * file edited here; host Cursor and Pi sessions never load project settings,
- * so those sources are shown as excluded. Read-only layers the provider loads
+ * file edited here; host Cursor and Pi sessions load project settings only
+ * when the environment's execution policy turns project resources on, so
+ * otherwise those sources are shown as excluded. Read-only layers the provider loads
  * (system and managed files, inline environment configuration, another
  * provider's file) are shown so an effective entry is never a surprise. See
  * docs/architecture/mcp-management.md for the evidence table.
@@ -17,6 +18,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { OPENCODE_MCP_SIGN_IN_GUIDANCE } from "@orkestrator/protocol/native-agent";
 import {
   MCP_MANAGEMENT_LIMITS,
   type McpCapabilityFlag,
@@ -249,6 +251,8 @@ export interface SourceContext {
   grokCompatDisabled?(name: "claude" | "cursor", worktree?: string): Promise<boolean>;
   /** Container catalogs: project trust is the container's, not the host's. */
   inContainer?: boolean;
+  /** Keep persisted optional sources discoverable; names still come from the fixed allowlist. */
+  retainedSourceIds?: string[];
 }
 
 const OPENCODE_FILES: ReadonlyArray<["opencode.json" | "opencode.jsonc", "json" | "jsonc"]> = [
@@ -271,7 +275,10 @@ async function opencodeSources(
   const present: SourceSpec[] = [];
   for (const [name, format, precedence] of candidates) {
     const filePath = path.join(dir, name);
-    if (await input.exists(filePath)) {
+    if (
+      input.retainedSourceIds?.includes(`opencode:user-${name}`) ||
+      (await input.exists(filePath))
+    ) {
       present.push(
         userSource("opencode", `user-${name}`, filePath, homes, {
           format,
@@ -412,7 +419,7 @@ async function opencodeSources(
       inlineText: homes.opencodeConfigContent,
     });
   }
-  const managedDir = homes.opencodeManagedDir ?? "/etc/opencode";
+  const managedDir = homes.opencodeManagedDir ?? opencodeManagedDir(process.platform);
   for (const [[name, format], precedence] of OPENCODE_FILES.map(
     (file, i) => [file, 50 + i] as const,
   )) {
@@ -427,6 +434,27 @@ async function opencodeSources(
         }),
       );
     }
+  }
+}
+
+/**
+ * OpenCode's managed configuration folder, as the pinned 1.19.4 resolves it
+ * (re-derived from the binary on 2026-10-25): `/Library/Application
+ * Support/opencode` on macOS, `%ProgramData%\\opencode` on Windows,
+ * `/etc/opencode` elsewhere. macOS also reads an MDM profile
+ * (`ai.opencode.managed.plist`), which is not a file this catalog parses.
+ */
+export function opencodeManagedDir(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  switch (platform) {
+    case "darwin":
+      return "/Library/Application Support/opencode";
+    case "win32":
+      return path.join(env.ProgramData || "C:\\ProgramData", "opencode");
+    default:
+      return "/etc/opencode";
   }
 }
 
@@ -475,7 +503,18 @@ async function grokSources(
   );
   let projectTrust: TrustVerdict | undefined;
   if (worktree) {
-    projectTrust = input.inContainer ? undefined : await grokFolderTrust(policy, worktree, read);
+    // A session whose policy turns project resources on runs Grok with
+    // `GROK_FOLDER_TRUST=0` (the ACP bridge's `providerEnv`), so the store
+    // does not decide for it.
+    projectTrust = input.inContainer
+      ? undefined
+      : input.context.projectResources === true
+        ? {
+            trust: "allowed",
+            reason:
+              "This environment's execution policy turns project resources on, so its Grok sessions run with folder trust off and load this file.",
+          }
+        : await grokFolderTrust(policy, worktree, read);
     add(
       projectSource("grok", "project", worktree, path.join(".grok", "config.toml"), homes, {
         format: "toml",
@@ -611,6 +650,26 @@ async function grokSources(
   }
 }
 
+/**
+ * Trust of a host Cursor or Pi project MCP file. Both bridges load it only
+ * when the session's execution policy turns project resources on, which an
+ * environment can do for its host sessions; otherwise it is excluded.
+ */
+function hostProjectTrust(
+  context: TargetContextInfo,
+  trustReason: string,
+  excludedReason: string,
+): Pick<SourceSpec, "trust" | "trustReason" | "excludedReason"> {
+  if (context.projectResources === true) {
+    return {
+      trust: "allowed",
+      trustReason:
+        "This environment's execution policy turns project resources on, so its sessions load this file.",
+    };
+  }
+  return { trust: "excluded", trustReason, excludedReason };
+}
+
 export async function providerSources(
   provider: AgentPlatform,
   input: SourceContext,
@@ -735,11 +794,11 @@ export async function providerSources(
             precedence: 20,
             maxBytes: 1024 * 1024,
             sharedWith: ["grok"],
-            trust: "excluded",
-            trustReason:
+            ...hostProjectTrust(
+              context,
               "Host Cursor sessions do not load project settings, so cloning a repository cannot run its servers on this computer.",
-            excludedReason:
               "Excluded on this computer: host Cursor sessions do not load project settings.",
+            ),
           }),
         );
       }
@@ -766,11 +825,11 @@ export async function providerSources(
             bareMapFallback: true,
             precedence: 20,
             maxBytes: 1024 * 1024,
-            trust: "excluded",
-            trustReason:
+            ...hostProjectTrust(
+              context,
               "Host Pi sessions do not load project resources; a Pi project server is arbitrary code.",
-            excludedReason:
               "Excluded on this computer: host Pi sessions do not load project resources.",
+            ),
           }),
         );
       }
@@ -803,13 +862,17 @@ export const CONTAINER_HOMES: ProviderHomes = {
   xdgConfigHome: "/home/node/.config",
   piAgentDir: "/home/node/.pi/agent",
   grokHome: "/home/node/.grok",
+  // The image is Linux whatever the backend's host is.
+  opencodeManagedDir: "/etc/opencode",
 };
 export const CONTAINER_WORKSPACE = "/workspace";
 
 /**
  * Container sources the entrypoint fills from the backend user's own files
- * (docker/entrypoint.sh). Everything else in a container home is the
- * container's own file.
+ * (docker/entrypoint.sh) on every boot. These are the environment-private
+ * sources: an edit is kept in the backend's overlay and written back over
+ * every fresh copy. Cursor's `mcp.json` is copied by images with
+ * `staged-inputs` 2 or later; on older images the overlay alone fills it.
  */
 function copiedFromBackend(spec: SourceSpec): boolean {
   return (
@@ -817,13 +880,30 @@ function copiedFromBackend(spec: SourceSpec): boolean {
     spec.sourceId === "codex:user" ||
     spec.sourceId.startsWith("opencode:user-") ||
     spec.sourceId === "grok:user" ||
-    spec.sourceId === "pi:user"
+    spec.sourceId === "pi:user" ||
+    spec.sourceId === "cursor:user"
   );
 }
 
 export const CONTAINER_OWN_FILE_REASON =
-  "This is the container's own file. Orkestrator does not copy it from the backend user, so editing the " +
-  "backend user's copy does not change it.";
+  "This is the container's own file. Orkestrator does not copy it from the backend user and does not edit it; change it inside the container.";
+
+export const CONTAINER_CLAUDE_LOCAL_REASON =
+  "The container rebuilds Claude's private local settings on every start, so an edit here would not last. Add the server to this environment instead.";
+
+export const CONTAINER_PROJECT_EPHEMERAL_REASON =
+  "This environment keeps /workspace in the container itself, so a project edit made here would be lost when it is rebuilt. Change the project file in the repository, or add the server to this environment instead.";
+
+export interface ContainerSourceOptions {
+  /** This backend can write into the container (a writer is configured). */
+  writable: boolean;
+  /** `/workspace` is a persistent volume (`volume-v1`), so project files survive rebuilds. */
+  persistentWorkspace: boolean;
+  /** Why nothing in the container can be written, when `writable` is false. */
+  unavailableReason: string;
+  /** Persisted source identities; only fixed, supported filenames are honoured. */
+  overlaySourceIds?: string[];
+}
 
 function containerProbes(
   containerId: string,
@@ -852,17 +932,17 @@ function containerProbes(
 }
 
 /**
- * The container's own copies of provider configuration, read-only. Container
- * homes are copied from the backend user when the container is created and are
- * not a durable store of user intent, so editing them here would be lost on
- * recreation; see CONTAINER_READ_ONLY_REASON. With a reader, optional files
+ * The container's provider configuration. The copies the entrypoint makes
+ * from the backend user are this environment's private sources, written
+ * through the overlay; project files are writable only on a persistent
+ * workspace; everything else is read-only. With a reader, optional files
  * (OpenCode's alternate names, Grok's compat switches) are probed inside the
  * container; without one, only the default files are listed.
  */
 export async function containerSources(
   provider: AgentPlatform,
   containerId: string,
-  readOnlyReason: string,
+  options: ContainerSourceOptions,
   reader?: ContainerFileReader,
 ): Promise<SourceSpec[]> {
   const specs = await providerSources(provider, {
@@ -870,42 +950,66 @@ export async function containerSources(
     homes: CONTAINER_HOMES,
     inContainer: true,
     ...containerProbes(containerId, reader),
+    retainedSourceIds: options.overlaySourceIds,
   });
   return specs.map((spec) => {
     if (spec.format === "runtime") return spec;
     const inProject = spec.path.startsWith(`${CONTAINER_WORKSPACE}/`);
     const compat = spec.owner === "compatibility";
     const copied = copiedFromBackend(spec);
+    const base = { ...spec, container: { containerId }, allowedRoot: undefined };
+    if (compat || spec.owner === "managed-policy") {
+      return {
+        ...base,
+        writable: false,
+        displayPath: inProject ? spec.path : `container:${spec.path}`,
+        label: compat ? spec.label : `Container ${spec.label.toLowerCase()}`,
+        readOnlyReason: spec.readOnlyReason ?? "This configuration is read-only.",
+      };
+    }
+    if (inProject) {
+      const writable = options.writable && options.persistentWorkspace && spec.writable;
+      return {
+        ...base,
+        writable,
+        readOnlyReason: writable
+          ? undefined
+          : !options.writable
+            ? options.unavailableReason
+            : !options.persistentWorkspace
+              ? CONTAINER_PROJECT_EPHEMERAL_REASON
+              : spec.readOnlyReason,
+        displayPath: spec.path,
+        // Container sessions opt into project resources; the host exclusions do not apply.
+        trust: "allowed" as const,
+        trustReason: "Loaded by sessions in this container.",
+        excludedReason: undefined,
+      };
+    }
+    if (copied) {
+      return {
+        ...base,
+        scope: "environment-private" as const,
+        owner: "environment-overlay" as const,
+        writable: options.writable,
+        readOnlyReason: options.writable ? undefined : options.unavailableReason,
+        displayPath: `container:${spec.path}`,
+        label: "This environment (container home)",
+        // Credentials may be saved literally here, exactly as in the user file it copies.
+        createMode: 0o600,
+        sharedWith: spec.sharedWith,
+      };
+    }
     return {
-      ...spec,
-      container: { containerId },
+      ...base,
       writable: false,
       readOnlyReason:
-        compat || spec.owner === "managed-policy"
-          ? spec.readOnlyReason
-          : inProject || copied || spec.scope === "claude-local"
-            ? readOnlyReason
-            : `${CONTAINER_OWN_FILE_REASON} ${readOnlyReason}`,
-      allowedRoot: undefined,
-      displayPath: inProject ? spec.path : `container:${spec.path}`,
+        spec.scope === "claude-local" ? CONTAINER_CLAUDE_LOCAL_REASON : CONTAINER_OWN_FILE_REASON,
+      displayPath: `container:${spec.path}`,
       label:
-        inProject || compat
-          ? spec.label
-          : spec.scope === "claude-local"
-            ? "Container private local"
-            : spec.owner === "managed-policy"
-              ? `Container ${spec.label.toLowerCase()}`
-              : copied
-                ? "Container home (copied from backend user)"
-                : "Container home (container's own file)",
-      // Container sessions opt into project resources; the host exclusions do not apply.
-      ...(inProject && !compat
-        ? {
-            trust: "allowed" as const,
-            trustReason: "Loaded by sessions in this container.",
-            excludedReason: undefined,
-          }
-        : {}),
+        spec.scope === "claude-local"
+          ? "Container private local"
+          : "Container home (container's own file)",
     };
   });
 }
@@ -962,7 +1066,7 @@ const APPLY: Record<AgentPlatform, McpTargetCapabilities["apply"]> = {
     strategy: "directory-restart",
     impact: "directory",
     description:
-      "OpenCode reads configuration when its server starts; the change applies after the environment's OpenCode server restarts.",
+      "OpenCode rebuilds a worktree's project configuration in place once no session there is busy; open sessions use it from their next message. User files in OpenCode's config folder, and a container's OpenCode server, need a restart.",
   },
   cursor: {
     strategy: "idle-reattach",
@@ -1016,7 +1120,7 @@ const TERMINAL: Record<AgentPlatform, McpTargetCapabilities["terminal"]> = {
 const SIGN_IN: Record<AgentPlatform, McpCapabilityFlag> = {
   claude: flag(true),
   codex: flag(true),
-  opencode: flag(true),
+  opencode: flag(false, OPENCODE_MCP_SIGN_IN_GUIDANCE),
   cursor: flag(
     false,
     "Sign in to the server from Cursor itself; the Cursor SDK reuses that authorization.",

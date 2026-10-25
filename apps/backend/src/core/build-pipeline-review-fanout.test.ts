@@ -186,7 +186,11 @@ describe("build pipeline multi-model review", () => {
 
   test("fans out to every reviewer, consolidates, then addresses the merged report", async () => {
     await withPipeline(async ({ service, read, provider, packageGeneration }) => {
-      provider.usageFromMessages = () => ({ usedTokens: 12_345, sessionTokens: 12_345 });
+      provider.usageFromMessages = () => ({
+        usedTokens: 12_345,
+        sessionTokens: 12_345,
+        cacheReadTokens: 9_000,
+      });
       const started = await service.start(
         startInput([
           { agent: "claude", model: "opus" },
@@ -253,6 +257,7 @@ describe("build pipeline multi-model review", () => {
       ).toEqual({ "Review 1": "opus", "Review 2": "sonnet" });
       expect(reviewSessions.every((session) => session.completedAt !== undefined)).toBe(true);
       expect(reviewSessions.map((session) => session.tokenCount)).toEqual([12_345, 12_345]);
+      expect(reviewSessions.map((session) => session.cacheReadTokens)).toEqual([9_000, 9_000]);
       expect(reviewSessions.every((session) => session.structuredResultStatus === "accepted")).toBe(
         true,
       );
@@ -260,6 +265,12 @@ describe("build pipeline multi-model review", () => {
         (session) => session.label === "Consolidation",
       );
       expect(consolidationSession?.reviewReport?.reviewSummary).toBe("Merged review.");
+      // Overlap is counted from the cited source IDs before they are replaced
+      // by model labels, and kept on the session the fan-out record outlives.
+      expect(consolidationSession?.reviewOverlap).toMatchObject({ version: 1, reviewers: 2 });
+      expect(consolidationSession?.reviewOverlap?.positions.map((entry) => entry.position)).toEqual(
+        [1, 2],
+      );
       expect(consolidationSession?.structuredResultStatus).toBe("accepted");
       expect(addressing.structuredReviewRequestId).toBe(consolidationSession?.structuredRequestId);
       // Everything downstream reads one report, and the fan-out record is gone.

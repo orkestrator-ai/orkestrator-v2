@@ -217,7 +217,9 @@ export function reconcileForkPromptDraft(
  * Counting is, and a count is enough to tell the user what did not come across.
  */
 export function countForkPromptAttachments(message: NativeMessage): number {
-  return message.parts.filter((part) => part.type === "file").length;
+  // A published artifact is a scoped reference to this conversation's ledger;
+  // a fork cannot carry it into a new draft, so it is reported like a file.
+  return message.parts.filter((part) => part.type === "file" || part.type === "artifact").length;
 }
 
 /**

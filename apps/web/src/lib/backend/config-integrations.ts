@@ -1,4 +1,14 @@
 import { invoke } from "@/lib/native/backend";
+import type {
+  ControlMcpCredentialSummary,
+  ControlMcpProfile,
+} from "@orkestrator/protocol/control-mcp";
+import type { PublicCapability } from "@orkestrator/protocol/public-api-inputs";
+import {
+  invokeGlobalConfigCommand,
+  invokeRepositoryConfigCommand,
+  settingsOnCommandNode,
+} from "@/lib/portal/command-node-config";
 import { getGatewayBaseUrl, resolveGatewayLoopbackBaseUrl } from "@/lib/gateway-url";
 import type {
   Environment,
@@ -34,9 +44,14 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 /** PR detection result containing URL, state, and merge conflict status */
 
 import type { PrDetectionResult } from "./projects-environments";
+import { machineInvoke, type AccountMachine } from "./agent-accounts";
 
-export async function getConfig(): Promise<AppConfig> {
-  return invoke<AppConfig>("get_config");
+/**
+ * Workspace machine settings with the command node's inherited preferences.
+ * `machine` reads another machine's, as Settings does for the one it edits.
+ */
+export async function getConfig(machine?: AccountMachine): Promise<AppConfig> {
+  return invokeGlobalConfigCommand("get_config", undefined, machine);
 }
 
 export interface AgentModelCatalogCache {
@@ -67,13 +82,18 @@ export interface AgentModelCatalogCache {
  * Load the host-wide last-known-good catalogues, seeding Pi on first use. With
  * `seed`, the backend also downloads every enabled platform's missing catalogue
  * before answering, so only a caller that can wait in the background asks for it.
+ * `machine` selects the node whose catalogue is read and seeded.
  */
 export async function getAgentModelCatalogCache(
+  machine?: AccountMachine,
   options: { seed?: boolean } = {},
 ): Promise<AgentModelCatalogCache> {
-  return options.seed
-    ? invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache", { seed: true })
-    : invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache");
+  const args = options.seed ? { seed: true } : undefined;
+  return machine === undefined
+    ? args
+      ? invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache", args)
+      : invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache")
+    : machineInvoke<AgentModelCatalogCache>(machine, "get_agent_model_catalog_cache", args);
 }
 
 /** Discover Pi models without requiring an environment or persistent bridge. */
@@ -96,16 +116,19 @@ type HostModelCatalogRefreshResult = {
 export function refreshHostAgentModelCatalog(
   agent: "opencode",
   projectId: string,
+  machine?: AccountMachine,
 ): Promise<HostModelCatalogRefreshResult>;
 export function refreshHostAgentModelCatalog(
   agent: NonOpenCodeAgent,
   projectId?: never,
+  machine?: AccountMachine,
 ): Promise<HostModelCatalogRefreshResult>;
 export async function refreshHostAgentModelCatalog(
   agent: import("@orkestrator/protocol/agent-platforms").AgentPlatform,
   projectId?: string,
+  machine?: AccountMachine,
 ): Promise<HostModelCatalogRefreshResult> {
-  return invoke("refresh_host_agent_model_catalog", {
+  return machineInvoke(machine, "refresh_host_agent_model_catalog", {
     agent,
     ...(projectId ? { projectId } : {}),
   });
@@ -158,49 +181,68 @@ export async function saveConfig(config: AppConfig): Promise<void> {
 }
 
 export async function getGlobalConfig(): Promise<GlobalConfig> {
-  return invoke<GlobalConfig>("get_global_config");
+  return settingsOnCommandNode()
+    ? (await getConfig()).global
+    : invoke<GlobalConfig>("get_global_config");
 }
 
-export async function updateGlobalConfig(global: GlobalConfig): Promise<AppConfig> {
-  return invoke<AppConfig>("update_global_config", { global });
+export async function updateGlobalConfig(
+  global: GlobalConfig,
+  machine?: AccountMachine,
+): Promise<AppConfig> {
+  return invokeGlobalConfigCommand("update_global_config", { global }, machine);
 }
 
 /** Turn the startup reminder to set up the GitHub CLI off, or back on. */
 export async function setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
-  return invoke<AppConfig>("set_github_cli_reminder_dismissed", { dismissed });
+  return invokeGlobalConfigCommand("set_github_cli_reminder_dismissed", { dismissed });
 }
 
 export async function updateNotificationSoundSettings(
   settings: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings,
+  machine?: AccountMachine,
 ): Promise<AppConfig> {
-  return invoke<AppConfig>("update_notification_sound_settings", { settings });
+  return invokeGlobalConfigCommand("update_notification_sound_settings", { settings }, machine);
 }
 
-export async function setGitHubToken(token: string | null): Promise<AppConfig> {
-  return invoke<AppConfig>("set_github_token", { token });
+export async function setGitHubToken(
+  token: string | null,
+  machine?: AccountMachine,
+): Promise<AppConfig> {
+  return invokeGlobalConfigCommand("set_github_token", { token }, machine);
 }
 
-export async function setCursorApiKey(apiKey: string | null): Promise<AppConfig> {
-  return invoke<AppConfig>("set_cursor_api_key", { apiKey });
+export async function setCursorApiKey(
+  apiKey: string | null,
+  machine?: AccountMachine,
+): Promise<AppConfig> {
+  return invokeGlobalConfigCommand("set_cursor_api_key", { apiKey }, machine);
 }
 
-export async function setAnthropicApiKey(apiKey: string | null): Promise<AppConfig> {
-  return invoke<AppConfig>("set_anthropic_api_key", { apiKey });
+export async function setAnthropicApiKey(
+  apiKey: string | null,
+  machine?: AccountMachine,
+): Promise<AppConfig> {
+  return invokeGlobalConfigCommand("set_anthropic_api_key", { apiKey }, machine);
 }
 
 /** Read one platform's plan/quota windows from the backend. */
 export async function getPlanUsage(
   platform: AgentPlatform,
   options: { force?: boolean } = {},
+  machine?: AccountMachine,
 ): Promise<PlanUsageSnapshot> {
-  return invoke<PlanUsageSnapshot>("get_plan_usage", {
+  return machineInvoke<PlanUsageSnapshot>(machine, "get_plan_usage", {
     platform,
     ...(options.force ? { force: true } : {}),
   });
 }
 
-export async function setOpenCodeZenApiKey(apiKey: string | null): Promise<AppConfig> {
-  return invoke<AppConfig>("set_opencode_zen_api_key", { apiKey });
+export async function setOpenCodeZenApiKey(
+  apiKey: string | null,
+  machine?: AccountMachine,
+): Promise<AppConfig> {
+  return invokeGlobalConfigCommand("set_opencode_zen_api_key", { apiKey }, machine);
 }
 
 /**
@@ -208,22 +250,29 @@ export async function setOpenCodeZenApiKey(apiKey: string | null): Promise<AppCo
  *
  * Start returns the URL to open; the flow itself runs in the backend, which
  * spawns the bridge, parses its output and stores the credential. Callers open
- * the URL and poll `cursorSdkLoginStatus` until it leaves `pending`.
+ * the URL in this client's browser (`openInBrowser`) and poll
+ * `cursorSdkLoginStatus` until it leaves `pending`; the backend's login child
+ * opens no browser of its own. `machine` names another node to sign in,
+ * through the command node.
  */
-export async function cursorSdkLoginStart(): Promise<{ loginUrl: string }> {
-  return invoke<{ loginUrl: string }>("cursor_sdk_login_start", {});
+export async function cursorSdkLoginStart(machine?: AccountMachine): Promise<{ loginUrl: string }> {
+  return machineInvoke<{ loginUrl: string }>(machine, "cursor_sdk_login_start", {
+    openBrowser: false,
+  });
 }
 
-export async function cursorSdkLoginStatus(): Promise<CursorSdkLoginProgress> {
-  return invoke<CursorSdkLoginProgress>("cursor_sdk_login_status", {});
+export async function cursorSdkLoginStatus(
+  machine?: AccountMachine,
+): Promise<CursorSdkLoginProgress> {
+  return machineInvoke<CursorSdkLoginProgress>(machine, "cursor_sdk_login_status");
 }
 
-export async function cursorSdkLoginCancel(): Promise<void> {
-  await invoke<{ cancelled: boolean }>("cursor_sdk_login_cancel", {});
+export async function cursorSdkLoginCancel(machine?: AccountMachine): Promise<void> {
+  await machineInvoke<{ cancelled: boolean }>(machine, "cursor_sdk_login_cancel");
 }
 
-export async function cursorSdkLogout(): Promise<CursorSdkAuthStatus> {
-  return invoke<CursorSdkAuthStatus>("cursor_sdk_logout", {});
+export async function cursorSdkLogout(machine?: AccountMachine): Promise<CursorSdkAuthStatus> {
+  return machineInvoke<CursorSdkAuthStatus>(machine, "cursor_sdk_logout");
 }
 
 export async function getWebClientStatus(): Promise<WebClientStatus> {
@@ -273,8 +322,17 @@ export interface ControlMcpSettings {
   enabled: boolean;
   running: boolean;
   url: string;
+  /** The `default` credential's token. */
   token: string;
   error: string | null;
+  credentials: ControlMcpCredentialSummary[];
+}
+
+export interface CreateControlMcpCredentialInput {
+  label: string;
+  profile: ControlMcpProfile;
+  /** Omitted: the profile's preset. Required for `custom`. */
+  capabilities?: PublicCapability[];
 }
 
 export async function getControlMcpSettings(): Promise<ControlMcpSettings> {
@@ -285,6 +343,24 @@ export async function rotateControlMcpToken(): Promise<ControlMcpSettings> {
   return invoke<ControlMcpSettings>("rotate_control_mcp_token");
 }
 
+export async function createControlMcpCredential(
+  input: CreateControlMcpCredentialInput,
+): Promise<ControlMcpSettings> {
+  return invoke<ControlMcpSettings>("create_control_mcp_credential", { ...input });
+}
+
+export async function rotateControlMcpCredential(
+  credentialId: string,
+): Promise<ControlMcpSettings> {
+  return invoke<ControlMcpSettings>("rotate_control_mcp_credential", { credentialId });
+}
+
+export async function revokeControlMcpCredential(
+  credentialId: string,
+): Promise<ControlMcpSettings> {
+  return invoke<ControlMcpSettings>("revoke_control_mcp_credential", { credentialId });
+}
+
 export async function getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {
   return invoke<RepositoryConfig>("get_repository_config", { projectId });
 }
@@ -293,11 +369,11 @@ export async function updateRepositoryConfig(
   projectId: string,
   repoConfig: RepositoryConfig,
 ): Promise<AppConfig> {
-  return invoke<AppConfig>("update_repository_config", { projectId, repoConfig });
+  return invokeRepositoryConfigCommand("update_repository_config", { projectId, repoConfig });
 }
 
-export async function getLogDirectory(): Promise<string> {
-  return invoke<string>("get_log_directory");
+export async function getLogDirectory(machine?: AccountMachine): Promise<string> {
+  return machineInvoke<string>(machine, "get_log_directory");
 }
 
 export interface LogStorageStats {
@@ -305,12 +381,12 @@ export interface LogStorageStats {
   fileCount: number;
 }
 
-export async function getLogStorageStats(): Promise<LogStorageStats> {
-  return invoke<LogStorageStats>("get_log_storage_stats");
+export async function getLogStorageStats(machine?: AccountMachine): Promise<LogStorageStats> {
+  return machineInvoke<LogStorageStats>(machine, "get_log_storage_stats");
 }
 
-export async function cleanupLogs(): Promise<LogStorageStats> {
-  return invoke<LogStorageStats>("cleanup_logs");
+export async function cleanupLogs(machine?: AccountMachine): Promise<LogStorageStats> {
+  return machineInvoke<LogStorageStats>(machine, "cleanup_logs");
 }
 
 // --- Linear Commands ---

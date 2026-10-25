@@ -1,5 +1,34 @@
 import { expect, test } from "@playwright/test";
 
+test("compose gallery restores keyboard focus after Escape and the close button", async ({
+  page,
+}) => {
+  await page.goto("/native-compose?images");
+  const opener = page.getByRole("button", { name: "Preview second.svg" });
+  for (const close of ["Escape", "close button"]) {
+    await opener.focus();
+    await page.keyboard.press("Enter");
+    const dialog = page.getByRole("dialog", { name: "Image preview: second.svg" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("img", { name: "second.svg" })).toBeVisible();
+    await expect(dialog.getByRole("status")).toHaveCount(0);
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.getByRole("dialog", { name: "Image preview: first.svg" })).toBeVisible();
+    if (close === "Escape") await page.keyboard.press("Escape");
+    else await page.getByRole("button", { name: "Close image preview" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(opener).toBeFocused();
+    // Tab past the second thumbnail's remove button and back into the prompt.
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    const input = page.getByRole("textbox", { name: "Send a message" });
+    await expect(input).toBeFocused();
+    await page.keyboard.type("Continue");
+    await expect(input).toContainText("Continue");
+    await input.fill("");
+  }
+});
+
 test("compose controls stay reachable in a narrow viewport", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
   await page.goto("/native-compose");
@@ -42,6 +71,8 @@ test("compose controls stay reachable in a narrow viewport", async ({ page }, te
   await picker.click();
   await page.locator("[data-native-mobile-speed-trigger]").click();
   await page.getByRole("menuitemradio", { name: /^Fast/ }).click();
+  await expect(page.getByRole("menuitemradio", { name: /^Fast/ })).toBeChecked();
+  await page.keyboard.press("Escape");
   await expect(picker).toHaveAccessibleName(/High ⚡/);
 
   await page.getByRole("button", { name: "+123 queued" }).click();

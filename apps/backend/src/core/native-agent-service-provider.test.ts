@@ -1,5 +1,4 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
 import { promises as fs } from "node:fs";
 
@@ -37,14 +36,13 @@ import { openCodeFake } from "./agent-provider-test-support.js";
 import { OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE } from "./opencode-provider-list-test-fixtures.js";
 import { OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
 import { seedUnreadableStore } from "./storage-test-support.js";
-import { localAgentAccountIds } from "./agent-account-bridge-state.js";
+import { LocalServerRuntime } from "./local-server-runtime.js";
 
 import type { Environment } from "./models.js";
 
 import {
   NativeAgentService,
   nativeAgentSessionStorageKey,
-  type AgentInteractionObservation,
   type EnsureNativeAgentSessionInput,
   type NativeAgentServiceOptions,
 } from "./native-agent-service.js";
@@ -56,6 +54,7 @@ import {
   COORDINATOR_WORKSPACE_VERSION,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import { collaborators, interactionInternals } from "./native-agent-service-test-collaborators.js";
 
 /** The model earlier releases shipped as the OpenCode default. */
 const LEGACY_OPENCODE_DEFAULT_MODEL_ID = "opencode/claude-sonnet-5";
@@ -166,9 +165,6 @@ function createProviderStub(
 /** Reach the timer-driven scans and backoff bookkeeping the service keeps private. */
 function internals(service: NativeAgentService) {
   return service as unknown as {
-    drainPromptQueues(): Promise<void>;
-    drainPromptQueueOnce(queueKey: string): Promise<void>;
-    reconcilePendingLaunches(): Promise<void>;
     provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
     createProviderSession(
       provider: NativeAgentRuntimeProvider,
@@ -180,39 +176,6 @@ function internals(service: NativeAgentService) {
       model?: string,
       effort?: string,
     ): Promise<BridgeConnection>;
-    providerRegistry: ProviderRegistry;
-    activityRetryAt: Map<string, number>;
-    activityAttempts: Map<string, number>;
-    observedSessionActivity: Map<
-      string,
-      { providerSessionId: string; state: ProviderActivityState }
-    >;
-    pendingPrRefreshEnvironmentIds: Set<string>;
-    launchTasks: Map<string, Promise<void>>;
-    queueRetryAt: Map<string, number>;
-    queueAttempts: Map<string, number>;
-    launchRetryAt: Map<string, number>;
-    trackedInteractions: Map<string, unknown>;
-    providerReportedInteractions: Map<
-      string,
-      {
-        observationKey: string;
-        providerSessionKey: string;
-        missingSince?: number;
-      }
-    >;
-    interactionObservations: Map<string, AgentInteractionObservation>;
-    interactionRetryAt: Map<string, number>;
-    interactionAttempts: Map<string, number>;
-    monitoredInteractionSessionKeys: Set<string>;
-    observedInteractionRevisions: Map<string, number>;
-    interactionSelectionCursors: Map<string, number>;
-    interactionRevisionReconciliations: number;
-    projectionCache: Map<string, unknown>;
-    projectionEpochs: Map<string, number>;
-    projectionRefreshes: Map<string, Promise<unknown>>;
-    launchTimer: ReturnType<typeof setInterval> | null;
-    interactionTimer: ReturnType<typeof setInterval> | null;
   };
 }
 
@@ -236,6 +199,7 @@ async function withService(
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
     resolveAgentToolConnection?: NativeAgentServiceOptions["resolveAgentToolConnection"];
+    localBridgeAccountId?: NativeAgentServiceOptions["localBridgeAccountId"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -283,6 +247,7 @@ async function withService(
     ...(setup.resolveAgentToolConnection
       ? { resolveAgentToolConnection: setup.resolveAgentToolConnection }
       : {}),
+    ...(setup.localBridgeAccountId ? { localBridgeAccountId: setup.localBridgeAccountId } : {}),
   });
   try {
     await run({ storage, service });
@@ -1098,13 +1063,13 @@ describe("NativeAgentService", () => {
         });
         await service.reconcileAgentInteractions();
         current = unsupported.provider;
-        internals(service).providerRegistry.stateForTesting().providers.clear();
+        collaborators(service).providerRegistry.stateForTesting().providers.clear();
         await service.reconcileAgentInteractions();
         expect(service.getInteractionObservations()[0]).toMatchObject({
           providerState: "error",
           eventualOutcome: "expired",
         });
-        expect(internals(service).trackedInteractions.size).toBe(0);
+        expect(interactionInternals(service).trackedInteractions.size).toBe(0);
       },
     );
   });
@@ -1181,24 +1146,24 @@ describe("NativeAgentService", () => {
 
   describe("bridge connections", () => {
     test("binds local usage to the account recorded at bridge launch", async () => {
-      const key = "codex:env-1";
-      localAgentAccountIds.set(key, "account-a");
-      try {
-        await withService(
-          {
-            prefix: "orkestrator-native-bridge-account-",
-            invoke: (async () => ({ port: 4123, authToken: "token" })) as Invoke,
-          },
-          async ({ storage, service }) => {
-            const environment = (await storage.getEnvironment("env-1"))!;
-            expect(
-              (await internals(service).bridgeConnection("codex", environment)).accountId,
-            ).toBe("account-a");
-          },
-        );
-      } finally {
-        localAgentAccountIds.delete(key);
-      }
+      const localServers = new LocalServerRuntime();
+      localServers.adoptProcess("codex:env-1", {} as never, {
+        workingDirectory: "/workspace",
+        accountId: "account-a",
+      });
+      await withService(
+        {
+          prefix: "orkestrator-native-bridge-account-",
+          invoke: (async () => ({ port: 4123, authToken: "token" })) as Invoke,
+          localBridgeAccountId: (key) => localServers.launchedAccountId(key),
+        },
+        async ({ storage, service }) => {
+          const environment = (await storage.getEnvironment("env-1"))!;
+          expect((await internals(service).bridgeConnection("codex", environment)).accountId).toBe(
+            "account-a",
+          );
+        },
+      );
     });
     test.each([
       ["claude", "start_local_claude_server_cmd"],
@@ -1344,7 +1309,7 @@ describe("NativeAgentService", () => {
           expect(opencode.agent).toBe("opencode");
           expect(invoke).toHaveBeenCalledTimes(3);
           expect(
-            [...internals(service).providerRegistry.stateForTesting().providers.keys()].sort(),
+            [...collaborators(service).providerRegistry.stateForTesting().providers.keys()].sort(),
           ).toEqual(["env-1\u0000codex", "env-1\u0000opencode"]);
         },
       );
@@ -1372,7 +1337,7 @@ describe("NativeAgentService", () => {
           expect(replacement).not.toBe(first);
           expect(replacement.agent).toBe("cursor");
           expect(invoke).toHaveBeenCalledTimes(2);
-          expect(internals(service).providerRegistry.cached("env-1\0cursor")).toBe(replacement);
+          expect(collaborators(service).providerRegistry.cached("env-1\0cursor")).toBe(replacement);
         },
       );
     });
@@ -1720,6 +1685,43 @@ describe("MCP configuration evidence", () => {
           state: "not-running",
         });
         expect(commands).toEqual(["peek_local_agent_bridge"]);
+      },
+    );
+  });
+});
+
+describe("OpenCode MCP listing observation", () => {
+  test("an absent server returns undefined without invoking a start command", async () => {
+    const commands: string[] = [];
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      commands.push(command);
+      expect(command).toBe("peek_local_agent_bridge");
+      return null as T;
+    };
+    await withService({ prefix: "opencode-mcp-no-spawn-", invoke }, async ({ service }) => {
+      expect(await service.openCodeMcpServerNamesIfRunning("env-1")).toBeUndefined();
+      expect(commands).toEqual(["peek_local_agent_bridge"]);
+    });
+  });
+
+  test("a running server lists names through observation without a session or spawn", async () => {
+    const inventory = mock(async () => [
+      { id: "docs", name: "Documentation", status: "connected" as const, actions: [] },
+    ]);
+    const stub = createProviderStub("opencode");
+    await withService(
+      {
+        prefix: "opencode-mcp-observe-",
+        environment: { localOpencodePort: 12345, localOpencodePassword: "test" },
+        provider: async (input) => {
+          expect(input.agent).toBe("opencode");
+          return { ...stub.provider, mcpServers: inventory };
+        },
+      },
+      async ({ service }) => {
+        expect(await service.openCodeMcpServerNamesIfRunning("env-1")).toEqual(["Documentation"]);
+        expect(inventory).toHaveBeenCalledWith("");
+        expect(stub.createSession).not.toHaveBeenCalled();
       },
     );
   });

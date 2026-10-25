@@ -76,12 +76,12 @@ function withoutAmbientGatewayCredentials(headers: Record<string, string>): Reco
 
 export function installRemoteGatewayRequestAuth(
   webRequest: Pick<WebRequest, "onBeforeSendHeaders" | "onHeadersReceived">,
-  getAuthorization: (url: string) => string | null,
+  getAuthorization: (url: string, webContentsId?: number) => string | null,
   options: { browserPreviewOnly?: boolean } = {},
 ): void {
   const filter = { urls: ["http://*/*", "https://*/*"] };
   webRequest.onBeforeSendHeaders(filter, (details, callback) => {
-    const authorization = getAuthorization(details.url);
+    const authorization = getAuthorization(details.url, details.webContentsId);
     if (!authorization) {
       callback({ requestHeaders: details.requestHeaders });
       return;
@@ -105,7 +105,7 @@ export function installRemoteGatewayRequestAuth(
     });
   });
   webRequest.onHeadersReceived(filter, (details, callback) => {
-    const authorization = getAuthorization(details.url);
+    const authorization = getAuthorization(details.url, details.webContentsId);
     if (
       !authorization ||
       !canAttachGatewayAuthorization(details, options.browserPreviewOnly === true)
@@ -125,4 +125,22 @@ export function installRemoteGatewayRequestAuth(
       },
     });
   });
+}
+
+/** Persistent realm sessions outlive views. Route through the live renderer context. */
+export function createRealmRequestAuthInstaller(
+  scopeForContents: (id: number) => string | undefined,
+  getAuthorization: (url: string, scope: string) => string | null,
+): (contents: {
+  session: { webRequest: Pick<WebRequest, "onBeforeSendHeaders" | "onHeadersReceived"> };
+}) => void {
+  const installed = new WeakSet<object>();
+  return ({ session }) => {
+    if (installed.has(session.webRequest)) return;
+    installRemoteGatewayRequestAuth(session.webRequest, (url, webContentsId) => {
+      const scope = webContentsId === undefined ? undefined : scopeForContents(webContentsId);
+      return scope === undefined ? null : getAuthorization(url, scope);
+    });
+    installed.add(session.webRequest);
+  };
 }

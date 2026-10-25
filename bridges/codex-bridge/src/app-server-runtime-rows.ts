@@ -158,7 +158,7 @@ function awaitsSubagent(row: HistoricalAssistantSegmentState): boolean {
  * a later change to one of its items tracks it again (`trackChangedRows`).
  * Deliberately *not* `releaseTurnRenderState`: every row of a turn shares one
  * `fileChange` context, so releasing one would clear the live row's diff
- * baselines.
+ * cache.
  *
  * A row waiting on a sub-agent is held instead, up to
  * `MAX_HELD_ASSISTANT_ROWS`, because nothing but the probe would move its card.

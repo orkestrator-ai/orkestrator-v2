@@ -16,10 +16,12 @@ export async function dockerExec(
   command: string,
   timeoutMs = 120_000,
   redactValues?: ReadonlyArray<string | null | undefined>,
+  signal?: AbortSignal,
 ): Promise<string> {
   const { stdout } = await runCommand("docker", ["exec", containerId, "bash", "-lc", command], {
     timeoutMs,
     redactValues,
+    signal,
   });
   return stdout;
 }
@@ -93,31 +95,4 @@ export function shouldAddDockerHostGatewayAlias(
   // Linux Engine needs the alias.
   // An undetermined daemon keeps the platform default rather than guessing.
   return platform === "linux" && daemon !== "desktop" && daemon !== "remote";
-}
-
-/**
- * How long one `docker ps` snapshot may serve status reads. A multi-project
- * refresh fans out one `get_environments` per project almost simultaneously;
- * without this, each of them would run its own `docker ps`.
- */
-export const DOCKER_CONTAINER_STATE_CACHE_MS = 3_000;
-
-export let dockerContainerStateCache: {
-  fetchedAt: number;
-  ownershipKey: string;
-  states: Promise<Map<string, EnvironmentStatus> | null>;
-} | null = null;
-
-export function invalidateDockerContainerStateCache(): void {
-  dockerContainerStateCache = null;
-}
-
-export function setDockerContainerStateCache(
-  value: {
-    fetchedAt: number;
-    ownershipKey: string;
-    states: Promise<Map<string, EnvironmentStatus> | null>;
-  } | null,
-): void {
-  dockerContainerStateCache = value;
 }

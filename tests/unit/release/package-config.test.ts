@@ -152,9 +152,15 @@ describe("Electron packaging configuration", () => {
     // Closing a window destroys its previews and the preview transport it owns.
     expect(desktopMain).toContain("closing?.browserPreviewManager.destroyAll()");
     expect(desktopMain).toContain("closing?.previewTransport.disposeAll()");
-    // A connection switch builds previews in the new connection's partition.
-    expect(desktopMain).toContain("browserPreviewPartitionForWindow(slot, connectionId)");
-    expect(desktopMain).toContain("const nextPreviewRuntime = createWindowBrowserPreviews(");
+    // A connection switch builds previews in the new connection's partition,
+    // after use, connect, forget and a command handover alike. (A window never moves to another
+    // node; a realm builds its own previews when it opens.)
+    expect(desktopMain).toContain("browserPreviewPartitionForWindow(slot, partitionKey)");
+    expect(desktopMain).toContain(
+      "rebindWindowPreviews(context, connectionManager.getConnectionId",
+    );
+    expect(desktopMain.match(/followWindowConnection\((?:context|current)\);/g)).toHaveLength(4);
+    expect(desktopMain).toContain("const previews = createWindowBrowserPreviews(");
     expect(desktopMain.indexOf("registerIpc();")).toBeLessThan(
       desktopMain.indexOf("windowRequestGate.markReady()"),
     );
@@ -180,7 +186,7 @@ describe("Electron packaging configuration", () => {
     );
     expect(desktopMain.indexOf("await getMacOsPermissions()")).toBeGreaterThan(-1);
     expect(desktopMain.indexOf("await getMacOsPermissions()")).toBeLessThan(
-      desktopMain.indexOf("backend = await backendProcess.start"),
+      desktopMain.indexOf("backend = await startLocal()"),
     );
   });
 
@@ -226,6 +232,18 @@ describe("Electron packaging configuration", () => {
       NSPhotoLibraryUsageDescription:
         "Orkestrator checks Pictures, Movies, and Photos-library access at startup so agent searches are not interrupted later.",
     });
+  });
+
+  test("each release writes its own update channel's feed", async () => {
+    const { releasePublish } = await import("../../../electron-builder.release.config");
+    const { createLinuxReleaseConfig } =
+      await import("../../../electron-builder.release.linux.config");
+    const channelOf = (publish: unknown) => (publish as Array<{ channel?: string }>)[0]?.channel;
+    expect(channelOf(releasePublish("2.23.0"))).toBe("latest");
+    expect(channelOf(releasePublish("2.23.0-beta"))).toBe("beta");
+    expect(channelOf(releasePublish("2.24.0-alpha.2"))).toBe("alpha");
+    expect(channelOf(createLinuxReleaseConfig("2.23.0-beta").publish)).toBe("beta");
+    expect(() => releasePublish("2.23.0-rc.1")).toThrow("no update channel ships");
   });
 
   test("configures complete Linux release targets, package metadata, draft publication, and distinct artifact names", async () => {

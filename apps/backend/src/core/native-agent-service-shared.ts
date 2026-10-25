@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type {
   BuildPipelineAgent,
   PipelineSessionPhase,
@@ -82,6 +83,8 @@ import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review
 import type { StorageService } from "./storage.js";
 import type { DirectHistoryPageCacheLimits } from "./native-agent-direct-history.js";
 import type { ProjectedMessageCacheLimits } from "./native-agent-projection-entries.js";
+import type { ArtifactLedgerReader } from "./native-agent-service-projection-artifacts.js";
+import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import { PendingNativeAgentDispatchError, PendingNativeAgentSteerError } from "./storage.js";
 import {
   AmbiguousPromptDispatchError,
@@ -165,6 +168,8 @@ export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSession
   attachments?: PromptAttachment[];
   schema?: JsonSchema;
   mode?: ProviderExecutionMode;
+  /** Backend-authored queued prompts may require the durable session mode. */
+  requireSessionMode?: "plan";
   fastMode?: boolean;
   subAgent?: string;
   /**
@@ -375,6 +380,19 @@ export interface NativeAgentActivityTransition {
   observation?: ViewRevisionStamp;
 }
 
+/** See `NativeAgentServiceOptions.onObservationInvalidation`. */
+export interface NativeAgentObservationInvalidation {
+  environmentId: string;
+  sessionKey: string;
+  providerSessionId: string;
+  /** Unchanged since the previous observation. */
+  state: AgentActivityState;
+  agent: BuildPipelineAgent;
+  logicalSessionKey: string;
+  owner: "environment" | "coordinator";
+  observation: ViewRevisionStamp;
+}
+
 /**
  * Whether a transition means an agent turn just ended in this backend.
  *
@@ -418,6 +436,26 @@ export interface NativeAgentServiceOptions {
   interactionMonitorMaxRetries?: number;
   onInteractionObservation?: (observation: AgentInteractionObservation) => void | Promise<void>;
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
+  /**
+   * An idle (or released) session's view changed without an activity
+   * transition: its provider's content revision moved. Stamped from the same
+   * sequence as transitions. Only a view invalidation; nothing that hangs off
+   * turn edges (workflows, PR probes, mail) may consume it.
+   */
+  onObservationInvalidation?: (event: NativeAgentObservationInvalidation) => void;
+  /**
+   * Backend change tracking (docs/architecture/change-tracking.md). A getter
+   * because the tracking service is attached after this one is built.
+   */
+  changeTracking?: () => NativeAgentChangeTrackingHooks | null | undefined;
+  /** Account a live local Claude or Codex bridge (`<agent>:<environmentId>`) was launched on. */
+  localBridgeAccountId?: (key: string) => string | undefined;
+  /**
+   * The backend's replacement and move fence (`runtime.environments.fence`),
+   * which admits each prompt. A service built without one gets a private fence
+   * that nothing else closes.
+   */
+  environmentFence?: Pick<EnvironmentMutationFence, "beginAgentWork" | "assertAcceptsAgentWork">;
   /** Reports newly persisted, content-free background questions to the shell. */
   onAsyncQuestionAttention?: (event: { environmentId: string; sessionKey: string }) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */
@@ -428,6 +466,22 @@ export interface NativeAgentServiceOptions {
     tabId: string,
     target: "host" | "container",
   ) => { url: string; token: string };
+  /**
+   * Transcript-artifact turn bookkeeping. `beginTurn` attributes the
+   * conversation's artifact tool calls to the dispatched turn and, for a
+   * provider whose Orkestrator tool connection is environment-wide (no
+   * per-tab credential), returns an artifact-only grant the dispatch passes
+   * to the agent as trusted instructions. `settleTurn` revokes that turn's
+   * grants; already-admitted artifact work continues.
+   */
+  artifactDispatch?: ArtifactTurnDispatch;
+  /**
+   * The transcript-artifact publication ledger, read by projection to place
+   * each publication beside the call that published it. A getter because the
+   * artifact service is constructed after this one; absent or null means no
+   * artifact parts are projected (the renderer's own merge still runs).
+   */
+  artifactLedger?: () => ArtifactLedgerReader | null | undefined;
   /** Authoritative availability of the scoped worker-delegation MCP. */
   /**
    * Whether this conversation can actually reach the delegation tools.
@@ -437,6 +491,8 @@ export interface NativeAgentServiceOptions {
    * would be instructing it to use a tool it does not have.
    */
   coordinatorDelegationAvailable?: (platform: AgentPlatform) => boolean;
+  /** The coordinator's node-role line (leaf mode or command node), or null. */
+  coordinatorNodeContext?: () => Promise<string | null>;
   /** Test seam for exercising deterministic detail-cache capacity eviction. */
   toolDetailCacheMaxEntries?: number;
   /** Test seam for exercising deterministic detail-cache byte eviction. */
@@ -467,6 +523,37 @@ export interface NativeAgentServiceOptions {
     now: () => number;
     timers: import("./recurring-scheduler.js").RecurringTimerFactory;
   };
+}
+
+/** What native dispatch and the activity sweep need from change tracking. */
+export interface NativeAgentChangeTrackingHooks {
+  /**
+   * Capture the turn's fresh start before the provider runs. Bounded and
+   * never throwing; `held` only in strict-checkpoint mode.
+   */
+  prepareTurnStart(context: {
+    environmentId: string;
+    logicalSessionKey: string;
+    requestId: string;
+    provider: string;
+    /** The provider conversation this turn runs in (joins provider evidence). */
+    providerSessionId: string;
+  }): Promise<{ kind: "ready" | "degraded" | "untracked" } | { kind: "held"; reason: string }>;
+  markTurnDispatched(
+    environmentId: string,
+    logicalSessionKey: string,
+    requestId: string,
+    outcome: "accepted" | "rejected" | "uncertain",
+  ): void;
+  /** One bridge connection was just observed; pull its change evidence. */
+  noteProviderObserved(provider: NativeAgentRuntimeProvider, environmentId: string): void;
+  /** A conversation was forked; its child inherits history by reference. */
+  noteFork(input: {
+    environmentId: string;
+    provider: string;
+    parentLogicalSessionKey: string;
+    childProviderSessionId: string;
+  }): void;
 }
 
 export interface AgentInteractionObservation {

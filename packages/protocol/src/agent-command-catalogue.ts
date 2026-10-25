@@ -138,7 +138,9 @@ export function displayCommandName(name: string): string {
 
 function normalizeAvailability(value: unknown): NativeAgentCommandAvailability | undefined {
   if (!isRecord(value)) return undefined;
-  if (value.state !== "available" && value.state !== "unavailable") return undefined;
+  // A state this version does not know (a newer bridge's) falls through to
+  // unavailable below: it is never read as permission to run the command.
+  if (typeof value.state !== "string") return undefined;
   const reason =
     typeof value.reason === "string" && UNAVAILABLE_REASONS.has(value.reason)
       ? (value.reason as NativeAgentCommandAvailability["reason"])
@@ -194,6 +196,8 @@ export interface NormalizedCommandCatalogue {
   revision?: number;
   generation?: string;
   freshness?: "push" | "ttl";
+  /** See `BridgeCommandCatalogueResponse.attachPending`. */
+  attachPending?: boolean;
 }
 
 /**
@@ -332,6 +336,10 @@ export function normalizeCommandCataloguePayload(
     ...(revision !== undefined ? { revision } : {}),
     ...(generation ? { generation } : {}),
     ...(freshness ? { freshness } : {}),
+    // Only a non-authoritative list can be waiting for the rest of itself.
+    ...(enhanced && status === "stale" && record.attachPending === true
+      ? { attachPending: true }
+      : {}),
   };
 }
 
@@ -544,6 +552,14 @@ export interface BridgeCommandCatalogueResponse {
   generation?: string;
   freshness?: "push" | "ttl";
   truncated?: boolean;
+  /**
+   * With `status: "stale"`: the rows are what the bridge could read without
+   * starting the provider session, and the provider adds more commands once
+   * the session attaches (its first turn, or an explicit refresh). Pi lists
+   * its templates and skills before attach; extension commands need the
+   * extension runtime, which runs extension code.
+   */
+  attachPending?: boolean;
 }
 
 /** Catalogue state for an integration with no provider command surface. */

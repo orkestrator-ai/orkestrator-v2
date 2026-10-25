@@ -675,34 +675,79 @@ describe("build pipeline prompts", () => {
 
     expect(prompt).toContain("origin/develop");
     expect(prompt).toContain("resolve every merge conflict");
-    expect(prompt).toContain("run relevant validation");
-    expect(prompt).toContain(
-      "Skip tests, typechecking, and builds only when every changed path is prose documentation with no test, build, or tooling consumers and repository instructions permit skipping those checks",
-    );
-    expect(prompt).toContain("Always run repository-required checks");
-    expect(prompt).toContain("confirm no conflict markers remain");
+    expect(prompt).toContain("Choose validation from the repository's instructions");
+    expect(prompt).toContain("Confirm no conflict markers remain");
   });
 
-  test("documentation conflicts with auto-merged code still require merged-result validation", () => {
+  test("defers validation choices to repository instructions", () => {
     const prompt = resolveConflictsPrompt("develop");
 
     expect(prompt).toContain(
-      "all paths changed by the merge relative to the original pre-merge HEAD",
+      "Choose validation from the repository's instructions (such as AGENTS.md or CLAUDE.md). Where they say how to validate merge-conflict resolutions or documentation-only changes, follow them, including when they say no tests are needed.",
     );
-    expect(prompt).toContain("including auto-merged changes and conflict resolutions");
     expect(prompt).toContain(
-      "If documentation conflicts accompany auto-merged code, configuration, or tests, run relevant tests, typechecking, and build validation for the merged result",
+      "Run the full suite only when impact cannot be scoped or repository instructions require it.",
     );
-    expect(prompt).not.toContain("when every conflicted file is documentation");
+    expect(prompt).not.toContain("Always run repository-required checks");
   });
 
-  test("documentation location or extension cannot exempt executable or test-consumed files", () => {
+  test("skips tests for documentation-only conflicts unless repository instructions require them", () => {
+    const prompt = resolveConflictsPrompt("develop");
+
+    expect(prompt).toContain(
+      "Documentation-only conflicts: if the complete original conflict list contains only documentation or other non-code text not consumed by tests, builds, or tooling, and your resolution edits only those files, do not run tests, typechecking, lint, or builds unless repository instructions require them for this case.",
+    );
+    expect(prompt).toContain("Confirm no conflict markers remain");
+  });
+
+  test("does not require tests for cleanly auto-merged target-branch changes", () => {
+    const prompt = resolveConflictsPrompt("develop");
+
+    expect(prompt).toContain(
+      "Changes that merged cleanly from the target branch do not by themselves require tests, typechecking, or builds in this step unless repository instructions say so.",
+    );
+    expect(prompt).not.toContain("whole merge delta");
+    expect(prompt).not.toContain("Auto-merged code alongside prose-only conflicts");
+  });
+
+  test("retains source conflicts resolved to either parent after staging or committing", () => {
+    const prompt = resolveConflictsPrompt("develop");
+
+    expect(prompt).toContain(
+      "Before staging any resolution, capture the complete original unmerged path list with git diff --name-only --diff-filter=U -z",
+    );
+    expect(prompt).toContain(
+      "retain it in local Git metadata, outside tracked files, for resume, tied to this merge's parent commit IDs",
+    );
+    expect(prompt).toContain(
+      "Keep every original conflict in scope even if its resolution exactly matches either parent, including after staging or committing.",
+    );
+    expect(prompt).toContain(
+      "Code conflicts: if any original conflict is source, configuration, a test, or text consumed by tests, builds, or tooling, or your resolution edits such a file, run the validation repository instructions require for that change",
+    );
+  });
+
+  test("requires validation on resume when conflict scope is unknown", () => {
+    const prompt = resolveConflictsPrompt("develop");
+
+    expect(prompt).toContain("On resume, use the complete retained original conflict list.");
+    expect(prompt).toContain(
+      "Once staging has begun, the remaining live unmerged paths are not a complete original list; never overwrite the retained list with them.",
+    );
+    expect(prompt).toContain(
+      "Staged paths differing from both parents and a merge commit's combined diff cannot reconstruct that list",
+    );
+    expect(prompt).toContain("omit conflicts resolved to one parent and include clean auto-merges");
+    expect(prompt).toContain(
+      "If the original list is unavailable or incomplete, treat scope as unknown: do not apply the documentation-only skip; validate the merged result as repository instructions require for code changes",
+    );
+    expect(prompt).not.toContain("recover the conflicted files from merge state");
+  });
+
+  test("classifies files by role including executable content under docs", () => {
     const prompt = resolveConflictsPrompt("develop");
 
     expect(prompt).toContain("File role takes precedence over location or extension");
-    expect(prompt).toContain("source files (including .ts and .mdx under docs/)");
-    expect(prompt).toContain(
-      "Markdown consumed by tests, builds, or tooling require relevant validation",
-    );
+    expect(prompt).toContain("source files under docs/ (such as .ts or .mdx) count as code");
   });
 });

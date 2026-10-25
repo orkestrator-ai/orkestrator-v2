@@ -157,7 +157,7 @@ commands. Never use npm or yarn.
 ```bash
 bun install              # NOT npm install
 mise run <task>          # Repository-level task; NOT npm run
-mise run test            # Complete suite; NOT bare root-level `bun test`
+mise run test            # Default suite; NOT bare root-level `bun test`
 bun test <explicit-path> # Focused Bun test-runner invocation only
 bunx <package>           # NOT npx
 bun <file>               # NOT node <file>
@@ -181,12 +181,17 @@ Review preparation (the Build pipeline's package preparation and Multi Review)
 reads this file to decide which checks a change needs. Scale the plan to what
 the changed paths can affect instead of always running every suite:
 
-- Documentation-only changes (`*.md`, `docs/**`, `plans/**`) need no test
-  suite: `mise run format:check` is enough.
+- Documentation-only changes (prose in files such as `*.md`, `docs/**`, or
+  `plans/**`, not content consumed by tests, builds, or tooling) need no test
+  suite: `mise run format:check` is enough. This includes merge-conflict
+  resolutions confined to such files (see below). File role takes precedence
+  over location or extension; source under `docs/` still counts as code.
 - Every change to code or configuration runs `mise run format:check`,
   `mise run lint`, and `mise run typecheck`.
 - Code changes under `apps/`, `bridges/`, `packages/`, `scripts/`, or `tests/`
-  run `mise run test` (the complete non-iOS suite).
+  run `mise run test` (the non-iOS suite). It selects the slow area suites
+  itself from the change's import graph; do not add `mise run test:full` to
+  force them.
 - Treat dependency, lockfile, `mise.toml`, Turbo, test-runner, or
   `packages/protocol` changes as wide-reaching even when the diff is small;
   they always need `mise run test`.
@@ -198,6 +203,31 @@ the changed paths can affect instead of always running every suite:
   (`mise run test:agent:docker`), the published CLI
   (`mise run test:cli:scenarios`), and iOS (`mise run test:all`, macOS only).
   Omit them otherwise and say so in one limitation.
+
+#### Documentation-only merge-conflict resolution
+
+Resolving merge conflicts that are only in documentation needs no tests. When
+the complete original conflicted-path list shows that every conflict was in
+prose documentation or other non-code text not consumed by tests, builds, or
+tooling, and the manual resolution changes only those files, confirm no
+conflict markers remain and run `mise run format:check`. That is the whole
+validation for the step: do not run tests, lint, typechecking, builds, or
+scenario suites for it, even when code, configuration, or tests from the target
+branch merged cleanly alongside it. This rule takes precedence over the normal
+changed-path requirements above and over generic merge-validation guidance.
+
+Capture the complete original unmerged path list before staging any resolution
+and retain it with the merge's parent commit IDs in local Git metadata for
+resume. A conflict remains in scope even when resolved exactly to one parent's
+version. If the original list is unavailable or incomplete, do not infer a
+documentation-only scope from remaining unmerged paths, staged diffs, or a merge
+commit's combined diff; run relevant validation on the merged result, including
+the full suite when impact cannot be scoped.
+
+The exception does not waive outstanding validation required for the feature
+work or apply to new code/configuration changes, non-documentation conflict
+resolutions, or documentation consumed by tests, builds, or tooling. Those
+changes follow the normal validation requirements.
 
 ### Running tests
 
@@ -224,9 +254,10 @@ reusable mock functions in `tests/mocks/*`, mock narrow dependencies rather than
 shared app modules, and never add a competing global mock for a module another
 suite imports for real.
 
-Flakes are tracked only in
-[`docs/tests/flaky-tests/0000-index.md`](docs/tests/flaky-tests/0000-index.md).
-Search the index by test name or owning file; do not read every case file. A
+Flakes are tracked only in the group folders of
+[`docs/tests/flaky-tests/`](docs/tests/flaky-tests/0000-index.md); the top-level
+index only lists the groups. Search the group indexes by test name or owning
+file; do not read every case file. A
 failure is a flake only if the owning file passes when rerun alone; record it in
 the same change, and never hide one by skipping or loosening the test.
 
@@ -268,20 +299,30 @@ If another standalone `bun.lock` is added later, add its owning directory to
 both command lists and to the lockfile coverage in
 `tests/unit/version-drift.test.ts`.
 
-## Formatting and Linting - oxc
+`docker/artifact-preview-worker/package-lock.json` is the one npm lockfile: the
+worker image runs Node and installs with `npm ci`. When the backend's
+`playwright-core` pin changes, update that directory's `package.json` and
+regenerate the lockfile with the base image's own npm (`npm install
+--package-lock-only --ignore-scripts` in a container of the worker image); the
+drift test checks the manifest, lockfile, backend pin and base-image tag agree.
 
-Formatting is oxfmt and linting is oxlint; run them from the repo root with
+## Formatting, Linting and Typechecking
+
+Formatting is `bun fmt` (configured by `.oxfmtrc.json`, oxfmt-compatible output),
+linting is oxlint, and typechecking is `bun check` (TypeScript 7, the same
+version as the `typescript` dev dependency). Run them from the repo root with
 `mise run format`, `mise run format:check`, `mise run lint`, `mise run lint:fix`,
-or `mise run check` (format, lint and typecheck). Markdown and `docs/**` are not
-reformatted. Rationale and exclusions are in
-[`docs/development/linting.md`](docs/development/linting.md).
+`mise run typecheck`, or `mise run check` (format, lint and typecheck). Package
+`typecheck` scripts call `bun check -p <tsconfig>`; do not add a `check` script
+to a `package.json`, because `bun check` runs that script instead of the type
+checker. Markdown and `docs/**` are not reformatted. Rationale and exclusions
+are in [`docs/development/linting.md`](docs/development/linting.md).
 
-- Only `correctness` is enabled, as errors. `no-unused-vars` and the seven
-  React Compiler rules (`react/refs`, `react/set-state-in-effect`, …; listed in
-  `.oxlintrc.json`) are warnings for the pre-existing backlog: clean up files
-  you touch, never add new findings or silence them, and raise a rule to
-  `error` only once its backlog is gone. Warnings do not fail the build, so
-  read the output.
+- Only `correctness` is enabled, as errors, including the seven React
+  Compiler rules (`react/refs`, `react/set-state-in-effect`, …). The one
+  warning is `no-unused-vars`, for its pre-existing backlog: clean up files you
+  touch, never add new findings or silence it, and raise it to `error` only
+  once the backlog is gone. Warnings do not fail the build, so read the output.
 - Use a disable directive only when the rule is wrong about that site, with the
   reason above it. `oxlint-disable-next-line` sits above the **reported** line;
   `react-hooks/exhaustive-deps` needs a block `oxlint-disable`/`oxlint-enable`
@@ -300,8 +341,10 @@ reformatted. Rationale and exclusions are in
 
 ## Application Version Bumps
 
-When bumping the Orkestrator version, keep the top-level `version` field in all
-of these package manifests synchronized:
+Bump the Orkestrator version with `mise run release:version -- <version>`
+(`scripts/set-version.ts`). It sets the top-level `version` field in all of
+these package manifests, then regenerates and verifies the lockfiles as
+described in **Updating Bun and lockfiles**:
 
 - `package.json`
 - `apps/backend/package.json`
@@ -317,15 +360,16 @@ of these package manifests synchronized:
 - `packages/protocol/package.json`
 - `packages/toolchain/package.json`
 
-After a bump, run the following to verify every package manifest was included
-and has the intended version:
+A new versioned manifest must be added to this list and to
+`VERSIONED_MANIFESTS` in that script; `tests/unit/release/set-version.test.ts`
+fails until both name it. To check a bump by hand:
 
 ```bash
 rg -n '"version"\s*:' --glob 'package.json' --glob '!node_modules/**'
 ```
 
-Then follow **Updating Bun and lockfiles** above. A version-only bump still
-changes the workspace metadata in the root `bun.lock`; leaving the old values
+A bump made by hand must then follow **Updating Bun and lockfiles** above. A
+version-only bump still changes the workspace metadata in the root `bun.lock`; leaving the old values
 there causes a later non-frozen `bun install` to dirty an otherwise clean build
 worktree.
 
@@ -388,7 +432,7 @@ session surface. When touching the session catalogue
 - **The no-control fallback costs a process.** `createProbe()` spawns a whole
   Claude CLI, so `commandInventory` caches the catalogue the way `mcpInventory`
   already did. The backend re-reads both on every session projection
-  (`native-agent-service-projection.ts`), so an uncached fallback is one spawn
+  (`native-agent-transcript-projection.ts`), so an uncached fallback is one spawn
   per turn boundary rather than a one-off.
 - **Every SDK frame has a declared fate.** `HANDLED_SDK_MESSAGE_TYPES` and
   `SYSTEM_SUBTYPE_DISPOSITIONS` (`src/types/index.ts`) are `Record`s over the
@@ -565,6 +609,19 @@ rather than a name, and "signed in" is one answer per provider.
   model picker and a Pi terminal tab. `thinking_level_changed` is echoed back
   into the composer so the picker shows the level actually in force after Pi
   clamps it.
+- A session with no explicit model starts on Pi's saved default
+  (`defaultProvider`/`defaultModel`, what `/model` writes) when a signed-in
+  provider serves it, then on `PI_BRIDGE_DEFAULT_MODEL`, then on the
+  catalogue's first model (`defaultModelIds` in `agent-session.ts`). Never fall
+  straight to the first model: a login can refuse models its provider lists,
+  and a ChatGPT login refuses the first one (under `openai` since Pi 1.2.0,
+  and under the legacy `openai-codex`). Project settings count only when the
+  session trusts the project.
+- Tests run with `src/testing/test-isolation.ts` preloaded (`test:bridge`). It points
+  `PI_CODING_AGENT_DIR` at a temporary directory, so no test reads the
+  developer's saved default or writes `auth.json`/`models-store.json` into
+  their `~/.pi/agent`. A focused `bun test` outside `test:bridge` should add
+  `--preload ./src/testing/test-isolation.ts` or isolate its own directory.
 - `credentials.ts` reports per-provider status and deliberately implements no
   sign-in. Pi's login is an interactive multi-step prompt flow with no
   counterpart in Orkestrator's session surface, and the credential it writes is
@@ -586,8 +643,9 @@ When touching the Pi bridge:
   Losing the bridge's state costs a rendered transcript; it never costs the
   conversation. That is why `detachSession` keeps `sessionFile` and why a
   restart re-attaches to the same session rather than starting a new one.
-- Approvals are off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, matching the
-  permissive default every other bridge here uses. When on, every timeout,
+- Approvals follow the session's execution policy: `ask` parks a call, `deny`
+  refuses it, and a session with no policy runs as the host default,
+  `auto-approve`. When the gate asks, every timeout,
   disconnect, closing session and unparseable answer **denies**. A turn that
   ends with a call still parked denies it too — leaving it unanswered wedges the
   turn and, with it, the environment's activity state.
@@ -615,11 +673,10 @@ When touching the Pi bridge:
   await: new prompts get 409, one still preparing settles as cancelled, and
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).
-- Project-local `.pi/` resources are opt-in through
-  `PI_BRIDGE_PROJECT_RESOURCES`, and only the container launcher opts in. A Pi
-  extension is arbitrary TypeScript this process would execute, so cloning a
-  repository must not be enough to run its code — the same boundary
-  `ACP_APPROVE_PROJECT_MCPS` draws for the ACP bridge.
+- Project-local `.pi/` resources load only when the session's execution
+  policy turns `projectResources` on, on both host and container runs. Host
+  project resources are off by default. Enabling them permits repository MCP processes and Pi extensions
+  (arbitrary TypeScript) to run on the host.
 - Pi's SDK sessions load no MCP client (only its CLI loads the built-in `mcp`
   extension) and have no plan/build mode. The bridge owns an MCP client (`src/mcp.ts`) and registers tools through the inline
   `orkestrator-mcp` extension: Orkestrator from env / per-tab `agentMcp`,
@@ -662,12 +719,15 @@ When touching the SDK bridge:
   with native helpers, and a login needs no environment and no session.
 - The credential lives in Orkestrator's data directory, not the SDK's default
   `~/.cursor/sdk/auth.json`, so a container can be handed exactly one file.
-- Project settings (`.cursor/`) are read inside containers and not on the host,
-  so cloning a repository is not enough to run its code on the user's machine.
+- Project settings (`.cursor/`) load only when the resolved environment
+  execution policy enables project resources, on both host and container runs.
+  Host project resources are off by default; enabling them permits repository
+  configuration to start MCP processes on the host.
 - The Orkestrator Agent MCP server is injected from a per-tab `agentMcp`
   body or, as fallback, `ORKESTRATOR_AGENT_MCP_URL` /
   `ORKESTRATOR_AGENT_MCP_TOKEN` as `AgentOptions.mcpServers.orkestrator`
-  (`src/mcp.ts`). Host runs still do not load a repo's `.cursor/mcp.json`.
+  (`src/mcp.ts`). A repo's `.cursor/mcp.json` loads on the host only when
+  the resolved environment policy enables project resources.
   Native Cursor mail is on (`{canPull,canSend,canInject}=true`). A rotated
   tab token detaches and re-attaches the SDK agent; the bearer is never
   persisted.
@@ -837,7 +897,7 @@ answer.
 `bridges/claude-bridge/src/services/read-only-policy.ts` holds the read-only
 boundary for shell, because no tool-name rule can separate `git log` from
 `git commit` — which is why `capabilityPolicy`'s `shell.mutate` maps to no tool
-names at all. Two invariants keep it honest:
+names at all. Three invariants keep it honest:
 
 - **The command checked must be the command that runs.** `COMPOSITION_PATTERN`
   refuses anything that can become several commands, and a newline counts: the
@@ -845,11 +905,24 @@ names at all. Two invariants keep it honest:
   `ls\nrm -rf .` to a harmless-looking `ls`.
 - **The program name is not the whole command.** A program that launches another
   program does not belong in `READ_ONLY_COMMANDS` whatever it is called — `env`
-  is absent for that reason. Where a reading tool has a writing flag, name it in
-  `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`, `yq -i`) rather than dropping
-  the tool. Git subcommands whose effect depends on their arguments belong in
+  is absent for that reason, and a path (`bin/cat`) names whatever the checkout
+  put there, so programs run by bare name only. Where a reading tool has a
+  writing flag, name it in `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`,
+  `yq -i`) rather than dropping the tool; a one-letter flag there also matches
+  inside a cluster or with its value attached (`-no out`, `-oout`). A tool that
+  writes a positional (`uniq in out`) belongs in `POSITIONAL_LIMITS`, and one
+  with too many writing options to list (gawk) in `OPTION_ALLOWLISTS`. Git
+  subcommands whose effect depends on their arguments belong in
   `CONDITIONAL_GIT_SUBCOMMANDS`, not the flat read-only set: `branch`, `tag`,
   `remote` and `config` all read in one form and write in another.
+- **Assume no sandbox behind it.** The SDK sandbox lets a command write its
+  working directory, which for a coordinator is the user's checkout, so
+  `claudeReadOnlySandbox` denies writes there (`filesystem.denyWrite`). Where
+  the sandbox cannot start at all (Windows, Linux without bubblewrap and
+  socat; the launcher says so in `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`)
+  this allowlist is the whole boundary. A command it admits must neither write
+  nor reach the network on its own, which is why `gh`, `curl` and
+  `git ls-remote` are refused rather than left to the sandbox.
 
 ### Backend
 
@@ -881,7 +954,7 @@ views stay sandboxed.
 
 ## Docker Base Image
 
-The image is built from `oven/bun:1.4.3-debian`, pinned by its multi-architecture
+The image is built from `oven/bun:1.4.4-debian`, pinned by its multi-architecture
 index digest on both stages, matching the Bun version managed in `mise.toml`
 for development and CI. Refresh the digest deliberately (`docker buildx
 imagetools inspect oven/bun:<tag>`) for a Bun bump or a base security update;
@@ -1022,14 +1095,16 @@ else is rejected outright. `full` mode skips the firewall entirely.
   providers, so a self-hosted endpoint or a regional mirror is a host only the
   user knows and belongs in `allowedDomains` rather than being guessed at.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
-  (`apps/backend/src/core/storage-shared-core.ts`): GitHub, npm, Bun, the
+  (`packages/protocol/src/network-allowlist.ts`): GitHub, npm, Bun, the
   Anthropic API, Sentry/Statsig, the VS Code marketplace, Context7, and
-  Playwright's CDN. `docker/init-firewall.sh` and `configStore.ts` carry their
-  own, broader default lists as fallbacks; the three are not identical, so read
-  the one that applies before assuming a host is reachable. They are not required
-  to match, but `tests/unit/version-drift.test.ts` does require the hosts the
-  image itself depends on to appear in all three, so a new one cannot be added to
-  only one list.
+  Playwright's CDN. It is the only default list. The renderer seeds its
+  unloaded config from the same constant, and the firewall's fallback for a
+  container with no `ALLOWED_DOMAINS`, `docker/default-allowed-domains`, is
+  generated from it plus every platform's required hosts
+  (`bun scripts/generate-default-allowed-domains.ts`).
+  `tests/unit/version-drift.test.ts` fails when the committed file is stale or
+  a copy of the list reappears elsewhere. A stored user list is never widened
+  to match the defaults.
 - DNS (to Docker's resolvers and the upstreams its embedded resolver names)
   and localhost are always allowed. There is no general outbound SSH
   exception: SSH reaches GitHub's published ranges and, under policy 3, only
@@ -1376,6 +1451,11 @@ that a missed event can be recovered.
   or installed dependencies require stopping and starting the profile again.
 - Backend business-logic changes generally require a restart because the
   supervised backend is not a Vite module.
+- Bridge changes need a rebuild first: a profile runs local bridges from
+  `bridges/<name>/dist/index.js`, and `dev:test` bundles only Electron. Run
+  that bridge's `build` script (for example
+  `bun run --cwd bridges/codex-bridge build`), then restart the profile, or
+  the run silently exercises the old bridge.
 - Use `dev:reset` only when the scenario requires pristine persisted state. A
   normal implementation loop should preserve the profile so reload and
   rehydration behavior remain testable.
@@ -1445,15 +1525,20 @@ report whether its state was reset or deliberately retained.
 
 ### Flaky Test Tracking
 
-Keep [`docs/tests/flaky-tests/0000-index.md`](docs/tests/flaky-tests/0000-index.md)
+Keep the flake registry in [`docs/tests/flaky-tests/`](docs/tests/flaky-tests/0000-index.md)
 current whenever test behavior shows a credible flake. That directory is the
-only flake registry — do not start a second one. Search the index by test name
-or owning file; read the **Status** column before opening a case file. Do not
-read every `NNNN-*.md` file.
+only flake registry — do not start a second one. Cases live in ten group
+folders, each with its own `0000-index.md` table; the top-level index only
+names the groups and what they cover, and never holds case rows. Search the
+group indexes by test name or owning file
+(`rg '<name>' docs/tests/flaky-tests/*/0000-index.md`); read the **Status**
+column before opening a case file. Do not read every `NNNN-*.md` file.
 
 If a test fails in the normal aggregate or parallel suite but passes when its
-owning file is rerun alone, add or update the matching numbered case file and
-its index row in the same change. Record the exact test name and file, the
+owning file is rerun alone, add or update the matching numbered case file in
+its group folder and that group's index row in the same change. Append new
+rows at the end of the group table and change status in place, so parallel
+branches touch different lines. Record the exact test name and file, the
 original command and worker configuration, the failure message and duration when
 available, suite counts, the isolated rerun command and result, the observation
 date, and any evidence-backed hypothesis or reproduction notes.

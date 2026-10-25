@@ -3,6 +3,7 @@ import {
   type SetStateAction,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -58,8 +59,19 @@ export function useDurableComposeDraft<T>({
     () => composeDraftKey(namespace, ownerId, localKey),
     [localKey, namespace, ownerId],
   );
-  const revisionState = useMemo(createDraftRevisionState, [key]);
+  // Each draft key gets its own revision fence, created when the key changes.
+  const [revision, setRevision] = useState(() => ({
+    key,
+    state: createDraftRevisionState(),
+  }));
+  let revisionState = revision.state;
+  if (revision.key !== key) {
+    revisionState = createDraftRevisionState();
+    setRevision({ key, state: revisionState });
+  }
   const [value, setValue] = useState(initialValue);
+  // Every `setValue` below writes this first, so it always holds the newest
+  // value, including one React has not rendered yet.
   const valueRef = useRef(value);
   const initialRef = useRef(initialValue);
   const isEmptyRef = useRef(isEmpty);
@@ -68,10 +80,24 @@ export function useDurableComposeDraft<T>({
   const clearedKeyRef = useRef<string | null>(null);
   const [hydratedKey, setHydratedKey] = useState<string | null>(null);
 
-  valueRef.current = value;
-  initialRef.current = initialValue;
-  isEmptyRef.current = isEmpty;
-  isValidRef.current = isValid;
+  // Latest options, published at commit and before the effects below read them.
+  useLayoutEffect(() => {
+    initialRef.current = initialValue;
+    isEmptyRef.current = isEmpty;
+    isValidRef.current = isValid;
+  });
+
+  // The state half of the hydration effect below, applied while rendering
+  // when the draft it owns changes. Hydration starts from the initial value;
+  // a disabled draft has nothing hydrated. `valueRef` is left to the effect:
+  // the previous draft's cleanup still flushes it under the previous key.
+  const hydrationScope = JSON.stringify([enabled, key, ownerType]);
+  const [renderedHydrationScope, setRenderedHydrationScope] = useState(hydrationScope);
+  if (renderedHydrationScope !== hydrationScope) {
+    setRenderedHydrationScope(hydrationScope);
+    if (enabled) setValue(initialValue);
+    else setHydratedKey(null);
+  }
 
   const persistValue = useCallback(
     (draftKey: string, nextValue: T): Promise<void> =>
@@ -84,7 +110,7 @@ export function useDurableComposeDraft<T>({
   );
 
   const reportPersistenceError = useCallback(
-    (error: unknown, draftKey: string): void => {
+    function reportPersistenceError(error: unknown, draftKey: string): void {
       const discarding = clearedKeyRef.current === draftKey || isEmptyRef.current(valueRef.current);
       if (!(error instanceof DraftRevisionConflictError)) {
         console.warn(`[${namespace}] Failed to persist draft:`, error);
@@ -126,15 +152,11 @@ export function useDurableComposeDraft<T>({
   );
 
   useEffect(() => {
-    if (!enabled) {
-      setHydratedKey(null);
-      return;
-    }
+    if (!enabled) return;
     let disposed = false;
     let hydrated = false;
     let loadSucceeded = false;
     const revisionAtRequest = editRevisionRef.current;
-    setValue(initialRef.current);
     valueRef.current = initialRef.current;
 
     void loadComposeDraft<T>(key, revisionState)

@@ -21,7 +21,6 @@ import {
   normalizeCodexCollabToolCallItem,
   reconcileCodexSubagentTimeline,
 } from "../codex-collaboration.js";
-import { relative } from "node:path";
 import { deriveTranscriptSubagentPartsForTurn } from "../subagent-transcript-parts.js";
 import { indexAgentPaths } from "../subagent-spawn.js";
 import {
@@ -34,7 +33,6 @@ import {
   resolvePersistedChildThreadIds,
 } from "../history/rollout.js";
 import { isWithheldMachineOutput } from "@orkestrator/protocol/structured-output";
-import { BaselineMap, beginTurn, touchBaseline } from "./diff-budget.js";
 import { agentMessageDisplayText, isAuthoritativeAgentMessage } from "./agent-message.js";
 import { hasVisibleText, itemToParts } from "./normalization.js";
 import { withCommandChanges } from "../sessions/command-changes.js";
@@ -133,35 +131,16 @@ export function createTurnRenderState(): TurnRenderState {
     subagentActivity: true,
     subagentSettled: false,
     subagentEvidenceVersion: -1,
-    fileChange: { baselines: new BaselineMap(), cache: new Map() },
+    fileChange: { cache: new Map() },
   };
-}
-
-/**
- * Resets per-turn render state while **carrying baselines forward**.
- *
- * Baselines are what make a second edit to the same file diff against the
- * previous turn's content. Discarding them would make every turn diff against
- * git HEAD, so turn 3 would re-display the changes from turns 1 and 2 as if they
- * were new. The per-item cache *is* turn-scoped and is cleared.
- */
-export function beginTurnRenderState(previous: TurnRenderState | undefined): TurnRenderState {
-  const fresh = createTurnRenderState();
-  if (!previous) return fresh;
-  fresh.fileChange = previous.fileChange;
-  beginTurn(fresh.fileChange);
-  return fresh;
 }
 
 /**
  * Render state for the next assistant row of the **same** turn.
  *
  * Row-scoped state (timeline, completed-part and sub-agent caches) starts
- * fresh; turn-scoped state is shared. That includes the per-item diff cache,
- * deliberately not cleared as `beginTurn` would: a file change's diff is
- * computed once, against the baseline before it, and the baseline is advanced
- * to the change's result in the same step. Recomputing it for a row still
- * rendering an earlier change would diff the file against itself.
+ * fresh; turn-scoped state is shared, the per-item diff cache included, so a
+ * row still rendering an earlier change reuses that change's diff.
  */
 export function beginAssistantRowRenderState(previous: TurnRenderState): TurnRenderState {
   const fresh = createTurnRenderState();
@@ -184,20 +163,7 @@ export function releaseTurnRenderState(state: TurnRenderState): void {
   state.subagentOwners.clear();
   state.subagentProbedAt = 0;
   state.subagentSettled = false;
-  state.fileChange.baselines.clear();
   state.fileChange.cache.clear();
-}
-
-function touchCachedPartBaselines(
-  parts: readonly NormalizedPart[],
-  cwd: string,
-  baselines: BaselineMap,
-): void {
-  for (const part of parts) {
-    const filePath = part.toolDiff?.filePath;
-    if (!filePath) continue;
-    touchBaseline(baselines, relative(cwd, filePath));
-  }
 }
 
 function joinReasoning(summary: string[], content: string[]): string {
@@ -898,11 +864,6 @@ export async function renderTurn(
           cached?.source === accumulator.item &&
           cached.commandChanges === accumulator.commandChanges
         ) {
-          // `itemToParts` touches a file's baseline while rendering its diff.
-          // A completed-item cache hit skips that function, so without the
-          // equivalent touch here an actively re-rendered file looks cold to
-          // the LRU and can be evicted ahead of truly unused baselines.
-          touchCachedPartBaselines(cached.parts, options.cwd, options.state.fileChange.baselines);
           if (!suppressDraft) parts.push(...cached.parts);
         } else {
           const itemParts = withCommandChanges(

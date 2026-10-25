@@ -3,6 +3,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   FileCode,
+  GitPullRequest,
   Globe2,
   Paintbrush,
   Terminal as TerminalIcon,
@@ -29,7 +30,7 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { useFileDirtyStore } from "@/stores";
-import { openAgentMailForTab } from "@/components/agent-mail/AgentMailButton";
+import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { agentMailCapabilities, resolveTabDisplayName } from "@orkestrator/protocol/agent-mail";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -37,6 +38,8 @@ import type { TabType } from "@/contexts";
 import { getWorkflowTabTitle } from "./workflow-tab-title";
 import { TAB_ICON_CLASS, TabShell } from "./TabShell";
 import { useConfigStore } from "@/stores/configStore";
+import { usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { parsePreviewTabTarget } from "@orkestrator/protocol/preview-services";
 
 /** Check if a tab type is an OpenCode variant (terminal or native mode) */
 const isOpenCodeTab = (type: TabType): boolean => type === "opencode";
@@ -152,18 +155,30 @@ export function DraggableTab({
     return state.workflows.get(tab.multiReviewTabData.workflowId)?.phase;
   });
 
+  // A service tab is named after its service once its environment's list is loaded.
+  const serviceLabel = usePreviewServiceStore((state) => {
+    if (tab.type !== "browser") return undefined;
+    const target = parsePreviewTabTarget(tab.browserData?.url);
+    if (target.kind !== "service") return undefined;
+    return state.service(target.ref.environmentId, target.ref.serviceId)?.definition.label;
+  });
+
   // Check if file tab has unsaved changes
   const isDirty = useFileDirtyStore((state) =>
     tab.type === "file" ? state.isDirty(tab.id) : false,
   );
 
   const style = {
-    transform: CSS.Transform.toString(transform),
+    transform: CSS.Translate.toString(transform),
     transition,
   };
 
   // Get tab title based on type and session name
   const getTabTitle = () => {
+    if (tab.type === "pull-request" && tab.pullRequestData) {
+      const { ref, title } = tab.pullRequestData;
+      return title ? `#${ref.number} ${title}` : `${ref.repo} #${ref.number}`;
+    }
     if (tab.type === "file" && tab.fileData) {
       const parts = tab.fileData.filePath.split("/").filter(Boolean);
       return parts.at(-1) ?? tab.fileData.filePath;
@@ -246,7 +261,7 @@ export function DraggableTab({
         : `Multi Review ${tabNumber}`;
     }
     if (tab.type === "design-canvas") return `Design ${tabNumber}`;
-    if (tab.type === "browser") return `Browser ${tabNumber}`;
+    if (tab.type === "browser") return `${serviceLabel || "Browser"} ${tabNumber}`;
     if (tab.type === "root") return `ROOT ${tabNumber}`;
     return `Tab ${tabNumber}`;
   };
@@ -260,6 +275,9 @@ export function DraggableTab({
       return <Paintbrush className="h-3 w-3 shrink-0 text-violet-400" />;
     if (tab.type === "browser") {
       return <Globe2 className="h-3 w-3 shrink-0 text-sky-400" />;
+    }
+    if (tab.type === "pull-request") {
+      return <GitPullRequest className="h-3 w-3 shrink-0 text-success" />;
     }
     if (tab.type === "agent-native") {
       const platform = nativeAgentData?.platform;
@@ -303,9 +321,11 @@ export function DraggableTab({
   const isFileTab = tab.type === "file" && !!tab.fileData;
   const tooltipContent = isFileTab
     ? tab.fileData?.filePath
-    : workflowTitle
-      ? session?.name || nativeSessionTitle
-      : undefined;
+    : tab.type === "pull-request" && tab.pullRequestData
+      ? `${tab.pullRequestData.ref.owner}/${tab.pullRequestData.ref.repo} #${tab.pullRequestData.ref.number}${tab.pullRequestData.title ? ` · ${tab.pullRequestData.title}` : ""}`
+      : workflowTitle
+        ? session?.name || nativeSessionTitle
+        : undefined;
   const setTabRefs = useCallback(
     (node: HTMLDivElement | null) => {
       setNodeRef(node);
@@ -356,29 +376,8 @@ export function DraggableTab({
       <ContextMenuContent>
         {owningEnvironmentId && messagingEnabled && mailCapabilities.canPull && (
           <>
-            <ContextMenuItem
-              onClick={() =>
-                openAgentMailForTab(
-                  owningEnvironmentId,
-                  tab.id,
-                  "compose",
-                  tooltipAnchorRef.current,
-                )
-              }
-            >
-              Message this tab…
-            </ContextMenuItem>
-            <ContextMenuItem
-              onClick={() =>
-                openAgentMailForTab(
-                  owningEnvironmentId,
-                  tab.id,
-                  "settings",
-                  tooltipAnchorRef.current,
-                )
-              }
-            >
-              Inbox settings…
+            <ContextMenuItem onClick={() => openAgentMailForTab(owningEnvironmentId, tab.id)}>
+              Messages…
             </ContextMenuItem>
             <ContextMenuSeparator />
           </>

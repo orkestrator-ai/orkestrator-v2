@@ -41,6 +41,7 @@ export function hostMaintenanceSnapshotFixture(
     tasks: {},
     nextRelease: null,
     ghChannel: "pinned",
+    updateChannel: "stable",
     ...overrides,
   };
 }

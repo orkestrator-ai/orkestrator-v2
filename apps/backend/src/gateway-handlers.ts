@@ -34,6 +34,7 @@ import type {
   DrainAwareEventClientWriter,
   GatewayEventClient,
 } from "./gateway-internals.js";
+import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import { recurringWorkDiagnostics } from "./core/recurring-diagnostics.js";
 
 /** The invoke, event-stream, metrics and loopback-proxy routes. */
@@ -55,6 +56,7 @@ export class GatewayHandlers {
     request: IncomingMessage,
     response: ServerResponse,
     requestMetrics: GatewayRequestMetrics,
+    options: { refuseCommand?: (command: string) => boolean } = {},
   ): Promise<void> {
     if (request.method !== "POST") {
       response.writeHead(405, { allow: "POST" });
@@ -87,6 +89,10 @@ export class GatewayHandlers {
     const args = body.args;
     if (typeof command !== "string") {
       jsonResponse(response, 400, { error: "Expected command to be a string" });
+      return;
+    }
+    if (options.refuseCommand?.(command)) {
+      jsonResponse(response, 403, { error: "This credential cannot run that command." });
       return;
     }
     const commandLimit = Object.hasOwn(INVOKE_COMMAND_BODY_LIMITS, command)
@@ -315,6 +321,8 @@ export class GatewayHandlers {
       replay: { ...snapshot.replay, ring: this.ctx.eventReplay.getStats() },
       // Additive: bounded, content-free recurring-work counters (kinds only).
       recurringWork: recurringWorkDiagnostics(),
+      // Additive: content-free mixed-version compatibility-path usage.
+      compatibilityPaths: compatibilityPathUsage.snapshot().paths,
     });
   }
 

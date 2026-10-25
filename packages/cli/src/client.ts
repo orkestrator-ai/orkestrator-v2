@@ -2,8 +2,9 @@
  * Entry bundle for the published `orkestrator` launcher (bin/orkestrator.js).
  *
  * It decides — before the backend is ever imported — whether an invocation
- * runs the foreground service or a client command. Client commands, help and
- * version never import `dist/main.js`, never create a data directory, and
+ * runs the foreground service, a client command, or `--fix` (which opens a
+ * coding agent to help report a problem). Client commands, help, version and
+ * `--fix` never import `dist/main.js`, never create a data directory, and
  * never start a listener, bridge, or backend child.
  */
 import {
@@ -13,11 +14,13 @@ import {
   validateServerArguments,
 } from "../../../apps/backend/src/server-flags.js";
 import { GLOBAL_OPTIONS } from "./client/argv.js";
+import { isFixInvocation, runFixProcess } from "./client/fix.js";
 import { COMMAND_TREE, runClient, runClientProcess } from "./client/main.js";
 
 export type Invocation =
   | { mode: "serve"; args: string[] }
   | { mode: "client"; argv: string[] }
+  | { mode: "fix"; argv: string[] }
   | { mode: "error"; message: string };
 
 const CLIENT_WORDS = new Set([
@@ -43,6 +46,7 @@ function flagName(token: string): string {
 
 export function classifyInvocation(argv: readonly string[]): Invocation {
   if (argv.length === 0) return { mode: "serve", args: [] };
+  if (isFixInvocation(argv)) return { mode: "fix", argv: [...argv] };
   const first = argv[0]!;
   if (first === "serve") {
     const rest = argv.slice(1);
@@ -96,7 +100,7 @@ export function classifyInvocation(argv: readonly string[]): Invocation {
   };
 }
 
-export { runClient, runClientProcess, SERVER_BOOLEAN_FLAGS, SERVER_VALUE_FLAGS };
+export { runClient, runClientProcess, runFixProcess, SERVER_BOOLEAN_FLAGS, SERVER_VALUE_FLAGS };
 
 /** Render a launcher-level classification error in the requested mode. */
 export function renderInvocationError(argv: readonly string[], message: string): number {

@@ -22,6 +22,7 @@ const PROVIDER_SOURCE_FILES = [
   "opencode-review-session-permissions.ts",
   "opencode-workflow-result-broker.ts",
   "opencode-session-lifecycle.ts",
+  "opencode-session-policy.ts",
   "opencode-snapshots.ts",
 ] as const;
 

@@ -12,7 +12,7 @@
 # only each bridge's runtime output. Same pinned base (and glibc) as the final
 # stage, so vendored native helpers match the runtime.
 # ---------------------------------------------------------------------------
-FROM oven/bun:1.4.3-debian@sha256:923bedb355f7746666659f71e724998159a5c8c54bd1cb1030e1975a0698415b AS bridge-build
+FROM oven/bun:1.4.4-debian@sha256:93d5032fe06d163427822dc1598f420363759bb18155c9cc90eb1be05a64a19e AS bridge-build
 WORKDIR /opt/bridge-build
 # Manifests first: a source edit reuses the install layer; a lockfile, patch or
 # manifest edit invalidates it. Every workspace manifest is present so the
@@ -60,7 +60,7 @@ RUN cd bridges/cursor-bridge && bun run build && rm -rf node_modules
 # ---------------------------------------------------------------------------
 # Development runtime image.
 # ---------------------------------------------------------------------------
-FROM oven/bun:1.4.3-debian@sha256:923bedb355f7746666659f71e724998159a5c8c54bd1cb1030e1975a0698415b
+FROM oven/bun:1.4.4-debian@sha256:93d5032fe06d163427822dc1598f420363759bb18155c9cc90eb1be05a64a19e
 
 ARG TZ
 ENV TZ="$TZ"
@@ -95,6 +95,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   nano \
   vim \
   tmux \
+  inotify-tools \
   locales \
   && apt-get clean && rm -rf /var/lib/apt/lists/* \
   && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
@@ -189,11 +190,11 @@ ENV VISUAL=nano
 #   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
-ARG CLAUDE_CLI_VERSION=2.1.296
-ARG CODEX_CLI_VERSION=0.162.1
-ARG OPENCODE_CLI_VERSION=1.19.0
-ARG GROK_BUILD_VERSION=1.0.52
-ARG PI_CLI_VERSION=1.2.0
+ARG CLAUDE_CLI_VERSION=2.1.309
+ARG CODEX_CLI_VERSION=0.164.0
+ARG OPENCODE_CLI_VERSION=1.19.4
+ARG GROK_BUILD_VERSION=1.0.67
+ARG PI_CLI_VERSION=1.4.0
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies.
@@ -205,8 +206,8 @@ ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude
 # Retry transient release-host failures with bounded attempts and timeouts.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=7bb9e61ad6feacf2e89c10a6a2c1840e3de4220bb50ba1fc7110f31806076aec ;; \
-    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=e9841d43d3e1a8f36ed2691592d3b8b4fb097e606c8b559a277a1b845840e26b ;; \
+    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=849bd6b3d959a1d2ef200ed1634a51c79a45ca236aa26665d75debd694805cce ;; \
+    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=8568230ccd847dc93e95b9f6894379077d3e014a16b48040743573e77c23e85f ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   mkdir -p /home/node/.opencode/bin && \
@@ -230,8 +231,8 @@ ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
 USER root
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) GROK_ARCH=x86_64; GROK_SHA=1668414b047e1050a96d25fe17dfc3efe63190fbf66d8cc1c3de8633caf50d11 ;; \
-    arm64) GROK_ARCH=aarch64; GROK_SHA=fc32410b6883c15a39b9f33ec04a6bfb7d070b383e5dbad7efbc48c787e5050d ;; \
+    amd64) GROK_ARCH=x86_64; GROK_SHA=ce33b1a29e37901f56fe59916cda7a1149e6fd377118f918e90d89f9abb52a51 ;; \
+    arm64) GROK_ARCH=aarch64; GROK_SHA=089a0acc2c1b570efcd791c5cd0f8aa074f6e8ab82c00ab78af0b934acdb6386 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${GROK_BUILD_VERSION}-linux-${GROK_ARCH}" -o /usr/local/bin/grok && \
@@ -245,8 +246,8 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # packages/toolchain/src/manifest.ts for the same version.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) PI_ARCH=x64; PI_SHA=00fc36cffdebceea5a48230da62cf3fb463178f8fe185766652f96002a246847 ;; \
-    arm64) PI_ARCH=arm64; PI_SHA=d8597ee3a2050592d38e67f6b609ab55139deed7e820020d910d84f17bb7abd6 ;; \
+    amd64) PI_ARCH=x64; PI_SHA=f2e4e4329603223d03260cdb8bd5033dbdc1f73ba58ab8939db2e56546e115d2 ;; \
+    arm64) PI_ARCH=arm64; PI_SHA=fa5829c7ef83ffeaebba015715c8306220f89b2aa8a00154efbba98dd5440156 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://github.com/earendil-works/pi/releases/download/v${PI_CLI_VERSION}/pi-linux-${PI_ARCH}.tar.gz" -o /tmp/pi.tar.gz && \
@@ -380,12 +381,12 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   tar -xzf "/tmp/${MISE_TARBALL}" -C /opt/mise --strip-components=1 --no-same-owner && \
   ln -s /opt/mise/bin/mise /usr/local/bin/mise && \
   chmod 755 /opt/mise/bin/mise && \
-  mise install --system bun@1.4.3 && \
-  BUN_INSTALL_DIR="$(mise where bun@1.4.3)" && \
+  mise install --system bun@1.4.4 && \
+  BUN_INSTALL_DIR="$(mise where bun@1.4.4)" && \
   test -x "$BUN_INSTALL_DIR/bin/bun" && \
   ln -sf "$BUN_INSTALL_DIR/bin/bun" /usr/local/bin/bun && \
-  test "$(/usr/local/bin/bun --version)" = "1.4.3" && \
-  mise exec bun@1.4.3 -- bun --version && \
+  test "$(/usr/local/bin/bun --version)" = "1.4.4" && \
+  mise exec bun@1.4.4 -- bun --version && \
   printf '%s\n' 'eval "$(/usr/local/bin/mise activate zsh)"' >> /home/node/.zshrc && \
   chown node:node /home/node/.zshrc && \
   rm -f "/tmp/${MISE_TARBALL}" && \
@@ -398,8 +399,8 @@ ENV MISE_TRUSTED_CONFIG_PATHS=/workspace
 ENV MISE_SELF_UPDATE_AVAILABLE=false
 USER node
 WORKDIR /workspace
-RUN test "$(/usr/local/bin/bun --version)" = "1.4.3" \
- && test "$(/usr/local/bin/bunx --version)" = "1.4.3" \
+RUN test "$(/usr/local/bin/bun --version)" = "1.4.4" \
+ && test "$(/usr/local/bin/bunx --version)" = "1.4.4" \
  && printf '%s\n' '[env]' 'ORKESTRATOR_MISE_TRUST_SMOKE = "trusted"' > mise.toml \
  && zsh -ic 'command -v mise >/dev/null && typeset -f _mise_hook >/dev/null && test "$ORKESTRATOR_MISE_TRUST_SMOKE" = trusted && mise --version' \
  && rm mise.toml
@@ -407,10 +408,11 @@ RUN test "$(/usr/local/bin/bun --version)" = "1.4.3" \
 # Copy and set up firewall scripts
 COPY docker/init-firewall.sh docker/update-firewall.sh docker/run-root-setup.sh /usr/local/bin/
 COPY docker/firewall-domains.sh /usr/local/lib/orkestrator/firewall-domains.sh
+COPY docker/default-allowed-domains /usr/local/lib/orkestrator/default-allowed-domains
 USER root
 RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/update-firewall.sh /usr/local/bin/run-root-setup.sh && \
   chown -R root:root /usr/local/lib/orkestrator && chmod 0755 /usr/local/lib/orkestrator && \
-  chmod 0644 /usr/local/lib/orkestrator/firewall-domains.sh && \
+  chmod 0644 /usr/local/lib/orkestrator/firewall-domains.sh /usr/local/lib/orkestrator/default-allowed-domains && \
   printf '%s\n' \
     'Defaults!/usr/local/bin/network-policy-entrypoint.sh env_keep += "NETWORK_MODE ALLOWED_DOMAINS ORKESTRATOR_NETWORK_POLICY ORKESTRATOR_HOST_SERVICE_PORTS ORKESTRATOR_INGRESS_PORTS"' \
     'node ALL=(root) NOPASSWD: /usr/local/bin/network-policy-entrypoint.sh *' \
@@ -444,11 +446,12 @@ COPY docker/orkestrator-storage.sh /usr/local/bin/orkestrator-storage.sh
 COPY docker/orkestrator-migrate.sh /usr/local/bin/orkestrator-migrate.sh
 COPY docker/orkestrator-log-writer.sh /usr/local/bin/orkestrator-log-writer
 COPY docker/orkestrator-state-signal.sh /usr/local/bin/orkestrator-state-signal
+COPY docker/orkestrator-worktree-signal.sh /usr/local/bin/orkestrator-worktree-signal
 # Per-boot status and process registration. Owned by node because the
 # entrypoint runs as node after the network policy is fixed; the records are
 # orchestration evidence, not a security boundary against the same user.
 RUN install -d -o node -g node -m 0755 /run/orkestrator /run/orkestrator/processes \
- && chmod 0755 /usr/local/bin/orkestrator-drain.sh /usr/local/bin/orkestrator-storage.sh /usr/local/bin/orkestrator-migrate.sh /usr/local/bin/orkestrator-log-writer /usr/local/bin/orkestrator-state-signal
+ && chmod 0755 /usr/local/bin/orkestrator-drain.sh /usr/local/bin/orkestrator-storage.sh /usr/local/bin/orkestrator-migrate.sh /usr/local/bin/orkestrator-log-writer /usr/local/bin/orkestrator-state-signal /usr/local/bin/orkestrator-worktree-signal
 COPY docker/git-branch-helpers.sh /usr/local/bin/
 COPY docker/runtime-env.sh /usr/local/bin/orkestrator-runtime-env.sh
 RUN apt-get update && apt-get install -y --no-install-recommends util-linux \

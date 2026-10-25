@@ -15,7 +15,7 @@
  * AGENTS.md mandates: each test file gets a fresh module registry, so this
  * module is evaluated once per file exactly as the duplicated preambles were.
  */
-import { afterEach, beforeEach, describe, test, expect } from "bun:test";
+import { afterEach, beforeEach } from "bun:test";
 
 import { EventEmitter } from "node:events";
 
@@ -25,18 +25,7 @@ import { tmpdir } from "node:os";
 
 import { join } from "node:path";
 
-import {
-  AppServerRuntime,
-  DEFAULT_THREAD_IDLE_MS,
-  estimateOrderedEventBytes,
-  MAX_PENDING_EVENTS_PER_TURN,
-  MAX_PENDING_TURNS,
-  MAX_RECOVERED_CONTEXT_CHARS,
-  mergeRateLimitWindows,
-  messageSnapshotIntervalMs,
-  normalizedMessageSnapshotChars,
-  type RuntimeSseEvent,
-} from "./app-server-runtime.js";
+import { AppServerRuntime, type RuntimeSseEvent } from "./app-server-runtime.js";
 
 import type { WatchRolloutFile } from "./sessions/refused-cell-tail.js";
 import { AppServerEngine } from "./engine/app-server-engine.js";
@@ -45,32 +34,10 @@ import type { AppServerSupervisorOptions } from "./app-server/process-supervisor
 
 import { FakeReadable, FakeWritable } from "./app-server/testing/fake-app-server.js";
 
-import { MAX_LOCAL_MESSAGES, phaseToExternalStatus } from "./sessions/thread-registry.js";
-
-import {
-  BRIDGE_SESSION_REGISTRY_VERSION,
-  BridgeSessionStore,
-  hashCwd,
-} from "./sessions/persistence.js";
-
-import { DispatchJournal } from "./sessions/dispatch-journal.js";
-
 import type { CommandChangeProbe } from "./sessions/command-changes.js";
+import type { CodexChangeEvidence } from "./change-evidence.js";
 
-import { persistSessionTitle } from "./session-titles.js";
-
-import {
-  getTranscriptCatalogInvalidationCountForTesting,
-  setHydrateMessagesFromPersistedSessionGateForTesting,
-} from "./history/rollout.js";
-
-import { AppServerProcessExitError, AppServerTimeoutError } from "./app-server/errors.js";
-
-import type {
-  EngineEvent,
-  EngineRateLimitWindow,
-  EngineRateLimitWindowUpdate,
-} from "./engine/types.js";
+import { setHydrateMessagesFromPersistedSessionGateForTesting } from "./history/rollout.js";
 
 /**
  * Returned by a handler to model a request app-server never answers — the exact
@@ -239,6 +206,8 @@ export function threadPayload(
 }
 
 export const BASE_HANDLERS: Record<string, (params: Record<string, unknown>) => unknown> = {
+  "skills/list": () => ({ data: [{ errors: [], skills: [] }] }),
+  "config/read": () => ({ config: { features: { incremental_tools: false } } }),
   initialize: () => ({
     userAgent: "orkestrator/0.145.0 (test)",
     codexHome: "/tmp/codex-home",
@@ -312,12 +281,15 @@ export async function harness(
     dispatchJournalMaxRecords?: number;
     dispatchJournalMaxBytes?: number;
     skillRefreshDebounceMs?: number;
+    /** Defaults to 0: the fake app-server answers its whole skill list at once. */
+    skillColdSettleMs?: number;
     fingerprintEnvironment?: () => string;
     /** Uses the production adaptive cadence instead of deterministic immediate publishes. */
     adaptiveCoalesce?: boolean;
     /** Leaves `runtime.start()` to the caller, so startup itself can be observed. */
     deferStart?: boolean;
     commandChangeProbe?: CommandChangeProbe;
+    changeEvidence?: CodexChangeEvidence;
     watchRolloutFile?: WatchRolloutFile;
   } = {},
 ): Promise<Harness> {
@@ -331,6 +303,7 @@ export async function harness(
     codexHome,
     clientInfo: { name: "orkestrator", title: "Orkestrator", version: "2.4.9" },
     interruptTimeoutMs: 30,
+    toolHistoryVerdict: async () => "clean",
     supervisorOverrides: {
       pidFileEnabled: false,
       shutdownGraceMs: 5,
@@ -408,7 +381,9 @@ export async function harness(
     ...(options.skillRefreshDebounceMs !== undefined
       ? { skillRefreshDebounceMs: options.skillRefreshDebounceMs }
       : {}),
+    skillColdSettleMs: options.skillColdSettleMs ?? 0,
     ...(options.commandChangeProbe ? { commandChangeProbe: options.commandChangeProbe } : {}),
+    ...(options.changeEvidence ? { changeEvidence: options.changeEvidence } : {}),
     ...(options.watchRolloutFile ? { watchRolloutFile: options.watchRolloutFile } : {}),
   });
   if (options.deferStart !== true) await runtime.start();

@@ -6,6 +6,8 @@ import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell"
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
 import { isClaudeAuthenticationFailureMessage } from "@/lib/claude-auth";
+import { OpenCodeAuthRecoveryAction } from "@/components/opencode/OpenCodeAuthRecoveryAction";
+import { openCodeCredentialFailureProvider } from "@/lib/opencode-auth";
 import { formatElapsed } from "@/lib/format-elapsed";
 import {
   type NativeMessage as NativeMessageType,
@@ -41,10 +43,11 @@ import { TextPart } from "./NativeMessage.file-parts";
 import { MailTile } from "./MailTile";
 import { structuredReviewJsonPayload } from "@/lib/chat/json-payload";
 import { WebAnnotationRequestChip, webAnnotationMarkerFor } from "./WebAnnotationRequestChip";
+import { RichMessageContext } from "@/lib/chat/rich-identity";
 
 export const NativeMessage = memo(function NativeMessage({
-  message,
-  previousMessage = null,
+  message: rawMessage,
+  previousMessage: rawPreviousMessage = null,
   assistantLabel = "Assistant",
   containerId,
   agentExpansionScope,
@@ -56,13 +59,11 @@ export const NativeMessage = memo(function NativeMessage({
   asyncQuestionResponses = [],
   respondToAsyncQuestion,
 }: NativeMessageProps) {
-  const normalizedMessage = useMemo(() => normalizeNativeMessage(message), [message]);
-  const normalizedPreviousMessage = useMemo(
-    () => (previousMessage ? normalizeNativeMessage(previousMessage) : null),
-    [previousMessage],
+  const message = useMemo(() => normalizeNativeMessage(rawMessage), [rawMessage]);
+  const previousMessage = useMemo(
+    () => (rawPreviousMessage ? normalizeNativeMessage(rawPreviousMessage) : null),
+    [rawPreviousMessage],
   );
-  message = normalizedMessage;
-  previousMessage = normalizedPreviousMessage;
   const toolIdsWithFirstClassImages = useMemo(
     () => firstClassImageToolUseIds(message.parts),
     [message.parts],
@@ -77,11 +78,17 @@ export const NativeMessage = memo(function NativeMessage({
   const [stableAgentExpansionScope] = useState(() => agentExpansionScope ?? containerId ?? "host");
   const messageAgentExpansionScope = JSON.stringify([stableAgentExpansionScope, message.id]);
 
+  const richMessageIdentity = useMemo(
+    () => ({ messageId: message.id, role: message.role }),
+    [message.id, message.role],
+  );
   const isUser = message.role === "user";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
   const isSystem = message.role === "system" || message.id.startsWith(SYSTEM_MESSAGE_PREFIX);
   const isPeerMail = message.id.startsWith(PEER_MAIL_MESSAGE_PREFIX);
   const isClaudeAuthError = platform === "claude" && isClaudeAuthenticationFailureMessage(message);
+  const openCodeAuthProvider =
+    platform === "opencode" ? openCodeCredentialFailureProvider(message) : undefined;
   const isContinuation =
     !isUser &&
     !isSystem &&
@@ -103,8 +110,10 @@ export const NativeMessage = memo(function NativeMessage({
     );
   }, [isUser, message.content, message.parts]);
 
+  // An artifact card already shows its summary, so a publication row's
+  // content is not repeated as a fallback text block.
   const hasTextParts = message.parts.some(
-    (part) => part.type === "text" || part.type === "async-question",
+    (part) => part.type === "text" || part.type === "async-question" || part.type === "artifact",
   );
   const hasContent = messageHasVisibleContent(message);
   // An empty assistant message with no attributable content or actions carries
@@ -129,7 +138,11 @@ export const NativeMessage = memo(function NativeMessage({
     : "";
   const assistantCopyContent = !isUser
     ? message.parts
-        .filter((part) => part.type === "text" || part.type === "async-question")
+        // Artifact parts contribute their textual summary, never icons or bodies.
+        .filter(
+          (part) =>
+            part.type === "text" || part.type === "async-question" || part.type === "artifact",
+        )
         .map((part) => part.content)
         .join("\n\n")
         .trim() || message.content
@@ -161,7 +174,18 @@ export const NativeMessage = memo(function NativeMessage({
   // Render error messages with special styling
   if (isError) {
     return (
-      <MessageErrorAlert content={message.content} timestampLabel={formatTime(message.createdAt)} />
+      <MessageErrorAlert
+        content={message.content}
+        timestampLabel={formatTime(message.createdAt)}
+        action={
+          openCodeAuthProvider ? (
+            <OpenCodeAuthRecoveryAction
+              providerId={openCodeAuthProvider}
+              containerId={containerId}
+            />
+          ) : undefined
+        }
+      />
     );
   }
 
@@ -212,101 +236,104 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   return (
-    <ToolDetailLoaderContext.Provider value={loadToolDetails}>
-      <BackgroundTaskStopContext.Provider value={stopBackgroundTask}>
-        <AsyncQuestionResponseContext.Provider
-          value={{
-            responses: asyncQuestionResponses,
-            respond: respondToAsyncQuestion,
-            draftScope: stableAgentExpansionScope,
-          }}
-        >
-          <AgentPlatformContext.Provider value={platform}>
-            <ModelLabelResolverContext.Provider value={resolveModelLabel}>
-              <AgentExpansionScopeContext.Provider value={stableAgentExpansionScope}>
-                <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
-                  <UserPromptEvidenceContext.Provider value={message.promptEvidence}>
-                    <NativeMessagePartRendererContext.Provider
-                      value={(props) => (
-                        <MessagePart
-                          {...props}
-                          suppressImageReadPreview={
-                            props.suppressImageReadPreview ??
-                            (props.part.type === "tool-invocation" &&
-                              Boolean(
-                                props.part.toolUseId &&
-                                toolIdsWithFirstClassImages.has(props.part.toolUseId),
-                              ))
-                          }
-                        />
-                      )}
-                    >
-                      <MessageShell
-                        isUser={isUser}
-                        authorLabel={isUser ? "You" : assistantAuthorLabel}
-                        timestampLabel={formatTime(message.createdAt)}
-                        durationLabel={durationLabel}
-                        showHeader={!isContinuation}
-                        showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
-                        className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
-                        onUserLongPress={
-                          isUser && userCopyContent ? handleUserLongPress : undefined
-                        }
-                        actions={
-                          (isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
-                            <>
-                              {messageActions}
-                              {(isUser ? userCopyContent : assistantCopyContent) ? (
-                                <MessageCopyButton
-                                  content={isUser ? userCopyContent : assistantCopyContent}
-                                  wrapperClassName="mt-0 pr-0"
-                                />
-                              ) : null}
-                            </>
-                          ) : undefined
-                        }
-                      >
-                        {annotationMarker ? (
-                          <WebAnnotationRequestChip
-                            requestId={annotationMarker.requestId}
-                            operation={annotationMarker.operation}
-                            annotationCount={annotationMarker.annotationCount}
-                          />
-                        ) : null}
-                        {isUser && message.promptEvidence ? (
-                          <div className="pb-2">
-                            <JsonPayloadPart
-                              payload={structuredReviewJsonPayload(message.promptEvidence)}
-                              expansionKey={`${message.id}-content/json/prompt-evidence`}
-                            />
-                          </div>
-                        ) : null}
-                        {renderMessageParts(message, {
-                          showTextCopy: false,
-                          containerId,
-                          toolIdsWithFirstClassImages,
-                        })}
-
-                        {!hasTextParts && message.content && (
-                          <TextPart
-                            content={message.content}
-                            showCopy={false}
-                            truncateUserPrompt={isUser}
-                            promptPresentation={message.promptPresentation}
-                            renderJsonPayload={!isUser}
-                            expansionKey={`${message.id}-content/json`}
+    <RichMessageContext.Provider value={richMessageIdentity}>
+      <ToolDetailLoaderContext.Provider value={loadToolDetails}>
+        <BackgroundTaskStopContext.Provider value={stopBackgroundTask}>
+          <AsyncQuestionResponseContext.Provider
+            value={{
+              responses: asyncQuestionResponses,
+              respond: respondToAsyncQuestion,
+              draftScope: stableAgentExpansionScope,
+            }}
+          >
+            <AgentPlatformContext.Provider value={platform}>
+              <ModelLabelResolverContext.Provider value={resolveModelLabel}>
+                <AgentExpansionScopeContext.Provider value={stableAgentExpansionScope}>
+                  <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
+                    <UserPromptEvidenceContext.Provider value={message.promptEvidence}>
+                      <NativeMessagePartRendererContext.Provider
+                        value={(props) => (
+                          <MessagePart
+                            {...props}
+                            suppressImageReadPreview={
+                              props.suppressImageReadPreview ??
+                              (props.part.type === "tool-invocation" &&
+                                Boolean(
+                                  props.part.toolUseId &&
+                                  toolIdsWithFirstClassImages.has(props.part.toolUseId),
+                                ))
+                            }
                           />
                         )}
-                      </MessageShell>
-                    </NativeMessagePartRendererContext.Provider>
-                  </UserPromptEvidenceContext.Provider>
-                </MessageExpansionScopeContext.Provider>
-              </AgentExpansionScopeContext.Provider>
-            </ModelLabelResolverContext.Provider>
-          </AgentPlatformContext.Provider>
-        </AsyncQuestionResponseContext.Provider>
-      </BackgroundTaskStopContext.Provider>
-    </ToolDetailLoaderContext.Provider>
+                      >
+                        <MessageShell
+                          isUser={isUser}
+                          authorLabel={isUser ? "You" : assistantAuthorLabel}
+                          timestampLabel={formatTime(message.createdAt)}
+                          durationLabel={durationLabel}
+                          showHeader={!isContinuation}
+                          showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
+                          className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
+                          onUserLongPress={
+                            isUser && userCopyContent ? handleUserLongPress : undefined
+                          }
+                          actions={
+                            (isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
+                              <>
+                                {messageActions}
+                                {(isUser ? userCopyContent : assistantCopyContent) ? (
+                                  <MessageCopyButton
+                                    content={isUser ? userCopyContent : assistantCopyContent}
+                                    wrapperClassName="mt-0 pr-0"
+                                  />
+                                ) : null}
+                              </>
+                            ) : undefined
+                          }
+                        >
+                          {annotationMarker ? (
+                            <WebAnnotationRequestChip
+                              requestId={annotationMarker.requestId}
+                              operation={annotationMarker.operation}
+                              annotationCount={annotationMarker.annotationCount}
+                            />
+                          ) : null}
+                          {isUser && message.promptEvidence ? (
+                            <div className="pb-2">
+                              <JsonPayloadPart
+                                payload={structuredReviewJsonPayload(message.promptEvidence)}
+                                expansionKey={`${message.id}-content/json/prompt-evidence`}
+                              />
+                            </div>
+                          ) : null}
+                          {renderMessageParts(message, {
+                            showTextCopy: false,
+                            containerId,
+                            toolIdsWithFirstClassImages,
+                            identityScope: stableAgentExpansionScope,
+                          })}
+
+                          {!hasTextParts && message.content && (
+                            <TextPart
+                              content={message.content}
+                              showCopy={false}
+                              truncateUserPrompt={isUser}
+                              promptPresentation={message.promptPresentation}
+                              renderJsonPayload={!isUser}
+                              expansionKey={`${message.id}-content/json`}
+                            />
+                          )}
+                        </MessageShell>
+                      </NativeMessagePartRendererContext.Provider>
+                    </UserPromptEvidenceContext.Provider>
+                  </MessageExpansionScopeContext.Provider>
+                </AgentExpansionScopeContext.Provider>
+              </ModelLabelResolverContext.Provider>
+            </AgentPlatformContext.Provider>
+          </AsyncQuestionResponseContext.Provider>
+        </BackgroundTaskStopContext.Provider>
+      </ToolDetailLoaderContext.Provider>
+    </RichMessageContext.Provider>
   );
 });
 
@@ -328,14 +355,17 @@ function renderMessageParts(
     showTextCopy?: boolean;
     containerId?: string;
     toolIdsWithFirstClassImages?: ReadonlySet<string>;
+    /** The transcript scope source identities are unique within. */
+    identityScope?: string;
   } = {},
 ) {
   const promptPresentationPartIndex = message.promptPresentation
     ? message.parts.findIndex((part) => part.type === "text")
     : -1;
+  const identities = partIdentities(message, options.identityScope);
   const renderPart = (part: NativeMessagePart, index: number) => (
     <MessagePart
-      key={`${message.id}-part-${index}-${part.type}`}
+      key={identities[index]!.key}
       part={part}
       showTextCopy={options.showTextCopy ?? true}
       truncateUserPrompt={message.role === "user"}
@@ -349,7 +379,7 @@ function renderMessageParts(
         part.type === "tool-invocation" &&
         Boolean(part.toolUseId && options.toolIdsWithFirstClassImages?.has(part.toolUseId))
       }
-      partKey={`${message.id}-part-${index}`}
+      partKey={identities[index]!.partKey}
     />
   );
 
@@ -384,6 +414,44 @@ function renderMessageParts(
   }
 
   return renderedParts;
+}
+
+/**
+ * A part's identity within its conversation: its source occurrence (source
+ * message plus the provider's part or call id) when it has one. Never a
+ * content hash — a streaming token must not change it — and never its
+ * position, which history paging and coalescing shift.
+ */
+export function sourcePartIdentity(part: NativeMessagePart): string | undefined {
+  const id =
+    part.type === "tool-invocation" ? (part.toolUseId ?? part.sourcePartId) : part.sourcePartId;
+  if (!id) return undefined;
+  return part.sourceMessageId ? `${part.sourceMessageId}:${id}` : id;
+}
+
+/**
+ * React keys and `partKey`s for a message's parts. A part with a source
+ * identity keeps both across appends, merges into a coalesced row and renames
+ * of that row; a legacy part without one falls back to its position. Two
+ * parts claiming one identity (a provider reusing an id) are told apart by
+ * position rather than colliding.
+ */
+function partIdentities(
+  message: NativeMessageType,
+  scope: string | undefined,
+): Array<{ key: string; partKey: string }> {
+  const used = new Set<string>();
+  return message.parts.map((part, index) => {
+    const identity = sourcePartIdentity(part);
+    let key = identity ? `src:${identity}` : `${message.id}-part-${index}-${part.type}`;
+    if (used.has(key)) key = `${key}#${index}`;
+    used.add(key);
+    const partKey =
+      identity && !key.includes("#")
+        ? `src:${JSON.stringify([scope ?? message.id, identity])}`
+        : `${message.id}-part-${index}`;
+    return { key, partKey };
+  });
 }
 
 function firstClassImageToolUseIds(parts: readonly NativeMessagePart[]): ReadonlySet<string> {

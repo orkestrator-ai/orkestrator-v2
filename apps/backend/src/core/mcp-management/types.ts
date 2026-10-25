@@ -57,6 +57,12 @@ export interface TargetContextInfo {
   containerId?: string;
   /** Environment is a coordinator/review runtime with project resources excluded. */
   environmentStatus?: string;
+  /**
+   * Whether the environment's interactive sessions load project resources,
+   * from its resolved execution policy. Host Cursor and Pi sessions load their
+   * project MCP file only when this is on.
+   */
+  projectResources?: boolean;
 }
 
 /** A native configuration source a target can see. Backend-only: carries a path. */
@@ -101,3 +107,39 @@ export type ContainerFileReader = (
   filePath: string,
   maxBytes: number,
 ) => Promise<{ state: "ok"; bytes: Uint8Array } | { state: "absent" | "oversized" | "offline" }>;
+
+export type ContainerFileWriteResult =
+  | { state: "ok" }
+  /** The file no longer has the bytes the write was prepared against. */
+  | { state: "conflict" }
+  /** Destination outside the allowed homes, a symlink, or not a regular file. */
+  | { state: "refused" }
+  | { state: "oversized" }
+  | { state: "offline" }
+  | { state: "failed" };
+
+/**
+ * Narrow, backend-owned write of one file inside a container as the `node`
+ * user. The backend chooses `filePath` from its own source specs (never the
+ * renderer); the payload goes over stdin, bounded; `expectedDigest` is the
+ * `contentDigest` of the bytes the change was prepared against, or `absent`.
+ * `private` writes mode 0600; `preserve` keeps an existing file's mode
+ * (0644 for a new one).
+ */
+export type ContainerFileWriter = (
+  containerId: string,
+  filePath: string,
+  write: { expectedDigest: string; bytes: Uint8Array; mode: "private" | "preserve" },
+) => Promise<ContainerFileWriteResult>;
+
+/** Id of the container's current boot, or `null` for images without boot status. */
+export type ContainerBootReader = (containerId: string) => Promise<string | null>;
+
+/**
+ * What each absolute path is inside a container, from one bounded exec.
+ * Paths are arguments to a fixed script, never shell text.
+ */
+export type ContainerPathProbe = (
+  containerId: string,
+  paths: readonly string[],
+) => Promise<Map<string, "file" | "directory" | "absent"> | null>;

@@ -1,6 +1,8 @@
 /**
- * Live coordinator read-only scenario against a real `dev:test --fixture`
- * profile, one case per platform on the live suite's list.
+ * Live coordinator scenarios against a real `dev:test --fixture` profile, one
+ * case per platform and scenario on the live suite's lists: `read-only` (the
+ * boundary), `async` and `family` (real workers and their mail, see
+ * `coordinator-live-delegation.ts`).
  *
  * Opt-in only: each case runs a real coordinator turn on the host's
  * credentials, so every case is skipped unless
@@ -22,23 +24,27 @@
  * platform without a usable credential is skipped with the reason recorded,
  * never passed.
  *
- * The case writes a content-free summary to
- * `output/agent-testing/<run>/coordinator/<platform>.json`, which the runner
- * aggregates. It never records prompts, file contents or tool output.
+ * Each case writes a content-free summary to
+ * `output/agent-testing/<run>/coordinator/<platform>-<scenario>.json`, which
+ * the runner aggregates. It never records prompts, message bodies, file
+ * contents or tool output.
  */
 import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   type AgentInteractionKind,
 } from "@orkestrator/protocol/agent-interactions";
+import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   coordinatorMainConversation,
   coordinatorRuntimeId,
+  type CoordinatorConversation,
   type CoordinatorSnapshot,
 } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentAuthState } from "@orkestrator/protocol/native-agent";
@@ -47,8 +53,10 @@ import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profi
 import {
   COORDINATOR_LIVE_OPT_IN_ENV,
   COORDINATOR_LIVE_PLATFORMS_ENV,
+  COORDINATOR_LIVE_SCENARIOS_ENV,
   READ_ONLY_REPORT_MARKER,
   coordinatorLivePlatformsFromEnv,
+  coordinatorLiveScenariosFromEnv,
   coordinatorLiveSummaryFile,
   createTurnWatch,
   describeDigestChanges,
@@ -63,11 +71,43 @@ import {
   transcriptAssistantText,
   transcriptToolCalls,
   withCodeModeCellDetails,
+  type CoordinatorLiveCheck,
+  type CoordinatorLivePlatform,
   type CoordinatorLivePlatformSummary,
+  type CoordinatorLiveScenario,
+  type CoordinatorTranscriptMessage,
   type CoordinatorTurnProjection,
   type ReadOnlyProbe,
   type ToolDetails,
 } from "../../apps/desktop/scripts/dev/coordinator-live";
+import {
+  asyncPollPrompt,
+  asyncScenarioPrompt,
+  asyncWorkerNames,
+  carrierCount,
+  coordinatorWaitCounts,
+  delegationFailures,
+  evaluateAsyncScenario,
+  evaluateFamilyScenario,
+  familyScenarioPrompt,
+  familyWorkerNames,
+  parseAsyncPollReport,
+  transcriptUserTexts,
+  type DelegationMailMessage,
+  type DelegationProbe,
+  type DelegationRecord,
+} from "../../apps/desktop/scripts/dev/coordinator-live-delegation";
+import { coordinatorLiveBudgets } from "../../apps/desktop/scripts/dev/coordinator-live-budgets";
+import { runPeerScenario } from "../../apps/desktop/scripts/dev/coordinator-live-peer-orchestration";
+import {
+  createDelegationWatch,
+  removeLaunchedEnvironments,
+  runCoordinatorCleanup,
+} from "../../apps/desktop/scripts/dev/coordinator-live-observer";
+import {
+  deliverAsyncReport,
+  finishFamilyExchange,
+} from "../../apps/desktop/scripts/dev/coordinator-live-orchestration";
 
 type Status = {
   status: string;
@@ -86,8 +126,8 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? profile;
 const LIVE = process.env[COORDINATOR_LIVE_OPT_IN_ENV] === "1";
-const TURN_TIMEOUT_MS =
-  Number(process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_TURN_TIMEOUT_MS) || 600_000;
+const budgets = coordinatorLiveBudgets();
+const TURN_TIMEOUT_MS = budgets.turn;
 const POLL_INTERVAL_MS = 2_000;
 /**
  * A live turn prints nothing for minutes. `test:logged` kills a command after
@@ -209,9 +249,605 @@ async function settleTurn(
 }
 
 async function writeSummary(summary: CoordinatorLivePlatformSummary): Promise<void> {
-  const file = coordinatorLiveSummaryFile(repositoryRoot, runId, summary.platform);
+  const file = coordinatorLiveSummaryFile(
+    repositoryRoot,
+    runId,
+    summary.platform,
+    summary.scenario ?? "read-only",
+  );
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await writeFile(file, `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** What every case starts from: a signed-in, assigned, fresh main coordinator. */
+interface CoordinatorCase {
+  checkout: string;
+  invoke: Invoke;
+  projectId: string;
+  conversation: CoordinatorConversation;
+  identity: SessionIdentity;
+}
+
+/**
+ * Assigns the platform to a fresh main conversation on the fixture project
+ * through the Coordinator page's backend commands, or skips the case when the
+ * profile has no usable login. Every setting it changes, and the conversation
+ * it opens, is undone through `cleanup`.
+ */
+async function startCoordinatorCase(input: {
+  page: Page;
+  entry: CoordinatorLivePlatform;
+  summary: CoordinatorLivePlatformSummary;
+  settings: Record<string, unknown>;
+  skip: (reason: string) => never;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<CoordinatorCase> {
+  const { entry, summary, skip, cleanup } = input;
+  const { platform } = entry;
+  const { checkout, invoke, fixture } = await openProfile(input.page);
+  const projectId = fixture.id;
+
+  const config = await invoke<{ global: Record<string, unknown> }>("get_config");
+  const enabled = config.global.enabledAgentPlatforms;
+  if (Array.isArray(enabled) && !enabled.includes(platform)) {
+    skip(`${platform} is not enabled in this profile (start it with --agent-platforms)`);
+  }
+  const caseSettings = { coordinatorProviderTiers: entry.tierSetting, ...input.settings };
+  const previousSettings = Object.fromEntries(
+    Object.keys(caseSettings).map((key) => [key, config.global[key]]),
+  );
+  await invoke("update_global_config", { global: { ...config.global, ...caseSettings } });
+  cleanup.push(async () => {
+    const current = await invoke<{ global: Record<string, unknown> }>("get_config");
+    await invoke("update_global_config", {
+      global: { ...current.global, ...previousSettings },
+    });
+  });
+
+  // A fresh, unassigned main conversation: a platform is bound by the
+  // first prompt and never changes, so an earlier case's main is closed.
+  let snapshot = await invoke<CoordinatorSnapshot>("ensure_project_coordinator", { projectId });
+  const previous = coordinatorMainConversation(snapshot.workspace);
+  if (previous?.agent) {
+    snapshot = await invoke<CoordinatorSnapshot>("close_coordinator_conversation", {
+      projectId,
+      conversationId: previous.id,
+    });
+  }
+  if (!coordinatorMainConversation(snapshot.workspace)) {
+    snapshot = await invoke<CoordinatorSnapshot>("create_coordinator_conversation", { projectId });
+  }
+  const conversation = coordinatorMainConversation(snapshot.workspace)!;
+  const qualification = snapshot.providerAvailability[platform];
+  summary.tier = qualification?.tier;
+  expect(
+    qualification?.available,
+    `${platform} is not offered to Coordinator: ${qualification?.reason ?? "no qualification"}`,
+  ).toBe(true);
+  expect(qualification?.delegation, `${platform} has no delegation`).toBe(true);
+  expect(
+    snapshot.controlMcp.running,
+    `Control MCP is not running: ${snapshot.controlMcp.error ?? "disabled"}`,
+  ).toBe(true);
+
+  snapshot = await invoke<CoordinatorSnapshot>("assign_coordinator_conversation_agent", {
+    projectId,
+    conversationId: conversation.id,
+    agent: platform,
+  });
+  cleanup.push(() =>
+    invoke("close_coordinator_conversation", { projectId, conversationId: conversation.id }),
+  );
+  const identity: SessionIdentity = {
+    environmentId: coordinatorRuntimeId(snapshot.workspace.id, conversation.id),
+    agent: platform,
+    logicalSessionKey: conversation.logicalSessionKey,
+  };
+  try {
+    await invoke("ensure_native_agent_session", identity);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isSignInError(message)) {
+      skip(`no usable ${platform} credential in this profile: ${message.slice(0, 300)}`);
+    }
+    throw error;
+  }
+  const auth = await invoke<{ state: NativeAgentAuthState } | null>(
+    "get_native_agent_auth_status",
+    identity,
+  ).catch(() => null);
+  if (isSignedOut(auth?.state)) {
+    skip(`no usable ${platform} credential in this profile (${auth!.state})`);
+  }
+  return { checkout, invoke, projectId, conversation, identity };
+}
+
+/** One case's summary, skip and cleanup, written whatever happens. */
+async function runCase(
+  entry: CoordinatorLivePlatform,
+  scenario: CoordinatorLiveScenario,
+  body: (context: {
+    summary: CoordinatorLivePlatformSummary;
+    skip: (reason: string) => never;
+    cleanup: Array<() => Promise<unknown>>;
+  }) => Promise<void>,
+): Promise<void> {
+  const summary: CoordinatorLivePlatformSummary = {
+    version: 1,
+    platform: entry.platform,
+    scenario,
+    verdict: "failed",
+    tierSetting: entry.tierSetting,
+    startedAt: new Date().toISOString(),
+  };
+  const started = Date.now();
+  const skip = (reason: string): never => {
+    summary.verdict = "skipped";
+    summary.reason = reason;
+    test.skip(true, reason);
+    throw new Error(reason);
+  };
+  // Undone last-first in `finally`, whatever happened before.
+  const cleanup: Array<() => Promise<unknown>> = [];
+  try {
+    await body({ summary, skip, cleanup });
+  } catch (error) {
+    if (summary.verdict !== "skipped") {
+      summary.verdict = "failed";
+      summary.reason ??= error instanceof Error ? error.message.slice(0, 2_000) : String(error);
+    }
+    throw error;
+  } finally {
+    await runCoordinatorCleanup(cleanup, summary);
+    summary.durationMs = Date.now() - started;
+    await writeSummary(summary);
+  }
+}
+
+/**
+ * The read-only scenario: digest the checkout, ask for one attempt per
+ * mutation class, then require the checkout unchanged, every attempt refused
+ * and both canaries read back.
+ */
+async function readOnlyCase(input: {
+  checkout: string;
+  invoke: Invoke;
+  projectId: string;
+  identity: SessionIdentity;
+  platform: AgentPlatform;
+  summary: CoordinatorLivePlatformSummary;
+  skip: (reason: string) => never;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { checkout, invoke, projectId, identity, platform, summary, skip, cleanup } = input;
+  // Canaries reachable only through a working read tool and Control MCP.
+  const canaryLine = `coordinator-live-canary-${randomBytes(8).toString("hex")}`;
+  await writeFile(path.join(checkout, CANARY_FILE), `${canaryLine}\n`);
+  cleanup.push(() => rm(path.join(checkout, CANARY_FILE), { force: true }));
+  const ticketTitle = `coordinator-live-discovery-${randomBytes(8).toString("hex")}`;
+  const ticket = await invoke<{ id: string }>("add_kanban_task", {
+    projectId,
+    title: ticketTitle,
+    description: "Synthetic ticket read back by the live coordinator read-only scenario.",
+  });
+  cleanup.push(() => invoke("delete_kanban_task", { taskId: ticket.id }));
+  // The project home is the checkout as an environment: the one target a
+  // coordinator credential must never act on.
+  const home = await invoke<{ id: string }>("ensure_project_home_environment", {
+    projectId,
+  });
+  // The agent is told not to launch workers. One it launches anyway is
+  // removed after the checkout has been measured, so it still counts.
+  await removeLaunchedEnvironments(invoke, projectId, cleanup);
+
+  const probe: ReadOnlyProbe = {
+    platform,
+    canaryFile: CANARY_FILE,
+    canaryLine,
+    ticketTitle,
+    homeEnvironmentId: home.id,
+    requestId: `coordinator-live-${randomUUID()}`,
+  };
+  // What a launched job leaves on the project home, read before the
+  // digest so a worker that writes after the turn still counts.
+  const homeWork = async () =>
+    homeEnvironmentWork(
+      await invoke<unknown>("get_pane_layout", { environmentId: home.id }),
+      await invoke<unknown>("get_sessions_by_environment", { environmentId: home.id }),
+    );
+  const homeBefore = await homeWork();
+  const before = await fixtureTreeDigest(checkout);
+  summary.tree = { before: before.digest };
+  // Build mode, not the plan mode a fresh coordinator composer selects:
+  // plan mode asks the agent not to try, so the boundary would never be
+  // exercised. Build mode is where a coordinator lands after its plan is
+  // approved, and the policy has to hold there whatever the agent tries.
+  await invoke("dispatch_native_agent_intent", {
+    ...identity,
+    prompt: readOnlyScenarioPrompt(probe),
+    requestId: randomUUID(),
+    mode: "build",
+  });
+  const { projection: settled, escaped } = await settleTurn(invoke, identity, summary);
+  const homeAfter = await homeWork();
+  const after = await fixtureTreeDigest(checkout);
+  summary.tree = {
+    before: before.digest,
+    after: after.digest,
+    changes: describeDigestChanges(before, after),
+  };
+  summary.turn = {
+    phase: settled.turn.phase,
+    ...(settled.turn.error ? { error: settled.turn.error.slice(0, 500) } : {}),
+  };
+
+  const report = parseReadOnlyReport(transcriptAssistantText(settled.messages));
+  if (!("error" in report)) summary.outcomes = report.outcomes;
+  // Codex's refused calls show as the code-mode cells that made them,
+  // whose output (the evidence) is fetched as opening the row does.
+  const messages =
+    platform === "codex"
+      ? await withCodeModeCellDetails(settled.messages, (detailRef) =>
+          invoke<ToolDetails | null>("get_native_agent_tool_details", {
+            ...identity,
+            detailRef,
+          }),
+        )
+      : settled.messages;
+  const { failures, toolCalls, cellRows, cellCalls } = evaluateReadOnlyConversation({
+    platform,
+    messages,
+    before,
+    after,
+    report,
+    probe,
+    escapedInteractions: escaped,
+    homeWork: { before: homeBefore, after: homeAfter },
+  });
+  summary.toolCalls = toolCalls.map(({ name, state }) => ({ name, state }));
+  if (platform === "codex") summary.cellCalls = { rows: cellRows, counted: cellCalls };
+  if (settled.turn.phase === "error") {
+    const signedOut = signedOutTurnReason({
+      projection: settled,
+      reported: !("error" in report),
+      checkoutChanged: (summary.tree.changes?.length ?? 0) > 0 || escaped.length > 0,
+    });
+    if (signedOut) skip(`no usable ${platform} credential in this profile (${signedOut})`);
+    failures.unshift(`the turn failed: ${settled.turn.error ?? "no error text"}`);
+  }
+  summary.verdict = failures.length === 0 ? "passed" : "failed";
+  if (failures.length > 0) summary.reason = failures.join("; ");
+  expect(
+    failures,
+    `${platform}: the read-only scenario must leave the checkout unchanged, refuse every mutation and still read (${READ_ONLY_REPORT_MARKER} outcomes: ${JSON.stringify(summary.outcomes ?? {})})`,
+  ).toEqual([]);
+}
+
+// ---------------------------------------------------------------------------
+// Delegation scenarios: the harness watches, and answers nothing
+
+function recordChecks(
+  summary: CoordinatorLivePlatformSummary,
+  checks: CoordinatorLiveCheck[],
+  observed: Record<string, number>,
+): string[] {
+  summary.checks = checks;
+  summary.observed = observed;
+  const failures = delegationFailures(checks);
+  summary.verdict = failures.length === 0 ? "passed" : "failed";
+  if (failures.length > 0) summary.reason = failures.join("; ");
+  return failures;
+}
+
+/**
+ * Dispatch one coordinator turn in build mode and wait for it to end: idle
+ * for two reads after it was seen working or added a row, with nothing left
+ * in its prompt queue.
+ */
+async function coordinatorTurn(
+  watch: ReturnType<typeof createDelegationWatch>,
+  coordinator: CoordinatorCase,
+  label: string,
+  prompt: string,
+): Promise<{ phases: string[]; rowsBefore: number; endedAt: number }> {
+  const before = await watch.observe();
+  const rowsBefore = watch.projection()?.messages.length ?? 0;
+  await coordinator.invoke("dispatch_native_agent_intent", {
+    ...coordinator.identity,
+    prompt,
+    requestId: randomUUID(),
+    mode: "build",
+  });
+  const phases = [before.coordinatorPhase];
+  let sawActive = false;
+  let idleReads = 0;
+  const end = await watch.until(label, (observation) => {
+    phases.push(observation.coordinatorPhase);
+    if (observation.coordinatorPhase === "error") {
+      throw new Error(
+        `the ${coordinator.identity.agent} coordinator turn failed: ${watch.projection()?.turn.error ?? "no error text"}`,
+      );
+    }
+    if (observation.coordinatorPhase !== "idle") sawActive = true;
+    idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
+    const grew = (watch.projection()?.messages.length ?? 0) > rowsBefore;
+    return idleReads >= 2 && (sawActive || grew) && observation.queueLength === 0;
+  });
+  return { phases, rowsBefore, endedAt: end.at };
+}
+
+function mailCountsObserved(
+  mail: readonly DelegationMailMessage[],
+  coordinatorEnvironmentId: string,
+  messages: readonly CoordinatorTranscriptMessage[],
+): Record<string, number> {
+  const toCoordinator = mail.filter(
+    (message) => message.toEnvironmentId === coordinatorEnvironmentId,
+  );
+  return {
+    messagesToCoordinator: toCoordinator.length,
+    noticesToCoordinator: toCoordinator.filter((message) => message.from.kind === "system").length,
+    // -1 records an unverified count; nearby timestamps cannot prove batching.
+    coordinatorCarriers: carrierCount(toCoordinator, transcriptUserTexts(messages)) ?? -1,
+    ...coordinatorWaitCounts(transcriptToolCalls(messages)),
+  };
+}
+
+/**
+ * The async scenario. The coordinator launches a reporter and a silent
+ * worker and ends its turn. The silent worker finishes without mail. The
+ * reporter sends one progress message and then waits for a gate file. Once
+ * the silent worker's notice has been handled and the progress message is
+ * seen held, the harness gives the coordinator a busy turn, queues a prompt
+ * behind it and opens the gate, so the reporter's report is pending while the
+ * coordinator is busy and a user prompt is queued. Last, a poll turn reads
+ * the mailbox five times with identical arguments.
+ */
+async function asyncCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { coordinator, summary, cleanup } = input;
+  const { invoke, identity, projectId } = coordinator;
+  const platform = identity.agent;
+  await removeLaunchedEnvironments(invoke, projectId, cleanup);
+  const gateDirectory = await mkdtemp(path.join(tmpdir(), "coordinator-live-gate-"));
+  cleanup.push(() => rm(gateDirectory, { recursive: true, force: true }));
+  const probe: DelegationProbe = {
+    platform,
+    token: randomBytes(6).toString("hex"),
+    gatePath: path.join(gateDirectory, "report.go"),
+    finishGatePath: path.join(gateDirectory, "finish.go"),
+  };
+  const names = asyncWorkerNames(probe);
+  const watch = createDelegationWatch(invoke, coordinator, summary);
+  const coordinatorEnvironmentId = identity.environmentId;
+  const worker = (name: string) => watch.workers.find((id) => watch.workerName(id) === name);
+  const fromReporter = (message: DelegationMailMessage) =>
+    message.toEnvironmentId === coordinatorEnvironmentId &&
+    message.from.kind === "tab" &&
+    message.from.environmentId === worker(names.reporter);
+
+  // 1–2. The delegating turn.
+  const delegating = await coordinatorTurn(
+    watch,
+    coordinator,
+    "the delegating turn",
+    asyncScenarioPrompt(probe),
+  );
+  const delegatingMessages = (watch.projection()?.messages ?? []).slice(delegating.rowsBefore);
+  const delegatingTurnCalls = transcriptToolCalls(delegatingMessages);
+  const launchResults = await watch.toolOutputs("launch_environment", delegatingMessages);
+  // The workers' names may land a read after the launch.
+  await watch
+    .until("the launched workers", () => Boolean(worker(names.reporter) && worker(names.silent)))
+    .catch(() => undefined);
+  const reporter = worker(names.reporter);
+  const silent = worker(names.silent);
+
+  let queuedAccepted = false;
+  let pollResults: string[] = [];
+  let pollCalls: ReturnType<typeof transcriptToolCalls> = [];
+  let pollReport: ReturnType<typeof parseAsyncPollReport> | undefined;
+  if (reporter && silent) {
+    // 5. The silent worker's notice is handled, and the progress message is held.
+    let idleReads = 0;
+    await watch.until(
+      "the silent worker's notice and the reporter's held progress",
+      (observation) => {
+        idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
+        const silentWoken = observation.delegations.some(
+          (delegation) => delegation.environmentId === silent && delegation.wokenAt !== undefined,
+        );
+        const progressHeld = observation.mail.some(
+          (message) => fromReporter(message) && message.placement === "inject-held",
+        );
+        return silentWoken && progressHeld && idleReads >= 2 && observation.queueLength === 0;
+      },
+    );
+
+    queuedAccepted = await deliverAsyncReport({ coordinator, watch, probe, fromReporter });
+
+    // 6. The poll turn.
+    const poll = await coordinatorTurn(
+      watch,
+      coordinator,
+      "the poll turn",
+      asyncPollPrompt(watch.coordinatorMailbox),
+    );
+    const pollMessages = (watch.projection()?.messages ?? []).slice(poll.rowsBefore);
+    pollCalls = transcriptToolCalls(pollMessages);
+    pollResults = await watch.toolOutputs("read_messages", pollMessages);
+    pollReport = parseAsyncPollReport(transcriptAssistantText(pollMessages));
+  }
+
+  const projection = watch.projection();
+  const messages = projection?.messages ?? [];
+  const mail = await watch.mailWithBodies();
+  const snapshot = await invoke<CoordinatorSnapshot>("get_project_coordinator", { projectId });
+  const delegations: DelegationRecord[] = snapshot.workflows.flatMap((workflow) =>
+    workflow.kind === "environment" &&
+    workflow.conversationId === coordinator.conversation.id &&
+    workflow.delegation
+      ? [{ environmentId: workflow.resourceId, ...workflow.delegation }]
+      : [],
+  );
+  const checks = evaluateAsyncScenario({
+    probe,
+    coordinatorEnvironmentId,
+    workers: {
+      ...(reporter ? { reporter: { role: "reporter", environmentId: reporter } } : {}),
+      ...(silent ? { silent: { role: "silent", environmentId: silent } } : {}),
+    },
+    delegatingTurnPhases: delegating.phases,
+    delegatingTurnEndedAt: delegating.endedAt,
+    delegatingTurnCalls,
+    launchResults,
+    queuedAccepted,
+    messages,
+    mail,
+    observations: watch.observations,
+    delegations,
+    pollResults,
+    pollCalls,
+    ...(pollReport ? { pollReport } : {}),
+    escapedInteractions: watch.escaped(),
+    workerInteractions: watch.workerEscaped(),
+  });
+  const calls = transcriptToolCalls(messages);
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, checks, {
+    ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    workers: watch.workers.length,
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the async delegation scenario`).toEqual([]);
+}
+
+/**
+ * The family scenario: one prompt, then nobody touches anything. The
+ * coordinator launches two workers and immediately follows the second up
+ * while it is still on its first request; both report; the coordinator then
+ * pings the first worker by environment id and they alternate until six pings
+ * have been answered.
+ */
+async function familyCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { coordinator, summary, cleanup } = input;
+  const { invoke, identity, projectId } = coordinator;
+  const platform = identity.agent;
+  await removeLaunchedEnvironments(invoke, projectId, cleanup);
+  const gateDirectory = await mkdtemp(path.join(tmpdir(), "coordinator-live-gate-"));
+  cleanup.push(() => rm(gateDirectory, { recursive: true, force: true }));
+  const probe: DelegationProbe = {
+    platform,
+    token: randomBytes(6).toString("hex"),
+    gatePath: path.join(gateDirectory, "report.go"),
+    finishGatePath: path.join(gateDirectory, "unused.go"),
+  };
+  const names = familyWorkerNames(probe);
+  const watch = createDelegationWatch(invoke, coordinator, summary);
+  const coordinatorEnvironmentId = identity.environmentId;
+
+  // The scenario is defined against the shipped defaults; a profile that
+  // changed them would prove something else.
+  const messaging = await invoke<Record<string, unknown>>("get_agent_messaging_settings");
+  const changedDefaults = Object.entries(DEFAULT_AGENT_MESSAGING_SETTINGS)
+    .filter(([key, value]) => messaging[key] !== value)
+    .map(([key]) => key);
+
+  let finished: string | undefined;
+  try {
+    await coordinatorTurn(watch, coordinator, "the delegating turn", familyScenarioPrompt(probe));
+    await finishFamilyExchange(watch, probe, names.two);
+  } catch (error) {
+    finished = error instanceof Error ? error.message.slice(0, 500) : String(error);
+  }
+
+  const projection = watch.projection();
+  const messages = projection?.messages ?? [];
+  const calls = transcriptToolCalls(messages);
+  const mail = await watch.mailWithBodies();
+  const worker = (name: string) => watch.workers.find((id) => watch.workerName(id) === name);
+  const one = worker(names.one);
+  const two = worker(names.two);
+  const checks: CoordinatorLiveCheck[] = [
+    {
+      name: "default-messaging-settings",
+      passed: changedDefaults.length === 0,
+      ...(changedDefaults.length > 0 ? { detail: `changed: ${changedDefaults.join(", ")}` } : {}),
+    },
+    {
+      name: "finished",
+      passed: finished === undefined,
+      ...(finished ? { detail: finished } : {}),
+    },
+    ...evaluateFamilyScenario({
+      probe,
+      coordinatorEnvironmentId,
+      workers: {
+        ...(one ? { one: { role: "one", environmentId: one } } : {}),
+        ...(two ? { two: { role: "two", environmentId: two } } : {}),
+      },
+      calls,
+      assistantText: transcriptAssistantText(messages),
+      userTexts: transcriptUserTexts(messages),
+      mail,
+      observations: watch.observations,
+      escapedInteractions: watch.escaped(),
+      workerInteractions: watch.workerEscaped(),
+      harnessPrompts: 1,
+    }),
+  ];
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, checks, {
+    ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    workers: watch.workers.length,
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the worker-mail family scenario`).toEqual([]);
+}
+
+/**
+ * The peer scenario: two ordinary environments, neither launched by a
+ * coordinator, with Wake peers on. The responder starts idle; the opener
+ * sends it the first message by environment id; they alternate until ten
+ * messages have moved. The harness sends nothing after the two startup
+ * prompts and answers nothing.
+ */
+async function peerCase(input: {
+  page: Page;
+  entry: CoordinatorLivePlatform;
+  summary: CoordinatorLivePlatformSummary;
+  skip: (reason: string) => never;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { entry, summary, skip, cleanup } = input;
+  const { platform } = entry;
+  const { invoke, fixture } = await openProfile(input.page);
+  const { checks, transcripts, escaped, mail, observations } = await runPeerScenario({
+    invoke,
+    projectId: fixture.id,
+    probe: { platform, token: randomBytes(6).toString("hex") },
+    skip,
+    cleanup,
+    log: (line) => console.log(line),
+  });
+  const calls = Object.values(transcripts).flatMap((messages) => transcriptToolCalls(messages));
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  if (escaped.length > 0) summary.escapedInteractions = escaped;
+  const failures = recordChecks(summary, checks, {
+    peerMessages: mail.filter((message) => message.route === "peer").length,
+    ...coordinatorWaitCounts(calls),
+    observations: observations.length,
+  });
+  expect(failures, `${platform}: the peer-mail scenario`).toEqual([]);
 }
 
 test.describe("live coordinator", () => {
@@ -220,246 +856,94 @@ test.describe("live coordinator", () => {
     `opt-in: ${COORDINATOR_LIVE_OPT_IN_ENV}=1 runs real coordinator turns on host credentials; use mise run test:agent:coordinator`,
   );
 
+  const scenarios = coordinatorLiveScenariosFromEnv(process.env[COORDINATOR_LIVE_SCENARIOS_ENV]);
   for (const entry of coordinatorLivePlatformsFromEnv(
     process.env[COORDINATOR_LIVE_PLATFORMS_ENV],
   )) {
     const { platform } = entry;
-    test(`read-only boundary holds on ${platform}: every mutation is refused, the checkout is unchanged and discovery returns`, async ({
-      page,
-    }) => {
-      test.setTimeout(TURN_TIMEOUT_MS + 240_000);
-      page.setDefaultTimeout(30_000);
-      const summary: CoordinatorLivePlatformSummary = {
-        version: 1,
-        platform,
-        verdict: "failed",
-        tierSetting: entry.tierSetting,
-        startedAt: new Date().toISOString(),
-      };
-      const started = Date.now();
-      const skip = (reason: string): never => {
-        summary.verdict = "skipped";
-        summary.reason = reason;
-        test.skip(true, reason);
-        throw new Error(reason);
-      };
-      // Undone last-first in `finally`, whatever happened before.
-      const cleanup: Array<() => Promise<unknown>> = [];
-      try {
-        const { checkout, invoke, fixture } = await openProfile(page);
-        const projectId = fixture.id;
-
-        const config = await invoke<{ global: Record<string, unknown> }>("get_config");
-        const enabled = config.global.enabledAgentPlatforms;
-        if (Array.isArray(enabled) && !enabled.includes(platform)) {
-          skip(`${platform} is not enabled in this profile (start it with --agent-platforms)`);
-        }
-        // The network step tests the coordinator's whole `network` denial, so
-        // the research exception (hosted search, on by default) is switched
-        // off. What search may reach with it on is checked by the gated canary
-        // in `bridges/codex-bridge/src/app-server/live-network-lock.test.ts`.
-        const caseSettings = {
-          coordinatorProviderTiers: entry.tierSetting,
-          coordinatorWebResearch: "off",
-        };
-        const previousSettings = Object.fromEntries(
-          Object.keys(caseSettings).map((key) => [key, config.global[key]]),
-        );
-        await invoke("update_global_config", { global: { ...config.global, ...caseSettings } });
-        cleanup.push(async () => {
-          const current = await invoke<{ global: Record<string, unknown> }>("get_config");
-          await invoke("update_global_config", {
-            global: { ...current.global, ...previousSettings },
+    if (scenarios.includes("read-only")) {
+      test(`read-only boundary holds on ${platform}: every mutation is refused, the checkout is unchanged and discovery returns`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests["read-only"]);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "read-only", async ({ summary, skip, cleanup }) => {
+          // The network step tests the coordinator's whole `network` denial, so
+          // the research exception (hosted search, on by default) is switched
+          // off. What search may reach with it on is checked by the gated canary
+          // in `bridges/codex-bridge/src/app-server/live-network-lock.test.ts`.
+          const { checkout, invoke, projectId, identity } = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: { coordinatorWebResearch: "off" },
+            skip,
+            cleanup,
           });
-        });
-
-        // A fresh, unassigned main conversation: a platform is bound by the
-        // first prompt and never changes, so an earlier case's main is closed.
-        let snapshot = await invoke<CoordinatorSnapshot>("ensure_project_coordinator", {
-          projectId,
-        });
-        const previous = coordinatorMainConversation(snapshot.workspace);
-        if (previous?.agent) {
-          snapshot = await invoke<CoordinatorSnapshot>("close_coordinator_conversation", {
+          await readOnlyCase({
+            checkout,
+            invoke,
             projectId,
-            conversationId: previous.id,
+            identity,
+            platform,
+            summary,
+            skip,
+            cleanup,
           });
-        }
-        if (!coordinatorMainConversation(snapshot.workspace)) {
-          snapshot = await invoke<CoordinatorSnapshot>("create_coordinator_conversation", {
-            projectId,
+        });
+      });
+    }
+
+    if (scenarios.includes("async")) {
+      test(`delegation on ${platform} is asynchronous: async launch, queued prompt before mail, one carrier, one silent-worker notice, repeated reads refused`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.async);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "async", async ({ summary, skip, cleanup }) => {
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: {},
+            skip,
+            cleanup,
           });
-        }
-        const conversation = coordinatorMainConversation(snapshot.workspace)!;
-        const qualification = snapshot.providerAvailability[platform];
-        summary.tier = qualification?.tier;
-        expect(
-          qualification?.available,
-          `${platform} is not offered to Coordinator: ${qualification?.reason ?? "no qualification"}`,
-        ).toBe(true);
-        expect(qualification?.delegation, `${platform} has no delegation`).toBe(true);
-        expect(
-          snapshot.controlMcp.running,
-          `Control MCP is not running: ${snapshot.controlMcp.error ?? "disabled"}`,
-        ).toBe(true);
+          await asyncCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
 
-        snapshot = await invoke<CoordinatorSnapshot>("assign_coordinator_conversation_agent", {
-          projectId,
-          conversationId: conversation.id,
-          agent: platform,
-        });
-        cleanup.push(() =>
-          invoke("close_coordinator_conversation", { projectId, conversationId: conversation.id }),
-        );
-        const identity: SessionIdentity = {
-          environmentId: coordinatorRuntimeId(snapshot.workspace.id, conversation.id),
-          agent: platform,
-          logicalSessionKey: conversation.logicalSessionKey,
-        };
-        try {
-          await invoke("ensure_native_agent_session", identity);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (isSignInError(message)) {
-            skip(`no usable ${platform} credential in this profile: ${message.slice(0, 300)}`);
-          }
-          throw error;
-        }
-        const auth = await invoke<{ state: NativeAgentAuthState } | null>(
-          "get_native_agent_auth_status",
-          identity,
-        ).catch(() => null);
-        if (isSignedOut(auth?.state)) {
-          skip(`no usable ${platform} credential in this profile (${auth!.state})`);
-        }
-
-        // Canaries reachable only through a working read tool and Control MCP.
-        const canaryLine = `coordinator-live-canary-${randomBytes(8).toString("hex")}`;
-        await writeFile(path.join(checkout, CANARY_FILE), `${canaryLine}\n`);
-        cleanup.push(() => rm(path.join(checkout, CANARY_FILE), { force: true }));
-        const ticketTitle = `coordinator-live-discovery-${randomBytes(8).toString("hex")}`;
-        const ticket = await invoke<{ id: string }>("add_kanban_task", {
-          projectId,
-          title: ticketTitle,
-          description: "Synthetic ticket read back by the live coordinator read-only scenario.",
-        });
-        cleanup.push(() => invoke("delete_kanban_task", { taskId: ticket.id }));
-        // The project home is the checkout as an environment: the one target a
-        // coordinator credential must never act on.
-        const home = await invoke<{ id: string }>("ensure_project_home_environment", {
-          projectId,
-        });
-        // The agent is told not to launch workers. One it launches anyway is
-        // removed after the checkout has been measured, so it still counts.
-        const existing = new Set(
-          (await invoke<Array<{ id: string }>>("get_environments", { projectId })).map(
-            (environment) => environment.id,
-          ),
-        );
-        cleanup.push(async () => {
-          for (const environment of await invoke<Array<{ id: string }>>("get_environments", {
-            projectId,
-          })) {
-            if (existing.has(environment.id)) continue;
-            await invoke("stop_environment", { environmentId: environment.id }).catch(
-              () => undefined,
-            );
-            await invoke("delete_environment", { environmentId: environment.id });
-          }
-        });
-
-        const probe: ReadOnlyProbe = {
-          platform,
-          canaryFile: CANARY_FILE,
-          canaryLine,
-          ticketTitle,
-          homeEnvironmentId: home.id,
-          requestId: `coordinator-live-${randomUUID()}`,
-        };
-        // What a launched job leaves on the project home, read before the
-        // digest so a worker that writes after the turn still counts.
-        const homeWork = async () =>
-          homeEnvironmentWork(
-            await invoke<unknown>("get_pane_layout", { environmentId: home.id }),
-            await invoke<unknown>("get_sessions_by_environment", { environmentId: home.id }),
-          );
-        const homeBefore = await homeWork();
-        const before = await fixtureTreeDigest(checkout);
-        summary.tree = { before: before.digest };
-        // Build mode, not the plan mode a fresh coordinator composer selects:
-        // plan mode asks the agent not to try, so the boundary would never be
-        // exercised. Build mode is where a coordinator lands after its plan is
-        // approved, and the policy has to hold there whatever the agent tries.
-        await invoke("dispatch_native_agent_intent", {
-          ...identity,
-          prompt: readOnlyScenarioPrompt(probe),
-          requestId: randomUUID(),
-          mode: "build",
-        });
-        const { projection: settled, escaped } = await settleTurn(invoke, identity, summary);
-        const homeAfter = await homeWork();
-        const after = await fixtureTreeDigest(checkout);
-        summary.tree = {
-          before: before.digest,
-          after: after.digest,
-          changes: describeDigestChanges(before, after),
-        };
-        summary.turn = {
-          phase: settled.turn.phase,
-          ...(settled.turn.error ? { error: settled.turn.error.slice(0, 500) } : {}),
-        };
-
-        const report = parseReadOnlyReport(transcriptAssistantText(settled.messages));
-        if (!("error" in report)) summary.outcomes = report.outcomes;
-        // Codex's refused calls show as the code-mode cells that made them,
-        // whose output (the evidence) is fetched as opening the row does.
-        const messages =
-          platform === "codex"
-            ? await withCodeModeCellDetails(settled.messages, (detailRef) =>
-                invoke<ToolDetails | null>("get_native_agent_tool_details", {
-                  ...identity,
-                  detailRef,
-                }),
-              )
-            : settled.messages;
-        const { failures, toolCalls, cellRows, cellCalls } = evaluateReadOnlyConversation({
-          platform,
-          messages,
-          before,
-          after,
-          report,
-          probe,
-          escapedInteractions: escaped,
-          homeWork: { before: homeBefore, after: homeAfter },
-        });
-        summary.toolCalls = toolCalls.map(({ name, state }) => ({ name, state }));
-        if (platform === "codex") summary.cellCalls = { rows: cellRows, counted: cellCalls };
-        if (settled.turn.phase === "error") {
-          const signedOut = signedOutTurnReason({
-            projection: settled,
-            reported: !("error" in report),
-            checkoutChanged: (summary.tree.changes?.length ?? 0) > 0 || escaped.length > 0,
+    if (scenarios.includes("family")) {
+      test(`worker mail on ${platform} needs nobody: two reports, a follow-up by environment id, ten more alternating messages and a busy follow-up joining its delegation`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.family);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "family", async ({ summary, skip, cleanup }) => {
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: {},
+            skip,
+            cleanup,
           });
-          if (signedOut) skip(`no usable ${platform} credential in this profile (${signedOut})`);
-          failures.unshift(`the turn failed: ${settled.turn.error ?? "no error text"}`);
-        }
-        summary.verdict = failures.length === 0 ? "passed" : "failed";
-        if (failures.length > 0) summary.reason = failures.join("; ");
-        expect(
-          failures,
-          `${platform}: the read-only scenario must leave the checkout unchanged, refuse every mutation and still read (${READ_ONLY_REPORT_MARKER} outcomes: ${JSON.stringify(summary.outcomes ?? {})})`,
-        ).toEqual([]);
-      } catch (error) {
-        if (summary.verdict !== "skipped") {
-          summary.verdict = "failed";
-          summary.reason ??= error instanceof Error ? error.message.slice(0, 2_000) : String(error);
-        }
-        throw error;
-      } finally {
-        for (const step of cleanup.toReversed()) await step().catch(() => undefined);
-        summary.durationMs = Date.now() - started;
-        await writeSummary(summary);
-      }
-    });
+          await familyCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("peer")) {
+      test(`peer mail on ${platform} wakes both sides: ten alternating messages between two ordinary environments with Wake peers on and nobody acting`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.peer);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "peer", async ({ summary, skip, cleanup }) => {
+          await peerCase({ page, entry, summary, skip, cleanup });
+        });
+      });
+    }
   }
 });

@@ -9,7 +9,7 @@ permissions, name conflicts or signal delivery, so lifecycle, storage, network
 and image changes are also qualified against a real daemon. How the lifecycle
 works is in [container-lifecycle.md](../architecture/container-lifecycle.md);
 the platforms and providers still waiting for evidence are in
-[container-platform-qualification.md](../todo/container-platform-qualification.md).
+[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
 
 ## Rules
 
@@ -42,12 +42,29 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26 |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 |
+| Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch), C10, C22 host-service reply, C23 re-run |
+| Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
+| Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
 | Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts` | C28 |
 | Final image | `bash docker/tests/final-image-smoke.sh <image>` (CI runs it on the native amd64 and arm64 builds in `validate-bun-runtime.yml`) | C27 |
 | Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`), deletion through the ledger (`browser-gateway.spec.ts`) |
 | Real stack, live approval | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL=1 mise run test:agent:docker` | C11 approval half (`container-approval-stop.spec.ts`, a real Claude turn) |
+| Real stack, root terminal | Included in `test:agent:docker`; start the profile with `--fixture-network full` for the full-network half | **New root terminal**: uid 0, outbound access by network mode (`container-root-terminal.spec.ts`) |
 | Real stack, local | `mise run test:agent:browser:isolated` | C30 |
 | Provider resume | `scripts/qualify-session-resume.sh <profile> <agent> [environment-name]` | C13 |
+| OpenCode seeded data | `container-live-data-contracts.test.ts` (also `scripts/qualify-opencode-seeded-data.sh <image>`) | Real OpenCode turns, diff, revert and unrevert with and without host seeds on both database paths. Active console accounts in SQLite must retrieve provider configuration using their bearer token and selected organization from a local console fixture. Inotify checks the omitted host paths; no external credentials or billing. |
+| Volume copy metadata | `container-live-data-contracts.test.ts` | Production `copy-volume` between real Docker volumes with a read-only source; compare raw `user.*` file/directory attributes and `security.capability` bytes before and after. Missing xattr or setcap support fails qualification. |
+| Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
+| Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
+| Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm` |
+| Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | None yet: the external egress design in [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md), item 3 |
+
+`test:logged` kills a command that prints nothing for 300 s, and Bun prints
+a test's output only when the test finishes, so run the readiness and
+rebuild-fault suites with `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=2400000`.
+Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep the rebuild-fault
+suite's per-scenario observations as JSON lines (no contents), since a
+passing logged run deletes its output.
 
 The image must carry a manifest (`mise run docker:build` or
 `docker/build.sh <tag>`). The network and firewall suites need outbound
@@ -62,7 +79,102 @@ the profile's exact-owner volumes and networks. Profile handling is in
 environment onto a new runtime generation and checks the resumed session
 repeats it: exit 0 pass, 1 fail, 2 setup error. A provider that passes is
 added to `RESUME_QUALIFIED_PROVIDERS` (`container-replacement.ts`); until then
-the rebuild preview marks its resume unverified.
+the rebuild preview marks its resume unverified. `QUALIFY_MODEL` and
+`QUALIFY_REASONING` pick a model the login accepts (Codex and Pi defaults are
+refused for a ChatGPT-account login), `QUALIFY_REQUEST_TIMEOUT` (default
+`5m`) covers a slow provider start, and `QUALIFY_AMBIGUOUS=1` adds a pass in
+which a prompt whose outcome is unknown must stay parked and unsent across
+the rebuild.
+
+`measure-registry-image.sh` reads sizes from the manifests alone, and
+optionally times every layer blob through the registry API or a cold `docker
+pull` into a throwaway, labelled `docker:dind` with its own empty volume; it
+never touches the local Docker cache. `qualify-backend-upgrade-rollback.ts`
+runs each release's own headless backend from a detached worktree over one
+private data directory (agent-test flavour, no credentials), snapshots files,
+store rows, lifecycle records and owned Docker resources, and removes exactly
+what it created.
+
+`qualify-egress-gateway.sh` starts a gateway container that owns a network
+namespace and runs the working tree's `init-firewall.sh` with `NET_ADMIN`,
+joins a workload to it with no added capability, and checks policy 3
+egress, root tampering, live edits, published and host-service ports, and
+restarts of either side: exit 0 pass, 1 fail, 2 setup error. The backend does
+not create this topology yet.
+
+## Rootless Linux host (2026-10-25)
+
+The first run on a real rootless Linux daemon, not a nested
+`docker:dind-rootless`:
+- **Host:** Omarchy (Arch), kernel 7.2.8, x86_64.
+- **Daemon:** Docker Engine 29.9.1 rootless, run as a systemd user service
+  (`dockerd-rootless-setuptool.sh`, RootlessKit 3.3.0, slirp4netns 1.3.3,
+  builtin port driver), with the systemd cgroup driver on cgroup v2. The user
+  slice delegates only `cpu memory pids`; `docker info` warns that there is no
+  cpuset or io support.
+- **Image:** `orkestrator-v2:q0021-rootless-amd64`. This is the amd64 review
+  build `orkestrator-v2:review-ede1e368-amd64` with two files from the todo
+  0021 branch (`e6440483`) laid on top: `entrypoint.sh` and
+  `orkestrator-migrate.sh`, the only container scripts that differed from it.
+  Its manifest matches the branch's except `appVersion` (2.29.0-beta). It was
+  streamed into the rootless daemon because the host had 13 GB free.
+- **Command:** each suite as in [Suites](#suites), from a clone of the branch,
+  with `DOCKER_HOST=unix:///run/user/1000/docker.sock`.
+
+| Suite | Result |
+| --- | --- |
+| Live lifecycle (C09, C11, C12, C20) | 5/6. Both C12 volume tests pass. C20 fails: see staged inputs below |
+| Live replacement (C14–C19) | 10/10 |
+| Live data contracts (volume xattrs and capabilities, OpenCode accounts) | 2/2 |
+| Live network (C22, C24, C26) | 3/4. C24 budgets pass with `cpu memory pids` delegated. C22 fails on host-service reachability, below |
+| Live firewall (C23, policy 3 tuples) | 2/2: `ip_set`, `xt_set` and `nf_tables` were loaded on the stock kernel |
+| Live readiness faults | 5/8. The two C09 boots fail on a fixture `/tmp` mount, below; C22 host-service reply below |
+| Live rebuild faults (C15) | 4/5 in the sequence, then 5/5 on a rerun; the failure is a port collision, below |
+
+Volume storage, migration, rebuild, restore, capacity and the fault paths all
+pass on rootless. That qualified `volume-v1` there, and
+`ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` was removed. The rootless gaps
+this run found are tracked in
+[0109-rootless-linux-runtime-gaps.md](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md):
+
+- **Staged inputs are unreadable (C20).** The staged revision is owned by the
+  host user and is owner-only (`0700`/`0600`). Under rootless the host user
+  is container root, so the container's `node` user cannot open
+  `/codex-home`. A minimal reproduction got `Permission denied` even for a
+  `0644` file inside a `0700` directory. A provider's login and
+  configuration silently do not arrive. Nothing leaks.
+- **The agent-tools port is unreachable (C22).** `host.docker.internal`
+  resolves inside RootlessKit's network namespace, which has host loopback
+  disabled by default. The probe was refused (curl exit 7), and
+  `container-host-reachability` reported the path closed (`host=blocked`), so
+  the product says so rather than hanging.
+- **A read-only file bind from a `nosuid,nodev` mount fails.** Docker
+  refuses it with `remount-ro … operation not permitted`. The fixtures staged
+  the GitHub ranges seed under a tmpfs `/tmp` mounted that way; with `TMPDIR`
+  on the home filesystem both C09 tests pass. A data directory on a
+  `nodev`/`nosuid` filesystem, such as a separately mounted `/home`, would
+  fail the same way in production.
+- **An ephemeral published port can collide with a host process (C15).**
+  Rootless dockerd chooses the port inside its namespace and RootlessKit then
+  binds it on the host. The candidate got `127.0.0.1:33169`, which the
+  host's own running Orkestrator Claude bridge held, and the rebuild failed
+  `port-conflict` with the original kept. The rerun drew other ports and
+  passed.
+
+## Docker Desktop on Apple Silicon (2026-10-23)
+
+The full live set, now six suites, ran on Docker Desktop 4.95.0 (Engine
+29.8.2) on the same Apple M5 Pro host, native arm64, with the development
+image built from `06297124` (`sha256:18aae789…72d6`). Every suite passed;
+the two new fault suites passed twice each. The pass found and fixed nine
+product problems, two of them in the rebuild copy (an outage could commit an
+empty candidate; a lost daemon could hang a rebuild forever) and one in
+read-only mode (delete and allowlist edits ignored a newer writer's marker).
+C13 now passes for Codex, OpenCode, Cursor and Pi; the full-network fixture
+and root terminal passed `test:agent:docker`; and every benchmark target was
+met at load 18. Rootless was exercised in a nested `docker:dind-rootless`
+only. Evidence, decisions and what remains are in
+[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md#results-2026-10-23).
 
 ## Docker Desktop on Apple Silicon (2026-10-17)
 
@@ -101,7 +213,7 @@ This run caught two problems. Three of the opt-in Docker suites (lifecycle,
 network and the benchmark harness) had not kept up with account switching
 (#889). And a stopped container lost its agent tabs
 from view when it was started again. Both are fixed. Detail and decisions are
-in [container-platform-qualification.md](../todo/container-platform-qualification.md).
+in [0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
 
 ## Provider-state review evidence (2026-10-16)
 
@@ -233,3 +345,37 @@ is fixed, or the reason is recorded, before it merges.
 
 Never clear a user's global Docker or cache state to manufacture a cold run;
 "cold" means a new network, volumes and staged inputs per environment.
+
+### Exec cost and container change signals
+
+Two scripts measure what container observation costs, on whatever Docker the
+machine talks to. Run each on Docker Desktop and on Linux Engine and record
+the platform with the numbers.
+
+```bash
+# One docker exec, end to end: wall latency, the docker CLI's CPU and RSS,
+# dockerd/containerd/shim CPU (through a --privileged --pid=host helper: the
+# host on Linux Engine, the VM on Desktop), whole-machine busy CPU and, on
+# macOS, com.docker.backend and the VM process. With --repo also the status
+# scan and tree walk; with --watcher (an image with container-worktree-signal)
+# the watcher's watches, set-up time, RSS and idle CPU.
+mise exec -- bun apps/backend/scripts/container-exec-cost.ts \
+  --image orkestrator-v2:dev-<hash> --execs 200 --repo . --watcher
+
+# Against a running isolated profile started with
+# --fixture-environments local,container: execs per minute idle and with a
+# Files panel reading every 5 s, change-to-announcement and change-to-visible
+# latency, and signal health. --demote first stops the container's watcher,
+# which is how an image without the signal behaves.
+mise exec -- bun apps/backend/scripts/container-signal-profile-sample.ts --profile <p>
+mise exec -- bun apps/backend/scripts/container-signal-profile-sample.ts --profile <p> --demote
+```
+
+The live signal tests need a development image of the checkout
+(`mise run docker:build:dev`) and are skipped without one:
+
+```bash
+ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE=orkestrator-v2:dev-<hash> \
+  bun test apps/backend/tests/claude-state-signal-docker.test.ts \
+  apps/backend/tests/container-worktree-signal-docker.test.ts
+```

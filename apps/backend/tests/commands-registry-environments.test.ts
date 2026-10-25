@@ -10,8 +10,6 @@ const {
   RUNNING_CONTAINER_DOCKER_SCRIPT,
   SETUP_DONE_OSC,
   SETUP_FAILED_OSC,
-  closeLocalServerAdmission,
-  commandTesting,
   configuredGitPushBehaviour,
   configuredGitUpstream,
   createCommandRegistry,
@@ -30,6 +28,7 @@ const {
   expectedManagedWorktreePath,
   fs,
   gitOutput,
+  localServerHooks,
   path,
   ptyProcesses,
   ptySpawn,
@@ -1432,12 +1431,16 @@ esac
       const expectedWorktreePath = expectedManagedWorktreePath(context, projectName, branch);
       const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
       const originalImplementation = updateEnvironment.getMockImplementation();
+      let rejectedWorktreePath: unknown;
       updateEnvironment.mockImplementation(
         async (environmentId: string, update: Record<string, unknown>) => {
           // `createLocalWorktree` has already succeeded at this point, so the
           // compensation under test is the one in `startEnvironmentOnce`, not the
-          // one inside worktree creation.
-          if (update.worktreePath === expectedWorktreePath) {
+          // one inside worktree creation. Fail whichever path is persisted and
+          // compare it below: matching on the expected path made a different
+          // spelling of the root skip the failure and the start succeed.
+          if (rejectedWorktreePath === undefined && update.worktreePath !== undefined) {
+            rejectedWorktreePath = update.worktreePath;
             throw new Error("storage unavailable at /private/user/path");
           }
           return originalImplementation!(environmentId, update);
@@ -1450,6 +1453,7 @@ esac
           commands.get("start_environment")?.({ environmentId: environment.id }, context),
         ).rejects.toThrow("storage unavailable");
 
+        expect(rejectedWorktreePath).toBe(expectedWorktreePath);
         expect(environment.status).toBe("error");
         expect(environment.worktreePath).toBeUndefined();
         expect(environment.lifecycleError).not.toContain("/private/user/path");
@@ -1715,14 +1719,14 @@ esac
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    commandTesting.markEnvironmentMerging(environment.id);
+    context.runtime.environments.beginMerge(environment.id);
 
     await expect(
       commands.get("delete_environment")?.({ environmentId: environment.id }, context),
     ).rejects.toThrow("Environment is currently being merged");
     // Reserving before the refusal would block local-server starts and further
     // merges for an environment that is not being deleted at all.
-    expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(false);
+    expect(context.runtime.environments.isDeleting(environment.id)).toBe(false);
   });
 
   test("rejects starts while deletion is reserved before cleanup settles", async () => {
@@ -1745,18 +1749,18 @@ esac
     const terminationResult = new Promise<boolean>((resolve) => {
       releaseTermination = resolve;
     });
-    commandTesting.setLocalServerProcess(`codex:${environment.id}`, createFakeChild(95050));
-    commandTesting.setTerminateProcessTree(async () => {
+    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, createFakeChild(95050));
+    localServerHooks.terminateProcessTree = async () => {
       announceTermination();
       return terminationResult;
-    });
+    };
 
     const deletion = commands.get("delete_environment")?.(
       { environmentId: environment.id },
       context,
     );
     await terminationStarted;
-    expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(true);
+    expect(context.runtime.environments.isDeleting(environment.id)).toBe(true);
 
     await expect(
       commands.get("start_environment")?.({ environmentId: environment.id }, context),
@@ -1767,7 +1771,7 @@ esac
 
     releaseTermination(false);
     await expect(deletion).rejects.toThrow("Failed to stop all local servers");
-    commandTesting.setTerminateProcessTree(async () => true);
+    localServerHooks.terminateProcessTree = async () => true;
   });
 
   test("rejects starts carrying a durable deletion tombstone", async () => {
@@ -1866,12 +1870,12 @@ exit 0
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    closeLocalServerAdmission();
+    context.runtime.localServers.closeAdmission();
 
     await expect(
       commands.get("delete_environment")?.({ environmentId: environment.id }, context),
     ).rejects.toThrow("Backend is shutting down");
-    expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(false);
+    expect(context.runtime.environments.isDeleting(environment.id)).toBe(false);
   });
 
   test(
@@ -1982,8 +1986,8 @@ exit 0
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    commandTesting.setLocalServerProcess(`codex:${environment.id}`, createFakeChild(95010));
-    commandTesting.setTerminateProcessTree(async () => false);
+    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, createFakeChild(95010));
+    localServerHooks.terminateProcessTree = async () => false;
 
     await expect(
       commands.get("stop_environment")?.({ environmentId: environment.id }, context),
@@ -1997,7 +2001,7 @@ exit 0
       "Environment start failed. Check the backend logs and retry.",
     );
 
-    commandTesting.setTerminateProcessTree(async () => true);
+    localServerHooks.terminateProcessTree = async () => true;
   });
 
   test(
@@ -2897,13 +2901,10 @@ exit 0
 
   test("suffixes local worktree branches when origin has an unfetched branch with the stored name", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
-    const updater = await createTempDir("ork-electron-remote-branch-");
-    await runGit(updater, ["clone", remote, "."]);
-    await runGit(updater, ["checkout", "-b", "review-oauth-callback"]);
-    await fs.writeFile(path.join(updater, "remote-only.txt"), "remote branch\n");
-    await runGit(updater, ["add", "remote-only.txt"]);
-    await runGit(updater, ["commit", "-m", "remote branch"]);
-    await runGit(updater, ["push", "origin", "review-oauth-callback"]);
+    // Created directly in the bare remote: the project checkout has never
+    // fetched it, which is the collision the start path must detect. Only the
+    // branch name matters here, so no clone, commit and push are needed.
+    await runGit(remote, ["branch", "review-oauth-callback", "main"]);
 
     const { stdout: knownBranches } = await execFileAsync("git", [
       "-C",
@@ -3620,17 +3621,17 @@ exit 0
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
     const child = createFakeChild(92001);
-    commandTesting.setLocalServerProcess(`codex:${environment.id}`, child);
-    commandTesting.setTerminateProcessTree(async () => false);
+    context.runtime.localServers.adoptProcess(`codex:${environment.id}`, child);
+    localServerHooks.terminateProcessTree = async () => false;
 
     await expect(
       commands.get("delete_environment")?.({ environmentId: environment.id }, context),
     ).rejects.toThrow("Failed to stop all local servers");
     expect(await context.storage.getEnvironment(environment.id)).toBe(environment);
     expect(existsSync(worktreePath)).toBe(true);
-    expect(commandTesting.getLocalServerProcess(`codex:${environment.id}`)).toBe(child);
+    expect(context.runtime.localServers.process(`codex:${environment.id}`)).toBe(child);
 
-    commandTesting.setTerminateProcessTree(async () => true);
+    localServerHooks.terminateProcessTree = async () => true;
     await expect(
       commands.get("delete_environment")?.({ environmentId: environment.id }, context),
     ).resolves.toBeUndefined();

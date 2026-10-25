@@ -1,50 +1,144 @@
-# Orkestrator AI
+# Orkestrator
 
-A desktop application for managing isolated Docker-based and local-worktree
-development environments for Claude Code, Codex, OpenCode, Cursor Agent, Grok
-Build, and Pi. Create multiple sandboxed environments per repository, each with
-its own terminal session, Git branch, and PR workflow.
+Orkestrator is a desktop application for running coding agents under explicit control.
 
-## Features
+It creates isolated development environments — Docker containers or local Git worktrees — for **Claude Code**, **Codex**, **OpenCode**, **Cursor Agent**, **Grok Build**, and **Pi**. Each environment has its own checkout and branch, so one agent’s work stays in that environment instead of writing into the project’s main working copy.
 
-- **Project Management**: Add Git repositories and manage multiple environments per project
-- **Isolated Environments**: Each environment runs in its own Docker container with network isolation
-- **Embedded Terminal**: Full xterm.js terminal with ANSI color support
-- **GitHub Integration**: Create and view pull requests directly from the UI
-- **Remote Web Gateway**: Access the app from another browser on your Tailscale network
-- **Static Public Client**: Deploy `apps/web-public` to Vercel and connect the browser directly to a tailnet backend
-- **Configuration**: Global and per-repository settings for SSH keys, resource limits, and branches
-- **Security**: Network firewall restricts outbound traffic to approved domains only
+A project **Coordinator** reads the configured checkout, inspects Orkestrator state, and delegates implementation to worker environments. It cannot edit the checkout itself. Permissions, network, sandbox and approvals are resolved by the backend as an execution policy for every native session — not left as an honour system.
 
-## Screenshots
+Work continues when you switch away. Agent sessions, terminals, mail and pipelines live in the backend, not only in the visible React tree.
 
+## Safety and control
+
+### Isolated environments, limited blast radius
+
+Create several environments per repository. A **container** environment runs in its own labelled Docker runtime. Capable images keep the workspace and agent session files on owner-labelled volumes, and (network policy 2 or later) a private Docker network. A **local** environment is a linked Git worktree (`git worktree add --no-track -b`), with a dedicated branch that does not track the base branch — so a plain `git push` publishes that branch rather than pushing onto `main`.
+
+The Coordinator is not a disposable workspace whose `worktreePath` happens to be the project root. Existing environment delete, merge and cleanup paths assume they own that workspace; routing the checkout through them would risk modifying or deleting the user’s repository. Coordinator runtime, transcripts and generated configuration live under application data. Opening Coordinator does not run project setup scripts, install dependencies, or load repository hooks.
+
+Delegation cannot target the **project home** environment (the writable record for the canonical checkout). Side agents receive Control MCP credentials with only `discovery` and `mail`; they cannot launch environments or jobs. Agent mail is bounded, idempotent, and routed: a side agent may message only the main coordinator; cross-project and external mail is stored and never auto-injected.
+
+Closing a tab stops owned work and denies parked approvals. It retains the conversation. It never calls Claude `deleteSession`, Codex `thread/delete`, or OpenCode `session.delete`.
+
+### Sandboxing and network isolation
+
+Container sessions treat the container as the isolation boundary (`sandbox: "container"`). The image runs agents as the non-root `node` user. Root terminals use a separate `orkroot` identity; `node` has no sudoers path to become `orkroot`. On images with network policy 2 or later, each environment gets its own labelled Docker bridge network with IPv6 disabled, so sibling containers are not on the same `/24`.
+
+Restricted containers apply an iptables/ipset allowlist (`docker/init-firewall.sh`). A new install persists `DEFAULT_ALLOWED_DOMAINS` (GitHub, npm, Bun, mise, Anthropic, Sentry/Statsig, the VS Code marketplace, Context7, Playwright’s CDN), the one default list; the image's fallback for a container started without an allowlist is generated from it. Enabled agent platforms add the hosts those CLIs need. `full` mode skips the firewall. Local worktrees have no container firewall; a host session that requests restricted network without a sandbox reports that the restriction is not applied.
+
+Host interactive sessions default to **no vendor sandbox** (`sandbox: "none"`). Vendor sandboxes hold `.git` read-only, which stalls ordinary Git work in a worktree. Tighten sandbox, network and approvals per environment under **Settings → Execution policy**.
+
+The Coordinator’s read-only boundary is stronger than a prompt instruction. On macOS and Linux, Claude’s command sandbox (Seatbelt, or bubblewrap/landlock) is required for the `enforced` tier. Codex uses a permission profile the bridge reads back and refuses to run without. Pi gates every tool call inside the bridge. OpenCode is `provider-configured`: it denies mutating tools through its own rules, but always loads the checkout’s project configuration. Cursor is `provider-configured`: it applies sandbox and tool restrictions, but its SDK exposes no approval callback to verify them. Grok is `advisory`: write, edit, shell, subagent and web tools are removed; remaining permission requests are denied; tools that never ask stay advisory.
+
+### Per-environment permissions
+
+Every native session receives a `NativeAgentExecutionPolicy`:
+
+| Axis | What it controls |
+| --- | --- |
+| `sandbox` | `provider`, `container`, or `none` |
+| `approvals` | `ask`, `auto-approve`, or `deny` |
+| `networkAccess` | `restricted` or `full` |
+| `projectResources` | Whether the session may load project-local MCP / extensions |
+| `capabilityPolicy` | Provider-neutral denials (`file.write`, `file.patch`, `shell.mutate`, `network`, `web.search`) that each bridge translates |
+| `toolPolicy` | User-editable allow/deny of provider tool names |
+
+Interactive sessions inherit host or container defaults; **Settings → Execution policy** overrides apply to new native sessions in that environment. Coordinator sessions always receive `coordinator-read-only` (`approvals: "deny"`, mutating capabilities denied, `projectResources: false`). That policy is not user-overridable. Bridges are launched with `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`, so a request body or a persisted record cannot widen a live coordinator conversation across a restart.
+
+A `network` denial also removes hosted web tools (they run on the vendor’s servers, so a local firewall cannot stop them). Coordinator web research can reopen hosted search only; live page fetches and mutating shell stay off.
+
+### Human approval points
+
+Questions, plan approvals, command/file approvals, permission prompts and MCP elicitations go through one interaction contract. Interactive sessions wait for the user; unknown kinds fail closed (`deny-and-fail`). Unattended workflows (build pipeline, looped review) decline input and deny authorisation.
+
+Interactive environments default to **`approvals: "auto-approve"`**. There is no inner sandbox to escalate against on a trusted host checkout, and a container already holds the outer boundary. Set **Ask** on an environment when a human must approve tools. Coordinator sessions deny rather than prompt.
+
+When an approval is parked, timeout, disconnect, process death and an unparseable answer **deny**. They never approve. The default wait is five minutes; a pause can hold a card for up to 24 hours, after which expiry still denies.
+
+### Parallel agents
+
+Several environments can run at once. Switching the UI away does not cancel them.
+
+The Coordinator is the planned parallel path: one **main** conversation per project (at most 16 open conversations including side agents) inspects the checkout and launches worker environments with `launch_environment`. Workers report back over durable agent mail. Side agents read and discuss; they do not launch workers. The agent registry answers which tabs exist and what each is doing (`working`, `waiting`, `idle`, `stopped`).
+
+**Multi Review** commits a snapshot, runs a validation worker, seals an evidence package, then fans that package out to reviewers. Unattended interactions on that path cannot silently approve a mutation.
+
+There is no separate “swarm orchestrator” product. Parallelism is environments, coordinator delegation, mail, and pipelines — all of which keep running while another environment is on screen.
+
+## Architecture
+
+```mermaid
+flowchart TB
+  subgraph clients [Clients]
+    Electron[Electron desktop]
+    Browser[Authenticated browser]
+    CLI["orkestrator CLI"]
+  end
+
+  subgraph backend [Bun backend]
+    Policy[Execution policy]
+    Coord[Coordinator]
+    Mail[Agent mail]
+    Life[Environment lifecycle]
+  end
+
+  subgraph isolation [Isolation]
+    Worktree[Git worktrees]
+    Container[Docker containers]
+    FW[Allowlist firewall]
+  end
+
+  subgraph engines [Agent engines]
+    Claude[Claude Code]
+    Codex[Codex]
+    OpenCode[OpenCode]
+    Cursor[Cursor Agent]
+    Grok[Grok Build]
+    Pi[Pi]
+  end
+
+  clients --> backend
+  Coord -->|read-only| Checkout[Project checkout]
+  Coord -->|launch_environment| isolation
+  Mail --- isolation
+  Life --> Worktree
+  Life --> Container
+  Container --> FW
+  backend --> engines
 ```
-+------------------+----------------------------------------+
-| < Back           |  my-repo [gear]           [Create PR] |
-+------------------+----------------------------------------+
-| + Create New     |                                        |
-|   Environment    |  $ claude                              |
-+------------------+                                        |
-| [green] my-repo- |  Welcome to Claude Code!               |
-|   20260106  [x]  |                                        |
-+------------------+  > _                                   |
-| [grey] my-repo-  |                                        |
-|   20260105  [x]  |                                        |
-+------------------+----------------------------------------+
+
+| Layer | Role |
+| --- | --- |
+| `apps/web` | React UI (Electron renderer and remote browsers) |
+| `apps/desktop` | Electron shell, preload, backend supervision |
+| `apps/backend` | Authoritative Bun service: Docker, PTY, storage, bridges, mail, coordinator |
+| `bridges/` | Claude, Codex, Cursor, Pi, and Grok/ACP session servers |
+| `packages/protocol` | Shared contracts (policy, interactions, mail, platforms) |
+| `packages/toolchain` | Pinned, hash-verified agent CLIs for local environments |
+| `docker/` | Container image, firewall, workspace setup |
+
+The backend owns long-running state. Electron may supervise it, or it can run standalone. Each environment gets its own agent process set and a per-environment bridge token; a missing token fails closed rather than open.
+
+Live events are incremental updates over authoritative snapshots. An inactive tab rehydrates from the snapshot; it does not depend on an event it missed.
+
+```text
+apps/backend/   Standalone Bun service and authoritative long-running state
+apps/desktop/   Electron shell, preload API, native IPC, and backend supervision
+apps/web/       React/Vite application used by Electron and remote browsers
+apps/ios/       iOS client for a Tailscale-published backend
+packages/       Shared contracts, toolchain, published CLI
+bridges/        Claude, Codex, Cursor SDK, Pi SDK, and Grok ACP bridges
+docker/         Base image, firewall, and container setup
 ```
 
-## Prerequisites
+## Quick start
 
-- macOS or Linux. Windows is not supported because terminal sessions use Bun's native PTY.
-- [mise](https://mise.jdx.dev) - installs the repository-pinned Bun 1.4.3 runtime
-- [Docker](https://docker.com) - Container runtime
-- [Tailscale](https://tailscale.com) - Optional, required for remote browser access through the gateway
+macOS or Linux. Windows is not supported: terminal sessions use Bun’s native PTY, and the backend refuses to start on `win32`.
 
-## Quick Start
+You need [mise](https://mise.jdx.dev) (pins Bun 1.4.4) and, for container environments, [Docker](https://docker.com).
 
 ```bash
-# Clone the repository
-git clone <repo-url>
+git clone https://github.com/orkestrator-ai/orkestrator-v2.git
 cd orkestrator-v2
 
 # Install the tool versions pinned in mise.toml
@@ -53,147 +147,56 @@ mise install
 # Install dependencies with the repository-pinned Bun
 mise exec -- bun install
 
-# Build the Docker base image (required for container functionality). The task
-# passes the build arguments that stamp the image's capability manifest.
+# Optional: build the Docker image used by container environments.
+# Local worktrees do not need it. The task stamps the image capability manifest.
 mise run docker:build
 
-# Run the application
+# Run the Electron application (it supervises one backend)
 mise run dev
 ```
 
-### Packaging the desktop app
+`mise run docker:build` tags `orkestrator-v2:latest`. Existing environments keep the image they were created with; rebuild an environment to move it.
 
-Published releases, including the self-updating builds, are described in
-[Releasing the desktop app](docs/development/releasing.md).
+### Using it
 
-#### macOS
+1. Add a Git repository (URL or local folder).
+2. Open the project. **Coordinator** is the default project page: it reads the checkout and can launch workers. **Home** is the writable project checkout.
+3. Create environments from the project. Each local environment gets a worktree and branch; each container clones into `/workspace`.
+4. Under **Settings → Execution policy**, set sandbox, approvals and network for that environment’s native sessions. Coordinator policy cannot be loosened from here.
+5. Work continues if you switch to another environment. Return, or reload, and the UI rehydrates from the backend snapshot.
 
-For a fast local build, package and install the unpacked app with local ad-hoc
-signing, without Apple Developer ID signing, notarization, or DMG creation:
+Application data lives in `~/Library/Application Support/orkestrator-v2/` on macOS, or `${XDG_CONFIG_HOME:-~/.config}/orkestrator-v2/` on Linux.
 
-```bash
-mise run package:mac
-```
-
-For a distributable DMG, opt into both Developer ID signing and Apple
-notarization:
+### Development commands
 
 ```bash
-mise run package:release
+mise run test          # Complete non-iOS suite
+mise run build         # Production desktop build
+mise run check         # Format, lint, and typecheck
+mise run format:check  # Formatting only
 ```
 
-The release command relies on electron-builder's standard signing identity and
-Apple notarization environment variables. It is expected to fail when the
-required certificate or notarization credentials are unavailable.
+Repository tasks live in `mise.toml`. Use `mise run <task>`, not npm. Isolated real-stack QA is documented in [`docs/development/agent-testing.md`](docs/development/agent-testing.md).
 
-#### Linux
-
-Package and install the app for the current user:
+### Packaging
 
 ```bash
-mise run package:linux
+mise run package:mac      # Unpacked macOS app, local ad-hoc signing
+mise run package:release  # Signed, notarised macOS DMG (needs Developer ID)
+mise run package:linux    # Unpacked Linux app under XDG_DATA_HOME
 ```
 
-The Linux installer uses the freedesktop/XDG layout. It installs the unpacked
-app and desktop-menu entry under `XDG_DATA_HOME` (normally `~/.local/share`) and
-adds a launcher at `~/.local/bin/orkestrator-v2`. The install itself does not
-require root or a distro package manager. The host must provide Docker, the
-standard Electron runtime libraries, and a Chromium sandbox configuration that
-permits an unpacked per-user Electron app to run. Distribution security policy
-varies; in particular, Ubuntu/AppArmor installations may require enabling
-unprivileged user namespaces or adding an appropriate local AppArmor profile.
+Published desktop releases and the in-app updater are described in [`docs/development/releasing.md`](docs/development/releasing.md). Container images are published to `ghcr.io/orkestrator-ai/orkestrator-v2`.
 
-### Published container image
+`mise run release:desktop` creates and pushes the version tag that triggers container publishing; the tag must match the root `package.json` version.
 
-Release images are published for AMD64 and ARM64 through GitHub Container
-Registry. Pull the current stable image and give it the local tag expected by
-Orkestrator:
+### Standalone backend and hosted client
 
-```bash
-docker pull ghcr.io/orkestrator-ai/orkestrator-v2:latest
-docker tag ghcr.io/orkestrator-ai/orkestrator-v2:latest orkestrator-v2:latest
-```
+Open [`orkestrator.dev`](https://www.orkestrator.dev) and select **Log in**, or connect directly at [`orkestrator.dev/connect`](https://www.orkestrator.dev/connect).
 
-Versioned images are also available, for example
-`ghcr.io/orkestrator-ai/orkestrator-v2:2.15.4`. Pin a version or digest when a
-reproducible environment is more important than automatically receiving the
-latest release. Each release run records its manifest digest in the job
-summary and an `image-release` artifact.
+The hosted client is static. The browser connects directly to your backend over Tailscale; commands, terminal traffic and agent sessions are not relayed through the website. Both devices must be on the same tailnet, and the backend needs a tailnet-only HTTPS address (a plain `http://100.x.y.z:34121` URL is blocked as mixed content).
 
-Orkestrator reads the image's capability manifest (Settings → Docker) and
-enables persistent workspaces, staged agent inputs, per-environment networks
-and bounded logs only for images that declare them; an older image keeps
-working with the earlier behaviour. Existing environments keep the container
-they were created with — pulling a new image never changes one silently.
-Rebuild an environment (Settings → Container → Rebuild) to move it to the new
-image while keeping its files and agent session files.
-
-#### Publishing a release
-
-The `Publish container image` GitHub Actions workflow runs when a semantic
-version tag is pushed. The tag must match the version in the root
-`package.json`:
-
-```bash
-git tag v2.15.4
-git push origin v2.15.4
-```
-
-Stable releases receive full, major/minor, major, `latest`, and commit-SHA
-tags. Pre-release versions receive version and commit-SHA tags but do not move
-`latest`. The workflow also publishes build-provenance attestations.
-
-GitHub creates a new container package as private. After the first successful
-publish, an owner of the `orkestrator-ai` organization must open **Packages >
-orkestrator-v2 > Package settings > Change visibility** and select **Public**.
-This is a one-time operation, and GitHub does not allow a public package to be
-made private again.
-
-## Usage
-
-### Adding a Project
-
-1. Click "Add Project" in the sidebar
-2. Enter the Git repository URL or select a local folder
-3. The project appears in the sidebar
-
-### Creating an Environment
-
-1. Click on a project to expand it
-2. Click "Create New Environment"
-3. A new container is provisioned with:
-   - Credentials for the agent platforms enabled on this install
-   - SSH key for Git operations
-   - Repository cloned to `/workspace`
-   - Pinned agent CLIs ready to use
-
-### Working with Environments
-
-- Click an environment to open its terminal
-- The terminal connects to the running container
-- Use "Create PR" to run `gh pr create` interactively
-- After PR creation, the button becomes "View PR"
-
-### Connecting `orkestrator.dev` to a Local Instance
-
-[`orkestrator.dev`](https://www.orkestrator.dev) is a static web client. It loads the Orkestrator interface in your browser, then connects directly to a backend running on your machine. Your commands, terminal traffic, and agent sessions are not relayed through the website.
-
-Both the machine running Orkestrator and the device with the browser must be signed in to the same [Tailscale](https://tailscale.com) network. The hosted client also requires a tailnet-only HTTPS address; a plain `http://100.x.y.z:34121` gateway URL will be blocked by the browser as mixed content.
-
-1. Make sure Tailscale is connected on both devices.
-2. In the Electron app, open **Settings > Web client**, enable **Allow web access**, and save. The app keeps its existing backend running, allows the hosted Orkestrator origins, and publishes it through Tailscale Serve.
-3. Copy the HTTPS backend address and gateway token shown in that settings panel.
-4. Open [`https://www.orkestrator.dev`](https://www.orkestrator.dev) from a browser on the same tailnet.
-5. Enter the HTTPS address as the **Backend address** and the token as the **Gateway token**, then select **Connect directly**. Use the origin only—do not add a path, query string, or token to the URL.
-
-For a standalone backend without Electron, run:
-
-```bash
-mise run start:web-public
-```
-
-To install Bun when necessary and run the published backend without cloning the
-repository, use:
+From the desktop app, enable **Settings → Web client → Allow web access**, then enter the HTTPS address and gateway token shown there. Without the desktop app or a clone, install Bun if needed and run the published backend:
 
 ```bash
 curl -fsSL https://orkestrator.dev/install.sh | \
@@ -201,232 +204,19 @@ curl -fsSL https://orkestrator.dev/install.sh | \
   --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev
 ```
 
-If Bun is already installed, the equivalent command is:
+See the [CLI guide](packages/cli/README.md) for service options and Tailscale Serve setup. Remote browser access (`mise run start:web`, `mise run start:web-public`, tokens, Tailscale Serve) is documented in [`docs/architecture/remote-gateway.md`](docs/architecture/remote-gateway.md). The gateway binds Tailscale addresses by default and requires a token.
 
-```bash
-bunx orkestrator \
-  --tailscale-serve \
-  --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev
-```
+### Reporting a problem
 
-On macOS, Orkestrator automatically detects the CLI bundled with `/Applications/Tailscale.app`. If Tailscale is installed somewhere else, provide its executable explicitly:
+Run `bunx orkestrator --fix claude` (or `codex`, `opencode`, `grok`). It opens that agent instead of Orkestrator, with instructions to ask what went wrong, read Orkestrator's logs on this machine, and file a redacted GitHub issue on this repository once you approve the draft. See the [CLI guide](packages/cli/README.md#reporting-a-problem).
 
-```bash
-ORKESTRATOR_TAILSCALE_BIN="/custom/path/to/tailscale" mise run start:web-public
-```
+## Further reading
 
-With the standalone macOS Tailscale client, you can instead install its [command-line integration](https://tailscale.com/docs/reference/tailscale-cli?tab=macos) from **Tailscale > Settings > CLI integration** and then use the shorter command on future runs.
-
-Keep this process running while using the web client. It builds the backend, allows requests from both `https://orkestrator.dev` and `https://www.orkestrator.dev`, and publishes the local service through Tailscale Serve. Do not run it alongside Electron with the same data directory. Do not use Tailscale Funnel; the backend is intended to remain private to your tailnet.
-
-For the standalone command, copy these two values from the startup output:
-
-- The HTTPS address shown by `[TailscaleServe] Available at`, such as `https://workstation.example-tailnet.ts.net`
-- The token in the `gateway-auth.json` file shown by `[RemoteGateway] Auth token stored at`
-
-On macOS, print only the token value with:
-
-```bash
-bun -e 'console.log((await Bun.file(process.env.HOME + "/Library/Application Support/orkestrator-v2/gateway-auth.json").json()).token)'
-```
-
-On Linux, the default file is `~/.config/orkestrator-v2/gateway-auth.json`. If the startup log shows a different path, read that file instead. Keep the token private; it grants access to the local Orkestrator backend.
-
-The backend address is remembered in the browser. The token lasts for the current browser tab unless you enable **Remember token**. Once connected, use the connection indicator at the bottom of the page to change or forget the backend.
-
-If the connection fails:
-
-- **Could not reach the backend:** Confirm the backend process is still running, both devices are on the same tailnet, and the address starts with `https://`.
-- **Site is not in the backend's allowed origins:** Enable web access in Electron settings, or start the standalone backend with `mise run start:web-public`; both allow the apex and `www` Orkestrator origins.
-- **Gateway token was rejected:** Reopen the current `gateway-auth.json` file and copy its `token` value without quotes or extra whitespace.
-- **`Executable not found in $PATH: "tailscale"`:** Install Tailscale's CLI integration or set `ORKESTRATOR_TAILSCALE_BIN` to the executable's absolute path.
-- **Tailscale Serve fails to start:** Confirm the Tailscale app is connected and that HTTPS/Serve is enabled for the tailnet. The first Serve setup may require approval from a tailnet administrator.
-
-For custom ports, origins, service management, and more troubleshooting, see [Standalone Backend and Remote Gateway](docs/architecture/remote-gateway.md#vercel-hosted-public-client).
-
-### Shared Backend And Web Access
-
-The backend is a standalone-capable Bun service in `apps/backend` and is the authoritative owner of Docker, terminal, storage, and agent state. There are two supported launch modes:
-
-- `mise run dev` starts Electron, and Electron supervises one backend instance. Electron talks to an ephemeral loopback control listener, while authenticated browser clients use a separate Tailscale listener on port `34121` (or a local-only fallback). Losing Tailscale or encountering a browser-port conflict does not take down the desktop control channel.
-- `mise run start:web` builds and starts the backend without Electron. The backend serves the built React app directly to authenticated browsers.
-
-For local web development with Vite and the backend in one Turbo invocation:
-
-```bash
-mise run dev:web
-```
-
-Open the backend URL printed in the logs (normally `http://127.0.0.1:34121/` without Tailscale), not the internal Vite URL on port `1420`.
-
-To build and start the standalone service on a machine connected to your tailnet:
-
-```bash
-mise run start:web
-```
-
-By default the service detects and binds to the first Tailscale address on port `34121`. For a local-only development instance, bind explicitly:
-
-```bash
-bun run --cwd apps/backend start --host 127.0.0.1 --port 34121 --allow-non-tailscale-bind
-```
-
-By default the gateway listens on port `34121`. Look for a startup log like:
-
-```text
-[RemoteGateway] Listening on http://100.x.y.z:34121/
-[RemoteGateway] Auth token stored at /path/to/gateway-auth.json
-```
-
-Open the logged URL from another browser on the same tailnet, then enter the token from the host machine. See [Standalone Backend and Remote Gateway](docs/architecture/remote-gateway.md) for service flags, environment variables, security notes, and troubleshooting.
-
-To deploy a static frontend separately, use `apps/web-public`. Vercel only delivers its asset bundle; the browser connects directly to the selected HTTPS backend on the user's local or Tailscale network. The backend traffic is never routed through Vercel. See the public-client section in [Standalone Backend and Remote Gateway](docs/architecture/remote-gateway.md#vercel-hosted-public-client).
-
-The standalone backend can configure the tailnet-only HTTPS listener itself. The convenience script assumes the public client is hosted at `https://orkestrator.dev`:
-
-```bash
-mise run start:web-public
-```
-
-### Configuration
-
-Access settings via the gear icon:
-
-**Global Settings:**
-- SSH key path (default: `~/.ssh/id_rsa`)
-- CPU cores limit (default: 2)
-- Memory limit (default: 4GB)
-- .env file patterns
-
-**Per-Repository Settings:**
-- Default branch to clone
-- PR base branch
-
-**Per-Environment Settings:**
-- Debug mode - enables verbose logging during container startup
-
-### Debug Mode
-
-Each environment can have debug mode enabled, which provides verbose logging during container startup. This is useful for troubleshooting credential injection, configuration copying, and other initialization issues.
-
-When debug mode is enabled, the container entrypoint will output:
-- List of files copied from `~/.claude`
-- `.claude.json` processing details (file sizes, keys)
-- Credential injection status
-
-Debug mode only takes effect when the container is created. Changing it on a running environment requires recreating the container.
-
-## Development
-
-For isolated real-stack development and agent QA, including disposable fixtures,
-dynamic ports, status manifests, Playwright, Electron smoke testing, and safe
-cleanup, see [Isolated development and agent testing](docs/development/agent-testing.md).
-
-```bash
-# Run with hot reload
-mise run dev
-
-# Run tests
-mise run test
-
-# Build for production
-mise run build
-```
-
-## Monorepo Layout
-
-```text
-apps/backend/   Standalone Bun service and authoritative long-running state
-apps/desktop/   Electron shell, preload API, native IPC, and backend supervision
-apps/web/       React/Vite application used by Electron and remote browsers
-packages/       Shared cross-runtime contracts and validation
-bridges/        Claude, Codex, Cursor SDK, Pi SDK, and Grok ACP bridge services
-```
-
-The web application is independently built. Electron loads it as its renderer while the Electron-supervised backend serves the same renderer to authenticated browsers. The same backend can instead run standalone without Electron.
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│ Electron shell and/or web browsers: React + Zustand     │
-│             HTTP commands + server-sent events          │
-├─────────────────────────────────────────────────────────┤
-│ One Bun backend service (Electron-supervised or standalone) │
-│ Docker · PTY sessions · agent bridges · JSON storage    │
-├─────────────────────────────────────────────────────────┤
-│                    Docker Containers                     │
-│  ┌────────────────────────────────────────────────────┐ │
-│  │ orkestrator-v2:latest                              │ │
-│  │ - Node.js 24 LTS + pinned agent CLIs               │ │
-│  │ - Git + GitHub CLI                                 │ │
-│  │ - Network firewall (restricted allowlist)          │ │
-│  └────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────┘
-```
-
-### Agent engines
-
-Orkestrator supports six coding agents — Claude Code, Codex, OpenCode, Cursor
-Agent, Grok Build, and Pi — and they do not share one integration mechanism.
-Each vendor exposes a different surface (a TypeScript SDK, a JSON-RPC
-app-server, an HTTP server, or a raw stdio protocol), so each gets its own
-adapter behind a common contract.
-
-[**docs/architecture/agent-engines.md**](docs/architecture/agent-engines.md)
-explains how all six work: process topology, transport, session and approval
-handling, and the invariants they share.
-
-| Related | Document |
+| Document | Contents |
 | --- | --- |
-| Documentation catalog | [`docs/README.md`](docs/README.md) |
-| Bumping an agent SDK, CLI, or pinned binary | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |
-| Contributing agent guidance and invariants | [`AGENTS.md`](AGENTS.md) |
-
-## Network Security
-
-Containers have restricted network access via iptables firewall:
-
-**Default allowlist** (`DEFAULT_ALLOWED_DOMAINS`):
-- GitHub (`github.com`, `api.github.com`)
-- npm (`registry.npmjs.org`) and Node (`nodejs.org`)
-- Bun (`bun.sh`) and mise (`mise.jdx.dev`, `mise-versions.jdx.dev`, `aube.jdx.dev`)
-- Anthropic API (`api.anthropic.com`, `statsig.anthropic.com`) plus `statsig.com`
-- Sentry (`sentry.io`)
-- VS Code marketplace and update hosts
-- Context7 (`mcp.context7.com`)
-- Playwright CDN (`cdn.playwright.dev`)
-
-Enabled agent platforms also add the hosts those CLIs need (Cursor, Grok, Pi,
-and so on). Pi fronts the user's own model providers, so a self-hosted or
-regional endpoint belongs in the environment's `allowedDomains`. `full` network
-mode skips the firewall entirely.
-
-All other outbound traffic is blocked in the default `restricted` mode.
-
-The remote gateway binds only to Tailscale addresses by default and requires a gateway token before serving the app, backend API, event stream, or loopback proxy routes.
-
-## Configuration Storage
-
-Application data is stored in:
-- **macOS**: `~/Library/Application Support/orkestrator-v2/`
-- **Linux**: `${XDG_CONFIG_HOME:-~/.config}/orkestrator-v2/`
-
-On first launch, Orkestrator downloads the pinned Claude Code, Codex, OpenCode,
-Grok, and Pi executables into the versioned `toolchains/` directory under this
-location. Cursor is SDK-only and has no managed CLI. Each archive and extracted
-executable is checked against hashes embedded in the signed desktop application
-before it is activated. The cache is shared by all local worktree environments
-and reused across application upgrades. Bun remains bundled with the desktop
-application so the backend can always start and report download or recovery
-errors.
-
-## Tech Stack
-
-- **Frontend**: React 19, TypeScript, Tailwind CSS v4, shadcn/ui, Zustand, xterm.js
-- **Backend**: Bun service (`apps/backend`); Electron is the desktop shell and supervisor
-- **Container**: Docker with custom base image
-
-## License
-
-MIT
+| [`docs/README.md`](docs/README.md) | Documentation catalogue |
+| [`docs/architecture/coordinator.md`](docs/architecture/coordinator.md) | Coordinator, tiers, delegation |
+| [`docs/architecture/agent-engines.md`](docs/architecture/agent-engines.md) | How the six engines are wired |
+| [`docs/architecture/container-lifecycle.md`](docs/architecture/container-lifecycle.md) | Container ownership, volumes, rebuilds |
+| [`docs/architecture/agent-messaging.md`](docs/architecture/agent-messaging.md) | Agent mail |
+| [`AGENTS.md`](AGENTS.md) | Contributor invariants |

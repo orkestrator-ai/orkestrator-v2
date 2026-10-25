@@ -110,6 +110,37 @@ function mergeChangedFields(base: unknown, local: unknown, remote: unknown): unk
   return clone(local);
 }
 
+/** Keep a browser URL and the identity of its write together across a rebase. */
+function mergeBrowserNavigation(
+  base: TabInfo,
+  local: TabInfo,
+  remote: TabInfo,
+  merged: TabInfo,
+): TabInfo {
+  if (base.type !== "browser" || local.type !== "browser" || remote.type !== "browser")
+    return merged;
+  const data = (tab: TabInfo): Record<string, unknown> | null => {
+    const value = (tab as unknown as Record<string, unknown>).browserData;
+    return isPlainObject(value) ? value : null;
+  };
+  const baseData = data(base);
+  const localData = data(local);
+  const remoteData = data(remote);
+  const mergedData = data(merged);
+  if (!baseData || !localData || !remoteData || !mergedData) return merged;
+  const localChanged =
+    !valuesEqual(baseData.url, localData.url) ||
+    !valuesEqual(baseData.navigationRequestId, localData.navigationRequestId);
+  const chosen = localChanged ? localData : remoteData;
+  const browserData: Record<string, unknown> = { ...mergedData, url: clone(chosen.url) };
+  // A legacy writer can omit the identity; never retain the other writer's id.
+  delete browserData.navigationRequestId;
+  if (chosen.navigationRequestId !== undefined)
+    browserData.navigationRequestId = clone(chosen.navigationRequestId);
+  const result = { ...merged, browserData };
+  return result;
+}
+
 function nativeAgentIdentity(tab: TabInfo): NativeAgentTabIdentity | null {
   if (tab.type !== "agent-native") return null;
   const record = tab as unknown as Record<string, unknown>;
@@ -403,7 +434,12 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
       continue;
     }
     if (!localTab || !remoteTab) continue;
-    const mergedTab = mergeChangedFields(baseTab, localTab, remoteTab) as TabInfo;
+    const mergedTab = mergeBrowserNavigation(
+      baseTab,
+      localTab,
+      remoteTab,
+      mergeChangedFields(baseTab, localTab, remoteTab) as TabInfo,
+    );
     finalTabs.set(id, mergeNativeAgentIdentity(baseTab, localTab, remoteTab, mergedTab));
   }
 

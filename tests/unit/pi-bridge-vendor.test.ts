@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -18,6 +18,73 @@ type FixturePackage = {
 };
 
 describe("Pi bridge runtime vendoring", () => {
+  test("stops dequeuing after copy failure and waits for active writes before rejecting", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "pi-vendor-failed-copy-"));
+    const source = path.join(root, "source");
+    const destination = path.join(root, "staged", "node_modules");
+    const names = Array.from({ length: 14 }, (_, i) => `entry-${i}`);
+    const started = Promise.withResolvers<void>();
+    const fail = Promise.withResolvers<void>();
+    const active = Promise.withResolvers<void>();
+    const failure = new Error("injected copy failure");
+    const copies: string[] = [];
+    let finishedWrites = 0;
+    let settled = false;
+    let staging: Promise<unknown> | undefined;
+    try {
+      for (const name of names) {
+        const directory = path.join(
+          source,
+          "node_modules",
+          ".bun",
+          `${name}@1`,
+          "node_modules",
+          name,
+        );
+        await mkdir(directory, { recursive: true });
+        await writeFile(path.join(directory, "package.json"), JSON.stringify({ name }));
+        await symlink(directory, path.join(source, "node_modules", name));
+      }
+      staging = stageRuntimeClosure({
+        packageRoot: source,
+        destination,
+        entryPackages: names,
+        copy: async (from, to, options) => {
+          copies.push(String(from));
+          if (copies.length === 12) started.resolve();
+          if (String(from).endsWith("entry-0@1")) await fail.promise;
+          else await active.promise;
+          await cp(from, to, options);
+          finishedWrites += 1;
+        },
+      }).then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error) => {
+          settled = true;
+          return error;
+        },
+      );
+      await started.promise;
+      fail.reject(failure);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(copies).toHaveLength(12);
+      active.resolve();
+      expect(await staging).toBe(failure);
+      expect(finishedWrites).toBe(11);
+      expect(copies).toHaveLength(12);
+      await expect(readFile(path.join(destination, "entry-1", "package.json"))).rejects.toThrow();
+    } finally {
+      fail.resolve();
+      active.resolve();
+      await staging;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("loads Pi's supported SDK from the staged runtime closure", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "pi-vendor-live-test-"));
     const packageRoot = path.resolve(import.meta.dir, "../../bridges/pi-bridge");

@@ -1,0 +1,7 @@
+{
+  "$comment": "Registry digest pin of the published artifact preview worker, written by publish.sh. Packaged backends pull image@digest on demand (transcript_artifact_prepare_worker) and prefer it over the local tag. null until the maintainer publishes.",
+  "image": null,
+  "tag": null,
+  "digest": null,
+  "publishedAt": null
+}

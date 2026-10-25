@@ -120,6 +120,7 @@ describe("GlobalSettings defaults section", () => {
 
     openPicker("Review");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     expect(
       screen.getByRole("combobox", { name: "Review default agent, model and reasoning" })
@@ -140,8 +141,10 @@ describe("GlobalSettings defaults section", () => {
     openPicker("Review 2");
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     openPicker("Fix review issues");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     await flushAutoSave();
     await waitFor(() =>
@@ -170,6 +173,7 @@ describe("GlobalSettings defaults section", () => {
 
     openPicker("PR");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     openPicker("PR");
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     fireEvent.keyDown(document.body, { key: "Escape" });
@@ -195,6 +199,7 @@ describe("GlobalSettings defaults section", () => {
     expect(screen.queryByRole("button", { name: "claude models" }) === null).toBe(true);
     expect(screen.getByRole("button", { name: "codex models" })).toBeTruthy();
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     await flushAutoSave();
 
@@ -207,6 +212,7 @@ describe("GlobalSettings defaults section", () => {
             actionDefaults: { review: { platform: "codex", model: "gpt-5.4" } },
           }),
         }),
+        undefined,
       ),
     );
   });
@@ -248,6 +254,7 @@ describe("GlobalSettings defaults section", () => {
 
     openPicker("Review");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     // The star persists `favoriteModels` optimistically, replacing
     // `config.global` while this form is dirty. The form must not treat that
@@ -276,6 +283,7 @@ describe("GlobalSettings defaults section", () => {
 
     openPicker("Review");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     // The other half of the guard above: a write that does change a value this
     // form owns is a genuine reload and must win over the local edit, or the
@@ -310,8 +318,10 @@ describe("GlobalSettings defaults section", () => {
     openPicker("Resolve");
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     openPicker("Resolve");
     fireEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     await flushAutoSave();
     await waitFor(() =>
@@ -325,6 +335,7 @@ describe("GlobalSettings defaults section", () => {
     mockUpdateGlobalConfig.mockClear();
     openPicker("Resolve");
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Default" }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     await flushAutoSave();
 
     await waitFor(() =>
@@ -449,6 +460,7 @@ describe("GlobalSettings defaults section", () => {
       }),
     );
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     fireEvent.click(screen.getByRole("button", { name: "Use one more reviewer" }));
     expect(grid.querySelectorAll("[data-multi-review-default-row]")).toHaveLength(3);
@@ -459,6 +471,7 @@ describe("GlobalSettings defaults section", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     await flushAutoSave();
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));

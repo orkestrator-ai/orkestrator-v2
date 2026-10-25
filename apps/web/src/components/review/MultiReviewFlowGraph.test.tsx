@@ -20,7 +20,10 @@ import {
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import type { Environment } from "@/types";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { useUIStore } from "@/stores/uiStore";
 import { MultiReviewTab } from "./MultiReviewTab";
 import {
   MultiReviewFlowGraph,
@@ -33,7 +36,11 @@ import {
   type MultiReviewFlowEdgeState,
   type MultiReviewFlowState,
 } from "./multi-review-flow";
-import { fitFlowZoom, flowViewportHeight } from "./multi-review-flow-viewport";
+import {
+  FLOW_VIEWPORT_RESIZE_MIN_HEIGHT,
+  flowViewportHeight,
+  resizedFlowViewportHeight,
+} from "./multi-review-flow-viewport";
 
 const STARTED = "2026-08-14T00:00:00.000Z";
 
@@ -144,8 +151,13 @@ interface PhaseCase {
     intoReviewers: MultiReviewFlowEdgeState[];
     intoConsolidation: MultiReviewFlowEdgeState[];
     intoFix: MultiReviewFlowEdgeState;
+    intoPr?: MultiReviewFlowEdgeState;
   };
   selected: string;
+  /** The PR node, which stays queued unless a phase says otherwise. */
+  pr?: MultiReviewFlowState;
+  prUrl?: string;
+  prSource?: "consolidation" | "fix";
 }
 
 const NOT = "not-started" as const;
@@ -282,6 +294,7 @@ const PHASES: PhaseCase[] = [
       intoReviewers: ["complete", "complete", "complete"],
       intoConsolidation: ["complete", "complete", "complete"],
       intoFix: "complete",
+      intoPr: "ready",
     },
     selected: "Fix,",
   },
@@ -339,6 +352,56 @@ const PHASES: PhaseCase[] = [
   },
 ];
 
+for (const launchState of ["pending", "launched"] as const) {
+  PHASES.push({
+    name: `clean review PR ${launchState}`,
+    workflow: workflow({
+      phase: "ready",
+      reviewers: allDone(),
+      consolidatedReport: { ...report, issues: [], testCoverageGaps: [] },
+      autoPr: true,
+      autoPrLaunch: {
+        basis: "clean-review",
+        state: launchState,
+        requestId: "pr",
+        tabId: "background-pr",
+      },
+    }),
+    nodes: ["complete", ["complete", "complete", "complete"], "complete", NOT],
+    edges: {
+      intoReviewers: ["complete", "complete", "complete"],
+      intoConsolidation: ["complete", "complete", "complete"],
+      intoFix: "ready",
+      intoPr: launchState === "pending" ? "active" : "ready",
+    },
+    selected: "Pull request,",
+    pr: launchState === "pending" ? "running" : "paused",
+    prSource: "consolidation",
+  });
+}
+for (const clean of [true, false]) {
+  PHASES.push({
+    name: `detected PR after ${clean ? "clean review" : "Fix"}`,
+    workflow: workflow({
+      phase: clean ? "ready" : "completed",
+      reviewers: allDone(),
+      consolidatedReport: clean ? { ...report, issues: [], testCoverageGaps: [] } : report,
+      autoPr: false,
+    }),
+    nodes: ["complete", ["complete", "complete", "complete"], "complete", clean ? NOT : "complete"],
+    edges: {
+      intoReviewers: ["complete", "complete", "complete"],
+      intoConsolidation: ["complete", "complete", "complete"],
+      intoFix: clean ? "ready" : "complete",
+      intoPr: "complete",
+    },
+    selected: "Pull request,",
+    pr: "complete",
+    prUrl: "https://github.com/o/r/pull/42",
+    prSource: clean ? "consolidation" : "fix",
+  });
+}
+
 function renderTab(target: MultiReviewWorkflow) {
   useMultiReviewStore.getState().replaceWorkflow(target);
   return render(
@@ -360,33 +423,57 @@ function edgeState(id: string): string | null {
 beforeEach(() => {
   useMultiReviewStore.setState({ workflows: new Map() });
   useMultiReviewFlowViewStore.setState({ views: new Map() });
+  useUIStore.setState({ multiReviewGraphHeight: null });
   useMessagePartExpansionStore.getState().reset();
 });
 afterEach(cleanup);
 
 describe("flow graph by phase", () => {
   test.each(PHASES)("maps nodes and edges while $name", (phase) => {
-    renderTab(phase.workflow);
-    const pipeline = screen.getByRole("tablist", { name: "Multi Review pipeline" });
-    const states = within(pipeline)
-      .getAllByRole("tab")
-      .map((node) => node.dataset.flowState);
-    const [packageState, reviewerStates, consolidationState, fixState] = phase.nodes;
-    expect(states).toEqual([packageState, ...reviewerStates, consolidationState, fixState]);
+    const environments = useEnvironmentStore.getState().environments;
+    if (phase.prUrl)
+      useEnvironmentStore.setState({
+        environments: [{ id: "env-1", prUrl: phase.prUrl, prState: "open" } as Environment],
+      });
+    try {
+      renderTab(phase.workflow);
+      const pipeline = screen.getByRole("tablist", { name: "Multi Review pipeline" });
+      const states = within(pipeline)
+        .getAllByRole("tab")
+        .map((node) => node.dataset.flowState);
+      const [packageState, reviewerStates, consolidationState, fixState] = phase.nodes;
+      expect(states).toEqual([
+        packageState,
+        ...reviewerStates,
+        consolidationState,
+        fixState,
+        phase.pr ?? NOT,
+      ]);
 
-    phase.edges.intoReviewers.forEach((state, index) =>
-      expect(edgeState(`into-reviewer-${index}`)).toBe(state),
-    );
-    phase.edges.intoConsolidation.forEach((state, index) =>
-      expect(edgeState(`into-consolidation-${index}`)).toBe(state),
-    );
-    expect(edgeState("into-fix")).toBe(phase.edges.intoFix);
+      phase.edges.intoReviewers.forEach((state, index) =>
+        expect(edgeState(`into-reviewer-${index}`)).toBe(state),
+      );
+      phase.edges.intoConsolidation.forEach((state, index) =>
+        expect(edgeState(`into-consolidation-${index}`)).toBe(state),
+      );
+      expect(edgeState("into-fix")).toBe(phase.edges.intoFix);
+      expect(edgeState("into-pr")).toBe(phase.edges.intoPr ?? "pending");
+      if (phase.prSource) {
+        const source = document.querySelector<HTMLElement>(`[data-flow-node="${phase.prSource}"]`)!;
+        expect(document.querySelector('[data-flow-edge="into-pr"]')!.getAttribute("d")).toStartWith(
+          `M${parseFloat(source.style.left) + parseFloat(source.style.width)} `,
+        );
+      }
 
-    const selected = within(pipeline)
-      .getAllByRole("tab")
-      .filter((node) => node.getAttribute("aria-selected") === "true");
-    expect(selected).toHaveLength(1);
-    expect(selected[0]!.getAttribute("aria-label")).toStartWith(phase.selected);
+      const selected = within(pipeline)
+        .getAllByRole("tab")
+        .filter((node) => node.getAttribute("aria-selected") === "true");
+      expect(selected).toHaveLength(1);
+      expect(selected[0]!.getAttribute("aria-label")).toStartWith(phase.selected);
+    } finally {
+      cleanup();
+      useEnvironmentStore.setState({ environments });
+    }
   });
 
   test("draws pending edges dashed, live edges solid cyan and finished edges solid green", () => {
@@ -612,9 +699,11 @@ describe("flow graph nodes", () => {
       </TerminalProvider>,
     );
 
-    const tabs = () => screen.getAllByRole("tab");
+    // The pipeline's nodes, not the inspector's own Transcript/Report tabs.
+    const tabs = () =>
+      within(screen.getByRole("tablist", { name: "Multi Review pipeline" })).getAllByRole("tab");
     // One tab stop: the selected node.
-    expect(tabs().map((node) => node.tabIndex)).toEqual([0, -1, -1, -1, -1]);
+    expect(tabs().map((node) => node.tabIndex)).toEqual([0, -1, -1, -1, -1, -1]);
     const packageNode = tabs()[0]!;
     packageNode.focus();
     fireEvent.keyDown(packageNode, { key: "ArrowRight" });
@@ -623,8 +712,10 @@ describe("flow graph nodes", () => {
     fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Reviewer 2 ·");
     fireEvent.keyDown(document.activeElement!, { key: "End" });
-    expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Fix,");
+    expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Pull request,");
     fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Pull request,");
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
     expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Fix,");
     fireEvent.keyDown(document.activeElement!, { key: "Home" });
     expect(document.activeElement).toBe(tabs()[0]!);
@@ -692,10 +783,12 @@ describe("stacked layout", () => {
     ],
     consolidationNode: node("consolidation", "consolidation", "not-started"),
     fixNode: node("fix", "fix", "not-started"),
+    prNode: node("pr", "pr", "not-started"),
     edges: {
       intoReviewers: ["complete", "active"] as MultiReviewFlowEdgeState[],
       intoConsolidation: ["ready", "pending"] as MultiReviewFlowEdgeState[],
       intoFix: "pending" as const,
+      intoPr: "pending" as const,
     },
     reviewLabel: "Review · 1/2",
     selectedId: "reviewer:2",
@@ -715,6 +808,7 @@ describe("stacked layout", () => {
       "reviewer:2, running",
       "consolidation, not-started",
       "fix, not-started",
+      "pr, not-started",
     ]);
     expect(document.querySelector("path[data-flow-edge]") === null).toBe(true);
     expect(edgeState("into-reviewers")).toBe("active");
@@ -723,6 +817,22 @@ describe("stacked layout", () => {
     expect(document.querySelector('[data-flow-edge="into-fix"]')!.className).toContain(
       "border-dashed",
     );
+    expect(edgeState("into-pr")).toBe("pending");
+  });
+
+  test("routes the stacked clean-review connector around Fix from consolidation", () => {
+    render(
+      <MultiReviewFlowGraph
+        {...props}
+        layout="stacked"
+        edges={{ ...props.edges, intoPr: "complete", prSource: "consolidation" }}
+      />,
+    );
+    const edge = document.querySelector<HTMLElement>('[data-flow-edge="into-pr"]')!;
+    expect(edge.dataset.flowSource).toBe("consolidation");
+    expect(edge.dataset.edgeState).toBe("complete");
+    expect(edge.className).toContain("absolute");
+    expect(edge.parentElement!.querySelector('[data-flow-node="fix"]')).toBeTruthy();
   });
 
   test("switches to the stacked layout below the threshold width", () => {
@@ -861,10 +971,12 @@ describe("zoom and pan", () => {
     ),
     consolidationNode: node("consolidation", "consolidation", "not-started"),
     fixNode: node("fix", "fix", "not-started"),
+    prNode: node("pr", "pr", "not-started"),
     edges: {
       intoReviewers: Array.from({ length: count }, () => "active" as const),
       intoConsolidation: Array.from({ length: count }, () => "pending" as const),
       intoFix: "pending",
+      intoPr: "pending",
     },
     reviewLabel: `Review · 0/${count}`,
     selectedId: "reviewer:1",
@@ -909,23 +1021,6 @@ describe("zoom and pan", () => {
     expect(sizer.style.width).toBe(`${geometry(2).width * 1.25}px`);
   });
 
-  test("fits the 32-reviewer maximum inside the viewport", () => {
-    render(<MultiReviewFlowGraph {...panel(32)} />);
-    const layout = geometry(32);
-    const height = flowViewportHeight(layout.height);
-    expect(viewport().style.height).toBe(`${height}px`);
-    fireEvent.click(screen.getByRole("button", { name: "Fit the whole pipeline" }));
-    const fit = fitFlowZoom(
-      { width: layout.width, height: layout.height },
-      { width: 1440, height },
-    );
-    expect(fit).toBeLessThan(0.33);
-    expect(zoomLevel()).toBe(`${Math.round(fit * 100)}%`);
-    const sizer = screen.getByRole("tablist", { name: "Multi Review pipeline" }).parentElement!;
-    expect(Number.parseFloat(sizer.style.height)).toBeLessThanOrEqual(height);
-    expect(Number.parseFloat(sizer.style.width)).toBeLessThanOrEqual(1440);
-  });
-
   test("keeps a node reached from the keyboard in view", () => {
     render(<SelectableGraph {...panel(32)} />);
     const layout = geometry(32);
@@ -944,11 +1039,89 @@ describe("zoom and pan", () => {
     // At another zoom the scaled position is what has to be visible.
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
     fireEvent.keyDown(document.activeElement!, { key: "End" });
-    const fix = layout.fix;
+    const pr = layout.pr;
     const zoomed = viewport();
-    expect(fix.y * 1.25 - zoomed.scrollTop).toBeGreaterThanOrEqual(0);
-    expect((fix.y + fix.height) * 1.25 - zoomed.scrollTop).toBeLessThanOrEqual(height);
-    expect((fix.x + fix.width) * 1.25 - zoomed.scrollLeft).toBeLessThanOrEqual(1440);
+    expect(pr.y * 1.25 - zoomed.scrollTop).toBeGreaterThanOrEqual(0);
+    expect((pr.y + pr.height) * 1.25 - zoomed.scrollTop).toBeLessThanOrEqual(height);
+    // Unmeasured, the viewport is as wide as the canvas at 100%.
+    expect((pr.x + pr.width) * 1.25 - zoomed.scrollLeft).toBeLessThanOrEqual(layout.width);
+  });
+
+  test("centres a new stage within the scroll range, never past either edge", () => {
+    const width = 1200;
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => width,
+    });
+    // Reduced motion lands each scroll at once instead of gliding.
+    const matchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      ...matchMedia.call(window, query),
+      matches: query.includes("prefers-reduced-motion"),
+    })) as typeof window.matchMedia;
+    try {
+      render(<SelectableGraph {...panel(4)} />);
+      const layout = multiReviewFlowLayout({ width, reviewerCount: 4, packageHasChips: false });
+      const maxScroll = layout.width - width;
+      expect(maxScroll).toBeGreaterThan(0);
+      // Early stages sit at the left edge; the PR column starts out of view.
+      expect(viewport().scrollLeft).toBe(0);
+
+      fireEvent.click(screen.getByRole("tab", { name: "consolidation, not-started" }));
+      const centre = layout.consolidation.x + layout.consolidation.width / 2 - width / 2;
+      expect(viewport().scrollLeft).toBe(Math.round(Math.min(maxScroll, centre)));
+
+      // The PR column is at the far right, so the canvas stops at its edge.
+      fireEvent.click(screen.getByRole("tab", { name: "pr, not-started" }));
+      expect(viewport().scrollLeft).toBe(maxScroll);
+
+      fireEvent.click(screen.getByRole("tab", { name: "package, complete" }));
+      expect(viewport().scrollLeft).toBe(0);
+
+      // Another node in the same stage does not move the canvas.
+      fireEvent.click(screen.getByRole("tab", { name: "reviewer:2, running" }));
+      act(() => {
+        viewport().scrollLeft = 40;
+      });
+      fireEvent.click(screen.getByRole("tab", { name: "reviewer:3, running" }));
+      expect(viewport().scrollLeft).toBe(40);
+    } finally {
+      window.matchMedia = matchMedia;
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, "clientWidth", descriptor);
+      else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+    }
+  });
+
+  test("restores remembered pan before centering, then recenters the same stage on resize", () => {
+    let width = 1200;
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    const originalObserver = globalThis.ResizeObserver;
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => width,
+    });
+    // Exercise the measurement fallback so resizing can be driven deterministically.
+    globalThis.ResizeObserver = undefined as unknown as typeof ResizeObserver;
+    useMultiReviewFlowViewStore
+      .getState()
+      .saveView("workflow-zoom", { zoom: 1.25, scrollLeft: 37, scrollTop: 12, width });
+    const view = render(<MultiReviewFlowGraph {...panel(4)} selectedId="pr" />);
+    try {
+      expect(viewport().scrollLeft).toBe(37);
+      expect(zoomLevel()).toBe("125%");
+      width = 1000;
+      fireEvent(window, new Event("resize"));
+      const layout = multiReviewFlowLayout({ width, reviewerCount: 4, packageHasChips: false });
+      expect(zoomLevel()).toBe("100%");
+      expect(viewport().scrollLeft).toBe(layout.width - width);
+      expect(viewport().scrollLeft).not.toBe(37);
+    } finally {
+      view.unmount();
+      globalThis.ResizeObserver = originalObserver;
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, "clientWidth", descriptor);
+      else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+    }
   });
 
   test("zooms with Ctrl + wheel or a pinch, and leaves a plain wheel to scrolling", () => {
@@ -1022,6 +1195,111 @@ describe("zoom and pan", () => {
     expect(capture).not.toHaveBeenCalled();
     fireEvent.click(item);
     expect(restart).toHaveBeenCalledTimes(1);
+  });
+
+  test("the divider drags the graph taller or shorter and remembers where it was let go", () => {
+    render(<MultiReviewFlowGraph {...panel(4)} />);
+    const natural = flowViewportHeight(geometry(4).height);
+    const max = resizedFlowViewportHeight(Number.POSITIVE_INFINITY, geometry(4).height);
+    const divider = screen.getByRole("separator", { name: "Resize graph" });
+    expect(viewport().style.height).toBe(`${natural}px`);
+    expect(divider.getAttribute("aria-valuenow")).toBe(String(natural));
+
+    fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientY: 100 });
+    fireEvent.pointerMove(divider, { pointerId: 1, clientY: 180 });
+    expect(viewport().style.height).toBe(`${natural + 80}px`);
+    // Only letting go stores it.
+    expect(useUIStore.getState().multiReviewGraphHeight).toBeNull();
+    fireEvent.pointerUp(divider, { pointerId: 1, clientY: 180 });
+    expect(useUIStore.getState().multiReviewGraphHeight).toBe(natural + 80);
+    expect(viewport().style.height).toBe(`${natural + 80}px`);
+
+    // Dragging past either limit stops at it.
+    fireEvent.pointerDown(divider, { button: 0, pointerId: 2, clientY: 1000 });
+    fireEvent.pointerMove(divider, { pointerId: 2, clientY: 0 });
+    expect(viewport().style.height).toBe(`${FLOW_VIEWPORT_RESIZE_MIN_HEIGHT}px`);
+    fireEvent.pointerMove(divider, { pointerId: 2, clientY: 5000 });
+    expect(viewport().style.height).toBe(`${max}px`);
+    fireEvent.pointerUp(divider, { pointerId: 2, clientY: 5000 });
+    expect(useUIStore.getState().multiReviewGraphHeight).toBe(max);
+
+    fireEvent.keyDown(divider, { key: "ArrowUp" });
+    expect(viewport().style.height).toBe(`${max - 16}px`);
+    fireEvent.keyDown(divider, { key: "Home" });
+    expect(viewport().style.height).toBe(`${FLOW_VIEWPORT_RESIZE_MIN_HEIGHT}px`);
+
+    // A double-click gives the graph its own height back.
+    fireEvent.doubleClick(divider);
+    expect(useUIStore.getState().multiReviewGraphHeight).toBeNull();
+    expect(viewport().style.height).toBe(`${natural}px`);
+  });
+
+  test("clicking the divider preserves automatic growth and focuses it for keyboard resizing", () => {
+    const { rerender } = render(<MultiReviewFlowGraph {...panel(4)} />);
+    const divider = screen.getByRole("separator", { name: "Resize graph" });
+    fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientY: 100 });
+    fireEvent.pointerMove(divider, { pointerId: 1, clientY: 101 });
+    fireEvent.pointerUp(divider, { pointerId: 1, clientY: 101 });
+    expect(useUIStore.getState().multiReviewGraphHeight).toBeNull();
+    expect(document.activeElement === divider).toBe(true);
+    rerender(<MultiReviewFlowGraph {...panel(8)} />);
+    expect(viewport().style.height).toBe(`${flowViewportHeight(geometry(8).height)}px`);
+    fireEvent.keyDown(divider, { key: "ArrowUp" });
+    expect(useUIStore.getState().multiReviewGraphHeight).toBe(
+      flowViewportHeight(geometry(8).height) - 16,
+    );
+  });
+
+  test("the stacked layout ignores a saved height and omits the divider", () => {
+    useUIStore.setState({ multiReviewGraphHeight: 300 });
+    const { rerender } = render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+    const automaticHeight = viewport().style.height;
+    expect(screen.queryByRole("separator", { name: "Resize graph" }) === null).toBe(true);
+    act(() => useUIStore.getState().setMultiReviewGraphHeight(500));
+    expect(viewport().style.height).toBe(automaticHeight);
+    rerender(<MultiReviewFlowGraph {...panel(4)} layout="graph" />);
+    expect(viewport().style.height).toBe("500px");
+  });
+
+  for (const interruption of [
+    "stacked",
+    "fullscreen",
+    "pointerCancel",
+    "lostPointerCapture",
+  ] as const) {
+    test(`an interrupted resize (${interruption}) restores the latest saved height`, () => {
+      useUIStore.setState({ multiReviewGraphHeight: 300 });
+      const { rerender } = render(<MultiReviewFlowGraph {...panel(4)} />);
+      const divider = screen.getByRole("separator", { name: "Resize graph" });
+      fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientY: 100 });
+      fireEvent.pointerMove(divider, { pointerId: 1, clientY: 180 });
+      expect(viewport().style.height).toBe("380px");
+      // Another graph can save a preference while this one's drag is active.
+      act(() => useUIStore.getState().setMultiReviewGraphHeight(420));
+      if (interruption === "stacked") {
+        rerender(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+        rerender(<MultiReviewFlowGraph {...panel(4)} layout="graph" />);
+      } else if (interruption === "fullscreen") {
+        fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
+        fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
+      } else {
+        fireEvent[interruption](divider, { pointerId: 1, clientY: 180 });
+        fireEvent.pointerUp(divider, { pointerId: 1, clientY: 180 });
+      }
+      expect(useUIStore.getState().multiReviewGraphHeight).toBe(420);
+      expect(viewport().style.height).toBe("420px");
+      act(() => useUIStore.getState().setMultiReviewGraphHeight(460));
+      expect(viewport().style.height).toBe("460px");
+    });
+  }
+
+  test("a remembered graph height applies to every graph, but not in fullscreen", () => {
+    useUIStore.setState({ multiReviewGraphHeight: 300 });
+    render(<MultiReviewFlowGraph {...panel(4)} />);
+    expect(viewport().style.height).toBe("300px");
+    fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
+    expect(viewport().style.height).toBe("");
+    expect(screen.queryByRole("separator", { name: "Resize graph" }) === null).toBe(true);
   });
 
   test("fullscreen lays the graph over the window until the button or Escape leaves it", () => {
@@ -1128,7 +1406,7 @@ describe("zoom and pan", () => {
   test("the stacked layout has the same controls and bounds, with 44 px targets", () => {
     render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
     const controls = screen.getByRole("group", { name: "Zoom" });
-    for (const name of ["Zoom out", "Zoom in", "Fit the whole pipeline"]) {
+    for (const name of ["Zoom out", "Zoom in"]) {
       expect(within(controls).getByRole("button", { name }).className).toContain("size-11");
     }
     expect(screen.getByTestId("multi-review-zoom-level").className).toContain("h-11");
@@ -1146,9 +1424,6 @@ describe("zoom and pan", () => {
     expect(zoomLevel()).toBe("20%");
     expect(zoomOut.disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Zoom 20%, reset to 100%" }));
-    expect(zoomLevel()).toBe("100%");
-    // Unmeasured, Fit leaves the column as it is rather than guessing.
-    fireEvent.click(screen.getByRole("button", { name: "Fit the whole pipeline" }));
     expect(zoomLevel()).toBe("100%");
   });
 
@@ -1354,6 +1629,7 @@ describe("provisional findings", () => {
         ],
       }),
     );
+    fireEvent.click(screen.getByTestId("multi-review-findings-badge"));
     expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
       "1 · from 1 reviewer · 2 provisional",
     );
@@ -1378,6 +1654,7 @@ describe("provisional findings", () => {
 
   test("a backend without provisional findings shows confirmed reports only, as before", () => {
     renderTab(workflow({ reviewers: [completed(0), running(1)] }));
+    fireEvent.click(screen.getByTestId("multi-review-findings-badge"));
     expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
       "1 · from 1 reviewer",
     );

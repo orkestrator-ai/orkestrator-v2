@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import {
   WEB_ANNOTATION_COMMANDS,
@@ -13,6 +13,8 @@ import {
   webAnnotationCommand,
 } from "@/lib/web-annotations/client";
 import { refreshAllWebAnnotationCapabilities } from "@/lib/web-annotations/sync";
+import { isWindowMachine, useAccountMachine } from "./account-machine";
+import { WebAnnotationDiagnostics } from "./WebAnnotationDiagnostics";
 
 const MODE_LABELS: Record<WebAnnotationRolloutMode, { title: string; detail: string }> = {
   enabled: {
@@ -40,26 +42,34 @@ export function WebAnnotationSettings() {
   const [unsupported, setUnsupported] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
+  const { machine } = useAccountMachine();
+  // Switching machine clears the previous machine's error before it reloads.
+  const [loadedMachine, setLoadedMachine] = useState(machine);
+  if (loadedMachine !== machine) {
+    setLoadedMachine(machine);
     setError(null);
-    try {
-      setSnapshot(await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.rollout, {}));
-    } catch (loadError) {
-      if (classifyWebAnnotationError(loadError) === "unsupported") setUnsupported(true);
-      else setError(describeWebAnnotationError(loadError));
-    }
-  }, []);
+  }
+
   useEffect(() => {
-    void load();
-  }, [load]);
+    void (async () => {
+      try {
+        setSnapshot(await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.rollout, {}, machine));
+      } catch (loadError) {
+        if (classifyWebAnnotationError(loadError) === "unsupported") setUnsupported(true);
+        else setError(describeWebAnnotationError(loadError));
+      }
+    })();
+  }, [machine]);
 
   const choose = async (mode: WebAnnotationRolloutMode) => {
     setSaving(true);
     setError(null);
     try {
-      setSnapshot(await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.rolloutSet, { mode }));
-      refreshAllWebAnnotationCapabilities();
+      setSnapshot(
+        await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.rolloutSet, { mode }, machine),
+      );
+      // This window's annotation engines follow its own backend's rollout only.
+      if (isWindowMachine(machine)) refreshAllWebAnnotationCapabilities();
     } catch (saveError) {
       setError(describeWebAnnotationError(saveError));
     } finally {
@@ -120,6 +130,7 @@ export function WebAnnotationSettings() {
           {error}
         </p>
       )}
+      {snapshot && <WebAnnotationDiagnostics />}
     </section>
   );
 }

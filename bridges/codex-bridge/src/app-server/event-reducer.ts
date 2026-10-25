@@ -138,6 +138,10 @@ const IGNORED_METHODS = new Set([
   // protocol has no client method that asks for one, so the bridge has no
   // surface it could belong to.
   "thread/prediction/updated",
+  // Codex's per-thread unread marker (codex 0.164). Orkestrator keeps its own
+  // read state for a tab, so adopting Codex's would give the user two unread
+  // markers that can disagree.
+  "thread/readState/changed",
   // The review-mode counterpart of the approval flow. Code review is an
   // Orkestrator-owned pipeline (see the plan index), so the strict-review
   // demand has no surface here to raise; the approval itself still arrives as
@@ -151,10 +155,6 @@ const IGNORED_METHODS = new Set([
   // message-level rewind; until then adopting it would drop transcript the
   // bridge is still serving, with nothing able to put it back.
   "thread/reverted",
-  // Codex re-authenticating a model provider mid-session. Surfaced as
-  // sign-in state by plan 08 rather than as a transcript event.
-  "modelProvider/authRecoveryStarted",
-  "modelProvider/authRecoveryCompleted",
   // Bookkeeping the bridge tracks itself.
   "thread/status/changed",
   "thread/archived",
@@ -249,6 +249,28 @@ export function reduceNotification(
       };
     }
 
+    // Codex re-authenticating a model provider mid-session. Surfaced as the
+    // tab's `auth` notice rather than as a transcript row.
+    case "modelProvider/authRecoveryStarted":
+    case "modelProvider/authRecoveryCompleted": {
+      if (!threadId || !isRecord(params)) return { events: [] };
+      const message = str(params.message)?.trim().slice(0, 300);
+      const provider = str(params.provider)?.trim().slice(0, 64);
+      return {
+        events: [
+          {
+            kind: "thread.authRecovery",
+            threadId,
+            phase:
+              notification.method === "modelProvider/authRecoveryStarted" ? "started" : "completed",
+            ...(message ? { message } : {}),
+            ...(provider ? { provider } : {}),
+            ...base,
+          },
+        ],
+      };
+    }
+
     case "thread/tokenUsage/updated": {
       if (!isRecord(params) || !threadId || !turnId || !isRecord(params.tokenUsage)) {
         return { events: [] };
@@ -278,6 +300,7 @@ export function reduceNotification(
               turns: [
                 {
                   turnId,
+                  at: new Date().toISOString(),
                   inputTokens: num(last.inputTokens),
                   outputTokens: num(last.outputTokens),
                   cacheReadTokens: num(last.cachedInputTokens),
@@ -292,6 +315,8 @@ export function reduceNotification(
             },
             ...base,
           },
+          // Usage is reported once per model response, so it also closes one.
+          { kind: "model.response.completed", threadId, turnId, ...base },
         ],
       };
     }

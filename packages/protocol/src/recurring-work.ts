@@ -1,23 +1,27 @@
 /**
  * Shared, content-free vocabulary for recurring background work.
  *
- * Every recurring job in Orkestrator — a PR poll, a diff scan, a workflow tick,
- * a renderer refresh — is named by one entry of {@link RECURRING_JOB_KINDS}.
+ * Every recurring job the backend records — a PR poll, a diff scan, a
+ * workflow tick, an activity sweep — is named by one entry of
+ * {@link RECURRING_JOB_KINDS}.
  * The names are the only labels recurring-work metrics may carry: an
  * environment id, a path, a branch, a URL, a prompt or a command's output can
  * never become a dimension, because the recording API has nowhere to put one.
  *
  * The catalogue records what the inventory in
- * `docs/architecture/recurring-work.md` describes for each family:
- * which process owns it, what triggers it, its default priority class, its
+ * `docs/architecture/recurring-work.md` describes for each family: what
+ * triggers it, its default priority class, its
  * nominal cadence, what happens when it is requested while already running,
  * and how a missed run is recovered. It describes the system as it is, so a
  * later change to a cadence or policy must update the entry in the same
  * change. It is data for diagnostics and the baseline harness, not a switch:
  * nothing reads a cadence from here to drive a timer.
  *
- * Deliberately dependency-free so a bridge or the renderer can report against
- * the same names later without importing backend code.
+ * Renderer, bridge and desktop recurrence (the inventory's C and L rows) is
+ * not in the vocabulary: no process records it, and an entry nothing records
+ * drifts from the code unnoticed. A process that starts recording adds its
+ * kinds here, with a bounded, content-free path to the diagnostics surface.
+ * Deliberately dependency-free so that process can share these names.
  */
 
 export const RECURRING_WORK_SCHEMA_VERSION = 1;
@@ -31,6 +35,10 @@ export const RECURRING_JOB_KINDS = [
   "file-tree-read",
   "git-fetch-local",
   "git-fetch-container",
+  // Backend: change tracking (docs/architecture/change-tracking.md).
+  "change-capture",
+  "change-evidence-pull",
+  "change-retention",
   // Backend: agent observation and queues.
   "native-activity-sweep",
   "native-launch-scan",
@@ -47,6 +55,7 @@ export const RECURRING_JOB_KINDS = [
   "mail-retention",
   "activity-lease-expiry",
   "tab-cleanup",
+  "node-summary-reconcile",
   // Backend: workflows.
   "build-supervisor-tick",
   "looped-review-tick",
@@ -61,32 +70,8 @@ export const RECURRING_JOB_KINDS = [
   "process-usage",
   "opencode-reconnect",
   "gateway-heartbeat",
-  // Renderer.
-  "client-native-session-refresh",
-  "client-files-panel",
-  "client-resource-manifest",
-  "client-reviewer-transcript",
-  "client-validation-output",
-  "client-init-logs",
-  "client-system-meters",
-  "client-docker-availability",
-  "client-connection-health",
-  "client-coordinator-panel",
-  "client-design-canvas",
-  "client-browser-annotation",
-  "client-cursor-login",
-  // Bridges and desktop.
-  "bridge-sse-keepalive",
-  "bridge-idle-sweep",
-  "bridge-parent-watchdog",
-  "acp-disconnect-poll",
-  "bridge-diagnostics-heartbeat",
-  "desktop-log-retention",
 ] as const;
 export type RecurringJobKind = (typeof RECURRING_JOB_KINDS)[number];
-
-export const RECURRING_WORK_OWNERS = ["backend", "bridge", "renderer", "desktop"] as const;
-export type RecurringWorkOwner = (typeof RECURRING_WORK_OWNERS)[number];
 
 /** What causes one attempt: a clock, a completed run, a change hint, a read, or a user. */
 export const RECURRING_TRIGGERS = [
@@ -157,14 +142,13 @@ export type RecurringRecoveryContract = (typeof RECURRING_RECOVERY_CONTRACTS)[nu
 export interface RecurringJobDescriptor {
   /** Inventory row(s) in `docs/architecture/recurring-work.md`, e.g. `B03`. */
   inventory: string;
-  owner: RecurringWorkOwner;
   trigger: RecurringTrigger;
   priority: RecurringPriorityClass;
   /** Nominal period of the dominant trigger; `null` when purely demand-driven. */
   nominalCadenceMs: number | null;
   inFlight: RecurringInFlightPolicy;
   recovery: RecurringRecoveryContract;
-  /** Whether the owning process records this kind today. */
+  /** Whether the backend records this kind today. */
   instrumented: boolean;
 }
 
@@ -178,32 +162,12 @@ const backend = (
   instrumented = true,
 ): RecurringJobDescriptor => ({
   inventory,
-  owner: "backend",
   trigger,
   priority,
   nominalCadenceMs,
   inFlight,
   recovery,
   instrumented,
-});
-
-const external = (
-  owner: Exclude<RecurringWorkOwner, "backend">,
-  inventory: string,
-  trigger: RecurringTrigger,
-  priority: RecurringPriorityClass,
-  nominalCadenceMs: number | null,
-  inFlight: RecurringInFlightPolicy,
-  recovery: RecurringRecoveryContract,
-): RecurringJobDescriptor => ({
-  inventory,
-  owner,
-  trigger,
-  priority,
-  nominalCadenceMs,
-  inFlight,
-  recovery,
-  instrumented: false,
 });
 
 /**
@@ -224,11 +188,14 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   ),
   // Inside a detection, at most once per 60 s per entry.
   "pr-check-rollup": backend("B02", "completion", "discovery", 60_000, "join", "next-tick"),
-  // Watched local: 400 ms coalesced hints + 120 s safety; container/unwatched: 15 s.
+  // Watched local: 400 ms coalesced hints + 120 s safety; container with a
+  // confirmed worktree signal: rings (≥ 2 s apart) + 60 s safety;
+  // other container/unwatched: 15 s.
   "diff-scan": backend("B03", "watcher", "discovery", 15_000, "trailing-rerun", "safety-scan"),
   // Files panel reads, served by the worktree snapshot owner (step 03): they
   // join the owner's scan/walk; a result stays valid until a watcher hint
-  // (qualified watched worktree) or for 3 s (unwatched). Panel polls every 5 s.
+  // (qualified watched worktree or signalled container) or for 3 s
+  // (unwatched). Panel polls every 5 s.
   "file-list-read": backend("B04", "read", "interactive", null, "join", "snapshot-rehydrate"),
   "file-tree-read": backend("B04", "read", "interactive", null, "join", "snapshot-rehydrate"),
   // Read-driven, 5 min TTL per common git dir + ref, joined in flight.
@@ -237,6 +204,21 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   // 5 min attempt cooldown per container generation + clone + ref, joined in
   // flight, immutable local baselines never fetch (`container-git-fetch.ts`).
   "git-fetch-container": backend("F02", "read", "discovery", 300_000, "join", "next-tick"),
+  // Boundary and provisional snapshot captures: one per WorktreeIdentity at a
+  // time inside the shared git-docker-scan pool; fresh boundaries outrank
+  // provisional captures, which run only while dirty (1 s local / 5 s remote).
+  "change-capture": backend(
+    "B03",
+    "watcher",
+    "progress",
+    null,
+    "per-key-serial",
+    "storage-reconcile",
+  ),
+  // Rides the 2 s activity sweep, once per bridge connection with evidence.
+  "change-evidence-pull": backend("B06", "interval", "progress", 2_000, "join", "next-tick"),
+  // Reference expiry, quota enforcement and object sweep.
+  "change-retention": backend("B03", "interval", "discovery", 3_600_000, "join", "next-tick"),
   "native-activity-sweep": backend("B06", "interval", "progress", 2_000, "join", "next-tick"),
   // Step 08: one recovery job, 2 s while a launch intent is pending, else a
   // 30 s safety pass; environment changes wake it.
@@ -328,6 +310,15 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "unguarded",
     "lease-expiry",
   ),
+  "node-summary-reconcile": backend(
+    "B26",
+    "interval",
+    "discovery",
+    60_000,
+    "trailing-rerun",
+    "snapshot-rehydrate",
+    false,
+  ),
   "tab-cleanup": backend("B13", "interval", "maintenance", 60_000, "join", "storage-reconcile"),
   // Step 08 keyed supervision: one attempt is one pipeline's pass (every
   // 1.5 s per pipeline with an obligation) or a 30 s safety discovery.
@@ -357,8 +348,9 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "lease-expiry",
   ),
   // Step 08 keyed supervision by default (per-workflow due times, 30 s safety
-  // discovery); the adaptive due scheduler is its rollback and the legacy 1 s
-  // tick remains behind `adaptiveScheduling: false`.
+  // discovery); the adaptive due scheduler is its rollback
+  // (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=multi-review`). The legacy 1 s
+  // whole-store tick is gone.
   "multi-review-tick": backend(
     "B16",
     "interval",
@@ -423,182 +415,6 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "unguarded",
     "reconnect-replay",
     false,
-  ),
-  "client-native-session-refresh": external(
-    "renderer",
-    "C01",
-    "interval",
-    "interactive",
-    500,
-    "join",
-    "snapshot-rehydrate",
-  ),
-  "client-files-panel": external(
-    "renderer",
-    "C02",
-    "interval",
-    "interactive",
-    5_000,
-    "skip-while-running",
-    "snapshot-rehydrate",
-  ),
-  "client-resource-manifest": external(
-    "renderer",
-    "C03",
-    "interval",
-    "recovery",
-    300_000,
-    "join",
-    "snapshot-rehydrate",
-  ),
-  // Step 09: C05–C07 are scheduled by the read coordinator (hidden pause,
-  // reconcile on return); reads are conditional (source token, byte offsets)
-  // and init-log tails are shared across clients by the backend.
-  "client-reviewer-transcript": external(
-    "renderer",
-    "C05",
-    "interval",
-    "interactive",
-    4_000,
-    "skip-while-running",
-    "snapshot-rehydrate",
-  ),
-  "client-validation-output": external(
-    "renderer",
-    "C06",
-    "completion",
-    "interactive",
-    2_000,
-    "skip-while-running",
-    "snapshot-rehydrate",
-  ),
-  "client-init-logs": external(
-    "renderer",
-    "C07",
-    "interval",
-    "interactive",
-    1_000,
-    "join",
-    "snapshot-rehydrate",
-  ),
-  // One read-coordinator key shared by every host-meter consumer (step 09).
-  "client-system-meters": external(
-    "renderer",
-    "C08",
-    "interval",
-    "interactive",
-    5_000,
-    "join",
-    "none",
-  ),
-  "client-docker-availability": external(
-    "renderer",
-    "C09",
-    "interval",
-    "discovery",
-    60_000,
-    "skip-while-running",
-    "snapshot-rehydrate",
-  ),
-  "client-connection-health": external(
-    "renderer",
-    "C10",
-    "interval",
-    "discovery",
-    30_000,
-    // Step 09: young in-flight probes are joined; only stalled ones superseded.
-    "join",
-    "none",
-  ),
-  // Step 09: coordinator view is event-led (scoped `coordinator` changes,
-  // conditional reads, resource-sync safety checks); the 60 s cadence is the
-  // repository-status probe (and the full poll kept for older backends).
-  "client-coordinator-panel": external(
-    "renderer",
-    "C11",
-    "event",
-    "interactive",
-    60_000,
-    "join",
-    "snapshot-rehydrate",
-  ),
-  // Step 09: the 3 s cursor check runs through the read coordinator (hidden
-  // pause, reconcile on return); a longer quiet interval is not yet qualified.
-  "client-design-canvas": external(
-    "renderer",
-    "C12",
-    "interval",
-    "interactive",
-    3_000,
-    "trailing-rerun",
-    "snapshot-rehydrate",
-  ),
-  // Step 09: terminal native events plus a 1 s fallback on desktops that
-  // report operation ids; older desktops keep the 150 ms poll listed here.
-  "client-browser-annotation": external(
-    "renderer",
-    "C13",
-    "interval",
-    "interactive",
-    150,
-    "skip-while-running",
-    "snapshot-rehydrate",
-  ),
-  "client-cursor-login": external(
-    "renderer",
-    "C14",
-    "interval",
-    "interactive",
-    1_500,
-    // Step 09: read-coordinator key; one read in flight, pending logins only.
-    "join",
-    "snapshot-rehydrate",
-  ),
-  "bridge-sse-keepalive": external(
-    "bridge",
-    "L02",
-    "interval",
-    "recovery",
-    5_000,
-    "unguarded",
-    "reconnect-replay",
-  ),
-  "bridge-idle-sweep": external(
-    "bridge",
-    "L03,L04,L05",
-    "interval",
-    "maintenance",
-    60_000,
-    "unguarded",
-    "next-tick",
-  ),
-  "bridge-parent-watchdog": external(
-    "bridge",
-    "L05,L06",
-    "interval",
-    "critical",
-    5_000,
-    "unguarded",
-    "none",
-  ),
-  "acp-disconnect-poll": external("bridge", "L07", "interval", "critical", 50, "unguarded", "none"),
-  "bridge-diagnostics-heartbeat": external(
-    "bridge",
-    "L08",
-    "interval",
-    "maintenance",
-    60_000,
-    "unguarded",
-    "none",
-  ),
-  "desktop-log-retention": external(
-    "desktop",
-    "L09",
-    "interval",
-    "maintenance",
-    6 * 60 * 60_000,
-    "unguarded",
-    "next-tick",
   ),
 };
 

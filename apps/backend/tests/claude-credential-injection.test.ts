@@ -441,3 +441,122 @@ describe("host Claude credential opt-out", () => {
     expect(resolved).toBe(explicit);
   });
 });
+
+const { readRuntimeHostClaudeCredentials, runtimeHostClaudeConfigDir } =
+  await import("../src/core/commands-files");
+const { applyClaudeHostCredentialEnvironment } = await import("../src/core/host-agent-credentials");
+const { claudeKeychainService, claudeLoginLookupOptions } =
+  await import("../src/core/claude-host-credentials");
+
+describe("the agent-test host Claude login follows the shell's directory", () => {
+  const KEYS = [
+    "PATH",
+    "ORKESTRATOR_AGENT_TEST_HOST_HOME",
+    "ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR",
+    "ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT",
+  ] as const;
+  const saved = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
+  afterEach(() => {
+    for (const key of KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  const credential = (accessToken: string) =>
+    JSON.stringify({ claudeAiOauth: { accessToken, expiresAt: Date.now() + 3_600_000 } });
+  const agentTest = {
+    runtimeFlavor: "agent-test",
+    credentialSources: new Set(["claude"]),
+  } as unknown as Parameters<typeof applyClaudeHostCredentialEnvironment>[0];
+
+  /** The default login in `~/.claude`, an added account's directory, and a stub Keychain. */
+  async function host(dir: string, keychain: Record<string, string> = {}): Promise<string> {
+    const home = join(dir, "host-home");
+    const account = join(dir, "agent-accounts", "claude", "added");
+    await fs.mkdir(join(home, ".claude"), { recursive: true });
+    await fs.mkdir(account, { recursive: true });
+    await fs.writeFile(join(home, ".claude", ".credentials.json"), credential("default-token"));
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const cases = Object.entries(keychain)
+      .map(([service, token]) => `  *"-s ${service} -w"*) printf '%s' '${credential(token)}' ;;`)
+      .join("\n");
+    writeFileSync(
+      join(binDir, "security"),
+      `#!/bin/sh\ncase "$*" in\n${cases}\n  *) exit 44 ;;\nesac\n`,
+    );
+    chmodSync(join(binDir, "security"), 0o755);
+    process.env.PATH = `${binDir}${delimiter}${saved.PATH ?? ""}`;
+    process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = home;
+    process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = account;
+    return account;
+  }
+
+  test("only an explicit directory is read as Claude reads it", () => {
+    expect(claudeLoginLookupOptions("/x", false)).toEqual({});
+    expect(claudeLoginLookupOptions(undefined, true)).toEqual({});
+    expect(claudeLoginLookupOptions("/x", true)).toEqual({
+      keychainService: claudeKeychainService("/x"),
+      configDirOnly: true,
+    });
+    expect(
+      runtimeHostClaudeConfigDir({
+        ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR: "/a",
+        CLAUDE_CONFIG_DIR: "/profile",
+      }),
+    ).toEqual({ configDir: "/a", explicit: false });
+    expect(
+      runtimeHostClaudeConfigDir({
+        ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR: "/a",
+        ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT: "1",
+      }),
+    ).toEqual({ configDir: "/a", explicit: true });
+    expect(runtimeHostClaudeConfigDir({ CLAUDE_CONFIG_DIR: "/b" })).toEqual({
+      configDir: "/b",
+      explicit: true,
+    });
+    expect(runtimeHostClaudeConfigDir({})).toEqual({ configDir: undefined, explicit: false });
+  });
+
+  test("an explicit account directory never falls back to the default login", async () => {
+    await withTempDirAsync(async (dir) => {
+      await host(dir);
+      // A defaulted directory may still fall back to `~/.claude`, as Claude does.
+      expect(getClaudeOAuthAccessToken(await readRuntimeHostClaudeCredentials())).toBe(
+        "default-token",
+      );
+
+      process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT = "1";
+      expect(await readRuntimeHostClaudeCredentials()).toBeUndefined();
+      const env: NodeJS.ProcessEnv = {};
+      await applyClaudeHostCredentialEnvironment(agentTest, env);
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    });
+  });
+
+  test.if(process.platform === "darwin")(
+    "launches and container sync read the account's own Keychain entry",
+    async () => {
+      await withTempDirAsync(async (dir) => {
+        const account = join(dir, "agent-accounts", "claude", "added");
+        await host(dir, {
+          "Claude Code-credentials": "default-keychain-token",
+          [claudeKeychainService(account)]: "added-keychain-token",
+        });
+        let env: NodeJS.ProcessEnv = {};
+        await applyClaudeHostCredentialEnvironment(agentTest, env);
+        expect(env.ANTHROPIC_AUTH_TOKEN).toBe("default-keychain-token");
+
+        process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT = "1";
+        env = {};
+        await applyClaudeHostCredentialEnvironment(agentTest, env);
+        expect(env.ANTHROPIC_AUTH_TOKEN).toBe("added-keychain-token");
+        // Container sync goes through the same runtime read.
+        expect(getClaudeOAuthAccessToken(await readRuntimeHostClaudeCredentials())).toBe(
+          "added-keychain-token",
+        );
+      });
+    },
+  );
+});

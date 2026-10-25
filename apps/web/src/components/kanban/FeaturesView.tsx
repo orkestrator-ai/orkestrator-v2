@@ -14,6 +14,12 @@ import {
   X,
 } from "lucide-react";
 import { workflowResultSubmissionLabel } from "@orkestrator/protocol/workflow-results";
+import { featurePlanningConversationKey } from "@orkestrator/protocol/feature-planning";
+import {
+  useWorkflowTranscriptArtifacts,
+  type WorkflowTranscriptConversation,
+} from "@/hooks/useWorkflowTranscriptArtifacts";
+import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
@@ -136,6 +142,24 @@ function toNativeChatMessage(
     parts: [{ type: "text", content }],
     createdAt: message.createdAt,
     modelId: message.modelId,
+  };
+}
+
+/**
+ * The artifact conversation of a planning chat: the feature's, or one story's
+ * refinement chat, in the feature's planning environment. Null before that
+ * environment exists (nothing can have been published yet).
+ */
+function planningArtifactConversation(
+  feature: FeaturePlan,
+  storyId?: string,
+): WorkflowTranscriptConversation | null {
+  if (!feature.codexEnvironmentId) return null;
+  const conversationKey = featurePlanningConversationKey(feature.id, storyId);
+  return {
+    environmentId: feature.codexEnvironmentId,
+    conversationKey,
+    generation: feature.codexSessionId ?? conversationKey,
   };
 }
 
@@ -734,6 +758,10 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
               <TabsContent value={`story:${selectedStory.id}`} className={RIGHT_PANE_CONTENT_CLASS}>
                 <StoryDetailPanel
                   story={selectedStory}
+                  artifactConversation={planningArtifactConversation(
+                    selectedFeature,
+                    selectedStory.id,
+                  )}
                   draft={
                     chatDrafts.get(storyChatDraftId(selectedFeature.id, selectedStory.id)) ?? ""
                   }
@@ -790,6 +818,7 @@ function FeatureChatPanel({
   return (
     <NativeStyleChatPanel
       messages={feature.messages}
+      artifactConversation={planningArtifactConversation(feature)}
       stripState={stripFeaturePlannerStateBlocks}
       persistKey={`feature-chat-${feature.id}`}
       draft={draft}
@@ -810,6 +839,7 @@ function FeatureChatPanel({
 
 export function NativeStyleChatPanel({
   messages,
+  artifactConversation = null,
   stripState,
   persistKey,
   draft,
@@ -826,6 +856,12 @@ export function NativeStyleChatPanel({
   onRefresh,
 }: {
   messages: FeaturePlanMessage[];
+  /**
+   * The planning conversation this chat shows; its published artifacts are
+   * merged in by publication time (planning messages are plain text, so no
+   * publish call anchors them) and resolved in that conversation.
+   */
+  artifactConversation?: WorkflowTranscriptConversation | null;
   stripState: (content: string) => string;
   persistKey: string;
   draft: string;
@@ -847,17 +883,24 @@ export function NativeStyleChatPanel({
     (modelId: string) => resolveCatalogModelLabel(modelId, models),
     [models],
   );
-  const nativeMessages = useMemo(
+  const chatMessages = useMemo(
     () =>
       messages
         .map((message) => toNativeChatMessage(message, stripState))
         .filter((message): message is NativeMessageType => message !== null),
     [messages, stripState],
   );
+  const { scope: richTranscriptScope, messages: nativeMessages } = useWorkflowTranscriptArtifacts(
+    artifactConversation,
+    chatMessages,
+    { canLoadEarlier: false },
+  );
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive: true,
     persistKey,
-    stickToBottomOnActivation: true,
+    // The spec chat is a live conversation panel: it always opens on the
+    // latest exchange.
+    activation: "latest",
   });
 
   const handleSend = useCallback(() => {
@@ -869,64 +912,66 @@ export function NativeStyleChatPanel({
   return (
     <div className="@container relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background">
       <div className="flex min-h-0 flex-1 flex-col">
-        <VirtualizedMessageList
-          messages={nativeMessages}
-          computeItemKey={(_index, message) => message.id}
-          resolvePreviousMessage={findPreviousNativeMessage}
-          renderMessage={(_index, message, previousMessage) => (
-            <NativeMessage
-              message={message}
-              previousMessage={previousMessage}
-              assistantLabel="Codex"
-              agentExpansionScope={persistKey}
-              resolveModelLabel={resolveModelLabel}
-            />
-          )}
-          footer={
-            <>
-              {isRunning && (
-                <div className="px-2 @sm:px-4 py-3">
-                  <div className="mx-auto max-w-3xl min-w-0">
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      <span className="text-xs">{submissionLabel ?? loadingText}</span>
+        <RichTranscriptScopeContext.Provider value={richTranscriptScope}>
+          <VirtualizedMessageList
+            messages={nativeMessages}
+            computeItemKey={(_index, message) => message.id}
+            resolvePreviousMessage={findPreviousNativeMessage}
+            renderMessage={(_index, message, previousMessage) => (
+              <NativeMessage
+                message={message}
+                previousMessage={previousMessage}
+                assistantLabel="Codex"
+                agentExpansionScope={persistKey}
+                resolveModelLabel={resolveModelLabel}
+              />
+            )}
+            footer={
+              <>
+                {isRunning && (
+                  <div className="px-2 @sm:px-4 py-3">
+                    <div className="mx-auto max-w-3xl min-w-0">
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span className="text-xs">{submissionLabel ?? loadingText}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
-              {recoveryMessage && (
-                <div className="px-2 @sm:px-4 py-3">
-                  <div
-                    role="alert"
-                    className="mx-auto max-w-3xl rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100"
-                  >
-                    <p>{recoveryMessage}</p>
-                    <div className="mt-2 flex gap-2">
-                      {onRetryRecovery && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          onClick={onRetryRecovery}
-                        >
-                          Check again
-                        </Button>
-                      )}
-                      {onStopWaiting && (
-                        <Button type="button" size="sm" variant="ghost" onClick={onStopWaiting}>
-                          Stop waiting
-                        </Button>
-                      )}
+                )}
+                {recoveryMessage && (
+                  <div className="px-2 @sm:px-4 py-3">
+                    <div
+                      role="alert"
+                      className="mx-auto max-w-3xl rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100"
+                    >
+                      <p>{recoveryMessage}</p>
+                      <div className="mt-2 flex gap-2">
+                        {onRetryRecovery && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={onRetryRecovery}
+                          >
+                            Check again
+                          </Button>
+                        )}
+                        {onStopWaiting && (
+                          <Button type="button" size="sm" variant="ghost" onClick={onStopWaiting}>
+                            Stop waiting
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
-              <div className="h-32" aria-hidden="true" />
-            </>
-          }
-          scrollProps={scrollProps}
-          virtuosoRef={virtuosoRef}
-        />
+                )}
+                <div className="h-32" aria-hidden="true" />
+              </>
+            }
+            scrollProps={scrollProps}
+            virtuosoRef={virtuosoRef}
+          />
+        </RichTranscriptScopeContext.Provider>
       </div>
 
       <NativeComposeDock
@@ -1031,6 +1076,7 @@ function FeatureStoriesPanel({
 
 function StoryDetailPanel({
   story,
+  artifactConversation,
   draft,
   setDraft,
   isRunning,
@@ -1043,6 +1089,7 @@ function StoryDetailPanel({
   onRefresh,
 }: {
   story: FeatureStoryCard;
+  artifactConversation: WorkflowTranscriptConversation | null;
   draft: string;
   setDraft: (value: string) => void;
   isRunning: boolean;
@@ -1077,6 +1124,7 @@ function StoryDetailPanel({
         </div>
         <NativeStyleChatPanel
           messages={story.messages}
+          artifactConversation={artifactConversation}
           stripState={stripStoryRefinementStateBlocks}
           persistKey={`feature-story-${story.id}`}
           draft={draft}

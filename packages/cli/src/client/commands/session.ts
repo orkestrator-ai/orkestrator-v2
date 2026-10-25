@@ -3,12 +3,14 @@ import type {
   PublicAgentOptions,
   PublicInteraction,
   PublicInteractionAnswerInput,
+  PublicSessionCommandList,
   PublicSessionSummary,
   PublicTranscriptPage,
 } from "@orkestrator/protocol/public-api-resources";
+import path from "node:path";
 import { CliError } from "../errors.js";
 import { keyValues, receiptLines, sessionLines, sessionRows, table } from "../format.js";
-import { readPrompt, readTextSource } from "../inputs.js";
+import { readBinaryFile, readPrompt, readTextSource } from "../inputs.js";
 import type { CommandContext, CommandOutcome, CommandSpec, ParsedCommand } from "../spec.js";
 import { observe, ObservationStopped } from "../wait.js";
 import {
@@ -20,6 +22,7 @@ import {
   REQUEST_ID_OPTION,
   stringOption,
   submit,
+  submitForWait,
   TIMEOUT_OPTION,
   waitForOperation,
 } from "./common.js";
@@ -62,10 +65,88 @@ const CONTROL_OPTIONS = [
   },
 ];
 
+const LITERAL_OPTION = {
+  name: "literal",
+  kind: "boolean" as const,
+  description:
+    "Send the prompt as plain text: a leading /name never runs a provider command (by default it does).",
+};
+
+const ENQUEUE_OPTION = {
+  name: "enqueue",
+  kind: "boolean" as const,
+  description:
+    "If the session is busy, queue this behind its current work (the backend sends it later) instead of refusing.",
+};
+
+const ATTACH_OPTION = {
+  name: "attach",
+  kind: "list" as const,
+  valueName: "FILE",
+  description: `Send a local file with the prompt (repeatable; at most ${PUBLIC_API_LIMITS.promptAttachmentsMaxItems} files, ${PUBLIC_API_LIMITS.promptAttachmentsMaxBytes / 1024} KiB in total).`,
+};
+
+/**
+ * Read `--attach` files from the caller's machine, bounded in count and total
+ * size, and encode them for the request. Only the file name travels; the
+ * backend decides where in the workspace the bytes are written.
+ */
+async function readAttachments(
+  context: CommandContext,
+  options: Record<string, unknown>,
+): Promise<Array<{ name: string; dataBase64: string }> | undefined> {
+  const files = (options.attach as string[] | undefined) ?? [];
+  if (files.length === 0) return undefined;
+  if (files.length > PUBLIC_API_LIMITS.promptAttachmentsMaxItems) {
+    throw new CliError(
+      "input-too-large",
+      `At most ${PUBLIC_API_LIMITS.promptAttachmentsMaxItems} attachments are allowed`,
+    );
+  }
+  let remaining = PUBLIC_API_LIMITS.promptAttachmentsMaxBytes;
+  const names = new Set<string>();
+  const attachments: Array<{ name: string; dataBase64: string }> = [];
+  for (const file of files) {
+    const name = path.basename(file);
+    if (names.has(name)) {
+      throw new CliError("invalid-input", `Two attachments are both named ${name}`);
+    }
+    names.add(name);
+    const bytes = await readBinaryFile(context.io, file, `Attachment ${name}`, remaining);
+    remaining -= bytes.byteLength;
+    attachments.push({ name, dataBase64: Buffer.from(bytes).toString("base64") });
+  }
+  return attachments;
+}
+
+function waitBudget(options: Record<string, unknown>): number {
+  return (options.timeout as number | undefined) ?? DEFAULT_WAIT_MS;
+}
+
+/** Submit a run; with --wait, a lost response is recovered by request key. */
+async function submitRun<T>(
+  context: CommandContext,
+  action: "session.start" | "session.prompt" | "session.command",
+  input: Record<string, unknown>,
+  options: Record<string, unknown>,
+) {
+  const submitted =
+    options.wait === true
+      ? await submitForWait<T>(context, action, input, options, waitBudget(options))
+      : await submit<T>(context, action, input, options);
+  return {
+    ...submitted,
+    recoveryDeadline: "deadline" in submitted ? (submitted.deadline as number) : undefined,
+  };
+}
+
 async function finishRun(
   context: CommandContext,
   parsed: ParsedCommand,
   base: CommandOutcome,
+  recoveryDeadline: number | undefined,
+  /** For a recovered submission: the result and IDs, read from the final receipt. */
+  fromReceipt?: (receipt: PublicReceipt) => Pick<CommandOutcome, "result" | "ids">,
 ): Promise<CommandOutcome> {
   if (parsed.options.wait !== true || !base.receipt) {
     return base;
@@ -75,12 +156,16 @@ async function finishRun(
     context,
     session,
     base.receipt,
-    (parsed.options.timeout as number | undefined) ?? DEFAULT_WAIT_MS,
+    // Recovering a lost response spends part of the same budget.
+    recoveryDeadline === undefined
+      ? waitBudget(parsed.options)
+      : Math.max(0, recoveryDeadline - Date.now()),
     { continueOnInteraction: parsed.options["continue-on-interaction"] === true },
   );
   const failure = receiptFailure(final);
   return {
     ...base,
+    ...fromReceipt?.(final),
     receipt: final,
     human: receiptLines(final),
     ...(failure ? { failure } : {}),
@@ -142,6 +227,7 @@ function parseAnswers(options: Record<string, unknown>): PublicInteractionAnswer
 export const sessionCommands: CommandSpec[] = [
   {
     path: ["agent", "options"],
+    action: "agent.options",
     summary: "Enabled agents, model catalogues (with freshness), and supported controls.",
     description:
       "Reads the backend's cached catalogues; --refresh asks providers again, which can take a while. An `empty` catalogue is a successful empty answer; `stale`/`unavailable` means the backend could not read it.",
@@ -194,6 +280,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "list"],
+    action: "session.list",
     summary: "List native-agent sessions of an environment (no transcripts are read).",
     positionals: [],
     options: [
@@ -224,6 +311,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "get"],
+    action: "session.get",
     summary: "Show one session (activity, latest request, pending interactions).",
     positionals: [{ name: "session", required: true }],
     options: [],
@@ -244,6 +332,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "start"],
+    action: "session.start",
     summary: "Start an independent conversation in a ready environment and send its first prompt.",
     description:
       "Creates a new agent tab without focusing it. The response is a submission receipt; add --wait (or run `run wait`) to observe the turn. Independent sessions in one environment share its files.",
@@ -264,9 +353,12 @@ export const sessionCommands: CommandSpec[] = [
       { name: "title", kind: "string", valueName: "TITLE", description: "Tab title." },
       ...CONTROL_OPTIONS,
       ...PROMPT_OPTIONS,
+      LITERAL_OPTION,
+      ATTACH_OPTION,
       ...WAIT_OPTIONS,
       REQUEST_ID_OPTION,
     ],
+    inputFields: { attach: "attachments" },
     idOutput: "session ID",
     async run(context, parsed) {
       const options = parsed.options;
@@ -277,7 +369,8 @@ export const sessionCommands: CommandSpec[] = [
         throw new CliError("invalid-input", "--environment and --agent are required");
       }
       const prompt = await readPrompt(context.io, options);
-      const { session, result, receipt, warnings } = await submit<{
+      const attachments = await readAttachments(context, options);
+      const { session, result, receipt, warnings, recoveryDeadline } = await submitRun<{
         sessionId: string;
         tabId: string;
         runId: string;
@@ -290,30 +383,48 @@ export const sessionCommands: CommandSpec[] = [
           prompt,
           ...(options.title !== undefined ? { title: options.title } : {}),
           ...controlsInput(options),
+          ...(options.literal === true ? { literal: true } : {}),
+          ...(attachments ? { attachments } : {}),
         },
         options,
       );
-      return finishRun(context, parsed, {
-        action: "session.start",
-        result,
-        receipt,
-        warnings,
-        connection: session.identity,
-        ids: [result.sessionId],
-        human: [
-          ...keyValues([
-            ["session", result.sessionId],
-            ["run", result.runId],
-          ]),
-        ],
+      // A recovered submission has only its receipt, which names the same
+      // IDs once the backend has dispatched the run.
+      const fromReceipt = (final: PublicReceipt) => ({
+        result: {
+          sessionId: final.resources.sessionId ?? null,
+          tabId: final.resources.tabId ?? null,
+          runId: final.operationId,
+        },
+        ids: final.resources.sessionId ? [final.resources.sessionId] : [],
       });
+      return finishRun(
+        context,
+        parsed,
+        {
+          action: "session.start",
+          ...(result ? { result, ids: [result.sessionId] } : fromReceipt(receipt!)),
+          receipt,
+          warnings,
+          connection: session.identity,
+          human: result
+            ? keyValues([
+                ["session", result.sessionId],
+                ["run", result.runId],
+              ])
+            : [],
+        },
+        recoveryDeadline,
+        result ? undefined : fromReceipt,
+      );
     },
   },
   {
     path: ["session", "prompt"],
-    summary: "Send a follow-up prompt to an idle session.",
+    action: "session.prompt",
+    summary: "Send a follow-up prompt to an idle session, or queue it behind a busy one.",
     description:
-      "Busy sessions are refused (exit 8); use `session steer` to redirect an active turn. The target must be the exact session: a vanished session is never replaced by a new one.",
+      "Busy sessions are refused (exit 8) unless --enqueue puts the prompt in the backend's durable queue; use `session steer` to redirect an active turn. A leading /name runs that provider command unless --literal is given. The target must be the exact session: a vanished session is never replaced by a new one.",
     positionals: [{ name: "session", required: true }],
     options: [
       {
@@ -323,15 +434,22 @@ export const sessionCommands: CommandSpec[] = [
         description: "Conversation mode for this turn.",
       },
       ...PROMPT_OPTIONS,
+      LITERAL_OPTION,
+      ENQUEUE_OPTION,
+      ATTACH_OPTION,
       ...WAIT_OPTIONS,
       REQUEST_ID_OPTION,
     ],
+    inputFields: { attach: "attachments" },
     idOutput: "operation (run) ID",
     async run(context, parsed) {
       const options = parsed.options;
       validateWaitOptions(options);
       const prompt = await readPrompt(context.io, options);
-      const { session, result, receipt, warnings } = await submit<{ runId: string }>(
+      const attachments = await readAttachments(context, options);
+      const { session, result, receipt, warnings, recoveryDeadline } = await submitRun<{
+        runId: string;
+      }>(
         context,
         "session.prompt",
         {
@@ -340,22 +458,142 @@ export const sessionCommands: CommandSpec[] = [
           ...(options.mode !== undefined
             ? { mode: oneOf(options.mode, ["plan", "build"] as const, "--mode") }
             : {}),
+          ...(options.literal === true ? { literal: true } : {}),
+          ...(options.enqueue === true ? { enqueue: true } : {}),
+          ...(attachments ? { attachments } : {}),
         },
         options,
       );
-      return finishRun(context, parsed, {
-        action: "session.prompt",
-        result,
-        receipt,
-        warnings,
-        connection: session.identity,
-        ids: [result.runId],
-        human: receipt ? receiptLines(receipt) : [`run ${result.runId}`],
+      const runId = result?.runId ?? receipt!.operationId;
+      return finishRun(
+        context,
+        parsed,
+        {
+          action: "session.prompt",
+          result: result ?? { runId },
+          receipt,
+          warnings,
+          connection: session.identity,
+          ids: [runId],
+          human: receipt ? receiptLines(receipt) : [`run ${runId}`],
+        },
+        recoveryDeadline,
+      );
+    },
+  },
+  {
+    path: ["session", "commands"],
+    action: "session.commands",
+    summary: "List the session's slash commands (ID, name, availability, argument policy).",
+    description:
+      "Reads the catalogue the backend already holds; --refresh asks the provider again. Use an ID (or a unique name) with `session command`.",
+    positionals: [{ name: "session", required: true }],
+    options: [
+      { name: "refresh", kind: "boolean", description: "Ask the provider for its list again." },
+    ],
+    idOutput: "command IDs, one per line",
+    async run(context, parsed) {
+      const session = await context.session();
+      const list = await session.read<PublicSessionCommandList>("session.commands", {
+        sessionId: parsed.positionals.session,
+        ...(parsed.options.refresh === true ? { refresh: true } : {}),
       });
+      return {
+        action: "session.commands",
+        result: list,
+        connection: session.identity,
+        ids: list.commands.map((command) => command.id),
+        human: [
+          `catalogue ${list.catalogue.status}${list.catalogue.error ? ` (${list.catalogue.error})` : ""}`,
+          ...table(
+            ["NAME", "ID", "ARGS", "AVAILABLE", "DESCRIPTION"],
+            list.commands.map((command) => [
+              command.name,
+              command.id,
+              command.arguments,
+              command.available ? "yes" : `no: ${command.unavailableReason ?? ""}`,
+              (command.description ?? "").slice(0, 60),
+            ]),
+          ),
+        ],
+      };
+    },
+  },
+  {
+    path: ["session", "command"],
+    action: "session.command",
+    summary: "Run one selected slash command in a session.",
+    description:
+      "Pass the command's ID or unique name with --command and its arguments after `--`. The command is sent as a selection: if it is missing, ambiguous, unavailable or changed (--expected-binding-revision), the request fails (exit 3 or 8) and nothing is sent as text. Busy sessions are refused unless --enqueue.",
+    positionals: [{ name: "session", required: true }],
+    options: [
+      {
+        name: "command",
+        kind: "string",
+        valueName: "ID|NAME",
+        description: "Command ID or name from `session commands`.",
+      },
+      {
+        name: "expected-binding-revision",
+        kind: "string",
+        valueName: "REV",
+        description: "Refuse if the command changed since `session commands` listed this revision.",
+      },
+      ENQUEUE_OPTION,
+      ...WAIT_OPTIONS,
+      REQUEST_ID_OPTION,
+    ],
+    acceptsRest: true,
+    idOutput: "operation (run) ID",
+    examples: [
+      "orkestrator session command ses_… --command /review -- the open diff",
+      "orkestrator session command ses_… --command /compact --wait",
+    ],
+    async run(context, parsed) {
+      const options = parsed.options;
+      validateWaitOptions(options);
+      const command = stringOption(options, "command");
+      if (!command) throw new CliError("invalid-input", "--command is required");
+      const args = parsed.rest.join(" ");
+      if (Buffer.byteLength(args) > PUBLIC_API_LIMITS.commandArgumentsMaxBytes) {
+        throw new CliError("input-too-large", "Command arguments are too large");
+      }
+      const { session, result, receipt, warnings, recoveryDeadline } = await submitRun<{
+        runId: string;
+      }>(
+        context,
+        "session.command",
+        {
+          sessionId: parsed.positionals.session,
+          command,
+          ...(args.trim() ? { arguments: args } : {}),
+          ...(options["expected-binding-revision"] !== undefined
+            ? { expectedBindingRevision: options["expected-binding-revision"] }
+            : {}),
+          ...(options.enqueue === true ? { enqueue: true } : {}),
+        },
+        options,
+      );
+      const runId = result?.runId ?? receipt!.operationId;
+      return finishRun(
+        context,
+        parsed,
+        {
+          action: "session.command",
+          result: result ?? { runId },
+          receipt,
+          warnings,
+          connection: session.identity,
+          ids: [runId],
+          human: receipt ? receiptLines(receipt) : [`run ${runId}`],
+        },
+        recoveryDeadline,
+      );
     },
   },
   {
     path: ["session", "stop"],
+    action: "session.stop",
     summary: "Stop the session's current turn (not the environment).",
     description:
       "--expect-run binds the stop to that run: if a different turn is now active the stop is refused (exit 8). Success requires the provider to confirm the turn ended; otherwise the result is unknown (exit 7).",
@@ -395,6 +633,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "steer"],
+    action: "session.steer",
     summary: "Redirect the active turn (providers that support steering only).",
     positionals: [{ name: "session", required: true }],
     options: [
@@ -450,6 +689,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "config", "get"],
+    action: "session.config.get",
     summary: "Show the live session's effective controls.",
     positionals: [{ name: "session", required: true }],
     options: [],
@@ -468,6 +708,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "config", "set"],
+    action: "session.config.set",
     summary: "Change the live session's controls (not environment defaults).",
     description:
       "Applies to this conversation now, as validated by its provider; the response shows the values actually in force (a provider may clamp them). To change defaults for future sessions use `environment config set`.",
@@ -495,6 +736,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "history"],
+    action: "session.history",
     summary: "List earlier provider conversations this session can resume.",
     positionals: [{ name: "session", required: true }],
     options: [],
@@ -523,6 +765,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "resume"],
+    action: "session.resume",
     summary: "Rebind the session to an earlier conversation from `session history`.",
     description: "The current conversation's history is kept; nothing is deleted.",
     positionals: [
@@ -542,6 +785,8 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "fork"],
+    action: "session.fork",
+    inputFields: { message: "messageId" },
     summary: "Fork the conversation into a new session (optionally at a message).",
     positionals: [{ name: "session", required: true }],
     options: [
@@ -577,6 +822,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "interactions", "list"],
+    action: "session.interactions",
     summary: "List pending questions and approvals with their permitted answers.",
     positionals: [{ name: "session", required: true }],
     options: [],
@@ -609,6 +855,8 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "interactions", "resolve"],
+    action: "session.interaction.resolve",
+    inputFields: { revision: "expectedRevision", choose: "answers", text: "answers" },
     summary: "Answer one pending interaction at its current revision.",
     description:
       "--revision must match the interaction's current revision; a replaced or expired interaction is refused (exit 8), never answered. Nothing is approved implicitly.",
@@ -690,6 +938,7 @@ export const sessionCommands: CommandSpec[] = [
   },
   {
     path: ["session", "transcript"],
+    action: "session.transcript",
     summary: "Read a bounded transcript page; --follow polls for new messages.",
     description:
       "Pages are oldest-first and hold at most --limit messages (max 100). Pass the returned olderCursor as --before for earlier history. --follow --jsonl streams one record per new message by polling snapshots; it stops at --timeout or Ctrl+C and never affects the session.",

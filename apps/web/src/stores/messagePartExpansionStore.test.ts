@@ -221,6 +221,26 @@ describe("messagePartExpansionStore", () => {
     expect(keys().has("late-4")).toBe(true);
   });
 
+  test("updates group aliases atomically and keeps an oversized group within the cap", () => {
+    const store = useMessagePartExpansionStore.getState();
+    let notifications = 0;
+    const unsubscribe = useMessagePartExpansionStore.subscribe(() => {
+      notifications += 1;
+    });
+    try {
+      const aliases = Array.from({ length: 600 }, (_, index) => `group-call-${index}`);
+      store.setExpanded(aliases, true);
+      expect(notifications).toBe(1);
+      expect(keys().size).toBe(500);
+      expect(keys().has(aliases.at(-1)!)).toBe(true);
+      store.setExpanded(aliases, false);
+      expect(notifications).toBe(2);
+      expect(keys().size).toBe(0);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   test("reset clears every remembered key", () => {
     setExpanded("msg-1-part-0", true);
     setExpanded("msg-2-part-0", true);

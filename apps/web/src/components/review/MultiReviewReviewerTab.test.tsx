@@ -1,5 +1,7 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import * as scrollState from "@/hooks/useVirtuosoScrollState";
+import { HeldTranscriptPlace } from "@/hooks/useHeldTranscriptPlace";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
 /*
@@ -473,6 +475,56 @@ describe("MultiReviewReviewerTab earlier history", () => {
     return screen.queryAllByText(/^text m\d+$/).map((node) => node.textContent ?? "");
   }
 
+  for (const merged of [false, true]) {
+    test(`restores the reviewer reader after a ${merged ? "same-minute merged" : "separate row"} history page`, async () => {
+      const originalHook = scrollState.useVirtuosoScrollState;
+      const scrollToIndex = mock((_index: number) => true);
+      const spy = spyOn(scrollState, "useVirtuosoScrollState").mockImplementation((options) => ({
+        ...originalHook(options),
+        scrollToIndex,
+      }));
+      const toolRow = (id: string) =>
+        row(
+          id,
+          merged
+            ? {
+                content: "",
+                parts: [
+                  {
+                    type: "tool-invocation",
+                    content: "Read",
+                    toolName: "Read",
+                    toolUseId: `call-${id}`,
+                    toolArgs: { file_path: `${id}.txt` },
+                    toolState: "success",
+                  },
+                ],
+              }
+            : {},
+        );
+      try {
+        render(
+          <MultiReviewReviewerTab
+            data={data}
+            isActive
+            loadTranscript={async () => tail([], { messages: [toolRow("m3")] })}
+            loadHistoryPage={async () => ({
+              status: "page",
+              messages: [toolRow("m2")],
+              historyEpoch: "epoch-1",
+              complete: true,
+              truncated: false,
+            })}
+          />,
+        );
+        fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+        await waitFor(() => expect(scrollToIndex).toHaveBeenCalledWith(merged ? 0 : 1));
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  }
+
   test("load earlier prepends a page, drops rows already shown, and expands its details", async () => {
     const loadTranscript = mock(async () => tail(["m3", "m4"]));
     const loadHistoryPage = mock<LoadHistoryPage>(
@@ -542,6 +594,7 @@ describe("MultiReviewReviewerTab earlier history", () => {
   });
 
   test("an expired cursor drops loaded pages and re-reads the transcript for a new cursor", async () => {
+    const release = spyOn(HeldTranscriptPlace.prototype, "release");
     let reads = 0;
     const loadTranscript = mock(
       async (
@@ -568,9 +621,12 @@ describe("MultiReviewReviewerTab earlier history", () => {
       />,
     );
     await screen.findByText("text m4");
+    release.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
     expect(await screen.findByText(/history changed/)).toBeTruthy();
     await screen.findByText("text m6");
+    expect(release).toHaveBeenCalled();
+    release.mockRestore();
     // The re-read asked for a full snapshot rather than confirming the old token.
     expect(loadTranscript.mock.calls.at(-1)?.[2]).toEqual({ knownSourceToken: undefined });
     expect(shownRows()).toEqual(["text m5", "text m6"]);

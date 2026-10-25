@@ -7,15 +7,27 @@
  * - `user` always, from `<agentDir>/mcp.json` (`~/.pi/agent` on a host).
  * - `project` only when the execution policy opts into project resources,
  *   from `<cwd>/.pi/mcp.json`. A cloned repo must not spawn stdio on the host.
+ *
+ * A coordinator process adds a fourth, `research`: the remote HTTPS servers
+ * the launcher named as process authority (Settings → Coordinator web
+ * research). Reserved like `orkestrator`, so a file entry of the same name
+ * cannot stand in for one.
  */
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
 import { isObject, nonBlank } from "./state.js";
+import {
+  ORKESTRATOR_ARTIFACT_MCP_PATH,
+  ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+} from "@orkestrator/protocol/transcript-artifacts";
 
 export const ORKESTRATOR_MCP_SERVER_NAME = "orkestrator";
 export const AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
 export const AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
+/** The coordinator process authority; see `agent-session.ts`. */
+const BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";
 
 const MAX_MCP_CONFIG_BYTES = 1024 * 1024;
 const MAX_MCP_SERVERS = 64;
@@ -33,12 +45,18 @@ export const BRIDGE_SECRET_ENV: ReadonlySet<string> = new Set([
   "PI_BRIDGE_TOKEN",
 ]);
 
-export type McpScope = "orkestrator" | "user" | "project";
+export type McpScope = "orkestrator" | "research" | "user" | "project";
 export type McpTransport = "http" | "stdio";
 
 export interface AgentMcpConnection {
   url: string;
   token: string;
+  /**
+   * A backend workflow turn's artifact-only connection: an
+   * `orkestrator-artifacts` server at this connection's origin
+   * (`/artifact-mcp`), authenticated by the turn's artifact grant.
+   */
+  artifacts?: { token: string };
 }
 
 export interface ResolvedMcpServer {
@@ -59,7 +77,34 @@ export function parseAgentMcpConnection(value: unknown): AgentMcpConnection | un
   const url = typeof value.url === "string" ? value.url.trim() : "";
   const token = typeof value.token === "string" ? value.token.trim() : "";
   if (!url || !token || Buffer.byteLength(token, "utf8") > 1024) return undefined;
-  return { url, token };
+  const artifacts = isObject(value.artifacts) ? value.artifacts.token : undefined;
+  const artifactToken = typeof artifacts === "string" ? artifacts.trim() : "";
+  return {
+    url,
+    token,
+    ...(artifactToken && Buffer.byteLength(artifactToken, "utf8") <= 1024
+      ? { artifacts: { token: artifactToken } }
+      : {}),
+  };
+}
+
+/**
+ * A workflow turn's artifact-only server, beside the attempt's own
+ * `orkestrator` server. Same trusted scope: its tools are Orkestrator's.
+ */
+export function orkestratorArtifactMcpServer(
+  connection?: AgentMcpConnection,
+): ResolvedMcpServer | undefined {
+  const token = connection?.artifacts?.token;
+  const agent = token ? orkestratorMcpServer(connection, {}) : undefined;
+  if (!token || !agent?.url) return undefined;
+  return {
+    id: ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+    scope: "orkestrator",
+    transport: "http",
+    url: new URL(ORKESTRATOR_ARTIFACT_MCP_PATH, agent.url).toString(),
+    headers: { Authorization: `Bearer ${token}` },
+  };
 }
 
 export function orkestratorMcpServer(
@@ -118,7 +163,10 @@ export async function loadMcpConfigFile(
   try {
     const stat = await fs.stat(path);
     if (stat.size > MAX_MCP_CONFIG_BYTES) return [];
-    const parsed: unknown = JSON.parse(await fs.readFile(path, "utf8"));
+    // Pi strips one leading UTF-8 BOM before parsing (since 1.4.0); without it
+    // a Notepad-saved file would drop every server here and none in Pi.
+    const text = await fs.readFile(path, "utf8");
+    const parsed: unknown = JSON.parse(text.startsWith("﻿") ? text.slice(1) : text);
     if (!isObject(parsed)) return [];
     const record = isObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
     if (!isObject(record)) return [];
@@ -304,14 +352,42 @@ export async function resolvePiMcpServers(input: {
     { scope: "project", entries: project },
   ]);
   const orkestrator = orkestratorMcpServer(input.agentMcp, input.env);
-  // The Orkestrator entry is reserved: it is inserted last so it wins a name
-  // collision, but the file scopes are truncated first so it is never the entry
-  // `slice` discards. Without this, 64 user servers silently disabled agent mail
-  // and coordinator delegation.
-  const limit = orkestrator ? MAX_MCP_SERVERS - 1 : MAX_MCP_SERVERS;
-  const resolved = fileServers.slice(0, limit);
-  if (orkestrator) resolved.push(orkestrator);
+  const artifacts = orkestratorArtifactMcpServer(input.agentMcp);
+  const research = researchMcpServers(env);
+  // The Orkestrator entries are reserved: they are inserted last so they win a
+  // name collision, but the file scopes are truncated first so they are never
+  // the entries `slice` discards. Without this, 64 user servers silently
+  // disabled agent mail and coordinator delegation.
+  const reserved = [orkestrator, artifacts, ...research].filter(
+    (server): server is ResolvedMcpServer => server !== undefined,
+  );
+  const reservedNamespaces = new Set(research.map((server) => mcpNamespace(server.id)));
+  const resolved = fileServers
+    .filter(
+      (server) =>
+        server.id !== ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME &&
+        !reservedNamespaces.has(mcpNamespace(server.id)),
+    )
+    .slice(0, MAX_MCP_SERVERS - reserved.length);
+  resolved.push(...reserved);
   return resolved;
+}
+
+/**
+ * The research servers a coordinator process was launched with.
+ *
+ * Read only under the coordinator's process authority: the launcher clears the
+ * research variables for every other bridge, and a worker's read-only review
+ * must not gain remote servers if one were inherited anyway.
+ */
+function researchMcpServers(env: NodeJS.ProcessEnv): ResolvedMcpServer[] {
+  if (env[BRIDGE_EXECUTION_POLICY_ENV] !== "coordinator-read-only") return [];
+  return coordinatorResearchMcpServersFromEnv(env).map((server) => ({
+    id: server.name,
+    scope: "research",
+    transport: "http",
+    url: server.url,
+  }));
 }
 
 export function sanitizeMcpName(value: string): string | undefined {

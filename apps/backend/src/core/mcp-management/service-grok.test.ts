@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -230,34 +230,75 @@ describe("Grok adapter", () => {
     expect(source(cursorSnapshot, "cursor:user").sharedWith).toEqual(["grok"]);
   });
 
-  test("Grok: folder trust labels the project and excludes a declined folder", async () => {
+  test("Grok: folder trust follows the pinned Grok's repository-root rule", async () => {
     let snapshot = await grokSnapshot();
     expect(source(snapshot, "grok:project").trust).toBe("unknown");
 
-    const linkedWorktree = path.join(fixture.root, "linked-worktree");
-    symlinkSync(fixture.worktree, linkedWorktree);
-    fixture.write(
-      "home/.grok/trusted_folders.toml",
-      `[folders."${linkedWorktree}"]\ntrusted = true\ndecided_at = "2026-09-01T00:00:00Z"\n`,
-    );
+    // Grok compares the store's keys with the repository's canonical root as
+    // written (a trailing slash is tolerated, a symlinked spelling is not).
+    const canonical = realpathSync(fixture.worktree);
+    const trust = (folder: string, trusted: boolean) =>
+      fixture.write(
+        "home/.grok/trusted_folders.toml",
+        `[folders."${folder}"]\ntrusted = ${trusted}\ndecided_at = 1784732898\n`,
+      );
+    trust(`${canonical}/`, true);
     snapshot = await grokSnapshot();
     expect(source(snapshot, "grok:project").trust).toBe("allowed");
 
-    fixture.write(
-      "home/.grok/trusted_folders.toml",
-      `[folders."${fixture.worktree}"]\ntrusted = false\n`,
-    );
+    const symlinked = path.join(fixture.root, "symlinked-worktree");
+    symlinkSync(fixture.worktree, symlinked);
+    trust(symlinked, true);
+    snapshot = await grokSnapshot();
+    expect(source(snapshot, "grok:project").trust).toBe("unknown");
+
+    trust(canonical, false);
     fixture.write("worktree/.grok/config.toml", `[mcp_servers.p]\ncommand = "x"\n`);
     snapshot = await grokSnapshot();
     expect(source(snapshot, "grok:project").trust).toBe("excluded");
     expect(entry(snapshot, "grok:project", "p").status).toBe("policy-excluded");
 
-    // A grant on a parent folder covers the worktree.
+    // A grant on a parent folder does not cover a repository below it.
+    trust(realpathSync(fixture.root), true);
+    snapshot = await grokSnapshot();
+    expect(source(snapshot, "grok:project").trust).toBe("unknown");
+  });
+
+  test("Grok: a linked worktree takes its main checkout's trust", async () => {
+    fixture.write("main/.git/worktrees/wt/commondir", "../..\n");
     fixture.write(
-      "home/.grok/trusted_folders.toml",
-      `[folders."${fixture.root}"]\ntrusted = true\n`,
+      "worktree/.git",
+      `gitdir: ${path.join(fixture.root, "main/.git/worktrees/wt")}\n`,
+    );
+    const main = realpathSync(path.join(fixture.root, "main"));
+    const store = (body: string) => fixture.write("home/.grok/trusted_folders.toml", body);
+
+    // The worktree's own grant is ignored.
+    store(`[folders."${realpathSync(fixture.worktree)}"]\ntrusted = true\n`);
+    let snapshot = await grokSnapshot();
+    expect(source(snapshot, "grok:project").trust).toBe("unknown");
+    expect(source(snapshot, "grok:project").trustReason).toContain("main checkout");
+
+    store(
+      `[folders."${realpathSync(fixture.worktree)}"]\ntrusted = false\n[folders."${main}"]\ntrusted = true\n`,
     );
     snapshot = await grokSnapshot();
     expect(source(snapshot, "grok:project").trust).toBe("allowed");
+    expect(source(snapshot, "grok:project").trustReason).toContain("main checkout");
+
+    store(`[folders."${main}"]\ntrusted = false\n`);
+    snapshot = await grokSnapshot();
+    expect(source(snapshot, "grok:project").trust).toBe("excluded");
+  });
+
+  test("Grok: a policy with project resources on runs Grok with the gate off", async () => {
+    fixture.write(
+      "home/.grok/trusted_folders.toml",
+      `[folders."${realpathSync(fixture.worktree)}"]\ntrusted = false\n`,
+    );
+    fixture.environment.agentSettings = { executionPolicy: { projectResources: true } };
+    const snapshot = await grokSnapshot();
+    expect(source(snapshot, "grok:project").trust).toBe("allowed");
+    expect(source(snapshot, "grok:project").trustReason).toContain("folder trust off");
   });
 });

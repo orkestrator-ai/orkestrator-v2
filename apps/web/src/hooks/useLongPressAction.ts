@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 
 export const LONG_PRESS_MS = 550;
@@ -62,9 +62,12 @@ export function useLongPressAction(onLongPress: () => void, enabled = true): Lon
   const originRef = useRef<{ x: number; y: number } | null>(null);
   const suppressClickRef = useRef(false);
   const onLongPressRef = useRef(onLongPress);
-  onLongPressRef.current = onLongPress;
   const enabledRef = useRef(enabled);
-  enabledRef.current = enabled;
+  // Published at commit so the stable handlers below read the latest props.
+  useLayoutEffect(() => {
+    onLongPressRef.current = onLongPress;
+    enabledRef.current = enabled;
+  });
 
   const cancel = useCallback(() => {
     if (pressTimerRef.current) {

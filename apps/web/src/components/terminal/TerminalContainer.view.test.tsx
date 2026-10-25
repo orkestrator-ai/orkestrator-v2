@@ -1546,6 +1546,12 @@ describe("TerminalContainer", () => {
     expect(screen.getByText("Environment setup failed.")).toBeTruthy();
     expect(screen.getByRole("button", { name: /retry setup/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /skip setup/i })).toBeTruthy();
+    // Laid-out tab content (native agent tabs included) is z-10. Without a higher
+    // layer, a native tab's own transparent setup overlay paints over this one.
+    const recoveryLayer = screen
+      .getByText("Environment setup failed.")
+      .closest(".inset-0.bg-background");
+    expect(recoveryLayer?.classList.contains("z-20")).toBe(true);
   });
 
   test("hydrates and preserves a build tab inserted before the container mounts", async () => {
@@ -5631,6 +5637,94 @@ describe("TerminalContainer", () => {
         "right-second",
       );
     });
+  });
+
+  test("pull request creation validates refs, deduplicates and focuses reopened tabs at the limit", async () => {
+    const ref = { owner: "acme", repo: "repo", number: 7 };
+    const results: boolean[] = [];
+    function PullRequestHarness() {
+      const { createTab } = useTerminalContext();
+      return (
+        <>
+          <button
+            onClick={() =>
+              results.push(createTab!("pull-request", { pullRequest: { ref, view: "code" } }))
+            }
+          >
+            Open PR
+          </button>
+          <button
+            onClick={() =>
+              results.push(createTab!("pull-request", { pullRequest: { ref, view: "timeline" } }))
+            }
+          >
+            Reopen PR
+          </button>
+          <button
+            onClick={() =>
+              results.push(
+                createTab!("pull-request", { pullRequest: { ref: { ...ref, number: 0 } } }),
+              )
+            }
+          >
+            Invalid PR
+          </button>
+          <button
+            onClick={() =>
+              results.push(
+                createTab!("pull-request", { pullRequest: { ref: { ...ref, number: 8 } } }),
+              )
+            }
+          >
+            Another PR
+          </button>
+        </>
+      );
+    }
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+        />
+        <PullRequestHarness />
+      </TerminalProvider>,
+    );
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(1),
+    );
+    fireEvent.click(screen.getByText("Invalid PR"));
+    expect(results).toEqual([false]);
+    fireEvent.click(screen.getByText("Open PR"));
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(2),
+    );
+    const store = usePaneLayoutStore.getState();
+    const tab = store.getAllTabs("env-visible").find((t) => t.type === "pull-request")!;
+    expect(tab.pullRequestData).toMatchObject({ ref, view: "code" });
+    const pane = store.findPaneWithTab(tab.id, "env-visible")!;
+    act(() => {
+      for (let i = 2; i < MAX_TABS; i++)
+        store.addTab(pane.id, { id: `filler-${i}`, type: "plain" }, "env-visible");
+    });
+    fireEvent.click(screen.getByText("Another PR"));
+    expect(results.at(-1)).toBe(false);
+    fireEvent.click(screen.getByText("Reopen PR"));
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getPane(pane.id, "env-visible")?.activeTabId).toBe(
+        tab.id,
+      ),
+    );
+    expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(MAX_TABS);
+    expect(
+      usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-visible")
+        .find((t) => t.id === tab.id)?.pullRequestData,
+    ).toMatchObject({ view: "timeline", openRequest: 1 });
+    expect(results).toEqual([false, true, false, true]);
   });
 
   test("keeps the shared tab count synchronized as pane tabs change", async () => {

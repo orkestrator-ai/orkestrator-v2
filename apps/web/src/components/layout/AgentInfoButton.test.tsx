@@ -491,7 +491,36 @@ afterEach(() => {
 });
 
 describe("AgentInfoButton popover lifecycle", () => {
-  test("shows tab messaging actions only while agent messaging is enabled", () => {
+  test("remote mode applies initial and subsequent requests and reports user dismissals", () => {
+    const onOpenChange = mock(() => undefined);
+    const onDismiss = mock(() => undefined);
+    const remote = (seq: number, open: boolean) => ({
+      request: { seq, open, inset: 6 },
+      onOpenChange,
+      onDismiss,
+    });
+    const { rerender } = render(<AgentInfoButton activeTab={null} remote={remote(1, true)} />);
+    const dialog = screen.getByRole("dialog", { name: "Agent information" });
+    expect(screen.getByTestId("realm-agent-info-panel")).toBeTruthy();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(onOpenChange).toHaveBeenLastCalledWith(true);
+    expect(screen.queryByRole("button", { name: "Open agent information" }) === null).toBe(true);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close agent information" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    rerender(<AgentInfoButton activeTab={null} remote={remote(2, true)} />);
+    expect(
+      screen.getByRole("dialog", { name: "Agent information" }).contains(document.activeElement),
+    ).toBe(true);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+    rerender(<AgentInfoButton activeTab={null} remote={remote(3, true)} />);
+    rerender(<AgentInfoButton activeTab={null} remote={remote(4, false)} />);
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+  });
+
+  test("shows the tab messages action only while agent messaging is enabled", () => {
     const original = structuredClone(useConfigStore.getState().config);
     const disabled = structuredClone(original);
     disabled.global.agentMessaging = { ...disabled.global.agentMessaging!, enabled: false };
@@ -499,14 +528,12 @@ describe("AgentInfoButton popover lifecycle", () => {
     try {
       render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
-      expect(screen.queryByRole("button", { name: "Message this tab…" }) === null).toBe(true);
-      expect(screen.queryByRole("button", { name: "Inbox settings…" }) === null).toBe(true);
+      expect(screen.queryByRole("button", { name: "Messages…" }) === null).toBe(true);
 
       const enabled = structuredClone(disabled);
       enabled.global.agentMessaging = { ...enabled.global.agentMessaging!, enabled: true };
       act(() => useConfigStore.setState({ config: enabled }));
-      expect(screen.getByRole("button", { name: "Message this tab…" })).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Inbox settings…" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Messages…" })).toBeTruthy();
     } finally {
       act(() => useConfigStore.setState({ config: original }));
     }
@@ -798,7 +825,7 @@ describe("AgentInfoButton provider resolution", () => {
         refreshUsage: true,
       }),
     );
-    expect(screen.queryByRole("button", { name: "Message this tab…" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Messages…" }) === null).toBe(true);
   });
 
   test("falls back to the current agent session while Tests is selected", async () => {
@@ -984,6 +1011,55 @@ describe("AgentInfoButton provider resolution", () => {
 });
 
 describe("AgentInfoButton usage panel", () => {
+  for (const provider of ["claude", "codex"] as const) {
+    test(`places the ${provider} account controls directly below usage in the popover`, async () => {
+      seedUsage(
+        usage({ account: [{ window: "weekly", label: "Weekly quota", usedPercent: 25 }] }),
+        provider,
+      );
+      const account = {
+        id: "default",
+        platform: provider,
+        label: "Host login",
+        isDefault: true,
+        isActive: true,
+        signedIn: false,
+        identity: {},
+      };
+      nativeInvokeMock.mockImplementation(async (command: string) => {
+        if (command === "get_native_agent_projection") return mockNativeProjectionRead();
+        if (command === "list_agent_accounts") {
+          return { accounts: [account], active: { claude: "default", codex: "default" } };
+        }
+        if (command === "get_native_agent_session_account") {
+          return { platform: provider, source: "account", account, running: false };
+        }
+        return undefined;
+      });
+
+      render(<AgentInfoButton activeTab={provider === "claude" ? claudeTab() : codexTab()} />);
+      open();
+
+      const dialog = within(screen.getByRole("dialog", { name: "Agent information" }));
+      const section = dialog.getByTestId("agent-info-account");
+      expect(await within(section).findByRole("button", { name: "Add an account" })).toBeTruthy();
+      expect(within(section).queryByText("Reading account…") === null).toBe(true);
+      expect(
+        within(section).getByText(`${provider === "claude" ? "Claude Code" : "Codex"} account`),
+      ).toBeTruthy();
+      expect(
+        section.previousElementSibling?.contains(
+          dialog.getByRole("region", { name: "Account usage" }),
+        ),
+      ).toBe(true);
+      expect(dialog.getByText("Runtime").parentElement?.contains(section)).toBe(false);
+      expect(nativeInvokeMock).toHaveBeenCalledWith("get_native_agent_session_account", {
+        environmentId: ENVIRONMENT_ID,
+        agent: provider,
+      });
+    });
+  }
+
   test("shows live system percentages in one row and reveals full names on tap", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_system_usage"
@@ -1613,12 +1689,13 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.queryByText("Context") === null).toBe(true);
   });
 
-  test("renders context, token split, cache, reasoning, elapsed and denial rows", () => {
+  test("renders context, token split, cache read/write, reasoning, elapsed and denial rows", () => {
     seedUsage(
       usage({
         inputTokens: 20_000,
         outputTokens: 5_000,
         cacheReadTokens: 12_000,
+        cacheWriteTokens: 3_000,
         reasoningTokens: 900,
         sessionTokens: 30_000,
         costUsd: 1.25,
@@ -1659,6 +1736,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(metricValue("Input")).toBe("20k");
     expect(metricValue("Output")).toBe("5.0k");
     expect(metricValue("Cache read")).toBe("12k");
+    expect(metricValue("Cache write")).toBe("3.0k");
     expect(metricValue("Reasoning")).toBe("900");
     expect(metricValue("Session")).toBe("30k");
     expect(metricValue("Cost")).toBe("$1.25");
@@ -1837,6 +1915,7 @@ describe("AgentInfoButton usage panel", () => {
       "Input",
       "Output",
       "Cache read",
+      "Cache write",
       "Reasoning",
       "Cost",
       "Elapsed",
@@ -2618,6 +2697,54 @@ describe("AgentInfoButton Claude session options", () => {
       generation: "test-generation",
     };
   }
+
+  test("offers Claude's in-app account sign-in instead of a terminal", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string, input?: unknown) => {
+      if (command === "list_agent_accounts") return { accounts: [], active: {} };
+      if (command === "get_native_agent_session_account") return null;
+      if (command === "get_native_agent_auth_status") {
+        return {
+          state: "needs-auth",
+          signIn: {
+            kind: "terminal",
+            hint: "Sign in to Claude from the sign-in card in this tab or from Settings → Claude.",
+          },
+          signOut: false,
+        };
+      }
+      if (command === "get_agent_account_login") return { state: "idle" };
+      if (command === "start_agent_account_login") {
+        expect(input).toEqual({ platform: "claude", reauthenticate: true });
+        return {
+          state: "pending",
+          operationId: "reauth-1",
+          accountId: "default",
+          platform: "claude",
+          mode: "reauthenticate",
+          url: "https://claude.example.test/authorize",
+          needsCode: true,
+        };
+      }
+      return {};
+    });
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(CLAUDE_KEY, neutralClaudeProjection({ executionProfiles: [] }));
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+    await waitFor(() =>
+      expect(
+        nativeInvokeMock.mock.calls.some(([command]) => command === "start_agent_account_login"),
+      ).toBe(true),
+    );
+    expect(
+      screen.getByText(
+        "Sign in to Claude from the sign-in card in this tab or from Settings → Claude.",
+      ),
+    ).toBeTruthy();
+  });
 
   test("keeps Claude informational diagnostics in the runtime panel", () => {
     useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, {
@@ -3511,7 +3638,7 @@ describe("AgentInfoButton session actions", () => {
     await waitFor(() =>
       expect(mockNativeAction).toHaveBeenCalledWith({ kind: "undo", messageId: "m1" }),
     );
-    expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode session reverted");
+    expect(mockToastSuccess).toHaveBeenCalledWith("Session reverted");
 
     reopen();
     fireEvent.click(screen.getByRole("button", { name: /Redo turn/ }));
@@ -3545,12 +3672,12 @@ describe("AgentInfoButton session actions", () => {
     await waitFor(() =>
       expect(mockNativeAction).toHaveBeenCalledWith({ kind: "undo", messageId: undefined }),
     );
-    expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode session reverted");
+    expect(mockToastSuccess).toHaveBeenCalledWith("Session reverted");
   });
 
   test.each([
-    ["undo", /Undo turn/, "OpenCode session reverted"],
-    ["redo", /Redo turn/, "OpenCode revert undone"],
+    ["undo", /Undo turn/, "Session reverted"],
+    ["redo", /Redo turn/, "Revert undone"],
   ] as const)(
     "reports an OpenCode %s rejection and re-enables actions",
     async (kind, button, success) => {
@@ -3584,7 +3711,7 @@ describe("AgentInfoButton session actions", () => {
     fireEvent.click(screen.getByRole("button", { name: /Undo turn/ }));
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("undo failed"));
-    expect(mockToastSuccess).not.toHaveBeenCalledWith("OpenCode session reverted");
+    expect(mockToastSuccess).not.toHaveBeenCalledWith("Session reverted");
   });
 
   test("forks and compacts OpenCode through the backend session actions", async () => {
@@ -3877,9 +4004,30 @@ describe("AgentInfoButton rewind confirmation", () => {
   });
 });
 
-describe("AgentInfoButton OpenCode sharing", () => {
+describe("AgentInfoButton session sharing", () => {
+  // No platform advertises `share` since OpenCode 1.19.1 discontinued it; the
+  // control follows the capability, so a projection that advertises it shows it.
+  function shareCapabilities() {
+    const capabilities = nativeAgentCapabilities("opencode");
+    return { ...capabilities, actions: { ...capabilities.actions, share: true } };
+  }
+
+  function shareCapableProjection(
+    sessionId = "opencode-session-1",
+    overrides: Partial<NativeAgentSessionProjection> = {},
+  ) {
+    return openCodeProjection(sessionId, { capabilities: shareCapabilities(), ...overrides });
+  }
+
+  function seedShareCapableProjection(
+    sessionId = "opencode-session-1",
+    overrides: Partial<NativeAgentSessionProjection> = {},
+  ) {
+    seedOpenCodeProjection(sessionId, { capabilities: shareCapabilities(), ...overrides });
+  }
+
   function seedShareableSession(sessionId = "opencode-session-1") {
-    seedOpenCodeProjection(sessionId);
+    seedShareCapableProjection(sessionId);
   }
 
   /** Holds the next share open until the test releases it with a URL. */
@@ -3900,8 +4048,17 @@ describe("AgentInfoButton OpenCode sharing", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
   }
 
+  test("OpenCode itself no longer offers sharing", () => {
+    seedOpenCodeProjection("opencode-session-1");
+    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+
+    expect(screen.getByRole("button", { name: /Undo turn/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Share…/ }) === null).toBe(true);
+  });
+
   test("rehydrates sharing from the provider-neutral projection", () => {
-    seedOpenCodeProjection("opencode-session-1", {
+    seedShareCapableProjection("opencode-session-1", {
       shareUrl: "https://share.opencode.test/projected",
     });
 
@@ -3992,7 +4149,9 @@ describe("AgentInfoButton OpenCode sharing", () => {
      */
     seedShareableSession();
     mockNativeProjectionRead.mockImplementation(async () =>
-      openCodeProjection("opencode-session-1", { shareUrl: "https://share.opencode.test/live" }),
+      shareCapableProjection("opencode-session-1", {
+        shareUrl: "https://share.opencode.test/live",
+      }),
     );
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
@@ -4026,7 +4185,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     // A share can be revoked from another client. A projection that reports
     // no share URL is authoritative and must remove the stale local action.
     mockNativeProjectionRead.mockImplementation(async () =>
-      openCodeProjection("opencode-session-1", { shareUrl: null }),
+      shareCapableProjection("opencode-session-1", { shareUrl: null }),
     );
     reopen();
 
@@ -4042,9 +4201,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     await shareAndWaitForRevocation();
 
     fireEvent.click(screen.getByRole("button", { name: /Stop sharing/ }));
-    await waitFor(() =>
-      expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode share link disabled"),
-    );
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Share link disabled"));
     expect(nativeActionKinds()).toEqual(["share", "unshare"]);
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
@@ -4063,7 +4220,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith("OpenCode unshare endpoint unavailable"),
     );
-    expect(mockToastSuccess).not.toHaveBeenCalledWith("OpenCode share link disabled");
+    expect(mockToastSuccess).not.toHaveBeenCalledWith("Share link disabled");
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Stop sharing/ }).hasAttribute("disabled")).toBe(
         false,
@@ -4072,9 +4229,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
 
     mockNativeAction.mockImplementation(async () => ({ outcome: "applied" }));
     fireEvent.click(screen.getByRole("button", { name: /Stop sharing/ }));
-    await waitFor(() =>
-      expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode share link disabled"),
-    );
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Share link disabled"));
     expect(nativeActionKinds()).toEqual(["share", "unshare", "unshare"]);
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
@@ -4400,6 +4555,25 @@ describe("AgentInfoButton runtime inventory", () => {
     expect(metricValue("Plugins")).toBe("1");
     expect(metricValue("Commands")).toBe("3");
   });
+
+  test("drops the MCP count tile when the session lists its servers", () => {
+    seedClaudeProjection({
+      runtime: {
+        mcpServers: 1,
+        plugins: 1,
+        commands: 3,
+        mcp: [{ id: "docs", name: "docs", status: "connected", toolCount: 4, actions: [] }],
+      },
+    });
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    // The server list says the same thing, with names and states.
+    expect(screen.getByRole("button", { name: /Tools 4/ })).toBeTruthy();
+    expect(screen.queryByText("MCP") === null).toBe(true);
+    expect(metricValue("Plugins")).toBe("1");
+    expect(metricValue("Commands")).toBe("3");
+  });
 });
 
 describe("AgentInfoButton ACP agents", () => {
@@ -4483,6 +4657,31 @@ describe("AgentInfoButton ACP agents", () => {
       .filter(([command]) => command === "perform_native_agent_mcp_action")
       .map(([, input]) => input as { serverId?: string; action?: string });
   }
+
+  test.each(["signed-in", "signed-out", "needs-auth", "expired", "unknown"] as const)(
+    "shows the %s auth fixture in the session's account card",
+    async (state) => {
+      nativeInvokeMock.mockImplementation(async (command: string) => {
+        if (command === "get_native_agent_auth_status") {
+          return {
+            state,
+            account: { label: "fixture@example.test", plan: "pro" },
+            signIn: { kind: "terminal", hint: "Open a terminal and run grok login." },
+            signOut: false,
+          };
+        }
+        return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+      });
+      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      open();
+      expect(await screen.findByText("fixture@example.test")).toBeTruthy();
+      expect(screen.getByText(`${state.replaceAll("-", " ")} · pro`)).toBeTruthy();
+      expect(screen.queryByText("Open a terminal and run grok login.") !== null).toBe(
+        state !== "signed-in",
+      );
+    },
+  );
 
   test("reads the account when the panel opens and again after signing out", async () => {
     const accountReads = () =>
@@ -4636,6 +4835,49 @@ describe("AgentInfoButton ACP agents", () => {
       fireEvent.focus(window);
       await screen.findByRole("button", { name: "Sign out" });
       expect(mockToastDismiss).toHaveBeenCalledWith(options.id);
+    } finally {
+      window.orkestratorGateway = previousGateway;
+    }
+  });
+
+  test("the device-code toast cancels the sign-in on the provider's side", async () => {
+    const previousGateway = window.orkestratorGateway;
+    window.orkestratorGateway = { enabled: true, desktop: true };
+    const pendingSignIn = {
+      url: "https://auth.example.test/device",
+      code: "CANCEL-CODE",
+      expiresAt: Date.now() + 60_000,
+    };
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_native_agent_auth_status")
+        return { state: "signed-out", signIn: { kind: "device-code" } };
+      if (command === "begin_native_agent_sign_in") return pendingSignIn;
+      if (command === "cancel_native_agent_sign_in") return { cancelled: true };
+      return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+    });
+    try {
+      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      open();
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+      await waitFor(() =>
+        expect(
+          mockToastInfo.mock.calls.some(([message]) => message === "Device code: CANCEL-CODE"),
+        ).toBe(true),
+      );
+      const options = mockToastInfo.mock.calls.find(
+        ([message]) => message === "Device code: CANCEL-CODE",
+      )![1] as { id: string; cancel: { label: string; onClick: () => void } };
+      expect(options.cancel.label).toBe("Cancel sign-in");
+      options.cancel.onClick();
+      expect(mockToastDismiss).toHaveBeenCalledWith(options.id);
+      await waitFor(() =>
+        expect(
+          nativeInvokeMock.mock.calls.find(
+            ([command]) => command === "cancel_native_agent_sign_in",
+          )?.[1],
+        ).toMatchObject({ environmentId: ENVIRONMENT_ID, agent: "cursor" }),
+      );
     } finally {
       window.orkestratorGateway = previousGateway;
     }

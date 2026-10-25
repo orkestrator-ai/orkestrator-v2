@@ -118,21 +118,21 @@ Execute these steps in order:
 
 ## Step 3: Resolve Conflicts
 
-If there are merge conflicts:
-1. Run \`git status\` to see which files have conflicts
+Resolve any remaining conflicts, then validate the resolution, even on resume after staging or committing:
+1. Run \`git status\` to see which files have conflicts. Before staging any resolution, capture the complete original unmerged path list with git diff --name-only --diff-filter=U -z and retain it in local Git metadata, outside tracked files, for resume, tied to this merge's parent commit IDs. Keep every original conflict in scope even if its resolution exactly matches either parent, including after staging or committing.
 2. For each conflicted file:
    - Read the file to understand the conflict markers (<<<<<<<, =======, >>>>>>>)
    - Analyze both versions and determine the correct resolution
    - Edit the file to resolve the conflict, removing all conflict markers
-   - Ensure the resolved code is correct and functional
+   - Ensure the resolved file is correct and keeps both sides' intended changes
 3. After resolving all conflicts, run \`git add -A\` to stage the resolved files
-4. Validate the full merged result:
-   - Inspect all paths changed by the merge relative to the original pre-merge HEAD, including auto-merged changes and conflict resolutions
-   - On resume, recover that baseline from merge metadata or history; if the full scope cannot be established, run relevant validation
-   - Skip tests, typechecking, and builds only when every changed path is prose documentation with no test, build, or tooling consumers and repository instructions permit skipping those checks
-   - Always run repository-required checks, including applicable documentation, formatting, and link checks, and confirm no conflict markers remain
-   - If documentation conflicts accompany auto-merged code, configuration, or tests, run relevant tests, typechecking, and build validation for the merged result
-   - File role takes precedence over location or extension: source files (including .ts and .mdx under docs/), configuration, tests, and Markdown consumed by tests, builds, or tooling require relevant validation
+4. Validate the resolution:
+   - Choose validation from the repository's instructions (such as AGENTS.md or CLAUDE.md). Where they say how to validate merge-conflict resolutions or documentation-only changes, follow them, including when they say no tests are needed.
+   - Scope validation to the original conflicts and your resolution edits. Changes that merged cleanly from the target branch do not by themselves require tests, typechecking, or builds in this step unless repository instructions say so.
+   - Documentation-only conflicts: if the complete original conflict list contains only documentation or other non-code text not consumed by tests, builds, or tooling, and your resolution edits only those files, do not run tests, typechecking, lint, or builds unless repository instructions require them for this case. Confirm no conflict markers remain and run only the documentation checks the repository asks for, such as formatting.
+   - Code conflicts: if any original conflict is source, configuration, a test, or text consumed by tests, builds, or tooling, or your resolution edits such a file, run the validation repository instructions require for that change, otherwise relevant checks targeted at affected files and their dependents. Run the full suite only when impact cannot be scoped or repository instructions require it.
+   - File role takes precedence over location or extension: source files under docs/ (such as .ts or .mdx) count as code, not documentation.
+   - On resume, use the complete retained original conflict list. Once staging has begun, the remaining live unmerged paths are not a complete original list; never overwrite the retained list with them. Staged paths differing from both parents and a merge commit's combined diff cannot reconstruct that list: they can omit conflicts resolved to one parent and include clean auto-merges. If the original list is unavailable or incomplete, treat scope as unknown: do not apply the documentation-only skip; validate the merged result as repository instructions require for code changes, otherwise with relevant targeted checks, or full validation when impact cannot be scoped.
 
 ## Step 4: Complete the Merge
 

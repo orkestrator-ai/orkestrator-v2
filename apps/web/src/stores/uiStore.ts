@@ -1,7 +1,10 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { persist, createJSONStorage } from "zustand/middleware";
 import { projectFolderKey } from "@orkestrator/protocol/project-folders";
-import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import { windowStorageKey } from "@/lib/desktop-storage-key";
+import { workspaceTarget } from "@/lib/portal/portal-transport";
+import { portalStore } from "@/lib/portal/portal-store";
+import { createUIStateStorage } from "@/lib/ui-state-storage";
 
 /** Zoom level constraints */
 const ZOOM_MIN = 50;
@@ -23,8 +26,30 @@ const addRecentProject = (recentProjectIds: string[], projectId: string): string
  * The panel a project's page shows. `home` is the project home's own tabs;
  * the rest are the project board.
  */
-export type ProjectBoardTab = "home" | "coordinator" | "kanban" | "github" | "linear" | "features";
+export type ProjectBoardTab =
+  | "home"
+  | "coordinator"
+  | "kanban"
+  | "github"
+  | "linear"
+  | "features"
+  | "pull-requests";
 export type EnvironmentSortMode = "project" | "activity";
+/**
+ * How "By activity" orders environments: `priority` puts unread work, then
+ * waiting, then working before idle, newest first within each; `newest` and
+ * `oldest` order by activity time alone.
+ */
+export type ActivitySortOrder = "priority" | "newest" | "oldest";
+
+/**
+ * A project opens on its coordinator, except on a leaf node: coordination
+ * happens on the command node, so a leaf's project opens on its home.
+ */
+const initialProjectBoardTab = (): ProjectBoardTab =>
+  workspaceTarget() !== null || portalStore.getState().status?.mode === "leaf"
+    ? "home"
+    : "coordinator";
 
 interface UIState {
   // Sidebar state
@@ -41,6 +66,8 @@ interface UIState {
   sidebarWidth: number;
   /** Project IDs that are collapsed in the hierarchical sidebar */
   collapsedProjects: string[];
+  /** Projects with an explicit collapse choice; defaults may still apply to the others. */
+  projectCollapseChoices: string[];
   /**
    * Sidebar folder names that are collapsed. Keyed by name because a folder
    * has no record of its own — see `@orkestrator/protocol/project-folders`.
@@ -52,8 +79,12 @@ interface UIState {
   expandedSessionsEnvironments: string[];
   /** How environments are arranged in the sidebar. */
   environmentSortMode: EnvironmentSortMode;
+  /** Order of the "By activity" list. */
+  activitySortOrder: ActivitySortOrder;
   /** Zoom level as a percentage (50-200, default 100) */
   zoomLevel: number;
+  /** Multi Review graph height set by dragging its divider; null sizes it to the graph. */
+  multiReviewGraphHeight: number | null;
 
   // Actions
   selectProject: (projectId: string | null) => void;
@@ -65,6 +96,7 @@ interface UIState {
   /** Select both project and environment at once (for hierarchical sidebar) */
   selectProjectAndEnvironment: (projectId: string, environmentId: string) => void;
   setSidebarWidth: (width: number) => void;
+  setMultiReviewGraphHeight: (height: number | null) => void;
   /** Toggle the collapsed state of a project */
   toggleProjectCollapse: (projectId: string) => void;
   /** Set the collapsed state of a project */
@@ -82,6 +114,7 @@ interface UIState {
   /** Toggle the expanded state of sessions for an environment */
   toggleSessionsExpanded: (environmentId: string) => void;
   setEnvironmentSortMode: (mode: EnvironmentSortMode) => void;
+  setActivitySortOrder: (order: ActivitySortOrder) => void;
   /** Check if sessions are expanded for an environment */
   isSessionsExpanded: (environmentId: string) => boolean;
   /** Collapse projects that have no environments (used on initial load) */
@@ -96,155 +129,173 @@ interface UIState {
   resetZoom: () => void;
 }
 
-export const useUIStore = create<UIState>()(
-  persist(
-    (set, get) => ({
-      // Initial state
-      selectedProjectId: null,
-      projectSelectionRevision: 0,
-      selectedEnvironmentId: null,
-      sidebarOpen: true,
-      recentProjectIds: [],
-      projectBoardTab: "coordinator",
-      projectBoardNotesOpen: false,
-      sidebarWidth: 280,
-      collapsedProjects: [],
-      collapsedProjectFolders: [],
-      selectedEnvironmentIds: [],
-      expandedSessionsEnvironments: [],
-      environmentSortMode: "project",
-      zoomLevel: ZOOM_DEFAULT,
+export const createUIStore = () =>
+  create<UIState>()(
+    persist(
+      (set, get) => ({
+        // Initial state
+        selectedProjectId: null,
+        projectSelectionRevision: 0,
+        selectedEnvironmentId: null,
+        sidebarOpen: true,
+        recentProjectIds: [],
+        projectBoardTab: initialProjectBoardTab(),
+        projectBoardNotesOpen: false,
+        sidebarWidth: 280,
+        collapsedProjects: [],
+        projectCollapseChoices: [],
+        collapsedProjectFolders: [],
+        selectedEnvironmentIds: [],
+        expandedSessionsEnvironments: [],
+        environmentSortMode: "project",
+        activitySortOrder: "priority",
+        zoomLevel: ZOOM_DEFAULT,
+        multiReviewGraphHeight: null,
 
-      // Actions
-      selectProject: (projectId) =>
-        set((state) => ({
-          selectedProjectId: projectId,
-          projectSelectionRevision: state.projectSelectionRevision + 1,
-          projectBoardTab: "coordinator",
-          projectBoardNotesOpen: false,
-          selectedEnvironmentId: null,
-          selectedEnvironmentIds: [],
-          recentProjectIds: projectId
-            ? addRecentProject(state.recentProjectIds, projectId)
-            : state.recentProjectIds,
-        })),
+        // Actions
+        selectProject: (projectId) =>
+          set((state) => ({
+            selectedProjectId: projectId,
+            projectSelectionRevision: state.projectSelectionRevision + 1,
+            projectBoardTab: initialProjectBoardTab(),
+            projectBoardNotesOpen: false,
+            selectedEnvironmentId: null,
+            selectedEnvironmentIds: [],
+            recentProjectIds: projectId
+              ? addRecentProject(state.recentProjectIds, projectId)
+              : state.recentProjectIds,
+          })),
 
-      selectEnvironment: (environmentId) => set({ selectedEnvironmentId: environmentId }),
+        selectEnvironment: (environmentId) => set({ selectedEnvironmentId: environmentId }),
 
-      toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+        toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
 
-      setProjectBoardTab: (tab) => set({ projectBoardTab: tab, projectBoardNotesOpen: false }),
+        setProjectBoardTab: (tab) => set({ projectBoardTab: tab, projectBoardNotesOpen: false }),
 
-      setProjectBoardNotesOpen: (open) => set({ projectBoardNotesOpen: open }),
+        setProjectBoardNotesOpen: (open) => set({ projectBoardNotesOpen: open }),
 
-      selectProjectAndEnvironment: (projectId, environmentId) =>
-        set((state) => ({
-          selectedProjectId: projectId,
-          projectSelectionRevision: state.projectSelectionRevision + 1,
-          selectedEnvironmentId: environmentId,
-          recentProjectIds: addRecentProject(state.recentProjectIds, projectId),
-        })),
+        selectProjectAndEnvironment: (projectId, environmentId) =>
+          set((state) => ({
+            selectedProjectId: projectId,
+            projectSelectionRevision: state.projectSelectionRevision + 1,
+            selectedEnvironmentId: environmentId,
+            recentProjectIds: addRecentProject(state.recentProjectIds, projectId),
+          })),
 
-      setSidebarWidth: (width) => set({ sidebarWidth: width }),
+        setSidebarWidth: (width) => set({ sidebarWidth: width }),
 
-      toggleProjectCollapse: (projectId) =>
-        set((state) => ({
-          collapsedProjects: state.collapsedProjects.includes(projectId)
-            ? state.collapsedProjects.filter((id) => id !== projectId)
-            : [...state.collapsedProjects, projectId],
-        })),
+        setMultiReviewGraphHeight: (height) => set({ multiReviewGraphHeight: height }),
 
-      setProjectCollapsed: (projectId, collapsed) =>
-        set((state) => ({
-          collapsedProjects: collapsed
-            ? state.collapsedProjects.includes(projectId)
-              ? state.collapsedProjects
-              : [...state.collapsedProjects, projectId]
-            : state.collapsedProjects.filter((id) => id !== projectId),
-        })),
+        toggleProjectCollapse: (projectId) =>
+          set((state) => ({
+            projectCollapseChoices: Array.from(
+              new Set([...state.projectCollapseChoices, projectId]),
+            ),
+            collapsedProjects: state.collapsedProjects.includes(projectId)
+              ? state.collapsedProjects.filter((id) => id !== projectId)
+              : [...state.collapsedProjects, projectId],
+          })),
 
-      // Folder identity is the case-folded name, matching how the sidebar tree
-      // groups projects. Comparing these entries literally would leave a
-      // folder stuck collapsed after it was reached by a differently-cased
-      // spelling of its own name.
-      toggleProjectFolderCollapse: (folder) =>
-        set((state) => ({
-          collapsedProjectFolders: isFolderCollapsed(state.collapsedProjectFolders, folder)
-            ? withoutFolder(state.collapsedProjectFolders, folder)
-            : [...state.collapsedProjectFolders, folder],
-        })),
+        setProjectCollapsed: (projectId, collapsed) =>
+          set((state) => ({
+            projectCollapseChoices: Array.from(
+              new Set([...state.projectCollapseChoices, projectId]),
+            ),
+            collapsedProjects: collapsed
+              ? state.collapsedProjects.includes(projectId)
+                ? state.collapsedProjects
+                : [...state.collapsedProjects, projectId]
+              : state.collapsedProjects.filter((id) => id !== projectId),
+          })),
 
-      setProjectFolderCollapsed: (folder, collapsed) =>
-        set((state) => ({
-          collapsedProjectFolders: collapsed
-            ? isFolderCollapsed(state.collapsedProjectFolders, folder)
-              ? state.collapsedProjectFolders
-              : [...state.collapsedProjectFolders, folder]
-            : withoutFolder(state.collapsedProjectFolders, folder),
-        })),
+        // Folder identity is the case-folded name, matching how the sidebar tree
+        // groups projects. Comparing these entries literally would leave a
+        // folder stuck collapsed after it was reached by a differently-cased
+        // spelling of its own name.
+        toggleProjectFolderCollapse: (folder) =>
+          set((state) => ({
+            collapsedProjectFolders: isFolderCollapsed(state.collapsedProjectFolders, folder)
+              ? withoutFolder(state.collapsedProjectFolders, folder)
+              : [...state.collapsedProjectFolders, folder],
+          })),
 
-      toggleEnvironmentSelection: (environmentId) =>
-        set((state) => ({
-          selectedEnvironmentIds: state.selectedEnvironmentIds.includes(environmentId)
-            ? state.selectedEnvironmentIds.filter((id) => id !== environmentId)
-            : [...state.selectedEnvironmentIds, environmentId],
-        })),
+        setProjectFolderCollapsed: (folder, collapsed) =>
+          set((state) => ({
+            collapsedProjectFolders: collapsed
+              ? isFolderCollapsed(state.collapsedProjectFolders, folder)
+                ? state.collapsedProjectFolders
+                : [...state.collapsedProjectFolders, folder]
+              : withoutFolder(state.collapsedProjectFolders, folder),
+          })),
 
-      setMultiSelection: (environmentIds) => set({ selectedEnvironmentIds: environmentIds }),
+        toggleEnvironmentSelection: (environmentId) =>
+          set((state) => ({
+            selectedEnvironmentIds: state.selectedEnvironmentIds.includes(environmentId)
+              ? state.selectedEnvironmentIds.filter((id) => id !== environmentId)
+              : [...state.selectedEnvironmentIds, environmentId],
+          })),
 
-      clearMultiSelection: () => set({ selectedEnvironmentIds: [] }),
+        setMultiSelection: (environmentIds) => set({ selectedEnvironmentIds: environmentIds }),
 
-      toggleSessionsExpanded: (environmentId) =>
-        set((state) => ({
-          expandedSessionsEnvironments: state.expandedSessionsEnvironments.includes(environmentId)
-            ? state.expandedSessionsEnvironments.filter((id) => id !== environmentId)
-            : [...state.expandedSessionsEnvironments, environmentId],
-        })),
+        clearMultiSelection: () => set({ selectedEnvironmentIds: [] }),
 
-      setEnvironmentSortMode: (mode) => set({ environmentSortMode: mode }),
+        toggleSessionsExpanded: (environmentId) =>
+          set((state) => ({
+            expandedSessionsEnvironments: state.expandedSessionsEnvironments.includes(environmentId)
+              ? state.expandedSessionsEnvironments.filter((id) => id !== environmentId)
+              : [...state.expandedSessionsEnvironments, environmentId],
+          })),
 
-      isSessionsExpanded: (environmentId) =>
-        get().expandedSessionsEnvironments.includes(environmentId),
+        setEnvironmentSortMode: (mode) => set({ environmentSortMode: mode }),
 
-      collapseEmptyProjects: (projectIds, projectsWithEnvironments) =>
-        set((state) => {
-          // Find projects that have no environments and aren't already collapsed
-          const emptyProjects = projectIds.filter(
-            (id) => !projectsWithEnvironments.has(id) && !state.collapsedProjects.includes(id),
-          );
-          if (emptyProjects.length === 0) {
-            return state; // No change needed
-          }
-          return {
-            collapsedProjects: [...state.collapsedProjects, ...emptyProjects],
-          };
-        }),
+        setActivitySortOrder: (order) => set({ activitySortOrder: order }),
 
-      setZoomLevel: (level) => set({ zoomLevel: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, level)) }),
+        isSessionsExpanded: (environmentId) =>
+          get().expandedSessionsEnvironments.includes(environmentId),
 
-      zoomIn: () =>
-        set((state) => ({
-          zoomLevel: Math.min(ZOOM_MAX, state.zoomLevel + ZOOM_STEP),
-        })),
+        collapseEmptyProjects: (projectIds, projectsWithEnvironments) =>
+          set((state) => {
+            const empty = projectIds.filter(
+              (id) =>
+                !state.projectCollapseChoices.includes(id) &&
+                !state.collapsedProjects.includes(id) &&
+                !projectsWithEnvironments.has(id),
+            );
+            if (empty.length === 0) return state;
+            return { collapsedProjects: [...state.collapsedProjects, ...empty] };
+          }),
 
-      zoomOut: () =>
-        set((state) => ({
-          zoomLevel: Math.max(ZOOM_MIN, state.zoomLevel - ZOOM_STEP),
-        })),
+        setZoomLevel: (level) => set({ zoomLevel: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, level)) }),
 
-      resetZoom: () => set({ zoomLevel: ZOOM_DEFAULT }),
-    }),
-    {
-      name: desktopConnectionStorageKey("ui-storage"),
-      partialize: (state) => ({
-        sidebarWidth: state.sidebarWidth,
-        sidebarOpen: state.sidebarOpen,
-        collapsedProjects: state.collapsedProjects,
-        collapsedProjectFolders: state.collapsedProjectFolders,
-        recentProjectIds: state.recentProjectIds,
-        environmentSortMode: state.environmentSortMode,
-        zoomLevel: state.zoomLevel,
+        zoomIn: () =>
+          set((state) => ({
+            zoomLevel: Math.min(ZOOM_MAX, state.zoomLevel + ZOOM_STEP),
+          })),
+
+        zoomOut: () =>
+          set((state) => ({
+            zoomLevel: Math.max(ZOOM_MIN, state.zoomLevel - ZOOM_STEP),
+          })),
+
+        resetZoom: () => set({ zoomLevel: ZOOM_DEFAULT }),
       }),
-    },
-  ),
-);
+      {
+        name: windowStorageKey("ui-storage"),
+        storage: createJSONStorage(() => createUIStateStorage()),
+        partialize: (state) => ({
+          sidebarWidth: state.sidebarWidth,
+          sidebarOpen: state.sidebarOpen,
+          collapsedProjects: state.collapsedProjects,
+          projectCollapseChoices: state.projectCollapseChoices,
+          collapsedProjectFolders: state.collapsedProjectFolders,
+          recentProjectIds: state.recentProjectIds,
+          environmentSortMode: state.environmentSortMode,
+          activitySortOrder: state.activitySortOrder,
+          zoomLevel: state.zoomLevel,
+          multiReviewGraphHeight: state.multiReviewGraphHeight,
+        }),
+      },
+    ),
+  );
+
+export const useUIStore = createUIStore();

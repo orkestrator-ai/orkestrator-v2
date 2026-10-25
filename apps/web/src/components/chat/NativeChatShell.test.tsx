@@ -9,6 +9,7 @@ import type {
 } from "@/lib/chat/native-message-types";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import { useVirtuosoScrollState } from "@/hooks/useVirtuosoScrollState";
 import * as realVirtualizedMessageList from "./VirtualizedMessageList";
 
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
@@ -145,6 +146,11 @@ describe("NativeChatShell", () => {
       resizeCallback?.([], resizeObserver!);
     });
     expect(spacer.style.height).toBe("336px");
+  });
+
+  test("enables live arrivals on the production transcript", () => {
+    render(<NativeChatShell {...shellProps()} />);
+    expect(lastVirtualizedMessageListProps?.animateArrivals).toBe(true);
   });
 
   test("shows a desync warning while already at the bottom without another accessory", () => {
@@ -1204,6 +1210,45 @@ describe("NativeChatShell", () => {
   });
 
   describe("scroll affordance", () => {
+    test("shows the shortcut after a one-pixel follow release inside Virtuoso's bottom band", () => {
+      function FollowingShell() {
+        const { isAtBottom, scrollToBottom, scrollProps, virtuosoRef } = useVirtuosoScrollState();
+        return (
+          <>
+            <div data-testid="follow-scroller" ref={(el) => scrollProps.scrollerRef(el)} />
+            <NativeChatShell
+              {...shellProps()}
+              isAtBottom={isAtBottom}
+              scrollToBottom={scrollToBottom}
+              scrollProps={scrollProps}
+              virtuosoRef={virtuosoRef}
+            />
+          </>
+        );
+      }
+
+      render(<FollowingShell />);
+      const scroller = screen.getByTestId("follow-scroller");
+      Object.defineProperty(scroller, "scrollHeight", { value: 1000 });
+      Object.defineProperty(scroller, "clientHeight", { value: 300 });
+      scroller.scrollTop = 700;
+      fireEvent.scroll(scroller);
+      expect(
+        screen.queryByRole("button", { name: "Scroll to bottom of conversation" }) === null,
+      ).toBe(true);
+
+      fireEvent.wheel(scroller, { deltaY: -1 });
+      scroller.scrollTop = 699;
+      fireEvent.scroll(scroller);
+      expect(screen.getByRole("button", { name: "Scroll to bottom of conversation" })).toBeTruthy();
+
+      scroller.scrollTop = 700;
+      fireEvent.scroll(scroller);
+      expect(
+        screen.queryByRole("button", { name: "Scroll to bottom of conversation" }) === null,
+      ).toBe(true);
+    });
+
     test("offers a scroll-down shortcut only when scrolled away from the bottom", () => {
       const scrollToBottom = mock(() => {});
       const { rerender } = render(

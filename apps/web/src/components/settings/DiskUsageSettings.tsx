@@ -25,6 +25,7 @@ import type {
   WorktreeLocationsSnapshot,
 } from "@/lib/backend";
 import { pickHostPath } from "@/lib/host-path-picker";
+import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { cn } from "@/lib/utils";
 
 /** Environments measured at once; the backend also bounds its `du` walks. */
@@ -41,6 +42,7 @@ function LocationRow({
   value,
   placeholder,
   disabled,
+  canPick = true,
   saving,
   onPick,
   onReset,
@@ -50,6 +52,7 @@ function LocationRow({
   value: string | null;
   placeholder: string;
   disabled?: boolean;
+  canPick?: boolean;
   saving: boolean;
   onPick: () => void;
   onReset: () => void;
@@ -75,7 +78,7 @@ function LocationRow({
           size="icon"
           aria-label={`Choose ${label.toLowerCase()}`}
           onClick={onPick}
-          disabled={disabled || saving}
+          disabled={disabled || saving || !canPick}
         >
           <FolderOpen className="h-4 w-4" aria-hidden="true" />
         </Button>
@@ -97,11 +100,14 @@ function LocationRow({
 function WorktreeLocations() {
   const [locations, setLocations] = useState<WorktreeLocationsSnapshot | null>(null);
   const [saving, setSaving] = useState(false);
+  const { machine } = useAccountMachine();
+  // The folder picker browses this window's backend, not another machine.
+  const canPick = isWindowMachine(machine);
 
   useEffect(() => {
     let cancelled = false;
     backend
-      .getWorktreeLocations()
+      .getWorktreeLocations(machine)
       .then((result) => {
         if (!cancelled) setLocations(result);
       })
@@ -115,12 +121,12 @@ function WorktreeLocations() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [machine]);
 
   const save = async (next: { environments: string | null; dev: string | null }) => {
     setSaving(true);
     try {
-      setLocations(await backend.updateWorktreeLocations(next));
+      setLocations(await backend.updateWorktreeLocations(next, machine));
     } catch (error) {
       toast.error("Worktree location was not saved", {
         description: error instanceof Error ? error.message : String(error),
@@ -170,6 +176,7 @@ function WorktreeLocations() {
         value={current.environments}
         placeholder={`Default · ${locations.environments.defaultPath}`}
         disabled={!!override}
+        canPick={canPick}
         saving={saving}
         onPick={() =>
           void pick(
@@ -190,6 +197,7 @@ function WorktreeLocations() {
         disabled={locations.dev.readOnly}
         value={current.dev}
         placeholder={`Default · inside each profile in ${locations.dev.defaultPath}`}
+        canPick={canPick}
         saving={saving}
         onPick={() =>
           void pick("dev", "Choose where new dev worktrees go", locations.dev.defaultPath)
@@ -213,6 +221,7 @@ function EnvironmentUsageRow({
   onToggle: () => void;
   onMeasured: (usage: EnvironmentDiskUsage) => void;
 }) {
+  const { machine } = useAccountMachine();
   const usage = measurement?.state === "done" ? measurement.usage : undefined;
   const devCount =
     usage?.dev.profiles.reduce(
@@ -279,6 +288,7 @@ function EnvironmentUsageRow({
             environmentId={environment.environmentId}
             initial={usage}
             onMeasured={onMeasured}
+            machine={machine}
           />
         </div>
       )}
@@ -292,6 +302,7 @@ function EnvironmentUsage() {
   const [measurements, setMeasurements] = useState<Map<string, Measurement>>(new Map());
   const [expanded, setExpanded] = useState<string | null>(null);
   const generationRef = useRef(0);
+  const { machine } = useAccountMachine();
 
   const measureAll = useCallback(
     async (list: DiskUsageEnvironmentSummary[], refresh: boolean, generation: number) => {
@@ -302,7 +313,10 @@ function EnvironmentUsage() {
           const id = next.environmentId;
           let result: Measurement;
           try {
-            result = { state: "done", usage: await backend.getEnvironmentDiskUsage(id, refresh) };
+            result = {
+              state: "done",
+              usage: await backend.getEnvironmentDiskUsage(id, refresh, machine),
+            };
           } catch (error) {
             result = {
               state: "failed",
@@ -315,24 +329,33 @@ function EnvironmentUsage() {
       };
       await Promise.all(Array.from({ length: MEASURE_CONCURRENCY }, worker));
     },
-    [],
+    [machine],
   );
 
+  // Switching machine clears the previous machine's failure before it reloads;
+  // Refresh clears it itself.
+  const [loadedMachine, setLoadedMachine] = useState(machine);
+  if (loadedMachine !== machine) {
+    setLoadedMachine(machine);
+    setLoadError(null);
+  }
+
   const load = useCallback(
-    async (refresh: boolean) => {
+    (refresh: boolean) => {
       const generation = ++generationRef.current;
-      setLoadError(null);
-      try {
-        const list = await backend.listDiskUsageEnvironments();
-        if (generation !== generationRef.current) return;
-        setEnvironments(list);
-        await measureAll(list, refresh, generation);
-      } catch (error) {
-        if (generation === generationRef.current)
-          setLoadError(error instanceof Error ? error.message : String(error));
-      }
+      return backend
+        .listDiskUsageEnvironments(machine)
+        .then(async (list) => {
+          if (generation !== generationRef.current) return;
+          setEnvironments(list);
+          await measureAll(list, refresh, generation);
+        })
+        .catch((error: unknown) => {
+          if (generation === generationRef.current)
+            setLoadError(error instanceof Error ? error.message : String(error));
+        });
     },
-    [measureAll],
+    [machine, measureAll],
   );
 
   useEffect(() => {
@@ -395,7 +418,10 @@ function EnvironmentUsage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => void load(true)}
+          onClick={() => {
+            setLoadError(null);
+            void load(true);
+          }}
           disabled={environments === null || measuring}
         >
           {measuring ? (

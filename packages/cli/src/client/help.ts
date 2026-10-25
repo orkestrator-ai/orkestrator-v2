@@ -7,6 +7,7 @@ const GROUP_SUMMARIES: Record<string, string> = {
   environment: "Create, start, stop, configure, launch and delete environments.",
   agent: "Discover agents, models and controls.",
   session: "Start, prompt, control and inspect native-agent conversations.",
+  changes: "Read the file and line changes the backend measures (read-only).",
   run: "Inspect, wait for and recover individual operations.",
 };
 
@@ -68,7 +69,9 @@ export function rootHelp(tree: CommandTree): string {
   return [
     "Usage:",
     "  orkestrator [serve] [service options]     Run the backend service in the foreground",
+    "  orkestrator service install [options]     Install the backend as a background service",
     "  orkestrator <group> <command> [options]   Talk to an already-running backend",
+    "  orkestrator --fix AGENT                   Get an agent's help reporting a problem",
     "",
     "Client commands never start a backend. Select the backend explicitly with",
     "--profile NAME (an isolated dev profile) or --connection NAME, or save a",
@@ -79,6 +82,8 @@ export function rootHelp(tree: CommandTree): string {
     "",
     "Other:",
     "  serve          Run the backend service (same as passing only service options)",
+    "  --fix AGENT    Open claude, codex or opencode to diagnose an Orkestrator",
+    "                 problem and file a GitHub issue (`orkestrator --fix --help`)",
     "  help [COMMAND] Show help for a group or command",
     "  version        Print the client version",
     "",

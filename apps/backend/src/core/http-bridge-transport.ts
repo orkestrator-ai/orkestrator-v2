@@ -1,6 +1,8 @@
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
+import { isContentRevision } from "@orkestrator/protocol/session-activity-batch";
 import {
   NATIVE_AGENT_SIGN_IN_KINDS,
+  type NativeAgentNotice,
   type NativeAgentReadiness,
   type NativeAgentSignInRoute,
 } from "@orkestrator/protocol/native-agent";
@@ -137,6 +139,7 @@ export async function readProviderActivityObservation(
     asyncQuestionItemIds?: unknown;
     readyForInput?: unknown;
     completionPending?: unknown;
+    contentRevision?: unknown;
   };
   // Pi bridges before recurring-processes step 07 answer a parked approval
   // as `blocked`, which is not an activity state. Rejecting it failed the
@@ -155,6 +158,9 @@ export async function readProviderActivityObservation(
     throw new ProviderUnavailableError(
       `${connection.agent} returned malformed completion metadata`,
     );
+  }
+  if (body.contentRevision !== undefined && !isContentRevision(body.contentRevision)) {
+    throw new ProviderUnavailableError(`${connection.agent} returned a malformed content revision`);
   }
   let asyncQuestionItemIds: string[] = [];
   if (body.asyncQuestionItemIds !== undefined) {
@@ -178,6 +184,7 @@ export async function readProviderActivityObservation(
     ...(typeof body.completionPending === "boolean"
       ? { completionPending: body.completionPending }
       : {}),
+    ...(typeof body.contentRevision === "string" ? { contentRevision: body.contentRevision } : {}),
   };
 }
 
@@ -188,6 +195,29 @@ export function normalizeSignInRoute(value: unknown): NativeAgentSignInRoute | u
   if (!kind) return undefined;
   const hint = nonEmptyString(route?.hint)?.trim();
   return { kind, ...(hint ? { hint: hint.slice(0, 500) } : {}) };
+}
+
+/**
+ * A bridge's turn-time sign-in notice (`authNotice` on the Claude and Codex
+ * session reads) as the tab's `auth` notice. Read field by field, like every
+ * auth answer, so nothing beyond the state, a bounded message and an
+ * occurrence id crosses. Only the two states a turn can discover are accepted:
+ * a missing login is readiness, not a notice.
+ */
+export function normalizeProviderAuthNotice(
+  value: unknown,
+): Extract<NativeAgentNotice, { kind: "auth" }> | undefined {
+  const notice = asRecord(value);
+  if (notice?.state !== "expired" && notice?.state !== "needs-auth") return undefined;
+  const message = nonEmptyString(notice.message)?.trim();
+  if (!message) return undefined;
+  const occurrenceId = nonEmptyString(notice.occurrenceId)?.trim();
+  return {
+    kind: "auth",
+    state: notice.state,
+    message: message.slice(0, 500),
+    ...(occurrenceId ? { occurrenceId: occurrenceId.slice(0, 128) } : {}),
+  };
 }
 
 /** Validate the provider-neutral prompt-admission state at the bridge boundary. */
@@ -331,6 +361,21 @@ function bridgeRequestTimeoutMs(
   return DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS;
 }
 
+/**
+ * `fetch` for OpenCode SDK clients, which reach the OpenCode server directly
+ * rather than through {@link bridgeFetch}: one `provider-request` per HTTP
+ * request (event-stream connects and reconnects included), charged the same
+ * way. Bun's idle timeout is off, as in the SDK's own default fetch; the
+ * caller's signal and deadline still abort.
+ */
+export const openCodeSdkFetch: typeof fetch = Object.assign(
+  (input: RequestInfo | URL, init?: RequestInit) => {
+    recurringWorkMetrics.work("provider-request");
+    return fetch(input, { ...init, timeout: false });
+  },
+  { preconnect: fetch.preconnect },
+);
+
 export async function bridgeFetch(
   connection: BridgeConnection,
   path: string,
@@ -366,6 +411,44 @@ export async function bridgeFetch(
   }
 }
 
+/**
+ * Open a bridge's long-lived event stream. Unlike {@link bridgeFetch} there is
+ * no whole-request deadline, only one until the response headers arrive: the
+ * body stays open for the life of the subscription. Bun's idle timeout is off
+ * for the same reason; the caller's signal still aborts it.
+ */
+export async function bridgeEventStreamFetch(
+  connection: BridgeConnection,
+  path: string,
+  signal: AbortSignal,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Response> {
+  const headers = authHeaders(connection);
+  headers.delete("Content-Type");
+  headers.delete("Accept-Encoding");
+  headers.set("Accept", "text/event-stream");
+  const connect = new AbortController();
+  const timer = setTimeout(
+    () => connect.abort(new Error("bridge event stream connect timed out")),
+    bridgeRequestTimeoutMs(connection),
+  );
+  (timer as { unref?: () => void }).unref?.();
+  const onAbort = () => connect.abort(signal.reason);
+  if (signal.aborted) onAbort();
+  else signal.addEventListener("abort", onAbort, { once: true });
+  recurringWorkMetrics.work("provider-request");
+  try {
+    return await fetchImpl(`${connection.baseUrl}${path}`, {
+      headers,
+      signal: connect.signal,
+      // Bun extension: no idle timeout on a stream that is quiet by design.
+      timeout: false,
+    } as RequestInit);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function assertOk(response: Response, operation: string): void {
   if (!response.ok) {
     if (isTransientHttpStatus(response.status)) {
@@ -377,14 +460,32 @@ export function assertOk(response: Response, operation: string): void {
   }
 }
 
+/** A bridge's `error` text on a failed response, flattened and bounded; "" when absent. */
+export async function bridgeErrorDetail(response: Response, operation: string): Promise<string> {
+  const payload = await boundedJson(response, operation).catch(() => null);
+  const rawDetail = nonEmptyString(asRecord(payload)?.error)?.trim();
+  return rawDetail ? rawDetail.replace(/[\r\n\t]+/g, " ").slice(0, 500) : "";
+}
+
+/** Preserve a retryable dispatch refusal's reason without trusting its response body. */
+export async function promptDispatchUnavailableError(
+  agent: ProviderAgent,
+  response: Response,
+): Promise<ProviderUnavailableError> {
+  const detail = await bridgeErrorDetail(response, "prompt dispatch");
+  return new ProviderUnavailableError(
+    `${agent} prompt dispatch is temporarily unavailable (HTTP ${response.status})${
+      detail ? `: ${detail}` : ""
+    }`,
+  );
+}
+
 export async function assertOkWithErrorDetail(
   response: Response,
   operation: string,
 ): Promise<void> {
   if (response.ok) return;
-  const payload = await boundedJson(response, operation).catch(() => null);
-  const rawDetail = nonEmptyString(asRecord(payload)?.error);
-  const detail = rawDetail ? rawDetail.replace(/[\r\n\t]+/g, " ").slice(0, 500) : "";
+  const detail = await bridgeErrorDetail(response, operation);
   const message = `${operation} ${
     isTransientHttpStatus(response.status) ? "is temporarily unavailable" : "failed"
   } (HTTP ${response.status})${detail ? `: ${detail}` : ""}`;

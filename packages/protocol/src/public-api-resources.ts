@@ -8,7 +8,14 @@
  * is derived from the environment and tab, never from the provider's own ID.
  */
 import type { AgentPlatform } from "./agent-platforms.js";
-import type { PublicCompletionSupport, PublicInteractionRef } from "./public-api.js";
+import type { ChangeFileRow, ChangeHistoryEntry, ChangeProjection } from "./change-resources.js";
+import type {
+  PublicActionName,
+  PublicCompletionSupport,
+  PublicErrorCode,
+  PublicInteractionRef,
+  PublicOperationState,
+} from "./public-api.js";
 
 // ---------------------------------------------------------------------------
 // Session handles
@@ -206,6 +213,50 @@ export interface PublicSessionSummary {
 }
 
 // ---------------------------------------------------------------------------
+// Slash commands
+
+/**
+ * One row of a session's slash-command catalogue. The descriptor ID and
+ * binding revision are opaque selection keys; the provider's private binding
+ * (skill paths, template files, provider command names) is never exposed.
+ */
+export interface PublicSessionCommand {
+  id: string;
+  name: string;
+  aliases: string[];
+  description: string | null;
+  argumentHint: string | null;
+  source: string;
+  /** Changes when what the command runs changes; pass it back to refuse a changed command. */
+  bindingRevision: string | null;
+  available: boolean;
+  unavailableReason: string | null;
+  /** `optional` when the provider states no policy. */
+  arguments: "none" | "optional" | "required";
+  /** `idle`: refused while the agent is busy. */
+  busy: "queue" | "idle" | "running" | null;
+}
+
+export interface PublicSessionCommandList {
+  sessionId: string;
+  agent: AgentPlatform;
+  /**
+   * `ready`/`stale`/`loading`/`unavailable`/`unsupported` as the backend's
+   * catalogue reports it; `unknown` when the session has not been read yet
+   * (use `refresh`).
+   */
+  catalogue: {
+    status: string;
+    revision: number | null;
+    fetchedAt: string | null;
+    error: string | null;
+  };
+  commands: PublicSessionCommand[];
+  /** Present when `refresh` was requested: what the refresh did. */
+  refresh?: { outcome: string; message?: string };
+}
+
+// ---------------------------------------------------------------------------
 // Agent options
 
 export type PublicCatalogueState = "ready" | "empty" | "stale" | "unavailable";
@@ -314,6 +365,55 @@ export interface PublicTranscriptPage {
   token: string | null;
   historyEpoch: string | null;
   freshness: "current" | "cached" | "empty";
+}
+
+// ---------------------------------------------------------------------------
+// Change tracking
+
+/**
+ * Scopes `changes.view` can read. `environment` is the environment's baseline
+ * to its current workspace (`environment-net`).
+ */
+export const PUBLIC_CHANGE_SCOPES = Object.freeze(["environment"] as const);
+export type PublicChangeScope = (typeof PUBLIC_CHANGE_SCOPES)[number];
+
+/** One page of a projection's file rows, pinned to the projection's revision. */
+export interface PublicChangeFilePage {
+  rows: ChangeFileRow[];
+  /** Pass back as `cursor` for the next page; null on the last page. */
+  nextCursor: string | null;
+  /** Null when the backend does not know the total. */
+  totalRows: number | null;
+}
+
+/**
+ * `changes.view`: the backend's own {@link ChangeProjection} — the one every
+ * desktop and web client renders — verbatim, plus the requested page of file
+ * rows. On the first page `files` repeats `projection.filePage`. Clients never
+ * count lines, sum pages or read a missing count as zero.
+ */
+export interface PublicChangesView {
+  environmentId: string;
+  scope: PublicChangeScope;
+  projection: ChangeProjection;
+  files: PublicChangeFilePage;
+}
+
+/**
+ * A history entry as the backend reports it, with the projection of every
+ * resource its presentation names (keyed by resource key, without file rows).
+ * A resource the backend cannot project is absent, never zero.
+ */
+export interface PublicChangesHistoryEntry extends ChangeHistoryEntry {
+  projections: Record<string, ChangeProjection>;
+}
+
+/** `changes.history`: one page of a session's turns, oldest first. */
+export interface PublicChangesHistory {
+  sessionId: string;
+  entries: PublicChangesHistoryEntry[];
+  /** Pass back as `cursor` for the next (newer) page; null on the last page. */
+  nextCursor: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -525,4 +625,74 @@ export interface PublicExecOutputWindow {
   totalBytes: number;
   truncatedHead: boolean;
   complete: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Attention
+
+/** One thing that needs a person: a pending interaction, a settled run, a finished setup. */
+export type PublicAttentionItem =
+  | {
+      kind: "interaction";
+      at: string;
+      sessionId: string;
+      environmentId: string;
+      environmentName: string;
+      agent: string;
+      interactionId: string;
+      interactionKind: string;
+      revision: number;
+      blocking: boolean;
+      /** Bounded; the body is read with `session.interactions`. */
+      title: string;
+    }
+  | {
+      kind: "run";
+      at: string;
+      operationId: string;
+      action: PublicActionName;
+      state: PublicOperationState;
+      sessionId: string | null;
+      environmentId: string | null;
+      errorCode: PublicErrorCode | null;
+    }
+  | {
+      kind: "setup";
+      at: string;
+      environmentId: string;
+      environmentName: string;
+      phase: "ready" | "failed";
+    };
+
+export interface PublicAttentionPage {
+  /** Blocking interactions first, then newest first. */
+  items: PublicAttentionItem[];
+  /** Items left out by `limit`. */
+  more: number;
+  counts: { interactions: number; runs: number; setups: number };
+  /** Pass back to see only what changed since this read. */
+  cursor: string;
+}
+
+// ---------------------------------------------------------------------------
+// Tickets
+
+export interface PublicTicketSummary {
+  id: string;
+  projectId: string;
+  title: string;
+  status: string;
+  order: number;
+  createdAt: string;
+  commentCount: number;
+  imageCount: number;
+  environmentId: string | null;
+  pr: { url: string | null; state: string | null };
+}
+
+export interface PublicTicketDetail extends PublicTicketSummary {
+  description: string;
+  acceptanceCriteria: string;
+  /** The latest 50. */
+  comments: Array<{ id: string; text: string; createdAt: string }>;
 }

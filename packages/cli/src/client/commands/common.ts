@@ -1,10 +1,14 @@
 import {
   PUBLIC_API_LIMITS,
   type PublicActionName,
-  type PublicExecutionState,
   type PublicReceipt,
 } from "@orkestrator/protocol/public-api";
 import type { PublicEnvironmentSummary } from "@orkestrator/protocol/public-api-resources";
+import {
+  classifyReceiptForWait,
+  isTerminalPublicReceipt,
+  terminalReceiptErrorCode,
+} from "@orkestrator/protocol/public-api-wait";
 import { CliError } from "../errors.js";
 import type { ClientSession } from "../session.js";
 import type { CommandContext, OptionSpec } from "../spec.js";
@@ -85,18 +89,115 @@ export async function submit<T>(
   return { session, ...outcome };
 }
 
+/**
+ * Submit a mutation whose operation the caller will then wait for. A lost
+ * response (`transport-uncertain`) does not end the wait: the request key was
+ * saved before sending, so the operation is found by that key (as `run get
+ * --request-id` would) and the caller observes it from there. Admission can
+ * outlast the client's request timeout (a provider server starting under
+ * load), so lookups repeat within `timeoutMs`; if the key never appears, the
+ * original error stands. Nothing is ever resubmitted.
+ */
+export async function submitForWait<T>(
+  context: CommandContext,
+  action: PublicActionName,
+  input: Record<string, unknown>,
+  options: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<{
+  session: ClientSession;
+  result?: T;
+  receipt?: PublicReceipt;
+  warnings?: string[];
+  deadline?: number;
+}> {
+  const deadline = Date.now() + timeoutMs;
+  const session = await context.session();
+  try {
+    return {
+      session,
+      ...(await session.mutate<T>(action, input, stringOption(options, "request-id"))),
+    };
+  } catch (error) {
+    const requestId = error instanceof CliError ? error.details?.requestId : undefined;
+    const namespace = error instanceof CliError ? error.details?.namespace : undefined;
+    if (
+      !(error instanceof CliError) ||
+      error.code !== "transport-uncertain" ||
+      typeof requestId !== "string" ||
+      typeof namespace !== "string"
+    )
+      throw error;
+    let receipt: PublicReceipt;
+    try {
+      receipt = await observe<PublicReceipt>(
+        async () => {
+          if (Date.now() >= deadline) throw new ObservationStopped("deadline");
+          try {
+            const found = await session.readWithReceipt(
+              "run.get",
+              {
+                requestId,
+                action,
+                namespace,
+                submittedInput: input,
+              },
+              Math.max(1, deadline - Date.now()),
+            );
+            return found.receipt ? { done: true, value: found.receipt } : { done: false };
+          } catch (lookup) {
+            // Not admitted yet, or the backend is too busy to answer a read.
+            if (
+              lookup instanceof CliError &&
+              (lookup.code === "not-found" || lookup.code === "connection-failed")
+            )
+              return { done: false };
+            throw lookup;
+          }
+        },
+        { timeoutMs: Math.max(0, deadline - Date.now()), signal: context.signal },
+      );
+    } catch (lookup) {
+      const stopped = context.signal?.aborted
+        ? new ObservationStopped("signal", signalName(context.signal))
+        : lookup;
+      if (stopped instanceof ObservationStopped && stopped.reason === "deadline") throw error;
+      const failure =
+        stopped instanceof ObservationStopped
+          ? stoppedError(stopped, action, undefined, "admission")
+          : stopped;
+      if (failure instanceof CliError) {
+        throw new CliError(failure.code, failure.message, {
+          action,
+          receipt: failure.receipt,
+          retryable: failure.retryable,
+          details: { ...error.details, ...failure.details },
+        });
+      }
+      throw failure;
+    }
+    return {
+      session,
+      receipt,
+      deadline,
+      warnings: [`The ${action} response was lost; found the operation by its request key`],
+    };
+  }
+}
+
 /** Read `run.get` for one operation; returns its receipt. */
 export async function readOperation(
   session: ClientSession,
   operationId: string,
+  timeoutMs?: number,
 ): Promise<PublicReceipt> {
-  const { receipt } = await session.readWithReceipt("run.get", { operationId });
+  const { receipt } = await session.readWithReceipt("run.get", { operationId }, timeoutMs);
   if (!receipt) throw new CliError("response-invalid", "run.get returned no receipt");
   return receipt;
 }
 
 export function isTerminalReceipt(receipt: PublicReceipt): boolean {
-  return !["admitted", "running", "unknown"].includes(receipt.state);
+  return isTerminalPublicReceipt(receipt);
 }
 
 function stoppedError(
@@ -128,20 +229,17 @@ function stoppedError(
 
 /** Map a terminal receipt to success or a structured failure. */
 export function receiptFailure(receipt: PublicReceipt): CliError | undefined {
-  if (receipt.state === "succeeded") return undefined;
+  const code = terminalReceiptErrorCode(receipt);
+  if (!code) return undefined;
   const message = receipt.error?.message ?? `Operation ended ${receipt.state}`;
-  const code =
-    receipt.state === "partial"
-      ? "partial-failure"
-      : receipt.state === "cancelled"
-        ? "run-cancelled"
-        : receipt.state === "interrupted"
-          ? "run-interrupted"
-          : receipt.state === "unknown"
-            ? "run-unknown"
-            : (receipt.error?.code ?? "operation-failed");
   return new CliError(code, message, { receipt, action: receipt.action });
 }
+
+/** CLI wording for the early stops whose fix is a CLI command. */
+const CLI_STOP_MESSAGES: Partial<Record<string, string>> = {
+  "dispatch-unknown":
+    "The provider may or may not have received the prompt; use `run retry` (same key) or `run discard`",
+};
 
 /**
  * Observe an operation until it is terminal. Interaction-required and
@@ -156,48 +254,37 @@ export async function waitForOperation(
   options: { continueOnInteraction?: boolean } = {},
 ): Promise<PublicReceipt> {
   let latest = initial;
+  const deadline = Date.now() + timeoutMs;
   try {
     return await observe<PublicReceipt>(
       async () => {
-        latest = await readOperation(session, initial.operationId);
-        if (isTerminalReceipt(latest)) return { done: true as const, value: latest };
-        const execution: PublicExecutionState | undefined = latest.execution;
-        if (execution?.state === "waiting-for-input" && !options.continueOnInteraction) {
-          throw new CliError(
-            "interaction-required",
-            "The run is waiting for an answer to a pending interaction",
-            {
-              receipt: latest,
-              action: latest.action,
-              details: { interactions: execution.interactions ?? [] },
-            },
+        if (Date.now() >= deadline) throw new ObservationStopped("deadline");
+        try {
+          latest = await readOperation(
+            session,
+            initial.operationId,
+            Math.max(1, deadline - Date.now()),
           );
+        } catch (error) {
+          if (context.signal?.aborted)
+            throw new ObservationStopped("signal", signalName(context.signal));
+          if (
+            Date.now() >= deadline &&
+            error instanceof CliError &&
+            error.code === "connection-failed"
+          )
+            throw new ObservationStopped("deadline");
+          throw error;
         }
-        if (latest.state === "unknown" && latest.dispatch?.state === "unknown") {
-          throw new CliError(
-            "dispatch-unknown",
-            "The provider may or may not have received the prompt; use `run retry` (same key) or `run discard`",
-            { receipt: latest, action: latest.action, retryable: true },
-          );
-        }
-        if (latest.state === "unknown") {
-          // The backend concluded it cannot prove the outcome; waiting longer
-          // would not change that.
-          throw new CliError(
-            "run-unknown",
-            latest.error?.message ?? "The outcome of this run is not known",
-            {
-              receipt: latest,
-              action: latest.action,
-            },
-          );
-        }
-        if (execution?.state === "unsupported") {
-          throw new CliError(
-            "capability-unavailable",
-            execution.reason ?? "Completion of this run cannot be observed for its provider",
-            { receipt: latest, action: latest.action },
-          );
+        const verdict = classifyReceiptForWait(latest, options);
+        if (verdict.kind === "terminal") return { done: true as const, value: latest };
+        if (verdict.kind === "stopped") {
+          throw new CliError(verdict.code, CLI_STOP_MESSAGES[verdict.code] ?? verdict.message, {
+            receipt: latest,
+            action: latest.action,
+            ...(verdict.retryable ? { retryable: true } : {}),
+            ...(verdict.interactions ? { details: { interactions: verdict.interactions } } : {}),
+          });
         }
         return { done: false };
       },

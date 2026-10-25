@@ -15,6 +15,8 @@ import {
 } from "../src/core/container-git-fetch.js";
 import { PrMonitorService, type PrMonitorTarget } from "../src/core/pr-monitor.js";
 import { ClaudeStatePollManager } from "../src/core/tmux-poll.js";
+import type { WorktreeSignalReason } from "../src/core/agent-tools.js";
+import { ContainerWorktreeSignals } from "../src/core/container-worktree-signal.js";
 import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
 import { ManualTime } from "../src/core/recurring-test-support.js";
 import {
@@ -83,6 +85,12 @@ export const PHYSICAL_COST = {
    * the config write that rings once (1). Once per poll lineage.
    */
   claudeStateSignalInstallDockerExecs: 4,
+  /**
+   * Arming the worktree watcher (`container-worktree-signal-install.ts`): the
+   * same host alias (2) and service-port (1) preparation, then the
+   * `orkestrator-worktree-signal start` exec (1). Once per tracking lineage.
+   */
+  worktreeSignalInstallDockerExecs: 4,
 } as const;
 
 export interface BaselineScenario {
@@ -99,6 +107,12 @@ export interface BaselineScenario {
   untrackedFilesPerEnvironment: number;
   /** Container images implement `claude-state-signal`, so state polls arm the doorbell. */
   claudeStateSignal?: boolean;
+  /**
+   * Container images implement `container-worktree-signal`: each tracked
+   * container arms a watcher whose probe ring confirms it, and an idle
+   * workspace never rings again.
+   */
+  worktreeSignal?: boolean;
 }
 
 export const DEFAULT_SCENARIOS: readonly BaselineScenario[] = [
@@ -120,6 +134,13 @@ export const DEFAULT_SCENARIOS: readonly BaselineScenario[] = [
   // Added with the Claude state signal: the 50-container scenario on images
   // that ring on change, so state reads drop to the safety read.
   { ...scenario("env50-container-c1-pr-signal", 50, 0, 1, "mixed", 0), claudeStateSignal: true },
+  // Added with the container worktree signal: the same scenario with both
+  // signals, so diff scans, list reads and tree walks drop to the safety scan.
+  {
+    ...scenario("env50-container-c1-pr-signals", 50, 0, 1, "mixed", 0),
+    claudeStateSignal: true,
+    worktreeSignal: true,
+  },
 ];
 
 function scenario(
@@ -239,11 +260,10 @@ export const BASELINE_LIMITATIONS = [
   "Physical units per seam call come from PHYSICAL_COST, read from the production scanners at this commit; the real scanners are not executed.",
   "Driven owners: the worktree snapshot owner (diff statistics, Files-panel file-list and tree reads; watched local / polled container) behind the git-docker-scan admission pool, local git fetch scheduling, the container fetch policy (step 04; fetches share the admission pool), PR monitoring with check rollups, and Claude terminal-state polls (one per running container).",
   "Native activity sweep, launch/queue scans, mail, coordinator repair, retention and tab cleanup are modelled from nominal cadence only in the per-scenario blocks; their provider reads and storage costs need a live isolated profile.",
-  "The workflows block (step 08) drives the real feature-planning, build-pipeline and looped-review supervisors over a real temporary store with many completed and a few active records whose fake provider turns stay running, in rollback (whole-store tick) and keyed modes. Storage counts calls, not bytes: storageReads counts every whole-store, owner or row read whether SQLite or the connection's revision-validated row cache served it (a whole-store read parses every retained row either way), and storageStats counts revision checks that reused already-decoded records (the build-pipeline control cache). Multi Review is not driven.",
+  "The workflows block (step 08) drives the real feature-planning, build-pipeline, looped-review and multi-review supervisors over a real temporary store with many completed and a few active records whose fake provider turns stay running, in rollback (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK: the whole-store tick, or for multi review the adaptive WorkflowDueScheduler) and keyed modes, on one manual clock. Storage counts calls, not bytes: storageReads counts every whole-store, owner or row read whether SQLite or the connection's revision-validated row cache served it (a whole-store read parses every retained row either way), including uncached row access such as build-pipeline transcript manifests, and storageStats counts revision checks that reused already-decoded records (the build-pipeline control cache).",
   "The nativeObservation block (step 07) drives the real native activity sweep and native queue scan with fake providers counted at the provider boundary, over one 10-environment fixture, in rollback and shared modes; bridge-side cost per read and mail, coordinator and workflow consumers are not driven.",
-  "Multi review uses an adaptive due scheduler by default (reconcile every 15 s plus per-workflow due passes); it is not modelled because idle cost depends on active workflows.",
   "Local and container environments use a branch baseline (`main`), so every scan consults its fetch owner; environments created from an immutable commit skip that path. The modelled remote is idle: container fetches succeed and never move `origin/main`, so no fetch-triggered rescan occurs.",
-  "No watcher change events occur in the idle window; burst edits, long reads, outages and approval/completion freshness need the live isolated profile (docs/todo/recurring-work-qualification.md).",
+  "No watcher change events occur in the idle window; burst edits, long reads, outages and approval/completion freshness need the live isolated profile (docs/todo/transcripts-and-observation/0048-recurring-work-qualification.md).",
   "Clients model the Files panel open on environment 0 with both the file list and file tree refreshing every 5 s; other renderer polling (native session views, meters) is not driven.",
 ];
 
@@ -368,9 +388,43 @@ export async function runScenario(
     return [];
   };
 
+  // Worktree doorbells; the fake install rings `ready`, as the real watcher
+  // does once its watches are established.
+  const worktreeRings = new Map<string, (reason: WorktreeSignalReason) => void>();
+  const worktreeSignals = input.worktreeSignal
+    ? new ContainerWorktreeSignals({
+        installer: {
+          support: async () => "supported",
+          install: async (_containerId, credential) => {
+            metrics.work("docker-exec", PHYSICAL_COST.worktreeSignalInstallDockerExecs);
+            worktreeRings.get(credential.token)?.("ready");
+          },
+        },
+        context: () =>
+          ({
+            storage: {},
+            agentTools: {
+              issueWorktreeSignal: (ring: (reason: WorktreeSignalReason) => void) => {
+                const token = `worktree-signal-${worktreeRings.size}`;
+                worktreeRings.set(token, ring);
+                return {
+                  url: "http://agent-tools.invalid/worktree-signal",
+                  token,
+                  revoke: () => worktreeRings.delete(token),
+                };
+              },
+            },
+          }) as never,
+        nowMs: time.now,
+        delay: (callback, delayMs) => time.setTimeout(callback, delayMs),
+        cancelDelay: (timer) => time.clear(timer),
+      })
+    : null;
+
   diffStats = new DiffStatsService({
     metrics,
     admission,
+    ...(worktreeSignals ? { startContainerWatcher: (watch) => worktreeSignals.start(watch) } : {}),
     remoteFreshness: (target) =>
       target.containerId
         ? containerFetches.freshness(target.containerId, target.comparisonRef)

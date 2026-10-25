@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
+import * as sortable from "@dnd-kit/sortable";
 import { AgentModelPicker } from "./AgentModelPicker";
 import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
 
@@ -700,13 +701,85 @@ describe("AgentModelPicker", () => {
     fireEvent.click(screen.getByText("Model 2"));
     expect(onModelChange).toHaveBeenCalledWith("model-2");
 
-    fireEvent.pointerDown(trigger);
+    // The picker stays open between choices, so each column is reachable
+    // without reopening the menu.
     fireEvent.click(screen.getByText("Low"));
     expect(onReasoningChange).toHaveBeenCalledWith("low");
 
-    fireEvent.pointerDown(trigger);
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Fast/ }));
     expect(onFastModeChange).toHaveBeenCalledWith(true);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  test("keeps the desktop picker open after model, reasoning, and speed choices", async () => {
+    setMobileViewport(false);
+    const { onModelChange, onReasoningChange, onFastModeChange } = renderPicker({
+      fastModeEnabled: false,
+    });
+    const trigger = openPicker();
+    showPlatformCatalog("codex");
+    const isOpen = () => document.querySelector("[data-native-model-picker]") !== null;
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Model 3/ }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onModelChange).toHaveBeenCalledWith("model-3");
+    expect(isOpen()).toBe(true);
+
+    fireEvent.click(screen.getByText("Low"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onReasoningChange).toHaveBeenCalledWith("low");
+    expect(isOpen()).toBe(true);
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Fast/ }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onFastModeChange).toHaveBeenCalledWith(true);
+    expect(isOpen()).toBe(true);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+
+    // Dismissing the picker still closes it.
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(isOpen()).toBe(false));
+  });
+
+  test("keeps the picker open after choosing a favourite model", async () => {
+    setMobileViewport(false);
+    const { onModelChange } = renderPicker({
+      favorites: [
+        { platform: "codex", modelId: "model-1" },
+        { platform: "codex", modelId: "model-2" },
+      ],
+      onReorderFavorites: mock(() => {}),
+    });
+    openPicker();
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Model 2/ }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(onModelChange).toHaveBeenCalledWith("model-2");
+    expect(document.querySelector("[data-native-model-picker]") !== null).toBe(true);
+  });
+
+  test("keeps the mobile drill-in open after a reasoning choice", async () => {
+    setMobileViewport(true);
+    const { onReasoningChange } = renderPicker();
+    openPicker();
+    fireEvent.click(getMobileTrigger("reasoning"));
+
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Low/ }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(onReasoningChange).toHaveBeenCalledWith("low");
+    expect(screen.getByRole("group", { name: "Reasoning choices" })).toBeTruthy();
   });
 
   test("selects the settings inherit row", () => {
@@ -1050,7 +1123,6 @@ describe("AgentModelPicker", () => {
     );
     fireEvent.click(inherit);
     expect(onFastModeInherit).toHaveBeenCalledTimes(1);
-    fireEvent.pointerDown(trigger);
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Fast/ }));
     expect(onFastModeChange).toHaveBeenCalledWith(true);
   });
@@ -1788,10 +1860,10 @@ describe("AgentModelPicker", () => {
     expect(screen.getByRole("menuitemradio", { name: /Model 1/ })).toBeTruthy();
   });
 
-  test("persists the new order after a desktop pointer drag", async () => {
+  test("reorders favorites without selecting a model on pointer release", async () => {
     setMobileViewport(false);
     const onReorderFavorites = mock(() => {});
-    renderPicker({
+    const { onModelChange } = renderPicker({
       models: models.slice(0, 2),
       enabledPlatforms: ["codex"],
       selectedPlatform: "codex",
@@ -1804,6 +1876,7 @@ describe("AgentModelPicker", () => {
     openPicker();
 
     await dragFavoriteRow("codex:model-1", "codex:model-2");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Model 2/ }));
 
     await waitFor(() =>
       expect(onReorderFavorites).toHaveBeenCalledWith([
@@ -1811,6 +1884,38 @@ describe("AgentModelPicker", () => {
         { platform: "codex", modelId: "model-1" },
       ]),
     );
+    expect(onModelChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeTruthy();
+  });
+
+  test("favorite rows omit non-unit drag scales from their rendered transform", () => {
+    const useSortable = sortable.useSortable;
+    const sortableSpy = spyOn(sortable, "useSortable").mockImplementation((options) => ({
+      ...useSortable(options),
+      transform: { x: 12, y: 56, scaleX: 0.75, scaleY: 1.5 },
+    }));
+    try {
+      setMobileViewport(false);
+      renderPicker({
+        models: models.slice(0, 2),
+        selectedPlatform: "codex",
+        favorites: [
+          { platform: "codex", modelId: "model-1" },
+          { platform: "codex", modelId: "model-2" },
+        ],
+        onReorderFavorites: () => {},
+      });
+      openPicker();
+
+      const rows = document.querySelectorAll<HTMLElement>("[data-favorite-sortable]");
+      expect(rows.length).toBe(2);
+      for (const row of rows) {
+        expect(row.style.transform).toBe("translate3d(12px, 56px, 0)");
+      }
+    } finally {
+      cleanup();
+      sortableSpy.mockRestore();
+    }
   });
 
   test("supports keyboard drag activation and movement for favorite rows", async () => {
@@ -1846,10 +1951,10 @@ describe("AgentModelPicker", () => {
     expect(onReorderFavorites).not.toHaveBeenCalled();
   });
 
-  test("persists the new order after a mobile long press", async () => {
+  test("reorders favorites without selecting a model after a mobile long press", async () => {
     setMobileViewport(true);
     const onReorderFavorites = mock(() => {});
-    renderPicker({
+    const { onModelChange } = renderPicker({
       models: models.slice(0, 2),
       enabledPlatforms: ["codex"],
       selectedPlatform: "codex",
@@ -1891,6 +1996,7 @@ describe("AgentModelPicker", () => {
       isPrimary: true,
       pointerId: 2,
     });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Model 2/ }));
 
     await waitFor(() =>
       expect(onReorderFavorites).toHaveBeenCalledWith([
@@ -1898,6 +2004,8 @@ describe("AgentModelPicker", () => {
         { platform: "codex", modelId: "model-1" },
       ]),
     );
+    expect(onModelChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeTruthy();
   });
 
   test("uses a long-press drag on mobile favourite rows", () => {

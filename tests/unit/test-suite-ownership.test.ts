@@ -17,16 +17,36 @@ function git(...args: string[]): string {
   return result.stdout;
 }
 
-function repositoryTestFiles(): string[] {
-  return git("ls-files", "-co", "--exclude-standard")
-    .split("\n")
-    .filter((file) => TEST_FILE.test(file));
-}
+let allRepositoryFiles: string[] | undefined;
 
-function repositoryFiles(prefix: string): string[] {
-  return git("ls-files", "-co", "--exclude-standard", "--", prefix)
+/**
+ * Every tracked and untracked, non-ignored path, listed once per file run.
+ *
+ * Each `git ls-files -o` walks the whole working tree, so asking Git once per
+ * selector made ownership cost dozens of tree walks and pushed it past the
+ * test deadline under aggregate load.
+ */
+function listRepositoryFiles(): string[] {
+  allRepositoryFiles ??= git("ls-files", "-co", "--exclude-standard")
     .split("\n")
     .filter((file) => file.length > 0);
+  return allRepositoryFiles;
+}
+
+function repositoryTestFiles(): string[] {
+  return listRepositoryFiles().filter((file) => TEST_FILE.test(file));
+}
+
+/** Paths equal to `prefix` or beneath it, as a literal `git ls-files -- prefix` lists them. */
+function repositoryFiles(prefix: string): string[] {
+  // Git expands wildcard pathspecs; keep its semantics rather than reimplement them.
+  if (/[*?[]/.test(prefix)) {
+    return git("ls-files", "-co", "--exclude-standard", "--", prefix)
+      .split("\n")
+      .filter((file) => file.length > 0);
+  }
+  const directory = `${prefix.replace(/\/+$/, "")}/`;
+  return listRepositoryFiles().filter((file) => file === prefix || file.startsWith(directory));
 }
 
 /** Bun test flags whose value is a separate token rather than `--flag=value`. */
@@ -108,7 +128,17 @@ function filteredPackages(): string[] {
     .map((argument) => argument.slice("--filter=".length));
 }
 
-function buildOwnership() {
+type Ownership = { root: string[]; workspace: string[]; bridges: string[] };
+
+let ownership: Ownership | undefined;
+
+/** Ownership is a pure function of the checkout, so every test shares one derivation. */
+function buildOwnership(): Ownership {
+  ownership ??= deriveOwnership();
+  return ownership;
+}
+
+function deriveOwnership(): Ownership {
   const directories = workspaceDirectories();
 
   const rootOwned = ownedPaths(".", groupArgs("root and agent-support tests").join(" "));
@@ -138,7 +168,7 @@ function buildOwnership() {
   return { root: rootOwned, workspace: workspaceOwned, bridges: bridgeOwned };
 }
 
-function defaultOwners(owned: ReturnType<typeof buildOwnership>, file: string): string[] {
+function defaultOwners(owned: Ownership, file: string): string[] {
   const owners: string[] = [];
   if (selects(owned.root, file)) owners.push("root");
   if (selects(owned.workspace, file)) owners.push("workspace");

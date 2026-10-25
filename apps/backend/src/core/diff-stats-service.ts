@@ -17,7 +17,11 @@ import {
   type WorktreeSnapshotRevisionsSnapshot,
   type WorktreeSnapshotState,
 } from "@orkestrator/protocol/worktree-snapshots";
-import { startWorktreeWatcher, type WorktreeWatcher } from "./worktree-watcher.js";
+import {
+  startWorktreeWatcher,
+  type WorktreeChangeHint,
+  type WorktreeWatcher,
+} from "./worktree-watcher.js";
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
   responseDigest,
@@ -59,8 +63,12 @@ import type { WorkAdmissionPool } from "./work-admission.js";
  *    watcher can miss events under load and going quiet is worse than a wasted
  *    scan.
  *  - **Container environments** cannot be watched from the host without paying
- *    the same `docker exec` a scan costs, so they keep an interval - but one
- *    interval for the whole application rather than one per client.
+ *    the same `docker exec` a scan costs. On an image with the worktree
+ *    signal (`container-worktree-signal.ts`) a watcher inside the container
+ *    rings instead, and `startContainerWatcher` turns the rings into the same
+ *    hints a local watcher sends, with a one-minute safety scan. Without it
+ *    they keep an interval - but one interval for the whole application
+ *    rather than one per client.
  *
  * ## One read owner per scan identity
  *
@@ -93,7 +101,8 @@ import type { WorkAdmissionPool } from "./work-admission.js";
  *
  * ## Container trees
  *
- * A container has no watcher, so its tree is age-bounded. While its file list
+ * A container without a confirmed worktree signal has no watcher, so its tree
+ * is age-bounded. While its file list
  * is complete and was scanned within `containerTreeMaxAgeMs`, the tree is
  * served for that longer bound, because the file-list scans the Files panel
  * already pays for carry a membership signal: a Git-visible create, delete or
@@ -117,11 +126,36 @@ export interface DiffScanResult {
   stats: EnvironmentDiffStats;
   /** Retained so the Files panel is served from the same scan. */
   changes: unknown[];
+  /** Immutable commit the comparison ref resolved to, when known. */
+  baseOid?: string;
+  /** Untracked paths already listed by the tracked diff (index-membership overlap). */
+  ambiguousPaths?: string[];
 }
+
+/**
+ * Every settled outcome of the environment owner, for the change-tracking
+ * projector (docs/architecture/change-tracking.md). Delivered synchronously;
+ * a listener must not throw or await.
+ */
+export type DiffScanEvent =
+  | {
+      kind: "scanned";
+      target: DiffStatsTarget;
+      result: DiffScanResult;
+      /** Published counts changed (a no-op scan still advances the check time). */
+      changed: boolean;
+      at: string;
+      /** When the pass began; only passes started after a refresh may settle it. */
+      startedAt: string;
+    }
+  | { kind: "failed"; target: DiffStatsTarget; at: string }
+  | { kind: "paused"; target: DiffStatsTarget; at: string }
+  | { kind: "removed"; environmentId: string; at: string }
+  | { kind: "hint"; target: DiffStatsTarget; paths: readonly string[] | null; at: string };
 
 export interface DiffStatsServiceOptions {
   /** Runs the real git scan. Injected so the service is testable without git. */
-  scan: (target: DiffStatsTarget) => Promise<DiffScanResult>;
+  scan: (target: DiffStatsTarget, request?: ScanRequest) => Promise<DiffScanResult>;
   emit: (event: string, payload: unknown) => void;
   /**
    * Reads a file list for an identity no tracked entry covers. Defaults to
@@ -156,6 +190,14 @@ export interface DiffStatsServiceOptions {
   delay?: (callback: () => void, delayMs: number) => unknown;
   cancelDelay?: (timer: unknown) => void;
   startWatcher?: typeof startWorktreeWatcher;
+  /**
+   * Watches a container target (`container-worktree-signal.ts`). Absent, or a
+   * watcher that never becomes qualified, leaves the container on the
+   * unwatched bounds.
+   */
+  startContainerWatcher?: (options: ContainerWatcherStartOptions) => WorktreeWatcher;
+  /** Interval for a container whose watcher is qualified; only covers missed events. */
+  containerSafetyNetIntervalMs?: number;
   onWarning?: (message: string, error: unknown) => void;
   /**
    * Owner generation stamped on every event and snapshot. Defaults to a fresh
@@ -170,6 +212,16 @@ export interface DiffStatsServiceOptions {
    * {@link DiffStatsService.remoteFreshnessChanged} when it changes.
    */
   remoteFreshness?: (target: DiffStatsTarget) => WorktreeRemoteFreshness | undefined;
+  /** Settled scans, failures, removals and watcher hints (see {@link DiffScanEvent}). */
+  onScanEvent?: (event: DiffScanEvent) => void;
+}
+
+export interface ContainerWatcherStartOptions {
+  containerId: string;
+  comparisonRef: string;
+  onChange: (hint?: WorktreeChangeHint) => void;
+  /** Called whenever the watcher's `qualified` changes, in either direction. */
+  onCoverageChange: () => void;
 }
 
 export interface RetryPolicy {
@@ -183,6 +235,13 @@ export interface RetryPolicy {
 export const DIFF_POLL_INTERVAL_MS = 15_000;
 /** A watcher makes this a backstop, not the primary trigger. */
 export const DIFF_SAFETY_NET_INTERVAL_MS = 120_000;
+/**
+ * The same backstop for a container whose worktree signal is confirmed. Its
+ * watcher is a process inside the container that skips `node_modules` and can
+ * die with it, so the safety scan runs twice as often as a local one (see
+ * `CONTAINER_WORKTREE_SAFETY_SCAN_INTERVAL_MS`).
+ */
+export const CONTAINER_SAFETY_NET_INTERVAL_MS = 60_000;
 /** Unwatched file lists: comfortably under the Files panel's 5 s cadence. */
 export const FILE_LIST_MAX_AGE_MS = 3_000;
 /**
@@ -235,7 +294,14 @@ export interface TreeReadResultWithView {
 
 type ScanReason = "track" | "hint" | "refresh" | "read" | "periodic" | "retry" | "rerun";
 
+/** When the scan was asked for: a physical pass started later satisfies it. */
+export type ScanRequest = { requestedAtMs: number };
+
 type ScanAttempt = {
+  /** Wall-clock start, so a fenced refresh never settles on an older pass. */
+  startedAt: string;
+  /** `monotonicNow()` when the attempt was created. */
+  requestedAtMs: number;
   target: DiffStatsTarget;
   targetKey: string;
   targetGeneration: number;
@@ -322,6 +388,9 @@ export class DiffStatsService {
   > & {
     onWarning?: DiffStatsServiceOptions["onWarning"];
     remoteFreshness?: DiffStatsServiceOptions["remoteFreshness"];
+    onScanEvent?: DiffStatsServiceOptions["onScanEvent"];
+    startContainerWatcher?: DiffStatsServiceOptions["startContainerWatcher"];
+    containerSafetyNetIntervalMs: number;
   };
   private readonly metrics: RecurringWorkMetrics;
   private readonly admission: WorkAdmissionPool | null;
@@ -358,8 +427,12 @@ export class DiffStatsService {
       cancelDelay:
         options.cancelDelay ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)),
       startWatcher: options.startWatcher ?? startWorktreeWatcher,
+      startContainerWatcher: options.startContainerWatcher,
+      containerSafetyNetIntervalMs:
+        options.containerSafetyNetIntervalMs ?? CONTAINER_SAFETY_NET_INTERVAL_MS,
       onWarning: options.onWarning,
       remoteFreshness: options.remoteFreshness,
+      onScanEvent: options.onScanEvent,
     };
     this.generation = options.generation ?? randomUUID();
     this.metrics = options.metrics ?? recurringWorkMetrics;
@@ -439,6 +512,11 @@ export class DiffStatsService {
         // The previous counts were measured against something else; drop them so
         // a stale number cannot be served from the cache or suppress an emit.
         existing.last = undefined;
+        this.notify({
+          kind: "removed",
+          environmentId: target.environmentId,
+          at: this.options.now(),
+        });
         if (hadPublishedCounts) {
           this.announce({
             environmentId: target.environmentId,
@@ -493,6 +571,7 @@ export class DiffStatsService {
   untrack(environmentId: string): void {
     const entry = this.release(environmentId);
     if (!entry) return;
+    this.notify({ kind: "removed", environmentId, at: this.options.now() });
     if (entry.published) {
       this.announceSnapshot({ environmentId, removed: true } satisfies WorktreeSnapshotRemoval);
     }
@@ -547,11 +626,16 @@ export class DiffStatsService {
     this.tree.release(environmentId);
     this.adhoc.invalidateTarget(entry.target);
     this.publishSnapshot(entry);
+    this.notify({ kind: "paused", target: entry.target, at: this.options.now() });
   }
 
   /** Every environment the service holds state for, paused or not. */
   trackedIds(): string[] {
     return [...this.entries.keys()];
+  }
+
+  isTracked(environmentId: string): boolean {
+    return this.entries.has(environmentId);
   }
 
   /** Releases every watcher and timer; used on backend shutdown. */
@@ -810,6 +894,10 @@ export class DiffStatsService {
   }
 
   private attachWatcher(entry: DiffStatsEntry): void {
+    if (entry.target.kind === "container") {
+      this.attachContainerWatcher(entry);
+      return;
+    }
     const { worktreePath } = entry.target;
     if (entry.target.kind !== "local" || !worktreePath) return;
     const generation = ++entry.watcherGeneration;
@@ -824,6 +912,12 @@ export class DiffStatsService {
         // cannot say which view it touched (or an overflow) dirties both.
         if (!hint || hint.tree || hint.overflow) this.tree.hint(entry.target.environmentId);
         if (!hint || hint.fileList || hint.overflow) this.request(entry, "hint");
+        this.notify({
+          kind: "hint",
+          target: entry.target,
+          paths: hint?.paths && !hint.overflow ? hint.paths : null,
+          at: this.options.now(),
+        });
       },
       onCoverageChange: () => {
         if (!current()) return;
@@ -850,6 +944,40 @@ export class DiffStatsService {
       return;
     }
     entry.watcher = watcher;
+  }
+
+  /**
+   * A container's watcher (the worktree signal) reports through the same
+   * hints as a local one. It never fails over by itself: until and unless it
+   * is qualified the entry keeps the unwatched bounds, and it re-arms on its
+   * own after a demotion, so no watcher retry is scheduled here.
+   */
+  private attachContainerWatcher(entry: DiffStatsEntry): void {
+    const { containerId } = entry.target;
+    const start = this.options.startContainerWatcher;
+    if (!containerId || !start) return;
+    const generation = ++entry.watcherGeneration;
+    const current = () => entry.active && entry.watcherGeneration === generation;
+    entry.watcher = start({
+      containerId,
+      comparisonRef: entry.target.comparisonRef,
+      onChange: (hint) => {
+        if (!current()) return;
+        if (!hint || hint.tree || hint.overflow) this.tree.hint(entry.target.environmentId);
+        if (!hint || hint.fileList || hint.overflow) this.request(entry, "hint");
+        this.notify({
+          kind: "hint",
+          target: entry.target,
+          paths: null,
+          at: this.options.now(),
+        });
+      },
+      onCoverageChange: () => {
+        if (!current()) return;
+        this.restartTimer(entry);
+        this.publishSnapshot(entry);
+      },
+    });
   }
 
   private detachWatcher(entry: DiffStatsEntry): void {
@@ -902,7 +1030,9 @@ export class DiffStatsService {
     entry.timer = undefined;
     if (!entry.active) return;
     const intervalMs = this.isQualified(entry)
-      ? this.options.safetyNetIntervalMs
+      ? entry.target.kind === "container"
+        ? this.options.containerSafetyNetIntervalMs
+        : this.options.safetyNetIntervalMs
       : this.options.pollIntervalMs;
     entry.timer = this.options.schedule(() => this.periodic(entry, intervalMs), intervalMs);
   }
@@ -957,6 +1087,8 @@ export class DiffStatsService {
     priority: Exclude<RecurringPriorityClass, "critical">,
   ): void {
     const attempt: ScanAttempt = {
+      startedAt: this.options.now(),
+      requestedAtMs: this.options.monotonicNow(),
       target: entry.target,
       targetKey: entry.targetKey,
       targetGeneration: entry.targetGeneration,
@@ -988,7 +1120,10 @@ export class DiffStatsService {
   ): Promise<void> {
     let result: DiffScanResult;
     try {
-      const work = () => this.metrics.observe("diff-scan", () => this.options.scan(attempt.target));
+      const work = () =>
+        this.metrics.observe("diff-scan", () =>
+          this.options.scan(attempt.target, { requestedAtMs: attempt.requestedAtMs }),
+        );
       result = this.admission
         ? await this.admission.run(
             {
@@ -1035,7 +1170,23 @@ export class DiffStatsService {
     const changes = Array.isArray(result.changes) ? result.changes : [];
     const truncated = result.stats?.truncated === true;
     const semanticDigest = semanticFileListDigest(changes, truncated);
-    if (entry.fileList?.semanticDigest !== semanticDigest) entry.fileListRevision += 1;
+    const previous = entry.fileList;
+    if (previous?.semanticDigest !== semanticDigest) entry.fileListRevision += 1;
+    // Both scans ran under the same qualified watcher and nothing dirtied the
+    // entry in between (no hint, mutation or refresh advanced the epoch), yet
+    // the list moved: the watcher missed it. Local watchers ignore this.
+    if (
+      previous &&
+      previous.semanticDigest !== semanticDigest &&
+      attempt.qualified &&
+      previous.qualified &&
+      previous.watcherGeneration === attempt.watcherGeneration &&
+      previous.epoch === attempt.epoch &&
+      entry.dirtyEpoch === attempt.epoch &&
+      entry.watcherGeneration === attempt.watcherGeneration
+    ) {
+      entry.watcher?.unannouncedChange?.();
+    }
     // A container tree has no watcher; a Git-visible create, delete or rename
     // shows up here first, so it dirties the tree now instead of waiting out
     // the tree's age bound. Content-only edits leave paths and statuses alone.
@@ -1053,7 +1204,16 @@ export class DiffStatsService {
       completedAt: this.options.monotonicNow(),
     };
 
-    if (entry.last && isSameStats(entry.last.stats, result.stats)) {
+    const unchanged = entry.last !== undefined && isSameStats(entry.last.stats, result.stats);
+    this.notify({
+      kind: "scanned",
+      target,
+      result,
+      changed: !unchanged,
+      at: this.options.now(),
+      startedAt: attempt.startedAt,
+    });
+    if (unchanged) {
       this.metrics.outcome("diff-scan", "unchanged");
     } else {
       this.metrics.outcome("diff-scan", "changed");
@@ -1066,7 +1226,15 @@ export class DiffStatsService {
       entry.last = change;
       this.announce(change);
     }
-    if (membershipDigest !== undefined && membershipDigest !== previousMembership) {
+    // A qualified container watcher already hinted the tree for the ring this
+    // scan answers; hinting again would walk twice for one change.
+    const announcedByWatcher =
+      attempt.qualified && previous !== undefined && attempt.epoch > previous.epoch;
+    if (
+      membershipDigest !== undefined &&
+      membershipDigest !== previousMembership &&
+      !announcedByWatcher
+    ) {
       this.tree.hint(target.environmentId);
     }
     this.publishSnapshot(entry);
@@ -1082,6 +1250,7 @@ export class DiffStatsService {
       retryAt: this.options.monotonicNow() + delayMs,
     };
     this.warn(`Diff scan failed for ${attempt.target.environmentId}`, error);
+    this.notify({ kind: "failed", target: attempt.target, at: this.options.now() });
     if (entry.retryTimer !== undefined) this.options.cancelDelay(entry.retryTimer);
     entry.retryTimer = undefined;
     if (entry.failures <= this.failureRetry.maxAttempts) {
@@ -1264,6 +1433,14 @@ export class DiffStatsService {
    * Stamps and emits one change or removal. The revision advances even when
    * the sink throws, so a client that missed it sees a gap.
    */
+  private notify(event: DiffScanEvent): void {
+    try {
+      this.options.onScanEvent?.(event);
+    } catch (error) {
+      this.warn("Change-tracking scan listener failed", error);
+    }
+  }
+
   private announce(payload: EnvironmentDiffStatsChange | EnvironmentDiffStatsRemoval): void {
     this.revision += 1;
     this.emitSafely(DIFF_STATS_CHANGED_EVENT, payload.environmentId, {

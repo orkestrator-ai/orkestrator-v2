@@ -6,6 +6,7 @@ import {
   DEFAULT_AGENT_ACCOUNT_ID,
   type AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
+import { jwtExpiryMs, restrictCodexAuthSnapshot } from "@orkestrator/protocol/login-snapshots";
 
 import type { CommandContext } from "./commands-context.js";
 import {
@@ -13,13 +14,6 @@ import {
   getHostClaudeCredentials,
   readRuntimeHostClaudeCredentials,
 } from "./commands-files.js";
-import { localServerProcesses } from "./commands-runtime-state.js";
-import {
-  localAgentAccountIds,
-  localAgentAccountTokenExpiry,
-  loginlessLocalBridges,
-  staleLoginLocalBridges,
-} from "./agent-account-bridge-state.js";
 import {
   agentAccountHome,
   claudeKeychainService,
@@ -28,12 +22,15 @@ import {
 } from "./agent-accounts-homes.js";
 import { INHERITED_CREDENTIAL_ENV } from "./agent-accounts-login.js";
 import { initializeActivePlanUsageAccount } from "./plan-usage-cache.js";
+import { runCommand } from "./shell.js";
 
 /** The account a platform's launches use: the host login, or an added account's directory. */
 export interface ResolvedAgentAccount {
   accountId: string;
   /** Absent for the host login, which launches with no directory override. */
   home?: string;
+  /** Captured with the identity and home, so copied logins cannot acquire a newer marker. */
+  loginGeneration?: string;
 }
 
 export function stripInheritedAgentCredentials(env: NodeJS.ProcessEnv): void {
@@ -47,10 +44,13 @@ export async function resolveActiveAgentAccount(
   const store = await context.storage.loadAgentAccounts();
   const accountId = store.active[platform];
   initializeActivePlanUsageAccount(platform, accountId ?? DEFAULT_AGENT_ACCOUNT_ID);
-  if (!accountId) return { accountId: DEFAULT_AGENT_ACCOUNT_ID };
+  const loginGeneration = store.loginGeneration?.[platform];
   return {
-    accountId,
-    home: agentAccountHome(context.storage.agentAccountsDirectory(), platform, accountId),
+    accountId: accountId ?? DEFAULT_AGENT_ACCOUNT_ID,
+    ...(accountId
+      ? { home: agentAccountHome(context.storage.agentAccountsDirectory(), platform, accountId) }
+      : {}),
+    ...(loginGeneration ? { loginGeneration } : {}),
   };
 }
 
@@ -98,64 +98,83 @@ export async function localBridgeIsOnActiveAccount(
   environmentId: string,
   context: CommandContext,
 ): Promise<boolean> {
+  const localServers = context.runtime.localServers;
+  if (kind === "opencode") {
+    // OpenCode has no accounts, but a server keeps the provider credentials it
+    // loaded until restarted, so a provider signed in from the app since
+    // launch moves it over once idle.
+    if (!localServers.hasStaleLogin(key)) return true;
+    return (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
+  }
   if (kind !== "claude" && kind !== "codex") return true;
-  const launchedWith = localAgentAccountIds.get(key) ?? DEFAULT_AGENT_ACCOUNT_ID;
+  const launchedWith = localServers.launchedAccountId(key) ?? DEFAULT_AGENT_ACCOUNT_ID;
   const active = await resolveActiveAgentAccount(context, kind);
-  const tokenExpiresAt = kind === "claude" ? localAgentAccountTokenExpiry.get(key) : undefined;
+  const tokenExpiresAt = localServers.launchedTokenExpiry(key);
   const tokenLapsed =
     tokenExpiresAt !== undefined && Date.now() >= tokenExpiresAt - TOKEN_REPLACEMENT_LEAD_MS;
   // Signed in again since launch: the bridge's login is out of date even
   // though it is on the right account.
-  if (launchedWith === active.accountId && !staleLoginLocalBridges.has(key)) {
-    if (kind === "claude" && loginlessLocalBridges.has(key)) {
+  if (launchedWith === active.accountId && !localServers.hasStaleLogin(key)) {
+    if (localServers.isLoginless(key)) {
       // It answers "Not logged in" to everything; relaunching only helps once
       // the account has a token to hand over.
-      const credentials = await readActiveClaudeCredentials(context, active);
-      if (!getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS)) {
-        return true;
-      }
+      const usable =
+        kind === "claude"
+          ? Boolean(
+              (await readUsableClaudeLogin(context, active, readAddedClaudeCredentials)).token,
+            )
+          : (await readCoordinatorCodexLogin(active)).text !== undefined;
+      if (!usable) return true;
       return (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
     }
     if (tokenExpiresAt === undefined || !tokenLapsed) return true;
-    const credentials = await readActiveClaudeCredentials(context, active);
-    const freshExpiry = claudeCredentialExpiry(credentials);
+    const fresh =
+      kind === "claude"
+        ? await readFreshClaudeTokenExpiry(context, active)
+        : (await readCoordinatorCodexLogin(active)).tokenExpiresAt;
     // A lapsed lead window is only a reason to relaunch when there is a
     // better token to hand over. Keep the existing bridge until actual expiry.
-    if (
-      !freshExpiry ||
-      freshExpiry <= tokenExpiresAt ||
-      !getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS)
-    ) {
+    if (!fresh || fresh <= tokenExpiresAt) {
       if (Date.now() < tokenExpiresAt) return true;
     }
   }
   return (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
 }
 
+/** The active Claude login's expiry, when it holds a token that outlives the replacement lead. */
+async function readFreshClaudeTokenExpiry(
+  context: CommandContext,
+  active: ResolvedAgentAccount,
+): Promise<number | undefined> {
+  const credentials = await readActiveClaudeCredentials(context, active);
+  if (!getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS)) {
+    return undefined;
+  }
+  return claudeCredentialExpiry(credentials);
+}
+
 /** How long before a handed-over token expires its idle bridge is replaced. */
-const TOKEN_REPLACEMENT_LEAD_MS = 5 * 60_000;
+export const TOKEN_REPLACEMENT_LEAD_MS = 5 * 60_000;
 
 /**
- * The platform's login was renewed. Every live local bridge may hold the old
- * one, so each is replaced the next time it is used while idle.
+ * The platform's login was renewed (for OpenCode, any provider login changed).
+ * Every live local bridge may hold the old one, so each is replaced the next
+ * time it is used while idle.
  */
-export function markLocalBridgesForLoginRefresh(platform: AgentAccountPlatform): void {
-  for (const key of localServerProcesses.keys()) {
-    if (key.startsWith(`${platform}:`)) staleLoginLocalBridges.add(key);
-  }
+export function markLocalBridgesForLoginRefresh(
+  context: CommandContext,
+  platform: AgentAccountPlatform | "opencode",
+): void {
+  context.runtime.localServers.markLoginStale(platform);
 }
 
 /** Whether any live local bridge was launched on this account. */
 export function isAgentAccountInUseByLocalBridge(
+  context: CommandContext,
   platform: AgentAccountPlatform,
   accountId: string,
 ): boolean {
-  for (const [key, launchedWith] of localAgentAccountIds) {
-    if (launchedWith !== accountId || !key.startsWith(`${platform}:`)) continue;
-    const child = localServerProcesses.get(key);
-    if (child && child.exitCode === null && child.signalCode === null) return true;
-  }
-  return false;
+  return context.runtime.localServers.isAccountInUse(platform, accountId);
 }
 
 /**
@@ -195,11 +214,18 @@ async function readActiveClaudeCredentials(
   context: CommandContext,
   active: ResolvedAgentAccount,
   readCredentials: (home: string) => Promise<string | undefined> = readAddedClaudeCredentials,
+  profileConfigDir?: string,
 ): Promise<string | undefined> {
   if (active.home) return readCredentials(active.home);
   // An agent-test profile reads the host login only through its own grant,
-  // which `applyClaudeHostCredentialEnvironment` has already applied.
-  return context.runtimeFlavor === "agent-test" ? undefined : readRuntimeHostClaudeCredentials();
+  // which `applyClaudeHostCredentialEnvironment` has already applied. Its own
+  // isolated directory's file login is its own, and never the Keychain's.
+  if (context.runtimeFlavor === "agent-test") {
+    return profileConfigDir
+      ? getHostClaudeCredentials("linux", os.homedir(), profileConfigDir, { configDirOnly: true })
+      : undefined;
+  }
+  return readRuntimeHostClaudeCredentials();
 }
 
 export async function readAddedCodexAuth(home: string): Promise<string | undefined> {
@@ -222,14 +248,6 @@ function claudeCredentialExpiry(credentials: string | undefined): number | undef
   }
 }
 
-async function hasFileCredential(configDir: string): Promise<boolean> {
-  for (const name of [".credentials.json", "credentials.json"]) {
-    const stat = await fs.lstat(path.join(configDir, name)).catch(() => null);
-    if (stat?.isFile() && stat.size > 0) return true;
-  }
-  return false;
-}
-
 export interface CoordinatorAgentAccount {
   accountId: string;
   /** Set when the bridge runs on a short-lived access token rather than a login. */
@@ -239,51 +257,212 @@ export interface CoordinatorAgentAccount {
 }
 
 /**
- * Seed a coordinator conversation's private Claude directory from the active
- * account and point the bridge at it.
+ * Asks the backend's login keeper to have Claude refresh the active login when
+ * it is due (`ContainerClaudeLoginKeeper.refreshLocalLoginIfDue`). Registered
+ * by the backend; absent in tests and tools that never refresh.
+ */
+let localClaudeLoginRefresher: (() => Promise<unknown>) | undefined;
+
+export function setLocalClaudeLoginRefresher(
+  refresher: (() => Promise<unknown>) | undefined,
+): void {
+  localClaudeLoginRefresher = refresher;
+}
+
+function isRefreshableClaudeLogin(credentials: string | undefined): boolean {
+  try {
+    const refreshToken = (
+      JSON.parse(credentials ?? "") as { claudeAiOauth?: { refreshToken?: unknown } }
+    ).claudeAiOauth?.refreshToken;
+    return typeof refreshToken === "string" && refreshToken.trim() !== "";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The active login and an access token from it that will outlive a bridge
+ * start. A login whose token lapsed while nothing used it is refreshed first,
+ * through Claude's own CLI, so a coordinator does not start signed out just
+ * because the host's `claude` was idle.
+ */
+async function readUsableClaudeLogin(
+  context: CommandContext,
+  active: ResolvedAgentAccount,
+  readCredentials: (home: string) => Promise<string | undefined>,
+  profileConfigDir?: string,
+): Promise<{ credentials: string | undefined; token: string | undefined }> {
+  const read = () =>
+    readActiveClaudeCredentials(context, active, readCredentials, profileConfigDir);
+  let credentials = await read();
+  let token = getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS);
+  if (
+    !token &&
+    localClaudeLoginRefresher &&
+    context.runtimeFlavor !== "agent-test" &&
+    isRefreshableClaudeLogin(credentials)
+  ) {
+    await localClaudeLoginRefresher().catch(() => undefined);
+    credentials = await read();
+    token = getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS);
+  }
+  return { credentials, token };
+}
+
+/** Coordinator homes whose own Keychain entry was already removed by this process. */
+const clearedCoordinatorKeychainEntries = new Set<string>();
+
+/**
+ * Remove a Keychain login Claude may have saved under the coordinator home.
  *
- * The directory receives a copied credential file when the account keeps one.
- * A login held only in the macOS Keychain cannot follow: Claude names that
- * entry after the directory it belongs to, so the private directory has none
- * of its own. The account's current access token is handed over instead, and
- * never its refresh token — a copied refresh token would rotate away from the
- * account's own login. The token cannot be renewed, so the returned expiry
- * lets an idle bridge be replaced before it lapses.
+ * Builds before access-only coordinators copied the account's credential file
+ * in, refresh token included. When that refresh failed, Claude saved the
+ * blanked login under the directory's own Keychain entry, and it then answers
+ * "OAuth session expired" instead of "Not logged in" whenever no token is
+ * handed over. Once per home per process is enough: nothing writes it now.
+ */
+async function clearCoordinatorKeychainLogin(
+  coordinatorHome: string,
+  removeKeychainEntry: (service: string) => Promise<void>,
+): Promise<void> {
+  if (process.platform !== "darwin" || clearedCoordinatorKeychainEntries.has(coordinatorHome)) {
+    return;
+  }
+  clearedCoordinatorKeychainEntries.add(coordinatorHome);
+  await removeKeychainEntry(claudeKeychainService(coordinatorHome)).catch(() => undefined);
+}
+
+async function deleteKeychainEntry(service: string): Promise<void> {
+  await runCommand("security", ["delete-generic-password", "-s", service], {
+    timeoutMs: 10_000,
+  });
+}
+
+/**
+ * Point a coordinator conversation's Claude bridge at the active account.
+ *
+ * The coordinator's private directory never holds a login. The account's
+ * current access token is handed over as `CLAUDE_CODE_OAUTH_TOKEN`, and never
+ * its refresh token: a copied refresh token rotates away from the account's
+ * own login, and a copy of a stale file (macOS keeps the live login in the
+ * Keychain) fails to refresh at all. The token cannot be renewed by the
+ * bridge, so the returned expiry lets an idle bridge be replaced before it
+ * lapses.
  */
 export async function applyCoordinatorClaudeAccount(
   context: CommandContext,
   coordinatorHome: string,
   env: NodeJS.ProcessEnv,
-  prepareHome: (destination: string, source?: string) => Promise<void>,
+  prepareHome: (destination: string) => Promise<void>,
   readCredentials: (home: string) => Promise<string | undefined> = readAddedClaudeCredentials,
+  removeKeychainEntry: (service: string) => Promise<void> = deleteKeychainEntry,
 ): Promise<CoordinatorAgentAccount> {
   const active = await resolveActiveAgentAccount(context, "claude");
   if (active.home) {
     stripInheritedAgentCredentials(env);
   }
-  // The directory outlives a launch; a login copied for an earlier account
-  // must not outrank the active one.
+  // An agent-test profile may have pointed the run at its own isolated home,
+  // whose login stands in for the host's.
+  const profileConfigDir = active.home ? undefined : env.CLAUDE_CONFIG_DIR?.trim() || undefined;
+  // The directory outlives a launch, and earlier builds copied logins into it.
   for (const name of [".credentials.json", "credentials.json"]) {
     await fs.rm(path.join(coordinatorHome, name), { force: true });
   }
-  // Without an added account this is whatever directory the run would
-  // otherwise have used, which an agent-test profile may have pointed at an
-  // isolated home.
-  await prepareHome(coordinatorHome, active.home ?? (env.CLAUDE_CONFIG_DIR?.trim() || undefined));
+  await prepareHome(coordinatorHome);
+  await clearCoordinatorKeychainLogin(coordinatorHome, removeKeychainEntry);
   env.CLAUDE_CONFIG_DIR = coordinatorHome;
-  if (
-    (await hasFileCredential(coordinatorHome)) ||
-    env.ANTHROPIC_AUTH_TOKEN ||
-    env.CLAUDE_CODE_OAUTH_TOKEN ||
-    env.ANTHROPIC_API_KEY
-  ) {
+  if (env.ANTHROPIC_AUTH_TOKEN || env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_API_KEY) {
     return { accountId: active.accountId };
   }
-  const credentials = await readActiveClaudeCredentials(context, active, readCredentials);
-  const token = getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS);
-  // Signed out, or an access token that lapsed while nothing used the account.
+  const { credentials, token } = await readUsableClaudeLogin(
+    context,
+    active,
+    readCredentials,
+    profileConfigDir,
+  );
+  // Signed out, or an access token that lapsed and could not be refreshed.
   if (!token) return { accountId: active.accountId, loginless: true };
   env.CLAUDE_CODE_OAUTH_TOKEN = token;
   const tokenExpiresAt = claudeCredentialExpiry(credentials);
   return { accountId: active.accountId, ...(tokenExpiresAt ? { tokenExpiresAt } : {}) };
+}
+
+/** Where a coordinator finds the host's Codex login: `CODEX_HOME`, else `~/.codex`. */
+export function coordinatorHostCodexHome(): string {
+  return process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
+}
+
+/** A Codex login reduced to what a coordinator may hold. */
+export interface CoordinatorCodexLogin {
+  /** The access-only `auth.json`, absent when there is nothing usable to hand over. */
+  text?: string;
+  /** When its ChatGPT access token expires; absent for an API key, which does not. */
+  tokenExpiresAt?: number;
+}
+
+function codexAccessTokenExpiry(text: string): number | undefined {
+  try {
+    const accessToken = (JSON.parse(text) as { tokens?: { access_token?: unknown } }).tokens
+      ?.access_token;
+    return typeof accessToken === "string" ? jwtExpiryMs(accessToken) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The access-only form of a Codex `auth.json` for a coordinator.
+ *
+ * The refresh token is blanked (`restrictCodexAuthSnapshot`, the same form
+ * containers receive): Codex rotates it on every refresh, so a coordinator
+ * that refreshed a copy would retire the account's own login. An access
+ * token that will not outlive the replacement lead is not handed over at all;
+ * the bridge then starts signed out and moves over once a fresher one exists.
+ */
+export function coordinatorCodexLogin(
+  raw: string | undefined,
+  nowMs = Date.now(),
+): CoordinatorCodexLogin {
+  if (raw === undefined) return {};
+  const restricted = restrictCodexAuthSnapshot(raw, nowMs);
+  if (!("text" in restricted)) return {};
+  const tokenExpiresAt = codexAccessTokenExpiry(restricted.text);
+  if (tokenExpiresAt !== undefined && tokenExpiresAt - nowMs < TOKEN_REPLACEMENT_LEAD_MS) {
+    return {};
+  }
+  return { text: restricted.text, ...(tokenExpiresAt ? { tokenExpiresAt } : {}) };
+}
+
+/**
+ * The active Codex login as a coordinator would receive it. Codex keeps its
+ * login in a file only. Renew it in the owning home before handing out an
+ * access-only copy; the coordinator never receives the renewable login.
+ */
+export async function readCoordinatorCodexLogin(
+  active: ResolvedAgentAccount,
+): Promise<CoordinatorCodexLogin> {
+  const home = active.home ?? coordinatorHostCodexHome();
+  let raw = await readCodexAuthFile(home);
+  let login = coordinatorCodexLogin(raw);
+  if (!login.text && localCodexLoginRefresher && codexHasRefreshToken(raw)) {
+    await localCodexLoginRefresher(home).catch(() => undefined);
+    raw = await readCodexAuthFile(home);
+    login = coordinatorCodexLogin(raw);
+  }
+  return login;
+}
+
+let localCodexLoginRefresher: ((home: string) => Promise<void>) | undefined;
+
+export function setLocalCodexLoginRefresher(refresher: typeof localCodexLoginRefresher): void {
+  localCodexLoginRefresher = refresher;
+}
+
+function codexHasRefreshToken(raw: string | undefined): boolean {
+  try {
+    const token = JSON.parse(raw ?? "").tokens?.refresh_token;
+    return typeof token === "string" && token.trim() !== "";
+  } catch {
+    return false;
+  }
 }

@@ -108,3 +108,49 @@ test("narrow settings use the selector to reach the last section with the keyboa
   await expect(page.getByTestId("settings-content")).toHaveText("Content for section-16");
   await expect(page.getByRole("listbox")).toBeHidden();
 });
+
+test("with machines attached the header lists them and the title moves right", async ({
+  page,
+}, testInfo) => {
+  const mobile = testInfo.project.name === "mobile-chromium";
+  await page.goto("/fullscreen-settings?machines");
+  const strip = page.getByRole("group", { name: "Machine" }).locator("visible=true");
+  const chip = (name: string) => strip.getByRole("button", { name: new RegExp(`^${name}`) });
+  await expect(strip.getByRole("button")).toHaveText([
+    "Studio(command node)",
+    "Desk",
+    "Build box",
+    "Laptop",
+  ]);
+  await expect(chip("Studio")).toHaveAttribute("aria-pressed", "true");
+  await expect(chip("Laptop")).toBeDisabled();
+  if (!mobile) {
+    const title = page.getByRole("heading", { name: "Section 1" });
+    const stripBox = await strip.boundingBox();
+    const titleBox = await title.boundingBox();
+    expect(titleBox!.x).toBeGreaterThan(stripBox!.x + stripBox!.width);
+  }
+
+  await chip("Desk").click();
+  await expect(chip("Desk")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("settings-content")).toHaveText("Content for section-1 on Desk");
+  await page.screenshot({ path: testInfo.outputPath("settings-machines.png") });
+
+  // A section only the command node has keeps it, and the choice returns afterwards.
+  if (mobile) {
+    await page.getByRole("combobox", { name: "Settings section" }).click();
+    await page.getByRole("option", { name: "Section 2", exact: true }).click();
+  } else {
+    await page.getByRole("button", { name: "Section 2", exact: true }).click();
+  }
+  await expect(chip("Studio")).toHaveAttribute("aria-pressed", "true");
+  await expect(chip("Desk")).toBeDisabled();
+  await expect(page.getByTestId("settings-content")).toHaveText("Content for section-2 on Studio");
+  if (mobile) {
+    await page.getByRole("combobox", { name: "Settings section" }).click();
+    await page.getByRole("option", { name: "Section 3", exact: true }).click();
+  } else {
+    await page.getByRole("button", { name: "Section 3", exact: true }).click();
+  }
+  await expect(chip("Desk")).toHaveAttribute("aria-pressed", "true");
+});

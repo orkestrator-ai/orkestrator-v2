@@ -26,8 +26,11 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 | `src/app-server/notification-recorder.ts` | Opt-in capture of the inbound stream for fixtures |
 | `src/sessions/dispatch-journal.ts`      | At-most-once prompt dispatch                       |
 | `src/sessions/refused-cell-tail.ts`     | Refused code-mode cells, read from the rollout     |
+| `src/history/code-mode-mcp-calls.ts`    | A reload's code-mode MCP calls, rendered as live   |
 | `src/messages/normalization.ts`         | Item → normalized part rendering                   |
 | `src/messages/diff-budget.ts`           | Caps the diff state, the largest memory consumer   |
+| `src/messages/file-change-diff.ts`      | Decodes app-server's per-file `fileChange` payload |
+| `src/change-evidence.ts`                | Change-tracking adapter and its evidence spool     |
 | `src/codex-item-types.ts`               | Local thread-item types (was the Codex SDK)        |
 | `src/testing/replay-recording.ts`       | Replays a recording through the real pipeline      |
 
@@ -36,8 +39,20 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 A turn renders as one assistant row per model response, plus a row after each
 steer (`TurnAccumulator.opensModelStep`, `app-server-runtime-rows.ts`). Live
 items name no response, so the boundary is inferred: a new reasoning or agent
-message item after a tool call in the live row opens the next row. A reload
-splits at the same place (`history/rollout.ts`). Never fold a whole turn back
+message item after a tool call in the live row opens the next row, and so does
+a new tool call after app-server reported a finished response. That report is
+`thread/tokenUsage/updated`, sent once per Responses API completion, tool-only
+responses included (`model.response.completed`; `rawResponse/completed` names
+the response but needs the experimental API). Without it a model reading files
+one call at a time with no reasoning item grew one row for the whole run. A
+code-mode cell's own calls stream after its response's report, so a cell making
+several calls can split once inside itself; rows stay bounded by responses. A
+reload splits at the same places, using the rollout's `token_usage_record` (or
+the older `token_count` event) after each response (`history/rollout.ts`).
+Replayed rows are named by their place in the rollout (`replayedRowId`), so
+every replay — an idle re-attach or a bridge restart — gives each row the same
+id; only the first replay after live streaming re-keys them, because live rows
+are minted before app-server names their turn. Never fold a whole turn back
 into one row: a turn can run for hours, and a single multi-megabyte row fits no
 transcript window, so readers can only show a trimmed copy and lose it once a
 newer row pushes it out of the live tail. A late change to an item (a command
@@ -48,8 +63,7 @@ item spawned it. Rows keep render state up to `MAX_TRACKED_ASSISTANT_ROWS`
 go is tracked again when one of its items changes, the turn ending included,
 so never make a late change depend on its row still being tracked. A row let
 go keeps its rendered file changes and sub-agent cards (`ReleasedAssistantRow`)
-and, tracked again, re-renders only the items that changed: a diff taken anew
-after later edits moved the file comes out blank. The turn's end also tracks
+and, tracked again, re-renders only the items that changed. The turn's end also tracks
 again every row let go while a card could still read as running. A publish
 tick renders only the rows that moved, and a row whose sub-agents have all
 finished (a failed spawn waits for none) is probed again only on new lifecycle
@@ -65,6 +79,23 @@ reaches readers; clear it whenever the history is replaced. Note through
 never when the change is sent: a send waits for the coalesced flush and can be
 dropped, and a note that lands after a read bumps nothing. Never note the
 newest row, which every window holds.
+
+## File changes and change evidence
+
+- A `fileChange` row is rendered only from app-server's own per-change `diff`
+  (`messages/file-change-diff.ts`): whole content for add/delete, headerless
+  hunks plus a `Moved to:` note for update. Never reconstruct it from the
+  worktree or `git show HEAD:`; that shows whatever the file holds when the
+  row renders. A change with no payload (older history) is path-only, counts
+  unknown. Keep the real status: `in_progress` is a proposal (pending row),
+  `declined` never ran; neither is folded into `completed`.
+- `change-evidence.ts` records the live item lifecycle on one per-process
+  spool (`GET /change-evidence`, `/body`, `POST /ack`, beside the transcript
+  routes). `conversationId` is the bridge session id the backend addresses in
+  `/session/:id` (one frame per session bound to the thread), `callId` the
+  item id (the row's `toolUseId`), `turnId` the Codex turn id. Calls are
+  synchronous spool appends from the notification path; never await there.
+  A reload from the rollout emits nothing.
 
 ## When touching the app-server engine
 
@@ -98,7 +129,16 @@ newest row, which every window holds.
   A `readOnly` turn adds the denial (`codexReadOnlyTurnPolicy`), and the
   runtime reloads the thread whenever the search setting changes between
   turns (`promptThreadConfig`); a resume that names no mode restores Codex's
-  own (verified against 0.162.1 by the loopback test). After a Codex bump, run `live-network-lock.test.ts` with
+  own (verified against 0.164.0 by the loopback test). Never let a
+  search-denied turn run on a history that declares tools: with
+  `features.incremental_tools` (default-on since 0.164.0) each turn's tools,
+  `web__run` included, are written into the history and replayed on resume,
+  and thread config cannot turn it off. Every bridge runs app-server with it
+  off (`codexAppServerConfigOverrides`); the engine reads that back
+  (`codexToolHistoryGaps`, and for coordinators `codexHostedNetworkLockGaps`)
+  and refuses a search-denied resume or fork whose rollout, or fork ancestor,
+  holds an `additional_tools` record (`sessions/tool-history-guard.ts`). The
+  loopback test asserts no `web__run` anywhere in a resumed read-only request. After a Codex bump, run `live-network-lock.test.ts` with
   `RUN_LIVE_CODEX_APP_SERVER=1` (no credits), and once with
   `RUN_LIVE_CODEX_WEB_SEARCH_CANARY=1`, which spends a few turns proving
   `cached` still refuses a page `live` opens.
@@ -114,11 +154,21 @@ newest row, which every window holds.
   behind a read before each new model response and before `turn.completed`,
   so a cell lands in the row of the response that ran it. It shows a cell as
   a failed `exec` row when no item of the turn started while it ran, or its
-  output reports a refusal. `fs.watch` cannot replace the poll: on macOS it
+  output reports a refusal, but never for a cell an interrupt stopped
+  (`code_mode_interrupt`, output "aborted by user after …"). `fs.watch` cannot replace the poll: on macOS it
   reports nothing for Codex's appends through its open descriptor. Raw
   response events cannot either: `experimentalRawEvents` exists only on
   `thread/start`, so a thread resumed in a new app-server never gets them.
-  Verified against 0.162.1 by `live-refused-calls.test.ts` (no credits).
+  Verified against 0.164.0 by `live-refused-calls.test.ts` (no credits).
+- Never reload a code-mode MCP call from its `exec` cell when the rollout
+  recorded it. Each call is an `event_msg` `item_completed` record with an
+  `McpToolCall` item; `history/code-mode-mcp-calls.ts` renders it through the
+  live adapter and `mcpToolCallParts`, so the reloaded part (id, arguments,
+  outcome, output) matches live and anchors an artifact publication. As live,
+  a cell whose only recorded work was MCP calls loses its `exec` row unless its
+  output reports a refusal. Only a cell with no record falls back to its
+  source: strict-JSON single-argument `tools.mcp__<server>__<tool>(…)` calls,
+  bounded, never evaluated, and never claimed successful.
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,

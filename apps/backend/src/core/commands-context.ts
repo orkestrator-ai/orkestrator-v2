@@ -1,5 +1,9 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { AgentToolConnection, StateSignalCredential } from "./agent-tools.js";
+import type {
+  AgentToolConnection,
+  StateSignalCredential,
+  WorktreeSignalReason,
+} from "./agent-tools.js";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { BackendRuntime } from "./backend-runtime.js";
 import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
@@ -23,6 +27,8 @@ export type CommandContext = {
   previews?: import("./preview-runtime.js").PreviewRuntime;
   mcpManagement?: import("./mcp-management/service.js").McpManagementService;
   webAnnotations?: import("./web-annotation-service.js").WebAnnotationService;
+  /** Transcript artifacts: durable revisions, receipts and publications. */
+  transcriptArtifacts?: import("./transcript-artifacts/service.js").TranscriptArtifactService;
   /** Backend rollout switch for web annotations (enabled / read-only / disabled). */
   webAnnotationRollout?: import("./web-annotation-rollout.js").WebAnnotationRollout;
   storage: StorageService;
@@ -57,6 +63,10 @@ export type CommandContext = {
     servicePort?(): number | null;
     /** Doorbell credential for the Claude terminal state signal. */
     issueStateSignal?(onSignal: () => void): StateSignalCredential | null;
+    /** Doorbell credential for a container worktree watcher (`container-worktree-signal.ts`). */
+    issueWorktreeSignal?(
+      onSignal: (reason: WorktreeSignalReason) => void,
+    ): StateSignalCredential | null;
   };
   /** Container → host agent tools reachability checks (startup, bridges, preflight). */
   containerHostReachability?: import("./container-host-reachability.js").ContainerHostReachabilityService;
@@ -74,10 +84,21 @@ export type CommandContext = {
   deleteWorkflowResultsByEnvironment?: (environmentId: string) => Promise<unknown>;
   workflowResultRollout?: import("./workflow-result-rollout.js").WorkflowResultRollout;
   coordinators?: CoordinatorService;
+  /** Command-node registry and leaf attachments (docs/architecture/command-nodes.md). */
+  nodes?: import("./nodes/node-service.js").NodeService;
+  /** Portal read model, routing and workspaces (command node); client grants (leaf). */
+  nodePortal?: import("./nodes/node-portal.js").NodePortal;
+  /** Leaf mail, the outbox and user-approved action requests. */
+  nodeCoordination?: import("./nodes/node-coordination.js").NodeCoordination;
   projectGit?: ProjectGitService;
   controlMcp?: {
     getSettings(): ControlMcpSettings;
     rotateToken(): Promise<ControlMcpSettings>;
+    createCredential(
+      input: import("./control-mcp-credentials.js").CreateControlMcpCredentialInput,
+    ): Promise<ControlMcpSettings>;
+    rotateCredential(credentialId: string): Promise<ControlMcpSettings>;
+    revokeCredential(credentialId: string): Promise<ControlMcpSettings>;
     issueCoordinatorCredential(scope: CoordinatorControlScope): CoordinatorControlConnection;
     revokeCoordinatorCredentials(coordinatorId: string, conversationId?: string): void;
   };

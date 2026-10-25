@@ -151,6 +151,7 @@ describe("MultiReviewFixPromptDialog", () => {
     fireEvent.pointerDown(picker);
     const reasoning = within(screen.getByRole("group", { name: "Reasoning" }));
     fireEvent.click(reasoning.getByRole("menuitemradio", { name: "Extra high" }));
+    fireEvent.keyDown(document.body, { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
 
     expect(onSubmit).toHaveBeenCalledWith(
@@ -167,11 +168,11 @@ describe("MultiReviewFixPromptDialog", () => {
     const speed = within(screen.getByRole("group", { name: "Speed mode" }));
     fireEvent.click(speed.getByRole("menuitemradio", { name: /Fast/ }));
 
-    // Reasoning and speed share one picker, so an edit to either must extend
-    // the selection rather than rebuild it.
-    fireEvent.pointerDown(picker);
+    // Reasoning and speed share one picker, which stays open between choices,
+    // so an edit to either must extend the selection rather than rebuild it.
     const reasoning = within(screen.getByRole("group", { name: "Reasoning" }));
     fireEvent.click(reasoning.getByRole("menuitemradio", { name: "Low" }));
+    fireEvent.keyDown(document.body, { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
 
     expect(onSubmit).toHaveBeenCalledWith(

@@ -12,6 +12,7 @@ import {
   type TabInfo,
 } from "@/types/paneLayout";
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
+import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 
 function saved(root: unknown, overrides: Partial<PersistedPaneLayout> = {}): PersistedPaneLayout {
   return {
@@ -132,6 +133,68 @@ describe("reconcilePersistedLayout", () => {
       expect(fileData?.columnNumber, String(malformed)).toBeUndefined();
       expect(fileData?.navigationRequestId, String(malformed)).toBeUndefined();
     }
+  });
+
+  test("restores change diff targets and drops ones that no longer name this environment's change", () => {
+    const restoreChangeDiff = (changeDiff: unknown) => {
+      const restored = reconcilePersistedLayout(
+        saved({
+          kind: "leaf",
+          id: "pane",
+          tabs: [
+            {
+              id: "file",
+              type: "file",
+              fileData: { filePath: "src/App.tsx", isDiff: true, changeDiff },
+            },
+          ],
+          activeTabId: "file",
+        }),
+        context,
+      );
+      const fileData = (restored!.root as Extract<EnvironmentPaneState["root"], { kind: "leaf" }>)
+        .tabs[0]?.fileData;
+      expect(fileData?.isDiff).toBe(true);
+      return fileData?.changeDiff;
+    };
+    const liveKey = environmentChangeResourceKey("env-1");
+
+    expect(
+      restoreChangeDiff({
+        kind: "historical",
+        diffIdentityId: "diff_1",
+        title: "App.tsx",
+        extra: 1,
+      }),
+    ).toEqual({ kind: "historical", diffIdentityId: "diff_1", title: "App.tsx" });
+    expect(
+      restoreChangeDiff({
+        kind: "live",
+        resourceKey: liveKey,
+        pathId: "p:src/App.tsx",
+        rowId: "m1:0",
+        revision: 4,
+        title: "App.tsx",
+      }),
+    ).toEqual({
+      kind: "live",
+      resourceKey: liveKey,
+      pathId: "p:src/App.tsx",
+      rowId: "m1:0",
+      revision: 4,
+      title: "App.tsx",
+    });
+    expect(restoreChangeDiff({ kind: "historical", diffIdentityId: "" })).toBeUndefined();
+    expect(restoreChangeDiff({ kind: "live", resourceKey: liveKey, title: "x" })).toBeUndefined();
+    expect(
+      restoreChangeDiff({
+        kind: "live",
+        resourceKey: environmentChangeResourceKey("env-other"),
+        path: "src/App.tsx",
+      }),
+    ).toBeUndefined();
+    expect(restoreChangeDiff({ kind: "live", resourceKey: "garbage", path: "a" })).toBeUndefined();
+    expect(restoreChangeDiff("historical")).toBeUndefined();
   });
 
   test("accepts legacy v1 layouts for one-time selection migration", () => {
@@ -565,6 +628,7 @@ describe("reconcilePersistedLayout", () => {
             type: "browser",
             browserData: {
               url: "http://localhost:3000/app",
+              navigationRequestId: "writer:request",
               history: ["http://localhost:3000/", "http://localhost:3000/app"],
               historyIndex: 1,
             },
@@ -584,6 +648,7 @@ describe("reconcilePersistedLayout", () => {
           type: "browser",
           browserData: {
             url: "http://localhost:3000/app",
+            navigationRequestId: "writer:request",
             history: ["http://localhost:3000/", "http://localhost:3000/app"],
             historyIndex: 1,
           },
@@ -1864,4 +1929,44 @@ describe("pane field preservation", () => {
       (reconciled.root as { tabs: Array<{ nativeAgentData?: unknown }> }).tabs[0]?.nativeAgentData,
     ).toBeUndefined();
   });
+});
+
+test("pull request restore sanitizes refs, views, titles and transient requests", () => {
+  for (const view of ["summary", "timeline", "code", "bad", undefined]) {
+    const result = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "pr",
+        tabs: [
+          {
+            id: "bad",
+            type: "pull-request",
+            pullRequestData: { ref: { owner: "acme", repo: "../x", number: 1 } },
+          },
+          {
+            id: "pr",
+            type: "pull-request",
+            pullRequestData: {
+              ref: { owner: "acme", repo: "repo", number: 42, extra: "discard" },
+              title: "x".repeat(400),
+              view,
+              openRequest: 900,
+            },
+          },
+        ],
+      }),
+      context,
+    );
+    const root = result?.root;
+    expect(root?.kind).toBe("leaf");
+    if (root?.kind !== "leaf") throw new Error("Expected leaf");
+    expect(root.tabs).toHaveLength(1);
+    expect(root.tabs[0]?.pullRequestData).toEqual({
+      ref: { owner: "acme", repo: "repo", number: 42 },
+      title: "x".repeat(300),
+      ...(view === "summary" || view === "timeline" || view === "code" ? { view } : {}),
+    });
+    expect(root.tabs[0]?.pullRequestData?.openRequest ?? 0).toBe(0);
+  }
 });

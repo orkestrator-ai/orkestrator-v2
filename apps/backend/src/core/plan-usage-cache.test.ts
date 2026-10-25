@@ -24,6 +24,31 @@ afterEach(() => {
 });
 
 describe("createPlanUsageCache", () => {
+  test("session reports replace stale windows instead of refreshing unreported quotas", () => {
+    const cache = createPlanUsageCache(() => 1_700_000_000_000);
+    const fresh = okSnapshot(
+      "claude",
+      [
+        { window: "five_hour", usedPercent: 10 },
+        { window: "seven_day", usedPercent: 60 },
+      ],
+      new Date(0).toISOString(),
+    );
+    cache.store("claude", fresh, CACHE_TTL_MS);
+    cache.store("claude", { ...fresh, stale: true, message: "HTTP 429" }, CACHE_TTL_MS);
+    expect(cache.lastOk("claude")).toBe(fresh);
+    // Even an unchanged incoming window is a new authoritative session report.
+    cache.recordSessionWindows("claude", [{ window: "five_hour", usedPercent: 10 }]);
+    const merged = cache.peek("claude");
+    expect(merged?.windows).toEqual([{ window: "five_hour", usedPercent: 10 }]);
+    expect(merged?.stale).toBeUndefined();
+    expect(merged?.fetchedAt).toBe(new Date(1_700_000_000_000).toISOString());
+    expect(cache.lastOk("claude")).toBe(merged);
+    cache.invalidate("claude");
+    expect(cache.peek("claude")).toBeUndefined();
+    expect(cache.lastOk("claude")).toBeUndefined();
+  });
+
   test("patches defined fields and preserves matched window metadata and plan", () => {
     const cache = createPlanUsageCache(() => 1_700_000_000_000);
     const original = {

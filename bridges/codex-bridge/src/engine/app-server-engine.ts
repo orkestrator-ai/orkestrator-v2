@@ -23,6 +23,11 @@
  */
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import {
+  ARTIFACT_TOOL_NAMES,
+  ORKESTRATOR_ARTIFACT_MCP_PATH,
+  ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+} from "@orkestrator/protocol/transcript-artifacts";
+import {
   NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
   normalizePendingSignIn,
   type NativeAgentPendingSignIn,
@@ -52,9 +57,10 @@ import type {
 } from "../app-server/interactions.js";
 import { reduceHistoricalTurns, reduceNotification } from "../app-server/event-reducer.js";
 import type { SkillsListParams, UserInput } from "../app-server/generated/typescript/v2/index.js";
-import { redactSecrets } from "../app-server/redaction.js";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import {
   AppServerRpcError,
+  JSON_RPC_METHOD_NOT_FOUND,
   classifyDispatchFailure,
   isPaginatedHistoryUnsupportedError,
   isSafeToRetryImmediately,
@@ -69,7 +75,15 @@ import {
   codexHostedNetworkLockGaps,
   codexNetworkDeniedConfig,
   codexNetworkDeniedSearchMode,
+  codexProjectSkillsConfig,
+  codexProjectTrustConfig,
+  codexToolHistoryGaps,
 } from "../codex-config.js";
+import { findTranscriptPath, listTranscriptPaths } from "../history/rollout.js";
+import {
+  threadToolHistoryVerdict,
+  type ToolHistoryVerdict,
+} from "../sessions/tool-history-guard.js";
 import { type McpToolAvailability, waitForMcpToolAvailability } from "./mcp-tool-availability.js";
 import {
   APP_SERVER_CAPABILITIES,
@@ -97,12 +111,16 @@ import {
 } from "./types.js";
 
 /**
- * Per-tool MCP approval for Orkestrator's mail tools (keyed by the raw tool
- * name). Always approved: they only write to Orkestrator's message store, and
- * they are how a worker reports back whatever its approval setting.
+ * Per-tool MCP approval for Orkestrator's mail and transcript-artifact tools
+ * (keyed by the raw tool name). Always approved: mail only writes to
+ * Orkestrator's message store and is how a worker reports back; artifact tools
+ * only write to Orkestrator's bounded artifact store and never the workspace.
  */
 const AGENT_MAIL_TOOL_APPROVALS = Object.fromEntries(
-  AGENT_MAIL_TOOL_NAMES.map((name) => [name, { approval_mode: "approve" }]),
+  [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map((name) => [
+    name,
+    { approval_mode: "approve" },
+  ]),
 );
 
 /**
@@ -416,6 +434,12 @@ export interface AppServerEngineOptions {
   approvalTimeoutMs?: number;
   now?: () => number;
   /**
+   * Whether a thread's inherited history still declares tools
+   * (`sessions/tool-history-guard.ts`). Defaults to reading its rollout and
+   * fork ancestors; scripted-child tests replace it.
+   */
+  toolHistoryVerdict?: (threadId: string) => Promise<ToolHistoryVerdict>;
+  /**
    * Supervisor overrides forwarded verbatim.
    *
    * Deliberately *not* an injectable supervisor instance: the engine must always
@@ -565,6 +589,10 @@ function mcpFailureReason(notice: RuntimeNotice): string | undefined {
 /** Most skill load failures one health snapshot reports. */
 const MAX_SKILL_LOAD_NOTICES = 16;
 
+/** Servers per `mcpServerStatus/list` page, and the most pages one read follows. */
+const MCP_STATUS_PAGE_SIZE = 100;
+const MCP_STATUS_MAX_PAGES = 10;
+
 /** Stable, path-free identity for skills sharing a directory name. */
 function skillPathFingerprint(path: string): string {
   let hash = 2166136261;
@@ -640,6 +668,27 @@ function isCodexAccountAuthFailure(notice: RuntimeNotice): boolean {
     notice.severity === "error" &&
     /\bHTTP 401\b|\b401 Unauthorized\b|"token_expired"/.test(notice.detail ?? "")
   );
+}
+
+/**
+ * `account/read` failing because the server rejected the access token, read as
+ * the signed-out answer it stands for.
+ *
+ * Codex 0.162 answers with an RPC error ("workspace routing discovery
+ * unauthorized (401)") rather than `{ account: null }` once its token is
+ * refused and cannot be refreshed: an access-only copy in a container past its
+ * expiry, checked live on 2026-10-21. Read as an error, it left the sign-out
+ * unconfirmed, so status showed "temporarily unavailable" and a login pushed
+ * into `CODEX_HOME` was never reloaded.
+ */
+function signedOutAccountRead(error: unknown): { account: null; requiresOpenaiAuth: true } {
+  if (
+    error instanceof AppServerRpcError &&
+    /\bunauthorized \(401\)|\bHTTP 401\b|\b401 Unauthorized\b/i.test(error.message)
+  ) {
+    return { account: null, requiresOpenaiAuth: true };
+  }
+  throw error;
 }
 
 /**
@@ -724,6 +773,14 @@ const MAX_UNKNOWN_METHOD_LENGTH = 128;
 const MAX_ACCOUNT_PROOF_TURNS = 1024;
 const MAX_ACCOUNT_PROOF_ID_LENGTH = 256;
 
+/** Whether a thread's turns run with hosted web search off (`disabled`, not `cached`). */
+function deniesHostedSearch(config: EngineTurnConfig): boolean {
+  return (
+    Object.keys(codexNetworkDeniedConfig(config.policy)).length > 0 &&
+    codexNetworkDeniedSearchMode(config.policy) === "disabled"
+  );
+}
+
 export class AppServerEngine implements CodexEngine {
   readonly kind = "app-server" as const;
   readonly capabilities: EngineCapabilities = APP_SERVER_CAPABILITIES;
@@ -759,7 +816,13 @@ export class AppServerEngine implements CodexEngine {
   private pendingSignIn: { loginId: string; display: NativeAgentPendingSignIn } | null = null;
   private pendingSignInTimer: ReturnType<typeof setTimeout> | undefined;
   private completedLoginId: string | null = null;
+  /**
+   * The login this bridge started and app-server has not finished, browser or
+   * device code, so an abandoned sign-in can be cancelled. Never logged.
+   */
+  private activeLoginId: string | null = null;
   private loginSequence = 0;
+  private loginStart: Promise<{ result: unknown; generation: EngineGeneration }> | undefined;
   /**
    * The generation whose model has answered since its last refused turn or
    * account change. Once a forced refresh is rejected, app-server reports no
@@ -778,6 +841,8 @@ export class AppServerEngine implements CodexEngine {
    * swap the binary underneath the same overrides.
    */
   private hostedNetworkLockVerifiedGeneration: EngineGeneration | null = null;
+  /** The generation whose `config/read` confirmed tool declarations stay out of history. */
+  private toolHistoryLockVerifiedGeneration: EngineGeneration | null = null;
   /**
    * The stored login successfully loaded by a replacement child. A confirmed sign-out
    * that persists after the reload must not trigger another one, so a login that
@@ -837,9 +902,10 @@ export class AppServerEngine implements CodexEngine {
       onGenerationReady: (generation, previous) =>
         this.handleGenerationChange(generation, previous),
       onGenerationExit: (generation) => {
-        this.clearPendingSignIn();
+        this.forgetSignIn();
         this.loginSequence++;
         this.hostedNetworkLockVerifiedGeneration = null;
+        this.toolHistoryLockVerifiedGeneration = null;
         this.rejectAllWaiters();
         this.router.abandonGeneration(generation);
       },
@@ -967,7 +1033,7 @@ export class AppServerEngine implements CodexEngine {
   }
 
   async stop(): Promise<void> {
-    this.clearPendingSignIn();
+    this.forgetSignIn();
     await this.supervisor.stop();
     this.bindings.clear();
     this.rejectAllWaiters();
@@ -1102,6 +1168,7 @@ export class AppServerEngine implements CodexEngine {
       if (typeof loginId === "string" && loginId.length <= 512) {
         this.completedLoginId = loginId;
         if (this.pendingSignIn?.loginId === loginId) this.clearPendingSignIn();
+        if (this.activeLoginId === loginId) this.activeLoginId = null;
       }
     }
 
@@ -1219,6 +1286,7 @@ export class AppServerEngine implements CodexEngine {
     const generation = this.supervisor.getGeneration();
     void this.supervisor
       .request("account/read", { refreshToken })
+      .catch(signedOutAccountRead)
       .then((response) => this.applyAccountRead(response, sequence, generation, accountChanged))
       .catch((error: unknown) => {
         // Unconfirmed either way: leave admission alone. The notice still says
@@ -1468,13 +1536,43 @@ export class AppServerEngine implements CodexEngine {
 
   // --------------------------------------------------------------- threads
 
-  private toThreadParams(config: EngineTurnConfig): Record<string, unknown> {
+  /**
+   * Thread configuration only app-server can supply: with project resources
+   * off, the checkout's own skills, which the untrusted pin does not reach.
+   * Failure to establish the inventory refuses the thread, including an older
+   * app-server without skills/list.
+   */
+  private async projectResourceThreadConfig(
+    generation: EngineGeneration,
+    config: EngineTurnConfig,
+  ): Promise<Record<string, unknown>> {
+    if (!config.policy || config.policy.projectResources) return {};
+    let listed: unknown;
+    try {
+      listed = await this.supervisor.requestOnGeneration(generation, "skills/list", {
+        cwds: [config.cwd ?? this.options.cwd],
+        forceReload: true,
+      } satisfies SkillsListParams);
+    } catch (error) {
+      if (error instanceof AppServerRpcError && error.code === JSON_RPC_METHOD_NOT_FOUND) {
+        throw new Error("Codex cannot enforce disabled project resources without skills/list");
+      }
+      throw error;
+    }
+    return codexProjectSkillsConfig(listed);
+  }
+
+  private toThreadParams(
+    config: EngineTurnConfig,
+    extraConfig: Record<string, unknown> = {},
+  ): Record<string, unknown> {
     const approveAgentMcpTools =
       (config.policy?.approvals === "auto-approve" &&
         (config.approvalPolicy ?? "never") === "never" &&
         config.sandbox !== "read-only") ||
       (config.policy?.id === "coordinator-read-only" && Boolean(config.permissionProfile)) ||
       Boolean(config.workflowResultTool && config.agentMcp);
+    const cwd = config.cwd ?? this.options.cwd;
     const threadConfig: Record<string, unknown> = {
       // A sandbox's network switch stops commands, not hosted web search, which
       // runs on OpenAI's servers: off, or `cached` (no live page fetches) when
@@ -1483,6 +1581,10 @@ export class AppServerEngine implements CodexEngine {
       // process carries the same setting as process configuration, which
       // `assertHostedNetworkLock` reads back.
       ...codexNetworkDeniedConfig(config.policy),
+      // Project resources off: this thread does not load the checkout's own
+      // `.codex` configuration, even where the user trusts it in Codex.
+      ...codexProjectTrustConfig(config.policy, cwd),
+      ...extraConfig,
       ...(config.agentMcp
         ? {
             // Replace the complete server table. The app-server process may
@@ -1497,6 +1599,22 @@ export class AppServerEngine implements CodexEngine {
                     http_headers: { Authorization: `Bearer ${config.agentMcp.token}` },
                     required: false,
                     startup_timeout_sec: 3,
+                  },
+                }
+              : {}),
+            ...(config.agentMcp.artifacts
+              ? {
+                  // A workflow turn's artifact-only server. Its own bearer is
+                  // the turn's artifact grant; the result credential above
+                  // carries no artifact authority.
+                  [`mcp_servers.${ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME}`]: {
+                    url: new URL(ORKESTRATOR_ARTIFACT_MCP_PATH, config.agentMcp.url).toString(),
+                    http_headers: { Authorization: `Bearer ${config.agentMcp.artifacts.token}` },
+                    required: false,
+                    startup_timeout_sec: 3,
+                    // It serves only the artifact tools, which bypass the
+                    // approval policy on every Orkestrator server.
+                    default_tools_approval_mode: "approve",
                   },
                 }
               : {}),
@@ -1519,7 +1637,7 @@ export class AppServerEngine implements CodexEngine {
         : {}),
     };
     return {
-      cwd: config.cwd ?? this.options.cwd,
+      cwd,
       // Passed explicitly on every call rather than relying on inherited state.
       approvalPolicy: config.approvalPolicy ?? "never",
       approvalsReviewer: config.approvalsReviewer ?? "user",
@@ -1531,6 +1649,10 @@ export class AppServerEngine implements CodexEngine {
             sandbox:
               config.sandbox ?? (config.mode === "plan" ? "read-only" : "danger-full-access"),
           }),
+      // A configured model is stated on every call. An unset one is left to
+      // Codex: since 0.164.0 a resume keeps the thread's saved model rather
+      // than the global default, and `bindThread` adopts the model app-server
+      // reports, so the transcript labels what the next turn runs.
       ...(config.model ? { model: config.model } : {}),
       ...(config.personality ? { personality: config.personality } : {}),
       // `null` clears a previously set tier; `undefined` would leave it in place.
@@ -1576,26 +1698,105 @@ export class AppServerEngine implements CodexEngine {
     return generation;
   }
 
+  /**
+   * Refuse a turn that denies hosted search unless its request can declare
+   * only the current turn's tools.
+   *
+   * A thread that was offered `web__run` keeps that declaration in its
+   * history while `features.incremental_tools` is on, so dropping the tool
+   * from a later turn's configuration would not take it away. The process
+   * runs with the feature off (`codexAppServerConfigOverrides`); this reads
+   * that back once per generation, and for a resumed or forked thread
+   * `assertNoToolHistory` checks the history it inherits.
+   */
+  private async assertToolHistoryLock(
+    generation: EngineGeneration,
+    config: EngineTurnConfig,
+  ): Promise<void> {
+    // A coordinator's hosted network lock already read this back.
+    if (!deniesHostedSearch(config) || config.permissionProfile) return;
+    if (this.toolHistoryLockVerifiedGeneration === generation) return;
+    const result = await this.supervisor.requestOnGeneration<{ config?: unknown }>(
+      generation,
+      "config/read",
+      { cwd: config.cwd ?? this.options.cwd },
+    );
+    const gaps = codexToolHistoryGaps(result?.config);
+    if (gaps.length > 0) {
+      throw new Error(
+        `Codex did not confirm that tool declarations stay out of thread history (${gaps.join("; ")}), so this session, which has web search off, was refused`,
+      );
+    }
+    if (!this.supervisor.isReady() || this.supervisor.getGeneration() !== generation) {
+      throw new Error("Codex exited during tool history verification");
+    }
+    this.toolHistoryLockVerifiedGeneration = generation;
+  }
+
+  /**
+   * Refuse a search-denied turn on a thread whose history, or a fork
+   * ancestor's, still declares tools: a thread written while
+   * `incremental_tools` was on. A history that cannot be read is refused too.
+   * `release` lets go of a thread this call just resumed; a fork's source is
+   * checked before the fork and left as it was.
+   */
+  private async assertNoToolHistory(
+    threadId: string,
+    config: EngineTurnConfig,
+    release: boolean,
+  ): Promise<void> {
+    if (!deniesHostedSearch(config)) return;
+    const verdict = await (this.options.toolHistoryVerdict ?? ((id) => this.readToolHistory(id)))(
+      threadId,
+    ).catch((): ToolHistoryVerdict => "unknown");
+    if (verdict === "clean") return;
+    if (release) {
+      for (const [handle, binding] of this.bindings) {
+        if (binding.threadId === threadId) this.bindings.delete(handle);
+      }
+      await this.supervisor.request("thread/unsubscribe", { threadId }).catch(() => undefined);
+    }
+    throw new Error(
+      verdict === "declares"
+        ? "This Codex thread was offered web search in an earlier turn and still declares it in its history, so a turn with web search off was refused. Start a new session for it."
+        : "Could not confirm that this Codex thread's history declares no web search, so a turn with web search off was refused.",
+    );
+  }
+
+  private async readToolHistory(threadId: string): Promise<ToolHistoryVerdict> {
+    const codexHome = this.options.codexHome;
+    const resolve = async (id: string) =>
+      this.rolloutPaths.get(id) ??
+      findTranscriptPath(id, () => listTranscriptPaths(codexHome), { allowNegativeCache: false });
+    const path = await resolve(threadId);
+    return path ? threadToolHistoryVerdict(path, resolve) : "unknown";
+  }
+
   async startThread(options: StartThreadOptions): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(options.config);
+    await this.assertToolHistoryLock(generation, options.config);
+    const extra = await this.projectResourceThreadConfig(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
       activePermissionProfile?: { id?: unknown } | null;
-    }>(generation, "thread/start", this.toThreadParams(options.config));
+    }>(generation, "thread/start", this.toThreadParams(options.config, extra));
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     return this.bindThread(response.thread, options.config, response.model);
   }
 
   async resumeThread(threadId: string, options: ResumeThreadOptions): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(options.config);
+    await this.assertToolHistoryLock(generation, options.config);
+    const extra = await this.projectResourceThreadConfig(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
       activePermissionProfile?: { id?: unknown } | null;
-    }>(generation, "thread/resume", { threadId, ...this.toThreadParams(options.config) });
+    }>(generation, "thread/resume", { threadId, ...this.toThreadParams(options.config, extra) });
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     const thread = this.bindThread(response.thread, options.config, response.model);
+    await this.assertNoToolHistory(thread.id ?? threadId, options.config, true);
     // app-server reconstructs turn history on resume by default.
     thread.turns = this.extractTurns(response.thread);
     return thread;
@@ -1646,6 +1847,11 @@ export class AppServerEngine implements CodexEngine {
     lastTurnId?: string,
   ): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(config);
+    await this.assertToolHistoryLock(generation, config);
+    // The whole source, not just the forked prefix: stricter, and it needs no
+    // rollout the fork may not have written yet.
+    await this.assertNoToolHistory(threadId, config, false);
+    const extra = await this.projectResourceThreadConfig(generation, config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
@@ -1653,7 +1859,7 @@ export class AppServerEngine implements CodexEngine {
     }>(generation, "thread/fork", {
       threadId,
       ...(lastTurnId ? { lastTurnId } : {}),
-      ...this.toThreadParams(config),
+      ...this.toThreadParams(config, extra),
     });
     this.assertPermissionProfile(response.activePermissionProfile, config);
     return this.bindThread(response.thread, config, response.model);
@@ -1762,11 +1968,7 @@ export class AppServerEngine implements CodexEngine {
     rateLimits: unknown;
   }> {
     const [mcp, skills, hooks, rateLimits] = await Promise.allSettled([
-      this.supervisor.request("mcpServerStatus/list", {
-        limit: 100,
-        detail: "full",
-        ...(threadId ? { threadId } : {}),
-      }),
+      this.listMcpServerStatus(threadId),
       this.supervisor.request("skills/list", {
         cwds: [this.options.cwd],
       }),
@@ -1846,12 +2048,35 @@ export class AppServerEngine implements CodexEngine {
     };
   }
 
+  /**
+   * Every page of `mcpServerStatus/list`, merged into one response in the
+   * server's order. Bounded by `MCP_STATUS_MAX_PAGES`; past it the merged
+   * response keeps the last `nextCursor`, so a reader can tell it is partial.
+   */
+  private async listMcpServerStatus(threadId?: string | null): Promise<unknown> {
+    const data: unknown[] = [];
+    let cursor: string | undefined;
+    let last: Record<string, unknown> = {};
+    for (let page = 0; page < MCP_STATUS_MAX_PAGES; page += 1) {
+      const response = await this.supervisor.request("mcpServerStatus/list", {
+        ...(cursor ? { cursor } : {}),
+        limit: MCP_STATUS_PAGE_SIZE,
+        detail: "full",
+        ...(threadId ? { threadId } : {}),
+      });
+      last = objectRecord(response);
+      // An unrecognised shape is passed through as the single answer.
+      if (!Array.isArray(last.data)) return page === 0 ? response : { ...last, data };
+      data.push(...last.data);
+      cursor = typeof last.nextCursor === "string" && last.nextCursor ? last.nextCursor : undefined;
+      if (!cursor) break;
+    }
+    // The last page's own `nextCursor` stays: set only when the bound cut it short.
+    return { ...last, data };
+  }
+
   async listMcpServers(threadId?: string | null): Promise<unknown> {
-    const response = await this.supervisor.request("mcpServerStatus/list", {
-      limit: 100,
-      detail: "full",
-      ...(threadId ? { threadId } : {}),
-    });
+    const response = await this.listMcpServerStatus(threadId);
     const root = objectRecord(response);
     if (!Array.isArray(root.data)) return response;
     return {
@@ -1926,6 +2151,12 @@ export class AppServerEngine implements CodexEngine {
     this.pendingSignIn = null;
   }
 
+  /** Forget both the display and the cancellable login. */
+  private forgetSignIn(): void {
+    this.clearPendingSignIn();
+    this.activeLoginId = null;
+  }
+
   async readAccount(): Promise<unknown> {
     // Order by request, but only a successful response supersedes an older
     // one. A failed routine read leaves a pending failure check free to land.
@@ -1934,7 +2165,9 @@ export class AppServerEngine implements CodexEngine {
     // On-demand UI auth-status reads must not force a token refresh here (see
     // `checkAccountSignIn`). App-server refreshes a stale token on its own.
     const loginSequence = this.loginSequence;
-    const response = await this.supervisor.request("account/read", { refreshToken: false });
+    const response = await this.supervisor
+      .request("account/read", { refreshToken: false })
+      .catch(signedOutAccountRead);
     // Auth-status reads answer from account/read itself. A connector reload is
     // independent work and must not turn a valid account answer into an error.
     void this.applyAccountRead(response, sequence, generation, false).catch((error: unknown) => {
@@ -1943,8 +2176,7 @@ export class AppServerEngine implements CodexEngine {
         redactSecrets(error instanceof Error ? error.message : String(error)),
       );
     });
-    if (loginSequence === this.loginSequence && objectRecord(response).account)
-      this.clearPendingSignIn();
+    if (loginSequence === this.loginSequence && objectRecord(response).account) this.forgetSignIn();
     const pendingSignIn = normalizePendingSignIn(this.pendingSignIn?.display);
     if (!pendingSignIn) this.clearPendingSignIn();
     return { ...objectRecord(response), ...(pendingSignIn ? { pendingSignIn } : {}) };
@@ -1973,8 +2205,8 @@ export class AppServerEngine implements CodexEngine {
    */
   async beginAccountLogin(method: "browser" | "device-code" = "browser"): Promise<unknown> {
     const sequence = ++this.loginSequence;
-    this.clearPendingSignIn();
-    const response = await this.supervisor.request(
+    this.forgetSignIn();
+    const start = this.supervisor.requestWithGeneration(
       "account/login/start",
       method === "device-code"
         ? {
@@ -1986,7 +2218,23 @@ export class AppServerEngine implements CodexEngine {
             useHostedLoginSuccessPage: true,
           },
     );
+    this.loginStart = start;
+    let response: unknown;
+    try {
+      response = (await start).result;
+    } finally {
+      if (this.loginStart === start) this.loginStart = undefined;
+    }
     const raw = objectRecord(response);
+    if (
+      sequence === this.loginSequence &&
+      typeof raw.loginId === "string" &&
+      raw.loginId.length > 0 &&
+      raw.loginId.length <= 512 &&
+      raw.loginId !== this.completedLoginId
+    ) {
+      this.activeLoginId = raw.loginId;
+    }
     const display = normalizePendingSignIn({
       url: raw.verificationUrl,
       code: raw.userCode,
@@ -2002,7 +2250,9 @@ export class AppServerEngine implements CodexEngine {
     ) {
       this.pendingSignIn = { loginId: raw.loginId, display };
       this.pendingSignInTimer = setTimeout(
-        () => this.clearPendingSignIn(),
+        // The device code has lapsed, so nobody can finish this login: release
+        // app-server's side of it too rather than leaving it to time out there.
+        () => void this.cancelAccountLogin().catch(() => undefined),
         Math.max(0, display.expiresAt - Date.now()),
       );
       this.pendingSignInTimer.unref?.();
@@ -2010,8 +2260,55 @@ export class AppServerEngine implements CodexEngine {
     return response;
   }
 
+  /**
+   * Abandon the sign-in this bridge started, if one is still open. App-server
+   * stops waiting on its loopback callback or device code (`account/login/cancel`).
+   * `none` when nothing was open or app-server had already finished it.
+   */
+  async cancelAccountLogin(): Promise<"canceled" | "none"> {
+    let loginId = this.activeLoginId;
+    const start = this.loginStart;
+    let generation = this.supervisor.getGeneration();
+    // Fence the display immediately, but keep the ID and expiry until the RPC
+    // succeeds so a failed cancellation can be retried.
+    const sequence = ++this.loginSequence;
+    if (!loginId && start) {
+      const started = await start;
+      generation = started.generation;
+      if (generation !== this.supervisor.getGeneration()) return "none";
+      const raw = objectRecord(started.result);
+      if (
+        typeof raw.loginId === "string" &&
+        raw.loginId.length > 0 &&
+        raw.loginId.length <= 512 &&
+        raw.loginId !== this.completedLoginId
+      ) {
+        loginId = raw.loginId;
+        if (sequence === this.loginSequence) {
+          this.activeLoginId = loginId;
+          this.pendingSignInTimer = setTimeout(
+            () => void this.cancelAccountLogin().catch(() => undefined),
+            NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
+          );
+          this.pendingSignInTimer.unref?.();
+        }
+      }
+    }
+    if (!loginId) return "none";
+    const response = await this.supervisor.requestOnGeneration(generation, "account/login/cancel", {
+      loginId,
+    });
+    if (
+      sequence === this.loginSequence &&
+      this.activeLoginId === loginId &&
+      generation === this.supervisor.getGeneration()
+    )
+      this.forgetSignIn();
+    return objectRecord(response).status === "canceled" ? "canceled" : "none";
+  }
+
   async logoutAccount(): Promise<void> {
-    this.clearPendingSignIn();
+    this.forgetSignIn();
     this.loginSequence++;
     await this.supervisor.request("account/logout", undefined);
   }
@@ -2225,21 +2522,28 @@ export class AppServerEngine implements CodexEngine {
    * Releases a thread. Deliberately `thread/unsubscribe`, never `thread/delete`:
    * closing a tab must not destroy the user's conversation or its descendants.
    */
-  async unsubscribeThread(handle: string): Promise<void> {
+  async unsubscribeThread(handle: string, requireConfirmation = false): Promise<void> {
     const binding = this.bindings.get(handle);
-    this.accountProofTurns.delete(binding?.threadId ?? handle);
-    this.rolloutPaths.delete(binding?.threadId ?? handle);
-    this.bindings.delete(handle);
-    if (!binding) return;
+    const threadId = binding?.threadId ?? handle;
+    if (!binding && !requireConfirmation) {
+      this.accountProofTurns.delete(threadId);
+      this.rolloutPaths.delete(threadId);
+      return;
+    }
     try {
-      await this.supervisor.request("thread/unsubscribe", { threadId: binding.threadId });
+      await this.supervisor.request("thread/unsubscribe", { threadId });
     } catch (error) {
-      // Already gone, or the process died — either way there is nothing to free.
+      // Policy changes must prove that a loaded thread released its old config.
+      // Keep the binding on failure so a retry can still unsubscribe it.
+      if (requireConfirmation) throw error;
       console.warn(
         "[codex-bridge] thread/unsubscribe failed:",
         error instanceof Error ? error.message : error,
       );
     }
+    this.accountProofTurns.delete(threadId);
+    this.rolloutPaths.delete(threadId);
+    this.bindings.delete(handle);
   }
 
   /**

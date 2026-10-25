@@ -10,6 +10,7 @@ import {
   type CursorApiKeySource,
 } from "./agent-test-cursor-credential.js";
 import { resolveGitHubRepository } from "./github.js";
+import { gitHubCredentialSource, resolveGitHubToken } from "./github-credentials.js";
 import { isStartFeaturePlanningInput } from "@orkestrator/protocol/feature-planning";
 import { assertValidPromptAttachments, assertValidPromptImages } from "./prompt-attachments.js";
 import type {
@@ -105,6 +106,24 @@ export async function requireLinearApiKey(context: CommandContext): Promise<stri
   return auth.apiKey;
 }
 
+async function gitHubTokenFromConfig(globalConfig: AppConfig["global"]): Promise<string> {
+  const token = await resolveGitHubToken(globalConfig);
+  if (!token) {
+    throw new Error(
+      gitHubCredentialSource(globalConfig) === "host-cli"
+        ? "GitHub is not configured. Sign in with `gh auth login` (or from Settings) and try again."
+        : "GitHub is not configured. Add a GitHub personal access token in Settings and try again.",
+    );
+  }
+  return token;
+}
+
+/** The GitHub credential selected in Settings, for commands not tied to a project. */
+export async function requireGitHubToken(context: CommandContext): Promise<string> {
+  const config = await context.storage.loadConfig();
+  return gitHubTokenFromConfig(config.global);
+}
+
 export async function requireGitHubProject(
   context: CommandContext,
   projectId: string,
@@ -114,12 +133,7 @@ export async function requireGitHubProject(
     context.storage.loadConfig(),
   ]);
   if (!project) throw new Error(`Project not found: ${projectId}`);
-  const token = config.global.githubToken?.trim();
-  if (!token) {
-    throw new Error(
-      "GitHub is not configured. Add a global GitHub token in Settings and try again.",
-    );
-  }
+  const token = await gitHubTokenFromConfig(config.global);
   return { token, repository: resolveGitHubRepository(project.gitUrl) };
 }
 

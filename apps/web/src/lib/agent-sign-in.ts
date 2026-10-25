@@ -26,5 +26,5 @@ export function agentTerminalSignInCommand(platform: string): string | undefined
 
 /** Platforms whose settings section can sign the account in. */
 export function agentSettingsCanSignIn(platform: string): boolean {
-  return platform === "codex" || platform === "cursor";
+  return platform === "codex" || platform === "cursor" || platform === "opencode";
 }

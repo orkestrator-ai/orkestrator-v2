@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { KanbanBoard } from "@/components/kanban";
 import { useProjectStore, useUIStore } from "@/stores";
 import { CoordinatorPanel } from "./CoordinatorPanel";
+import { LeafModeCoordinatorGate } from "./LeafModeCoordinatorGate";
 
 export function ProjectWorkspace({
   projectId,
@@ -44,7 +45,9 @@ export function ProjectWorkspace({
   return tab === "coordinator" ? (
     // A project switch must discard the prior checkout's live chat state even
     // when the next checkout fails to load.
-    <CoordinatorPanel key={projectId} projectId={projectId} />
+    <LeafModeCoordinatorGate key={projectId} projectId={projectId}>
+      <CoordinatorPanel projectId={projectId} />
+    </LeafModeCoordinatorGate>
   ) : (
     <div id={`project-panel-${tab}`} role="tabpanel" className="h-full">
       <KanbanBoard projectId={projectId} />

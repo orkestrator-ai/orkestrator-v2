@@ -44,16 +44,32 @@ export {
   TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
 } from "@orkestrator/protocol/gateway-event-stream";
 
-export async function listen<T>(
+/** The part of a transport that delivers events. */
+export interface EventSource {
+  listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
+  eventStreamReady?(event: string): Promise<void>;
+}
+
+export function listen<T>(
   event: string,
   handler: (event: NativeEvent<T>) => unknown,
   options: ListenOptions = {},
 ): Promise<UnlistenFn> {
-  if (!window.orkestrator) {
+  return listenOn(window.orkestrator, event, handler, options);
+}
+
+/** `listen` against an explicit transport (the portal's, for example). */
+export async function listenOn<T>(
+  source: EventSource | undefined,
+  event: string,
+  handler: (event: NativeEvent<T>) => unknown,
+  options: ListenOptions = {},
+): Promise<UnlistenFn> {
+  if (!source) {
     return () => {};
   }
 
-  const nativeUnlisten = window.orkestrator.listen<T>(event, (payload) => {
+  const nativeUnlisten = source.listen<T>(event, (payload) => {
     return handler({ payload });
   });
   let listening = true;
@@ -79,7 +95,7 @@ export async function listen<T>(
 
   let readyTimeout: ReturnType<typeof setTimeout> | null = null;
   try {
-    const ready = window.orkestrator.eventStreamReady?.(event);
+    const ready = source.eventStreamReady?.(event);
     if (ready) {
       await Promise.race([
         ready,

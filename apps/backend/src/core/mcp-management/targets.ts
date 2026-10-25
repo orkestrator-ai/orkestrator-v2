@@ -19,7 +19,10 @@ import {
 } from "@orkestrator/protocol/agent-platforms";
 import { mcpFailure, type McpTargetContext } from "@orkestrator/protocol/mcp-management";
 
+import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
+
 import type { Environment, Project } from "../models.js";
+import { resolveEnvironmentExecutionPolicy } from "../native-agent-execution-policy.js";
 import type { TargetContextInfo } from "./types.js";
 
 export interface TargetStorage {
@@ -35,6 +38,8 @@ export interface ResolvedTarget {
   context: McpTargetContext;
   environment?: Environment;
   readOnlyReason?: string;
+  /** Container targets: `/workspace` is a persistent volume, so project files survive rebuilds. */
+  persistentWorkspace?: boolean;
 }
 
 const PREFIX = "mcp1";
@@ -61,11 +66,8 @@ export function environmentTargetId(provider: AgentPlatform, environment: Enviro
   return `${PREFIX}~${provider}~env~${environment.id}~${incarnation(environment)}`;
 }
 
-export const CONTAINER_READ_ONLY_REASON =
-  "This container keeps its own copy of provider configuration, made when it was created, and a copy edited " +
-  "here would be lost when the container is recreated. Environment-private editing needs the durable " +
-  "environment overlay, which this backend does not provide yet. Edit the backend-user configuration to " +
-  "change what newly created containers receive.";
+export const CONTAINER_NOT_CREATED_REASON =
+  "This environment has no container yet; start it to edit its configuration.";
 
 function backendTarget(provider: AgentPlatform, instanceId: string): ResolvedTarget {
   return {
@@ -97,16 +99,30 @@ async function environmentTarget(
     worktreePath: local ? environment.worktreePath : undefined,
     containerId: local ? undefined : (environment.containerId ?? undefined),
     environmentStatus: environment.status,
+    ...(local
+      ? {
+          projectResources: resolveEnvironmentExecutionPolicy(environment, "interactive-native")
+            .projectResources,
+        }
+      : {}),
   };
   let readOnlyReason: string | undefined;
-  if (!local) readOnlyReason = CONTAINER_READ_ONLY_REASON;
-  else if (!environment.worktreePath) readOnlyReason = "This environment has no worktree yet.";
+  if (!local && !environment.containerId) readOnlyReason = CONTAINER_NOT_CREATED_REASON;
+  else if (local && !environment.worktreePath)
+    readOnlyReason = "This environment has no worktree yet.";
+  const lifecycle = local ? null : parseContainerLifecycle(environment.containerLifecycle);
   return {
     targetId: environmentTargetId(provider, environment),
     provider,
     info,
     environment,
     readOnlyReason,
+    ...(lifecycle
+      ? {
+          persistentWorkspace:
+            lifecycle.supported && lifecycle.record.storage.format === "volume-v1",
+        }
+      : {}),
     context: {
       kind: "environment",
       environmentId: environment.id,

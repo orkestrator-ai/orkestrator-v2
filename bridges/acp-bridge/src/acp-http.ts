@@ -6,6 +6,7 @@ import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-o
 import {
   DISPATCH_OUTCOME_LOST_KIND,
   isNativeAgentExecutionPolicy,
+  type BridgePromptDispatchStatus,
 } from "@orkestrator/protocol/native-agent";
 import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import {
@@ -15,6 +16,7 @@ import {
 import {
   commandCatalogue,
   refreshCommandCatalogue,
+  compactCommandSelection,
   resolveSelectedCommand,
 } from "./acp-commands.js";
 import { acpReportedPolicy, effectiveExecutionPolicy } from "./acp-policy.js";
@@ -100,6 +102,19 @@ import {
 import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
 import { primeCommandChanges, settleCommandChangeWindows } from "./acp-command-changes.js";
+import {
+  CHANGE_EVIDENCE_ACK_ROUTE,
+  CHANGE_EVIDENCE_BODY_ROUTE,
+  CHANGE_EVIDENCE_ROUTE,
+  changeEvidenceAckRouteBody,
+  changeEvidenceBodyRouteBody,
+  changeEvidenceReadBody,
+} from "@orkestrator/protocol/node/change-tracking/evidence-routes";
+import {
+  beginAcpTurnEvidence,
+  changeEvidenceSpool,
+  endAcpTurnEvidence,
+} from "./change-evidence.js";
 import { holdParkedRequest, type AcpHoldFamily } from "./acp-interaction-hold.js";
 
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
@@ -119,6 +134,26 @@ export async function route(
   if (!authenticated(request)) return json(response, 401, { error: "Unauthorized" });
   if (url.pathname === "/global/auth-check" && request.method === "GET") {
     return json(response, 200, { ok: true });
+  }
+  // Change evidence (docs/architecture/change-tracking.md). Reads never touch
+  // a session; only the backend's durable ack releases entries and bodies.
+  if (url.pathname === CHANGE_EVIDENCE_ROUTE && request.method === "GET") {
+    return json(
+      response,
+      200,
+      changeEvidenceReadBody(changeEvidenceSpool(), (name) => url.searchParams.get(name)),
+    );
+  }
+  if (url.pathname === CHANGE_EVIDENCE_BODY_ROUTE && request.method === "GET") {
+    return json(
+      response,
+      200,
+      changeEvidenceBodyRouteBody(changeEvidenceSpool(), (name) => url.searchParams.get(name)),
+    );
+  }
+  if (url.pathname === CHANGE_EVIDENCE_ACK_ROUTE && request.method === "POST") {
+    const answer = changeEvidenceAckRouteBody(changeEvidenceSpool(), await readJson(request));
+    return json(response, answer.ok ? 200 : 400, answer);
   }
   if (url.pathname === "/global/auth" && request.method === "GET") {
     const signedIn =
@@ -215,7 +250,7 @@ export async function route(
     return json(response, answer.status, answer.body);
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(close|messages|transcript(?:\/(?:detail|page))?|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+(?:\/hold)?)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+(?:\/hold)?)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(close|messages|transcript(?:\/(?:detail|page))?|status|activity|prompt|compact|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+(?:\/hold)?)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+(?:\/hold)?)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
@@ -269,6 +304,7 @@ export async function route(
     state.closing &&
     request.method === "POST" &&
     (action === "prompt" ||
+      action === "compact" ||
       action === "attach" ||
       action === "config" ||
       action?.startsWith("approvals/") ||
@@ -315,6 +351,8 @@ export async function route(
       status: state.status,
       error: state.error,
       revision: state.revision,
+      // The backend's interactive snapshot reads the title from this route.
+      ...(state.title ? { title: state.title } : {}),
       composer: state.sessionConfig.composer,
       ...(state.acpSessionId
         ? { resumableSessionId: externalSessionToken(state.acpSessionId) }
@@ -386,20 +424,25 @@ export async function route(
    *
    * Read-only, and never spawns: it exists so a caller whose prompt request
    * lost its acknowledgement can settle the question from the journal instead
-   * of asking the user to. `dispatched` is only ever an explicit positive.
+   * of asking the user to. `dispatched` is only ever an explicit positive;
+   * `lost` is exactly the prompt route's 410 `DISPATCH_OUTCOME_LOST_KIND`.
    */
   if (action === "dispatch" && request.method === "GET") {
     const requestId = url.searchParams.get("requestId") || "";
     const entry = requestId ? state.promptJournal.get(requestId) : undefined;
+    // `prepared` means the route owns the id but has not handed the prompt to
+    // the agent yet: `unknown`. `ambiguous` means a previous process died
+    // without a durable answer and the prompt route refuses the id for good:
+    // `lost`, which is neither "dispatched" nor "never sent".
+    const dispatch: BridgePromptDispatchStatus =
+      entry &&
+      (entry.state === "accepted" || entry.state === "completed" || entry.state === "failed")
+        ? "dispatched"
+        : entry?.state === "ambiguous"
+          ? "lost"
+          : "unknown";
     return json(response, 200, {
-      // `prepared` means the route owns the id but has not handed the prompt to
-      // the agent yet. `ambiguous` means a previous process died without a
-      // durable answer. Neither is an explicit positive.
-      dispatch:
-        entry &&
-        (entry.state === "accepted" || entry.state === "completed" || entry.state === "failed")
-          ? "dispatched"
-          : "unknown",
+      dispatch,
       // How the turn ended, once it has: the backend's `turnTerminalError`.
       ...(entry && (entry.state === "completed" || entry.state === "failed")
         ? {
@@ -516,8 +559,18 @@ export async function route(
     const requestId = url.searchParams.get("requestId") || "";
     return json(response, 200, { structuredOutput: state.structured.get(requestId) ?? null });
   }
-  if (action === "prompt" && request.method === "POST") {
-    const body = await readJson(request);
+  if ((action === "prompt" || action === "compact") && request.method === "POST") {
+    let body = await readJson(request);
+    if (action === "compact") {
+      // The shared `compact` session action. ACP has no compaction request, so
+      // it runs the agent's own `/compact` as a selected command: everything
+      // below — the journal, the busy check, revalidation after an attach —
+      // applies to it unchanged. Only an optional `requestId` is read.
+      body = {
+        prompt: "/compact",
+        ...(typeof body.requestId === "string" ? { requestId: body.requestId } : {}),
+      };
+    }
     const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
     const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
     const readOnly = body.readOnly;
@@ -531,7 +584,7 @@ export async function route(
     // here (`literalCommandSuppression`), so the text is passed unchanged.
     const commandFields = readBridgePromptCommandFields(body);
     if (!commandFields.ok) return json(response, 400, { error: commandFields.error });
-    const selectedCommand = commandFields.command;
+    let selectedCommand = commandFields.command;
     const workflowResult = parseWorkflowResultTurn(body.workflowResultTool, body.workflowResultKey);
     if (!workflowResult.ok) return json(response, 400, { error: workflowResult.error });
     if (selectedCommand && schema) {
@@ -577,6 +630,13 @@ export async function route(
         return json(response, 409, { error: "Prompt dispatch is still preparing" });
       }
       return json(response, 202, { accepted: true, duplicate: true });
+    }
+    if (action === "compact") {
+      // Existing request ids keep their journaled outcome even when the live
+      // inventory no longer offers /compact. Only new work needs a selection.
+      const compact = compactCommandSelection(state);
+      if (!compact.ok) return json(response, 422, commandUnavailableResponse(compact.message));
+      selectedCommand = compact.command;
     }
     if (state.status === "running" || state.dispatching) {
       return json(response, 409, { error: "Session is already running" });
@@ -732,6 +792,7 @@ export async function route(
     // Grok reports a command only once it is running, so each shell call is
     // measured from the latest snapshot; this is the turn's first one.
     await primeCommandChanges();
+    beginAcpTurnEvidence(state, requestId || undefined);
     const acpPrompt = schema ? `${prompt}\n\n${structuredPromptInstruction(schema)}` : prompt;
     const promptCompletion = dispatchAcpPrompt(
       state,
@@ -843,6 +904,14 @@ export async function route(
         // by the agent — ACP has no status for that, so settle it explicitly.
         reconcileStaleToolParts(state);
         settleCommandChangeWindows(state);
+        endAcpTurnEvidence(
+          state,
+          stopReason === "cancelled"
+            ? "cancelled"
+            : terminalError || state.outputTruncated
+              ? "failed"
+              : "succeeded",
+        );
         state.currentTurnOutput = null;
         if (!state.outputTruncated && state.child === child && state.status !== "error") {
           state.status = "idle";
@@ -875,6 +944,7 @@ export async function route(
         cancelCursorToolMetadataReconcile(state);
         reconcileStaleToolParts(state, true);
         settleCommandChangeWindows(state);
+        endAcpTurnEvidence(state, "failed");
         if (requestId)
           setPromptJournal(state, {
             requestId,

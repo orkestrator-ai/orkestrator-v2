@@ -8,8 +8,10 @@
  * same-URL reload); `pins-changed` means mutation-driven re-resolution moved
  * results, which are read back with `getPinResults`. Show on page uses the
  * desktop's bounded navigate → wait → resolve → scroll flow when available.
+ * Every result carries the document generation it was resolved against, and
+ * only results of the tab's newest document are kept.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   BROWSER_PREVIEW_CAPTURE_EVENT,
   type BrowserPreviewAnchorQuery,
@@ -75,6 +77,47 @@ function resultMap(results: readonly BrowserPreviewAnchorResult[]) {
   return new Map(results.map((result) => [result.annotationId, result.resolution] as const));
 }
 
+/** Newest document generation among `results`, or null when none carries one. */
+export function newestGeneration(results: Iterable<WebAnnotationAnchorResolution>): number | null {
+  let newest: number | null = null;
+  for (const resolution of results) {
+    const generation = resolution.documentGeneration;
+    if (typeof generation === "number" && (newest === null || generation > newest)) {
+      newest = generation;
+    }
+  }
+  return newest;
+}
+
+/**
+ * Only the results resolved against the tab's current document. Main counts
+ * documents per preview view, so a result from an older generation describes
+ * a page that is no longer shown (Show on page navigated, the page reloaded);
+ * it is dropped rather than left on screen. A result without a generation
+ * (older desktop builds) is kept, and so is everything while the current
+ * generation is unknown.
+ */
+export function currentDocumentResults(
+  results: ReadonlyMap<string, WebAnnotationAnchorResolution>,
+  generation: number | null,
+): ReadonlyMap<string, WebAnnotationAnchorResolution> {
+  if (generation === null) return results;
+  let stale = false;
+  for (const resolution of results.values()) {
+    if (resolution.documentGeneration !== null && resolution.documentGeneration !== generation) {
+      stale = true;
+      break;
+    }
+  }
+  if (!stale) return results;
+  return new Map(
+    Array.from(results).filter(
+      ([, resolution]) =>
+        resolution.documentGeneration === null || resolution.documentGeneration === generation,
+    ),
+  );
+}
+
 export function useAnnotationPins({
   tabId,
   environmentId,
@@ -95,16 +138,75 @@ export function useAnnotationPins({
   const [pinResults, setPinResults] = useState<ReadonlyMap<string, WebAnnotationAnchorResolution>>(
     new Map(),
   );
+  // Newest document generation main reported for this tab's view. It only
+  // moves forward within one view (events and replies can arrive in either
+  // order), and starts again when the tab or its attached view changes.
+  const generationRef = useRef<number | null>(null);
+  const viewRef = useRef({});
+  useEffect(() => {
+    const view = {};
+    viewRef.current = view;
+    return () => {
+      if (viewRef.current === view) viewRef.current = {};
+    };
+  }, [tabId, previewAttached, wanted]);
+  useEffect(() => {
+    generationRef.current = null;
+  }, [tabId, previewAttached]);
+  const noteGeneration = useCallback((generation: number | null | undefined) => {
+    if (typeof generation !== "number") return;
+    if (generationRef.current === null || generation > generationRef.current) {
+      generationRef.current = generation;
+    }
+  }, []);
+  /** Apply results, keeping only those of the current document. */
+  const applyResults = useCallback(
+    (
+      update: (
+        current: ReadonlyMap<string, WebAnnotationAnchorResolution>,
+      ) => ReadonlyMap<string, WebAnnotationAnchorResolution>,
+      view = viewRef.current,
+      snapshotGeneration?: number | null,
+    ) => {
+      setPinResults((current) => {
+        if (view !== viewRef.current) return current;
+        const next = update(current);
+        const generation = snapshotGeneration ?? newestGeneration(next.values());
+        if (
+          generation !== null &&
+          generationRef.current !== null &&
+          generation < generationRef.current
+        )
+          return current;
+        noteGeneration(generation);
+        return currentDocumentResults(next, generationRef.current);
+      });
+    },
+    [noteGeneration],
+  );
   const lastPinsRef = useRef<BrowserPreviewAnchorQuery[]>([]);
   const wantedRef = useRef(wanted);
-  wantedRef.current = wanted;
   const selectedRef = useRef(selectedId);
-  selectedRef.current = selectedId;
   const itemsRef = useRef(items);
-  itemsRef.current = items;
+  useLayoutEffect(() => {
+    wantedRef.current = wanted;
+    selectedRef.current = selectedId;
+    itemsRef.current = items;
+  });
   const pinKey = items
     .map((item) => `${item.id}:${item.currentCaptureId}:${item.state}:${item.hidden ? 1 : 0}`)
     .join("|");
+  // While pins are not wanted the effect below clears them from the page each
+  // time it reruns; their results are dropped at the same points, while
+  // rendering.
+  const unwantedKey = wanted
+    ? null
+    : JSON.stringify([tabId, environmentId, currentPage?.pageKey ?? null, pinKey, selectedId]);
+  const [clearedFor, setClearedFor] = useState(unwantedKey);
+  if (unwantedKey !== clearedFor) {
+    setClearedFor(unwantedKey);
+    if (unwantedKey !== null) setPinResults(new Map());
+  }
 
   const buildPins = useCallback(async () => {
     const visible = itemsRef.current
@@ -126,15 +228,22 @@ export function useAnnotationPins({
     async (pins: BrowserPreviewAnchorQuery[]) => {
       const api = getBrowserPreviewCaptureApi();
       if (!api) return;
+      const view = viewRef.current;
+      const generation = generationRef.current;
       lastPinsRef.current = pins;
       const results = await api.showPins({
         tabId,
         pins,
         focusedAnnotationId: selectedRef.current,
       });
-      if (wantedRef.current) setPinResults(resultMap(results ?? []));
+      if (wantedRef.current)
+        applyResults(
+          () => resultMap(results ?? []),
+          view,
+          newestGeneration((results ?? []).map((entry) => entry.resolution)) ?? generation,
+        );
     },
-    [tabId],
+    [applyResults, tabId],
   );
 
   useEffect(() => {
@@ -142,7 +251,6 @@ export function useAnnotationPins({
     if (!api) return;
     if (!wanted) {
       lastPinsRef.current = [];
-      setPinResults(new Map());
       void api.clearPins(tabId).catch(() => undefined);
       return;
     }
@@ -168,17 +276,24 @@ export function useAnnotationPins({
       const api = getBrowserPreviewCaptureApi();
       if (!api) return;
       if (event.status === "pins-invalidated") {
+        // A new document: the previous page's results go now, not when the
+        // re-sent pins come back.
+        noteGeneration(event.documentGeneration);
+        applyResults((current) => currentDocumentResults(current, generationRef.current));
         void send(lastPinsRef.current).catch(() => undefined);
       } else if (event.status === "pins-changed" && api.getPinResults) {
+        noteGeneration(event.documentGeneration);
+        const view = viewRef.current;
         void api
           .getPinResults(tabId)
           .then((snapshot) => {
-            if (snapshot && wantedRef.current) setPinResults(resultMap(snapshot.results));
+            if (!snapshot || !wantedRef.current) return;
+            applyResults(() => resultMap(snapshot.results), view, snapshot.documentGeneration);
           })
           .catch(() => undefined);
       }
     });
-  }, [send, tabId]);
+  }, [applyResults, noteGeneration, send, tabId]);
 
   useEffect(
     () => () => {
@@ -208,6 +323,7 @@ export function useAnnotationPins({
           reason: "Showing notes on the page needs the Orkestrator desktop preview.",
         };
       }
+      const view = viewRef.current;
       const record = await loadWebAnnotationCapture(environmentId, annotation.currentCaptureId);
       const pin = record ? pinQuery(annotation, 1, record) : null;
       if (!record || !pin) {
@@ -233,10 +349,18 @@ export function useAnnotationPins({
             pins: others,
             timeoutMs: SHOW_ON_PAGE_TIMEOUT_MS,
           });
-          setPinResults((current) => new Map(current).set(annotation.id, result.resolution));
+          // After a navigation this is the destination document: results
+          // for the page that was left are dropped with it.
+          applyResults(
+            (current) => new Map(current).set(annotation.id, result.resolution),
+            view,
+            result.documentGeneration,
+          );
           switch (result.outcome) {
             case "shown":
               return { status: "shown", navigated: result.navigated };
+            case "hidden":
+              return { status: "hidden" };
             case "not-found":
               return {
                 status: "not-found",
@@ -267,9 +391,12 @@ export function useAnnotationPins({
         });
         const resolution = results.find((item) => item.annotationId === annotation.id)?.resolution;
         if (!resolution) return { status: "not-found", reason: "no match" };
-        setPinResults((current) => new Map(current).set(annotation.id, resolution));
+        applyResults(() => resultMap(results), view);
         if (resolution.offPage) return { status: "off-page", route: annotation.page.route };
-        if (resolution.state === "matched" && !resolution.historical) return { status: "shown" };
+        if (resolution.state === "matched" && !resolution.historical) {
+          const rect = resolution.rect;
+          return { status: rect && (rect.width > 0 || rect.height > 0) ? "shown" : "hidden" };
+        }
         return { status: "not-found", reason: anchorStateLabel(resolution), resolution };
       } catch (error) {
         return {
@@ -278,7 +405,7 @@ export function useAnnotationPins({
         };
       }
     },
-    [currentPage, environmentId, previewAttached, tabId],
+    [applyResults, currentPage, environmentId, previewAttached, tabId],
   );
 
   return { pinResults, showOnPage };

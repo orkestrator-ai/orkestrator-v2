@@ -13,13 +13,20 @@
  * Every case launches through the real launcher (right-click Multi Review,
  * pick the models, Start), waits until a reviewer's prompt is sent, then
  * disturbs the review: leaves it unmounted in another environment, reloads the
- * renderer, restarts the backend, or kills one reviewer's bridge. The review
+ * renderer, restarts the backend, kills one reviewer's bridge, or kills only
+ * the Claude reviewer's Claude Code process while its bridge stays up. The review
  * must still settle from backend state alone. On return, and again after a
  * reload, the snapshot and the tab must agree on phase, reviewer state,
  * reports, consolidation and controls. No reviewer may be cancelled, sent its
  * prompt twice, or moved to a fresh session. A reviewer whose turn a restart
  * or a dead bridge cut short may fail closed with a stated reason; the case
  * records each reviewer's outcome as an annotation.
+ *
+ * `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>` (2 to 32) adds a scale case:
+ * an n-reviewer panel alternating Claude and Codex, started through
+ * `start_multi_review`, sampled once a second for the backend's RSS and for
+ * how many reviewers are setting up and running at once. It records tail
+ * latency and peak RSS in `scale.json` beside the case's output.
  *
  * Models default to the cheapest each platform offers; override the picker
  * labels with `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CLAUDE_MODEL` and
@@ -32,6 +39,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { openSync, promises as fs } from "node:fs";
 import path from "node:path";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 
@@ -57,7 +65,6 @@ type ReviewerTranscript = {
   messages: unknown[];
   transcript?: "snapshot" | "unchanged";
   sourceToken?: string;
-  fallback?: boolean;
 };
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -65,6 +72,7 @@ const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const LIVE_OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW === "1";
 const CLAUDE_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CLAUDE_MODEL ?? "Haiku 4.5";
 const CODEX_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CODEX_MODEL ?? "GPT-6-Luna";
+const SCALE_REVIEWERS = Number(process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE ?? "0");
 /** A real review on small models settles in a few minutes; allow for host load. */
 const SETTLE_TIMEOUT_MS = 8 * 60_000;
 const SETTLED_PHASES = new Set(["ready", "interactive", "completed", "failed", "cancelled"]);
@@ -565,9 +573,6 @@ class MultiReviewCycle {
           "get_multi_review_reviewer_transcript",
           { workflowId: this.workflowId, reviewerId: reviewer.id },
         );
-        expect(transcript.fallback ?? false, `reviewer ${index + 1} used the fallback read`).toBe(
-          false,
-        );
         expect(transcript.messages.length).toBeGreaterThan(0);
         const kinds = userTurnKinds(transcript.messages);
         const turns = kinds.length;
@@ -722,6 +727,39 @@ function killOwnedBridge(pid: number): void {
   process.kill(pid, "SIGKILL");
 }
 
+/**
+ * Kills the Claude Code CLI under one bridge this profile's backend spawned,
+ * leaving the bridge itself up. The bridge must pass {@link killOwnedBridge}'s
+ * ownership checks, and exactly one direct child of it must be a Claude Code
+ * process (the reviewer's turn), so nothing else is ever signalled.
+ */
+function killOwnedClaudeCli(bridgePid: number): number {
+  const status = profileStatus() as Status & { pids?: { backend?: number } };
+  const backend = status.pids?.backend;
+  expect(backend, "dev:status reported no backend pid").toBeTruthy();
+  const table = spawnSync("ps", ["-A", "-o", "pid=,ppid=,command="], { encoding: "utf8" });
+  const rows = table.stdout
+    .split("\n")
+    .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3]! }));
+  const bridge = rows.find((row) => row.pid === bridgePid);
+  expect(bridge, `bridge ${bridgePid} is not running`).toBeTruthy();
+  expect(bridge!.ppid, "the bridge is not a child of this profile's backend").toBe(backend);
+  expect(bridge!.command, "the pid is not a Claude bridge").toMatch(/claude-bridge/);
+  // The Agent SDK runs the pinned `claude` binary in stream-json mode; its
+  // arguments name MCP config files, so match the executable, not keywords.
+  const clis = rows.filter(
+    (row) =>
+      row.ppid === bridgePid &&
+      /\/claude --output-format stream-json(\s|$)/.test(row.command) &&
+      !/claude-bridge/.test(row.command),
+  );
+  expect(clis.length, "expected exactly one Claude Code process under the bridge").toBe(1);
+  process.kill(clis[0]!.pid, "SIGKILL");
+  return clis[0]!.pid;
+}
+
 test.describe("live Multi Review inactive-environment cycle", () => {
   test.skip(!LIVE_OPT_IN, "opt-in live Multi Review against the isolated fixture");
   test.setTimeout(15 * 60_000);
@@ -792,18 +830,16 @@ test.describe("live Multi Review inactive-environment cycle", () => {
       await cycle.reconnect(restarted);
       const resumed = await cycle.read();
       expect(resumed.phase).not.toBe("cancelled");
-      // The Codex bridge reports a turn the restart cut short, and the runner
-      // continues it once in the same session, so the Codex reviewer must
-      // finish. Claude reports no interruption yet
-      // (docs/todo/multi-review-scale-and-cost.md), so it may complete or fail
-      // closed, and is recorded. Everything else is held: no cancellation, no
-      // prompt beyond the designed follow-ups, no fresh session, a stated
-      // reason, and a tab that agrees with the snapshot.
+      // Both bridges report a turn the restart cut short, and the runner
+      // continues it once in the same session, so both reviewers must finish.
+      // Outcomes are still recorded. Everything else is held: no cancellation,
+      // no prompt beyond the designed follow-ups, no fresh session, and a tab
+      // that agrees with the snapshot.
       const settledAfterRestart = await cycle.waitForSettled();
       const failed = cycle.recordOutcomes(settledAfterRestart, "restart");
-      expect(settledAfterRestart.reviewers[1]!.status, describeWorkflow(settledAfterRestart)).toBe(
-        "completed",
-      );
+      for (const reviewer of settledAfterRestart.reviewers) {
+        expect(reviewer.status, describeWorkflow(settledAfterRestart)).toBe("completed");
+      }
       const settled = await cycle.verifySnapshot(before, { failedReviewers: failed });
       await cycle.gotoApp();
       await cycle.openEnvironment(0);
@@ -831,9 +867,10 @@ test.describe("live Multi Review inactive-environment cycle", () => {
       const after = await cycle.waitForReady();
       // The Codex peer must finish on its own report whatever happened to Claude.
       expect(after.reviewers[1]!.status, describeWorkflow(after)).toBe("completed");
-      // The Claude reviewer either recovered in its own session or failed closed.
+      // The restarted bridge reports the Claude turn cut short, so the reviewer
+      // continues in its own session and finishes.
       const failed = cycle.recordOutcomes(after, "bridge-kill");
-      expect(failed.every((index) => index === 0)).toBe(true);
+      expect(after.reviewers[0]!.status, describeWorkflow(after)).toBe("completed");
       const settled = await cycle.verifySnapshot(before, { failedReviewers: failed });
       await cycle.openEnvironment(0);
       await cycle.verifyTab(settled);
@@ -841,6 +878,153 @@ test.describe("live Multi Review inactive-environment cycle", () => {
       await cycle.gotoApp();
       await cycle.openEnvironment(0);
       await cycle.verifyTab(settled);
+    } finally {
+      await cycle.cleanup();
+    }
+  });
+
+  test("continues a reviewer whose Claude Code process was killed under a live bridge", async ({
+    page,
+  }) => {
+    page.setDefaultTimeout(15_000);
+    const cycle = new MultiReviewCycle(page, "cli");
+    try {
+      await cycle.open();
+      await cycle.launch();
+      const before = await cycle.waitForRunningReviewers([0, 1]);
+      await cycle.openEnvironment(1);
+      const environment = await cycle.environment();
+      expect(environment.claudeBridgePid, "the Claude reviewer has no bridge pid").toBeTruthy();
+      killOwnedClaudeCli(environment.claudeBridgePid!);
+      const after = await cycle.waitForReady();
+      expect(after.reviewers[1]!.status, describeWorkflow(after)).toBe("completed");
+      // The bridge stayed up and reports the signalled CLI as a turn cut short
+      // (`process_killed_by_signal`), so the reviewer continues once in its
+      // own session and finishes.
+      const failed = cycle.recordOutcomes(after, "cli-kill");
+      expect(after.reviewers[0]!.status, describeWorkflow(after)).toBe("completed");
+      expect(after.reviewers[0]!.restartContinuationSent, describeWorkflow(after)).toBe(true);
+      expect((await cycle.environment()).claudeBridgePid, "the bridge was replaced").toBe(
+        environment.claudeBridgePid,
+      );
+      const settled = await cycle.verifySnapshot(before, { failedReviewers: failed });
+      await cycle.openEnvironment(0);
+      await cycle.verifyTab(settled);
+      await page.reload();
+      await cycle.gotoApp();
+      await cycle.openEnvironment(0);
+      await cycle.verifyTab(settled);
+    } finally {
+      await cycle.cleanup();
+    }
+  });
+  test("scale: a mixed real-provider panel keeps the fan-out caps", async ({ page }, testInfo) => {
+    test.skip(
+      !(Number.isInteger(SCALE_REVIEWERS) && SCALE_REVIEWERS >= 2 && SCALE_REVIEWERS <= 32),
+      "set ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE to a panel size from 2 to 32",
+    );
+    test.setTimeout(45 * 60_000);
+    page.setDefaultTimeout(15_000);
+    const cycle = new MultiReviewCycle(page, `scale${SCALE_REVIEWERS}`);
+    try {
+      await cycle.open();
+      const environmentId = cycle.environments[0]!.id;
+      const catalog = await cycle.invoke<AgentModel[]>("get_native_agent_model_catalog", {
+        environmentId,
+      });
+      const pick = (platform: "claude" | "codex", label: string) => {
+        const model = catalog.find(
+          (entry) => entry.platform === platform && entry.label.startsWith(label),
+        );
+        expect(model, `no ${platform} model labelled ${label}`).toBeTruthy();
+        return model!.id;
+      };
+      const claude = { agent: "claude" as const, model: pick("claude", CLAUDE_MODEL) };
+      const codex = {
+        agent: "codex" as const,
+        model: pick("codex", CODEX_MODEL),
+        reasoningEffort: "low",
+      };
+      const targetBranch = spawnSync("git", ["symbolic-ref", "--short", "HEAD"], {
+        cwd: cycle.fixture.localPath!,
+        encoding: "utf8",
+      }).stdout.trim();
+      expect(targetBranch, "the fixture project has no branch").toBeTruthy();
+      const backend = (profileStatus() as Status & { pids?: { backend?: number } }).pids?.backend;
+      expect(backend, "dev:status reported no backend pid").toBeTruthy();
+      const rssMiB = () => {
+        const kib = Number(
+          spawnSync("ps", ["-o", "rss=", "-p", String(backend)], { encoding: "utf8" }).stdout,
+        );
+        return Number.isFinite(kib) ? kib / 1024 : 0;
+      };
+      const baselineRssMiB = rssMiB();
+      const started = await cycle.invoke<MultiReviewWorkflow>("start_multi_review", {
+        environmentId,
+        projectId: cycle.fixture.id,
+        targetBranch,
+        reviewers: Array.from({ length: SCALE_REVIEWERS }, (_, index) =>
+          index % 2 === 0 ? claude : codex,
+        ),
+        reviewModel: codex,
+        fixModel: codex,
+      });
+      cycle.workflowId = started.id;
+      const launchedAt = Date.now();
+      let peakRssMiB = baselineRssMiB;
+      let maxSettingUp = 0;
+      const maxRunning: Record<string, number> = {};
+      let workflow = started;
+      while (!SETTLED_PHASES.has(workflow.phase) && Date.now() - launchedAt < 40 * 60_000) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        workflow = await cycle.read();
+        peakRssMiB = Math.max(peakRssMiB, rssMiB());
+        // A reviewer between admission and its sent prompt is setting up.
+        const settingUp = workflow.reviewers.filter(
+          (reviewer) => reviewer.status === "running" && reviewer.dispatchState !== "sent",
+        ).length;
+        maxSettingUp = Math.max(maxSettingUp, settingUp);
+        for (const agent of ["claude", "codex"]) {
+          const running = workflow.reviewers.filter(
+            (reviewer) => reviewer.agent === agent && reviewer.status === "running",
+          ).length;
+          maxRunning[agent] = Math.max(maxRunning[agent] ?? 0, running);
+        }
+      }
+      const latencies = workflow.reviewers
+        .filter((reviewer) => reviewer.startedAt && reviewer.completedAt)
+        .map((reviewer) => Date.parse(reviewer.completedAt!) - Date.parse(reviewer.startedAt!))
+        .sort((left, right) => left - right);
+      const quantile = (q: number) =>
+        latencies.length
+          ? latencies[Math.min(latencies.length - 1, Math.floor(q * latencies.length))]!
+          : null;
+      const result = {
+        reviewers: SCALE_REVIEWERS,
+        phase: workflow.phase,
+        completed: workflow.reviewers.filter((reviewer) => reviewer.status === "completed").length,
+        failed: workflow.reviewers.filter((reviewer) => reviewer.status === "failed").length,
+        wallMs: Date.now() - launchedAt,
+        reviewerLatencyMs: {
+          p50: quantile(0.5),
+          p95: quantile(0.95),
+          max: latencies.at(-1) ?? null,
+        },
+        baselineRssMiB: Math.round(baselineRssMiB),
+        peakRssMiB: Math.round(peakRssMiB),
+        maxSettingUpObserved: maxSettingUp,
+        maxRunningObserved: maxRunning,
+      };
+      await fs.writeFile(testInfo.outputPath("scale.json"), `${JSON.stringify(result, null, 2)}\n`);
+      test.info().annotations.push({ type: "scale", description: JSON.stringify(result) });
+      expect(SETTLED_PHASES.has(workflow.phase), describeWorkflow(workflow)).toBe(true);
+      // Sampled once a second, so these can only catch a cap being exceeded.
+      expect(maxSettingUp).toBeLessThanOrEqual(4);
+      for (const reviewer of workflow.reviewers) {
+        if (reviewer.status === "failed")
+          expect(reviewer.error, describeWorkflow(workflow)).toBeTruthy();
+        else expect(reviewer.status, describeWorkflow(workflow)).toBe("completed");
+      }
     } finally {
       await cycle.cleanup();
     }

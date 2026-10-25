@@ -6,19 +6,25 @@ import {
   sniffOutputMode,
   type CommandTree,
 } from "./argv.js";
+import { attentionCommands } from "./commands/attention.js";
+import { changesCommands } from "./commands/changes.js";
+import { completionCommands } from "./commands/completion.js";
 import { connectionCommands } from "./commands/connection.js";
 import { environmentCommands } from "./commands/environment.js";
 import { hostCommands } from "./commands/host.js";
+import { mailCommands } from "./commands/mail.js";
 import { serviceCommands } from "./commands/service.js";
 import { projectCommands } from "./commands/project.js";
 import { runCommands } from "./commands/run.js";
 import { sessionCommands } from "./commands/session.js";
+import { ticketCommands } from "./commands/ticket.js";
 import { toolchainCommands } from "./commands/toolchain.js";
 import { CliConfigStore, defaultCliConfigDir } from "./config.js";
 import { CliError } from "./errors.js";
 import { helpFor, SERVE_HELP } from "./help.js";
 import type { ClientIo } from "./io.js";
 import { OutputWriter } from "./output.js";
+import { terminalQuestions } from "./questions.js";
 import { LocalReceiptStore } from "./receipts.js";
 import { ClientSession } from "./session.js";
 import type { CommandContext, CommandOutcome, CommandSpec, GlobalOptions } from "./spec.js";
@@ -31,10 +37,15 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...projectCommands,
   ...environmentCommands,
   ...sessionCommands,
+  ...changesCommands,
+  ...attentionCommands,
+  ...ticketCommands,
+  ...mailCommands,
   ...runCommands,
   ...toolchainCommands,
   ...hostCommands,
   ...serviceCommands,
+  ...completionCommands(() => CLIENT_COMMANDS),
 ];
 
 export const COMMAND_TREE: CommandTree = { commands: CLIENT_COMMANDS };
@@ -167,6 +178,7 @@ export async function runClient(
     if (error instanceof CliError && error.code === "observation-interrupted") {
       return output.interrupted(signalName(signal), {
         action: error.action ?? action,
+        details: error.details,
         ...(error.receipt ? { receipt: error.receipt } : {}),
         ...(connection ? { connection } : {}),
       });
@@ -188,6 +200,7 @@ export async function runClientProcess(argv: readonly string[], version: string)
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
+  const questions = terminalQuestions(process.stdin, process.stderr, () => onSignal("SIGINT"));
   const io: ClientIo = {
     stdout: (text) => process.stdout.write(text),
     stdoutBytes: (bytes) => process.stdout.write(Buffer.from(bytes)),
@@ -204,10 +217,13 @@ export async function runClientProcess(argv: readonly string[], version: string)
     cwd: process.cwd(),
     now: () => Date.now(),
     stdinIsTty: Boolean(process.stdin.isTTY),
+    stdoutIsTty: Boolean(process.stdout.isTTY),
+    question: questions.question,
   };
   try {
     return await runClient(argv, { io, version, signal: controller.signal });
   } finally {
+    questions.close();
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
   }

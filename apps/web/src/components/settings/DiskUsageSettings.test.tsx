@@ -9,6 +9,7 @@ import type {
 } from "@/lib/backend";
 import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
+import { AccountMachineProvider } from "./account-machine";
 import { DiskUsageSettings } from "./DiskUsageSettings";
 
 const GB = 1024 ** 3;
@@ -73,19 +74,23 @@ test("picks, saves and resets both locations; cancelled picks make no write", as
   await waitFor(() => expect(useHostPathPickerStore.getState().request).toBeTruthy());
   act(() => useHostPathPickerStore.getState().settle("/chosen/trees"));
   await waitFor(() =>
-    expect(update).toHaveBeenCalledWith({ environments: "/chosen/trees", dev: null }),
+    expect(update).toHaveBeenCalledWith({ environments: "/chosen/trees", dev: null }, undefined),
   );
   await screen.findByText("/chosen/trees");
   fireEvent.click(
     screen.getByRole("button", { name: "Reset new environment worktrees to default" }),
   );
-  await waitFor(() => expect(update).toHaveBeenLastCalledWith({ environments: null, dev: null }));
+  await waitFor(() =>
+    expect(update).toHaveBeenLastCalledWith({ environments: null, dev: null }, undefined),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Choose new dev worktrees" }));
   await waitFor(() => expect(useHostPathPickerStore.getState().request).toBeTruthy());
   act(() => useHostPathPickerStore.getState().settle("/chosen/dev"));
   await screen.findByText("/chosen/dev");
   fireEvent.click(screen.getByRole("button", { name: "Reset new dev worktrees to default" }));
-  await waitFor(() => expect(update).toHaveBeenLastCalledWith({ environments: null, dev: null }));
+  await waitFor(() =>
+    expect(update).toHaveBeenLastCalledWith({ environments: null, dev: null }, undefined),
+  );
 });
 
 test("profile backends disable both location controls and explain production ownership", async () => {
@@ -187,7 +192,7 @@ test("unmounted loads never start measurement and refresh uses a new generation"
   get.mockResolvedValue(usage("1", 3 * GB));
   fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
   await screen.findByText(/3 GB across 1 environment/);
-  expect(get).toHaveBeenLastCalledWith("1", true);
+  expect(get).toHaveBeenLastCalledWith("1", true, undefined);
 });
 
 test("unmounting a pending measure generation stops its remaining queue", async () => {
@@ -200,3 +205,40 @@ test("unmounting a pending measure generation stops its remaining queue", async 
   await act(async () => pending.resolve(usage("1")));
   expect(get).toHaveBeenCalledTimes(3);
 });
+
+for (const machine of [null, "leaf", "other"]) {
+  test(`leaf-window worktree browsing and disk measurements respect ${machine ?? "command node"}`, async () => {
+    window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+    const locations = snapshot();
+    locations.environments.configured = "/selected/trees";
+    const read = spyOn(backend, "getWorktreeLocations").mockResolvedValue(locations);
+    const list = spyOn(backend, "listDiskUsageEnvironments").mockResolvedValue([
+      row("selected-env"),
+    ]);
+    const update = spyOn(backend, "updateWorktreeLocations").mockResolvedValue(snapshot());
+    const measure = spyOn(backend, "getEnvironmentDiskUsage").mockResolvedValue(
+      usage("selected-env"),
+    );
+    try {
+      render(
+        <AccountMachineProvider value={{ machine, name: "Selected" }}>
+          <DiskUsageSettings />
+        </AccountMachineProvider>,
+      );
+      const pick = await screen.findByRole("button", { name: "Choose new environment worktrees" });
+      expect((pick as HTMLButtonElement).disabled).toBe(machine !== "leaf");
+      expect(read).toHaveBeenCalledWith(machine);
+      expect(list).toHaveBeenCalledWith(machine);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Reset new environment worktrees to default" }),
+      );
+      await waitFor(() =>
+        expect(update).toHaveBeenCalledWith({ environments: null, dev: null }, machine),
+      );
+      await waitFor(() => expect(measure).toHaveBeenCalledWith("selected-env", false, machine));
+    } finally {
+      cleanup();
+      delete window.orkestratorWorkspaceTarget;
+    }
+  });
+}

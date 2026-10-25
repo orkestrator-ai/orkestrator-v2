@@ -58,6 +58,9 @@ export class GatewayContext {
   readonly agentTestProfile?: string;
   readonly controlBindAddress?: string;
   readonly controlPort?: number;
+  readonly loopbackClientPort?: number;
+  readonly backendHello: OrkestratorGatewayOptions["backendHello"];
+  readonly nodeHooks: OrkestratorGatewayOptions["nodeHooks"];
   readonly env: NodeJS.ProcessEnv;
   readonly interfaces?: NetworkInterfaceMap;
   readonly logger: Pick<Console, "debug" | "error" | "info" | "warn">;
@@ -84,6 +87,8 @@ export class GatewayContext {
   });
   readonly browserPreviewHeadersTimeoutMs: number;
   servers = new Set<Server>();
+  /** Set once the loopback client listener is serving. */
+  loopbackClientUrl: string | null = null;
   token = "";
   authFile = "";
   agentTestBootstraps = new Map<string, number>();
@@ -125,6 +130,9 @@ export class GatewayContext {
     this.agentTestProfile = options.agentTestProfile?.trim() || undefined;
     this.controlBindAddress = options.controlBindAddress;
     this.controlPort = options.controlPort;
+    this.loopbackClientPort = options.loopbackClientPort;
+    this.backendHello = options.backendHello;
+    this.nodeHooks = options.nodeHooks;
     this.env = options.env ?? process.env;
     this.interfaces = options.interfaces;
     this.logger = options.logger ?? console;

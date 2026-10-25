@@ -24,7 +24,7 @@ import { parseInboundLine } from "../app-server/envelope-validation.js";
 import { reduceNotification } from "../app-server/event-reducer.js";
 import {
   beginAssistantRowRenderState,
-  beginTurnRenderState,
+  createTurnRenderState,
   renderTurn,
 } from "../messages/render-turn.js";
 import { TurnAccumulator } from "../sessions/turn-accumulator.js";
@@ -122,6 +122,9 @@ function applyEvent(
   switch (event.kind) {
     case "turn.started":
       turn.markRunning(turnId);
+      return;
+    case "model.response.completed":
+      turn.noteModelResponseCompleted();
       return;
     case "turn.completed":
       turn.complete(event.status, event.error);
@@ -230,9 +233,8 @@ export async function replayRecording(
   for (const turnId of state.order) {
     const turn = state.turns.get(turnId);
     if (!turn) continue;
-    // Carried forward exactly as the runtime does, so a second edit to the same
-    // file diffs against the previous turn rather than against git HEAD.
-    state.renderState = beginTurnRenderState(state.renderState);
+    // Each turn starts fresh render state, exactly as the runtime does.
+    state.renderState = createTurnRenderState();
     const rows: ReplayedRow[] = [];
     for (const segment of turn.assistantSegmentsInOrder()) {
       if (rows.length > 0) state.renderState = beginAssistantRowRenderState(state.renderState);

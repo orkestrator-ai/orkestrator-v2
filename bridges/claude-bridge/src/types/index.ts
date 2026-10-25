@@ -1,3 +1,4 @@
+import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 // Type definitions for Claude Bridge Server
 import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
@@ -6,6 +7,7 @@ import type { TranscriptWindowMetadata } from "@orkestrator/protocol/node/transc
 import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
+import type { NativeAgentContextCategory } from "@orkestrator/protocol/native-agent";
 
 export type {
   JsonSchema,
@@ -201,6 +203,7 @@ export interface SdkResultMessage extends SdkMessageBase {
   ttft_ms?: number;
   errors?: string[];
   startup_failure_reason?: import("@anthropic-ai/claude-agent-sdk").SDKStartupFailureReason;
+  terminal_reason?: import("@anthropic-ai/claude-agent-sdk").TerminalReason;
   usage?: Record<string, unknown>;
   modelUsage?: Record<
     string,
@@ -457,6 +460,14 @@ export interface ClaudeCommandInventoryState {
 export type SessionTurnActivity = "compacting";
 
 /** Session state */
+/** A turn-time sign-in notice; see {@link SessionState.authNotice}. */
+export interface SessionAuthNotice {
+  state: "needs-auth" | "expired";
+  message: string;
+  /** Distinguishes a new occurrence from one the user already dismissed. */
+  occurrenceId: string;
+}
+
 export interface SessionState {
   id: string;
   executionPolicy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
@@ -471,6 +482,19 @@ export interface SessionState {
   createdAt: Date;
   lastActivity: Date;
   error?: string;
+  /**
+   * Set beside `status: "error"` when a bridge restart cut the last turn short:
+   * the rollout is intact and a new prompt continues it. Cleared when the next
+   * turn starts. See `session-manager-turn-interruption.ts`.
+   */
+  interruption?: "restart";
+  /**
+   * Whether this process believes the preferences file holds a turn-in-flight
+   * mark for the session, so the mark is written and cleared once per edge.
+   */
+  turnInFlightMarked?: boolean;
+  /** Presence alone does not mean a restored mark belongs to this bridge. */
+  turnInFlightMarkOwned?: boolean;
   /** SDK session ID returned from Claude Agent SDK - used for resume */
   sdkSessionId?: string;
   /** Session initialization data (MCP servers, plugins, etc.) */
@@ -607,6 +631,13 @@ export interface SessionState {
   inProgressUsageGeneration?: number;
   /** Predicted next prompt emitted by the SDK after a completed turn. */
   promptSuggestion?: string;
+  /**
+   * A sign-in problem met during a turn: Claude's `auth_status` failing or
+   * re-authenticating, or a turn refused with `authentication_failed`. Served
+   * on `GET /session/:id` and shown as the tab's `auth` notice. Cleared once a
+   * model answers or Claude reports the authentication finished.
+   */
+  authNotice?: SessionAuthNotice;
   /**
    * What the CLI reports doing inside the running turn when the transcript
    * shows nothing (a `system/status` frame). Cleared when the turn ends.
@@ -763,7 +794,7 @@ export interface SessionState {
    *
    * The SDK leaves the order of `background_tasks_changed` and
    * `task_notification` for one transition unspecified. Through Agent SDK
-   * 0.3.284 the level came first; 0.3.292 (still in 0.3.296) documents a
+   * 0.3.284 the level came first; 0.3.292 (still in 0.3.309) documents a
    * finishing task leaving the level *after* its edge. When the level does come first, the task
    * leaves the live set with no outcome attached. Parking the
    * snapshot here keeps liveness honest — the task is gone from
@@ -784,6 +815,13 @@ export interface SessionState {
    * away from the turn the user is actually waiting on.
    */
   latestTurnGeneration?: number;
+  /**
+   * The turn generation a user stop (`POST /session/:id/abort`) asked to
+   * interrupt. The CLI reports a stop that lands before any text streamed as
+   * an aborted `error_during_execution` result; for this turn that result is
+   * the stop the user asked for, not a failure.
+   */
+  interruptRequestedGeneration?: number;
   /**
    * At-most-once journal for `/steer`. Survives a bridge restart via session
    * preferences so a retried request id cannot be pushed twice.
@@ -868,6 +906,8 @@ export interface SessionUsageSnapshot {
   }>;
   turns?: Array<{
     turnId: string;
+    /** When this turn was finalized, ISO-8601; what dates recorded usage. */
+    at?: string;
     costUsd?: number;
     inputTokens?: number;
     outputTokens?: number;
@@ -880,7 +920,7 @@ export interface SessionUsageSnapshot {
     numTurns?: number;
     modelId?: string;
   }>;
-  contextCategories?: Array<{ name: string; tokens: number; color?: string }>;
+  contextCategories?: NativeAgentContextCategory[];
   rateLimits?: SessionRateLimitWindow[];
 }
 
@@ -1110,7 +1150,7 @@ export type SSEEventType =
 export interface McpServerRuntimeStatus {
   name: string;
   status: "connected" | "connecting" | "failed" | "needs-auth" | "disabled" | "unknown";
-  scope?: "user" | "project" | "orkestrator" | "plugin";
+  scope?: NativeAgentMcpServer["scope"];
   transport?: "stdio" | "sse" | "http";
   error?: string;
   tools?: string[];
@@ -1216,7 +1256,7 @@ export interface PromptOptions {
   outputSchema?: JsonSchema;
   /** Stable caller id used to reconcile an async structured turn. */
   requestId?: string;
-  agentMcp?: { url: string; token: string; design?: boolean };
+  agentMcp?: { url: string; token: string; design?: boolean; artifacts?: { token: string } };
   parameterValues?: Record<string, string | boolean>;
   /** Optional backend-owned budget cap for this session. */
   maxBudgetUsd?: number;

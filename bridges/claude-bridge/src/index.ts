@@ -8,6 +8,7 @@ import health from "./routes/health.js";
 import config from "./routes/config.js";
 import session from "./routes/session.js";
 import { sessionActivityBatch } from "./routes/session-activity.js";
+import changeEvidence from "./routes/change-evidence.js";
 import { compressTranscriptReads } from "./routes/session-transcript.js";
 import events from "./routes/events.js";
 import mcp from "./routes/mcp.js";
@@ -176,7 +177,10 @@ app.get("/global/auth", async (c) => c.json(await readClaudeAuthStatus()));
 /** Plan-allocation windows for the global settings pane; no session required. */
 app.get("/global/usage", async (c) => c.json({ account: await readClaudePlanUsage() }));
 app.post("/global/auth/login", (c) =>
-  c.json({ error: "Open a Claude terminal tab and run /login." }, 405),
+  c.json(
+    { error: "Claude signs in from the sign-in card in its tab or from Settings → Claude." },
+    405,
+  ),
 );
 app.post("/global/auth/logout", (c) =>
   c.json({ error: "Claude sign-out is available from a terminal tab." }, 405),
@@ -192,6 +196,8 @@ app.route("/config", config);
 app.route("/session", session);
 // `POST /sessions/activity`: outside `/session/:id` so no id route can shadow it.
 app.route("/", sessionActivityBatch);
+// `GET /change-evidence`, `GET /change-evidence/body`, `POST /change-evidence/ack`.
+app.route("/", changeEvidence);
 app.route("/event", events);
 app.route("/mcp", mcp);
 app.route("/plugins", plugins);

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
+import { resetDockerTopologyCache } from "../src/core/docker-image";
+import { resetResourceCaches } from "../src/core/container-resources";
 import { groupRecoveryCopies } from "../src/core/recovery-copy-model";
 import {
   discardRecoveryCopy,
@@ -16,7 +18,10 @@ import {
 import { loadProtection } from "../src/core/docker-cleanup-inventory";
 import { buildEnvironmentCleanupEntry } from "../src/core/environment-cleanup";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { resetContainerOwnershipCache } from "../src/core/container-lifecycle-service";
+import {
+  assertRuntimeGeneration,
+  resetContainerOwnershipCache,
+} from "../src/core/container-lifecycle-service";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,
@@ -27,6 +32,8 @@ import {
 const cleanup: string[] = [];
 afterEach(async () => {
   resetCleanupGrants();
+  resetDockerTopologyCache();
+  resetResourceCaches();
   resetContainerOwnershipCache();
   await Promise.all(cleanup.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -314,6 +321,109 @@ exit 0
         ).rejects.toThrow("ContainerLifecycleError:needs-attention");
         expect(await log.read()).not.toMatch(/^stop /m);
       },
+    );
+  });
+
+  for (const failedCapacity of [false, true]) {
+    test(`missing retained runtime rejects its budget before quiescing (failedCapacity=${failedCapacity})`, async () => {
+      const { dir, owner } = await dataDir();
+      const environment = recoveryEnvironment(owner);
+      environment.status = "running";
+      environment.containerResourceLimits = { cpus: 1, memoryMiB: null, pids: null };
+      const { context, environments } = memoryLifecycleContext([environment], dir);
+      Object.assign(context.storage, {
+        loadConfig: async () => ({ version: "1.0.0", global: {}, repositories: {} }),
+      });
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1:$2" in
+  inspect:*) printf 'Error: No such object\\n' >&2; exit 1 ;;
+  volume:inspect) printf '{}\\n' ;;
+  info:*)
+    ${failedCapacity ? '[ "$3" = "{{json .}}" ] && exit 1' : ""}
+    printf '%s\\n' '{"SecurityOptions":["name=rootless"],"CpuCfsQuota":false}' ;;
+esac
+exit 0
+`,
+        async (log) => {
+          await expect(
+            restoreRecoveryCopy(
+              {
+                environmentId: environment.id,
+                copyId: "set-a",
+                expectedContainerId: "current-container",
+              },
+              context,
+            ),
+          ).rejects.toThrow(
+            failedCapacity
+              ? "ContainerLifecycleError:daemon-unavailable"
+              : "ContainerLifecycleError:unsupported-topology",
+          );
+          const calls = await log.read();
+          expect(calls).not.toMatch(/^(stop|exec|create|run) /m);
+          expect(environments.get(environment.id)).toMatchObject({
+            containerId: "current-container",
+            status: "running",
+          });
+        },
+      );
+    });
+  }
+
+  test("a swapped-back runtime takes a new generation, so its old handles are refused", async () => {
+    const { dir, owner } = await dataDir();
+    const environment = recoveryEnvironment(owner);
+    const { context, environments } = memoryLifecycleContext([environment], dir);
+    // Quiescing the current runtime asks for these.
+    Object.assign(context.storage, {
+      listMultiReviewWorkflows: async () => [],
+      listAllBuildPipelines: async () => [],
+    });
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1:$2" in
+  inspect:-f) printf '${owner}\\texited\\torkestrator-v2\\tlegacy-container\\n' ;;
+esac
+exit 0
+`,
+      async (log) => {
+        await expect(
+          restoreRecoveryCopy(
+            {
+              environmentId: environment.id,
+              copyId: "legacy-container",
+              expectedContainerId: "current-container",
+            },
+            context,
+          ),
+        ).resolves.toEqual({ containerId: "legacy-container" });
+        // Swapped back in place: no container was created for it.
+        expect(await log.read()).not.toMatch(/^(create|run) /m);
+      },
+    );
+    const restored = record(environments.get(environment.id)?.containerLifecycle);
+    // Generation 1 when it was set aside; above every generation used since.
+    expect(restored.runtime).toMatchObject({
+      containerId: "legacy-container",
+      runtimeGeneration: 4,
+    });
+    expect(restored.lastRuntimeGeneration).toBe(4);
+    expect(restored.retainedRuntimes?.map((runtime) => runtime.containerId).sort()).toEqual([
+      "current-container",
+      "rebuild-container",
+    ]);
+    await expect(
+      assertRuntimeGeneration(
+        { environmentId: environment.id, expectedRuntimeGeneration: 1 },
+        context,
+      ),
+    ).rejects.toThrow("runtime-changed");
+    await assertRuntimeGeneration(
+      { environmentId: environment.id, expectedRuntimeGeneration: 4 },
+      context,
     );
   });
 

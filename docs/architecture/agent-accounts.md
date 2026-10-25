@@ -1,9 +1,18 @@
 # Agent accounts
 
 Status: Living — `apps/backend/src/core/agent-accounts*.ts`,
-`apps/backend/src/core/agent-account-bridge-state.ts`,
+`apps/backend/src/core/agent-sign-in-status.ts`,
+`apps/web/src/components/settings/AgentSignInCard.tsx`,
+`apps/backend/src/core/local-server-runtime.ts` (per-bridge launch facts),
 `packages/protocol/src/agent-accounts.ts`,
-`apps/web/src/components/settings/AgentAccountsSection.tsx`.
+`apps/web/src/components/settings/AgentAccountsSection.tsx`,
+`apps/web/src/components/settings/account-machine.tsx`,
+`apps/web/src/components/settings/machines/MachineAgentAccountsSection.tsx`,
+`apps/web/src/components/layout/AgentInfoAccountSection.tsx`,
+`apps/backend/src/core/agent-sign-ins.ts`;
+`apps/backend/src/core/opencode-provider-login.ts`,
+`packages/protocol/src/opencode-provider-auth.ts`,
+`apps/web/src/components/settings/OpenCodeProvidersSection.tsx`.
 
 Claude and Codex can each hold more than one login. The user sees each
 account's plan usage and picks which one agents run on. Switching is global
@@ -12,8 +21,10 @@ and no tab, environment or settings tier records an account. Accounts never
 run side by side in one platform, so bridge keys, tab records and the agent
 settings tiers are unchanged by accounts.
 
-Outstanding work and known gaps are in
-[agent-accounts-and-sign-in.md](../todo/agent-accounts-and-sign-in.md).
+Every machine (node) keeps its own accounts and its own active account per
+platform; see [Machines](#machines). Outstanding work and known gaps are in
+[0003-agent-accounts-and-sign-in.md](../todo/agent-engines/0003-agent-accounts-and-sign-in.md)
+and [0722-per-machine-agent-accounts.md](../todo/agent-engines/0722-per-machine-agent-accounts.md).
 
 ## Account directories
 
@@ -57,7 +68,10 @@ missing, so an account's first session does not grow a private copy.
 `linkSharedEntries` is conservative: a regular file already in the account
 directory is left alone, because a CLI that saves by atomic rename replaces
 the link with one, and that content is the account's now. A link whose host
-target has gone is removed.
+target has gone is removed. Such an entry is reported rather than re-linked:
+`privateSharedEntries` lists it, `listAgentAccounts` returns the names as the
+account's `privateEntries`, and its row in Settings says the entry is no longer
+shared with the host login. Re-linking would race a CLI still writing it.
 
 Claude's `.claude.json` is per account, because it holds `oauthAccount`. Once
 `CLAUDE_CONFIG_DIR` is set it is also the only place Claude reads user- and
@@ -75,7 +89,8 @@ rotate, so a copy goes stale as soon as the original refreshes.
 `set_active_agent_account` records the choice; nothing is killed. The next
 `start_local_<agent>_server_cmd` for an environment asks
 `localBridgeIsOnActiveAccount` whether the running bridge was launched on the
-active account (`localAgentAccountIds`). An idle bridge on another account is
+active account (`LocalServerRuntime.launchedAccountId`, recorded by
+`adoptProcess` at launch). An idle bridge on another account is
 replaced. A bridge with observed live work keeps running on the old account
 until it is idle. The replacement resumes its sessions from the shared
 transcripts on the next prompt.
@@ -109,6 +124,13 @@ for that directory. The backend never sees the token, and CLI output is
 bounded and never logged. A login is given 16 minutes; Codex's device code
 lasts 15.
 
+When the CLI exits unsuccessfully, the failure names the CLI's own reason
+(`loginFailureMessage`): the last output line that reads as a failure, with
+any line holding a URL or a device code skipped and anything token-shaped cut
+out. It goes only to the client that asked, in `AgentAccountLoginProgress.error`,
+and adds what to do for a locked macOS keychain or a code from another
+attempt. Without a recognisable line it stays `exit code <n>`.
+
 A login that resolves to an identity already listed, including the host
 login, is refused and its directory removed. So is any failed or cancelled
 add.
@@ -139,12 +161,13 @@ read the host login its harness granted.
 
 Every bridge that may hold the previous login is then flagged:
 
-- Live local Claude bridges go into `staleLoginLocalBridges`.
+- Live local Claude bridges are flagged (`LocalServerRuntime.markLoginStale`).
   `localBridgeIsOnActiveAccount` treats a flagged bridge as being on another
   account, so it is replaced the next time it is used while idle; a busy one
   finishes first.
 - When containers share the host login (`useHostClaudeCredentials` on), every
-  container environment goes into `staleLoginEnvironmentIds`.
+  container environment is flagged
+  (`LocalServerRuntime.markContainerLoginStale`).
   `reconcileContainerAgentAccount` then pushes the new login in and replaces
   the idle in-container bridge even when its marker already matches. The
   in-process flag is only a hint: the durable `loginGeneration` in the
@@ -157,7 +180,11 @@ The UI is `ClaudeAuthRecoveryCard`. It shows under a Claude authentication
 error in the transcript, and pinned above the composer while Claude's `Not
 logged in · Please run /login` reply is the latest exchange or Claude reports
 `authentication-required` readiness (below). It reuses the settings pane's
-link-and-code panel and resumes a sign-in already running.
+link-and-code panel and resumes a sign-in already running. Its compact form,
+`ClaudeAccountSignInAction`, is the **Sign in to Claude** action on the Agent
+Info account card and on the Claude settings sign-in card. Claude's bridge
+hint names those cards rather than a terminal; its route kind stays
+`terminal`, because the CLI's own `/login` is still the fallback they offer.
 
 ## Sign-in readiness
 
@@ -189,17 +216,41 @@ the tab without a send.
   answers a turn with `error: "authentication_failed"`. `accountInfo()`
   reports a signed-out directory as `tokenSource: "none"` with
   `apiProvider: "firstParty"`, and it cannot see an expired token, so an
-  expired login stays a turn error with the transcript card.
+  expired login stays a turn error with the transcript card. After such a
+  turn, an auth read that still finds a credential reports `expired` instead
+  of `signed-in` until a model answers again (`claude-sign-in.ts`). That
+  never locks the composer.
 - Grok's ACP `authenticate` does not fail without a login: it waits on an
   interactive sign-in. The bridge refuses before asking, and a session created
   without a login is deferred (no agent, empty `acpSessionId`) until the first
   attach or prompt after one exists.
 - OpenCode's own `opencode` provider is connected with no login, so the default
-  allowlist never locks. `opencode auth login` reaches the running server
-  without a restart.
+  allowlist never locks. A local tab sends the user to Settings → OpenCode
+  rather than a terminal (see [OpenCode provider sign-in](#opencode-provider-sign-in)).
+  OpenCode cannot tell an expired key from a valid one, so that stays a turn
+  error, which offers the provider's sign-in inside its row.
 - Background work never sees the banner. A bridge refusing a prompt for a
   missing login answers 401 with `kind: "authentication-required"`, and the
   backend passes that message through unwrapped on every platform.
+
+### Turn-time auth notice
+
+A login that stops working during a turn is shown as the tab's `auth` notice
+(`NativeAgentNotice { kind: "auth", state, message, occurrenceId }`), a warning
+beside the transcript's sign-in card, rather than as a failed spawn. Claude and
+Codex put an `authNotice` on their session read (`GET /session/:id`,
+`/session/:id/status`), and the backend reads it field by field
+(`normalizeProviderAuthNotice`) into the first snapshot notice.
+
+| Platform | Raised by | Cleared by |
+| --- | --- | --- |
+| Claude | `auth_status` with an `error` (`expired`) or `isAuthenticating` (`needs-auth`); a turn refused with `authentication_failed` (`expired`) | `auth_status` reporting the authentication finished; any real model answer |
+| Codex | `modelProvider/authRecoveryStarted` (`expired`) | `authRecoveryCompleted`, unless its text says the renewal failed, which keeps a `needs-auth` notice; a completed turn |
+
+Codex's completion carries no outcome field (codex 0.162 says succeeded,
+failed-permanent or failed-transient only in its message), so the failure check
+reads its text; a real sign-out still locks the composer through readiness. The
+notice is in memory on the bridge: a restarted bridge starts without one.
 
 ### Codex in-tab sign-in: browser or device code
 
@@ -217,6 +268,87 @@ device code (`deviceCode: true`, sent to the bridge as
 Otherwise it keeps the browser flow. The tab banner keeps the code visible
 beside the sign-in link, and the panel's code toast stays until a read finds
 the account signed in. Bridges without a device flow ignore the body.
+
+An abandoned sign-in is cancelled on Codex's side too. The bridge keeps the
+`loginId` of the browser or device-code login it started (never logged or
+returned), and `POST /global/auth/login/cancel` sends
+`account/login/cancel` and answers only `{ cancelled }`. The backend command
+is `cancel_native_agent_sign_in`; on a bridge without the route it is a no-op.
+The tab banner's **Cancel sign-in** and the panel's device-code toast call it,
+and a device code that lapses cancels its login on the bridge by itself.
+
+## Settings sign-in card
+
+Each enabled platform's settings page opens with a sign-in card
+(`AgentSignInCard`) read without a session or a bridge
+(`get_agent_sign_in_status`, `agent-sign-in-status.ts`), so it is there before
+any environment runs the platform. It reads the same evidence the launchers
+hand to bridges:
+
+- Claude and Codex: the active account's login, as `listAgentAccounts` reports
+  it. The card sits above the accounts list. Claude is signed in again from it
+  (`ClaudeAccountSignInAction`); Codex points to the tab's in-app sign-in and
+  to adding an account.
+- Cursor: the credential `cursorSdkAuthStatus` resolves. The card wraps
+  `CursorSdkSignIn`, which keeps its own sign-in and sign-out.
+- Grok: the bridge's checks before `authenticate` (a stored login,
+  `XAI_API_KEY`, an auth-provider command).
+- Pi and OpenCode: the provider entries in `~/.pi/agent/auth.json` and
+  OpenCode's `auth.json` (ids and credential kinds only; a key-shaped id is
+  dropped). An empty store reads `unknown`, never `signed-out`, because an
+  environment variable or configuration may still hold a key. OpenCode's
+  logins are managed under Provider Sign-in below the card.
+
+## OpenCode provider sign-in
+
+OpenCode has no accounts. It keeps one login per model provider (OpenCode Go,
+OpenAI, …) in the host's own store, `~/.local/share/opencode/auth.json` for
+the bundled 1.x, which every local environment's server shares. Settings →
+OpenCode → Provider Sign-in lists the providers and signs each in, replaces its
+login or signs it out (`OpenCodeProvidersSection`).
+
+Each operation starts a private server from the bundled binary in the
+model-catalogue probe directory (`withHostOpenCodeServer`) and calls its own
+auth routes (`opencode-provider-login.ts`):
+
+- **List:** `provider.list` and `provider.auth`, read field by field. A
+  provider without sign-in methods takes an API key. `storedLogin` means the
+  login is in OpenCode's store (`source` `api`, or `custom` for a plugin's
+  OAuth login); one from an environment variable or configuration cannot be
+  signed out here.
+- **API key:** `auth.set` with `{ type: "api", key }`. The key goes straight
+  through; nothing in Orkestrator stores, returns or logs it. A method's
+  prompts (an account id, say) are sent as `metadata`.
+- **OAuth:** `provider.oauth.authorize` returns the link and OpenCode's
+  instruction text (a device code is lifted out of it for a copy button).
+  `auto` methods then wait in `provider.oauth.callback` until the user
+  approves; `code` methods wait for the pasted code first. The renderer polls
+  `get_opencode_provider_login`, like the account sign-in. One sign-in runs at
+  a time and is given 16 minutes. The callback is sent without Bun's
+  five-minute fetch idle timeout, and the private server lives until it
+  settles. A browser method whose callback is a loopback (ChatGPT's browser
+  sign-in) only completes when the browser is on the backend's machine; the
+  headless method works from anywhere.
+- **Sign out:** `auth.remove`.
+
+OpenCode reads a provider's credentials once per directory instance and keeps
+them until the instance is disposed: a key replaced in the store is not used by
+a running server, though a newly connected provider is listed. After every
+change, `markLocalBridgesForLoginRefresh(context, "opencode")` flags each live
+local OpenCode server. These refresh flags live in `LocalServerRuntime`, and
+`localBridgeIsOnActiveAccount` has the next `start_local_opencode_server_cmd`
+replace it once idle, as for a renewed Claude login. A container copies
+`auth.json` in when it starts, so it needs a restart.
+
+An OpenCode model request refused with HTTP 401 (or a 403 or OpenCode's own
+auth error that says so) gets the failed provider's sign-in inside its error
+row (`OpenCodeAuthRecoveryAction`). The inline error row carries the failed
+message's `providerID/modelID` as `modelId` for this
+(`openCodeCredentialFailureProvider`).
+
+The CLI on the user's PATH is not used: it may be OpenCode 2.x, which keeps
+its logins in its database and never writes `auth.json`. See
+[0008-opencode-v2.md](../todo/agent-engines/0008-opencode-v2.md) for what moves with 2.x.
 
 ## Credentials in auth answers
 
@@ -238,7 +370,12 @@ device login.
   warnings with `redactSecrets`. Hono's default handler would otherwise print
   the whole `AppServerRpcError`, including app-server's `data`.
   `open_in_browser` redacts the URL from a failed launch. Nothing logs command
-  arguments or results.
+  arguments or results. Every local bridge's stdout and stderr, which Debug
+  logging writes to `<dataDir>/logs`, is reassembled into whole lines and
+  scrubbed of credential shapes before it reaches the console
+  (`forwardBridgeOutput`, `redactBridgeOutput`). A bare OAuth or device code
+  has no recognisable shape, so the rule that bridges never print one stays
+  the guard for those.
 - **Recordings.** `scripts/scrub-codex-recording.ts` removes `authUrl`,
   `authorizationUrl`, `verificationUrl`, `userCode` and `loginId`. The opt-in
   notification recorder writes those verbatim.
@@ -258,6 +395,20 @@ Orkestrator never refreshes a token itself. Claude access tokens last hours,
 so an inactive Claude account reports "refreshed while it is in use" once its
 token lapses, until it is used again. Codex tokens last days.
 
+Each account's last successful reading is kept in
+`<agent-accounts>/last-usage.json` (`agent-accounts-last-usage.ts`). The active
+account's reading is saved when it is read and when the user switches away from
+it. Whenever a fresh read fails, including the lapsed-token case above, the last
+reading is served instead with `stale: true`, its original `fetchedAt` and the
+failure as `message`. Any window whose reset time has passed is shown empty.
+Removing an account deletes its entry.
+
+A 429 from a usage endpoint is not retried until its `Retry-After` has passed
+(clamped to 1–30 minutes; 5 minutes if absent), even by a forced refresh. The
+endpoint's allowance is shared with the account's running Claude Code sessions.
+Switching accounts clears the wait. Meanwhile the shared reader serves the
+active account's last good reading as stale.
+
 Session-reported usage windows are folded into the platform's card only when
 the reporting bridge was launched on the active account
 (`contextUsageWithPlanUsage` in `plan-usage-cache.ts`).
@@ -265,7 +416,7 @@ the reporting bridge was launched on the active account
 ## Containers
 
 A container receives the active account's login instead of the host's at
-three points (`agent-accounts-containers.ts`). Nothing is rewritten for a
+these points (`agent-accounts-containers.ts`). Nothing is rewritten for a
 platform that never had an account added, renewed or made active, and a
 provider the environment has revoked is never handed a login.
 
@@ -286,31 +437,169 @@ provider the environment has revoked is never handed a login.
   `reconcileContainerAgentAccount` writes the new login into the container,
   updates the staged revision, stops the bridge and only then writes the
   marker. A busy bridge keeps its account until idle.
+- **Older images.** A container created before staged inputs mounts the host
+  homes read-only and its entrypoint copies them into `/home/node`, so a
+  restart would bring the host login back. On every start of such a container
+  (no inputs-revision label) the active Claude identity is pushed in, and the
+  active Codex login too while its marker proves an unreconciled boot and
+  Codex has no live work (`applyActiveCodexLoginAfterLegacyBoot`). Only the
+  container's own copy is written; the marker is left for the next bridge
+  start. Retiring the legacy mount removes this step.
+- **Terminal open.** `start_terminal_session` first runs
+  `applyActiveAgentAccountsForContainerTerminal`, so `claude` and `codex` in a
+  new container terminal use the active account. It writes the login and the
+  staged copy but neither stops the bridge nor writes the marker, waits behind
+  the platform's bridge operations, is skipped while that platform has live
+  work and gives up after 10 s.
 
 `useHostClaudeCredentials: false` keeps every Orkestrator-held Claude token
-out of containers, whichever account it belongs to.
+out of containers, whichever account it belongs to, and the terminal hand-off
+then leaves Claude alone, because the container's own login was signed in
+from a terminal inside it.
 
 ## Coordinator conversations
 
-`applyCoordinatorClaudeAccount` seeds a coordinator's private Claude directory
-from the active account's directory instead of the host's, after removing any
-login an earlier launch copied. A Claude login kept only in the macOS Keychain
-cannot be copied, because the entry is named after its directory. The
-account's current access token is passed as `CLAUDE_CODE_OAUTH_TOKEN` instead,
-never the refresh token, which would rotate away from the account's own login.
+A coordinator's private Claude directory (`prepareCoordinatorClaudeHome`)
+never holds a login. `applyCoordinatorClaudeAccount` removes any login an
+earlier build copied in, and on macOS removes once per process any Keychain
+entry Claude saved under that directory. It then reads the active account's
+login (Keychain first, then file; for the host login exactly as Claude does)
+and passes only the access token, as `CLAUDE_CODE_OAUTH_TOKEN`. A refresh token
+is never handed over: a copy rotates away from the account's own login, and on
+macOS `~/.claude/.credentials.json` is often stale beside the Keychain login,
+so a copy of it fails with "OAuth session expired and could not be refreshed".
 
-That token cannot be renewed, so its expiry is recorded
-(`localAgentAccountTokenExpiry`). Within five minutes of expiry an idle
+A login whose access token has lapsed is refreshed first, through the
+keeper's `refreshLocalLoginIfDue` (the same `claude -p` refresh containers
+use). While any coordinator runs on a handed-over token or waits for one,
+`ContainerClaudeLoginKeeper` keeps the active login refreshed even with no
+container running and with the container opt-out on.
+
+A Codex coordinator gets the same treatment through a file, because Codex
+has no access-token variable: `prepareCoordinatorCodexHome` writes the active
+login's `auth.json` into the coordinator's private `CODEX_HOME` access-only
+(`coordinatorCodexLogin`, the `restrictCodexAuthSnapshot` form containers
+receive). The refresh token is blanked and `last_refresh` set to now, so Codex
+uses its access token until it actually expires instead of refreshing early.
+Codex rotates the refresh token on every refresh, so a coordinator refreshing
+a whole copy would retire the account's own login. An API-key login is copied
+as is. Before startup, or reuse of a bridge whose token is near expiry, the
+backend renews a due login in its owning home with Codex app-server's
+`account/read { refreshToken: true }`. Requests are serialized per owning home,
+re-read the saved login before refreshing, and back off after failed renewal.
+The owner retains the rotated refresh token; only the renewed access token is
+handed over. Agent-test profiles never renew a borrowed host login.
+App-server's `chatgptAuthTokens` login would avoid the file but needs the
+`experimentalApi` capability, which the bridge leaves off.
+
+Either token cannot be renewed by the coordinator, so its expiry is recorded
+(`LocalServerRuntime.launchedTokenExpiry`). Within five minutes of expiry an idle
 coordinator bridge is replaced if a fresher login is available, and otherwise
 once the token has expired. Coordinator bridges also move to a newly active
 account once idle, like other bridges.
 
 When there is no live token to hand over (signed out, or an access token that
 lapsed while nothing used the account), the bridge launches without one and
-answers "Not logged in". It is recorded in `loginlessLocalBridges`, and every
+answers "Not logged in". It is recorded as loginless (`LocalServerRuntime.isLoginless`), and every
 later use checks the account again, so an idle bridge is replaced as soon as a
 token exists. This covers sign-ins Orkestrator is never told about, such as
-`claude auth login` in a terminal.
+`claude auth login` in a terminal. A Codex coordinator with an inherited
+`CODEX_API_KEY` or `OPENAI_API_KEY` is not recorded as loginless.
+
+## Machines
+
+Every machine (node) has its own registry, host logins, account directories
+and active account per platform. Nothing moves a credential between machines
+(see [command-nodes.md](command-nodes.md#settings)); each machine signs in for
+itself. Where each surface acts:
+
+- **A leaf's workspace** talks to the leaf, so the transcript sign-in card,
+  in-tab sign-in and the agent information panel act on the machine the
+  session runs on. With more than one machine, the card and panel name it.
+- **Settings** belongs to the command node. Each sign-in section (Claude and
+  Codex accounts, OpenCode providers, Cursor sign-in, GitHub CLI) sits under a
+  "Sign-ins on" machine picker (`AccountMachineScope`). It defaults to the
+  machine on screen; closing Settings forgets a choice. Another machine is
+  asked through the command node (`portalStore.invokeOnNode`, so an
+  ambiguous write reports an unknown outcome rather than retrying); the
+  command node itself through the portal transport (`machine: null`); an omitted
+  target follows the current workspace's backend. A sign-in runs on
+  the chosen machine, and its link opens in this client's browser. That
+  includes Cursor: `cursor_sdk_login_start { openBrowser: false }` starts its
+  login child with `NO_OPEN_BROWSER`, and the settings pane opens the link
+  with `openInBrowser`. Cursor's sign-in polls for approval, so it completes
+  from a browser on any machine. An older client omits the flag and the
+  machine's own desktop opens the link, as before.
+- **Settings → Machines → Agent accounts** shows every machine against Claude
+  and Codex, with each machine's active account and a switch
+  (`list_machine_agent_accounts`). The command node asks each enabled machine
+  for `list_agent_accounts` and `read_host_agent_sign_ins` in parallel, eight
+  seconds each; one that cannot answer shows as not connected. A node in leaf mode lists only itself,
+  and a leaf's own window shows the section with that one row (its machines
+  are its command node's to manage). Each machine's own settings dialog shows
+  its row. Registry changes reload the
+  overview so attached and removed machines are reflected immediately. Peer
+  account summaries and live sign-in rereads are rebuilt from validated fields;
+  a malformed account row shows an error for that machine.
+  - **Live.** Every machine announces a change to its accounts as
+    `agent-accounts-changed` `{ platform }` (`AGENT_ACCOUNTS_CHANGED_EVENT`):
+    a switch, an added, renamed or removed account, a renewed login. The
+    event never carries the state. The overview watches each listed machine
+    through the command node's relay (`subscribeNodeEvents`, so the command
+    node's own events arrive directly) and re-reads only that machine, with
+    `list_agent_accounts` and `read_host_agent_sign_ins`, on an event or a
+    resync. Each machine is re-read once its subscription is in place, which
+    covers a change between the overview read and the subscription. A
+    sign-in made outside Orkestrator is never announced; the refresh button
+    and reopening still re-read everything.
+  - **By account.** A toggle groups the overview by email instead of by
+    machine: each login, the machines it is on, which of them use it, a
+    switch to it on a machine that has it, and a sign-in (that platform's
+    settings, on that machine) on each connected machine that lacks it. A
+    login without an email cannot be matched across machines and is listed
+    alone.
+  - **Preferred login.** A star on an email group in By account makes that
+    email the platform's preferred login (`set_preferred_agent_identity`
+    `{ platform, email | null }`). The machine answering the overview keeps
+    it in its own `agent-accounts.json` (`preferred`) and returns it with
+    `list_machine_agent_accounts`; it is an email only and is never sent to
+    another machine. Above both views a line per platform says how many
+    machines use it and how many lack it, with a switch for every machine
+    that has it but uses another. By machine, a cell off it shows **Use
+    preferred** where the machine has that login and **No preferred login**
+    where it does not. Nothing switches by itself: a leaf adding or removing
+    a login, or a machine coming back online, never changes which account it
+    uses. A preference change made in another client shows on the next full
+    read (opening the page or the refresh button), not live. A machine's own
+    settings dialog does not flag its row. Older command nodes reject the
+    command, so the star reports an error there.
+  - **Grok and Pi** have no accounts. Each machine reports whether it has a
+    login a local bridge would use (`read_host_agent_sign_ins`,
+    `agent-sign-ins.ts`), from files and variable names only, never a value:
+    for Grok the bridge's own rule (`XAI_API_KEY`, an auth-provider command or
+    `$GROK_HOME/auth.json`), for Pi the provider ids in `~/.pi/agent/auth.json`
+    and then a common provider key in the backend's environment. Nothing is
+    checked against the provider, so an expired login still reads as signed
+    in. The command node rebuilds another machine's answer field by field,
+    and a machine that predates the read shows no Grok or Pi column.
+    "Sign in on <machine>" calls `open_agent_sign_in_terminal`: the machine
+    opens a plain terminal tab running its fixed login command (`grok login`,
+    or `pi` for Pi's own `/login`) through `launch_terminal_job`, in the
+    environment on screen when it is a running local one there, otherwise its
+    most recently active one. A container's terminal would sign the container
+    in, so only local environments qualify. The window then shows that
+    environment.
+- **The agent information panel** places account controls below usage. It reads
+  `get_native_agent_session_account` for container or unknown-source messages
+  and pending moves to a newly active account. When the machine holds multiple
+  logins, it offers a machine-wide active-account switcher, except for isolated
+  containers. It shows read or switch errors. Outside isolated containers, it
+  offers **Manage accounts** or, with at most one login, **Add an account**,
+  opening the platform's Settings section. Claude reauthentication lives in
+  Settings. The composer shows no account control. The panel re-reads on its own machine's
+  `agent-accounts-changed` (`useAgentAccountsChanged`), on event-stream reconnect,
+  when opened, and when the turn or bridge changes. Reads are fenced against
+  newer requests, and a different environment or provider starts with fresh state.
 
 ## Terminal tabs
 
@@ -318,12 +607,15 @@ Local terminal tabs start with `CLAUDE_CONFIG_DIR`/`CODEX_HOME` pointing at
 the active accounts (`activeAgentAccountShellEnvironment`); nothing is set for
 host logins. A terminal keeps the account that was active when it opened.
 Claude tmux mode exports the active Claude account per session, because a
-local tmux server keeps the environment it was first started with. Container
-terminals use whatever login the container holds.
+local tmux server keeps the environment it was first started with. A container
+terminal is handed the active login when it opens (see
+[Containers](#containers)); one opened while that platform has live work, or
+one already open, keeps the login the container held.
 
 ## Provider behaviour relied on
 
-Checked against Claude Code 2.1.283 and Codex 0.158.0.
+Checked against Claude Code 2.1.283 and Codex 0.158.0, except where a line
+names another version.
 
 - Claude's Keychain service for a config directory is
   `Claude Code-credentials-<first 8 hex of sha256(CLAUDE_CONFIG_DIR)>`
@@ -343,5 +635,22 @@ Checked against Claude Code 2.1.283 and Codex 0.158.0.
 - Codex keeps its login in `$CODEX_HOME/auth.json`. Its `chatgptAuthTokens`
   login needs the `experimentalApi` capability, which the bridge leaves off,
   and is memory-only.
+- Codex 0.164.0 accepts the access-only `auth.json` in a local home: `codex
+  login status` reads it as a ChatGPT login and backend requests carry its
+  access token. It refreshes proactively only once the access token is
+  within five minutes of its `exp`; `last_refresh` counts only for a token
+  without a readable `exp`. Inside that window, or after a 401, it tries the
+  blank refresh token once, the attempt fails, and the file is left as it
+  was. A coordinator is replaced at the same five-minute lead
+  (`TOKEN_REPLACEMENT_LEAD_MS`) when next used while idle, so only a turn
+  running across that point sees the failed attempt. Checked offline with
+  `scripts/codex-access-only-auth-probe.ts` on 2026-10-25.
+- The Claude Agent SDK's `accountInfo()` returns the login's email (0.3.309,
+  host OAuth login, with organization, subscription type and API provider;
+  checked 2026-10-25). The panel still takes the email from the account
+  registry, which has it before any session starts.
+- The Cursor SDK's login (1.0.40) skips spawning the system opener when
+  `NO_OPEN_BROWSER` is set or an SSH variable is present, and still publishes
+  the URL (`bridges/cursor-bridge/src/login-no-open-browser.test.ts`).
 - With `sessions/` symlinked, a second `CODEX_HOME` with a fresh state
   database lists, resumes and continues the first home's threads.

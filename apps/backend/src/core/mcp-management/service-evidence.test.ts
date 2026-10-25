@@ -333,7 +333,9 @@ describe("Claude evidence", () => {
         state: "restart-required",
         reason: STILL_LOADED_REASON,
       });
-      // The background work ended and the next message started a new CLI.
+      // A CLI kept open between messages holds it too, not only background work.
+      expect(STILL_LOADED_REASON).toContain("idle");
+      // The old CLI closed and the next message started a new one.
       fixture.now.value += EVIDENCE_RECHECK_MS;
       report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value);
       await fixture.service.tick();

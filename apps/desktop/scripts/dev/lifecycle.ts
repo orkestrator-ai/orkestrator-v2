@@ -348,7 +348,7 @@ export async function seedAgentTestProfileState(
   const warn = dependencies.warn ?? ((message: string) => console.warn(message));
   const [, , toolchains] = await Promise.all([
     (dependencies.seedModelCatalogCaches ?? seedInstalledModelCatalogCaches)(profile),
-    (dependencies.seedProviderCredentials ?? seedAgentTestProviderCredentials)(profile),
+    (dependencies.seedProviderCredentials ?? seedAgentTestProviderCredentials)(profile, { warn }),
     (dependencies.seedAgentToolchains ?? seedInstalledAgentToolchains)(profile),
   ]);
   if (toolchains.seeded.length > 0) {
@@ -366,6 +366,24 @@ export async function seedAgentTestProfileState(
     // Attributes a long or hung startup before Electron is even launched.
     log(`Electron will download managed toolchains for: ${pending.join(", ")}`);
   }
+}
+
+const ELECTRON_READINESS_TIMEOUT_MS = 60_000;
+
+/**
+ * How long the launcher waits for Electron to announce readiness before
+ * killing it, or `null` to wait for as long as Electron stays alive.
+ *
+ * Readiness comes only after startup finishes, and a `development` profile's
+ * startup can wait on a person: a fresh profile opens the first-run agent
+ * platform chooser, then may download toolchains and show the macOS
+ * permissions splash. Timing that out killed Electron while the chooser was
+ * still on screen, so `mise run dev` never reached the app. `agent-test` runs
+ * non-interactively (no chooser, no retry dialogs), so a hang there is a
+ * failure worth reporting.
+ */
+export function electronReadinessTimeoutMs(flavor: "development" | "agent-test"): number | null {
+  return flavor === "agent-test" ? ELECTRON_READINESS_TIMEOUT_MS : null;
 }
 
 /**
@@ -421,7 +439,7 @@ export async function compileElectronForDevelopment(
   const checked = (
     dependencies.typecheck ??
     (() =>
-      spawnSync("bunx", ["tsc", "--noEmit", "-p", "tsconfig.electron.json"], {
+      spawnSync("bun", ["check", "-p", "tsconfig.electron.json"], {
         cwd: packageRoot,
         encoding: "utf8",
       }))
@@ -648,10 +666,20 @@ export async function startDevelopment(
     });
 
     const ready = await new Promise<ElectronReady>((resolve, reject) => {
-      const timeout = setTimeout(
-        () => reject(new Error("Timed out waiting for Electron/backend readiness")),
-        60_000,
-      );
+      const timeoutMs = electronReadinessTimeoutMs(flavor);
+      const timeout =
+        timeoutMs === null
+          ? setTimeout(
+              () =>
+                console.log(
+                  "Still waiting for Electron to finish starting; answer any first-run prompt in its window.",
+                ),
+              ELECTRON_READINESS_TIMEOUT_MS,
+            )
+          : setTimeout(
+              () => reject(new Error("Timed out waiting for Electron/backend readiness")),
+              timeoutMs,
+            );
       electron!.once("error", reject);
       electron!.once("exit", (code, signal) =>
         reject(
@@ -680,6 +708,7 @@ export async function startDevelopment(
         browserUrl: fixtureUrl,
         authFile: ready.authFile,
         environments: args.fixtureEnvironments,
+        containerNetwork: args.fixtureContainerNetwork,
       });
     }
     await writeStatus({

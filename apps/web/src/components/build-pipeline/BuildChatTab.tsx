@@ -1,6 +1,14 @@
 import { ReviewValidationStatus } from "../review/ReviewValidationStatus";
 import { WorkflowResultStatus } from "../review/WorkflowResultStatus";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { flushSync } from "react-dom";
 import {
   AlertCircle,
@@ -69,6 +77,8 @@ import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
 import { toPipelineTranscript } from "./pipeline-transcript";
+import { useWorkflowTranscriptArtifacts } from "@/hooks/useWorkflowTranscriptArtifacts";
+import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import {
   formatStageSpan,
   pipelineStageGroups,
@@ -281,6 +291,29 @@ export function reviewIterationLabels(
   return labels;
 }
 
+const NO_CLOCK_SUBSCRIPTION = () => {};
+
+/**
+ * The wall clock behind the tab's live durations, as an external store: it is
+ * re-read when a subscription starts and on every one-second tick, and holds
+ * still in between so the snapshot is stable.
+ */
+function createDisplayClock() {
+  let now = Date.now();
+  return {
+    getSnapshot: () => now,
+    subscribe: (onChange: () => void) => {
+      const tick = () => {
+        now = Date.now();
+        onChange();
+      };
+      tick();
+      const interval = window.setInterval(tick, 1_000);
+      return () => window.clearInterval(interval);
+    },
+  };
+}
+
 /** Matches the elapsed/token line used by each standalone Multi Review reviewer tile. */
 export function pipelineReviewRuntimeSummary(
   session: Pick<PipelineSession, "status" | "startedAt" | "completedAt" | "tokenCount">,
@@ -310,7 +343,10 @@ export function BuildChatTab({
   const [controlPending, setControlPending] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendPending, setSendPending] = useState(false);
-  const [displayNow, setDisplayNow] = useState(() => Date.now());
+  const [displayClock] = useState(createDisplayClock);
+  // Stands in for messages that carry no time of their own when the stage has
+  // no start time either; fixed so their rows do not drift on every update.
+  const [transcriptFallbackCreatedAt] = useState(() => new Date().toISOString());
   const validationStageId = pipeline?.validationRun
     ? `validation:${pipeline.validationRun.id}`
     : null;
@@ -325,7 +361,7 @@ export function BuildChatTab({
   // Distinguishes "the user picked this stage" from "we auto-followed the
   // pipeline". Without it the first automatic pick — the build stage — pins the
   // transcript there for the rest of the run, because it stays a valid session.
-  const pinnedSessionRef = useRef(false);
+  const [selectionPinned, setSelectionPinned] = useState(false);
   const hydrationAttemptedFor = useRef<string | null>(null);
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     // Switching to the stage list on a phone hides the transcript as
@@ -337,8 +373,9 @@ export function BuildChatTab({
     persistKey: `build-pipeline:${data.pipelineId}`,
     environmentId: data.environmentId,
     // A build runs unattended, so returning to the tab should show what the
-    // pipeline is doing now rather than where the transcript was left.
-    stickToBottomOnActivation: true,
+    // pipeline is doing now rather than where the transcript was left: the
+    // documented exception to returning readers to their place.
+    activation: "latest",
   });
 
   // A `useId` value is legal in an id and in an ARIA reference whatever
@@ -355,7 +392,7 @@ export function BuildChatTab({
 
   const pinSession = useCallback(
     (sessionId: string) => {
-      pinnedSessionRef.current = true;
+      setSelectionPinned(true);
       setViewedSessionId(data.pipelineId, sessionId);
     },
     [data.pipelineId, setViewedSessionId],
@@ -409,27 +446,33 @@ export function BuildChatTab({
   // The stage rail's phase durations and elapsed footer count up while the
   // pipeline works, so they share this clock with the reviewer timers.
   const pipelineRunning = pipeline ? isActiveBuildPhase(pipeline.phase) : false;
-  useEffect(() => {
-    if (!isActive || (!hasRunningValidation && !hasRunningReview && !pipelineRunning)) return;
-    setDisplayNow(Date.now());
-    const interval = window.setInterval(() => setDisplayNow(Date.now()), 1_000);
-    return () => window.clearInterval(interval);
-  }, [hasRunningReview, hasRunningValidation, isActive, pipelineRunning]);
+  const subscribeDisplayClock = useCallback(
+    (onChange: () => void) =>
+      !isActive || (!hasRunningValidation && !hasRunningReview && !pipelineRunning)
+        ? NO_CLOCK_SUBSCRIPTION
+        : displayClock.subscribe(onChange),
+    [displayClock, hasRunningReview, hasRunningValidation, isActive, pipelineRunning],
+  );
+  const displayNow = useSyncExternalStore(subscribeDisplayClock, displayClock.getSnapshot);
+
+  const selectionExists =
+    selectedSessionId !== null &&
+    Boolean(
+      pipeline?.sessions.some((session) => session.sdkSessionId === selectedSessionId) ||
+      selectedSessionId === validationStageId,
+    );
+  // A pinned selection that vanished from the snapshot is no longer a choice
+  // the user can hold on to, so release the pin and follow the pipeline again.
+  if (selectionPinned && (!pipeline?.sessions.length || !selectionExists)) {
+    setSelectionPinned(false);
+  }
 
   useEffect(() => {
     if (!pipeline?.sessions.length) {
       setViewedSessionId(data.pipelineId, null);
-      pinnedSessionRef.current = false;
       return;
     }
-    const selectionExists =
-      selectedSessionId !== null &&
-      (pipeline.sessions.some((session) => session.sdkSessionId === selectedSessionId) ||
-        selectedSessionId === validationStageId);
-    // A pinned selection that vanished from the snapshot is no longer a choice
-    // the user can hold on to, so release the pin and follow the pipeline again.
-    if (!selectionExists) pinnedSessionRef.current = false;
-    if (selectionExists && pinnedSessionRef.current) return;
+    if (selectionExists && selectionPinned) return;
     const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     const following =
       validationStageId && isReviewPackagePreparationSession(currentSession, pipeline)
@@ -442,6 +485,8 @@ export function BuildChatTab({
     pipeline?.currentSessionIndex,
     pipeline?.sessions,
     selectedSessionId,
+    selectionExists,
+    selectionPinned,
     setViewedSessionId,
     validationStageId,
   ]);
@@ -504,7 +549,12 @@ export function BuildChatTab({
     },
     [],
   );
-  const reportSession = pipeline ? reviewReportSession(pipeline) : undefined;
+  // Memoized on the snapshot so the stage it returns is read-only from here
+  // on, as `pipeline` is; the transcript memo below depends on both.
+  const reportSession = useMemo(
+    () => (pipeline ? reviewReportSession(pipeline) : undefined),
+    [pipeline],
+  );
   const fanoutReviewerBySessionKey = useMemo(
     () =>
       new Map(
@@ -556,12 +606,12 @@ export function BuildChatTab({
   // through the Claude adapter silently drops its subagent and tool-group parts.
   // Snapshots written before per-step harnesses carry no session agent.
   const agentType = selectedSession?.agent ?? pipeline?.agentType;
-  const messages = useMemo(() => {
+  const stageTranscript = useMemo(() => {
     if (!agentType) return [];
     const transcript = toPipelineTranscript(
       selectedSession?.messages,
       agentType,
-      selectedSession?.startedAt ?? new Date().toISOString(),
+      selectedSession?.startedAt ?? transcriptFallbackCreatedAt,
       selectedSession?.interactionTranscript,
     );
     if (selectedSession?.label === REVIEW_PACKAGE_SESSION_LABEL) {
@@ -606,19 +656,54 @@ export function BuildChatTab({
     selectedSession?.interactionTranscript,
     selectedSession?.label,
     structuredResultAccepted,
+    transcriptFallbackCreatedAt,
   ]);
+  /*
+   * The stage session's own key owns what its agent publishes, in the
+   * pipeline's environment; a replaced provider session is a new generation.
+   * Cards resolve in that conversation, as in a native agent tab.
+   */
+  const pipelineEnvironmentId = pipeline?.environmentId;
+  const stageSessionKey = selectedSession?.sessionKey;
+  const stageProviderSessionId = selectedSession?.sdkSessionId;
+  const stageConversation = useMemo(
+    () =>
+      pipelineEnvironmentId && stageSessionKey
+        ? {
+            environmentId: pipelineEnvironmentId,
+            conversationKey: stageSessionKey,
+            generation: stageProviderSessionId ?? stageSessionKey,
+          }
+        : null,
+    [pipelineEnvironmentId, stageProviderSessionId, stageSessionKey],
+  );
+  const { scope: stageScope, messages } = useWorkflowTranscriptArtifacts(
+    stageConversation,
+    stageTranscript,
+    { canLoadEarlier: false },
+  );
 
   // Tests replaces the visible pane but must not remount or empty the
   // virtualized list — that would lose the reader's place and, with
-  // stickToBottomOnActivation, jump them to the bottom on return.
-  const lastListMessagesRef = useRef(messages);
-  const lastListReportRef = useRef(selectedReviewReport);
-  if (!validationSelected) {
-    lastListMessagesRef.current = messages;
-    lastListReportRef.current = selectedReviewReport;
+  // the "latest" activation policy, jump them to the bottom on return.
+  // The rows and the conversation their artifact cards resolve in stay together.
+  // Recorded while rendering, and only when one of them changes.
+  const [lastListView, setLastListView] = useState({
+    messages,
+    scope: stageScope,
+    reviewReport: selectedReviewReport,
+  });
+  if (
+    !validationSelected &&
+    (lastListView.messages !== messages ||
+      lastListView.scope !== stageScope ||
+      lastListView.reviewReport !== selectedReviewReport)
+  ) {
+    setLastListView({ messages, scope: stageScope, reviewReport: selectedReviewReport });
   }
-  const listMessages = validationSelected ? lastListMessagesRef.current : messages;
-  const listReviewReport = validationSelected ? lastListReportRef.current : selectedReviewReport;
+  const listMessages = validationSelected ? lastListView.messages : messages;
+  const listScope = validationSelected ? lastListView.scope : stageScope;
+  const listReviewReport = validationSelected ? lastListView.reviewReport : selectedReviewReport;
 
   /** The accepted report a stage produced, as its stage badge and the rail's review chip read it. */
   const stageReportFor = (session: PipelineSession) =>
@@ -638,7 +723,7 @@ export function BuildChatTab({
     timeline?.groups.find((group) => group.current)?.key,
     selectedSessionId,
     selectedSessionId ? groupKeyByStageId.get(selectedSessionId) : undefined,
-    pinnedSessionRef.current,
+    selectionPinned,
   );
 
   const runControl = async (action: "pause" | "resume" | "cancel"): Promise<void> => {
@@ -668,7 +753,7 @@ export function BuildChatTab({
       replacePipeline(await backend.restartBuildPipelineCurrentStep(pipeline.id));
       // The restart opens a new session; follow it rather than leaving the
       // user on whichever stage they were reading.
-      pinnedSessionRef.current = false;
+      setSelectionPinned(false);
       toast.success(`${restartCurrentStageLabel?.replace(/^Restart /, "") ?? "Stage"} restarted`);
     } catch (error) {
       toast.error("Failed to restart the stage", {
@@ -685,7 +770,7 @@ export function BuildChatTab({
     try {
       const updated = await backend.retryBuildPipelineStage(pipeline.id);
       replacePipeline(updated);
-      pinnedSessionRef.current = false;
+      setSelectionPinned(false);
       if (updated.phase === "failed") {
         toast.error("Failed to restart the stage", {
           description: updated.error ?? "The stage failed again before it could restart",
@@ -708,7 +793,7 @@ export function BuildChatTab({
     try {
       const updated = await backend.restartBuildPipelineStep(pipeline.id, stageId);
       replacePipeline(updated);
-      pinnedSessionRef.current = false;
+      setSelectionPinned(false);
       toast.success("Stage restarted");
     } catch (error) {
       toast.error("Failed to restart the stage", {
@@ -1287,90 +1372,92 @@ export function BuildChatTab({
               renderer, the same virtualization, the same in-transcript find,
               and the same follow-the-tail behaviour while a stage streams.
             */}
-            <VirtualizedMessageList
-              messages={listMessages}
-              computeItemKey={(_index, message) => message.id}
-              resolvePreviousMessage={findPreviousNativeMessage}
-              renderMessage={(_index, message, previous) => (
-                <NativeMessage
-                  message={message}
-                  previousMessage={previous}
-                  assistantLabel={agentLabel}
-                  containerId={containerId}
-                  agentExpansionScope={data.environmentId}
-                  platform={isAgentPlatform(displayedAgent) ? displayedAgent : undefined}
-                />
-              )}
-              emptyState={
-                <div className="py-12 text-center text-sm text-muted-foreground">
-                  {!selectedSession
-                    ? "Waiting for the backend to start a build stage."
-                    : transcriptUnavailable
-                      ? "The stored transcript for this stage could not be read."
-                      : transcriptStale && selectedSession.messages === undefined
-                        ? "Loading this stage's transcript…"
-                        : selectedSession.status === "running"
-                          ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
-                          : "No text transcript was produced for this stage."}
-                </div>
-              }
-              header={
-                (selectedSession?.transcript && !selectedSession.transcript.complete) ||
-                selectedSession?.transcriptCheckpointError ? (
-                  <div className="px-3 py-2 text-center text-[11px] text-muted-foreground @sm:px-6">
-                    {selectedSession.transcript && !selectedSession.transcript.complete ? (
-                      <p>
-                        {selectedSession.transcript.omittedMessages ?? "Some"}{" "}
-                        {selectedSession.transcript.omittedMessages === 1
-                          ? "message was"
-                          : "messages were"}{" "}
-                        not kept in the stored transcript because of its size limit.
-                      </p>
-                    ) : null}
-                    {selectedSession.transcriptCheckpointError ? (
-                      <p>The newest messages of this stage could not be stored yet.</p>
-                    ) : null}
+            <RichTranscriptScopeContext.Provider value={listScope}>
+              <VirtualizedMessageList
+                messages={listMessages}
+                computeItemKey={(_index, message) => message.id}
+                resolvePreviousMessage={findPreviousNativeMessage}
+                renderMessage={(_index, message, previous) => (
+                  <NativeMessage
+                    message={message}
+                    previousMessage={previous}
+                    assistantLabel={agentLabel}
+                    containerId={containerId}
+                    agentExpansionScope={data.environmentId}
+                    platform={isAgentPlatform(displayedAgent) ? displayedAgent : undefined}
+                  />
+                )}
+                emptyState={
+                  <div className="py-12 text-center text-sm text-muted-foreground">
+                    {!selectedSession
+                      ? "Waiting for the backend to start a build stage."
+                      : transcriptUnavailable
+                        ? "The stored transcript for this stage could not be read."
+                        : transcriptStale && selectedSession.messages === undefined
+                          ? "Loading this stage's transcript…"
+                          : selectedSession.status === "running"
+                            ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
+                            : "No text transcript was produced for this stage."}
                   </div>
-                ) : undefined
-              }
-              footer={
-                showReviewReport || showThinking ? (
-                  <>
-                    {showReviewReport && listReviewReport ? (
-                      <div className="px-3 py-3 @sm:px-6">
-                        <StructuredReviewReportView
-                          className="mx-auto max-w-3xl"
-                          report={listReviewReport}
-                          heading={
-                            (pipeline.reviewers?.length ?? 0) > 1
-                              ? ownsCurrentReviewReport
-                                ? "Consolidated Multi Review"
-                                : "Reviewer report"
-                              : undefined
-                          }
-                          collapsibleSections
-                          sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
-                          showRawJson={false}
-                        />
-                      </div>
-                    ) : null}
-                    {showThinking ? (
-                      <div className="px-2 @sm:px-4">
-                        <div className="chat-status-row mx-auto max-w-3xl min-w-0">
-                          <AgentThinkingIndicator agentName={agentLabel} />
+                }
+                header={
+                  (selectedSession?.transcript && !selectedSession.transcript.complete) ||
+                  selectedSession?.transcriptCheckpointError ? (
+                    <div className="px-3 py-2 text-center text-[11px] text-muted-foreground @sm:px-6">
+                      {selectedSession.transcript && !selectedSession.transcript.complete ? (
+                        <p>
+                          {selectedSession.transcript.omittedMessages ?? "Some"}{" "}
+                          {selectedSession.transcript.omittedMessages === 1
+                            ? "message was"
+                            : "messages were"}{" "}
+                          not kept in the stored transcript because of its size limit.
+                        </p>
+                      ) : null}
+                      {selectedSession.transcriptCheckpointError ? (
+                        <p>The newest messages of this stage could not be stored yet.</p>
+                      ) : null}
+                    </div>
+                  ) : undefined
+                }
+                footer={
+                  showReviewReport || showThinking ? (
+                    <>
+                      {showReviewReport && listReviewReport ? (
+                        <div className="px-3 py-3 @sm:px-6">
+                          <StructuredReviewReportView
+                            className="mx-auto max-w-3xl"
+                            report={listReviewReport}
+                            heading={
+                              (pipeline.reviewers?.length ?? 0) > 1
+                                ? ownsCurrentReviewReport
+                                  ? "Consolidated Multi Review"
+                                  : "Reviewer report"
+                                : undefined
+                            }
+                            collapsibleSections
+                            sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
+                            showRawJson={false}
+                          />
                         </div>
-                      </div>
-                    ) : null}
-                  </>
-                ) : undefined
-              }
-              scrollProps={scrollProps}
-              virtuosoRef={virtuosoRef}
-              find={{
-                isActive: ownsGlobalShortcuts && !validationSelected,
-                getSearchText: getNativeMessageSearchText,
-              }}
-            />
+                      ) : null}
+                      {showThinking ? (
+                        <div className="px-2 @sm:px-4">
+                          <div className="chat-status-row mx-auto max-w-3xl min-w-0">
+                            <AgentThinkingIndicator agentName={agentLabel} />
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : undefined
+                }
+                scrollProps={scrollProps}
+                virtuosoRef={virtuosoRef}
+                find={{
+                  isActive: ownsGlobalShortcuts && !validationSelected,
+                  getSearchText: getNativeMessageSearchText,
+                }}
+              />
+            </RichTranscriptScopeContext.Provider>
           </div>
         </div>
       </div>

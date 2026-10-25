@@ -1,7 +1,3 @@
-import {
-  beginEnvironmentMove,
-  endEnvironmentMove,
-} from "../src/core/environment-replacement-fence";
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 import { tmuxSessionName } from "../src/core/tmux";
@@ -11,9 +7,11 @@ import {
   createHandlers,
   createTempDir,
   deferred,
+  harnessRuntime,
   invoke,
   waitFor,
   withFakeTmuxRuntime,
+  warpedCommandClock,
 } from "./tmux-test-harness.js";
 
 describe("Electron tmux launch flags and interactive controls", () => {
@@ -418,7 +416,9 @@ exit 0
   // — the CLI flags only apply at launch — and each one then waits out the
   // no-hook settle window, so this needs more than the default per-test budget.
   test("switches model, effort, and fast mode as slash commands in the live TUI", async () => {
-    const handlers = createHandlers();
+    // No hook arrives for these commands, so each model and effort switch
+    // settles at COMMAND_NO_HOOK_SETTLE_MS; the warped clock elapses it.
+    const handlers = createHandlers({ sessionTiming: warpedCommandClock() });
 
     await withFakeTmuxRuntime(async ({ environment, alive }) => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
@@ -933,7 +933,9 @@ exit 0
   });
 
   test("validates fast-mode requests and times out without inventing confirmation", async () => {
-    const handlers = createHandlers();
+    // The ignored request must run out FAST_MODE_SWITCH_TIMEOUT_MS; the
+    // warped clock elapses it while the pane is re-read on every poll.
+    const handlers = createHandlers({ sessionTiming: warpedCommandClock() });
 
     await withFakeTmuxRuntime(async ({ environment, alive, log }) => {
       const tabId = "tab-fast-timeout";
@@ -1209,7 +1211,9 @@ test("tmux launch admission and every input path are fenced during transfer", as
     );
     try {
       await entered.promise;
-      expect(() => beginEnvironmentMove(environment.id)).toThrow("submission is still in progress");
+      expect(() => harnessRuntime().environments.fence.beginMove(environment.id)).toThrow(
+        "submission is still in progress",
+      );
       naming.resolve();
       await starting;
       const terminalSessionId = await invoke(
@@ -1218,7 +1222,7 @@ test("tmux launch admission and every input path are fenced during transfer", as
         { tabId: "tab-move", environmentId: environment.id, cols: 80, rows: 24 },
         context,
       );
-      expect(beginEnvironmentMove(environment.id)).toBe(true);
+      expect(harnessRuntime().environments.fence.beginMove(environment.id)).toBe(true);
       for (const command of [
         "claude_tmux_start",
         "claude_tmux_submit",
@@ -1248,7 +1252,7 @@ test("tmux launch admission and every input path are fenced during transfer", as
       ).rejects.toThrow("being moved");
     } finally {
       naming.resolve();
-      endEnvironmentMove(environment.id);
+      harnessRuntime().environments.fence.endMove(environment.id);
       await starting;
       await invoke(
         handlers,

@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
-import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
+import { isWindowMachine, useAccountMachine } from "./account-machine";
+import { useSettingsConfig } from "./settings-config";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
 import { getReviewInstructionValidationError } from "@orkestrator/protocol/review-instruction";
 import { DEFAULT_COORDINATOR_PROVIDER_TIER } from "@orkestrator/protocol/coordinator";
@@ -58,6 +59,7 @@ import {
   MAX_SSH_AGENT_SOCKET_PATH_CHARS,
   SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES,
 } from "@orkestrator/protocol/ssh-agent-socket";
+import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
 import { parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
 
@@ -105,6 +107,7 @@ interface CoreFieldsSnapshot {
   allowedDomains: string[];
   useHostGitHubCredentials: boolean;
   sshAgentSocketPath: string;
+  defaultProjectsDirectory: string;
   useHostClaudeCredentials: boolean;
   preferredEditor: PreferredEditor;
   enabledAgentPlatforms: AgentPlatform[];
@@ -140,6 +143,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     allowedDomains: normalizeAllowedDomainsInput(global.allowedDomains ?? []),
     useHostGitHubCredentials: global.useHostGitHubCredentials ?? true,
     sshAgentSocketPath: global.sshAgentSocketPath ?? "",
+    defaultProjectsDirectory: global.defaultProjectsDirectory ?? "",
     useHostClaudeCredentials: global.useHostClaudeCredentials ?? true,
     preferredEditor: global.preferredEditor ?? "vscode",
     enabledAgentPlatforms: global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
@@ -195,6 +199,17 @@ export function sshAgentSocketPathForSave(value: string): string | undefined {
   return value.trim() || undefined;
 }
 
+/** Empty means "the most common parent of this machine's projects". */
+export function getDefaultProjectsDirectoryValidationError(value: string): string | null {
+  const candidate = value.trim();
+  if (!candidate) return null;
+  if (candidate.length > MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS || candidate.includes("\0")) {
+    return "The default projects folder is not a valid path.";
+  }
+  if (!candidate.startsWith("/")) return "The default projects folder must be an absolute path.";
+  return null;
+}
+
 function getSavedReviewInstruction(value: unknown): string {
   return typeof value === "string" && getReviewInstructionValidationError(value) === null
     ? value
@@ -218,6 +233,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.envFilePatterns,
     global.useHostGitHubCredentials ?? true,
     global.sshAgentSocketPath ?? "",
+    global.defaultProjectsDirectory ?? "",
     global.useHostClaudeCredentials ?? true,
     global.allowedDomains ?? [],
     global.preferredEditor ?? "vscode",
@@ -251,8 +267,8 @@ interface GlobalSettingsProps {
 }
 
 export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
-  const config = useConfigStore((state) => state.config);
-  const setConfig = useConfigStore((state) => state.setConfig);
+  const { config, setConfig } = useSettingsConfig();
+  const { machine } = useAccountMachine();
   const global = config.global;
 
   const [cpuCores, setCpuCores] = useState(global.containerResources.cpuCores);
@@ -268,6 +284,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     global.useHostGitHubCredentials ?? true,
   );
   const [sshAgentSocketPath, setSshAgentSocketPath] = useState(global.sshAgentSocketPath ?? "");
+  const [defaultProjectsDirectory, setDefaultProjectsDirectory] = useState(
+    global.defaultProjectsDirectory ?? "",
+  );
   const [useHostClaudeCredentials, setUseHostClaudeCredentials] = useState(
     global.useHostClaudeCredentials ?? true,
   );
@@ -394,6 +413,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     // typed keeps a rejected secret retryable across an unrelated store write.
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setSshAgentSocketPath(global.sshAgentSocketPath ?? "");
+    setDefaultProjectsDirectory(global.defaultProjectsDirectory ?? "");
     setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
@@ -435,11 +455,26 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
   }, [global]);
 
-  const refreshWebClientStatus = useCallback(async () => {
+  // Entering the web-client section starts a fresh status load, and entering
+  // the debug section (or switching machine while on it) a fresh log storage
+  // walk. Their loading state is set here, while rendering, so the effects
+  // below only start the requests.
+  const [loadedSection, setLoadedSection] = useState<string | null>(null);
+  const [loadedMachine, setLoadedMachine] = useState(machine);
+  if (loadedSection !== activeSection || (activeSection === "debug" && loadedMachine !== machine)) {
+    setLoadedSection(activeSection);
+    setLoadedMachine(machine);
+    if (activeSection === "web-client") {
+      setIsLoadingWebClientStatus(true);
+      setIsLoadingGatewayToken(true);
+      setGatewayTokenLoadError(null);
+    } else if (activeSection === "debug") {
+      setIsLoadingLogStorage(true);
+    }
+  }
+
+  const refreshWebClientStatus = useCallback(() => {
     const requestId = ++webClientStatusRequestRef.current;
-    setIsLoadingWebClientStatus(true);
-    setIsLoadingGatewayToken(true);
-    setGatewayTokenLoadError(null);
 
     const statusRequest = backend
       .getWebClientStatus()
@@ -481,7 +516,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         if (requestId === webClientStatusRequestRef.current) setIsLoadingGatewayToken(false);
       });
 
-    await Promise.all([statusRequest, tokenRequest]);
+    return Promise.all([statusRequest, tokenRequest]);
   }, []);
 
   useEffect(() => {
@@ -496,39 +531,43 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   // join on the backend and stays cheap enough to fetch eagerly. Walks and
   // cleanups share one generation so a slower earlier request cannot replace
   // newer stats or clear the spinner while a later walk is still in flight.
-  const refreshLogStorage = useCallback(async () => {
+  const fetchLogStorage = useCallback(() => {
     const requestId = ++logStorageRequestRef.current;
+    return Promise.allSettled([
+      backend.getLogDirectory(machine),
+      backend.getLogStorageStats(machine),
+    ]).then(([directory, stats]) => {
+      if (requestId !== logStorageRequestRef.current) return;
+      if (directory.status === "fulfilled") setLogDirectory(directory.value);
+      setLogStorageStats(stats.status === "fulfilled" ? stats.value : null);
+      setIsLoadingLogStorage(false);
+    });
+  }, [machine]);
+  const refreshLogStorage = useCallback(() => {
     setIsLoadingLogStorage(true);
-    const [directory, stats] = await Promise.allSettled([
-      backend.getLogDirectory(),
-      backend.getLogStorageStats(),
-    ]);
-    if (requestId !== logStorageRequestRef.current) return;
-    if (directory.status === "fulfilled") setLogDirectory(directory.value);
-    setLogStorageStats(stats.status === "fulfilled" ? stats.value : null);
-    setIsLoadingLogStorage(false);
-  }, []);
+    return fetchLogStorage();
+  }, [fetchLogStorage]);
 
   useEffect(() => {
     backend
-      .getLogDirectory()
+      .getLogDirectory(machine)
       .then(setLogDirectory)
       .catch(() => {});
-  }, []);
+  }, [machine]);
 
   useEffect(() => {
-    if (activeSection === "debug") void refreshLogStorage();
+    if (activeSection === "debug") void fetchLogStorage();
     return () => {
       logStorageRequestRef.current += 1;
     };
-  }, [activeSection, refreshLogStorage]);
+  }, [activeSection, fetchLogStorage]);
 
   const handleCleanupLogs = useCallback(async () => {
     const requestId = ++logStorageRequestRef.current;
     setIsCleaningLogs(true);
     setIsLoadingLogStorage(false);
     try {
-      const stats = await backend.cleanupLogs();
+      const stats = await backend.cleanupLogs(machine);
       if (requestId !== logStorageRequestRef.current) return;
       setLogStorageStats(stats);
       toast.success("Logs cleaned up");
@@ -540,7 +579,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     } finally {
       setIsCleaningLogs(false);
     }
-  }, []);
+  }, [machine]);
 
   // What the shared auto-save would persist for the current edit. Kept in a
   // ref so the debounce effect can tell a fresh edit from one that already
@@ -564,6 +603,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       allowedDomains: normalizeAllowedDomainsInput(allowedDomains),
       useHostGitHubCredentials,
       sshAgentSocketPath: sshAgentSocketPathForSave(sshAgentSocketPath) ?? "",
+      defaultProjectsDirectory: defaultProjectsDirectory.trim(),
       useHostClaudeCredentials,
       preferredEditor,
       enabledAgentPlatforms,
@@ -597,6 +637,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       allowedDomains,
       useHostGitHubCredentials,
       sshAgentSocketPath,
+      defaultProjectsDirectory,
       useHostClaudeCredentials,
       preferredEditor,
       enabledAgentPlatforms,
@@ -626,15 +667,13 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const storedCoreSignature = useMemo(() => JSON.stringify(storedCoreFields(global)), [global]);
   const coreHasChanges =
     localCoreSignature !== storedCoreSignature || githubCredentialPropagationPending;
-  coreSignatureRef.current = localCoreSignature;
 
   // Latest-value mirrors for the unmount flush. Its effect must run once, so it
   // cannot depend on state that changes on every render; the refs carry the
-  // current values into the cleanup instead.
+  // current values into the cleanup instead. They are written after each commit
+  // (see the layout effect below the save blocker).
   const coreHasChangesRef = useRef(coreHasChanges);
-  coreHasChangesRef.current = coreHasChanges;
   const isSavingRef = useRef(isSaving);
-  isSavingRef.current = isSaving;
   const saveBlockerRef = useRef<{ section: string; message: string } | null>(null);
 
   // Validate domains on change
@@ -681,7 +720,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setIsTesting(true);
     setTestResults(null);
     try {
-      const results = await backend.testDomainResolution(domains);
+      const results = await backend.testDomainResolution(domains, machine);
       setTestResults(results);
     } catch (err) {
       console.error("[settings] Failed to test domains:", err);
@@ -702,7 +741,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     let failureMessage = "Settings saved, but containers were not updated";
     let failureDescription: string | undefined;
     try {
-      const propagateResult = await backend.propagateGithubCredentialsToContainers();
+      const propagateResult = await backend.propagateGithubCredentialsToContainers(machine);
       if (propagateResult.failed.length === 0) {
         githubPropagationRetryCountRef.current = 0;
         githubPropagationFailureToastShownRef.current = false;
@@ -761,6 +800,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       const patterns = normalizeEnvPatternsInput(envPatterns);
       const domains = normalizeAllowedDomainsInput(allowedDomains);
       const savedSshAgentSocketPath = sshAgentSocketPathForSave(sshAgentSocketPath);
+      const savedDefaultProjectsDirectory = defaultProjectsDirectory.trim() || undefined;
 
       const newGlobal: {
         containerResources: { cpuCores: number; memoryGb: number };
@@ -768,6 +808,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         allowedDomains: string[];
         useHostGitHubCredentials: boolean;
         sshAgentSocketPath?: string;
+        defaultProjectsDirectory?: string;
         useHostClaudeCredentials: boolean;
         preferredEditor?: PreferredEditor;
         enabledAgentPlatforms: AgentPlatform[];
@@ -797,6 +838,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         allowedDomains: domains,
         useHostGitHubCredentials,
         ...(savedSshAgentSocketPath ? { sshAgentSocketPath: savedSshAgentSocketPath } : {}),
+        ...(savedDefaultProjectsDirectory
+          ? { defaultProjectsDirectory: savedDefaultProjectsDirectory }
+          : {}),
         useHostClaudeCredentials,
         preferredEditor,
         enabledAgentPlatforms,
@@ -842,7 +886,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         githubPropagationFailureToastShownRef.current = false;
       }
 
-      const newConfig = await backend.updateGlobalConfig(newGlobal);
+      const newConfig = await backend.updateGlobalConfig(newGlobal, machine);
       if (coreSignatureRef.current !== signature) {
         // An edit landed while this write was in flight. Mark the returned store
         // state as already accounted for so the sync effect does not reset the
@@ -857,7 +901,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         setPlanUsageRefreshToken((token) => token + 1);
       }
 
+      // The web client is this desktop's own; another machine's is not shown.
       if (
+        isWindowMachine(machine) &&
         !window.orkestratorGateway?.enabled &&
         webClientEnabled !== (global.webClientEnabled ?? true)
       ) {
@@ -903,10 +949,11 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
 
   const writeCredential = async (field: CredentialField, value: string | null) => {
     let nextConfig;
-    if (field === "anthropic") nextConfig = await backend.setAnthropicApiKey(value);
-    else if (field === "cursor") nextConfig = await backend.setCursorApiKey(value);
-    else if (field === "opencode-zen") nextConfig = await backend.setOpenCodeZenApiKey(value);
-    else nextConfig = await backend.setGitHubToken(value);
+    if (field === "anthropic") nextConfig = await backend.setAnthropicApiKey(value, machine);
+    else if (field === "cursor") nextConfig = await backend.setCursorApiKey(value, machine);
+    else if (field === "opencode-zen") {
+      nextConfig = await backend.setOpenCodeZenApiKey(value, machine);
+    } else nextConfig = await backend.setGitHubToken(value, machine);
     setConfig(nextConfig);
     if (field !== "github") setPlanUsageRefreshToken((token) => token + 1);
   };
@@ -997,6 +1044,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const reviewInstructionValidationError = getReviewInstructionValidationError(reviewInstruction);
   const sshAgentSocketPathValidationError =
     getSshAgentSocketPathValidationError(sshAgentSocketPath);
+  const defaultProjectsDirectoryValidationError =
+    getDefaultProjectsDirectoryValidationError(defaultProjectsDirectory);
 
   const sectionSettings = {
     global,
@@ -1017,6 +1066,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     sshAgentSocketPath,
     setSshAgentSocketPath,
     sshAgentSocketPathValidationError,
+    defaultProjectsDirectory,
+    setDefaultProjectsDirectory,
+    defaultProjectsDirectoryValidationError,
     useHostClaudeCredentials,
     setUseHostClaudeCredentials,
     githubToken,
@@ -1170,6 +1222,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     if (sshAgentSocketPathValidationError) {
       blockers.push({ section: "general", message: sshAgentSocketPathValidationError });
     }
+    if (defaultProjectsDirectoryValidationError) {
+      blockers.push({ section: "general", message: defaultProjectsDirectoryValidationError });
+    }
     return blockers[0] ?? null;
   }, [
     domainErrors,
@@ -1181,14 +1236,20 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     debugLogRetentionDays,
     reviewInstructionValidationError,
     sshAgentSocketPathValidationError,
+    defaultProjectsDirectoryValidationError,
   ]);
-  saveBlockerRef.current = saveBlocker;
+  useLayoutEffect(() => {
+    coreSignatureRef.current = localCoreSignature;
+    coreHasChangesRef.current = coreHasChanges;
+    isSavingRef.current = isSaving;
+    saveBlockerRef.current = saveBlocker;
+    persistCoreRef.current = persistCore;
+  });
 
   // Debounced auto-save. `coreHasChanges` flips as the form diverges from the
   // persisted config. The effect depends on the local signature, so every edit
   // clears and re-arms the timer and only the final value is written. A rejected
   // signature is not retried until the value changes again.
-  persistCoreRef.current = persistCore;
   useEffect(() => {
     if (!coreHasChanges || isSaving || saveBlocker) return;
     if (failedCoreSignatureRef.current === localCoreSignature) return;
@@ -1196,16 +1257,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       void persistCoreRef.current();
     }, AUTO_SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [coreHasChanges, localCoreSignature, isSaving, saveBlocker]);
-
-  // DEBUG: trace auto-save effect
-  useEffect(() => {
-    console.log("[DEBUG] auto-save effect ran", {
-      coreHasChanges,
-      isSaving,
-      saveBlocker: !!saveBlocker,
-      localCoreSignature,
-    });
   }, [coreHasChanges, localCoreSignature, isSaving, saveBlocker]);
 
   // Closing Settings, or switching to Messaging/Skills/MCP/Connections, unmounts

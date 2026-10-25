@@ -97,7 +97,7 @@ describe("OpenCodeCapabilities.authStatus", () => {
       "opencode-go",
     ]);
     expect(status.signIn?.hint).toBe(
-      "Connect one of OpenCode Go, anthropic with opencode auth login in a terminal.",
+      "Sign one of OpenCode Go, anthropic in from Settings → OpenCode.",
     );
   });
 
@@ -105,7 +105,7 @@ describe("OpenCodeCapabilities.authStatus", () => {
     const status = await capabilities(providerList([]), ["opencode-go"]).authStatus();
 
     expect(status.state).toBe("needs-auth");
-    expect(status.signIn?.hint).toBe("Connect OpenCode Go with opencode auth login in a terminal.");
+    expect(status.signIn?.hint).toBe("Sign OpenCode Go in from Settings → OpenCode.");
   });
 
   test("accepts object-shaped connected entries alongside strings and invalid entries", async () => {
@@ -147,7 +147,7 @@ describe("OpenCodeCapabilities.authStatus", () => {
     const status = await capabilities(providerList([]), allowed).authStatus();
 
     expect(status.state).toBe("needs-auth");
-    expect(status.signIn?.hint).toBe("Connect a provider with opencode auth login in a terminal.");
+    expect(status.signIn?.hint).toBe("Sign a provider in from Settings → OpenCode.");
   });
 
   test("names all eight providers at the hint limit", async () => {
@@ -155,7 +155,7 @@ describe("OpenCodeCapabilities.authStatus", () => {
     const status = await capabilities(providerList([]), allowed).authStatus();
 
     expect(status.signIn?.hint).toBe(
-      "Connect one of Provider 0, Provider 1, Provider 2, Provider 3, Provider 4, Provider 5, Provider 6, Provider 7 with opencode auth login in a terminal.",
+      "Sign one of Provider 0, Provider 1, Provider 2, Provider 3, Provider 4, Provider 5, Provider 6, Provider 7 in from Settings → OpenCode.",
     );
   });
 
@@ -172,7 +172,7 @@ describe("OpenCodeCapabilities.authStatus", () => {
     expect(status.providers).toEqual([
       { id: "OpenCode-Go", label: "OpenCode Go", state: "signed-in" },
     ]);
-    expect(status.signIn?.hint).toBe("Connect OpenCode Go with opencode auth login in a terminal.");
+    expect(status.signIn?.hint).toBe("Sign OpenCode Go in from Settings → OpenCode.");
   });
 
   test("is signed in when the connected selectable provider is absent from all", async () => {
@@ -182,6 +182,72 @@ describe("OpenCodeCapabilities.authStatus", () => {
 
     expect(status.state).toBe("signed-in");
     expect(status.providers).toEqual([]);
-    expect(status.signIn?.hint).toBe("Connect opencode-go with opencode auth login in a terminal.");
+    expect(status.signIn?.hint).toBe("Sign opencode-go in from Settings → OpenCode.");
+  });
+});
+
+describe("OpenCodeCapabilities.mcpServers", () => {
+  test("redacts credential-shaped error text before bounding it", async () => {
+    const client = {
+      mcp: {
+        status: async () => ({
+          data: {
+            docs: {
+              status: "failed",
+              error: `401 from https://user:hunter2hunter2@mcp.example.test/?api_key=sk-abcdefghijklmnopqrstuvwx Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123 ${"x".repeat(3_000)}`,
+            },
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+    const servers = await new OpenCodeCapabilities(
+      client,
+      "/workspace",
+      () => ({ signal: new AbortController().signal }),
+      async () => [],
+    ).mcpServers();
+    const error = servers[0]?.error ?? "";
+    expect(error).toContain("401 from");
+    expect(error).not.toContain("hunter2hunter2");
+    expect(error).not.toContain("abcdefghijklmnopqrstuvwxyz0123");
+    expect(error).not.toContain("sk-abcdefghijklmnopqrstuvwx");
+    expect(error.length).toBeLessThanOrEqual(2_000);
+  });
+});
+
+describe("OpenCode MCP sign-in", () => {
+  function withStatus(status: Record<string, unknown>, calls: string[] = []) {
+    const client = {
+      mcp: {
+        status: async () => ({ data: status }),
+        auth: {
+          start: async () => {
+            calls.push("start");
+            return { data: { authorizationUrl: "https://auth.example.test/authorize" } };
+          },
+        },
+      },
+    } as unknown as OpencodeClient;
+    return new OpenCodeCapabilities(
+      client,
+      "/workspace",
+      () => ({ signal: new AbortController().signal }),
+      async () => [],
+    );
+  }
+
+  test("a server that needs auth gets the terminal route, not an in-app sign-in", async () => {
+    const [server] = await withStatus({ docs: { status: "needs_auth" } }).mcpServers();
+    expect(server).toMatchObject({ status: "needs-auth", actions: ["reconnect"] });
+    expect(server?.hint).toContain("opencode mcp auth docs");
+  });
+
+  test("a stale sign-in request is refused with the route, and starts nothing", async () => {
+    const calls: string[] = [];
+    await expect(withStatus({}, calls).mcpServerAction("docs", "sign-in")).rejects.toThrow(
+      "opencode mcp auth docs",
+    );
+    // `mcp.auth.start` alone leaves OpenCode with no callback waiter.
+    expect(calls).toEqual([]);
   });
 });

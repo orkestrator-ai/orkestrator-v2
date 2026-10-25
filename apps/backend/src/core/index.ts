@@ -1,7 +1,27 @@
+import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
+import { coordinatorNodeContext } from "./nodes/node-context.js";
+import { NodeCoordination } from "./nodes/node-coordination.js";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import {
+  bridgeRemoteCoordinatorEvents,
+  NodeCoordinatorRemote,
+} from "./nodes/node-coordinator-remote.js";
+import { NodePortal } from "./nodes/node-portal.js";
+import type { GatewayNodeHooks } from "../gateway-support-core.js";
+import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
+import { NodeService, errorCode, type NodeServiceOptions } from "./nodes/node-service.js";
+import { createNodeSshFactory } from "./nodes/node-ssh.js";
+import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
+import { setGitHubCliConfigSource } from "./github-credentials.js";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
+import {
+  compatibilityPathUsage,
+  type CompatibilityPathUsageSink,
+} from "./compatibility-path-usage.js";
+import { compatibilityPathUsageDatabaseSink } from "./compatibility-path-usage-store.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
@@ -21,6 +41,13 @@ import {
 } from "./workflow-supervisor.js";
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
+import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
+import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
+import { setHostClaudeLoginRefresher } from "./agent-accounts-containers.js";
+import {
+  setLocalClaudeLoginRefresher,
+  setLocalCodexLoginRefresher,
+} from "./agent-accounts-active.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 
 /** Former activity-bundle cadence, per named job. */
@@ -41,14 +68,12 @@ import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
-  readContainerMcpFile,
+  mcpContainerOptions,
 } from "./commands-registry-mcp.js";
 import { McpManagementService } from "./mcp-management/service.js";
 import {
-  closeLocalServerAdmission,
   createCommandRegistry,
-  shutdownLocalServers,
-  shutdownPrMonitorTracking,
+  scheduleMergeCleanupRecovery,
   type BackendEmit,
   type CommandContext,
 } from "./commands.js";
@@ -60,13 +85,23 @@ import {
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import { containerWorktreeSignalInstaller } from "./container-worktree-signal-install.js";
 import { AgentToolsServer } from "./agent-tools.js";
+import type { TranscriptArtifactService } from "./transcript-artifacts/service.js";
+import type { TranscriptArtifactRuntime } from "./transcript-artifacts/runtime.js";
+import {
+  attachTranscriptArtifactRuntime,
+  createTranscriptArtifactService,
+} from "./transcript-artifacts/runtime-wiring.js";
+import type { TranscriptArtifactToolHost } from "./transcript-artifacts/tools.js";
+import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import { ContainerHostReachabilityService } from "./container-host-reachability.js";
 import {
   ensureContainerAgentToolsHost,
   ensureContainerHostServicePorts,
 } from "./commands-environment.js";
 import { APP_VERSION, DOCKER_IMAGE } from "./constants.js";
+import type { BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import { HostMaintenanceService } from "./host-maintenance.js";
 import { readImageStatus, readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
@@ -112,11 +147,7 @@ import {
   reconcileInterruptedEnvironmentLifecycleTasks,
 } from "./environment-lifecycle-tasks.js";
 import { recoverInterruptedEnvironmentMoves } from "./environment-move.js";
-import {
-  configureTerminalHistoryRetention,
-  flushTerminalHistories,
-  pruneTerminalHistoryStorage,
-} from "./terminal-history.js";
+import { createBackendChangeTracking } from "./change-tracking/backend-wiring.js";
 import {
   cancelScheduledEnvironmentCleanup,
   runStartupEnvironmentCleanup,
@@ -140,6 +171,15 @@ export class OrkestratorBackend {
   private readonly multiReviews: MultiReviewService;
   private readonly featurePlanning: FeaturePlanningService;
   private readonly coordinators: CoordinatorService;
+  /** Command-node registry and leaf attachments. */
+  readonly nodes: NodeService;
+  readonly nodePortal: NodePortal;
+  readonly nodeCoordination: NodeCoordination;
+  /** Origins clients load this node's UI from; registered on attached leaves. */
+  private portalOriginsSource: () => string[] = () => [];
+  /** How another node reaches this one, for handing it to a new command node. */
+  private selfAccessSource: () => Promise<{ token: string | null; origins: string[] }> =
+    async () => ({ token: null, origins: [] });
   private readonly projectGit: ProjectGitService;
   private readonly promptQueues: PromptQueueDrainer;
   private readonly agentMail: AgentMailService;
@@ -149,6 +189,8 @@ export class OrkestratorBackend {
   private readonly workflowResults: WorkflowResultService;
   /** Remote-initiated updates of this host; see host-maintenance.ts. */
   readonly hostMaintenance: HostMaintenanceService;
+  /** Persists compatibility-path usage; see compatibility-path-usage.ts. */
+  private readonly compatibilityPathSink: CompatibilityPathUsageSink;
   /** Absent in `bun test` backends unless injected: probing runs real Docker commands. */
   private readonly containerHostReachability: ContainerHostReachabilityService | undefined;
   private readonly workflowResultRollout: WorkflowResultRollout;
@@ -160,10 +202,15 @@ export class OrkestratorBackend {
   private readonly workflowAdmission = new WorkAdmissionPool({ name: "workflow-provider" });
   private readonly webAnnotations: WebAnnotationService;
   private readonly webAnnotationRollout: WebAnnotationRollout;
+  /** Durable transcript artifacts (revisions, receipts, publications). */
+  readonly transcriptArtifacts: TranscriptArtifactService;
+  private transcriptArtifactRuntime: TranscriptArtifactRuntime | null = null;
+  private readonly transcriptArtifactRuntimeEnabled: boolean;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
+  private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
   private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
   /** Step 08 named due jobs; `null` on the rollback bundle. Never both. */
@@ -183,7 +230,11 @@ export class OrkestratorBackend {
     Partial<
       Pick<
         AgentToolsServer,
-        "revokeTab" | "workflowResultConnection" | "servicePort" | "issueStateSignal"
+        | "revokeTab"
+        | "workflowResultConnection"
+        | "servicePort"
+        | "issueStateSignal"
+        | "issueWorktreeSignal"
       >
     >;
   private readonly controlMcp: Pick<
@@ -191,6 +242,9 @@ export class OrkestratorBackend {
     | "getInfo"
     | "getSettings"
     | "rotateToken"
+    | "createCredential"
+    | "rotateCredential"
+    | "revokeCredential"
     | "issueCoordinatorCredential"
     | "revokeCoordinatorCredentials"
     | "start"
@@ -220,7 +274,11 @@ export class OrkestratorBackend {
       Partial<
         Pick<
           AgentToolsServer,
-          "revokeTab" | "workflowResultConnection" | "servicePort" | "issueStateSignal"
+          | "revokeTab"
+          | "workflowResultConnection"
+          | "servicePort"
+          | "issueStateSignal"
+          | "issueWorktreeSignal"
         >
       >;
     controlMcp?: Pick<
@@ -228,6 +286,9 @@ export class OrkestratorBackend {
       | "getInfo"
       | "getSettings"
       | "rotateToken"
+      | "createCredential"
+      | "rotateCredential"
+      | "revokeCredential"
       | "issueCoordinatorCredential"
       | "revokeCoordinatorCredentials"
       | "start"
@@ -250,11 +311,22 @@ export class OrkestratorBackend {
     };
     /** Test seam; defaults to a Docker-backed checker outside `bun test`. */
     containerHostReachability?: ContainerHostReachabilityService;
+    /**
+     * Start the artifact preview runtime (headless browser runner, content
+     * listener). Defaults to on outside `bun test`.
+     */
+    transcriptArtifactRuntime?: boolean;
+    /** `--command-node`: command-node registration is always enabled. */
+    commandNode?: boolean;
+    /** Test seam: node links (fetch, SSH, timers). */
+    nodeLinks?: Pick<NodeServiceOptions, "fetchImpl" | "createSsh" | "timers" | "heartbeatMs">;
   }) {
     this.keyedActivityJobs =
       options.keyedActivityJobs ?? keyedSchedulingEnabled("backend-activity");
     this.activityJobClock = options.activityJobClock;
     const storage = new StorageService(options.dataDir);
+    this.compatibilityPathSink = compatibilityPathUsageDatabaseSink(options.dataDir);
+    compatibilityPathUsage.attach(this.compatibilityPathSink);
     this.workflowResults = new WorkflowResultService(options.dataDir);
     this.hostMaintenance = new HostMaintenanceService({
       dataDir: options.dataDir,
@@ -262,10 +334,10 @@ export class OrkestratorBackend {
       version: APP_VERSION,
       emit: (event, payload) => options.emit(event, payload),
       rollbackEvidence: options.hostRollbackEvidence,
-      onCheck: (latestVersion) => {
+      onCheck: (latestVersion, isCurrent) => {
         if (!latestVersion || latestVersion === APP_VERSION) return;
         void fetchReleasePins(latestVersion).then((pins) => {
-          if (pins) this.hostMaintenance.setNextRelease(pins);
+          if (pins && isCurrent()) this.hostMaintenance.setNextRelease(pins);
         });
       },
     });
@@ -330,14 +402,36 @@ export class OrkestratorBackend {
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
     this.runtime =
       options.runtime ??
-      new BackendRuntime({ emit: (event, payload) => options.emit(event, payload) });
+      new BackendRuntime({
+        emit: (event, payload) => options.emit(event, payload),
+        // Docker-backed, so unit tests keep the unwatched bounds unless they inject one.
+        worktreeSignal:
+          process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
+        prMonitor: { scheduleMergeCleanup: scheduleMergeCleanupRecovery },
+      });
     this.environmentLifecycleDrainTimeoutMs =
       options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
+    // Backend-owned file-change tracking (docs/architecture/change-tracking.md):
+    // one service per backend, fed by the environment scan owner, native
+    // dispatch and bridge evidence. Started in init(), closed in shutdown().
+    if (!this.runtime.changeTracking) {
+      this.runtime.attachChangeTracking(
+        createBackendChangeTracking({
+          dataDir: options.dataDir,
+          storage,
+          emit: (event, payload) => options.emit(event, payload),
+          refreshEnvironment: (environmentId) =>
+            this.runtime.diffStats.service.refresh(environmentId),
+        }),
+      );
+    }
     // Every committed mutation fans out to all connected clients, so a second
     // window or browser converges without polling. `emit` is read lazily by the
     // caller's closure, which is how this survives the gateway not existing yet.
     storage.setResourceChangeListener((change) => {
       options.emit(RESOURCE_CHANGED_EVENT, change);
+      // Created below; a change before then has no self summary to refresh.
+      this.nodePortal?.readModel.noteLocalEvent(RESOURCE_CHANGED_EVENT, change);
     });
     const context = {
       storage,
@@ -374,6 +468,7 @@ export class OrkestratorBackend {
     this.context = context;
     context.pinnedGitHubCli = resolveManagedBinary(context, "gh");
     setManagedGitHubCli(context.pinnedGitHubCli);
+    setGitHubCliConfigSource(async () => (await storage.loadConfig()).global);
     this.hostMaintenance.setReaders({
       impact: () => readRestartImpact(context),
       tools: () => readToolStatus(context, this.hostMaintenance.ghChannel()),
@@ -407,10 +502,96 @@ export class OrkestratorBackend {
       },
     );
     context.coordinators = this.coordinators;
+    this.nodes = new NodeService({
+      storage,
+      emit: (event, payload) => options.emit(event, payload),
+      forceRegistration: options.commandNode === true,
+      portalOrigins: () => normalizePortalOrigins(this.portalOriginsSource()),
+      selfAccess: () => this.selfAccessSource(),
+      ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
+      ...(options.nodeLinks?.timers ? { timers: options.nodeLinks.timers } : {}),
+      ...(options.nodeLinks?.heartbeatMs ? { heartbeatMs: options.nodeLinks.heartbeatMs } : {}),
+      ...((options.nodeLinks?.createSsh ?? createNodeSshFactory(options.dataDir))
+        ? { createSsh: options.nodeLinks?.createSsh ?? createNodeSshFactory(options.dataDir)! }
+        : {}),
+      inheritableSettings: async () =>
+        pickInheritedGlobalSettings((await storage.loadConfig()).global),
+      onInheritedSettingsChanged: () => storage.announceInheritedSettingsChanged(),
+    });
+    context.nodes = this.nodes;
+    // While a leaf, this node works with its command node's settings.
+    storage.inheritedGlobalSettings = () => this.nodes.inheritedSettings.current();
+    this.nodePortal = new NodePortal({
+      nodes: this.nodes,
+      emit: (event, payload) => options.emit(event, payload),
+      local: { invoke: (command, args = {}) => this.invoke(command, args) },
+      summaries: {
+        load: () => storage.loadNodeSummariesCache(),
+        save: (value) => storage.saveNodeSummariesCache(value),
+      },
+      outcomes: {
+        load: () => storage.loadNodeOutcomes(),
+        save: (value) => storage.saveNodeOutcomes(value),
+      },
+      ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
+    });
+    context.nodePortal = this.nodePortal;
+    this.nodeCoordination = new NodeCoordination({
+      storage,
+      nodes: this.nodes,
+      portal: this.nodePortal,
+      invoke: (command, args = {}) => this.invoke(command, args),
+      emit: (event, payload) => options.emit(event, payload),
+    });
+    context.nodeCoordination = this.nodeCoordination;
+    // Coordinator work on the nodes this one controls is read through the
+    // node link, and their relayed changes settle it promptly.
+    this.coordinators.setRemoteAccess(
+      new NodeCoordinatorRemote({
+        invokeOnNode: (input) => this.nodePortal.invokeOnNode(input),
+        summaries: (nodeIds) => this.nodePortal.summaries(nodeIds),
+        collectMail: (nodeId) => this.nodeCoordination.collector.collect(nodeId as BackendId),
+      }),
+    );
+    bridgeRemoteCoordinatorEvents({
+      onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
+      settleRemoteWorker: (nodeId, environmentId) =>
+        this.coordinators.settleRemoteWorker(nodeId, environmentId),
+      noteRemoteWorkflowChange: (nodeId, kind, id) =>
+        this.coordinators.statusWakes.noteRemoteWorkflowChange(nodeId, kind, id),
+    });
     const interactionMonitorMode =
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
         ? ("observe-only" as const)
         : ("disabled" as const);
+    // Per-turn transcript-artifact bookkeeping, shared by native turns and the
+    // workflows that drive providers directly (workflow-artifact-turns.ts).
+    // The artifact service is constructed after this; resolve it lazily.
+    const artifactDispatch: ArtifactTurnDispatch = {
+      beginTurn: (turn) => {
+        const artifacts = this.transcriptArtifacts;
+        if (!artifacts) return {};
+        artifacts.noteDispatchedTurn(turn.environmentId, turn.conversationKey, turn.turnId);
+        if (!turn.needsGrant) return {};
+        return {
+          grant: artifacts.mintArtifactGrant({
+            environmentId: turn.environmentId,
+            projectId: turn.projectId,
+            conversationKey: turn.conversationKey,
+            turnId: turn.turnId,
+            providerSessionId: turn.providerSessionId,
+          }).grant,
+        };
+      },
+      settleTurn: (environmentId, conversationKey, turnId) => {
+        const artifacts = this.transcriptArtifacts;
+        if (!artifacts) return;
+        artifacts.clearDispatchedTurn(environmentId, conversationKey, turnId);
+        artifacts.revokeArtifactGrantsForTurn(environmentId, turnId);
+      },
+      toolsEnabled: () => this.transcriptArtifacts?.toolsEnabled() === true,
+    };
+    const artifactLedger = () => this.transcriptArtifacts ?? null;
     this.nativeAgents = new NativeAgentService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -419,11 +600,30 @@ export class OrkestratorBackend {
         return (await handler(args, context)) as T;
       },
       {
+        changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
+        localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
+        environmentFence: this.runtime.environments.fence,
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
         interactionMonitorAdoptionEnabled:
           process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
+        // A view-only invalidation for an idle session whose content changed:
+        // same channel and stamp sequence as transitions, so a client re-reads
+        // that view (or every view after a gap). Deliberately nothing else
+        // hangs off it; it is not a turn edge.
+        onObservationInvalidation: (event) => {
+          options.emit("native-agent-session-activity", {
+            environment_id: event.environmentId,
+            previous_state: event.state,
+            state: event.state,
+            reason: "content",
+            agent: event.agent,
+            logical_session_key: event.logicalSessionKey,
+            generation: event.observation.generation,
+            revision: event.observation.revision,
+          });
+        },
         onActivityTransition: (event) => {
           options.emit("native-agent-session-activity", {
             environment_id: event.environmentId,
@@ -477,9 +677,32 @@ export class OrkestratorBackend {
               });
           }
           if (isAgentTurnEndTransition(event)) {
+            // Capture the turn's end state and publish turn-net/thread-net.
+            let changesFinalized: Promise<unknown> = Promise.resolve();
+            if (event.owner !== "coordinator" && event.logicalSessionKey) {
+              changesFinalized =
+                this.runtime.changeTracking?.finalizeTurn({
+                  environmentId: event.environmentId,
+                  logicalSessionKey: event.logicalSessionKey,
+                }) ?? Promise.resolve();
+            }
             // A coordinator has no environment row and no PR to probe for.
             if (event.owner !== "coordinator") {
               this.probeForAgentCreatedPullRequest(event.environmentId, context);
+            }
+            // Web annotation requests sent to this session read their turn
+            // outcome now, while the bridge that ran the turn is still up,
+            // rather than on a later reconcile pass that may find it gone.
+            let annotationsObserved: Promise<unknown> = Promise.resolve();
+            if (event.owner !== "coordinator" && event.agent && event.logicalSessionKey) {
+              annotationsObserved =
+                context.webAnnotations
+                  ?.noteTurnEnded({
+                    environmentId: event.environmentId,
+                    agent: event.agent,
+                    logicalSessionKey: event.logicalSessionKey,
+                  })
+                  .catch(() => undefined) ?? Promise.resolve();
             }
             /*
              * The turn that was holding this session's work just ended, so the
@@ -490,12 +713,14 @@ export class OrkestratorBackend {
              * dispatch latency instead of the mail backoff, which for a
              * coordinator could previously reach thirty seconds.
              */
-            void this.nativeAgents.drainPromptQueueForSession(event).catch((error: unknown) => {
-              console.warn(
-                "[backend] Failed to drain the prompt queue after a turn ended:",
-                error instanceof Error ? error.message : error,
-              );
-            });
+            void Promise.all([changesFinalized, annotationsObserved])
+              .then(() => this.nativeAgents.drainPromptQueueForSession(event))
+              .catch((error: unknown) => {
+                console.warn(
+                  "[backend] Failed to drain the prompt queue after a turn ended:",
+                  error instanceof Error ? error.message : error,
+                );
+              });
             /*
              * Settle first, drain second, in that order.
              *
@@ -552,6 +777,16 @@ export class OrkestratorBackend {
         },
         resolveAgentToolConnection: (environmentId, projectId, tabId, target) =>
           this.agentTools.connection(environmentId, projectId, target, tabId),
+        artifactLedger,
+        artifactDispatch,
+        coordinatorNodeContext: async () => {
+          const status = await this.nodes.status();
+          const list = await this.nodes.listNodes();
+          return coordinatorNodeContext(
+            status,
+            list.nodes.filter((node) => node.connection.state === "connected").length,
+          );
+        },
         coordinatorDelegationAvailable: (platform) =>
           this.controlMcp.getSettings().running &&
           coordinatorProviderQualification(platform).delegation,
@@ -568,7 +803,7 @@ export class OrkestratorBackend {
       storage,
       emit: options.emit,
       probe: createMcpRuntimeProbe(context),
-      readContainerFile: readContainerMcpFile,
+      ...mcpContainerOptions(context),
       loadRollout: mcpRolloutLoader(context),
     });
     // Web annotations: backend-owned threads and requests. Execution goes
@@ -602,6 +837,31 @@ export class OrkestratorBackend {
     annotationTools.setWebAnnotationToolHost?.(this.webAnnotations.toolHost());
     context.webAnnotations = this.webAnnotations;
     context.webAnnotationRollout = this.webAnnotationRollout;
+    // Transcript artifacts: ordinary agent tools on the common server plus
+    // renderer commands. Preview infrastructure attaches during init().
+    this.transcriptArtifacts = createTranscriptArtifactService(storage, {
+      dataDir: options.dataDir,
+      // Live hints after committed draft/operation/ledger changes.
+      announce: (_environmentId, conversationKey) =>
+        storage.announceTranscriptArtifact(conversationKey),
+      // Asset imports: only uploads staged by the same conversation through
+      // `transcript_artifact_stage_asset`; never a path or URL.
+      assetResolver: (owner, assetRef) =>
+        this.transcriptArtifacts.resolveStagedAsset(owner, assetRef),
+    });
+    this.transcriptArtifactRuntimeEnabled =
+      options.transcriptArtifactRuntime ?? process.env.NODE_ENV !== "test";
+    (
+      this.agentTools as {
+        setTranscriptArtifactToolHost?: (host: TranscriptArtifactToolHost | null) => void;
+      }
+    ).setTranscriptArtifactToolHost?.(this.transcriptArtifacts);
+    context.transcriptArtifacts = this.transcriptArtifacts;
+    // A publication changes its conversation's projected transcript (the
+    // artifact part beside its call): views of that environment re-read.
+    this.transcriptArtifacts.onLedgerChange((change) =>
+      storage.announceNativeAgentSessionProjection(change.environmentId),
+    );
     this.projectGit = new ProjectGitService(storage, async (projectId) => {
       for (const home of await storage.getEnvironmentsByProject(projectId)) {
         if (home.projectHome && (await this.nativeAgents.hasActiveCheckoutWork(home.id)))
@@ -655,6 +915,8 @@ export class OrkestratorBackend {
           this.nativeAgents.recordProviderInteractionObservation(event);
         },
         workflowAdmission: this.workflowAdmission,
+        artifactDispatch,
+        artifactLedger,
       },
     );
     context.buildPipelines = this.buildPipelines;
@@ -689,6 +951,8 @@ export class OrkestratorBackend {
         workflowResultRollout: this.workflowResultRollout,
         resolveAgentToolConnection,
         assertAgentToolsReachable,
+        artifactDispatch,
+        artifactLedger,
         dispatchAddressPrompt: (workflow, presentation) =>
           dispatchMultiReviewAddressPrompt(
             this.nativeAgents,
@@ -729,6 +993,7 @@ export class OrkestratorBackend {
         resolveAgentToolConnection,
         assertAgentToolsReachable,
         workflowAdmission: this.workflowAdmission,
+        artifactDispatch,
       },
     );
     context.featurePlanning = this.featurePlanning;
@@ -769,6 +1034,8 @@ export class OrkestratorBackend {
         this.activityJobs?.wake("pending-renames");
       }
       if (change.resource === "prompt-queue") this.activityJobs?.wake("tmux-queues");
+      // Leaves follow this node's settings.
+      if (change.resource === "config") this.nodes.syncSettingsToLeaves();
     });
     this.reapPidServers = options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =
@@ -856,7 +1123,7 @@ export class OrkestratorBackend {
    * — never per idle observation, and never for a fenced pre-dispatch idle,
    * which the observer refuses to apply (step 07). It reaches the PR monitor's
    * completion wakeup via `pr_monitor_probe_environment` →
-   * `wakePrMonitorForCompletion` (step 05).
+   * `PrMonitorRuntime.wakeForCompletion` (step 05).
    */
   private probeForAgentCreatedPullRequest(environmentId: string, context: CommandContext): void {
     void Promise.resolve(context.probeAgentCreatedPullRequest?.(environmentId)).catch(
@@ -871,6 +1138,14 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
+    try {
+      this.runtime.changeTracking?.start();
+    } catch (error) {
+      console.warn(
+        "[backend] Failed to start change tracking:",
+        error instanceof Error ? error.message : error,
+      );
+    }
     // Settles an update the previous process was applying; installing one is
     // what restarted this backend.
     try {
@@ -903,6 +1178,24 @@ export class OrkestratorBackend {
         error instanceof Error ? error.name : "unknown",
       );
     });
+    // Interrupts verification left unfinished by a previous process (never
+    // re-run), then cleans up hourly. The preview runtime is optional.
+    try {
+      this.transcriptArtifacts.initialize();
+    } catch (error) {
+      console.warn(
+        "[backend] Failed to initialize transcript artifacts:",
+        error instanceof Error ? error.name : "unknown",
+      );
+    }
+    if (this.transcriptArtifactRuntimeEnabled) {
+      this.transcriptArtifactRuntime = await attachTranscriptArtifactRuntime(
+        this.transcriptArtifacts,
+        {
+          dataDir: this.context.storage.getDataDir(),
+        },
+      );
+    }
     // Preview definitions load before the gateway accepts commands; resolving
     // targets happens in the background so a slow Docker daemon cannot delay
     // startup. A registry that fails to load disables previews, not the backend.
@@ -921,13 +1214,13 @@ export class OrkestratorBackend {
       );
     });
     const terminalHistoryConfig = (await this.context.storage.loadConfig()).global;
-    configureTerminalHistoryRetention({
+    this.runtime.terminals.history.configureRetention({
       enabled: terminalHistoryConfig.terminalHistoryEnabled,
       sessionMb: terminalHistoryConfig.terminalHistoryRetentionMb,
       globalMb: terminalHistoryConfig.terminalHistoryGlobalRetentionMb,
       days: terminalHistoryConfig.terminalHistoryRetentionDays,
     });
-    await pruneTerminalHistoryStorage(this.context.storage.getDataDir());
+    await this.runtime.terminals.history.pruneStorage(this.context.storage.getDataDir());
     if (!this.terminalStartupReconciled) {
       // A terminal session id names state owned by this backend process. On a
       // renderer-only reload the backend stays alive and the id remains valid;
@@ -993,6 +1286,16 @@ export class OrkestratorBackend {
       onSuspend: (suspendedMs) => recurringDiagnosticsRegistry.notifySuspension(suspendedMs),
     });
     this.hostSuspendDetector.start();
+    // Containers hold Claude logins access-only; this hands them each host
+    // renewal and renews the host login before it lapses.
+    this.claudeLoginKeeper ??= new ContainerClaudeLoginKeeper(this.context, {
+      refreshHostLogin: (account) => refreshHostClaudeLogin(this.context, account),
+    });
+    const keeper = this.claudeLoginKeeper;
+    setHostClaudeLoginRefresher(() => keeper.refreshHostIfDue());
+    setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
+    keeper.start();
+    setLocalCodexLoginRefresher(createCodexLoginRefresher(this.context));
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.
@@ -1326,7 +1629,7 @@ export class OrkestratorBackend {
         {
           name: "coordinator-repair",
           kind: "coordinator-repair",
-          priority: "maintenance",
+          priority: "recovery",
           intervalMs: MAINTENANCE_JOB_MS,
           run: async () => {
             reconcileCoordinatorWorkflows();
@@ -1379,7 +1682,7 @@ export class OrkestratorBackend {
         jobs.push({
           name: "claude-state",
           kind: "claude-state-reconcile",
-          priority: "progress",
+          priority: "recovery",
           intervalMs: ACTIVITY_JOB_MS,
           fixedRate: true,
           run: async () => {
@@ -1394,7 +1697,7 @@ export class OrkestratorBackend {
         jobs.push({
           name: "pending-renames",
           kind: "pending-rename-reconcile",
-          priority: "progress",
+          priority: "recovery",
           intervalMs: ACTIVITY_JOB_MS,
           fixedRate: true,
           // Rename intent (task 9): every 2 s while an environment carries
@@ -1483,6 +1786,14 @@ export class OrkestratorBackend {
       console.warn("[backend] Failed to start control MCP:", error);
     });
     this.reserveOwnedPreviewPorts();
+    // Node links reach other machines; they start after local recovery and
+    // never block it.
+    await this.nodes.start().catch((error) => {
+      console.warn("[backend] Command-node links did not start:", errorCode(error));
+    });
+    await this.nodePortal.start().catch((error) => {
+      console.warn("[backend] The command-node portal did not start:", errorCode(error));
+    });
     this.coordinators.startStatusWakes();
     reconcileCoordinatorWorkflows();
     // Tell the user now, not when a review stage silently fails to submit its
@@ -1517,9 +1828,75 @@ export class OrkestratorBackend {
     this.context.previews?.reservePorts("backend", ports);
   }
 
+  /**
+   * Safe identity for the gateway's authenticated hello handshake: the
+   * installation identity, this process's resource generation, the version
+   * and the canonical machine profile. No paths or credentials.
+   */
+  async backendHelloIdentity(): Promise<{
+    installationId: string;
+    generation: string;
+    appVersion: string;
+    profile: BackendProfile;
+    nodeMode: NodeMode;
+  }> {
+    const storage = this.context.storage;
+    const [identity, profile] = await Promise.all([
+      storage.getPreviewBackendIdentity(),
+      storage.getBackendProfile(),
+    ]);
+    return {
+      installationId: identity.instanceId,
+      generation: storage.getResourceGeneration(),
+      appVersion: APP_VERSION,
+      profile,
+      nodeMode: this.nodes.mode(),
+    };
+  }
+
+  /**
+   * The gateway's view of command-node state: attached command nodes'
+   * portal origins are allowed, and their requests record the last contact.
+   */
+  nodeGateway(): GatewayNodeHooks {
+    return {
+      isPortalOriginAllowed: (origin) => this.nodes.isPortalOriginAllowed(origin),
+      noteControllerContact: (id) => this.nodes.noteControllerContact(id),
+      authenticateGrant: (token) => this.nodePortal.grants.authenticate(token)?.expiresAt ?? null,
+      relayTarget: (nodeId) => this.nodePortal.relayTarget(nodeId),
+    };
+  }
+
+  /** Set once the gateway has bound: the origins clients use for this node, read on each attach. */
+  setPortalOriginsSource(source: () => string[]): void {
+    this.portalOriginsSource = source;
+  }
+
+  /**
+   * Set once the gateway has bound: its durable token and the origins that
+   * serve this backend, read only on a command handover.
+   */
+  setSelfAccessSource(source: () => Promise<{ token: string | null; origins: string[] }>): void {
+    this.selfAccessSource = source;
+  }
+
   /** Backend-owned preview services, for gateway transport adapters. */
   get previews(): PreviewRuntime | undefined {
     return this.context.previews;
+  }
+
+  /**
+   * The application's real page origins, known only once the gateway has
+   * bound: they become the artifact content server's `frame-ancestors`, and
+   * the content origin is re-chosen so it never shares a site with them.
+   */
+  setTranscriptArtifactApplicationOrigins(input: {
+    application: string[];
+    development?: string[];
+  }): void {
+    const status = this.transcriptArtifactRuntime?.setApplicationOrigins(input);
+    if (status && !status.available)
+      console.warn("[backend] Live interactive artifacts are unavailable:", status.reason);
   }
 
   getControlMcpInfo(): ControlMcpInfo | null {
@@ -1543,12 +1920,21 @@ export class OrkestratorBackend {
     // Stop new annotation reconciliation; pending requests stay as persisted
     // (never marked failed) and resume on the next start.
     this.webAnnotations.stopReconciler();
+    // Closes node links and owned SSH tunnels only; nothing on any node stops.
+    this.nodeCoordination.collector.dispose();
+    this.nodePortal.stop();
+    const nodesStopped = this.nodes.stop().catch(() => undefined);
     if (this.activityLeaseSweep) {
       clearInterval(this.activityLeaseSweep);
       this.activityLeaseSweep = null;
     }
     this.hostSuspendDetector?.stop();
     this.hostSuspendDetector = null;
+    this.claudeLoginKeeper?.stop();
+    this.claudeLoginKeeper = null;
+    setHostClaudeLoginRefresher(undefined);
+    setLocalClaudeLoginRefresher(undefined);
+    setLocalCodexLoginRefresher(undefined);
     // Log followers are observers; stopping them never touches containers.
     shutdownContainerLogService();
     shutdownOomEventWatcher();
@@ -1566,7 +1952,6 @@ export class OrkestratorBackend {
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     this.runtime.shutdown();
-    shutdownPrMonitorTracking();
     cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir());
     const attempt = (async () => {
       try {
@@ -1574,7 +1959,7 @@ export class OrkestratorBackend {
         // Close both admission gates before waiting on any in-flight work.
         // Starting the pipeline drain immediately also prevents its scheduler
         // from admitting more backend-owned work during shutdown.
-        closeLocalServerAdmission();
+        this.runtime.localServers.closeAdmission();
         const lifecycleDrain = this.environmentLifecycleTasks.beginShutdown(
           this.environmentLifecycleDrainTimeoutMs,
         );
@@ -1587,6 +1972,7 @@ export class OrkestratorBackend {
         } catch (error) {
           console.warn("[backend] Failed to drain native agent work:", error);
         }
+        await nodesStopped;
         try {
           await this.buildPipelines.shutdown();
         } catch (error) {
@@ -1619,8 +2005,8 @@ export class OrkestratorBackend {
         }
         this.workflowAdmission.close();
         await lifecycleDrain;
-        await flushTerminalHistories(true);
-        await shutdownLocalServers({
+        await this.runtime.terminals.history.flush(true);
+        await this.runtime.localServers.shutdown({
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });
       } finally {
@@ -1638,11 +2024,14 @@ export class OrkestratorBackend {
           }),
           new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref?.()),
         ]);
+        await this.transcriptArtifactRuntime?.close().catch(() => undefined);
+        await this.transcriptArtifacts.close().catch(() => undefined);
         const closeLifecycleStorage = async () => {
           await this.context.design?.close();
           // Last: closing checkpoints the WAL into the database file.
           this.workflowResults.closeStorage();
           this.hostMaintenance.close();
+          compatibilityPathUsage.detach(this.compatibilityPathSink);
           closeEnvironmentCleanupStorage();
           this.context.storage.close();
         };
@@ -1669,4 +2058,20 @@ export class OrkestratorBackend {
       throw error;
     }
   }
+}
+
+/** Exact `http(s)` origins only (wildcard allow rules are not portal origins), deduplicated. */
+function normalizePortalOrigins(values: string[]): string[] {
+  const origins = new Set<string>();
+  for (const value of values) {
+    try {
+      const url = new URL(value);
+      if ((url.protocol === "https:" || url.protocol === "http:") && !url.hostname.includes("*")) {
+        origins.add(url.origin);
+      }
+    } catch {
+      // Not an origin.
+    }
+  }
+  return [...origins].slice(0, 16);
 }

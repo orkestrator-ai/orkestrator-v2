@@ -1,16 +1,24 @@
 import { createHash } from "node:crypto";
 import { runCommand } from "./shell.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import {
-  ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
-  LOCAL_SERVER_HEALTH_ATTEMPTS,
-  LOCAL_SERVER_HEALTH_INTERVAL_MS,
-  LOCAL_SERVER_REUSE_FIRST_PROBE_TIMEOUT_MS,
-  LOCAL_SERVER_REUSE_HEALTH_ATTEMPTS,
-  LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS,
-  LOCAL_SERVER_REUSE_RETRY_PROBE_TIMEOUT_MS,
-} from "./commands-runtime-state.js";
-import type { LocalServerKind } from "./commands-runtime-state.js";
+import type { LocalServerKind } from "./local-server-runtime.js";
+
+export const LOCAL_SERVER_HEALTH_ATTEMPTS = 75;
+export const LOCAL_SERVER_HEALTH_INTERVAL_MS = 200;
+/**
+ * Reusing a running bridge re-checks its health first. The first probe keeps
+ * the historical 2s budget so a healthy bridge costs nothing extra; only a miss
+ * pays for the slower retries. Worst case before replacement is about 13s.
+ */
+export const LOCAL_SERVER_REUSE_HEALTH_ATTEMPTS = 3;
+export const LOCAL_SERVER_REUSE_FIRST_PROBE_TIMEOUT_MS = 2_000;
+export const LOCAL_SERVER_REUSE_RETRY_PROBE_TIMEOUT_MS = 5_000;
+export const LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS = 500;
+/**
+ * Grok, Cursor, and Pi may need longer to initialize their agent runtime before
+ * binding than the lightweight HTTP bridges.
+ */
+export const ACP_LOCAL_SERVER_HEALTH_ATTEMPTS = 120;
 
 /**
  * Liveness probing for locally bound agent servers and bridges.
@@ -202,6 +210,35 @@ export async function waitForUnhealthy(port: number, attempts = 50): Promise<voi
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Server on port ${port} did not stop`);
+}
+
+/** How long a fresh OpenCode server may take to load a directory's instance. */
+export const OPENCODE_INSTANCE_WARM_TIMEOUT_MS = 120_000;
+
+/**
+ * Let a just-started OpenCode server load `directory` before callers read it.
+ *
+ * `/global/health` answers before any directory is loaded. The first request
+ * that names one loads its configuration and installs the plugin
+ * dependencies, which in a container live in the container layer and so are
+ * installed again after every rebuild. On a loaded host that outlasted the
+ * backend's 30 s status read, and the first prompt after a rebuild was refused
+ * as "OpenCode status is unavailable". Best-effort: false leaves the caller's
+ * own reads to report a server that never finishes loading.
+ */
+export function warmOpenCodeInstance(
+  port: number,
+  directory: string,
+  headers: Record<string, string>,
+  dependencies: { checkHealth?: typeof checkHttpHealth; timeoutMs?: number } = {},
+): Promise<boolean> {
+  const checkHealth = dependencies.checkHealth ?? checkHttpHealth;
+  return checkHealth(
+    port,
+    `/session/status?directory=${encodeURIComponent(directory)}`,
+    headers,
+    dependencies.timeoutMs ?? OPENCODE_INSTANCE_WARM_TIMEOUT_MS,
+  );
 }
 
 export function openCodeHealthHeaders(password: string): Record<string, string> {

@@ -415,6 +415,124 @@ body[data-orkestrator-dev-profile]::before {
   }
 }
 
+/*
+ * Tool groups fold and open by animating real layout height (Radix measures
+ * the content into --radix-collapsible-content-height), so the
+ * bottom-anchored transcript follows the fold rather than jumping. A group
+ * folding on screen grows its head line in over the same span, so the rows
+ * the reader was looking at settle smoothly into the one-line summary.
+ */
+:root {
+  --tool-group-fold-duration: 500ms;
+  --tool-group-fold-easing: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes tool-group-fold-open {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+
+  to {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+}
+
+@keyframes tool-group-fold-close {
+  from {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+/* The head line is one fixed-height row: px-2 py-0.5 around a py-1.5 text-xs trigger. */
+@keyframes tool-group-head-enter {
+  from {
+    max-height: 0;
+    opacity: 0;
+  }
+
+  to {
+    max-height: 2rem;
+    opacity: 1;
+  }
+}
+
+.tool-group-fold-content {
+  overflow: hidden;
+}
+
+.tool-group-fold-content:where(.tool-group-reader-open)[data-state="open"] {
+  animation: tool-group-fold-open var(--tool-group-fold-duration) var(--tool-group-fold-easing);
+}
+
+.tool-group-fold-content[data-state="closed"] {
+  animation: tool-group-fold-close var(--tool-group-fold-duration) var(--tool-group-fold-easing);
+}
+
+.tool-group-head-enter {
+  overflow: hidden;
+  animation: tool-group-head-enter var(--tool-group-fold-duration) var(--tool-group-fold-easing);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-group-fold-content[data-state],
+  .tool-group-head-enter {
+    animation: none;
+  }
+}
+
+/*
+ * A transcript row or tool call appended live grows in by its real layout
+ * height, so the bottom-anchored transcript glides up with it instead of
+ * jumping a whole row per update. 0fr -> 1fr keeps tracking content that is
+ * still streaming in during the entrance. The attribute is set from a layout
+ * effect for live arrivals only (never for history, rehydration or a
+ * virtualized remount) and removed when the animation ends
+ * (`lib/transcript-scroll/arrivals.ts`). The 1px floor keeps the virtualizer
+ * from measuring an empty row.
+ */
+:root {
+  --transcript-arrival-duration: 300ms;
+  --transcript-arrival-easing: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes transcript-arrival {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+
+[data-transcript-arrival] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 1px;
+  animation: transcript-arrival var(--transcript-arrival-duration) var(--transcript-arrival-easing);
+}
+
+[data-transcript-arrival] > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-transcript-arrival] {
+    animation: none;
+  }
+}
+
 @keyframes agent-thinking-shimmer {
   from {
     background-position: 125% 50%;

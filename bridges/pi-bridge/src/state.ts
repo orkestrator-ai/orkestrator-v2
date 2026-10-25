@@ -194,6 +194,21 @@ export interface PiCommandCatalogueState {
   /** Advances whenever the rows or the status change. */
   revision: number;
   truncated?: boolean;
+  /**
+   * The rows came from a resource-only read (`command-preview.ts`): templates
+   * and skills, without the extension commands an attach adds. Always `stale`.
+   */
+  attachPending?: boolean;
+}
+
+/** The resource-only command read for a session that has not attached. */
+export interface PiCommandPreview {
+  /** The resource policy the read used; a different policy reads again. */
+  key: string;
+  /** Settles when the read has been published or discarded. Never rejects. */
+  settled: Promise<void>;
+  /** A discarded result must be read again after an attach fails. */
+  discarded?: boolean;
 }
 
 /**
@@ -288,7 +303,7 @@ export interface SessionState {
    * persisting them would write the bearer into `state.json`. Attach falls
    * back to the process env when this is absent after a restart.
    */
-  agentMcp?: { url: string; token: string };
+  agentMcp?: { url: string; token: string; artifacts?: { token: string } };
   /**
    * The workflow-result attempt the current turn runs for, from its prompt.
    * Runtime-only and replaced by every prompt: it scopes the read-only and
@@ -374,7 +389,7 @@ export interface SessionState {
    * The abort path for a prompt Pi has been handed but has not yet accepted.
    *
    * `session.prompt()` runs a preflight (input hooks, auth, then — inside Pi
-   * 1.2's `_startRun` — a possible auto-compaction and `before_agent_start`)
+   * 1.4's `_startRun` — a possible auto-compaction and `before_agent_start`)
    * before it reports acceptance, and only an accepted run has a cancel handle
    * here. `abort()` during that last stage aborts the compaction and pre-empts
    * the run at `agent_start`, so a cancel recorded then is applied through this
@@ -491,10 +506,17 @@ export interface SessionState {
   commandReloadPending?: boolean;
   /** The resource reload in flight. Prompts wait for it rather than racing it. */
   commandReload?: Promise<unknown>;
+  /** The latest resource-only command read; runtime-only. */
+  commandPreview?: PiCommandPreview;
   /** The extension command the current turn is running, if it is one. */
   commandRun?: PiCommandRun;
   /** True while Pi is compacting; the tab shows it as still working. */
   compacting: boolean;
+  /**
+   * The retry row of the compaction in flight, if its summary request has
+   * failed and Pi is retrying it. Settled by `compaction_end`. Runtime-only.
+   */
+  compactionRetry?: { messageId: string; sourcePartId: string };
   /** Wall clock the session was last touched by a tab-facing route. */
   lastAccessed: number;
   /**
@@ -529,6 +551,8 @@ export interface PersistedSession {
   /** Public descriptors only; restored as `stale` until the next attach. */
   commands?: NativeAgentSlashCommand[];
   commandsTruncated?: boolean;
+  /** The persisted rows came from a resource-only read, not an attach. */
+  commandsAttachPending?: boolean;
 }
 
 export interface PersistedState {

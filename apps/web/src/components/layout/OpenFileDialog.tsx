@@ -99,14 +99,28 @@ export function OpenFileDialog() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open]);
 
-  useEffect(() => {
-    if (!open) {
-      setQuery("");
-      setSelectedIndex(0);
-      return;
-    }
-
+  // Opening or closing, a new search, or another environment's files put the
+  // selection back at the top; closing also clears the query.
+  const [selectionScope, setSelectionScope] = useState({
+    open,
+    refresh,
+    deferredQuery,
+    selectedEnvironmentId,
+  });
+  if (
+    selectionScope.open !== open ||
+    selectionScope.refresh !== refresh ||
+    selectionScope.deferredQuery !== deferredQuery ||
+    selectionScope.selectedEnvironmentId !== selectedEnvironmentId
+  ) {
+    setSelectionScope({ open, refresh, deferredQuery, selectedEnvironmentId });
     setSelectedIndex(0);
+    if (!open) setQuery("");
+  }
+
+  useEffect(() => {
+    if (!open) return;
+
     void refresh();
 
     const timeoutId = window.setTimeout(() => {
@@ -116,10 +130,6 @@ export function OpenFileDialog() {
 
     return () => window.clearTimeout(timeoutId);
   }, [open, refresh]);
-
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [deferredQuery, selectedEnvironmentId]);
 
   useEffect(() => {
     selectedItemRef.current?.scrollIntoView({
@@ -162,7 +172,10 @@ export function OpenFileDialog() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="max-w-2xl gap-0 overflow-hidden p-0 sm:p-0" showCloseButton={false}>
+      <DialogContent
+        className="gap-0 overflow-hidden p-0 sm:max-w-[min(42rem,calc(100%-2rem))] sm:p-0"
+        showCloseButton={false}
+      >
         <DialogHeader className="m-0 border-b border-divider bg-background px-5 py-4 sm:m-0">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Search className="h-4 w-4 text-muted-foreground" />

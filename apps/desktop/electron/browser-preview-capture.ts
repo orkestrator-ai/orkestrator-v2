@@ -127,7 +127,8 @@ export type CaptureStoreLike = Pick<
   | "masksFor"
   | "listExpiredNotices"
   | "dismissExpiredNotices"
->;
+> &
+  Partial<Pick<BrowserPreviewCaptureStore, "stats">>;
 
 export interface BrowserPreviewCaptureOptions {
   preview: (tabId: string) => CapturePreviewHandle | null;

@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { nonRotatingOAuthProviders } from "@orkestrator/protocol/login-snapshots";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 
@@ -62,6 +63,7 @@ const AGENT_HELPER_SED =
   "/^copy_agent_file() {/,/^}$/p; " +
   "/^copy_agent_directory() {/,/^}$/p; " +
   "/^copy_agent_directory_entries() {/,/^}$/p; " +
+  "/^restrict_imported_login() {/,/^}$/p; " +
   "/^publish_claude_credentials() {/,/^}$/p";
 
 function agentCopyHelperHarness(body: string): string {
@@ -310,7 +312,13 @@ describe("container runtime environment wiring", () => {
     // One mechanism for every agent. An unguarded `find -maxdepth 1 -type f`
     // or a bare recursive `cp` of a mounted home is what these helpers replaced;
     // none of them should reappear for any agent.
-    for (const mount of ["/claude-config", "/codex-home", "/opencode-data", "/grok-home"]) {
+    for (const mount of [
+      "/claude-config",
+      "/codex-home",
+      "/opencode-data",
+      "/grok-home",
+      "/cursor-config",
+    ]) {
       expect(entrypoint).toContain(`copy_agent_file ${mount}`);
       expect(entrypoint).not.toContain(`find ${mount} -maxdepth 1 -type f`);
       expect(entrypoint).not.toContain(`cp -r ${mount}/.`);
@@ -321,11 +329,10 @@ describe("container runtime environment wiring", () => {
     // single symlinked or oversized entry cannot drop the whole directory.
     expect(entrypoint).toContain("copy_agent_directory /codex-home");
     expect(entrypoint).toContain("copy_agent_directory_entries /claude-config");
-    expect(entrypoint).toContain("copy_agent_directory_entries /opencode-data");
     expect(entrypoint).toContain("copy_agent_directory_entries /grok-home");
     expect(entrypoint).toContain("copy_agent_directory /grok-config");
     // Each call site names its agent so a skipped file is attributable.
-    for (const label of ["Claude", "Codex", "OpenCode", "Grok"]) {
+    for (const label of ["Claude", "Codex", "OpenCode", "Grok", "Cursor"]) {
       expect(entrypoint).toMatch(
         new RegExp(`copy_agent_(file|directory) [^\\n]*\\s${label}$`, "m"),
       );
@@ -531,6 +538,63 @@ describe("container runtime environment wiring", () => {
     });
   });
 
+  test("container startup copies only Cursor's mcp.json", () => {
+    const cursorSection = section(
+      read("docker/entrypoint.sh"),
+      "# Set up Cursor configuration.",
+      'log_progress "Cursor configuration ready"',
+    );
+    // User MCP servers only: account state, IDE state, hooks, plugins and the
+    // SDK's own state stay on the host.
+    const copies = [...cursorSection.matchAll(/^\s*copy_agent_[a-z_]+ .*$/gm)].map((match) =>
+      match[0].trim(),
+    );
+    expect(copies).toEqual(['copy_agent_file /cursor-config "$HOME/.cursor" mcp.json Cursor']);
+    expect(cursorSection).toContain('mkdir -p "$HOME/.cursor"');
+    expect(cursorSection).toContain('chmod 600 "$HOME/.cursor/mcp.json"');
+    expect(cursorSection).toContain('[ ! -L "$HOME/.cursor/mcp.json" ]');
+    expect(cursorSection).toContain("report_agent_copy_skips Cursor");
+  });
+
+  test("Cursor setup leaves a copied mcp.json owner-only and a symlink target untouched", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      mkdirSync(source);
+      writeFileSync(join(source, "mcp.json"), '{"mcpServers":{}}\n');
+      chmodSync(join(source, "mcp.json"), 0o644);
+      const cursorSection = section(
+        read("docker/entrypoint.sh"),
+        "# Set up Cursor configuration.",
+        'log_progress "Cursor configuration ready"',
+      ).replaceAll("/cursor-config", shellQuote(source));
+      const home = join(dir, "home");
+      const result = runShell(agentCopyHelperHarness(cursorSection), {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        HOME: home,
+      });
+      expect(result.exitCode).toBe(0);
+      const copied = join(home, ".cursor", "mcp.json");
+      expect(readFileSync(copied, "utf8")).toBe('{"mcpServers":{}}\n');
+      expect(statSync(copied).mode & 0o777).toBe(0o600);
+
+      // A destination a previous workload replaced with a link is refused,
+      // and the link's target keeps its mode.
+      const linkedHome = join(dir, "linked-home");
+      mkdirSync(join(linkedHome, ".cursor"), { recursive: true });
+      const target = join(dir, "outside.json");
+      writeFileSync(target, "{}\n");
+      chmodSync(target, 0o644);
+      symlinkSync(target, join(linkedHome, ".cursor", "mcp.json"));
+      const linked = runShell(agentCopyHelperHarness(cursorSection), {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        HOME: linkedHome,
+      });
+      expect(linked.exitCode).toBe(0);
+      expect(readFileSync(target, "utf8")).toBe("{}\n");
+      expect(statSync(target).mode & 0o777).toBe(0o644);
+    });
+  });
+
   test("Claude data copy takes config and skips host history", () => {
     withTempDir((dir) => {
       const source = join(dir, "source");
@@ -705,7 +769,7 @@ report_agent_copy_skips OpenCode
     // they run concurrently. Extract the real block and drive each ordering.
     function runCredentialBlock(
       dir: string,
-      options: { mount?: string; existing?: string; envValue?: string },
+      options: { mount?: string; existing?: string; envValue?: string; interleave?: boolean },
     ): { stdout: string; exitCode: number | null; credential: string | null } {
       const home = join(dir, "home");
       const mount = join(dir, "claude-config");
@@ -718,6 +782,13 @@ report_agent_copy_skips OpenCode
         writeFileSync(join(home, ".claude", ".credentials.json"), options.existing);
       }
 
+      // The image restricts a copied login with node; a host without node uses Bun.
+      const bin = join(dir, "bin");
+      mkdirSync(bin, { recursive: true });
+      if (!Bun.which("node")) {
+        writeFileSync(join(bin, "node"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
+        chmodSync(join(bin, "node"), 0o755);
+      }
       const entrypointPath = join(repoRoot, "docker", "entrypoint.sh");
       const result = runShell(
         `
@@ -726,11 +797,23 @@ eval "$(sed -n '${AGENT_HELPER_SED}' ${shellQuote(entrypointPath)})"
 block="$(sed -n '/^if \\[ -n "\\$CLAUDE_OAUTH_CREDENTIALS" \\]/,/^fi$/p' ${shellQuote(entrypointPath)} | sed "s#/claude-config#\\$AGENT_TEST_MOUNT#g")"
 [ -n "$block" ] || { echo "harness failed to extract the credential block"; exit 9; }
 log_progress() { echo "$1"; }
+${
+  options.interleave
+    ? `eval ${shellQuote(
+        read("docker/entrypoint.sh")
+          .match(/^restrict_imported_login\(\) \{[\s\S]*?^}/m)![0]
+          .replace(
+            "        if (!login",
+            '        const target = process.env.HOME + "/.claude/.credentials.json"; fs.writeFileSync(target + ".backend", JSON.stringify({claudeAiOauth:{accessToken:"fresh-backend"}})); fs.renameSync(target + ".backend", target);\n        if (!login',
+          ),
+      )}`
+    : ""
+}
 eval "$block"
 `,
         {
           HOME: home,
-          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
           AGENT_TEST_MOUNT: mount,
           ...(options.envValue === undefined ? {} : { CLAUDE_OAUTH_CREDENTIALS: options.envValue }),
         },
@@ -776,7 +859,45 @@ eval "$block"
       });
     });
 
-    test("treats an empty pre-existing credential as absent", () => {
+    test("a backend push during imported-login restriction cannot be overwritten", () => {
+      withTempDir((dir) => {
+        const result = runCredentialBlock(dir, {
+          mount: JSON.stringify({
+            claudeAiOauth: { accessToken: "stale-mounted", refreshToken: "SENTINEL" },
+          }),
+          interleave: true,
+        });
+        expect(result.exitCode).toBe(0);
+        expect(JSON.parse(result.credential!).claudeAiOauth.accessToken).toBe("fresh-backend");
+        expect(result.credential).not.toContain("SENTINEL");
+      });
+    });
+
+    test("a credential copied from the mount loses its refresh tokens", () => {
+      withTempDir((dir) => {
+        // A host-mounted ~/.claude, or a revision staged before logins were
+        // access-only, still carries the host's single-use refresh token.
+        const result = runCredentialBlock(dir, {
+          mount: JSON.stringify({
+            claudeAiOauth: {
+              accessToken: "from-mount",
+              refreshToken: "SENTINEL-CLAUDE",
+              expiresAt: 1,
+            },
+            mcpOAuth: { server: { accessToken: "mcp", refreshToken: "SENTINEL-MCP" } },
+          }),
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(JSON.parse(result.credential ?? "{}")).toEqual({
+          claudeAiOauth: { accessToken: "from-mount", expiresAt: 1 },
+          mcpOAuth: { server: { accessToken: "mcp" } },
+        });
+        expect(result.stdout).not.toContain("SENTINEL");
+      });
+    });
+
+    test("leaves an empty pre-existing file for the backend to replace atomically", () => {
       withTempDir((dir) => {
         // A zero-byte file is a failed write, not a login. `-s` is what makes
         // this differ from `-f`, which would strand the container logged out.
@@ -786,7 +907,7 @@ eval "$block"
         });
 
         expect(result.exitCode).toBe(0);
-        expect(result.credential).toContain("from-mount");
+        expect(result.credential).toBe("");
       });
     });
 
@@ -800,7 +921,7 @@ eval "$block"
       });
     });
 
-    test("an explicit CLAUDE_OAUTH_CREDENTIALS still overrides both sources", () => {
+    test("backend credentials win over a concurrently imported environment payload", () => {
       withTempDir((dir) => {
         const result = runCredentialBlock(dir, {
           envValue: '{"claudeAiOauth":{"accessToken":"from-env"}}',
@@ -809,7 +930,7 @@ eval "$block"
         });
 
         expect(result.exitCode).toBe(0);
-        expect(result.credential).toContain("from-env");
+        expect(result.credential).toContain("already-synced");
       });
     });
 
@@ -860,18 +981,17 @@ eval "$block"
     // which meant the host's multi-GB opencode.db session database (plus its
     // -wal/-shm siblings) was copied into every container on every start.
     expect(entrypoint).not.toContain("find /opencode-data -maxdepth 1 -type f");
-    expect(entrypoint).toContain("copy_agent_file /opencode-data");
-    expect(entrypoint).toContain("copy_agent_directory_entries /opencode-data");
-
-    for (const allowlisted of ["auth.json", "account.json", "storage", "snapshot"]) {
-      expect(entrypoint).toMatch(
-        new RegExp(
-          `^[ \\t]*${allowlisted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`,
-          "m",
-        ),
-      );
-    }
-    for (const excluded of ["opencode.db", "opencode.db-wal", "opencode.db-shm"]) {
+    // The login is the only portable OpenCode data. A live run of 1.19.4
+    // (scripts/qualify-opencode-seeded-data.sh) never opened a host-seeded
+    // snapshot/ directory or account.json, and read only storage/'s
+    // legacy-migration index, which an empty storage/ recreates.
+    const copies = entrypoint
+      .split("\n")
+      .filter((line) => /^\s*copy_agent_/.test(line) && line.includes(" /opencode-data "));
+    expect(copies.map((line) => line.trim())).toEqual([
+      'copy_agent_file /opencode-data "$HOME/.local/share/opencode" auth.json OpenCode',
+    ]);
+    for (const excluded of ["opencode.db", "account.json", "storage", "snapshot"]) {
       expect(entrypoint).not.toMatch(
         new RegExp(`^[ \\t]*${excluded.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
       );
@@ -930,7 +1050,7 @@ printf 'continued'
     });
   });
 
-  test("OpenCode data copy takes the credential and skips the session database", () => {
+  test("OpenCode data copy takes only the credential", () => {
     withTempDir((dir) => {
       const source = join(dir, "source");
       const destination = join(dir, "destination");
@@ -948,12 +1068,7 @@ printf 'continued'
 
       const result = runShell(
         agentCopyHelperHarness(`
-for file in auth.json account.json; do
-  copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$file" OpenCode
-done
-for dir in storage snapshot; do
-  copy_agent_directory_entries "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" "$dir" OpenCode
-done
+copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" auth.json OpenCode
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -966,11 +1081,16 @@ done
       // OpenCode's credential is a plain file, so unlike Claude it rides the
       // existing mount — this is what keeps container OpenCode logged in.
       expect(readFileSync(join(destination, "auth.json"), "utf8")).toBe('{"token":"opencode"}\n');
-      expect(readFileSync(join(destination, "account.json"), "utf8")).toBe('{"account":"test"}\n');
-      expect(readFileSync(join(destination, "storage", "kept.json"), "utf8")).toBe("kept\n");
-      expect(readFileSync(join(destination, "snapshot", "kept.json"), "utf8")).toBe("kept\n");
 
-      for (const excluded of ["opencode.db", "opencode.db-wal", "opencode.db-shm", "log"]) {
+      for (const excluded of [
+        "opencode.db",
+        "opencode.db-wal",
+        "opencode.db-shm",
+        "log",
+        "account.json",
+        "storage",
+        "snapshot",
+      ]) {
         expect(() => statSync(join(destination, excluded))).toThrow();
       }
     });
@@ -1122,6 +1242,182 @@ copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
       expect(readFileSync(join(destination, "skills", "review", "SKILL.md"), "utf8")).toBe(
         "changed\n",
       );
+    });
+  });
+
+  test("imported OpenCode and Pi OAuth logins lose rotating refresh tokens, keeping keys", () => {
+    const entrypoint = read("docker/entrypoint.sh");
+    expect(entrypoint).toMatch(
+      /chmod 600 "\$HOME\/\.local\/share\/opencode\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.local\/share\/opencode\/auth\.json" opencode OpenCode \/opencode-data auth\.json\n/,
+    );
+    expect(entrypoint).toMatch(
+      /chmod 600 "\$HOME\/\.pi\/agent\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.pi\/agent\/auth\.json" pi Pi \/pi-config\/agent auth\.json\n/,
+    );
+    // The entrypoint keeps the same non-rotating providers as the backend.
+    expect(entrypoint).toContain(
+      `{ opencode: ${JSON.stringify(nonRotatingOAuthProviders("opencode")).replaceAll(",", ", ")}, pi: ${JSON.stringify(nonRotatingOAuthProviders("pi")).replaceAll(",", ", ")} }[kind]`,
+    );
+    withTempDir((dir) => {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      if (!Bun.which("node")) {
+        writeFileSync(join(bin, "node"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
+        chmodSync(join(bin, "node"), 0o755);
+      }
+      const opencode = join(dir, "opencode.json");
+      const pi = join(dir, "pi.json");
+      const opencodeLogins = {
+        "opencode-go": { type: "api", key: "go" },
+        openai: { type: "oauth", access: "a", refresh: "SENTINEL-OC", expires: 1 },
+        "github-copilot": { type: "oauth", access: "gho", refresh: "gho", expires: 0 },
+      };
+      const piLogins = {
+        anthropic: { type: "oauth", access: "a", refresh: "SENTINEL-PI", expires: 1 },
+        meta: { type: "oauth", access: "key", refresh: "identity", expires: 2 },
+        openrouter: { type: "api_key", key: "or" },
+      };
+      // A host home mounted directly: the source and the copy are the same file.
+      mkdirSync(join(dir, "opencode-data"));
+      mkdirSync(join(dir, "pi-config", "agent"), { recursive: true });
+      writeFileSync(join(dir, "opencode-data", "auth.json"), JSON.stringify(opencodeLogins));
+      writeFileSync(join(dir, "pi-config", "agent", "auth.json"), JSON.stringify(piLogins));
+      writeFileSync(opencode, JSON.stringify(opencodeLogins));
+      writeFileSync(pi, JSON.stringify(piLogins));
+      const result = runShell(
+        agentCopyHelperHarness(`
+restrict_imported_login ${shellQuote(opencode)} opencode OpenCode ${shellQuote(join(dir, "opencode-data"))} auth.json
+restrict_imported_login ${shellQuote(pi)} pi Pi ${shellQuote(join(dir, "pi-config", "agent"))} auth.json
+`),
+        { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(opencode, "utf8"))).toEqual({
+        "opencode-go": { type: "api", key: "go" },
+        openai: { type: "oauth", access: "a", refresh: "", expires: 1 },
+        "github-copilot": { type: "oauth", access: "gho", refresh: "gho", expires: 0 },
+      });
+      expect(JSON.parse(readFileSync(pi, "utf8"))).toEqual({
+        anthropic: { type: "oauth", access: "a", refresh: "", expires: 1 },
+        meta: { type: "oauth", access: "key", refresh: "identity", expires: 2 },
+        openrouter: { type: "api_key", key: "or" },
+      });
+      expect((statSync(pi).mode & 0o777).toString(8)).toBe("600");
+      expect(result.stdout + result.stderr).not.toContain("SENTINEL");
+    });
+  });
+
+  test("OpenCode and Pi logins made inside the container keep their refresh tokens", () => {
+    withTempDir((dir) => {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      if (!Bun.which("node")) {
+        writeFileSync(join(bin, "node"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
+        chmodSync(join(bin, "node"), 0o755);
+      }
+      const own = { type: "oauth", access: "own", refresh: "own-refresh", expires: 2 };
+      const restart = join(dir, "restart.json");
+      const mixed = join(dir, "mixed.json");
+      const linked = join(dir, "linked.json");
+      const unreadable = join(dir, "unreadable.json");
+      // A restart with no staged file leaves the container's file as it is.
+      writeFileSync(restart, JSON.stringify({ kimi: own }));
+      // The host holds only OpenAI; the container's Kimi login is its own.
+      writeFileSync(
+        mixed,
+        JSON.stringify({ kimi: own, openai: { ...own, refresh: "SENTINEL-OLD" } }),
+      );
+      writeFileSync(unreadable, "not json");
+      const source = join(dir, "source");
+      mkdirSync(source);
+      writeFileSync(
+        join(source, "auth.json"),
+        JSON.stringify({ openai: { type: "oauth", access: "a", refresh: "", expires: 1 } }),
+      );
+      // A symlinked source names no providers: the copy skipped it.
+      const linkedSource = join(dir, "linked-source");
+      mkdirSync(linkedSource);
+      symlinkSync(join(source, "auth.json"), join(linkedSource, "auth.json"));
+      writeFileSync(linked, JSON.stringify({ kimi: own, openai: own }));
+      const result = runShell(
+        agentCopyHelperHarness(`
+restrict_imported_login ${shellQuote(restart)} pi Pi ${shellQuote(join(dir, "absent"))} auth.json
+restrict_imported_login ${shellQuote(mixed)} opencode OpenCode ${shellQuote(source)} auth.json
+restrict_imported_login ${shellQuote(linked)} opencode OpenCode ${shellQuote(linkedSource)} auth.json
+restrict_imported_login ${shellQuote(unreadable)} pi Pi ${shellQuote(join(dir, "absent"))} auth.json
+`),
+        { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(restart, "utf8"))).toEqual({ kimi: own });
+      expect(JSON.parse(readFileSync(mixed, "utf8"))).toEqual({
+        kimi: own,
+        openai: { ...own, refresh: "" },
+      });
+      expect(JSON.parse(readFileSync(linked, "utf8"))).toEqual({ kimi: own, openai: own });
+      // With no host file to restrict it against, the container's own file is not judged.
+      expect(readFileSync(unreadable, "utf8")).toBe("not json");
+      expect(result.stdout + result.stderr).not.toContain("SENTINEL");
+    });
+  });
+
+  test("imported Codex and Grok logins lose their single-use refresh tokens", () => {
+    const entrypoint = read("docker/entrypoint.sh");
+    expect(entrypoint).toContain('restrict_imported_login "$temporary_path" claude Claude');
+    // Each import is restricted right after it is copied, before any agent runs.
+    expect(entrypoint).toMatch(
+      /chmod 600 "\$HOME\/\.codex\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.codex\/auth\.json" codex Codex/,
+    );
+    expect(entrypoint).toMatch(
+      /chmod 600 "\$HOME\/\.grok\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.grok\/auth\.json" grok Grok/,
+    );
+    withTempDir((dir) => {
+      // The image runs the helper with node; a host without node runs it with Bun.
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      if (!Bun.which("node")) {
+        writeFileSync(join(bin, "node"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
+        chmodSync(join(bin, "node"), 0o755);
+      }
+      const codex = join(dir, "codex.json");
+      const grok = join(dir, "grok.json");
+      const broken = join(dir, "broken.json");
+      writeFileSync(
+        codex,
+        JSON.stringify({
+          auth_mode: "chatgpt",
+          last_refresh: "2026-10-01T00:00:00Z",
+          tokens: { access_token: "a", refresh_token: "SENTINEL-CODEX" },
+        }),
+      );
+      writeFileSync(
+        grok,
+        JSON.stringify({ one: { key: "k", refresh_token: "SENTINEL-GROK" }, two: { key: "j" } }),
+      );
+      writeFileSync(broken, "SENTINEL-NOT-JSON");
+      const result = runShell(
+        agentCopyHelperHarness(`
+restrict_imported_login ${shellQuote(codex)} codex Codex
+restrict_imported_login ${shellQuote(grok)} grok Grok
+restrict_imported_login ${shellQuote(broken)} grok Grok
+restrict_imported_login ${shellQuote(join(dir, "missing.json"))} grok Grok
+`),
+        { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` },
+      );
+
+      expect(result.exitCode).toBe(0);
+      const restrictedCodex = JSON.parse(readFileSync(codex, "utf8"));
+      expect(restrictedCodex.tokens).toEqual({ access_token: "a", refresh_token: "" });
+      expect(Date.parse(restrictedCodex.last_refresh)).toBeGreaterThan(Date.now() - 60_000);
+      expect(JSON.parse(readFileSync(grok, "utf8"))).toEqual({
+        one: { key: "k", refresh_token: "" },
+        two: { key: "j" },
+      });
+      expect((statSync(codex).mode & 0o777).toString(8)).toBe("600");
+      expect(() => statSync(broken)).toThrow();
+      expect(result.stdout).toContain("removed an unreadable Grok login");
+      expect(result.stdout + result.stderr).not.toContain("SENTINEL");
     });
   });
 
@@ -1727,6 +2023,8 @@ printf "continued"
       const source = join(dir, "source");
       const home = join(dir, "home");
       const destination = join(home, ".codex");
+      const marker = join(dir, "account-marker");
+      writeFileSync(marker, "previous-account", { mode: 0o600 });
       const files = [
         "auth.json",
         "config.toml",
@@ -1738,9 +2036,12 @@ printf "continued"
         "cloud-requirements-cache.json",
       ];
       const directories = ["rules", "skills", "prompts", "vendor_imports", "plugins/cache"];
+      // The import is restricted after copying, so auth.json must be a login.
+      const contents = (file: string) =>
+        file === "auth.json" ? '{"OPENAI_API_KEY":"auth.json"}' : `${file}\n`;
       mkdirSync(source, { recursive: true });
       for (const file of files) {
-        writeFileSync(join(source, file), `${file}\n`, { mode: 0o644 });
+        writeFileSync(join(source, file), contents(file), { mode: 0o644 });
       }
       for (const directory of directories) {
         mkdirSync(join(source, directory), { recursive: true });
@@ -1756,21 +2057,24 @@ printf "continued"
         `
 set -e
 log_progress() { :; }
-eval "$(sed -n '/^agent_copy_warn() {/,/^}$/p; /^report_agent_copy_skips() {/,/^}$/p; /^agent_source_path_has_symlink() {/,/^}$/p; /^agent_destination_path_has_symlink() {/,/^}$/p; /^copy_agent_file() {/,/^}$/p; /^copy_agent_directory() {/,/^}$/p' ${shellQuote(entrypoint)})"
-codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$AGENT_TEST_SOURCE#g")"
+eval "$(sed -n '/^agent_copy_warn() {/,/^}$/p; /^report_agent_copy_skips() {/,/^}$/p; /^agent_source_path_has_symlink() {/,/^}$/p; /^agent_destination_path_has_symlink() {/,/^}$/p; /^copy_agent_file() {/,/^}$/p; /^copy_agent_directory() {/,/^}$/p; /^restrict_imported_login() {/,/^}$/p' ${shellQuote(entrypoint)})"
+codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$AGENT_TEST_SOURCE#g; s#/tmp/orkestrator-codex-account#\\$AGENT_TEST_MARKER#g")"
 eval "$codex_setup"
 `,
         {
           HOME: home,
           PATH: process.env.PATH ?? "/usr/bin:/bin",
           AGENT_TEST_SOURCE: source,
+          AGENT_TEST_MARKER: marker,
         },
       );
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
+      expect(readFileSync(marker, "utf8")).toBe("unstaged");
+      expect(statSync(marker).mode & 0o777).toBe(0o600);
       for (const file of files) {
-        expect(readFileSync(join(destination, file), "utf8")).toBe(`${file}\n`);
+        expect(readFileSync(join(destination, file), "utf8")).toBe(contents(file));
       }
       for (const directory of directories) {
         expect(readFileSync(join(destination, directory, "copied.txt"), "utf8")).toBe(
@@ -1792,8 +2096,10 @@ eval "$codex_setup"
       mkdirSync(join(grokSource, "hooks"), { recursive: true });
       mkdirSync(join(grokSource, "skills"), { recursive: true });
       mkdirSync(join(grokSource, "sessions"), { recursive: true });
+      const contents = (file: string) =>
+        file === "auth.json" ? '{"login":{"key":"auth.json"}}' : `${file}\n`;
       for (const file of ["auth.json", "config.toml", "trusted_folders.toml", "agent_id"]) {
-        writeFileSync(join(grokSource, file), `${file}\n`, { mode: 0o644 });
+        writeFileSync(join(grokSource, file), contents(file), { mode: 0o644 });
       }
       writeFileSync(join(grokSource, "hooks", "hook.sh"), "hook\n");
       writeFileSync(join(grokSource, "skills", "skill.md"), "grok skill\n");
@@ -1819,7 +2125,7 @@ eval "$grok_setup"
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
       for (const file of ["auth.json", "config.toml", "trusted_folders.toml", "agent_id"]) {
-        expect(readFileSync(join(home, ".grok", file), "utf8")).toBe(`${file}\n`);
+        expect(readFileSync(join(home, ".grok", file), "utf8")).toBe(contents(file));
       }
       expect(statSync(join(home, ".grok", "auth.json")).mode & 0o777).toBe(0o600);
       expect(readFileSync(join(home, ".grok", "hooks", "hook.sh"), "utf8")).toBe("hook\n");
@@ -1848,7 +2154,7 @@ eval "$grok_setup"
       // An oversized file sits next to the allowlist, plus a link inside
       // ~/.config/grok, which is copied whole rather than per entry.
       mkdirSync(grokSource, { recursive: true });
-      writeFileSync(join(grokSource, "auth.json"), "auth.json\n");
+      writeFileSync(join(grokSource, "auth.json"), '{"login":{"key":"auth.json"}}');
       writeFileSync(join(grokSource, "config.toml"), "x".repeat(64), { mode: 0o644 });
       mkdirSync(grokConfig, { recursive: true });
       writeFileSync(join(grokConfig, "settings.json"), '{"portable":true}\n');
@@ -1884,7 +2190,9 @@ eval "$grok_setup"
       expect(result.stdout).not.toContain("container: .\n");
 
       // Dropping one entry does not cost the others, and no link was followed.
-      expect(readFileSync(join(home, ".grok", "auth.json"), "utf8")).toBe("auth.json\n");
+      expect(readFileSync(join(home, ".grok", "auth.json"), "utf8")).toBe(
+        '{"login":{"key":"auth.json"}}',
+      );
       expect(() => statSync(join(home, ".grok", "config.toml"))).toThrow();
       // The whole-directory helper is all-or-nothing, so the link takes the
       // portable sibling with it rather than resolving out of the mount.
@@ -1964,7 +2272,7 @@ eval "$claude_setup"
     // aggregate load that passed the default five seconds (flake 0160).
   }, 15_000);
 
-  test("OpenCode setup block merges user config, skips the database, and copies data per-entry", () => {
+  test("OpenCode setup block merges user config and copies only the login", () => {
     withTempDir((dir) => {
       const config = join(dir, "opencode-config");
       const data = join(dir, "opencode-data");
@@ -1981,7 +2289,14 @@ eval "$claude_setup"
       writeFileSync(join(config, "opencode.json"), '{"config":true}\n');
       writeFileSync(join(config, "plugin", "custom.ts"), "export default {}\n");
       writeFileSync(join(config, "node_modules", "some-dep", "binary.node"), "mach-o\n");
-      writeFileSync(join(data, "auth.json"), '{"token":"opencode"}\n', { mode: 0o600 });
+      writeFileSync(
+        join(data, "auth.json"),
+        JSON.stringify({
+          opencode: { type: "api", key: "k" },
+          openai: { type: "oauth", access: "a", refresh: "r", expires: 1 },
+        }),
+        { mode: 0o600 },
+      );
       writeFileSync(join(data, "account.json"), '{"account":"test"}\n');
       writeFileSync(join(data, "opencode.db"), "x".repeat(1024 * 1024));
       writeFileSync(join(data, "storage", "kept.json"), "kept\n");
@@ -2016,26 +2331,18 @@ eval "$opencode_setup"
         "export default {}\n",
       );
       expect(() => statSync(join(home, ".config", "opencode", "node_modules"))).toThrow();
-      // Credential rides the mount; the multi-GB session database does not.
-      expect(readFileSync(join(home, ".local", "share", "opencode", "auth.json"), "utf8")).toBe(
-        '{"token":"opencode"}\n',
-      );
-      expect(readFileSync(join(home, ".local", "share", "opencode", "account.json"), "utf8")).toBe(
-        '{"account":"test"}\n',
-      );
-      expect(() => statSync(join(home, ".local", "share", "opencode", "opencode.db"))).toThrow();
-      // Data directories copy per-entry: real records land, the symlinked one
-      // is skipped individually, and the excluded runtime dir never appears.
+      // Credential rides the mount, access-only; the multi-GB session database does not.
       expect(
-        readFileSync(join(home, ".local", "share", "opencode", "storage", "kept.json"), "utf8"),
-      ).toBe("kept\n");
-      expect(
-        readFileSync(join(home, ".local", "share", "opencode", "snapshot", "kept.json"), "utf8"),
-      ).toBe("kept\n");
-      expect(() =>
-        statSync(join(home, ".local", "share", "opencode", "storage", "linked.json")),
-      ).toThrow();
-      expect(() => statSync(join(home, ".local", "share", "opencode", "log"))).toThrow();
+        JSON.parse(readFileSync(join(home, ".local", "share", "opencode", "auth.json"), "utf8")),
+      ).toEqual({
+        opencode: { type: "api", key: "k" },
+        openai: { type: "oauth", access: "a", refresh: "", expires: 1 },
+      });
+      // Nothing else in the data directory reaches the container: OpenCode
+      // never reads a host's snapshot/, storage/ or account.json there.
+      for (const excluded of ["opencode.db", "account.json", "storage", "snapshot", "log"]) {
+        expect(() => statSync(join(home, ".local", "share", "opencode", excluded))).toThrow();
+      }
     });
   });
 
@@ -2054,7 +2361,7 @@ eval "$opencode_setup"
     const backend = [
       read("apps/backend/src/core/commands-registry-servers.ts"),
       read("apps/backend/src/core/commands-servers.ts"),
-      read("apps/backend/src/core/commands-runtime-state.ts"),
+      read("apps/backend/src/core/container-scripts.ts"),
       read("apps/backend/src/core/commands-containers.ts"),
     ].join("\n");
 

@@ -242,10 +242,13 @@ export interface WebAnnotationRegionTarget {
   label: string;
   /** CSS pixels. */
   rect: WebAnnotationRect;
-  /** Pixels of the stored image; derived through the capture's image transform. */
+  /**
+   * Pixels of the stored image; derived through the capture's image transform.
+   * Visual evidence only: no inferred DOM identity or source file. The crop's
+   * relation to the full-viewport image is `WebAnnotationCapture.regionCrop`,
+   * which only the backend assigns.
+   */
   imageRect: WebAnnotationRect | null;
-  /** Visual evidence only: no inferred DOM identity or source file. */
-  parentCaptureId?: string;
 }
 
 export interface WebAnnotationPageTarget {
@@ -381,6 +384,40 @@ export interface WebAnnotationCapture {
   resultOf?: { requestId: string; resultId?: string };
   /** Comparison metadata recorded with a result (after) capture. */
   comparison?: WebAnnotationComparisonMetadata;
+  // Optional fields below are assigned by the backend when it writes the
+  // capture, never taken from a payload. Records written before them omit them.
+  /**
+   * Which of `assetIds` is a region crop and which full-viewport image it was
+   * cut from. Recorded only when the stored image sizes agree with
+   * `target.imageRect`; otherwise the images carry no relation.
+   */
+  regionCrop?: WebAnnotationRegionCropRelation;
+  /**
+   * Basis of `producer`. `client-declared`: named by the client that submitted
+   * the capture and not verified; any authenticated client can name any
+   * submittable producer. `backend`: set by the backend itself (legacy import,
+   * result captures). Absent on older records; read it with
+   * `webAnnotationProducerSource`.
+   */
+  producerSource?: WebAnnotationProducerSource;
+}
+
+export type WebAnnotationProducerSource = "client-declared" | "backend";
+
+/** A region crop and the full-viewport image it was cut from, both in `assetIds`. */
+export interface WebAnnotationRegionCropRelation {
+  assetId: string;
+  sourceAssetId: string;
+  /** Crop rectangle in pixels of the source image (the target's `imageRect`). */
+  sourceRect: WebAnnotationRect;
+}
+
+/** `producerSource` with the default for records written before it existed. */
+export function webAnnotationProducerSource(
+  capture: Pick<WebAnnotationCapture, "producer" | "producerSource">,
+): WebAnnotationProducerSource {
+  if (capture.producerSource) return capture.producerSource;
+  return capture.producer === "legacy-import" ? "backend" : "client-declared";
 }
 
 /** Whether the page had settled when an after-capture was taken. */
@@ -606,7 +643,19 @@ export type WebAnnotationSummary = WebAnnotation & {
     WebAnnotationRequest,
     "id" | "state" | "operation" | "blockedReason" | "destination"
   > | null;
+  /**
+   * Stored images of the current capture, in `assetIds` order, with the exact
+   * sizes and digests request preparation counts (it deduplicates by digest).
+   * Absent from older backends and for unreadable captures.
+   */
+  currentCaptureAssets?: WebAnnotationSummaryAsset[];
 };
+
+export interface WebAnnotationSummaryAsset {
+  assetId: string;
+  digest: string;
+  bytes: number;
+}
 
 // ---------------------------------------------------------------------------
 // Drafts
@@ -788,9 +837,11 @@ export interface WebAnnotationRequestAttachment {
 }
 
 /**
- * How discussion avoided implementation. `plan-mode` asks the provider for its
- * own per-turn plan/read-only mode; `advisory` is an instruction only.
- * Neither is described to users as a sandbox guarantee.
+ * How discussion avoided implementation. `plan-mode` runs the turn in the
+ * provider's own plan/read-only mode: asked per turn where the provider scopes
+ * modes to a turn, or the session's current Plan mode where it scopes them to
+ * the session (never switched to get there). `advisory` is an instruction
+ * only. Neither is described to users as a sandbox guarantee.
  */
 export type WebAnnotationReadOnlyMode = "plan-mode" | "advisory" | "not-applicable";
 
@@ -1213,7 +1264,15 @@ export interface WebAnnotationDestinationOption {
   model: string | null;
   activity: "idle" | "working" | "waiting" | "unknown";
   images: boolean;
+  /** Discuss can run read-only (`readOnly: "plan-mode"`) in this session. */
   planMode: boolean;
+  /**
+   * How `planMode` is achieved: `turn` asks a per-turn plan mode (Claude);
+   * `session` means a session-scoped provider whose own mode is already Plan,
+   * so the turn is sent in that mode without changing it. Absent when
+   * `planMode` is false, and from older backends.
+   */
+  planModeScope?: "turn" | "session";
   resultTools: boolean;
   /** An unsent native composer draft or parked dispatch will hold the queue. */
   holds: Array<"compose-draft" | "parked-dispatch" | "queued-prompts">;

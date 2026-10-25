@@ -19,6 +19,7 @@
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import { PUBLIC_ACTION_NAMES, PUBLIC_API_LIMITS, type PublicActionName } from "./public-api.js";
 import {
+  PUBLIC_CHANGE_SCOPES,
   PUBLIC_ENVIRONMENT_SETTINGS,
   PUBLIC_PROJECT_SETTINGS,
   type PublicSettingDescriptor,
@@ -48,11 +49,9 @@ export interface PublicActionInputSchema extends PublicJsonSchema {
 }
 
 /**
- * Groups of actions a Control MCP credential can be granted. `tickets` and
- * `mail` have no public actions yet; they are listed so credentials can name
- * them before those actions exist. `host` (updating Orkestrator itself) is for
- * the operator's own clients only and must never be granted to an MCP
- * credential an agent could hold.
+ * Groups of actions a Control MCP credential can be granted. `host` (updating
+ * Orkestrator itself) is for the operator's own clients only and must never
+ * be granted to an MCP credential an agent could hold.
  */
 export const PUBLIC_CAPABILITIES = Object.freeze([
   "discovery",
@@ -149,6 +148,44 @@ const prompt: PublicJsonSchema = {
   maxLength: PUBLIC_API_LIMITS.promptMaxChars,
   description: "Prompt text sent to the agent.",
 };
+const literal: PublicJsonSchema = {
+  type: "boolean",
+  description:
+    "true sends the prompt as plain text: a leading /name never runs a provider command. Omitted: the session's default (a native tab treats a leading /name as a typed command).",
+};
+const enqueue: PublicJsonSchema = {
+  type: "boolean",
+  description:
+    "true queues the prompt behind a busy session in the backend's durable queue instead of refusing it; providers without a queue refuse.",
+};
+const attachments: PublicJsonSchema = {
+  type: "array",
+  maxItems: PUBLIC_API_LIMITS.promptAttachmentsMaxItems,
+  description: `Files sent with the prompt, at most ${PUBLIC_API_LIMITS.promptAttachmentsMaxBytes} decoded bytes in total. The backend writes them into the environment workspace; host paths are never accepted.`,
+  items: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        minLength: 1,
+        maxLength: PUBLIC_API_LIMITS.promptAttachmentNameMaxChars,
+        description: "File name only, without directories.",
+      },
+      type: {
+        type: "string",
+        enum: ["image", "file"],
+        description: "Omitted: image when the bytes are PNG, JPEG, GIF or WebP, otherwise file.",
+      },
+      dataBase64: {
+        type: "string",
+        minLength: 1,
+        description: "The file's bytes, base64-encoded.",
+      },
+    },
+    required: ["name", "dataBase64"],
+    additionalProperties: false,
+  },
+};
 const environmentType: PublicJsonSchema = {
   type: "string",
   enum: ["local", "container"],
@@ -165,6 +202,21 @@ const expectedRevision: PublicJsonSchema = {
   maxLength: 64,
   description: "Apply only if the stored revision still matches.",
 };
+
+const ticketId = id("Ticket ID, from ticket.list.");
+const ticketStatus: PublicJsonSchema = {
+  type: "string",
+  enum: ["backlog", "in-progress", "review", "done"],
+};
+const ticketTitle: PublicJsonSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 500,
+  description: "Ticket title.",
+};
+function ticketText(description: string): PublicJsonSchema {
+  return { type: "string", maxLength: 100_000, description };
+}
 
 const agentSelection: Record<string, PublicJsonSchema> = {
   agent: {
@@ -419,8 +471,35 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
     "project.remove": {
       capability: "projects",
       confirmation: "always",
-      input: schema({ projectId }, ["projectId"]),
-      examples: [{ projectId: "project-1" }],
+      input: schema(
+        {
+          projectId,
+          cascade: {
+            type: "boolean",
+            description:
+              "Delete every environment of the project first, each through the normal deletion lifecycle; never deletes the checkout or the remote. Operator credentials only.",
+          },
+        },
+        ["projectId"],
+      ),
+      examples: [{ projectId: "project-1" }, { projectId: "project-1", cascade: true }],
+    },
+    "project.init": {
+      capability: "projects",
+      confirmation: "never",
+      input: schema(
+        {
+          path: {
+            type: "string",
+            minLength: 1,
+            maxLength: PUBLIC_API_LIMITS.pathMaxChars,
+            description:
+              "Absolute path on the backend host: a new or empty directory for the repository.",
+          },
+        },
+        ["path"],
+      ),
+      examples: [{ path: "/Users/me/code/scratch" }],
     },
     "project.config.get": {
       capability: "settings",
@@ -662,6 +741,8 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
             description: "Tab title.",
           },
           prompt,
+          literal,
+          attachments,
         },
         ["environmentId", "agent", "prompt"],
       ),
@@ -671,13 +752,79 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
           agent: "codex",
           prompt: "Review the open diff.",
         },
+        {
+          environmentId: "env-1",
+          agent: "claude",
+          prompt: "/review is a word here, not a command.",
+          literal: true,
+        },
       ],
     },
     "session.prompt": {
       capability: "sessions.control",
       confirmation: "never",
-      input: schema({ sessionId, prompt, mode: conversationMode }, ["sessionId", "prompt"]),
-      examples: [{ sessionId: EXAMPLE_SESSION_ID, prompt: "Now add a test for it." }],
+      input: schema({ sessionId, prompt, mode: conversationMode, literal, enqueue, attachments }, [
+        "sessionId",
+        "prompt",
+      ]),
+      examples: [
+        { sessionId: EXAMPLE_SESSION_ID, prompt: "Now add a test for it." },
+        { sessionId: EXAMPLE_SESSION_ID, prompt: "After this turn, run the tests.", enqueue: true },
+        {
+          sessionId: EXAMPLE_SESSION_ID,
+          prompt: "What does this screenshot show?",
+          attachments: [{ name: "screen.png", type: "image", dataBase64: "iVBORw0KGgo=" }],
+        },
+      ],
+    },
+    "session.commands": {
+      capability: "sessions.read",
+      confirmation: "never",
+      input: schema(
+        {
+          sessionId,
+          refresh: {
+            type: "boolean",
+            description: "Ask the provider for its command list again first.",
+          },
+        },
+        ["sessionId"],
+      ),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID }],
+    },
+    "session.command": {
+      capability: "sessions.control",
+      confirmation: "never",
+      input: schema(
+        {
+          sessionId,
+          command: {
+            type: "string",
+            minLength: 1,
+            maxLength: 500,
+            description:
+              "Command ID or name from session.commands. An ID is matched exactly; a name must match exactly one command.",
+          },
+          arguments: {
+            type: "string",
+            maxLength: PUBLIC_API_LIMITS.commandArgumentsMaxBytes,
+            description: "Argument text after the command name.",
+          },
+          expectedBindingRevision: {
+            type: "string",
+            minLength: 1,
+            maxLength: 200,
+            description:
+              "bindingRevision from session.commands: refuse if the command changed since it was listed.",
+          },
+          enqueue,
+        },
+        ["sessionId", "command"],
+      ),
+      examples: [
+        { sessionId: EXAMPLE_SESSION_ID, command: "/review", arguments: "the open diff" },
+        { sessionId: EXAMPLE_SESSION_ID, command: "/compact" },
+      ],
     },
     "session.stop": {
       capability: "sessions.control",
@@ -859,10 +1006,200 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       ),
       examples: [{ sessionId: EXAMPLE_SESSION_ID, limit: 3 }],
     },
+    "changes.view": {
+      capability: "discovery",
+      confirmation: "never",
+      input: schema(
+        {
+          environmentId,
+          scope: {
+            type: "string",
+            enum: PUBLIC_CHANGE_SCOPES,
+            description:
+              "environment (default): the environment's baseline to its current workspace.",
+          },
+          pageSize: {
+            type: "integer",
+            minimum: 1,
+            maximum: PUBLIC_API_LIMITS.pageMaxItems,
+            description: `File rows per page (default and maximum ${PUBLIC_API_LIMITS.pageMaxItems}).`,
+          },
+          cursor: {
+            type: "string",
+            minLength: 1,
+            maxLength: 1024,
+            description:
+              "files.nextCursor from the previous page; refused once the changes have moved on.",
+          },
+        },
+        ["environmentId"],
+      ),
+      examples: [{ environmentId: "env-1" }, { environmentId: "env-1", pageSize: 20 }],
+    },
+    "changes.history": {
+      capability: "sessions.read",
+      confirmation: "never",
+      input: schema(
+        {
+          sessionId,
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: PUBLIC_API_LIMITS.pageMaxItems,
+            description: `Turns per page (default ${PUBLIC_API_LIMITS.pageDefaultItems}).`,
+          },
+          cursor: {
+            type: "string",
+            minLength: 1,
+            maxLength: 64,
+            description: "nextCursor from the previous page, to read newer turns.",
+          },
+        },
+        ["sessionId"],
+      ),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID }, { sessionId: EXAMPLE_SESSION_ID, limit: 10 }],
+    },
+    "attention.list": {
+      capability: "sessions.read",
+      confirmation: "never",
+      input: schema({
+        cursor: {
+          type: "string",
+          minLength: 1,
+          maxLength: 64,
+          description:
+            "cursor from the previous call: settled runs and setup changes since then. Omitted: the last hour. Pending interactions are always listed.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: PUBLIC_API_LIMITS.attentionMaxItems,
+          description: `Most items to return (default ${PUBLIC_API_LIMITS.attentionDefaultItems}).`,
+        },
+      }),
+      examples: [{}, { limit: 5 }],
+    },
+    "ticket.list": {
+      capability: "tickets",
+      confirmation: "never",
+      input: schema(
+        {
+          projectId,
+          status: { ...ticketStatus, description: "Only tickets in this column." },
+          limit,
+          cursor,
+        },
+        ["projectId"],
+      ),
+      examples: [{ projectId: "project-1" }, { projectId: "project-1", status: "backlog" }],
+    },
+    "ticket.get": {
+      capability: "tickets",
+      confirmation: "never",
+      input: schema({ projectId, ticketId }, ["projectId", "ticketId"]),
+      examples: [{ projectId: "project-1", ticketId: "ticket-1" }],
+    },
+    "ticket.create": {
+      capability: "tickets",
+      confirmation: "never",
+      input: schema(
+        {
+          projectId,
+          title: ticketTitle,
+          description: ticketText("Ticket description."),
+          acceptanceCriteria: ticketText("Acceptance criteria."),
+          status: { ...ticketStatus, description: "Column (default backlog)." },
+        },
+        ["projectId", "title"],
+      ),
+      examples: [{ projectId: "project-1", title: "Fix the login redirect" }],
+    },
+    "ticket.update": {
+      capability: "tickets",
+      confirmation: "never",
+      input: schema(
+        {
+          projectId,
+          ticketId,
+          title: ticketTitle,
+          description: ticketText("New description."),
+          acceptanceCriteria: ticketText("New acceptance criteria."),
+          status: { ...ticketStatus, description: "Move the ticket to this column." },
+        },
+        ["projectId", "ticketId"],
+      ),
+      examples: [{ projectId: "project-1", ticketId: "ticket-1", status: "in-progress" }],
+    },
+    "ticket.comment": {
+      capability: "tickets",
+      confirmation: "never",
+      input: schema(
+        {
+          projectId,
+          ticketId,
+          text: {
+            type: "string",
+            minLength: 1,
+            maxLength: 20_000,
+            description: "Comment text.",
+          },
+        },
+        ["projectId", "ticketId", "text"],
+      ),
+      examples: [{ projectId: "project-1", ticketId: "ticket-1", text: "Reproduced on main." }],
+    },
+    "mail.mailboxes": {
+      capability: "mail",
+      confirmation: "never",
+      input: schema({
+        q: {
+          type: "string",
+          minLength: 1,
+          maxLength: 200,
+          description: "Filter by environment, tab or project name.",
+        },
+        offset: { type: "integer", minimum: 0, description: "Rows to skip (default 0)." },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: PUBLIC_API_LIMITS.pageMaxItems,
+          description: "Rows per page (default 100).",
+        },
+      }),
+      examples: [{}, { q: "auth" }],
+    },
+    "mail.send": {
+      capability: "mail",
+      confirmation: "never",
+      input: schema(
+        {
+          toEnvironmentId: {
+            ...environmentId,
+            description: "Destination environment ID, from mail.mailboxes.",
+          },
+          toTabId: id("Destination tab ID, from mail.mailboxes."),
+          subject: { type: "string", minLength: 1, maxLength: 200, description: "Subject line." },
+          body: {
+            type: "string",
+            minLength: 1,
+            maxLength: 32 * 1024,
+            description: "Message text, at most 32 KiB of UTF-8.",
+          },
+        },
+        ["toEnvironmentId", "toTabId", "body"],
+      ),
+      examples: [{ toEnvironmentId: "env-1", toTabId: "startup-agent", body: "Rebase on main." }],
+    },
     "run.get": {
       capability: "discovery",
       confirmation: "never",
       input: schema({
+        submittedInput: {
+          type: "object",
+          description:
+            "With action, namespace and requestId: validate the original mutation scope and canonical intent before returning its receipt.",
+          additionalProperties: true,
+        },
         operationId: {
           ...operationId,
           description: "Operation ID. Or pass requestId instead.",
@@ -943,6 +1280,14 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       confirmation: "never",
       input: schema({}),
       examples: [{}],
+    },
+    "host.update.channel": {
+      capability: "host",
+      confirmation: "never",
+      input: schema({ channel: { type: "string", enum: ["stable", "beta", "unstable"] } }, [
+        "channel",
+      ]),
+      examples: [{ channel: "stable" }, { channel: "beta" }, { channel: "unstable" }],
     },
     "host.update.check": {
       capability: "host",

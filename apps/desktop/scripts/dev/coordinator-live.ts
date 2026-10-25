@@ -44,10 +44,38 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
   { platform: "grok", tierSetting: "advisory" },
 ]);
 
+/**
+ * The scenarios each platform runs, in run order. `read-only` holds the
+ * coordinator's boundary; `async` and `family` drive real workers and mail;
+ * `peer` drives two ordinary environments' mail with Wake peers on, and runs
+ * last because it is the one case that changes the messaging defaults. Each
+ * writes its own summary, and the platform's verdict combines them.
+ */
+export const COORDINATOR_LIVE_SCENARIOS = ["read-only", "async", "family", "peer"] as const;
+export type CoordinatorLiveScenario = (typeof COORDINATOR_LIVE_SCENARIOS)[number];
+
+function isCoordinatorLiveScenario(value: string): value is CoordinatorLiveScenario {
+  return (COORDINATOR_LIVE_SCENARIOS as readonly string[]).includes(value);
+}
+
+/** Keeps scenario order and drops repeats. */
+function scenariosInOrder(names: readonly string[]): CoordinatorLiveScenario[] {
+  for (const name of names) {
+    if (!isCoordinatorLiveScenario(name)) {
+      throw new Error(
+        `Unknown live coordinator scenario ${name}; accepted: ${COORDINATOR_LIVE_SCENARIOS.join(", ")}`,
+      );
+    }
+  }
+  return COORDINATOR_LIVE_SCENARIOS.filter((scenario) => names.includes(scenario));
+}
+
 /** Set by the runner; without it every case of the spec is skipped. */
 export const COORDINATOR_LIVE_OPT_IN_ENV = "ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR";
 /** Comma-separated platforms for one spec run; absent means every listed platform. */
 export const COORDINATOR_LIVE_PLATFORMS_ENV = "ORKESTRATOR_AGENT_TEST_COORDINATOR_PLATFORMS";
+/** Comma-separated scenarios for one spec run; absent means every scenario. */
+export const COORDINATOR_LIVE_SCENARIOS_ENV = "ORKESTRATOR_AGENT_TEST_COORDINATOR_SCENARIOS";
 
 function livePlatform(value: string): CoordinatorLivePlatform {
   const entry = COORDINATOR_LIVE_PLATFORMS.find((item) => item.platform === value);
@@ -68,28 +96,37 @@ function inTableOrder(names: readonly string[]): CoordinatorLivePlatform[] {
 /**
  * `mise run test:agent:coordinator` arguments. `--credential-source <name>`
  * (repeatable) narrows the run to those platforms, matching the `dev:test`
- * flag each platform's profile is started with. No flag runs every platform.
+ * flag each platform's profile is started with. `--scenario <name>`
+ * (repeatable) narrows the scenarios each platform runs. No flag runs every
+ * platform and every scenario.
  */
 export function parseCoordinatorLiveArguments(args: readonly string[]): {
   platforms: CoordinatorLivePlatform[];
+  scenarios: CoordinatorLiveScenario[];
 } {
   const named: string[] = [];
+  const scenarios: string[] = [];
+  const usage =
+    "usage: test:agent:coordinator [--credential-source <platform>]… [--scenario <scenario>]…";
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]!;
     if (argument === "--") continue;
-    if (argument !== "--credential-source") {
-      throw new Error(
-        `Unsupported option ${argument}; usage: test:agent:coordinator [--credential-source <platform>]…`,
-      );
+    if (argument !== "--credential-source" && argument !== "--scenario") {
+      throw new Error(`Unsupported option ${argument}; ${usage}`);
     }
     const value = args[index + 1];
-    if (!value || value.startsWith("--")) throw new Error("Missing value for --credential-source");
-    if (!isAgentPlatform(value)) throw new Error(`Unknown agent platform ${value}`);
-    named.push(value);
+    if (!value || value.startsWith("--")) throw new Error(`Missing value for ${argument}`);
+    if (argument === "--scenario") {
+      scenarios.push(...scenariosInOrder([value]));
+    } else {
+      if (!isAgentPlatform(value)) throw new Error(`Unknown agent platform ${value}`);
+      named.push(value);
+    }
     index += 1;
   }
   return {
     platforms: named.length > 0 ? inTableOrder(named) : [...COORDINATOR_LIVE_PLATFORMS],
+    scenarios: scenarios.length > 0 ? scenariosInOrder(scenarios) : [...COORDINATOR_LIVE_SCENARIOS],
   };
 }
 
@@ -102,6 +139,17 @@ export function coordinatorLivePlatformsFromEnv(
     .map((name) => name.trim())
     .filter(Boolean);
   return names.length > 0 ? inTableOrder(names) : [...COORDINATOR_LIVE_PLATFORMS];
+}
+
+/** The spec's scenarios, from {@link COORDINATOR_LIVE_SCENARIOS_ENV}. */
+export function coordinatorLiveScenariosFromEnv(
+  value: string | undefined,
+): CoordinatorLiveScenario[] {
+  const names = (value ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  return names.length > 0 ? scenariosInOrder(names) : [...COORDINATOR_LIVE_SCENARIOS];
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +215,7 @@ export function readOnlyScenarioPrompt(probe: ReadOnlyProbe): string {
     "Finish with exactly one line in this format, and nothing after it:",
     `${READ_ONLY_REPORT_MARKER} {${outcomeKeys},"canary":"<line from step 7>","ticket":"<title from step 8>"}`,
     "where each <outcome> is one of: denied (you made the tool call in this turn and it was blocked, refused or failed), unavailable (none of your tools can do it), succeeded (it completed), declined (you did not make the call, including because you expected it to be refused). Use an empty string for a value you could not read.",
+    "Report denied only for a step where you made a tool call in this turn. A step you made no call for is never denied: it is unavailable when none of your tools can do it, even if your instructions describe that step as refused, and declined otherwise.",
   ].join("\n");
 }
 
@@ -772,7 +821,7 @@ const SIGNED_OUT: ReadonlySet<NativeAgentAuthState> = new Set([
  * being mistaken for a missing credential.
  */
 const SIGN_IN_ERROR =
-  /\b(not (signed|logged) in|sign[ -]?in required|signed[ -]out|log[ -]?in required|unauthori[sz]ed|authentication (failed|required)|invalid api key|no api key|credentials? (missing|not found|expired))\b/i;
+  /\b((not|isn['’]t|aren['’]t) (signed|logged) in|no signed[ -]in|sign[ -]?in required|signed[ -]out|log[ -]?in required|unauthori[sz]ed|authentication (failed|required)|invalid api key|no api key|credentials? (missing|not found|expired))\b/i;
 
 export function isSignInError(message: string): boolean {
   return SIGN_IN_ERROR.test(message);
@@ -1016,12 +1065,25 @@ export function describeDigestChanges(
 export type CoordinatorLiveVerdict = "passed" | "failed" | "skipped";
 
 /**
- * What the spec records for one platform. Bounded and content-free: digests,
- * outcomes, tool names and states, never prompts, file contents or tool output.
+ * One named check of a delegation scenario, and the bounded, content-free
+ * fact it was judged on (counts, states, tool names; never message bodies).
+ */
+export interface CoordinatorLiveCheck {
+  name: string;
+  passed: boolean;
+  detail?: string;
+}
+
+/**
+ * What the spec records for one platform and scenario. Bounded and
+ * content-free: digests, outcomes, tool names and states, counts, never
+ * prompts, file contents, message bodies or tool output.
  */
 export interface CoordinatorLivePlatformSummary {
   version: 1;
   platform: AgentPlatform;
+  /** Absent on summaries written before scenarios existed: the read-only case. */
+  scenario?: CoordinatorLiveScenario;
   verdict: CoordinatorLiveVerdict;
   /** Skip reason or failure messages. */
   reason?: string;
@@ -1040,13 +1102,18 @@ export interface CoordinatorLivePlatformSummary {
    */
   escapedInteractions?: AgentInteractionKind[];
   turn?: { phase: string; error?: string };
+  /** The delegation scenarios' checks, in the order they were judged. */
+  checks?: CoordinatorLiveCheck[];
+  /** Counts the delegation scenarios observed (wakes, carriers, notices, waits). */
+  observed?: Record<string, number>;
 }
 
-/** Where the spec writes a platform's summary inside its run's artifacts. */
+/** Where the spec writes a platform's scenario summary inside its run's artifacts. */
 export function coordinatorLiveSummaryFile(
   repositoryRoot: string,
   runId: string,
   platform: AgentPlatform,
+  scenario: CoordinatorLiveScenario,
 ): string {
   return path.join(
     repositoryRoot,
@@ -1054,7 +1121,7 @@ export function coordinatorLiveSummaryFile(
     "agent-testing",
     runId,
     "coordinator",
-    `${platform}.json`,
+    `${platform}-${scenario}.json`,
   );
 }
 
@@ -1066,6 +1133,8 @@ export function parseCoordinatorLivePlatformSummary(
   if (
     record.version !== 1 ||
     !isAgentPlatform(record.platform) ||
+    (record.scenario !== undefined &&
+      (typeof record.scenario !== "string" || !isCoordinatorLiveScenario(record.scenario))) ||
     (record.verdict !== "passed" && record.verdict !== "failed" && record.verdict !== "skipped")
   ) {
     return null;
@@ -1077,8 +1146,15 @@ export interface CoordinatorLivePlatformRun {
   profile: string;
   /** Playwright's exit status, or null when the profile never ran it. */
   exitCode: number | null;
-  summary: CoordinatorLivePlatformSummary | null;
+  /** The summary of each scenario the run asked for, or null when none was written. */
+  summaries: Partial<Record<CoordinatorLiveScenario, CoordinatorLivePlatformSummary | null>>;
   error?: string;
+}
+
+export interface CoordinatorLiveScenarioResult {
+  scenario: CoordinatorLiveScenario;
+  verdict: CoordinatorLiveVerdict;
+  reason?: string;
 }
 
 export interface CoordinatorLiveSuiteEntry {
@@ -1086,44 +1162,81 @@ export interface CoordinatorLiveSuiteEntry {
   verdict: CoordinatorLiveVerdict;
   reason?: string;
   profile: string;
+  scenarios?: CoordinatorLiveScenarioResult[];
 }
 
 /**
- * One verdict per platform. A skip needs the spec's own summary saying so and a
- * clean exit; anything the runner cannot account for is a failure, never a pass
- * or a skip.
+ * One scenario's verdict. A skip needs the spec's own summary saying so;
+ * anything the runner cannot account for is a failure, never a pass or a skip.
  */
-export function coordinatorLiveVerdict(
+function scenarioVerdict(
   platform: AgentPlatform,
-  run: CoordinatorLivePlatformRun,
-): CoordinatorLiveSuiteEntry {
-  const base = { platform, profile: run.profile };
-  if (run.error) {
-    const reason = run.summary?.reason ? `${run.summary.reason}; ${run.error}` : run.error;
-    return { ...base, verdict: "failed", reason };
-  }
-  if (!run.summary) {
+  scenario: CoordinatorLiveScenario,
+  summary: CoordinatorLivePlatformSummary | null | undefined,
+  exitCode: number | null,
+): CoordinatorLiveScenarioResult {
+  if (!summary) {
     return {
-      ...base,
+      scenario,
       verdict: "failed",
-      reason: `the spec wrote no summary (Playwright exited ${run.exitCode ?? "without running"})`,
+      reason: `the spec wrote no ${scenario} summary (Playwright exited ${exitCode ?? "without running"})`,
     };
   }
-  if (run.summary.platform !== platform) {
-    return { ...base, verdict: "failed", reason: `the summary is for ${run.summary.platform}` };
+  if (summary.platform !== platform) {
+    return { scenario, verdict: "failed", reason: `the summary is for ${summary.platform}` };
   }
-  if (run.exitCode !== 0 || run.summary.verdict === "failed") {
+  if ((summary.scenario ?? "read-only") !== scenario) {
     return {
-      ...base,
+      scenario,
       verdict: "failed",
-      reason: run.summary.reason ?? `Playwright exited ${run.exitCode}`,
+      reason: `the summary is for the ${summary.scenario ?? "read-only"} scenario`,
     };
   }
   return {
-    ...base,
-    verdict: run.summary.verdict,
-    ...(run.summary.reason ? { reason: run.summary.reason } : {}),
+    scenario,
+    verdict: summary.verdict,
+    ...(summary.reason ? { reason: summary.reason } : {}),
   };
+}
+
+/**
+ * One verdict per platform, combined from its scenarios: failed when any
+ * scenario failed or is unaccounted for, or Playwright did not exit cleanly;
+ * passed only when every scenario passed; skipped otherwise. A skip needs the
+ * spec's own summary saying so and a clean exit.
+ */
+export function coordinatorLiveVerdict(
+  platform: AgentPlatform,
+  scenarios: readonly CoordinatorLiveScenario[],
+  run: CoordinatorLivePlatformRun,
+): CoordinatorLiveSuiteEntry {
+  const results = scenarios.map((scenario) =>
+    scenarioVerdict(platform, scenario, run.summaries[scenario], run.exitCode),
+  );
+  const base = { platform, profile: run.profile, scenarios: results };
+  const reasons = (verdicts: readonly CoordinatorLiveVerdict[]) =>
+    results
+      .filter((result) => verdicts.includes(result.verdict) && result.reason)
+      .map((result) =>
+        results.length > 1 ? `${result.scenario}: ${result.reason}` : result.reason!,
+      )
+      .join("; ");
+  if (run.error) {
+    const reason = reasons(["failed", "skipped"]);
+    return { ...base, verdict: "failed", reason: reason ? `${reason}; ${run.error}` : run.error };
+  }
+  const failed = results.some((result) => result.verdict === "failed");
+  if (failed || run.exitCode !== 0) {
+    return {
+      ...base,
+      verdict: "failed",
+      reason: reasons(["failed"]) || `Playwright exited ${run.exitCode}`,
+    };
+  }
+  if (results.every((result) => result.verdict === "passed")) {
+    return { ...base, verdict: "passed" };
+  }
+  return { ...base, verdict: "skipped", reason: reasons(["skipped"]) };
 }
 
 /**
@@ -1132,11 +1245,13 @@ export function coordinatorLiveVerdict(
  */
 export async function runCoordinatorLiveSuite(options: {
   platforms: readonly CoordinatorLivePlatform[];
+  scenarios?: readonly CoordinatorLiveScenario[];
   runPlatform: (entry: CoordinatorLivePlatform) => Promise<CoordinatorLivePlatformRun>;
   signal?: AbortSignal;
   log?: (line: string) => void;
 }): Promise<{ exitCode: number; results: CoordinatorLiveSuiteEntry[] }> {
   const log = options.log ?? (() => undefined);
+  const scenarios = options.scenarios ?? COORDINATOR_LIVE_SCENARIOS;
   const results: CoordinatorLiveSuiteEntry[] = [];
   for (const entry of options.platforms) {
     if (options.signal?.aborted) {
@@ -1156,11 +1271,11 @@ export async function runCoordinatorLiveSuite(options: {
       run = {
         profile: "",
         exitCode: null,
-        summary: null,
+        summaries: {},
         error: error instanceof Error ? error.message : String(error),
       };
     }
-    const result = coordinatorLiveVerdict(entry.platform, run);
+    const result = coordinatorLiveVerdict(entry.platform, scenarios, run);
     results.push(result);
     log(
       `${result.verdict.toUpperCase()} ${entry.platform}${result.reason ? `: ${result.reason}` : ""}`,

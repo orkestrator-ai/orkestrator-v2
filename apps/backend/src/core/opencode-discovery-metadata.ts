@@ -43,7 +43,6 @@ export interface OpenCodeDiscoveryMetadata {
   sessionModelId?: string;
   sessionReasoningId?: string;
   title?: string;
-  shareUrl?: string | null;
 }
 
 export interface OpenCodeDiscoveryCacheEntry extends OpenCodeDiscoveryMetadata {
@@ -114,10 +113,6 @@ export async function readOpenCodeDiscoveryFanOut(
       ? asRecord(asRecord(sessionResult.value)?.data)
       : undefined;
   const title = nonEmptyString(sessionData?.title);
-  const shareUrl =
-    sessionResult?.status === "fulfilled"
-      ? (nonEmptyString(asRecord(sessionData?.share)?.url) ?? null)
-      : undefined;
   const sessionModel = openCodeSessionModelRef(sessionData);
   const catalogResult = results[8];
   const catalog = catalogResult?.status === "fulfilled" ? catalogResult.value : { models: [] };
@@ -128,7 +123,6 @@ export async function readOpenCodeDiscoveryFanOut(
     runtime,
     models: catalog.models,
     ...(title ? { title } : {}),
-    ...(shareUrl === undefined ? {} : { shareUrl }),
     ...(catalog.selectedModelId ? { selectedModelId: catalog.selectedModelId } : {}),
     ...(sessionModel.modelId ? { sessionModelId: sessionModel.modelId } : {}),
     ...(sessionModel.reasoningId ? { sessionReasoningId: sessionModel.reasoningId } : {}),
@@ -187,7 +181,7 @@ export class OpenCodeDiscoveryMetadataCache {
     this.refreshes.clear();
   }
 
-  /** Forget one session, e.g. after an action that rewrote its share state. */
+  /** Forget one session's cached metadata. */
   forget(sessionId: string): void {
     this.entries.delete(sessionId);
     this.refreshes.delete(sessionId);

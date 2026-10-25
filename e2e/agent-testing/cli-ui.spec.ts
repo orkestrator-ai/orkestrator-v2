@@ -265,6 +265,110 @@ test("CLI changes reach an open renderer and survive a reload", async ({ page })
   }
 });
 
+test("a CLI-initialized project and its cascade removal reach an open renderer", async ({
+  page,
+}) => {
+  const status = profileStatus();
+  expect(status.status).toBe("ready");
+  const configDir = mkdtempSync(path.join(os.tmpdir(), "ork-cli-ui-"));
+  // The backend shares this machine, so a temporary directory is a backend path.
+  const parent = mkdtempSync(path.join(os.tmpdir(), "ork-cli-ui-init-"));
+  const suffix = Date.now().toString(36);
+  const projectName = `cli-init-${suffix}`;
+  let projectId: string | undefined;
+  try {
+    // This lifecycle check does not use an agent or Docker. Let credential-free
+    // profiles reach the workspace through the ordinary optional-tool dialogs.
+    for (const name of [
+      "Continue Without Claude",
+      "Continue Without Docker",
+      "Continue Without GitHub CLI",
+    ]) {
+      await page.addLocatorHandler(page.getByRole("button", { name, exact: true }), (button) =>
+        button.click(),
+      );
+    }
+    await login(page);
+    await page.goto(status.browserUrl!);
+    // Establish sidebar hydration before testing live project convergence.
+    await openProject(page, (await fixtureProject(configDir, status)).name, 120_000);
+    const created = cli<{ project: ProjectSummary }>(configDir, [
+      "project",
+      "init",
+      "--path",
+      path.join(parent, projectName),
+      "--request-id",
+      `init-${suffix}`,
+    ]);
+    projectId = created.project.id;
+    // No reload: the new local-only project appears by itself.
+    await openProject(page, created.project.name, 120_000);
+
+    const environmentName = `cli-cascade-${suffix}`;
+    readyEnvironment(configDir, projectId, environmentName);
+    await expect(page.getByText(environmentName, { exact: true }).first()).toBeVisible({
+      timeout: 30_000,
+    });
+
+    const refused = cliRun(configDir, ["project", "remove", projectId]);
+    expect(refused.code).toBe(8);
+    expect(refused.envelope.error?.code).toBe("not-empty");
+    cli(configDir, [
+      "project",
+      "remove",
+      projectId,
+      "--cascade",
+      "--wait",
+      "--timeout",
+      "5m",
+      "--request-id",
+      `cascade-${suffix}`,
+    ]);
+    projectId = undefined;
+    // The open renderer drops both, and a fresh load does not bring them back.
+    await expect(page.getByText(environmentName, { exact: true })).toHaveCount(0, {
+      timeout: 30_000,
+    });
+    await expect(
+      page.getByRole("button", { name: `Collapse project ${created.project.name}` }),
+    ).toHaveCount(0, { timeout: 30_000 });
+    await page.reload();
+    // The sidebar has rendered once the profile's own fixture project shows.
+    await openProject(page, (await fixtureProject(configDir, status)).name, 120_000);
+    await expect(page.getByText(environmentName, { exact: true })).toHaveCount(0);
+    await expect(
+      page.getByRole("button", {
+        name: new RegExp(`(Expand|Collapse) project ${created.project.name}$`),
+      }),
+    ).toHaveCount(0, { timeout: 30_000 });
+  } finally {
+    if (projectId) {
+      spawnSync(
+        "bun",
+        [
+          launcher,
+          "--json",
+          "--profile",
+          profile,
+          "project",
+          "remove",
+          projectId,
+          "--cascade",
+          "--wait",
+          "--timeout",
+          "5m",
+        ],
+        {
+          env: { ...process.env, ORKESTRATOR_CLI_CONFIG_DIR: configDir },
+          timeout: 6 * 60_000,
+        },
+      );
+    }
+    rmSync(parent, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
 test("a CLI-started question rehydrates in an inactive, reloaded renderer and takes the UI's answer", async ({
   page,
 }, testInfo) => {

@@ -89,6 +89,7 @@ import {
   boundTranscript,
   boundedString,
   boundedToolArguments,
+  sessionTitle,
   truncateUtf8,
 } from "./acp-transcript.js";
 
@@ -187,6 +188,9 @@ export function restorePersistedUsage(value: unknown): PersistedUsage | null {
             const turnId = candidate.turnId.trim().slice(0, 256);
             if (!turnId) return [];
             const entry: NonNullable<PersistedUsage["turns"]>[number] = { turnId };
+            // Restored so a turn kept across a restart is still dated by when
+            // it ran, not by when the reattached session republishes it.
+            if (typeof candidate.at === "string" && candidate.at) entry.at = candidate.at;
             for (const key of [
               "costUsd",
               "inputTokens",
@@ -411,6 +415,8 @@ export async function loadPersistedState(): Promise<void> {
       Number(candidate.commandsRevision) >= 0
         ? { commandsRevision: Number(candidate.commandsRevision) }
         : {}),
+      // Re-sanitized rather than trusted from disk, like the command rows.
+      ...(sessionTitle(candidate.title) ? { title: sessionTitle(candidate.title) } : {}),
     };
     if (Array.isArray(candidate.promptJournal)) {
       for (const rawEntry of candidate.promptJournal.slice(-MAX_PROMPT_JOURNAL)) {

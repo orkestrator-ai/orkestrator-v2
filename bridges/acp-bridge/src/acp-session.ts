@@ -4,6 +4,8 @@ import {
 } from "@orkestrator/protocol/agent-mail";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { WEB_ANNOTATION_TOOL_NAMES } from "@orkestrator/protocol/web-annotations";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
+import { isArtifactServerToolCall } from "./acp-artifact-permission.js";
 import {
   callsOwnWorkflowResult,
   workflowResultTurnToolNames,
@@ -87,7 +89,10 @@ import {
   isTranscriptUpdateKind,
   isTrimNotice,
   rememberHistoryMessage,
+  sessionTitle,
+  toolArgumentPath,
   trimPartsTo,
+  truncateUtf8,
   turnRequiresCompleteOutput,
 } from "./acp-transcript.js";
 import {
@@ -97,6 +102,7 @@ import {
   applySubagentFinished,
   applySubagentSpawned,
   applyToolCallUpdate,
+  GROK_USE_TOOL,
   restoreCursorTodosFromMessages,
 } from "./acp-tools.js";
 import {
@@ -119,6 +125,7 @@ import {
 import { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import { applyCommandInventory } from "./acp-commands.js";
 import { applyJournaledCommandChanges, trackCommandChangeWindow } from "./acp-command-changes.js";
+import { recordAcpToolApproval, recordAcpToolEvidence } from "./change-evidence.js";
 
 export async function listResumableSessions(): Promise<JsonObject[]> {
   if (sessionListProbe) return sessionListProbe;
@@ -655,6 +662,7 @@ async function startDeferredSession(state: SessionState): Promise<AcpProcess> {
 const ORKESTRATOR_AUTO_ALLOWED_TOOL_NAMES: readonly string[] = [
   ...AGENT_MAIL_TOOL_NAMES,
   ...WEB_ANNOTATION_TOOL_NAMES,
+  ...ARTIFACT_TOOL_NAMES,
 ];
 
 const ORKESTRATOR_AUTO_ALLOWED_TOOL_IDS = new Set(
@@ -666,9 +674,6 @@ const ORKESTRATOR_AUTO_ALLOWED_TOOL_IDS = new Set(
     `${ORKESTRATOR_MCP_SERVER_NAME}.${name}`,
   ]),
 );
-
-/** Grok's deferred-tool wrapper: the MCP tool it runs is in `tool_name`. */
-const GROK_USE_TOOL = "use_tool";
 
 function wrappedToolName(input: unknown): string | undefined {
   return isObject(input) && typeof input.tool_name === "string" ? input.tool_name : undefined;
@@ -874,6 +879,7 @@ const PERMISSION_KIND_BY_TOOL: Readonly<Record<string, string>> = {
   run_terminal_cmd: "execute",
   run_terminal_command: "execute",
   execute_command: "execute",
+  write: "edit",
   write_file: "edit",
   search_replace: "edit",
   delete_file: "delete",
@@ -959,26 +965,40 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
       typeof toolCallId === "string"
         ? findToolPart(state, toolCallId, turnStartIndex(state))?.part
         : undefined;
-    const recordedTool = recorded
-      ? { name: recorded.toolName, input: recorded.toolArgs }
+    // The call's own input as the agent sent it. A Grok `use_tool` part
+    // renders the wrapped tool's arguments, while a permission request that
+    // names only the wrapper is matched by the wrapper input kept on its
+    // source state.
+    const recordedInput = recorded
+      ? (acpToolSourceStates.get(recorded)?.toolArgs ?? recorded.toolArgs)
       : undefined;
+    const recordedTool = recorded ? { name: recorded.toolName, input: recordedInput } : undefined;
     const toolDenied = explicitlyDeniedPermissionTool(params, policy, recordedTool);
     const attemptAllow = toolDenied
       ? undefined
-      : workflowResultPermissionOption(params, state.workflowResultTurn, recorded?.toolArgs);
+      : workflowResultPermissionOption(params, state.workflowResultTurn, recordedInput);
     if (attemptAllow) {
       child.respond(requestId, { outcome: { outcome: "selected", optionId: attemptAllow } });
       return;
     }
+    const artifactAllow =
+      !toolDenied && isArtifactServerToolCall(params, state.agentMcp, recordedInput)
+        ? allowOptionId(params)
+        : undefined;
+    if (artifactAllow) {
+      child.respond(requestId, { outcome: { outcome: "selected", optionId: artifactAllow } });
+      return;
+    }
     const orkestratorAllow = toolDenied
       ? undefined
-      : orkestratorToolPermissionOption(params, policy?.approvals, recorded?.toolArgs);
+      : orkestratorToolPermissionOption(params, policy?.approvals, recordedInput);
     if (orkestratorAllow) {
       child.respond(requestId, { outcome: { outcome: "selected", optionId: orkestratorAllow } });
       return;
     }
     if (policy?.approvals === "deny") {
       state.policyDeniedRequests = (state.policyDeniedRequests ?? 0) + 1;
+      recordAcpToolApproval(state, toolCallId, "denied");
       child.respond(requestId, policyDenialOutcome(params));
       return;
     }
@@ -1354,6 +1374,103 @@ export function parkGrokInteraction(
   schedulePersist();
 }
 
+/** What a parked permission request asks to run: the card's kind and its detail. */
+export type AcpApprovalDetail =
+  | { kind: "command"; command: string; commandTruncated?: true }
+  | { kind: "file-change"; paths: string[]; pathsOmitted?: number }
+  | { kind: "permission" };
+
+const MAX_APPROVAL_COMMAND_BYTES = 4_096;
+const MAX_APPROVAL_PATHS = 20;
+const FILE_CHANGE_TOOL_KINDS = new Set(["edit", "delete", "move"]);
+
+/** The tool call as the bridge already recorded it, for a request that names only its id. */
+export interface RecordedApprovalTool {
+  name?: string | null;
+  kind?: string;
+  input?: unknown;
+  locationPath?: string;
+}
+
+/**
+ * The approval kind of an ACP permission request, from its ACP `toolCall.kind`
+ * (or the kind recorded for the same call, or one inferred from a known tool
+ * name): `execute` is a command, `edit`, `delete` and `move` a file change,
+ * anything else a generic permission. A command or file change without the
+ * command or paths a person needs to judge it stays a permission, so the card
+ * never claims detail it does not have. Grok's `use_tool` wrapper is read
+ * through to the tool it runs.
+ */
+export function permissionDetail(
+  params: JsonObject,
+  recorded: RecordedApprovalTool = {},
+): AcpApprovalDetail {
+  const call = isObject(params.toolCall) ? params.toolCall : {};
+  const rawInput = call.rawInput === undefined ? recorded.input : call.rawInput;
+  const wrapped =
+    isObject(rawInput) && wrappedToolName(rawInput) ? unwrappedToolInput(rawInput) : undefined;
+  const input = wrapped ?? (isObject(rawInput) ? rawInput : undefined);
+  const declaredKind = [call.kind, recorded.kind].find(
+    (candidate): candidate is string =>
+      typeof candidate === "string" && candidate !== "other" && candidate !== "unknown",
+  );
+  const kind =
+    declaredKind ??
+    permissionToolNames(params, recorded)
+      .map((name) => PERMISSION_KIND_BY_TOOL[name.toLowerCase()])
+      .find((value) => value !== undefined);
+  if (kind === "execute") {
+    const raw = input?.command ?? input?.cmd;
+    const command = Array.isArray(raw)
+      ? raw.filter((part): part is string => typeof part === "string").join(" ")
+      : typeof raw === "string"
+        ? raw
+        : "";
+    return command.trim()
+      ? {
+          kind: "command",
+          command: truncateUtf8(command.trim(), MAX_APPROVAL_COMMAND_BYTES),
+          ...(Buffer.byteLength(command.trim(), "utf8") > MAX_APPROVAL_COMMAND_BYTES
+            ? { commandTruncated: true as const }
+            : {}),
+        }
+      : { kind: "permission" };
+  }
+  if (kind && FILE_CHANGE_TOOL_KINDS.has(kind)) {
+    const located = Array.isArray(call.locations)
+      ? call.locations.flatMap((location) =>
+          isObject(location) ? [boundedString(location.path, MAX_TOOL_PATH_BYTES)] : [],
+        )
+      : [recorded.locationPath];
+    const paths = [...new Set([...located, toolArgumentPath(input)])].filter(
+      (path): path is string => typeof path === "string" && path.trim().length > 0,
+    );
+    return paths.length > 0
+      ? {
+          kind: "file-change",
+          paths: paths.slice(0, MAX_APPROVAL_PATHS),
+          ...(paths.length > MAX_APPROVAL_PATHS
+            ? { pathsOmitted: paths.length - MAX_APPROVAL_PATHS }
+            : {}),
+        }
+      : { kind: "permission" };
+  }
+  return { kind: "permission" };
+}
+
+/** A `use_tool` wrapper's `tool_input`, an object or a JSON string. */
+function unwrappedToolInput(input: JsonObject): JsonObject | undefined {
+  let value: unknown = input.tool_input;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+  return isObject(value) ? value : undefined;
+}
+
 export function parkPermission(
   state: SessionState,
   child: AcpProcess,
@@ -1388,13 +1505,32 @@ export function parkPermission(
   const id = randomBytes(12).toString("hex");
   const requestedAt = Date.now();
   const promptSequence = state.promptSequence;
+  const toolCallId = isObject(params.toolCall) ? params.toolCall.toolCallId : undefined;
   const finish = (optionId?: string) => {
     const approval = state.approvals.get(id);
     if (!approval) return;
     approval.deadline.settle();
     state.approvals.delete(id);
-    if (optionId && approval.options.some((option) => option.optionId === optionId)) {
-      child.respond(requestId, { outcome: { outcome: "selected", optionId } });
+    let selected = optionId
+      ? approval.options.find((option) => option.optionId === optionId)
+      : undefined;
+    // An older backend may ignore truncation metadata. Never let a response
+    // approve an operation whose command or complete file set was not shown.
+    const incomplete =
+      (approval.detail?.kind === "command" && approval.detail.commandTruncated) ||
+      (approval.detail?.kind === "file-change" && (approval.detail.pathsOmitted ?? 0) > 0);
+    if (incomplete && selected?.kind !== "reject_once") {
+      selected = approval.options.find((option) => option.kind === "reject_once");
+    }
+    // An unanswered or cancelled request, and a `reject_*` choice, refuse the
+    // call; any other selected option lets it run.
+    recordAcpToolApproval(
+      state,
+      toolCallId,
+      selected && !selected.kind?.startsWith("reject") ? "allowed" : "denied",
+    );
+    if (selected) {
+      child.respond(requestId, { outcome: { outcome: "selected", optionId: selected.optionId } });
     } else {
       child.respond(requestId, { outcome: { outcome: "cancelled" } });
     }
@@ -1409,14 +1545,26 @@ export function parkPermission(
     }
     finish();
   };
+  const recorded =
+    typeof toolCallId === "string"
+      ? findToolPart(state, toolCallId, turnStartIndex(state))?.part
+      : undefined;
+  const source = recorded ? acpToolSourceStates.get(recorded) : undefined;
   state.approvals.set(id, {
     id,
     title: permissionTitle(params),
+    detail: permissionDetail(params, {
+      name: recorded?.toolName,
+      kind: source?.kind,
+      input: source?.toolArgs ?? recorded?.toolArgs,
+      locationPath: source?.locationPath,
+    }),
     options,
     requestedAt,
     respond: finish,
     deadline: parkedDeadline(requestedAt, () => state.promptDeadlineAt, expire),
   });
+  recordAcpToolApproval(state, toolCallId, "awaiting");
   state.revision += 1;
   schedulePersist();
 }
@@ -1489,6 +1637,22 @@ function recordAcpNotice(state: SessionState, update: JsonObject): void {
   });
 }
 
+/**
+ * Standard ACP `session_info_update`: the agent names, renames or (with
+ * `title: null`) unnames the session. An absent or malformed `title` changes
+ * nothing. `updatedAt` is not kept: it is the agent's own activity clock, and
+ * nothing reads it from this bridge; the session list reads it from the agent.
+ */
+function applySessionInfoUpdate(state: SessionState, update: JsonObject): void {
+  if (update.title !== null && typeof update.title !== "string") return;
+  const title = sessionTitle(update.title);
+  if (title === state.title) return;
+  if (title) state.title = title;
+  else delete state.title;
+  state.revision += 1;
+  schedulePersist();
+}
+
 export function applySessionUpdate(state: SessionState, params: JsonObject): void {
   if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
   const update = params.update;
@@ -1522,6 +1686,13 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     // A reconnect replays notices already recorded, so they are dropped like
     // replayed usage rather than inflating the occurrence count.
     if (state.historyReplay !== "ignore") recordAcpNotice(state, update);
+    return;
+  }
+  if (kind === "session_info_update") {
+    // Session metadata, not transcript, so it is applied during a reconnect's
+    // replay too: a replayed title is still one this agent gave the session,
+    // and the last report wins.
+    applySessionInfoUpdate(state, update);
     return;
   }
   if (kind === "config_option_update") {
@@ -1572,7 +1743,12 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
   if (state.outputTruncated) return;
   if (kind === "tool_call" || kind === "tool_call_update") {
     const part = applyToolCallUpdate(state, update, kind === "tool_call");
-    if (part) trackCommandChangeWindow(state, part, kind === "tool_call");
+    if (part) {
+      // Evidence first: a window this update closes reports its observation
+      // against the call record the evidence adapter has just opened.
+      recordAcpToolEvidence(state, part, update);
+      trackCommandChangeWindow(state, part, kind === "tool_call");
+    }
     return;
   }
   if (kind === "plan" || kind === "plan_update") {
@@ -2041,6 +2217,9 @@ export function finalizeTurnUsage(state: SessionState): void {
     ...(state.usage.turns ?? []).filter((entry) => entry.turnId !== turnId),
     {
       turnId,
+      // `finalizeTurnUsage` commits one completed turn exactly once, so this
+      // is the turn's own time.
+      at: new Date().toISOString(),
       ...(turn.costUsd === undefined ? {} : { costUsd: turn.costUsd }),
       ...(turn.inputTokens === undefined ? {} : { inputTokens: turn.inputTokens }),
       ...(turn.outputTokens === undefined ? {} : { outputTokens: turn.outputTokens }),

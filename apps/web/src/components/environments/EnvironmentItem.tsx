@@ -1,8 +1,10 @@
-import { memo, useState, useId, useMemo, useRef, type ComponentType, type ReactNode } from "react";
+import { memo, useState, useId, useRef, type ComponentType, type ReactNode } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DesignEnvironmentDeletionNotice } from "@/components/design/DesignEnvironmentDeletionNotice";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
+import { EnvironmentStatusMarker } from "./EnvironmentStatusMarker";
+import { EnvironmentTooltipBody } from "./EnvironmentTooltipBody";
 import { UnreadBellIcon } from "./UnreadBellIcon";
 import {
   AlertDialog,
@@ -34,15 +36,11 @@ import {
   Square,
   Container,
   Laptop,
-  Shield,
-  Globe,
   Settings2,
   RotateCw,
   Loader2,
-  Network,
   Copy,
   MoreVertical,
-  House,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
@@ -56,6 +54,18 @@ import { getEnvironmentPortAddress } from "@/lib/environment-address";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
+import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
+import { ChangeCountBadge } from "@/components/changes/ChangeCountBadge";
+import { MachineDot } from "@/components/federation/MachineDot";
+import { useFederation } from "@/components/federation/FederationProvider";
+import {
+  changeLabel,
+  changeReason,
+  formatFileCount,
+  formatLineCount,
+  projectionTitle,
+} from "@/lib/changes/labels";
+import type { ChangeProjection } from "@orkestrator/protocol/change-resources";
 
 /** Below this width the row shows an explicit actions button; a right-click
  *  context menu is not reachable on touch. Matches Tailwind's `md` breakpoint. */
@@ -109,7 +119,7 @@ export function resolveEnvironmentAgentActivity(
  * desktop context menu and the mobile actions dropdown, so an action added
  * here cannot be missing from one surface.
  */
-type EnvironmentMenuItem =
+export type EnvironmentMenuItem =
   | { key: string; separator: true }
   | {
       key: string;
@@ -133,7 +143,7 @@ type MenuItemComponent = ComponentType<{
 type MenuSeparatorComponent = ComponentType<Record<never, never>>;
 
 /** Renders `items` with whichever menu primitive the calling surface uses. */
-function EnvironmentMenuItems({
+export function EnvironmentMenuItems({
   items,
   Item,
   Separator,
@@ -160,6 +170,71 @@ function EnvironmentMenuItems({
         ),
       )}
     </>
+  );
+}
+
+const APPROXIMATE_MARK = /^[~≥≤]/;
+
+/**
+ * The row badge for the environment's `environment-net` projection. Shown
+ * only when the backend says so; a stale or partial projection keeps the
+ * row's muted `~` idiom (unless the counts already carry their own mark) and
+ * explains itself in the tooltip. Another machine's rows use it too.
+ */
+export function EnvironmentChangeBadge({ projection }: { projection: ChangeProjection }) {
+  if (!projection.badge.visible) return null;
+  const marked =
+    APPROXIMATE_MARK.test(formatLineCount("+", projection.counters.additions)) ||
+    APPROXIMATE_MARK.test(formatLineCount("-", projection.counters.deletions));
+  const approximate =
+    (projection.state === "partial" || projection.state === "stale") &&
+    projection.badge.mode === "counts" &&
+    !marked;
+  return (
+    <span
+      data-testid="environment-change-badge"
+      data-measurement-id={projection.measurementId ?? ""}
+      data-change-state={projection.state}
+      title={projectionTitle(projection)}
+      className="ml-1 flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums"
+    >
+      {approximate && (
+        <span className="text-muted-foreground" aria-hidden="true">
+          ~
+        </span>
+      )}
+      <ChangeCountBadge projection={projection} testId="environment-change-counts" />
+    </span>
+  );
+}
+
+/** Hover-card detail for the same projection: files, counts and every backend reason. */
+export function EnvironmentChangeSummary({ projection }: { projection: ChangeProjection }) {
+  if (!projection.badge.visible) return null;
+  const plus = formatLineCount("+", projection.counters.additions);
+  const minus = formatLineCount("-", projection.counters.deletions);
+  return (
+    <div
+      className="border-t border-border/50 pt-1 mt-1"
+      data-testid="environment-change-summary"
+      data-measurement-id={projection.measurementId ?? ""}
+    >
+      <p className="text-xs text-muted-foreground">
+        {changeLabel(projection.labelKey, projection.labelArgs)}:{" "}
+        {formatFileCount(projection.counters.changedFiles)} changed
+      </p>
+      {projection.reasonKeys.map((reason) => (
+        <p key={reason} className="text-xs text-muted-foreground">
+          {changeReason(reason)}
+        </p>
+      ))}
+      {projection.badge.mode === "counts" && (plus || minus) && (
+        <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
+          {plus && <span className="text-success">{plus} added</span>}
+          {minus && <span className="text-failure">{minus} removed</span>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -193,6 +268,10 @@ export const EnvironmentItem = memo(function EnvironmentItem({
 }: EnvironmentItemProps) {
   const dockerAvailable = useDockerAvailability();
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(environment.projectId);
+  // The owning machine's colour fills the row's status marker whenever this
+  // client can show several machines.
+  const { boundMachine: windowMachine, supported: multiMachineClient } = useFederation();
+  const boundMachine = multiMachineClient ? windowMachine : null;
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   // Get Claude activity state for this environment
@@ -207,8 +286,14 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   // Check if this environment is being deleted
   const isEnvironmentDeleting = useEnvironmentStore((s) => s.isDeleting(environment.id));
 
-  // Get diff stats for this environment
-  const diffStats = useEnvironmentDiffStore((s) => s.stats.get(environment.id));
+  // The badge is the backend's `environment-net` projection — the same
+  // measurement the Files → Changes rows page through. Visibility, counts and
+  // their quality are backend decisions. An older backend answers no
+  // projection; only then does the legacy diff-stat mirror drive the badge.
+  const changeProjection = useEnvironmentChangeProjection(environment.id);
+  const diffStats = useEnvironmentDiffStore((s) =>
+    changeProjection ? undefined : s.stats.get(environment.id),
+  );
 
   // Check if this is a build pipeline environment (O(1) Set lookup, stable reference)
   const isBuildEnvironment = useBuildPipelineStore((s) =>
@@ -249,7 +334,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const isProjectHome = environment.projectHome === true;
   const displayName =
     isProjectHome && environment.name === "project-home" ? "Project home" : environment.name;
-  const LocalEnvironmentIcon = isProjectHome ? House : Laptop;
   // Local environments are always considered "running" - they exist or they don't
   const isRunning = isLocalEnvironment || (dockerAvailable && environment.status === "running");
   const isCreating = environment.status === "creating";
@@ -264,7 +348,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   };
 
   // Get network mode with null safety (defaults to "restricted")
-  const networkMode = environment.networkAccessMode ?? "restricted";
 
   const handleCheckboxChange = () => {
     // Toggle individual item selection (Cmd/Ctrl+Click behavior)
@@ -323,10 +406,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       });
   };
 
-  const createdDate = useMemo(
-    () => new Date(environment.createdAt).toLocaleDateString(),
-    [environment.createdAt],
-  );
   const tooltipAnchorRef = useRef<HTMLDivElement>(null);
   const tooltip = useHoverTooltip();
   // Touch devices have no right-click, so the actions live behind an explicit
@@ -465,35 +544,19 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               ) : isMultiSelectMode ? null : isTransitioning ? (
                 // Show spinner when creating/stopping
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
-              ) : // Show House for the project home, Laptop for local environments,
-              // Container for containerized
-              environment.environmentType === "local" ? (
-                <LocalEnvironmentIcon
-                  className={cn(
-                    "h-4 w-4 shrink-0 transition-colors",
-                    !isRunning && "text-muted-foreground",
-                    isRunning &&
-                      displayedActivityState === "waiting" &&
-                      "text-amber-500 animate-pulse",
-                    isRunning &&
-                      displayedActivityState === "working" &&
-                      "text-blue-500 animate-pulse",
-                    isRunning && displayedActivityState === "idle" && "text-success",
-                  )}
-                />
               ) : (
-                <Container
-                  className={cn(
-                    "h-4 w-4 shrink-0 transition-colors",
-                    !isRunning && "text-muted-foreground",
-                    isRunning &&
-                      displayedActivityState === "waiting" &&
-                      "text-amber-500 animate-pulse",
-                    isRunning &&
-                      displayedActivityState === "working" &&
-                      "text-blue-500 animate-pulse",
-                    isRunning && displayedActivityState === "idle" && "text-success",
-                  )}
+                <EnvironmentStatusMarker
+                  local={isLocalEnvironment}
+                  state={isRunning ? displayedActivityState : "inactive"}
+                  machine={
+                    boundMachine
+                      ? {
+                          name: boundMachine.name,
+                          colorToken: boundMachine.colorToken,
+                          status: "This window",
+                        }
+                      : null
+                  }
                 />
               )}
               <span className="flex min-w-0 flex-1 flex-col">
@@ -507,6 +570,15 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   >
                     {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : displayName}
                   </span>
+                  {boundMachine &&
+                    (isEnvironmentDeleting || isMultiSelectMode || isTransitioning) && (
+                      <MachineDot
+                        machineName={boundMachine.name}
+                        colorToken={boundMachine.colorToken}
+                        status="This window"
+                        shape={isLocalEnvironment ? "circle" : "square"}
+                      />
+                    )}
                   {hasUnreadActivity && (
                     <UnreadBellIcon className="h-3 w-3" aria-label="New completed activity" />
                   )}
@@ -531,7 +603,10 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   </span>
                 )}
               </span>
-              {diffStats &&
+              {changeProjection ? (
+                <EnvironmentChangeBadge projection={changeProjection} />
+              ) : (
+                diffStats &&
                 (diffStats.additions > 0 ||
                   diffStats.deletions > 0 ||
                   diffStats.filesChanged > 0) && (
@@ -555,7 +630,8 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                         <span className="text-muted-foreground">{diffStats.filesChanged}F</span>
                       )}
                   </span>
-                )}
+                )
+              )}
             </div>
             {isMobile && (
               <DropdownMenu>
@@ -596,83 +672,52 @@ export const EnvironmentItem = memo(function EnvironmentItem({
           onMouseEnter={tooltip.show}
           onMouseLeave={tooltip.hide}
         >
-          <div className="space-y-1">
-            <p className="font-medium">{displayName}</p>
-            <p className="text-xs text-muted-foreground">Created: {createdDate}</p>
-            <EnvironmentAgentSummary environmentId={environment.id} open={tooltip.open} />
-            {isProjectHome ? (
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                <House className="h-3 w-3" />
-                Project checkout · {environment.branch}
-              </p>
-            ) : isLocalEnvironment ? (
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                <Laptop className="h-3 w-3" />
-                Local worktree
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                {networkMode === "full" ? (
-                  <>
-                    <Globe className="h-3 w-3" />
-                    Full network access
-                  </>
-                ) : (
-                  <>
-                    <Shield className="h-3 w-3" />
-                    Restricted network
-                  </>
-                )}
-              </p>
-            )}
-            {!isLocalEnvironment && environment.entryPort && (
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                <Network className="h-3 w-3" />
-                {environment.hostEntryPort ? (
-                  <>
-                    Port:{" "}
-                    <span
-                      role="button"
-                      className="underline decoration-dotted cursor-pointer hover:text-foreground transition-colors"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        copyAddress();
-                      }}
-                    >
-                      localhost:{environment.hostEntryPort}
-                    </span>{" "}
-                    → {environment.entryPort}/tcp
-                  </>
-                ) : (
-                  <>Port: {environment.entryPort}/tcp (not mapped)</>
-                )}
-              </p>
-            )}
-            {diffStats &&
-              (diffStats.additions > 0 ||
-                diffStats.deletions > 0 ||
-                diffStats.filesChanged > 0) && (
-                <div className="border-t border-border/50 pt-1 mt-1">
-                  <p className="text-xs text-muted-foreground">
-                    {diffStats.filesChanged} file{diffStats.filesChanged !== 1 ? "s" : ""} changed
-                  </p>
-                  {diffStats.truncated && (
+          <EnvironmentTooltipBody
+            name={displayName}
+            machine={
+              boundMachine
+                ? {
+                    name: boundMachine.name,
+                    colorToken: boundMachine.colorToken,
+                    status: "this window",
+                  }
+                : null
+            }
+            details={environment}
+            agentSummary={
+              <EnvironmentAgentSummary environmentId={environment.id} open={tooltip.open} />
+            }
+            changes={
+              changeProjection ? (
+                <EnvironmentChangeSummary projection={changeProjection} />
+              ) : (
+                diffStats &&
+                (diffStats.additions > 0 ||
+                  diffStats.deletions > 0 ||
+                  diffStats.filesChanged > 0) && (
+                  <div className="border-t border-border/50 pt-1 mt-1">
                     <p className="text-xs text-muted-foreground">
-                      Line counts are approximate: too many untracked files to count them all.
+                      {diffStats.filesChanged} file{diffStats.filesChanged !== 1 ? "s" : ""} changed
                     </p>
-                  )}
-                  <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
-                    {diffStats.additions > 0 && (
-                      <span className="text-success">+{diffStats.additions} added</span>
+                    {diffStats.truncated && (
+                      <p className="text-xs text-muted-foreground">
+                        Line counts are approximate: too many untracked files to count them all.
+                      </p>
                     )}
-                    {diffStats.deletions > 0 && (
-                      <span className="text-failure">-{diffStats.deletions} removed</span>
-                    )}
+                    <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
+                      {diffStats.additions > 0 && (
+                        <span className="text-success">+{diffStats.additions} added</span>
+                      )}
+                      {diffStats.deletions > 0 && (
+                        <span className="text-failure">-{diffStats.deletions} removed</span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
-            {environment.prUrl && <p className="text-xs text-blue-400">PR: {environment.prUrl}</p>}
-          </div>
+                )
+              )
+            }
+            onCopyAddress={copyAddress}
+          />
         </HoverTooltipContent>
         <ContextMenuContent>
           <EnvironmentMenuItems

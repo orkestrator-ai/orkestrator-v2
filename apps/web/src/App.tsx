@@ -17,6 +17,7 @@ import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore 
 import { useProjectStore } from "@/stores/projectStore";
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 import { setReadCoordinatorConnection } from "@/lib/read-coordinator";
+import { noteRichContentConnection } from "@/lib/chat/rich-content-reset";
 import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import { hydrateLoopedReviewWorkflowsForEnvironment } from "@/lib/looped-review-persistence";
@@ -28,6 +29,7 @@ import {
 import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistence";
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { Toaster } from "@/components/ui/sonner";
+import { ArtifactLiveHost } from "@/components/chat/rich/ArtifactLiveHost";
 import { ErrorDetailsDialog } from "@/components/errors";
 import { HostPathPickerDialog } from "@/components/host-path/HostPathPickerDialog";
 import { ContainerHostReachabilityNotice } from "@/components/docker/ContainerHostReachabilityNotice";
@@ -89,6 +91,16 @@ import {
   type MacOsPrivacySettingsPane,
 } from "@orkestrator/protocol/macos-permissions";
 import { subscribeToConnections } from "@/lib/connections";
+import { FederationProvider } from "@/components/federation/FederationProvider";
+import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
+import { FederationEffects } from "@/components/federation/FederationEffects";
+import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
+import { ProjectCopyDialog } from "@/components/federation/ProjectCopyDialog";
+import { CommandHandoverDialog } from "@/components/federation/CommandHandoverDialog";
+import { NodeSshPromptDialog } from "@/components/settings/machines/NodeSshPromptDialog";
+import { WorkspaceRealmHost } from "@/components/federation/WorkspaceRealmHost";
+import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
+import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 export const DOCKER_STARTUP_CONFIRMATION_DELAY_MS = 1_500;
@@ -100,6 +112,14 @@ function desktopConnectionScopeSeed(): {
   activeConnectionId: string | null;
   resolved: boolean;
 } {
+  if (window.orkestratorWorkspaceTarget) {
+    return {
+      activeConnectionId:
+        window.orkestratorDesktopIdentity?.connectionId ??
+        `workspace:${window.orkestratorWorkspaceTarget.nodeId}`,
+      resolved: true,
+    };
+  }
   if (!window.orkestrator?.connections) {
     return { activeConnectionId: null, resolved: true };
   }
@@ -228,6 +248,20 @@ const STARTUP_BLOCKER_PANEL_CLASS_NAME = cn(
 );
 
 function App() {
+  // A browser or iOS realm boots on the grant its window keeps for it.
+  if (isWorkspaceRealm() && !window.orkestrator?.isolatedViewState && !readStoredWorkspace()) {
+    return (
+      <div role="alert" className="flex h-screen items-center justify-center p-6 text-center">
+        This workspace connection is unavailable. Open the environment again from the sidebar to
+        reconnect.
+      </div>
+    );
+  }
+  return <ConnectedApp />;
+}
+
+function ConnectedApp() {
+  const [workspaceRealm] = useState(isWorkspaceRealm);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const zoomLevel = useUIStore((state) => state.zoomLevel);
@@ -262,7 +296,9 @@ function App() {
   const [activeConnectionId, setActiveConnectionId] = useState<string | null>(
     () => desktopConnectionScopeSeed().activeConnectionId,
   );
-  const [activeConnectionName, setActiveConnectionName] = useState<string | null>(null);
+  const [activeConnectionName, setActiveConnectionName] = useState<string | null>(
+    () => window.orkestratorWorkspaceTarget?.nodeName ?? null,
+  );
   const [connectionScopeResolved, setConnectionScopeResolved] = useState(
     () => desktopConnectionScopeSeed().resolved,
   );
@@ -369,6 +405,12 @@ function App() {
     let active = true;
     const applyConnectionList = (list: ConnectionList) => {
       if (!active) return;
+      // Connection lists administer the command node; the gateway seed owns
+      // workspace identity while this window is on a leaf.
+      if (window.orkestratorWorkspaceTarget) {
+        setConnectionScopeResolved(true);
+        return;
+      }
       setActiveConnectionId(list.activeConnectionId);
       const activeConnection = list.connections.find(
         (connection) => connection.id === list.activeConnectionId,
@@ -376,6 +418,8 @@ function App() {
       setActiveConnectionName(activeConnection ? connectionDisplayName(activeConnection) : null);
       // Presentation reads are keyed by server identity; a switch resets them.
       setReadCoordinatorConnection(list.activeConnectionId);
+      // So is protected rich transcript content (render caches, artifact reads).
+      noteRichContentConnection(list.activeConnectionId);
       setConnectionScopeResolved(true);
       setLocalBackendUnavailableMessage(
         list.activeConnectionId === LOCAL_CONNECTION_ID && list.localAvailable === false
@@ -388,7 +432,7 @@ function App() {
       .then(applyConnectionList)
       .catch(() => {
         if (!active) return;
-        setActiveConnectionId(LOCAL_CONNECTION_ID);
+        if (!window.orkestratorWorkspaceTarget) setActiveConnectionId(LOCAL_CONNECTION_ID);
         setConnectionScopeResolved(true);
       });
     const unsubscribeConnections = subscribeToConnections(applyConnectionList);
@@ -396,7 +440,7 @@ function App() {
     const unsubscribeUnavailable =
       typeof listenDesktop === "function"
         ? listenDesktop<{ message?: string }>("local-backend-unavailable", (payload) => {
-            if (!active) return;
+            if (!active || window.orkestratorWorkspaceTarget) return;
             setLocalBackendUnavailableMessage(
               payload.message
                 ? `The Local backend stopped: ${payload.message}`
@@ -450,9 +494,10 @@ function App() {
     }
   }, []);
   const isRemoteBackendWindow =
-    connectionScopeResolved &&
-    activeConnectionId !== null &&
-    activeConnectionId !== LOCAL_CONNECTION_ID;
+    Boolean(window.orkestratorWorkspaceTarget) ||
+    (connectionScopeResolved &&
+      activeConnectionId !== null &&
+      activeConnectionId !== LOCAL_CONNECTION_ID);
   const macOsProbeFailed = Boolean(macOsPermissions?.error);
   const macOsHasBlockingMissing =
     macOsPermissions !== null && hasBlockingMacOsPermissions(macOsPermissions);
@@ -479,13 +524,15 @@ function App() {
   useEffect(() => {
     if (!window.orkestrator?.permissions) return;
     if (!connectionScopeResolved) return;
-    if (isRemoteBackendWindow) {
-      setMacOsPermissions({ supported: false, missing: [] });
-      setIsCheckingMacOsPermissions(false);
-      return;
-    }
-    void refreshMacOsPermissions();
+    if (isRemoteBackendWindow) return;
+    let active = true;
+    // Start the external probe after this commit, and fence StrictMode's
+    // discarded mount before it can schedule loading state or a host read.
+    void Promise.resolve().then(() => {
+      if (active) return refreshMacOsPermissions();
+    });
     return () => {
+      active = false;
       macOsRefreshGenerationRef.current += 1;
     };
   }, [refreshMacOsPermissions, connectionScopeResolved, isRemoteBackendWindow]);
@@ -514,6 +561,7 @@ function App() {
         dockerAvailableRef.current = next.available;
         setDockerAvailable(next.available);
         setDockerUnavailableReason(next.reason);
+        if (next.available) setDockerWarningDismissed(false);
       };
 
       // Keep the established non-blocking startup behavior for daemon and
@@ -613,12 +661,6 @@ function App() {
     }, DOCKER_AVAILABILITY_POLL_INTERVAL_MS);
     return () => window.clearInterval(interval);
   }, [macOsPermissionsReady, refreshDockerAvailability]);
-
-  // Dismissing an outage should last for that outage. Once Docker recovers, a
-  // later outage is new information and should warn the user again.
-  useEffect(() => {
-    if (dockerAvailable === true) setDockerWarningDismissed(false);
-  }, [dockerAvailable]);
 
   // Host CLI availability is independent of Docker. Run it in parallel with
   // the daemon probe so local worktree workflows receive the same onboarding.
@@ -794,6 +836,8 @@ function App() {
   // clients fall back to CSS `zoom`, which sizes correctly as long as the shell
   // measures itself against its container instead of viewport units.
   useEffect(() => {
+    // A workspace realm is shown at its window's zoom.
+    if (workspaceRealm) return;
     let active = true;
     const rootStyle = document.documentElement.style;
     const applyCssFallback = () => {
@@ -818,7 +862,7 @@ function App() {
     return () => {
       active = false;
     };
-  }, [zoomLevel]);
+  }, [workspaceRealm, zoomLevel]);
 
   // Surface Claude credential refresh/push failures as a non-blocking toast.
   // The backend de-dupes (only emits after repeated failures or actual push
@@ -872,6 +916,8 @@ function App() {
   // Global keyboard shortcuts for zoom (CMD+/CMD- on Mac, Ctrl+/Ctrl- on Windows/Linux)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // A focused surface that owns the key (the design canvas's Ctrl/⌘+0) claimed it first.
+      if (e.defaultPrevented) return;
       // Handle CMD (Mac) or Ctrl (Windows/Linux) key combinations
       // Require exactly one modifier key (not both)
       const hasModifier = e.metaKey || e.ctrlKey;
@@ -907,10 +953,13 @@ function App() {
   // Derived state for dialog visibility - makes conditions easier to read
   // When Docker is down, let its outage warning lead; host-tool onboarding is
   // shown after the user chooses to continue without containers.
+  // Host tool onboarding (missing CLIs, sign-ins) is about the machine's own
+  // setup; a workspace realm in another machine's window does not nag for it.
   const hostToolWarningsVisible =
-    (dockerCheckStatus === "error" && dockerAvailable === null) ||
-    dockerAvailable === true ||
-    (dockerAvailable === false && dockerWarningDismissed);
+    !workspaceRealm &&
+    ((dockerCheckStatus === "error" && dockerAvailable === null) ||
+      dockerAvailable === true ||
+      (dockerAvailable === false && dockerWarningDismissed));
 
   const isCheckingCliTools = hostToolWarningsVisible && hostToolCheckStatus === "checking";
 
@@ -1121,49 +1170,55 @@ function App() {
   const dockerWarning = dockerUnavailableMessage(dockerUnavailableReason);
 
   return (
-    <TooltipProvider>
-      <TerminalProvider>
-        <DockerAvailabilityProvider available={dockerAvailable === true}>
-          <AppShell>
-            {localBackendUnavailableMessage && (
-              <div
-                role="alert"
-                className="fixed inset-x-4 top-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-red-500/40 bg-red-950/95 px-4 py-3 text-sm text-red-100 shadow-xl"
-              >
-                <span>{localBackendUnavailableMessage}</span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    void restart().catch((error) => {
-                      toast.error("Could not restart Orkestrator", {
-                        description: error instanceof Error ? error.message : String(error),
-                      });
-                    });
-                  }}
+    <FederationProvider>
+      <TooltipProvider>
+        <TerminalProvider>
+          <DockerAvailabilityProvider
+            available={dockerAvailable === true}
+            ready={dockerAvailable !== null || dockerCheckStatus === "error"}
+          >
+            {/* Another node's workspace in a command node's window. */}
+            {workspaceRealm && <WorkspaceRealmHost />}
+            <AppShell>
+              {localBackendUnavailableMessage && (
+                <div
+                  role="alert"
+                  className="fixed inset-x-4 top-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-red-500/40 bg-red-950/95 px-4 py-3 text-sm text-red-100 shadow-xl"
                 >
-                  Restart Orkestrator
-                </Button>
-              </div>
-            )}
-            {selectedEnvironment || selectedProjectId ? (
-              <div className="relative h-full bg-background">
-                {selectedEnvironment && (
-                  <div
-                    {...(isProjectHomeSelected
-                      ? {
-                          id: "project-panel-home",
-                          role: "tabpanel",
-                          "aria-hidden": showProjectBoard,
-                        }
-                      : {})}
-                    className={cn(
-                      "absolute inset-0 z-10 bg-background",
-                      showProjectBoard && "invisible",
-                    )}
+                  <span>{localBackendUnavailableMessage}</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      void restart().catch((error) => {
+                        toast.error("Could not restart Orkestrator", {
+                          description: error instanceof Error ? error.message : String(error),
+                        });
+                      });
+                    }}
                   >
-                    {/*
+                    Restart Orkestrator
+                  </Button>
+                </div>
+              )}
+              {selectedEnvironment || selectedProjectId ? (
+                <div className="relative h-full bg-background">
+                  {selectedEnvironment && (
+                    <div
+                      {...(isProjectHomeSelected
+                        ? {
+                            id: "project-panel-home",
+                            role: "tabpanel",
+                            "aria-hidden": showProjectBoard,
+                          }
+                        : {})}
+                      className={cn(
+                        "absolute inset-0 z-10 bg-background",
+                        showProjectBoard && "invisible",
+                      )}
+                    >
+                      {/*
                     `isContainerRunning` is deliberately not gated on Docker
                     availability. A false value means "this container stopped",
                     and TerminalContainer answers it by disposing every terminal
@@ -1173,463 +1228,481 @@ function App() {
                     handleStartEnvironmentFromOverlay refuses to start a container
                     while Docker is down.
                   */}
-                    <TerminalContainer
-                      environmentId={selectedEnvironment.id}
-                      containerId={selectedEnvironment.containerId ?? null}
-                      isContainerRunning={isEnvironmentContainerAvailable(selectedEnvironment)}
-                      isContainerCreating={selectedEnvironment.status === "creating"}
-                      isActive
-                      className="h-full"
-                      onStartContainer={(initialPrompt) => {
-                        void handleStartEnvironmentFromOverlay(
-                          selectedEnvironment.id,
-                          initialPrompt,
-                        );
-                      }}
-                      onCreateScript={(initialPrompt) => {
-                        void handleCreateScriptFromOverlay(selectedEnvironment.id, initialPrompt);
-                      }}
-                      obscured={showProjectBoard}
-                      onReveal={isProjectHomeSelected ? revealProjectHome : undefined}
-                    />
-                  </div>
-                )}
-                {showProjectBoard && selectedProjectId && (
-                  <div className="absolute inset-0 z-20 bg-background">
-                    <ProjectWorkspace
-                      projectId={selectedProjectId}
-                      homeError={projectHomeActivation.error}
-                      onRetryHome={projectHomeActivation.retry}
-                    />
-                  </div>
-                )}
-              </div>
-            ) : (
-              <ProjectLauncher
-                createEnvironment={createEnvironment}
-                updateEnvironment={updateEnvironment}
-                startEnvironment={startEnvironment}
-              />
-            )}
-          </AppShell>
-        </DockerAvailabilityProvider>
-        <Toaster />
-        <ErrorDetailsDialog />
-        <HostPathPickerDialog />
-        <ContainerHostReachabilityNotice />
-        <BackendVersionReminder />
-        <HostUpdateBanner />
+                      <TerminalContainer
+                        environmentId={selectedEnvironment.id}
+                        containerId={selectedEnvironment.containerId ?? null}
+                        isContainerRunning={isEnvironmentContainerAvailable(selectedEnvironment)}
+                        isContainerCreating={selectedEnvironment.status === "creating"}
+                        isActive
+                        className="h-full"
+                        onStartContainer={(initialPrompt) => {
+                          void handleStartEnvironmentFromOverlay(
+                            selectedEnvironment.id,
+                            initialPrompt,
+                          );
+                        }}
+                        onCreateScript={(initialPrompt) => {
+                          void handleCreateScriptFromOverlay(selectedEnvironment.id, initialPrompt);
+                        }}
+                        obscured={showProjectBoard}
+                        onReveal={isProjectHomeSelected ? revealProjectHome : undefined}
+                      />
+                    </div>
+                  )}
+                  {showProjectBoard && selectedProjectId && (
+                    <div className="absolute inset-0 z-20 bg-background">
+                      <ProjectWorkspace
+                        projectId={selectedProjectId}
+                        homeError={projectHomeActivation.error}
+                        onRetryHome={projectHomeActivation.retry}
+                      />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <ProjectLauncher
+                  createEnvironment={createEnvironment}
+                  updateEnvironment={updateEnvironment}
+                  startEnvironment={startEnvironment}
+                />
+              )}
+            </AppShell>
+          </DockerAvailabilityProvider>
+          <Toaster />
+          {/* The window's single live interactive-artifact host, owned outside every transcript. */}
+          <ArtifactLiveHost />
+          <ErrorDetailsDialog />
+          <HostPathPickerDialog />
+          <ContainerHostReachabilityNotice />
+          {/* The window around a realm shows its own command node's. */}
+          {!workspaceRealm && <BackendVersionReminder />}
+          {!workspaceRealm && <HostUpdateBanner />}
 
-        {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
-          <div
-            role="alert"
-            className="fixed inset-x-4 bottom-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-amber-500/40 bg-amber-950/95 px-4 py-3 text-sm text-amber-100 shadow-xl"
-          >
-            <span>
-              Orkestrator could not check Docker availability. Container actions remain disabled
-              until the check succeeds.
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleRetryDockerCheck}
-              disabled={isCheckingDocker}
+          {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
+            <div
+              role="alert"
+              className="fixed inset-x-4 bottom-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-amber-500/40 bg-amber-950/95 px-4 py-3 text-sm text-amber-100 shadow-xl"
             >
-              {isCheckingDocker ? "Checking..." : "Check Docker Again"}
-            </Button>
-          </div>
-        )}
-
-        {/* macOS privacy access is resolved before any Docker probe starts. */}
-        {showStartupBlocker && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background px-6">
-            {!connectionScopeResolved || macOsPermissions === null ? (
-              <div className="flex flex-col items-center gap-4 text-center">
-                <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                <div>
-                  <h1 className="text-lg font-semibold">
-                    {!connectionScopeResolved
-                      ? "Starting Orkestrator..."
-                      : "Checking macOS file access..."}
-                  </h1>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {!connectionScopeResolved
-                      ? "Resolving the desktop connection before local file-access checks."
-                      : "This prevents permission prompts from interrupting agent work later."}
-                  </p>
-                </div>
-                {connectionScopeResolved && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() => void refreshMacOsPermissions()}
-                  >
-                    Check Again
-                  </Button>
-                )}
-              </div>
-            ) : macOsProbeFailed ? (
-              <div className={STARTUP_BLOCKER_PANEL_CLASS_NAME}>
-                <div className="mb-6">
-                  <p className="mb-2 text-xs font-semibold tracking-widest text-primary uppercase">
-                    Setup needed
-                  </p>
-                  <h1 className="text-2xl font-semibold">Could not check macOS file access</h1>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                    {macOsPermissions.error}
-                  </p>
-                </div>
-                <div className="flex flex-wrap justify-end gap-2">
-                  <Button
-                    type="button"
-                    onClick={() => void refreshMacOsPermissions()}
-                    disabled={isCheckingMacOsPermissions}
-                  >
-                    {isCheckingMacOsPermissions ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Checking...
-                      </>
-                    ) : (
-                      "Check Again"
-                    )}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() => {
-                      void restart().catch((error) => {
-                        toast.error("Could not restart Orkestrator", {
-                          description: error instanceof Error ? error.message : String(error),
-                        });
-                      });
-                    }}
-                  >
-                    Restart App
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className={STARTUP_BLOCKER_PANEL_CLASS_NAME}>
-                <div className="mb-6">
-                  <p className="mb-2 text-xs font-semibold tracking-widest text-primary uppercase">
-                    {macOsHasBlockingMissing ? "Setup required" : "Recommended setup"}
-                  </p>
-                  <h1 className="text-2xl font-semibold">macOS File Access</h1>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                    {macOsHasBlockingMissing
-                      ? "Grant the missing folder, Photos, and Media access before continuing so agents can search your home directory without interrupting their work with macOS privacy prompts."
-                      : "Full Disk Access is strongly recommended for searches that begin at the filesystem root. You can grant it now or continue and add it later."}
-                  </p>
-                </div>
-
-                <ul className="mb-6 space-y-2" aria-label="Missing macOS permissions">
-                  {macOsPermissions.missing.map((permission) => (
-                    <li
-                      key={permission.id}
-                      className="flex items-center justify-between gap-4 rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-3"
-                    >
-                      <span className="font-medium">{permission.label}</span>
-                      <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
-                        {permission.id === "full-disk-access" ? "Recommended" : "Required"}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-
-                <p className="mb-5 text-sm leading-6 text-muted-foreground">
-                  In System Settings, enable Orkestrator in the indicated Privacy &amp; Security
-                  panes, then return here and check again. Full Disk Access is never granted by a
-                  prompt: add Orkestrator manually. macOS may require an app restart before a new
-                  Full Disk Access grant takes effect.
-                </p>
-
-                <div className="flex flex-wrap justify-end gap-2">
-                  {macOsPermissions.missing.some(
-                    (permission) => permission.settingsPane === "files-and-folders",
-                  ) && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => void handleOpenMacOsSettings("files-and-folders")}
-                    >
-                      Open Files &amp; Folders Settings
-                    </Button>
-                  )}
-                  {macOsPermissions.missing.some(
-                    (permission) => permission.settingsPane === "full-disk-access",
-                  ) && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => void handleOpenMacOsSettings("full-disk-access")}
-                    >
-                      Open Full Disk Access Settings
-                    </Button>
-                  )}
-                  {macOsPermissions.missing.some(
-                    (permission) => permission.settingsPane === "photos",
-                  ) && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => void handleOpenMacOsSettings("photos")}
-                    >
-                      Open Photos Settings
-                    </Button>
-                  )}
-                  {macOsPermissions.missing.some(
-                    (permission) => permission.settingsPane === "media-library",
-                  ) && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => void handleOpenMacOsSettings("media-library")}
-                    >
-                      Open Media Library Settings
-                    </Button>
-                  )}
-                  <Button
-                    type="button"
-                    onClick={() => void refreshMacOsPermissions()}
-                    disabled={isCheckingMacOsPermissions}
-                  >
-                    {isCheckingMacOsPermissions ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Checking...
-                      </>
-                    ) : (
-                      "Check Again"
-                    )}
-                  </Button>
-                  {!macOsHasBlockingMissing && macOsHasAdvisoryMissing && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setMacOsAdvisoryDismissed(true)}
-                    >
-                      Continue without Full Disk Access
-                    </Button>
-                  )}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() => {
-                      void restart().catch((error) => {
-                        toast.error("Could not restart Orkestrator", {
-                          description: error instanceof Error ? error.message : String(error),
-                        });
-                      });
-                    }}
-                  >
-                    Restart App
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Loading overlay while the startup Docker probe runs. A remote window is
-            mostly waiting on the server connection, so say that instead. */}
-        {macOsPermissionsReady && dockerCheckStatus === "checking" && dockerAvailable === null && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
-            <div className="flex flex-col items-center gap-4">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">
-                {isRemoteBackendWindow
-                  ? `Connecting to ${activeConnectionName ?? "remote machine"}...`
-                  : "Checking Docker availability..."}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Loading overlay while checking CLI tools (after Docker is confirmed) */}
-        {isCheckingCliTools && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
-            <div className="flex flex-col items-center gap-4">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">Checking CLI tools installation...</p>
-            </div>
-          </div>
-        )}
-
-        {/* Docker not available dialog */}
-        <AlertDialog
-          open={dockerAvailable === false && !dockerWarningDismissed}
-          onOpenChange={(open) => {
-            if (!open) setDockerWarningDismissed(true);
-          }}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{dockerWarning.title}</AlertDialogTitle>
-              <AlertDialogDescription>
-                {dockerWarning.description}
-                <br />
-                <br />
-                Container functionality is currently disabled. You can continue using local worktree
-                environments while Docker is unavailable. Orkestrator will check again automatically
-                every 60 seconds. Docker is available from{" "}
-                <a
-                  href="https://docker.com"
-                  className="text-primary underline"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  docker.com
-                </a>
-                .
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
+              <span>
+                Orkestrator could not check Docker availability. Container actions remain disabled
+                until the check succeeds.
+              </span>
               <Button
+                type="button"
                 variant="outline"
+                size="sm"
                 onClick={handleRetryDockerCheck}
                 disabled={isCheckingDocker}
               >
-                {isCheckingDocker ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Checking...
-                  </>
-                ) : (
-                  "Check Again"
-                )}
+                {isCheckingDocker ? "Checking..." : "Check Docker Again"}
               </Button>
-              <AlertDialogAction onClick={() => setDockerWarningDismissed(true)}>
-                Continue Without Docker
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+            </div>
+          )}
 
-        {/* AI CLI not installed dialog - shows only when no agent platform is available */}
-        <AlertDialog open={noAiCliAvailable}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>AI CLI Required</AlertDialogTitle>
-              <AlertDialogDescription>
-                No compatible AI CLI is installed on your system. Orkestrator AI requires Claude
-                Code, Codex, or OpenCode to create and manage AI-powered development environments.
-                <br />
-                <br />
-                <strong>Option 1: Install Claude Code (recommended)</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
-                  curl -fsSL https://claude.ai/install.sh | bash
-                </pre>
-                Then run <code className="rounded bg-muted px-1 font-mono">claude</code> to complete
-                the setup.
-                <br />
-                <br />
-                <strong>Option 2: Install Codex</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
-                  npm install -g @openai/codex
-                </pre>
-                <br />
-                <br />
-                <strong>Option 3: Install OpenCode</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
-                  curl -fsSL https://opencode.ai/install | bash
-                </pre>
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <Button
-                variant="outline"
-                onClick={handleRetryClaudeCheck}
-                disabled={isCheckingClaude}
-              >
-                {isCheckingClaude ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Checking...
-                  </>
-                ) : (
-                  "Retry"
-                )}
-              </Button>
-              <Button onClick={handleCloseApp}>Close Application</Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+          {/* macOS privacy access is resolved before any Docker probe starts. */}
+          {showStartupBlocker && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background px-6">
+              {!connectionScopeResolved || macOsPermissions === null ? (
+                <div className="flex flex-col items-center gap-4 text-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                  <div>
+                    <h1 className="text-lg font-semibold">
+                      {!connectionScopeResolved
+                        ? "Starting Orkestrator..."
+                        : "Checking macOS file access..."}
+                    </h1>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {!connectionScopeResolved
+                        ? "Resolving the desktop connection before local file-access checks."
+                        : "This prevents permission prompts from interrupting agent work later."}
+                    </p>
+                  </div>
+                  {connectionScopeResolved && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => void refreshMacOsPermissions()}
+                    >
+                      Check Again
+                    </Button>
+                  )}
+                </div>
+              ) : macOsProbeFailed ? (
+                <div className={STARTUP_BLOCKER_PANEL_CLASS_NAME}>
+                  <div className="mb-6">
+                    <p className="mb-2 text-xs font-semibold tracking-widest text-primary uppercase">
+                      Setup needed
+                    </p>
+                    <h1 className="text-2xl font-semibold">Could not check macOS file access</h1>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      {macOsPermissions.error}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button
+                      type="button"
+                      onClick={() => void refreshMacOsPermissions()}
+                      disabled={isCheckingMacOsPermissions}
+                    >
+                      {isCheckingMacOsPermissions ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Checking...
+                        </>
+                      ) : (
+                        "Check Again"
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        void restart().catch((error) => {
+                          toast.error("Could not restart Orkestrator", {
+                            description: error instanceof Error ? error.message : String(error),
+                          });
+                        });
+                      }}
+                    >
+                      Restart App
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className={STARTUP_BLOCKER_PANEL_CLASS_NAME}>
+                  <div className="mb-6">
+                    <p className="mb-2 text-xs font-semibold tracking-widest text-primary uppercase">
+                      {macOsHasBlockingMissing ? "Setup required" : "Recommended setup"}
+                    </p>
+                    <h1 className="text-2xl font-semibold">macOS File Access</h1>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      {macOsHasBlockingMissing
+                        ? "Grant the missing folder, Photos, and Media access before continuing so agents can search your home directory without interrupting their work with macOS privacy prompts."
+                        : "Full Disk Access is strongly recommended for searches that begin at the filesystem root. You can grant it now or continue and add it later."}
+                    </p>
+                  </div>
 
-        {/* Claude Code not logged in notice - non-blocking, dismissible; other platforms keep working */}
-        <AlertDialog open={showClaudeLoginNotice}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Claude Code Is Not Logged In</AlertDialogTitle>
-              <AlertDialogDescription>
-                Claude Code is installed but you haven't logged in yet. Claude sessions will not
-                start until you do; other agent platforms keep working.
-                <br />
-                <br />
-                Run the following command in your terminal:
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">claude</pre>
-                This will open a browser window to authenticate with your Anthropic account.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <Button
-                variant="outline"
-                onClick={handleRetryClaudeCheck}
-                disabled={isCheckingClaude}
-              >
-                {isCheckingClaude ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Checking...
-                  </>
-                ) : (
-                  "Retry"
-                )}
-              </Button>
-              <AlertDialogAction onClick={() => setClaudeLoginNoticeDismissed(true)}>
-                Continue Without Claude
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+                  <ul className="mb-6 space-y-2" aria-label="Missing macOS permissions">
+                    {macOsPermissions.missing.map((permission) => (
+                      <li
+                        key={permission.id}
+                        className="flex items-center justify-between gap-4 rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-3"
+                      >
+                        <span className="font-medium">{permission.label}</span>
+                        <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                          {permission.id === "full-disk-access" ? "Recommended" : "Required"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
 
-        {/* GitHub CLI setup dialog - non-blocking, dismissible; signs in gh */}
-        <AlertDialog open={showGithubWarning}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {githubCliMissing ? "GitHub CLI Not Found" : "Sign In to GitHub"}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {githubCliMissing
-                  ? "The GitHub CLI (gh) is not installed on your system. While not required, it enables features like PR detection and GitHub integration."
-                  : "Orkestrator uses the GitHub CLI for PR detection, reviews and cloning private repositories. While not required, sign in to use them."}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <GitHubCliSetup onStatusChange={setGithubCliSetupStatus} />
-            <AlertDialogFooter>
-              {githubCliSetupStatus?.authenticated ? null : (
-                <label className="mr-auto flex items-center gap-2 text-sm text-muted-foreground">
-                  <Checkbox
-                    checked={githubReminderOptOut}
-                    onCheckedChange={(checked) => setGithubReminderOptOut(checked === true)}
-                  />
-                  Don&apos;t remind me again
-                </label>
+                  <p className="mb-5 text-sm leading-6 text-muted-foreground">
+                    In System Settings, enable Orkestrator in the indicated Privacy &amp; Security
+                    panes, then return here and check again. Full Disk Access is never granted by a
+                    prompt: add Orkestrator manually. macOS may require an app restart before a new
+                    Full Disk Access grant takes effect.
+                  </p>
+
+                  <div className="flex flex-wrap justify-end gap-2">
+                    {macOsPermissions.missing.some(
+                      (permission) => permission.settingsPane === "files-and-folders",
+                    ) && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void handleOpenMacOsSettings("files-and-folders")}
+                      >
+                        Open Files &amp; Folders Settings
+                      </Button>
+                    )}
+                    {macOsPermissions.missing.some(
+                      (permission) => permission.settingsPane === "full-disk-access",
+                    ) && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void handleOpenMacOsSettings("full-disk-access")}
+                      >
+                        Open Full Disk Access Settings
+                      </Button>
+                    )}
+                    {macOsPermissions.missing.some(
+                      (permission) => permission.settingsPane === "photos",
+                    ) && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void handleOpenMacOsSettings("photos")}
+                      >
+                        Open Photos Settings
+                      </Button>
+                    )}
+                    {macOsPermissions.missing.some(
+                      (permission) => permission.settingsPane === "media-library",
+                    ) && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void handleOpenMacOsSettings("media-library")}
+                      >
+                        Open Media Library Settings
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      onClick={() => void refreshMacOsPermissions()}
+                      disabled={isCheckingMacOsPermissions}
+                    >
+                      {isCheckingMacOsPermissions ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Checking...
+                        </>
+                      ) : (
+                        "Check Again"
+                      )}
+                    </Button>
+                    {!macOsHasBlockingMissing && macOsHasAdvisoryMissing && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setMacOsAdvisoryDismissed(true)}
+                      >
+                        Continue without Full Disk Access
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        void restart().catch((error) => {
+                          toast.error("Could not restart Orkestrator", {
+                            description: error instanceof Error ? error.message : String(error),
+                          });
+                        });
+                      }}
+                    >
+                      Restart App
+                    </Button>
+                  </div>
+                </div>
               )}
-              <AlertDialogAction onClick={handleCloseGithubCliSetup}>
-                {githubCliMissing
-                  ? "Continue Without GitHub CLI"
-                  : githubCliSetupStatus?.authenticated
-                    ? "Done"
-                    : "Not Now"}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </TerminalProvider>
-    </TooltipProvider>
+            </div>
+          )}
+
+          {/* Loading overlay while the startup Docker probe runs. A remote window is
+            mostly waiting on the server connection, so say that instead. */}
+          {macOsPermissionsReady &&
+            dockerCheckStatus === "checking" &&
+            dockerAvailable === null && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+                <div className="flex flex-col items-center gap-4">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                  <p className="text-sm text-muted-foreground">
+                    {isRemoteBackendWindow
+                      ? `Connecting to ${activeConnectionName ?? "remote machine"}...`
+                      : "Checking Docker availability..."}
+                  </p>
+                </div>
+              </div>
+            )}
+
+          {/* Loading overlay while checking CLI tools (after Docker is confirmed) */}
+          {isCheckingCliTools && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+              <div className="flex flex-col items-center gap-4">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">Checking CLI tools installation...</p>
+              </div>
+            </div>
+          )}
+
+          {/* Docker not available dialog */}
+          <AlertDialog
+            open={dockerAvailable === false && !dockerWarningDismissed}
+            onOpenChange={(open) => {
+              if (!open) setDockerWarningDismissed(true);
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{dockerWarning.title}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {dockerWarning.description}
+                  <br />
+                  <br />
+                  Container functionality is currently disabled. You can continue using local
+                  worktree environments while Docker is unavailable. Orkestrator will check again
+                  automatically every 60 seconds. Docker is available from{" "}
+                  <a
+                    href="https://docker.com"
+                    className="text-primary underline"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    docker.com
+                  </a>
+                  .
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={handleRetryDockerCheck}
+                  disabled={isCheckingDocker}
+                >
+                  {isCheckingDocker ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Checking...
+                    </>
+                  ) : (
+                    "Check Again"
+                  )}
+                </Button>
+                <AlertDialogAction onClick={() => setDockerWarningDismissed(true)}>
+                  Continue Without Docker
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          {/* AI CLI not installed dialog - shows only when no agent platform is available */}
+          <AlertDialog open={noAiCliAvailable}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>AI CLI Required</AlertDialogTitle>
+                <AlertDialogDescription>
+                  No compatible AI CLI is installed on your system. Orkestrator AI requires Claude
+                  Code, Codex, or OpenCode to create and manage AI-powered development environments.
+                  <br />
+                  <br />
+                  <strong>Option 1: Install Claude Code (recommended)</strong>
+                  <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
+                    curl -fsSL https://claude.ai/install.sh | bash
+                  </pre>
+                  Then run <code className="rounded bg-muted px-1 font-mono">claude</code> to
+                  complete the setup.
+                  <br />
+                  <br />
+                  <strong>Option 2: Install Codex</strong>
+                  <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
+                    npm install -g @openai/codex
+                  </pre>
+                  <br />
+                  <br />
+                  <strong>Option 3: Install OpenCode</strong>
+                  <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
+                    curl -fsSL https://opencode.ai/install | bash
+                  </pre>
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={handleRetryClaudeCheck}
+                  disabled={isCheckingClaude}
+                >
+                  {isCheckingClaude ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Checking...
+                    </>
+                  ) : (
+                    "Retry"
+                  )}
+                </Button>
+                <Button onClick={handleCloseApp}>Close Application</Button>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          {/* Claude Code not logged in notice - non-blocking, dismissible; other platforms keep working */}
+          <AlertDialog open={showClaudeLoginNotice}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Claude Code Is Not Logged In</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Claude Code is installed but you haven't logged in yet. Claude sessions will not
+                  start until you do; other agent platforms keep working.
+                  <br />
+                  <br />
+                  Run the following command in your terminal:
+                  <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">claude</pre>
+                  This will open a browser window to authenticate with your Anthropic account.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={handleRetryClaudeCheck}
+                  disabled={isCheckingClaude}
+                >
+                  {isCheckingClaude ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Checking...
+                    </>
+                  ) : (
+                    "Retry"
+                  )}
+                </Button>
+                <AlertDialogAction onClick={() => setClaudeLoginNoticeDismissed(true)}>
+                  Continue Without Claude
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          {/* GitHub CLI setup dialog - non-blocking, dismissible; signs in gh */}
+          <AlertDialog open={showGithubWarning}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {githubCliMissing ? "GitHub CLI Not Found" : "Sign In to GitHub"}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {githubCliMissing
+                    ? "The GitHub CLI (gh) is not installed on your system. While not required, it enables features like PR detection and GitHub integration."
+                    : "Orkestrator uses the GitHub CLI for PR detection, reviews and cloning private repositories. While not required, sign in to use them."}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <GitHubCliSetup onStatusChange={setGithubCliSetupStatus} />
+              <AlertDialogFooter>
+                {githubCliSetupStatus?.authenticated ? null : (
+                  <label className="mr-auto flex items-center gap-2 text-sm text-muted-foreground">
+                    <Checkbox
+                      checked={githubReminderOptOut}
+                      onCheckedChange={(checked) => setGithubReminderOptOut(checked === true)}
+                    />
+                    Don&apos;t remind me again
+                  </label>
+                )}
+                <AlertDialogAction onClick={handleCloseGithubCliSetup}>
+                  {githubCliMissing
+                    ? "Continue Without GitHub CLI"
+                    : githubCliSetupStatus?.authenticated
+                      ? "Done"
+                      : "Not Now"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </TerminalProvider>
+        {/* Multi-machine prompts and effects belong to the window, not its realms. */}
+        {!workspaceRealm && (
+          <>
+            <SshPromptDialog />
+            <FederationEffects />
+            <NodeActionRequestsDialog />
+            <ProjectCopyDialog />
+            <CommandHandoverDialog />
+            {/* SSH prompts from this node's own tunnels to the nodes it commands. */}
+            <NodeSshPromptDialog />
+          </>
+        )}
+      </TooltipProvider>
+    </FederationProvider>
   );
 }
 

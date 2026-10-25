@@ -69,15 +69,18 @@ export function flowViewportHeight(contentHeight: number): number {
   return clamp(contentHeight, FLOW_GRAPH_MIN_HEIGHT, FLOW_VIEWPORT_MAX_HEIGHT);
 }
 
+/** The shortest the divider drags the viewport to. */
+export const FLOW_VIEWPORT_RESIZE_MIN_HEIGHT = 160;
+
 /**
- * The zoom that shows the whole graph. It never magnifies: the layout already
- * fills the width at 100%, so Fit only ever zooms out.
+ * A height dragged with the divider, kept between
+ * {@link FLOW_VIEWPORT_RESIZE_MIN_HEIGHT} and the graph's height at the
+ * largest zoom (or {@link FLOW_VIEWPORT_MAX_HEIGHT}, if that is taller):
+ * beyond it there is only empty canvas.
  */
-export function fitFlowZoom(content: FlowSize, viewport: FlowSize): number {
-  if (content.width <= 0 || content.height <= 0) return 1;
-  return clampFlowZoom(
-    Math.min(1, viewport.width / content.width, viewport.height / content.height),
-  );
+export function resizedFlowViewportHeight(requested: number, contentHeight: number): number {
+  const max = Math.max(FLOW_VIEWPORT_MAX_HEIGHT, Math.ceil(contentHeight * FLOW_ZOOM_MAX));
+  return Math.round(clamp(requested, FLOW_VIEWPORT_RESIZE_MIN_HEIGHT, max));
 }
 
 /** Where the scaled canvas starts inside the viewport: centred when it is smaller. */
@@ -127,11 +130,6 @@ export function zoomFlowView(
     content,
     viewport,
   );
-}
-
-/** Fit the whole graph; it is then centred, so nothing is scrolled. */
-export function fitFlowView(content: FlowSize, viewport: FlowSize): FlowView {
-  return { zoom: fitFlowZoom(content, viewport), scrollLeft: 0, scrollTop: 0 };
 }
 
 function revealAxis(
@@ -186,6 +184,39 @@ export function revealFlowRect(
 }
 
 /**
+ * The scroll that centres `rect` (canvas coordinates) across the viewport, as
+ * far as the scroll range allows: at either end of the canvas the node sits
+ * off centre rather than the canvas scrolling past its edge. Vertically it
+ * only comes into view, as {@link revealFlowRect} brings it.
+ */
+export function centerFlowRect(
+  view: FlowView,
+  rect: FlowRect,
+  content: FlowSize,
+  viewport: FlowSize,
+  margin = KEEP_IN_VIEW_MARGIN,
+): FlowView {
+  const offset = flowContentOffset(view.zoom, content, viewport);
+  const left = rect.x * view.zoom + offset.x;
+  const top = rect.y * view.zoom + offset.y;
+  return clampScroll(
+    {
+      zoom: view.zoom,
+      scrollLeft: left + (rect.width * view.zoom) / 2 - viewport.width / 2,
+      scrollTop: revealAxis(
+        view.scrollTop,
+        top,
+        top + rect.height * view.zoom,
+        viewport.height,
+        margin,
+      ),
+    },
+    content,
+    viewport,
+  );
+}
+
+/**
  * The zoom factor for one wheel or pinch event. Chromium reports a trackpad
  * pinch as a wheel event with `ctrlKey` and small deltas; a mouse wheel notch
  * is much larger, so each event is capped to keep a notch to one gentle step.
@@ -203,14 +234,4 @@ export function wheelZoomFactor(deltaY: number, deltaMode: number): number {
 export function pinchFlowZoom(startZoom: number, startDistance: number, distance: number): number {
   if (!(startDistance > 0) || !Number.isFinite(distance)) return clampFlowZoom(startZoom);
   return clampFlowZoom((startZoom * distance) / startDistance);
-}
-
-/**
- * The stacked layout's Fit: the whole column within the height the page shows
- * it in. It never magnifies, and a height that could not be measured leaves
- * the column at 100%.
- */
-export function fitStackedFlowZoom(contentHeight: number, availableHeight: number | null): number {
-  if (!(contentHeight > 0) || availableHeight === null || !(availableHeight > 0)) return 1;
-  return clampFlowZoom(Math.min(1, availableHeight / contentHeight));
 }

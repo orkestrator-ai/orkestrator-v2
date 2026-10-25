@@ -16,6 +16,17 @@ import {
 } from "@/contexts";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { createSessionKey } from "@/lib/utils";
+import {
+  nativeAgentCapabilities,
+  type NativeAgentSessionStateUpdate,
+  type NativeAgentTurnPhase,
+  type NativeAgentSessionProjection,
+} from "@orkestrator/protocol/native-agent";
+import type { Environment } from "@/types";
 import { MultiReviewTab, allowsReviewTileActivation } from "./MultiReviewTab";
 import {
   autoPrLaunchNotice,
@@ -26,6 +37,8 @@ import {
   fixStep,
   multiReviewFixSessionTabOptions,
   multiReviewReviewSessionTabOptions,
+  pullRequestDetail,
+  pullRequestStep,
   reviewPackageGenerationStep,
   reviewerColumnLabel,
   reviewerProgressSummary,
@@ -52,6 +65,13 @@ function selectFlowNode(prefix: string): HTMLElement {
 
 function inspector() {
   return within(screen.getByTestId("multi-review-inspector"));
+}
+
+/** Radix activates a tab from mousedown/focus, not from a bare click. */
+function showInspectorTab(name: "Transcript" | "Report"): void {
+  const trigger = inspector().getByRole("tab", { name });
+  fireEvent.mouseDown(trigger);
+  fireEvent.focus(trigger);
 }
 
 const STEP_OPEN_LABEL = {
@@ -277,6 +297,128 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("MultiReviewTab backend snapshot viewer", () => {
+  test("reads the PR stage from the launch, its agent and the environment's pull request", () => {
+    const requestId = "multi-review-pr:multi-1";
+    const launched = { state: "launched" as const, requestId, tabId: "agent-job-pr" };
+    const base = {
+      autoPr: true,
+      launch: undefined,
+      prUrl: null,
+      prState: null,
+      agentPhase: undefined,
+      upstreamComplete: false,
+    };
+    expect(pullRequestStep(base)).toMatchObject({ state: "not-started", pendingLabel: "waiting" });
+    expect(pullRequestStep({ ...base, autoPr: false })).toMatchObject({
+      state: "not-started",
+      pendingLabel: "manual",
+    });
+    expect(pullRequestStep({ ...base, launch: { state: "pending", requestId } })).toMatchObject({
+      state: "running",
+      statusWord: { text: "launching" },
+    });
+    expect(pullRequestStep({ ...base, launch: launched, agentPhase: "running" })).toMatchObject({
+      state: "running",
+      statusWord: { text: "working" },
+    });
+    expect(pullRequestStep({ ...base, launch: launched, agentPhase: "blocked" })).toMatchObject({
+      state: "running",
+      statusWord: { text: "needs input", tone: "warning" },
+    });
+    expect(pullRequestStep({ ...base, launch: launched })).toMatchObject({
+      state: "paused",
+      statusWord: { text: "status unknown" },
+    });
+    expect(
+      pullRequestStep({
+        ...base,
+        launch: launched,
+        agentPhase: "running",
+        prUrl: "https://github.com/o/r/pull/42",
+      }),
+    ).toMatchObject({
+      state: "complete",
+      label: "Pull request open",
+    });
+    // A settled agent without a detected pull request does not claim one.
+    expect(pullRequestStep({ ...base, launch: launched, agentPhase: "idle" })).toMatchObject({
+      state: "complete",
+      statusWord: { text: "no PR yet", tone: "warning" },
+    });
+    expect(pullRequestStep({ ...base, launch: launched, agentPhase: "error" }).state).toBe(
+      "failed",
+    );
+    expect(
+      pullRequestStep({
+        ...base,
+        launch: launched,
+        agentPhase: "idle",
+        prUrl: "https://github.com/o/r/pull/42",
+        prState: "merged",
+      }),
+    ).toMatchObject({ state: "complete", label: "Pull request merged" });
+    // A pull request opened by hand counts once the Fix is done, not before.
+    const manual = { ...base, autoPr: false, prUrl: "https://github.com/o/r/pull/42" };
+    expect(pullRequestStep(manual).state).toBe("not-started");
+    expect(pullRequestStep({ ...manual, upstreamComplete: true }).state).toBe("complete");
+    expect(
+      pullRequestStep({
+        ...base,
+        launch: { state: "skipped", requestId, message: "PR exists" },
+      }),
+    ).toMatchObject({ state: "not-started", pendingLabel: "skipped", label: "PR exists" });
+    expect(
+      pullRequestStep({ ...base, launch: { state: "failed", requestId, message: "tab limit" } }),
+    ).toMatchObject({ state: "failed", error: expect.stringContaining("tab limit") });
+
+    expect(pullRequestDetail("https://github.com/o/r/pull/42", "main")).toBe("#42 · into main");
+    expect(pullRequestDetail(null, "main")).toBe("into main");
+  });
+
+  test("shows the opened pull request as the PR node", () => {
+    const workflow: MultiReviewWorkflow = {
+      ...readyWorkflow(),
+      phase: "interactive",
+      autoPr: true,
+      autoPrLaunch: {
+        state: "launched",
+        requestId: "multi-review-pr:multi-1",
+        tabId: "agent-job-pr",
+      },
+    };
+    const environments = useEnvironmentStore.getState().environments;
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          prUrl: "https://github.com/o/r/pull/42",
+          prState: "open",
+        } as Environment,
+      ],
+    });
+    try {
+      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      render(
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />,
+      );
+      const pr = flowNode("Pull request,");
+      expect(pr.getAttribute("data-flow-state")).toBe("complete");
+      expect(within(pr).getByText(`#42 · into ${workflow.targetBranch}`)).toBeTruthy();
+      fireEvent.click(pr);
+      expect(screen.getByRole("button", { name: "View pull request" })).toBeTruthy();
+      // The PR tab is not in this layout, so there is no session to show.
+      expect(
+        (screen.getByRole("button", { name: "Open PR session" }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+    } finally {
+      useEnvironmentStore.setState({ environments });
+    }
+  });
+
   test("reports each auto-PR launch state after the Fix completes", () => {
     const requestId = "multi-review-pr:multi-1";
     expect(autoPrLaunchNotice({ state: "pending", requestId })).toMatchObject({ tone: "muted" });
@@ -358,6 +500,20 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       const moved = { ...workflow, phase, consolidatedReport: report };
       act(() => useMultiReviewStore.getState().replaceWorkflow(moved));
       expect(screen.queryByTestId("multi-review-auto-pr-notice") === null).toBe(true);
+      const assertCurrentReview = () => {
+        expect(flowNode("Pull request,").dataset.flowState).toBe("not-started");
+        expect(flowNode("Pull request,").getAttribute("aria-selected")).toBe("false");
+        const edge = document.querySelector('[data-flow-edge="into-pr"]')!;
+        expect(edge.getAttribute("data-edge-state")).toBe("pending");
+        const fixRect = document.querySelector<HTMLElement>('[data-flow-node="fix"]')!;
+        expect(edge.getAttribute("d")).toStartWith(
+          `M${parseFloat(fixRect.style.left) + parseFloat(fixRect.style.width)} `,
+        );
+        selectFlowNode("Pull request,");
+        expect(inspector().queryByText(/The review found nothing to fix/) === null).toBe(true);
+        expect(inspector().getByText(/earlier review/)).toBeTruthy();
+      };
+      assertCurrentReview();
       // A fresh mount reads the same persisted snapshot, without the transition event.
       view.unmount();
       render(
@@ -368,6 +524,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         />,
       );
       expect(screen.queryByTestId("multi-review-auto-pr-notice") === null).toBe(true);
+      assertCurrentReview();
     },
   );
 
@@ -655,6 +812,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(within(failed).getByTitle("1 P1 issue")).toBeTruthy();
     expect(within(stopped).getByTitle("1 P1 issue")).toBeTruthy();
     // Partial reports are not findings so far: only completed reviewers count.
+    fireEvent.click(screen.getByTestId("multi-review-findings-badge"));
     expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
       "0 · from 0 reviewers",
     );
@@ -1036,6 +1194,83 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(openReviewer).toHaveBeenCalledTimes(3);
   });
 
+  test("shows a node's report in a tab beside its transcript", () => {
+    const ready = readyWorkflow();
+    ready.reviewers[1] = { ...ready.reviewers[1]!, report: undefined };
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    // The transcript is shown first; the report waits behind its own tab.
+    selectFlowNode("Reviewer 1 ·");
+    expect(inspector().getByRole("tab", { name: "Transcript" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(inspector().getByTestId("multi-review-transcript-tail")).toBeTruthy();
+    expect(screen.queryByRole("article", { name: "Reviewer report" }) === null).toBe(true);
+
+    showInspectorTab("Report");
+    expect(screen.getByRole("article", { name: "Reviewer report" })).toBeTruthy();
+    // The transcript stays mounted, hidden, so it keeps its place.
+    expect(
+      inspector().getByTestId("multi-review-transcript-tail").closest("[data-state=inactive]"),
+    ).toBeTruthy();
+
+    // A reviewer without a report has only its transcript.
+    selectFlowNode("Reviewer 2 ·");
+    expect(inspector().getByTestId("multi-review-transcript-tail")).toBeTruthy();
+    expect(inspector().queryByRole("tablist") === null).toBe(true);
+    expect(inspector().queryByRole("tab", { name: "Transcript" }) === null).toBe(true);
+    expect(inspector().queryByRole("tab", { name: "Report" }) === null).toBe(true);
+
+    // Each node remembers which tab was last shown.
+    selectFlowNode("Reviewer 1 ·");
+    expect(screen.getByRole("article", { name: "Reviewer report" })).toBeTruthy();
+  });
+
+  test("navigates inspector views from the keyboard without changing the pipeline selection", async () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    const node = selectFlowNode("Reviewer 1 ·");
+    const views = within(inspector().getByRole("tablist", { name: "Inspector views" }));
+    act(() => views.getByRole("tab", { name: "Transcript" }).focus());
+    for (const [key, name] of [
+      ["ArrowRight", "Report"],
+      ["ArrowLeft", "Transcript"],
+      ["End", "Report"],
+      ["Home", "Transcript"],
+      ["ArrowLeft", "Report"],
+      ["ArrowRight", "Transcript"],
+    ]) {
+      fireEvent.keyDown(document.activeElement!, { key });
+      await waitFor(() => {
+        const selected = views.getByRole("tab", { name });
+        expect(document.activeElement === selected).toBe(true);
+        expect(selected.getAttribute("aria-selected")).toBe("true");
+      });
+      const pipeline = within(screen.getByRole("tablist", { name: "Multi Review pipeline" }));
+      expect(pipeline.getAllByRole("tab", { selected: true }).length).toBe(1);
+      expect(pipeline.getByRole("tab", { selected: true }) === node).toBe(true);
+      expect(inspector().getByRole("heading", { name: /^Reviewer 1 ·/ }).textContent).toBe(
+        "Reviewer 1 · claude",
+      );
+    }
+  });
+
   test("cannot open a reviewer that never opened a provider session", () => {
     const ready = readyWorkflow();
     delete ready.reviewers[0]!.providerSessionId;
@@ -1193,6 +1428,11 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
+    selectFlowNode("Consolidation");
+    expect(screen.queryByRole("article", { name: "Consolidated Multi Review" }) === null).toBe(
+      true,
+    );
+    showInspectorTab("Report");
     const consolidated = screen.getByRole("article", { name: "Consolidated Multi Review" });
     expect(screen.getByRole("button", { name: "Review Scope" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Issues · 1" })).toBeTruthy();
@@ -3510,8 +3750,9 @@ describe("MultiReviewTab pipeline step cards", () => {
       "Reviewer 2 · codex, Complete, 1 issue found, 1 coverage gap found",
       expect.stringMatching(/^Consolidation, Consolidating findings, \d+/),
       "Fix, Not started",
+      "Pull request, Automatic PR is off. Use the PR button to create one",
     ]);
-    for (const label of ["Prepare", "Review · 2/2", "Consolidate"]) {
+    for (const label of ["Prepare", "Review · 2/2", "Consolidate", "PR"]) {
       expect(within(pipeline).getByText(label)).toBeTruthy();
     }
     // The running step is the one inspected until the user picks another.
@@ -3930,5 +4171,235 @@ describe("MultiReviewTab pipeline step cards", () => {
     ).toBe("30s");
     const { completedAt: _completedAt, ...unfinished } = session;
     expect(fixSessionRuntimeSummary(unfinished, now)).toBeNull();
+  });
+});
+
+describe("PR background state and review clock", () => {
+  function installPrTab() {
+    const saved = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        [
+          "env-1",
+          {
+            root: {
+              kind: "leaf",
+              id: "pr-pane",
+              activeTabId: "overview",
+              tabs: [
+                { id: "overview", type: "multi-review" },
+                {
+                  id: "agent-job-pr",
+                  type: "agent-native",
+                  nativeAgentData: { platform: "codex", environmentId: "env-1" },
+                },
+              ],
+            },
+            activePaneId: "pr-pane",
+            containerId: null,
+          },
+        ],
+      ]),
+    });
+    return () => usePaneLayoutStore.setState({ environments: saved });
+  }
+  function snapshot(phase: NativeAgentTurnPhase): NativeAgentSessionStateUpdate {
+    return {
+      viewVersion: 1,
+      status: "snapshot",
+      token: phase,
+      value: {
+        identity: {
+          backendInstanceId: "test",
+          environmentId: "env-1",
+          platform: "codex",
+          logicalSessionKey: createSessionKey("env-1", "agent-job-pr"),
+          providerSessionId: "pr-session",
+          sourceGeneration: 1,
+        },
+        connection: "connected",
+        turn: { phase },
+        interactions: [],
+        composerControls: [],
+        capabilities: nativeAgentCapabilities("codex"),
+        notices: [],
+      },
+    };
+  }
+  const launchedWorkflow = (): MultiReviewWorkflow => ({
+    ...readyWorkflow(),
+    phase: "completed",
+    autoPr: true,
+    stepRuntimes: {
+      fix: { startedAt: "2026-08-14T00:00:00.000Z", completedAt: "2026-08-14T00:01:00.000Z" },
+    },
+    autoPrLaunch: { state: "launched", requestId: "pr", tabId: "agent-job-pr" },
+  });
+
+  test("refreshes an inactive PR tab through blocked, error and idle and focuses its live session", async () => {
+    const restorePane = installPrTab();
+    const originalTimeout = window.setTimeout;
+    let poll: (() => void) | undefined;
+    window.setTimeout = ((callback: () => void, delay?: number) => {
+      if (delay === 2_000) {
+        poll = callback;
+        return 123456;
+      }
+      return originalTimeout(callback, delay);
+    }) as typeof window.setTimeout;
+    let sessionState: NativeAgentSessionStateUpdate = snapshot("running");
+    const loadPrSessionState = mock(async () => sessionState);
+    const workflow = launchedWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const view = render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+        loadPrSessionState={loadPrSessionState}
+      />,
+    );
+    try {
+      await waitFor(() => expect(flowNode("Pull request,").textContent).toContain("working"));
+      expect(loadPrSessionState).toHaveBeenCalledWith({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: createSessionKey("env-1", "agent-job-pr"),
+        viewVersion: 1,
+      });
+      expect(
+        usePaneLayoutStore.getState().findPaneWithTab("agent-job-pr", "env-1")?.activeTabId,
+      ).toBe("overview");
+      for (const [next, state, label] of [
+        ["blocked", "running", "needs input"],
+        ["error", "failed", "stopped with an error"],
+        ["idle", "complete", "no PR yet"],
+      ] as const) {
+        sessionState = snapshot(next);
+        await act(async () => {
+          poll?.();
+        });
+        expect(flowNode("Pull request,").dataset.flowState).toBe(state);
+        expect(
+          flowNode("Pull request,").getAttribute("aria-label") +
+            flowNode("Pull request,").textContent,
+        ).toContain(label);
+      }
+      sessionState = { viewVersion: 1, status: "missing" };
+      await act(async () => {
+        poll?.();
+      });
+      expect(flowNode("Pull request,").dataset.flowState).toBe("paused");
+      expect(flowNode("Pull request,").textContent).toContain("status unknown");
+      sessionState = { viewVersion: 1, status: "unavailable", retryable: true };
+      await act(async () => {
+        poll?.();
+      });
+      expect(flowNode("Pull request,").dataset.flowState).toBe("paused");
+      selectFlowNode("Pull request,");
+      fireEvent.click(inspector().getByRole("button", { name: "Open PR session" }));
+      expect(
+        usePaneLayoutStore.getState().findPaneWithTab("agent-job-pr", "env-1")?.activeTabId,
+      ).toBe("agent-job-pr");
+    } finally {
+      view.unmount();
+      window.setTimeout = originalTimeout;
+      restorePane();
+    }
+  });
+
+  test("accepts a manual PR for a clean review with automatic PR off and no Fix or launch", () => {
+    const saved = useEnvironmentStore.getState().environments;
+    useEnvironmentStore.setState({
+      environments: [
+        { id: "env-1", prUrl: "https://github.com/o/r/pull/42", prState: "open" } as Environment,
+      ],
+    });
+    const workflow = {
+      ...readyWorkflow(),
+      autoPr: false,
+      fixSession: undefined,
+      consolidatedReport: { ...report, issues: [], testCoverageGaps: [] },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    try {
+      render(
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />,
+      );
+      expect(flowNode("Pull request,").dataset.flowState).toBe("complete");
+      expect(flowNode("Pull request,").getAttribute("aria-selected")).toBe("true");
+      const edge = document.querySelector('[data-flow-edge="into-pr"]')!;
+      expect(edge.getAttribute("data-edge-state")).toBe("complete");
+      const source = document.querySelector<HTMLElement>('[data-flow-node="consolidation"]')!;
+      expect(edge.getAttribute("d")).toStartWith(
+        `M${parseFloat(source.style.left) + parseFloat(source.style.width)} `,
+      );
+      expect(inspector().queryByText(/Use the PR button/) === null).toBe(true);
+    } finally {
+      cleanup();
+      useEnvironmentStore.setState({ environments: saved });
+    }
+  });
+
+  test("keeps review duration stable during PR-only work, completion and remount despite a stale projection", async () => {
+    const restorePane = installPrTab();
+    const savedEnvironments = useEnvironmentStore.getState().environments;
+    const savedProjections = useNativeAgentProjectionStore.getState().projections;
+    const originalNow = Date.now;
+    let now = Date.parse("2026-08-14T00:02:00.000Z");
+    Date.now = () => now;
+    const workflow = launchedWorkflow();
+    const loadPrSessionState = mock(async () => snapshot("running"));
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const props = {
+      data: { environmentId: "env-1", workflowId: workflow.id, isLocal: true },
+      isActive: true,
+      hydrateWorkflow: mock(async () => workflow),
+      loadPrSessionState,
+    };
+    let view = render(<MultiReviewTab {...props} />);
+    try {
+      await waitFor(() => expect(flowNode("Pull request,").dataset.flowState).toBe("running"));
+      expect(screen.getByTestId("multi-review-elapsed").textContent).toContain("1m 0s");
+      now += 10_000;
+      view.rerender(<MultiReviewTab {...props} />);
+      expect(screen.getByTestId("multi-review-elapsed").textContent).toContain("1m 0s");
+      act(() => {
+        useNativeAgentProjectionStore.setState({
+          projections: new Map([
+            [
+              createSessionKey("env-1", "agent-job-pr"),
+              { turn: { phase: "running" } } as NativeAgentSessionProjection,
+            ],
+          ]),
+        });
+        useEnvironmentStore.setState({
+          environments: [
+            {
+              id: "env-1",
+              prUrl: "https://github.com/o/r/pull/42",
+              prState: "open",
+            } as Environment,
+          ],
+        });
+      });
+      expect(flowNode("Pull request,").dataset.flowState).toBe("complete");
+      expect(screen.getByTestId("multi-review-elapsed").textContent).toContain("1m 0s");
+      view.unmount();
+      now += 60_000;
+      view = render(<MultiReviewTab {...props} />);
+      expect(flowNode("Pull request,").dataset.flowState).toBe("complete");
+      expect(screen.getByTestId("multi-review-elapsed").textContent).toContain("1m 0s");
+    } finally {
+      view.unmount();
+      Date.now = originalNow;
+      restorePane();
+      useEnvironmentStore.setState({ environments: savedEnvironments });
+      useNativeAgentProjectionStore.setState({ projections: savedProjections });
+    }
   });
 });

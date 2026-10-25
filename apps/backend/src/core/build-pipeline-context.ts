@@ -57,6 +57,13 @@ import {
   type BuildPipelineObligation,
 } from "./build-pipeline-scheduling.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  beginWorkflowArtifactTurn,
+  settleArtifactDispatchTurn,
+  type ArtifactTurnDispatch,
+  type WorkflowArtifactTurnOptions,
+} from "./workflow-artifact-turns.js";
+import type { ArtifactLedgerSource } from "./workflow-transcript-artifacts.js";
 
 /** The previous supervisor interval; the keyed driver's per-pipeline fallback cadence. */
 export const BUILD_PIPELINE_PROGRESS_MS = 1_500;
@@ -90,6 +97,10 @@ export type BuildPipelineServiceOptions = {
   reviewFanoutConcurrency?: Partial<ReviewFanoutConcurrency>;
   /** Content-free fan-out measurements (tests and benchmarks). */
   efficiency?: MultiReviewEfficiencyObserver;
+  /** Stage turns' transcript-artifact grants (`workflow-artifact-turns.ts`). */
+  artifactDispatch?: ArtifactTurnDispatch;
+  /** Publication ledger; stage transcripts place each publication beside its call. */
+  artifactLedger?: ArtifactLedgerSource;
 } & KeyedWorkflowServiceOptions;
 
 export class BuildPipelineContext {
@@ -215,6 +226,45 @@ export class BuildPipelineContext {
       pipeline.environmentType === "local" ? "host" : "container",
       resultKey,
       provider,
+    );
+  }
+
+  /**
+   * A stage turn's transcript-artifact authority, owned by the stage
+   * session's own key in the pipeline's environment, or undefined when the
+   * provider has no path for it (`workflow-artifact-turns.ts`).
+   */
+  beginArtifactTurn(
+    pipeline: BuildPipeline,
+    session: Pick<PipelineSession, "sessionKey" | "sdkSessionId"> | undefined,
+    requestId: string,
+    agent: string | undefined,
+    agentMcp: AgentToolConnection | undefined,
+  ): WorkflowArtifactTurnOptions | undefined {
+    if (!session || !agent) return undefined;
+    return beginWorkflowArtifactTurn(this.options.artifactDispatch, {
+      environmentId: pipeline.environmentId,
+      projectId: pipeline.projectId,
+      conversationKey: session.sessionKey,
+      turnId: requestId,
+      providerSessionId: session.sdkSessionId,
+      agent,
+      ...(agentMcp ? { agentMcp } : {}),
+    });
+  }
+
+  /** Ends a stage turn's artifact grant (turn settled, or its send refused). */
+  settleArtifactTurn(
+    pipeline: BuildPipeline,
+    session: Pick<PipelineSession, "sessionKey"> | undefined,
+    requestId: string | undefined,
+  ): void {
+    if (!session || !requestId) return;
+    settleArtifactDispatchTurn(
+      this.options.artifactDispatch,
+      pipeline.environmentId,
+      session.sessionKey,
+      requestId,
     );
   }
 

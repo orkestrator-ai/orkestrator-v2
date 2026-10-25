@@ -1,8 +1,10 @@
-import { useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { isEditTool } from "@/lib/tool-names";
+import { useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { RichMessageContext, useRichMessageIdentity } from "@/lib/chat/rich-identity";
 import { imageReadFromToolPart, type ImageRead } from "@/lib/chat/image-read";
 import { isPlanTool } from "@/lib/plan-tool";
 import { isTodoTool } from "@/lib/todo-tool";
+import { agentMailToolCall } from "@/lib/chat/agent-mail-tool-call";
+import { MailToolPart } from "./MailToolPart";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
 import { PlanToolPart } from "./PlanToolPart";
 import { type NativeMessagePart } from "@/lib/chat/native-message-types";
@@ -21,6 +23,7 @@ import {
   ToolPart,
   hasRenderableDiff,
 } from "./NativeMessage.basic-parts";
+import { isFileToolKind, useToolChangeKind } from "./NativeMessage.change-parts";
 import {
   FilePart,
   TextPart,
@@ -28,13 +31,10 @@ import {
   canLoadImagePreview,
 } from "./NativeMessage.file-parts";
 import { CompactionPart, ImagePart, RetryPart, StatusPart } from "./NativeMessage.notice-parts";
-import {
-  AgentGroupPart,
-  SubagentPart,
-  TaskGroupPart,
-  ToolGroupPart,
-} from "./NativeMessage.agent-parts";
+import { AgentGroupPart, SubagentPart, TaskGroupPart } from "./NativeMessage.agent-parts";
 import { NativeAsyncQuestionCard } from "./NativeAsyncQuestionCard";
+import { ArtifactPart } from "./rich/ArtifactPart";
+import { ToolGroupPart } from "./NativeMessage.tool-group";
 
 export function DeferredToolMessagePart({
   part,
@@ -59,23 +59,17 @@ export function DeferredToolMessagePart({
   const expansionScope = useContext(MessageExpansionScopeContext);
   const expansionKey = `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`;
   const [isOpen] = useMessagePartExpansion(expansionKey);
-  const eagerDetails = isPlanTool(part.toolName);
+  // A mail call is drawn as its message, and a read's message is in the result.
+  const eagerDetails = isPlanTool(part.toolName) || agentMailToolCall(part) !== null;
   const detailRef = part.detailRef!;
-  const [details, setDetails] = useState<NativeAgentToolDetails | undefined>(() =>
-    cachedToolDetails(detailRef),
-  );
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const cached = cachedToolDetails(detailRef);
-    if (cached) {
-      setDetails(cached);
-      setLoadError(null);
-      return;
-    }
-    setDetails(undefined);
-    setLoadError(null);
-  }, [detailRef]);
+  const [loaded, setLoaded] = useState<{
+    ref: string;
+    details?: NativeAgentToolDetails;
+    error?: string;
+  } | null>(null);
+  const details =
+    cachedToolDetails(detailRef) ?? (loaded?.ref === detailRef ? loaded.details : undefined);
+  const loadError = loaded?.ref === detailRef ? (loaded.error ?? null) : null;
 
   useEffect(() => {
     if ((!isOpen && !eagerDetails) || details || loadError || !loadToolDetails) return;
@@ -84,11 +78,14 @@ export function DeferredToolMessagePart({
       .then((loaded) => {
         if (cancelled) return;
         cacheToolDetails(loaded);
-        setDetails(loaded);
+        setLoaded({ ref: detailRef, details: loaded });
       })
       .catch((error) => {
         if (cancelled) return;
-        setLoadError(error instanceof Error ? error.message : "Tool details are unavailable");
+        setLoaded({
+          ref: detailRef,
+          error: error instanceof Error ? error.message : "Tool details are unavailable",
+        });
       });
     return () => {
       cancelled = true;
@@ -180,7 +177,39 @@ function ImageReadPreview({
 }
 
 /** Render a single message part based on its type */
-export function MessagePart({
+export function MessagePart(props: Parameters<typeof MessagePartContent>[0]) {
+  const part = props.part;
+  // Rich block view state belongs to the part's source message, not to the
+  // display row: coalescing renames the row that holds a part, which must not
+  // reset a diagram's source view or a table's sort.
+  const displayMessage = useRichMessageIdentity();
+  const sourceMessageId = part.sourceMessageId;
+  const richIdentity = useMemo(
+    () =>
+      sourceMessageId && displayMessage
+        ? { messageId: sourceMessageId, role: displayMessage.role }
+        : null,
+    [displayMessage, sourceMessageId],
+  );
+  // Source parts are the transcript's scroll anchors: a held or restored
+  // place finds its part again by this id, whatever row now contains it.
+  // Prose anchors at block level; file chips flow inline and stay unwrapped.
+  const id =
+    part.type === "tool-invocation"
+      ? (part.toolUseId ?? part.sourcePartId)
+      : part.type === "text"
+        ? part.sourcePartId
+        : undefined;
+  const inner = <MessagePartContent {...props} />;
+  const content = richIdentity ? (
+    <RichMessageContext.Provider value={richIdentity}>{inner}</RichMessageContext.Provider>
+  ) : (
+    inner
+  );
+  return id ? <div data-transcript-part-id={id}>{content}</div> : content;
+}
+
+function MessagePartContent({
   part,
   showTextCopy = true,
   truncateUserPrompt = false,
@@ -215,6 +244,11 @@ export function MessagePart({
 }) {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const expansionScope = useContext(MessageExpansionScopeContext);
+  // The backend's tool kind for this call, once its presentation is known.
+  const changeToolKind = useToolChangeKind(
+    part.type === "tool-invocation" ? part.toolUseId : undefined,
+    part.sourceMessageId,
+  );
   if (part.type === "tool-invocation" && part.detailRef && loadToolDetails) {
     return (
       <DeferredToolMessagePart
@@ -248,20 +282,30 @@ export function MessagePart({
           promptPresentation={promptPresentation}
           renderJsonPayload={renderJsonPayload}
           expansionKey={`${partKey}/json`}
+          richPartId={part.sourcePartId ?? partKey}
+          containerId={containerId}
         />
       );
     case "transcript-reference":
       return <TranscriptReferencePart part={part} />;
     case "async-question":
       return <NativeAsyncQuestionCard part={part} />;
-    case "tool-invocation":
-      // ACP identifies file mutations through diff content as well as tool kind.
-      // Render any part carrying an actual diff with the edit treatment, while a
-      // location-only hint on read/search tools remains a generic tool row.
-      if (!part.toolDenied && (isEditTool(part.toolName) || hasRenderableDiff(part.toolDiff))) {
+    case "tool-invocation": {
+      const mailCall = part.toolDenied ? null : agentMailToolCall(part);
+      if (mailCall) return <MailToolPart call={mailCall} expansionKey={toolExpansionKey} />;
+      // File tools render as an edit card when the backend's presentation says
+      // so, or — before or without a presentation — when the part structurally
+      // carries a diff payload. Provider tool names are never classified here;
+      // a location-only hint on a read/search tool stays a generic tool row.
+      if (
+        !part.toolDenied &&
+        (isFileToolKind(changeToolKind) || hasRenderableDiff(part.toolDiff))
+      ) {
         return (
           <EditToolPart
             expansionKey={toolExpansionKey}
+            callId={part.toolUseId}
+            occurrenceId={part.sourceMessageId}
             toolName={part.toolName}
             toolState={part.toolState}
             toolTitle={part.toolTitle}
@@ -308,9 +352,12 @@ export function MessagePart({
       const toolCard = (
         <ToolPart
           expansionKey={toolExpansionKey}
+          callId={part.toolUseId}
+          occurrenceId={part.sourceMessageId}
           toolName={part.toolName}
           toolState={part.toolState}
           toolTitle={part.toolTitle}
+          mcpServerName={part.mcpServerName}
           toolArgs={part.toolArgs}
           toolOutput={part.toolOutput}
           toolError={part.toolError}
@@ -330,6 +377,7 @@ export function MessagePart({
           {toolCard}
         </ImageReadPreview>
       );
+    }
     case "tool-result":
       // Tool results are typically shown inline with tool invocations
       return null;
@@ -342,6 +390,7 @@ export function MessagePart({
           filename={part.filename}
           containerId={containerId}
           eagerPreview={eagerImagePreview}
+          hideThumbnailCaption={eagerImagePreview}
         />
       );
     case "compaction":
@@ -360,6 +409,10 @@ export function MessagePart({
       return <AgentGroupPart part={part} containerId={containerId} partKey={partKey} />;
     case "tool-group":
       return <ToolGroupPart part={part} containerId={containerId} partKey={partKey} />;
+    case "artifact":
+      // A published artifact reference; the card resolves it through the
+      // authenticated conversation scope and never trusts its own text.
+      return <ArtifactPart part={part} />;
     case "task-group":
       return (
         <TaskGroupPart

@@ -17,6 +17,11 @@ import {
   recordInterruptedStructuredOutputIfCurrent,
 } from "./session-manager-prompt-turn-lifecycle.js";
 import { reconcileIdleClaudeRuntime } from "./session-manager-runtime-idle.js";
+import {
+  claudeProcessKilledMessage,
+  killedClaudeProcessSignal,
+  syncTurnInFlightMark,
+} from "./session-manager-turn-interruption.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 
@@ -64,13 +69,13 @@ export function settleTurnEnd(turn: TurnState): PromptFollowUp | undefined {
   // actually sees it and generates a revised plan.
   // Guard: only re-prompt once (skip if this call is itself a re-prompt).
   if (
-    stream.pendingPlanRejectionFeedback &&
+    turn.pendingPlanRejectionFeedback &&
     !abortController.signal.aborted &&
     !options?._isReprompt &&
     !turn.superseded
   ) {
-    const feedbackPrompt = stream.pendingPlanRejectionFeedback;
-    stream.pendingPlanRejectionFeedback = null;
+    const feedbackPrompt = turn.pendingPlanRejectionFeedback;
+    turn.pendingPlanRejectionFeedback = null;
 
     debugLog("[session-manager] Re-prompting with plan rejection feedback", { sessionId });
 
@@ -99,19 +104,19 @@ export function settleTurnEnd(turn: TurnState): PromptFollowUp | undefined {
   }
 
   // Defensive fallback continuation: see the comment block on
-  // `stream.planApprovedThisTurn` above. If the SDK failed the ExitPlanMode tool
+  // `TurnState.planApprovedThisTurn`. If the SDK failed the ExitPlanMode tool
   // despite an approval (we already overrode the tool state to success in
   // the message loop), re-prompt Claude WITHOUT plan mode so it actually
   // implements the approved plan instead of ending the turn.
   // Guard: skip if this call is itself a re-prompt to avoid recursion.
   if (
-    stream.pendingPlanApprovalContinuation &&
+    turn.pendingPlanApprovalContinuation &&
     !abortController.signal.aborted &&
     !options?._isReprompt &&
     !turn.superseded
   ) {
-    const continuationPrompt = stream.pendingPlanApprovalContinuation;
-    stream.pendingPlanApprovalContinuation = null;
+    const continuationPrompt = turn.pendingPlanApprovalContinuation;
+    turn.pendingPlanApprovalContinuation = null;
 
     debugLog("[session-manager] Re-prompting after approved-plan ExitPlanMode failure", {
       sessionId,
@@ -125,7 +130,7 @@ export function settleTurnEnd(turn: TurnState): PromptFollowUp | undefined {
     // Attachments are intentionally not forwarded: the SDK has already seen
     // them in the conversation history, and re-sending them on a synthetic
     // system-role continuation could double-count their content. Matches
-    // the stream.pendingPlanRejectionFeedback re-prompt path above.
+    // the turn.pendingPlanRejectionFeedback re-prompt path above.
     const repromptOptions: PromptOptions = {
       model: options?.model,
       effort: options?.effort,
@@ -216,6 +221,7 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
     session.turnStartedAt = turn.beforeStartup.turnStartedAt;
     session.abortController = turn.beforeStartup.abortController;
     session.error = turn.beforeStartup.error;
+    session.interruption = turn.beforeStartup.interruption;
     session.inProgressUsage = turn.beforeStartup.inProgressUsage;
     session.inProgressUsageGeneration = turn.beforeStartup.inProgressUsageGeneration;
     const index = session.messages.indexOf(userMessage);
@@ -234,20 +240,26 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
   });
 
   if (session.abortController === abortController) {
+    // A CLI killed under the turn cut it short; the rollout holds it, so a
+    // workflow continues it like a turn a bridge restart cut short.
+    const killedBy = killedClaudeProcessSignal(error);
+    const failure = killedBy
+      ? claudeProcessKilledMessage(killedBy)
+      : error instanceof Error
+        ? error.message
+        : String(error);
     if (options?.outputSchema && structuredRequestId && !session.structuredOutput) {
       recordStructuredOutput(
         session,
-        structuredOutputFailure(
-          "claude",
-          "provider_error",
-          error instanceof Error ? error.message : String(error),
-          { requestId: structuredRequestId },
-        ),
+        structuredOutputFailure("claude", "provider_error", failure, {
+          requestId: structuredRequestId,
+        }),
       );
     }
     session.status = "error";
     session.turnStartedAt = undefined;
-    session.error = error instanceof Error ? error.message : String(error);
+    session.error = failure;
+    session.interruption = killedBy ? "restart" : undefined;
     session.abortController = undefined;
     session.completionBlockedByBackgroundTasks = false;
     cleanupPendingInteractions(sessionId);
@@ -296,6 +308,11 @@ export function finalizeTurn(turn: TurnState): void {
     diagnostics,
   } = turn;
   turn.queryEnded = true;
+  // A lost transport may never produce a result to consume the stop request.
+  // An old turn finishing must leave a newer turn's request intact.
+  if (session.interruptRequestedGeneration === turnGeneration) {
+    session.interruptRequestedGeneration = undefined;
+  }
   diagnostics?.close();
   flushDebugLogs();
   abortController.signal.removeEventListener("abort", turn.observeAbort);
@@ -366,4 +383,5 @@ export function finalizeTurn(turn: TurnState): void {
   // the foreground is actually free, including when turns settle together.
   reconcileIdleClaudeRuntime(session);
   stream.clearFlushTimer();
+  if (sessions.get(sessionId) === session) syncTurnInFlightMark(session);
 }

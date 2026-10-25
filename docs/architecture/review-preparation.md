@@ -188,7 +188,7 @@ independently of panel size, up to the 32-reviewer maximum:
 | Concurrent observations | 8 (`DEFAULT_REVIEW_OBSERVATION_CONCURRENCY`) | `review-fanout-scheduler.ts` |
 | Concurrent work per provider | 4 (`DEFAULT_REVIEW_PROVIDER_CONCURRENCY`) | `review-fanout-scheduler.ts` |
 | Any configured cap | Clamped to 16 (`MAX_REVIEW_FANOUT_CONCURRENCY`) | `review-fanout-scheduler.ts` |
-| Evidence verifications | 2 per evidence generation: before admission and before consolidation | `review-evidence-permits.ts` |
+| Evidence verifications | 2 per evidence generation: before admission and before consolidation. Each hashes the package and every validation artifact it references (at most 32 MiB per stream); `evidence.verify` reports both as `bytes` and the artifact count as `count` | `review-evidence-permits.ts`, `review-validation-artifacts.ts` |
 | Provider transcript reads | At most one progress read per live reviewer per 60 s; none on other passes | `multi-review-progress.ts`, `review-fanout-transcript.ts` |
 | Observational writes | At most one workflow write per pass, for any panel size | `ReviewFanoutRunner.stageObservation` |
 | Controller fence checks | One committed row read each, with no lease, whatever the panel size or retained review history; four per running reviewer per pass, plus one (and one per pending request) on providers that report interactions | `StorageReviews.validateMultiReviewController` |
@@ -252,7 +252,30 @@ MULTI_REVIEW_BENCH_OUT=/tmp/multi-review-bench.json \
 ```
 
 Add `MULTI_REVIEW_BENCH_REPORT_ONLY=1` to measure an older build without the
-assertions. The remaining budgets are asserted by focused tests:
+assertions.
+
+That benchmark fakes verification, so it counts verifications but not what
+one costs. The opt-in
+[`multi-review-large-evidence.bench.test.ts`](../../apps/backend/src/core/multi-review-large-evidence.bench.test.ts)
+writes validation artifacts totalling `ORKESTRATOR_MULTI_REVIEW_LARGE_EVIDENCE_MIB`
+MiB into a temporary local worktree (32 MiB per artifact), verifies them twice
+with real streamed SHA-256 as one evidence generation does, checks that one
+changed byte fails, and bounds peak RSS growth. It is skipped without the
+variable:
+
+```bash
+ORKESTRATOR_MULTI_REVIEW_LARGE_EVIDENCE_MIB=512 \
+MULTI_REVIEW_LARGE_EVIDENCE_OUT=/tmp/large-evidence.json \
+  mise exec -- bun test --cwd apps/backend \
+  ./src/core/multi-review-large-evidence.bench.test.ts
+```
+
+On an Apple M5 Pro (internal SSD, Bun 1.4.4, 2026-10-25) 512 MiB in 16
+artifacts verified in about 0.25 s per pass (about 2 GB/s), 0.5 s per
+generation, with peak RSS growing by under 20 MiB; Bun 1.4.2 runs of 512 MiB
+and 1 GiB took 0.36 to 1.2 s per pass. A GiB of evidence costs about two
+seconds per generation on local disk, against reviews that take minutes. Container artifacts are hashed inside the container
+(`stat`, then `sha256sum`) and were not measured. The remaining budgets are asserted by focused tests:
 `review-fanout-efficiency.test.ts` (transcript reads, writes per pass,
 admission, isolation), `multi-review-service-efficiency.test.ts` and
 `multi-review-reviewer-transcript.test.ts` (reviewer-tab snapshots),
@@ -261,4 +284,74 @@ admission, isolation), `multi-review-service-efficiency.test.ts` and
 `structured-review/budgets.test.ts` (reports) and
 `review-consolidation-evidence.test.ts` (consolidation input). Open
 scale and cost work is in
-[multi-review-scale-and-cost.md](../todo/multi-review-scale-and-cost.md).
+[0027-multi-review-scale-and-cost.md](../todo/coordinator-and-multi-review/0027-multi-review-scale-and-cost.md).
+
+## Panel value measurements
+
+Three content-free measurements show what each reviewer adds and whether the
+shared prompt prefix is cached. None of them holds finding text, paths or
+reviewer IDs.
+
+- **Overlap counts.** When a consolidation is accepted,
+  `consolidationOverlap`
+  ([`review-fanout-provenance.ts`](../../apps/backend/src/core/review-fanout-provenance.ts))
+  turns the `reviewSourceIds` the model cited into a `ReviewPanelOverlapV1`
+  (`packages/protocol/src/review-fanout.ts`). It has to run then: the stored
+  report keeps model labels, not source IDs. Multi Review stores it as
+  `consolidationOverlap` beside `consolidatedReport` and clears both together.
+  A Build Pipeline stores it as `reviewOverlap` on its Consolidation session,
+  because the fan-out record is dropped once addressing starts, and keeps it
+  when report copies are discarded. Per run it counts the reviewers, the
+  source findings, the source findings that were cited (the rest were
+  dropped), the consolidated findings, and those only one reviewer
+  substantiated. Per configured position it adds `novelFindings`: findings no
+  earlier position substantiated. Summed over the first k positions, that is
+  what a k-reviewer panel would have found. Position still carries no
+  priority. The validator checks structure only, so a miscounted record
+  cannot make its workflow unreadable.
+- **Cache reads.** Reviewer records keep `cacheReadTokens` beside
+  `tokenCount`, and Build Pipeline reviewer sessions mirror it once the
+  reviewer settles. Claude, Codex and OpenCode report a session total. Pi and
+  Cursor report their latest turn, so the record keeps the largest value seen.
+  Each reviewer's tool loop rereads its own context from the cache on every
+  model call, so cache reads are mostly that context, not the prefix shared
+  across the panel. Compare reviewers 2..N against reviewer 1 on the same
+  agent and model, as a share of `tokenCount`.
+  Measured through the Claude CLI (2026-10-23), a separate session reads a
+  prompt from cache only when it is byte-identical up to a message boundary
+  and runs in the same working directory. A prompt that shares only its
+  opening instructions got no cache hit. See
+  [0025](../todo/coordinator-and-multi-review/0025-multi-review-panel-value.md#qualification).
+- **Evaluation corpus.**
+  [`multi-review-evaluation-corpus.ts`](../../apps/backend/src/core/multi-review-evaluation-corpus.ts)
+  holds nine synthetic panels with a reference consolidation for each:
+  severity disagreement, a contradiction, a late unique finding, two distinct
+  problems at one location, a clean panel, failed and invalid reviewers,
+  coverage gaps, Unicode and list limit boundaries, and evidence-frame
+  injection.
+  [`multi-review-evaluation.ts`](../../apps/backend/src/core/multi-review-evaluation.ts)
+  scores an answer by recall, false merges, splits, unexpected findings,
+  dropped sources, severity, location, provenance validity and verdict. It
+  also rebuilds the pre-#833 full-report evidence (`d680ccdb`) inside the
+  current prompt, so the evidence is the only thing that differs between the
+  two. CI covers these in `multi-review-evaluation.test.ts`.
+
+[`scripts/multi-review-evaluation.ts`](../../scripts/multi-review-evaluation.ts)
+runs the live comparison. `prompts` writes each case's full and compact prompt
+and reference answer under `output/multi-review-evaluation/`, and prints their
+sizes. `score <case> <answer.json>` scores one model answer. `panel
+<record.json>...` reads exported Multi Review workflows or Build Pipelines
+(from `get_multi_review_workflow` or the pipeline record) and prints each
+panel's overlap and cache-read shares. A Multi Review stored before
+`consolidationOverlap` existed is summarised from its report's model labels
+(`overlapFromModelLabels`), but only when every reviewer label is distinct.
+`live` sends selected cases to the Claude CLI already signed in on the host,
+with no tools and the report schema enforced. It saves the answers under
+`output/multi-review-evaluation/live/` and prints scores and token usage. Keep
+model answers and exported records out of the repository and CI logs.
+
+On the corpus, the compact evidence is 81–93% of the full evidence for two to
+five reviewers. One usable report has nothing to share, so its compact
+evidence is about 10% larger. For two small reports the whole compact prompt
+is about 2% larger, because the paragraph explaining `shared` outweighs what
+it saves. The savings grow with panel size and shared scope.

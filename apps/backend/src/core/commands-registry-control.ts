@@ -15,6 +15,7 @@ import {
   createAgentModelCatalogReader,
   resolveFastMode,
 } from "./build-pipeline-service-helpers.js";
+import { assertValidPromptAttachments } from "./prompt-attachments.js";
 
 function jobIdFor(environmentId: string, requestId: string): string {
   return createHash("sha256")
@@ -64,6 +65,21 @@ async function launchNativeAgentJob(
   if (completionAction !== undefined && completionAction !== "refresh-pr-after-agent-completion") {
     throw new Error("completionAction is invalid");
   }
+  // Only explicit literal intent is accepted for a first prompt: a new tab has
+  // no catalogue a selection could have been made from.
+  if (args.literal !== undefined && args.literal !== true) {
+    throw new Error("literal must be true when given");
+  }
+  const literal = args.literal === true;
+  // Already staged in the workspace by the caller; validated, never written here.
+  const attachments =
+    args.attachments === undefined
+      ? undefined
+      : Array.isArray(args.attachments)
+        ? assertValidPromptAttachments(args.attachments)
+        : (() => {
+            throw new Error("attachments must be an array");
+          })();
 
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -216,6 +232,8 @@ async function launchNativeAgentJob(
       prompt,
       requestId,
       mode: conversationMode,
+      ...(literal ? { command: { kind: "literal" as const } } : {}),
+      ...(attachments?.length ? { attachments } : {}),
       ...(initialPromptPresentation ? { initialPromptPresentation } : {}),
     });
     if (outcome.outcome === "rejected") await rollBackCompletionAction();
@@ -263,6 +281,30 @@ export function registerControlCommands(
   register("rotate_control_mcp_token", async (_args, context) => {
     if (!context.controlMcp) throw new Error("Orkestrator control MCP is unavailable");
     return context.controlMcp.rotateToken();
+  });
+
+  // Named operator credentials (Settings → MCP). Tokens are returned to the
+  // renderer so Copy setup works, exactly as the single token always was.
+  register("create_control_mcp_credential", async (args, context) => {
+    if (!context.controlMcp) throw new Error("Orkestrator control MCP is unavailable");
+    return context.controlMcp.createCredential({
+      label: args.label,
+      profile: args.profile,
+      ...(args.capabilities !== undefined ? { capabilities: args.capabilities } : {}),
+      ...(args.deniedActions !== undefined ? { deniedActions: args.deniedActions } : {}),
+    });
+  });
+
+  register("rotate_control_mcp_credential", async (args, context) => {
+    if (!context.controlMcp) throw new Error("Orkestrator control MCP is unavailable");
+    if (typeof args.credentialId !== "string") throw new Error("credentialId is required");
+    return context.controlMcp.rotateCredential(args.credentialId);
+  });
+
+  register("revoke_control_mcp_credential", async (args, context) => {
+    if (!context.controlMcp) throw new Error("Orkestrator control MCP is unavailable");
+    if (typeof args.credentialId !== "string") throw new Error("credentialId is required");
+    return context.controlMcp.revokeCredential(args.credentialId);
   });
 
   register("launch_control_job", (args, context) =>

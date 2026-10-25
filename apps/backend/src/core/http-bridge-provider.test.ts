@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import {
   AmbiguousPromptDispatchError,
   PromptRejectedError,
@@ -14,7 +15,10 @@ import {
   httpProvider,
   piConnection,
 } from "./agent-provider-test-support.js";
-import { normalizeProviderReadiness } from "./http-bridge-transport.js";
+import {
+  normalizeProviderAuthNotice,
+  normalizeProviderReadiness,
+} from "./http-bridge-transport.js";
 import { readHttpBridgeSessionState } from "./http-bridge-progressive.js";
 import { setActivePlanUsageAccount, sharedPlanUsageCache } from "./plan-usage-cache.js";
 
@@ -298,24 +302,28 @@ describe("HTTP bridge provider", () => {
     );
   });
 
-  test("falls back to the global slash-command route for older bridges", async () => {
-    const { provider, requests } = httpProvider((url) => {
-      if (url.endsWith("/session/session-1/commands")) {
+  test("never falls back to a global slash-command route for older bridges", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { provider, requests } = httpProvider((url) => {
+        if (url.endsWith("/session/session-1/commands")) {
+          return new Response(null, { status: 404 });
+        }
+        if (url.endsWith("/global/slash-commands")) {
+          return Response.json({ commands: [{ name: "/legacy", source: "builtin" }] });
+        }
         return new Response(null, { status: 404 });
-      }
-      if (url.endsWith("/global/slash-commands")) {
-        return Response.json({ commands: [{ name: "/legacy", source: "builtin" }] });
-      }
-      return new Response(null, { status: 404 });
-    }, cursorConnection);
+      }, cursorConnection);
 
-    await expect(provider.slashCommands?.("session-1")).resolves.toEqual([
-      expect.objectContaining({ name: "/legacy", source: "builtin" }),
-    ]);
-    expect(requests.map((request) => request.url)).toEqual([
-      `${cursorConnection.baseUrl}/session/session-1/commands`,
-      `${cursorConnection.baseUrl}/global/slash-commands`,
-    ]);
+      await expect(provider.slashCommands?.("session-1")).rejects.toMatchObject({
+        catalogueErrorCode: "outdated-bridge",
+      });
+      expect(requests.map((request) => request.url)).toEqual([
+        `${cursorConnection.baseUrl}/session/session-1/commands`,
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   for (const [agent, connection] of [
@@ -493,6 +501,133 @@ describe("HTTP bridge provider", () => {
         .catch((rejection: unknown) => rejection);
       expect(error).toBeInstanceOf(PromptRejectedError);
       expect((error as Error).message).toBe(message);
+    },
+  );
+
+  test.each([404, 409, 503])(
+    "keeps a retryable HTTP %s dispatch refusal's reason",
+    async (status) => {
+      const reason =
+        "Claude is still running background work in this session, so a prompt that changes its plugins cannot start until that work finishes or is stopped";
+      const explained = httpProvider(() => Response.json({ error: reason }, { status }));
+      const error = await explained.provider
+        .send("session-1", "Build it", { requestId: "request-1" })
+        .catch((rejection: unknown) => rejection);
+      // Still retryable: the refusal clears once the background work ends.
+      expect(error).toBeInstanceOf(ProviderUnavailableError);
+      expect(error).not.toBeInstanceOf(AmbiguousPromptDispatchError);
+      expect((error as Error).message).toBe(
+        `claude prompt dispatch is temporarily unavailable (HTTP ${status}): ${reason}`,
+      );
+
+      const bare = httpProvider(() => new Response(null, { status }));
+      await expect(
+        bare.provider.send("session-1", "Build it", { requestId: "r" }),
+      ).rejects.toMatchObject({
+        message: `claude prompt dispatch is temporarily unavailable (HTTP ${status})`,
+      });
+    },
+  );
+
+  test.each([404, 409, 503])(
+    "falls back to a retryable HTTP %s error for malformed or non-string dispatch details",
+    async (status) => {
+      for (const body of [
+        "not json",
+        '{"error":',
+        "null",
+        '"reason"',
+        "[]",
+        "{}",
+        ...[null, false, 42, {}, ["reason"], "", " \r\n\t "].map((error) =>
+          JSON.stringify({ error }),
+        ),
+      ]) {
+        const { provider, requests } = httpProvider(() => new Response(body, { status }));
+        const sent = provider.send("session-1", "Build it", { requestId: "request-1" });
+        await expect(sent).rejects.toBeInstanceOf(ProviderUnavailableError);
+        await expect(sent).rejects.not.toBeInstanceOf(AmbiguousPromptDispatchError);
+        await expect(sent).rejects.toMatchObject({
+          message: `claude prompt dispatch is temporarily unavailable (HTTP ${status})`,
+        });
+        expect(requests).toHaveLength(1);
+      }
+    },
+  );
+
+  test.each([404, 409, 503])(
+    "flattens and bounds retryable HTTP %s dispatch details",
+    async (status) => {
+      for (const [reason, detail] of [
+        [" \r\nWaiting\tfor\r\nbackground work\n ", "Waiting for background work"],
+        [` \n${"x".repeat(500)}\tshould be truncated `, "x".repeat(500)],
+      ]) {
+        const { provider } = httpProvider(() => Response.json({ error: reason }, { status }));
+        const sent = provider.send("session-1", "Build it", { requestId: "request-1" });
+        await expect(sent).rejects.toBeInstanceOf(ProviderUnavailableError);
+        await expect(sent).rejects.not.toBeInstanceOf(AmbiguousPromptDispatchError);
+        await expect(sent).rejects.toMatchObject({
+          message: `claude prompt dispatch is temporarily unavailable (HTTP ${status}): ${detail}`,
+        });
+      }
+    },
+  );
+
+  test.each([409, 503])(
+    "falls back and cancels oversized HTTP %s dispatch response streams",
+    async (status) => {
+      let cancelled = false;
+      const { provider } = httpProvider(
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(
+                  new Uint8Array(AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes + 1),
+                );
+              },
+              cancel() {
+                cancelled = true;
+              },
+            }),
+            { status },
+          ),
+      );
+      const sent = provider.send("session-1", "Build it", { requestId: "request-1" });
+      await expect(sent).rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(sent).rejects.not.toBeInstanceOf(AmbiguousPromptDispatchError);
+      await expect(sent).rejects.toMatchObject({
+        message: `claude prompt dispatch is temporarily unavailable (HTTP ${status})`,
+      });
+      expect(cancelled).toBe(true);
+    },
+  );
+
+  test.each([409, 503])(
+    "falls back to a retryable HTTP %s error when a dispatch response stream fails",
+    async (status) => {
+      let reads = 0;
+      const { provider } = httpProvider(
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (reads++ === 0) {
+                  controller.enqueue(new TextEncoder().encode('{"error":"incomplete reason'));
+                } else {
+                  controller.error(new Error("response stream failed"));
+                }
+              },
+            }),
+            { status },
+          ),
+      );
+      const sent = provider.send("session-1", "Build it", { requestId: "request-1" });
+      await expect(sent).rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(sent).rejects.not.toBeInstanceOf(AmbiguousPromptDispatchError);
+      await expect(sent).rejects.toMatchObject({
+        message: `claude prompt dispatch is temporarily unavailable (HTTP ${status})`,
+      });
     },
   );
 
@@ -689,12 +824,15 @@ describe("HTTP bridge provider", () => {
     });
   });
 
-  test("reads dispatch status and treats every non-positive answer as unknown", async () => {
+  test("reads dispatch status and treats every other answer as unknown", async () => {
     const dispatched = httpProvider(() => Response.json({ dispatch: "dispatched" }));
     await expect(dispatched.provider.dispatchStatus?.("s/1", "r/1")).resolves.toBe("dispatched");
     expect(dispatched.requests[0]!.url).toBe(
       "http://claude.test/session/s%2F1/dispatch?requestId=r%2F1",
     );
+    // The bridge retired the id after a restart: the read-only twin of a 410.
+    const lost = httpProvider(() => Response.json({ dispatch: "lost" }));
+    await expect(lost.provider.dispatchStatus?.("s", "r")).resolves.toBe("lost");
 
     // A bridge with no such route, an unknown session, an unparseable body and
     // an explicit `unknown` are all the same fact: no evidence it ran.
@@ -703,6 +841,8 @@ describe("HTTP bridge provider", () => {
       () => new Response(null, { status: 404 }),
       () => new Response("not json", { status: 200 }),
       () => Response.json({}),
+      () => Response.json({ dispatch: "absent" }),
+      () => new Response(JSON.stringify({ dispatch: "lost" }), { status: 500 }),
     ];
     for (const handler of unknown) {
       const { provider } = httpProvider(handler);
@@ -889,7 +1029,10 @@ describe("HTTP bridge provider", () => {
     const readiness = {
       state: "authentication-required",
       message: "Claude isn't signed in. Sign in to Claude to keep working.",
-      signIn: { kind: "terminal", hint: "Open a Claude terminal tab and run /login." },
+      signIn: {
+        kind: "terminal",
+        hint: "Sign in to Claude from the sign-in card in this tab or from Settings → Claude.",
+      },
     } as const;
     const read = async (body: Record<string, unknown>) => {
       const { provider } = httpProvider((url) => {
@@ -2091,6 +2234,28 @@ describe("HTTP bridge provider", () => {
     });
   });
 
+  test("carries a restart interruption from the claude session route", async () => {
+    const { provider, requests } = httpProvider(() =>
+      Response.json({
+        id: "session-1",
+        status: "error",
+        error: "Claude restarted before this turn finished.",
+        interruption: "restart",
+        retainedContinuationRequestIds: [],
+      }),
+    );
+
+    await expect(readProviderStatus(provider, "session-1")).resolves.toEqual({
+      status: "error",
+      error: "Claude restarted before this turn finished.",
+      interruption: "restart",
+    });
+    // Claude's snapshot is the session resource itself, not a `/status` route.
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/session/session-1",
+    ]);
+  });
+
   test("ignores an interruption the backend does not know, or one without a failure", async () => {
     const body = { current: {} as Record<string, unknown> };
     const { provider } = httpProvider(() => Response.json(body.current), codexConnection);
@@ -2624,6 +2789,69 @@ describe("HTTP bridge progressive transcript", () => {
       state: "authentication-required",
       message: "You've been signed out of Codex. Sign in again to keep working.",
     });
+  });
+
+  test.each([
+    [undefined],
+    [{ state: "signed-out", message: "Sign in" }],
+    [{ state: "expired" }],
+    [{ state: "needs-auth", message: "  " }],
+  ])("rejects a malformed turn-time auth notice %#", (value) => {
+    expect(normalizeProviderAuthNotice(value)).toBeUndefined();
+  });
+
+  test("reads a turn-time auth notice field by field and bounds it", () => {
+    expect(
+      normalizeProviderAuthNotice({
+        state: "expired",
+        message: ` ${"m".repeat(600)} `,
+        occurrenceId: "o".repeat(200),
+        accessToken: "never copied",
+      }),
+    ).toEqual({
+      kind: "auth",
+      state: "expired",
+      message: "m".repeat(500),
+      occurrenceId: "o".repeat(128),
+    });
+  });
+
+  test("shows a Codex login renewal as the first auth notice on both snapshot reads", async () => {
+    const authNotice = {
+      state: "expired" as const,
+      message: "Refreshing the OpenAI login",
+      occurrenceId: "renewal-1",
+    };
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/config")) return Response.json({ model: "gpt-5.5" });
+      return Response.json({ status: "running", messageRevision: 0, authNotice });
+    }, codexConnection);
+    const expected = { kind: "auth" as const, ...authNotice };
+    expect((await provider.interactiveSnapshot!("session-1")).notices).toEqual([expected]);
+    expect((await provider.sessionStateSnapshot!("session-1")).notices).toEqual([expected]);
+  });
+
+  test("shows a Claude login refused mid-turn as an auth notice", async () => {
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      return Response.json({
+        status: "error",
+        authNotice: {
+          state: "expired",
+          message: "Claude's login was refused. Sign in to Claude again to keep working.",
+          occurrenceId: "assistant-1",
+        },
+      });
+    }, claudeConnection);
+    const expected = {
+      kind: "auth" as const,
+      state: "expired" as const,
+      message: "Claude's login was refused. Sign in to Claude again to keep working.",
+      occurrenceId: "assistant-1",
+    };
+    expect((await provider.interactiveSnapshot!("session-1")).notices).toContainEqual(expected);
+    expect((await provider.sessionStateSnapshot!("session-1")).notices).toEqual([expected]);
   });
 
   test("carries Codex readiness through the interactive snapshot only when reported", async () => {

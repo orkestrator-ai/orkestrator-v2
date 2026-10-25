@@ -18,13 +18,13 @@ afterEach(async () => {
   );
 });
 
-async function runLogged(args: string[]) {
+async function runLogged(args: string[], env: NodeJS.ProcessEnv = {}) {
   const logDirectory = await mkdtemp(path.join(os.tmpdir(), "ork-run-logged-test-"));
   temporaryDirectories.push(logDirectory);
   const result = Bun.spawnSync({
     cmd: ["bun", runner, ...args],
     cwd: root,
-    env: { ...process.env, ORKESTRATOR_TEST_LOG_DIR: logDirectory },
+    env: { ...process.env, ...env, ORKESTRATOR_TEST_LOG_DIR: logDirectory },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -37,6 +37,32 @@ async function runLogged(args: string[]) {
 }
 
 describe("scripts/run-logged.ts", () => {
+  test("a live design heartbeat keeps an unchanged wait alive beyond the silence deadline", async () => {
+    const heartbeat = path.join(root, "e2e/agent-testing/design-live-heartbeat.ts");
+    const result = await runLogged(
+      [
+        "--name",
+        "live design heartbeat",
+        "--",
+        process.execPath,
+        "-e",
+        `import { withDesignLiveHeartbeat } from ${JSON.stringify(heartbeat)};
+         await withDesignLiveHeartbeat("claude", () => Bun.sleep(4500), (emit, intervalMs) => {
+           // Scale eight-plus minutes of unchanged projection/approval state
+           // to seconds, retaining the heartbeat-to-watchdog timing ratio.
+           const timer = setInterval(emit, intervalMs / 120);
+           return () => clearInterval(timer);
+         });`,
+      ],
+      {
+        ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS: "2500",
+        ORKESTRATOR_TEST_GROUP_TIMEOUT_MS: "10000",
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("PASS live design heartbeat");
+  }, 15_000);
+
   test("accepts separators and a name, deletes passing output, and writes a summary", async () => {
     const result = await runLogged([
       "--",

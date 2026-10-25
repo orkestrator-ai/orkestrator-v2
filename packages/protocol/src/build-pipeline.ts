@@ -5,7 +5,9 @@ import {
   REVIEW_FANOUT_MAX_REVIEWERS,
   REVIEW_FANOUT_MIN_REVIEWERS,
   isReviewFanoutState,
+  isReviewPanelOverlap,
   type ReviewFanoutState,
+  type ReviewPanelOverlapV1,
 } from "./review-fanout.js";
 import {
   AGENT_INTERACTION_KINDS,
@@ -370,6 +372,13 @@ export function isPipelineTranscriptReference(
 }
 
 export interface PipelineSession {
+  /** One durable continuation after a provider restart cut the turn short. */
+  restartContinuationSent?: boolean;
+  /**
+   * The one automatic reminder to submit a missing tool-mode result was
+   * already spent, so a stage that ignores it fails instead of looping.
+   */
+  resultReminderSent?: boolean;
   phase: PipelineSessionPhase;
   /**
    * The harness this session was created on.
@@ -405,6 +414,8 @@ export interface PipelineSession {
   completedAt?: string;
   /** Cumulative provider-session usage captured for an independent reviewer. */
   tokenCount?: number;
+  /** The reviewer's prompt-cache read count; see `ReviewerRecord.cacheReadTokens`. */
+  cacheReadTokens?: number;
   label: string;
   /**
    * Display transcript body.
@@ -461,6 +472,12 @@ export interface PipelineSession {
    * Optional for snapshots written before per-session reports existed.
    */
   reviewReport?: StructuredReviewReport;
+  /**
+   * Reviewer overlap in a consolidation session's {@link reviewReport}. Kept
+   * here because the fan-out record that computed it is dropped afterwards,
+   * and, like {@link tokenCount}, kept when the report copy is discarded.
+   */
+  reviewOverlap?: ReviewPanelOverlapV1;
   /**
    * Whether the backend is still waiting for this request's schema result or
    * has validated and accepted it.
@@ -1069,6 +1086,7 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     isIsoDate(value.startedAt) &&
     (value.completedAt === undefined || isIsoDate(value.completedAt)) &&
     (value.tokenCount === undefined || isNonNegativeInteger(value.tokenCount)) &&
+    (value.cacheReadTokens === undefined || isNonNegativeInteger(value.cacheReadTokens)) &&
     typeof value.label === "string" &&
     (value.messages === undefined || Array.isArray(value.messages)) &&
     (value.messageRevision === undefined || isNonNegativeInteger(value.messageRevision)) &&
@@ -1088,6 +1106,7 @@ function isPipelineSession(value: unknown): value is PipelineSession {
       isWorkflowResultSubmissionState(value.resultSubmission)) &&
     (value.reviewReport === undefined ||
       (value.phase === "review" && isStructuredReviewReport(value.reviewReport))) &&
+    (value.reviewOverlap === undefined || isReviewPanelOverlap(value.reviewOverlap)) &&
     (value.structuredResultStatus === undefined ||
       value.structuredResultStatus === "pending" ||
       value.structuredResultStatus === "accepted") &&
@@ -1098,6 +1117,9 @@ function isPipelineSession(value: unknown): value is PipelineSession {
       (typeof value.fixWorktreeFingerprintAtStart === "string" &&
         /^[0-9a-f]{64}$/i.test(value.fixWorktreeFingerprintAtStart))) &&
     (value.structuredWaitStartedAt === undefined || isIsoDate(value.structuredWaitStartedAt)) &&
+    (value.restartContinuationSent === undefined ||
+      typeof value.restartContinuationSent === "boolean") &&
+    (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
     (value.structuredReportRepairAttempts === undefined ||
       isNonNegativeInteger(value.structuredReportRepairAttempts)) &&
     (value.interactionSummary === undefined ||

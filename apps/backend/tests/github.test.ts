@@ -458,7 +458,7 @@ describe("GitHub error handling", () => {
     const unauthorized = mock(async () => jsonResponse({ message: token }, { status: 401 }));
     await expect(
       listGitHubIssueComments(token, repository, 1, asFetch(unauthorized)),
-    ).rejects.toThrow("Update the global GitHub token");
+    ).rejects.toThrow("Check the GitHub credentials in Settings");
 
     const forbidden = mock(async () => jsonResponse({ message: "Forbidden" }, { status: 403 }));
     await expect(listGitHubIssueComments(token, repository, 1, asFetch(forbidden))).rejects.toThrow(

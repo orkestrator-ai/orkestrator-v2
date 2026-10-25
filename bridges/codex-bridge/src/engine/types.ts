@@ -212,6 +212,8 @@ export interface EngineCreditSnapshot {
 
 export interface EngineTurnUsage {
   turnId: string;
+  /** When this turn was last accounted, ISO-8601; what dates recorded usage. */
+  at?: string;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -297,7 +299,17 @@ export interface EngineTurnConfig {
    */
   permissionProfile?: string;
   /** In-memory only: never persisted or logged with the bridge session record. */
-  agentMcp?: { url: string; token: string; design?: boolean };
+  agentMcp?: {
+    url: string;
+    token: string;
+    design?: boolean;
+    /**
+     * A backend workflow turn's artifact-only connection: an
+     * `orkestrator-artifacts` server at this connection's origin
+     * (`/artifact-mcp`), authenticated by the turn's artifact grant.
+     */
+    artifacts?: { token: string };
+  };
   /**
    * Backend-selected tool on an attempt-scoped result MCP connection. Its
    * presence permits that narrow server to bypass Codex's MCP approval gate.
@@ -371,12 +383,28 @@ export type EngineEvent = EngineEventMeta &
     | { kind: "thread.model.updated"; threadId: string; model: string }
     | { kind: "turn.model.updated"; threadId: string; turnId: string; model: string }
     | {
+        /** `modelProvider/authRecovery{Started,Completed}`; thread-scoped. */
+        kind: "thread.authRecovery";
+        threadId: string;
+        phase: "started" | "completed";
+        /** Codex's own wording, bounded; never a credential. */
+        message?: string;
+        provider?: string;
+      }
+    | {
         kind: "turn.configuration.updated";
         threadId: string;
         turnId: string;
         reasoningEffort: string;
       }
     | { kind: "model.tool.called"; threadId: string | null; turnId: string }
+    /**
+     * One model response of the turn finished sampling. app-server reports
+     * token usage once per Responses API completion, tool-only responses
+     * included, so this is the only response boundary it names on the stable
+     * surface (`TurnAccumulator.noteModelResponseCompleted`).
+     */
+    | { kind: "model.response.completed"; threadId: string | null; turnId: string }
     | { kind: "turn.started"; threadId: string | null; turnId: string }
     | {
         kind: "item.started";

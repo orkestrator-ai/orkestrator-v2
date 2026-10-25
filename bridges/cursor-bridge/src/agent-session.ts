@@ -43,7 +43,9 @@ import { hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
 import {
   cursorMcpServers,
+  cursorInlineMcpServers,
   hostOrkestratorCustomTools,
+  hostResearchCustomTools,
   mcpConnectionKey,
   retireMcpObservations,
   type AgentMcpConnection,
@@ -62,6 +64,7 @@ import {
   startTranscriptEpoch,
 } from "./transcript.js";
 import { applyInteractionUpdate } from "./translate.js";
+import { trackTurnEvidence, type TurnEvidence } from "./change-evidence.js";
 import {
   assertSessionOpen,
   clientSessionKeys,
@@ -449,18 +452,36 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   // otherwise see tools that fail closed. Container attaches disable the
   // provider sandbox, so they may still take the vendor HTTP client.
   const allowHttpMcp = !readOnly || policy.sandbox === "container";
-  const hosted = readOnly
-    ? await hostOrkestratorCustomTools(state.agentMcp, state.health, {
-        httpFallback: policy.sandbox === "container",
-      })
-    : undefined;
+  const [hosted, research] = readOnly
+    ? await Promise.all([
+        hostOrkestratorCustomTools(state.agentMcp, state.health, {
+          httpFallback: policy.sandbox === "container",
+        }),
+        // The launcher's research servers, hosted the same way: a sandboxed
+        // read-only attach cannot call an HTTP MCP server either.
+        hostResearchCustomTools(state.health),
+      ])
+    : [undefined, undefined];
+  const closeHosted =
+    hosted || research
+      ? async () => {
+          await Promise.allSettled([hosted?.close(), research?.close()]);
+        }
+      : undefined;
   if (state.closed) {
-    await hosted?.close().catch(() => undefined);
+    await closeHosted?.();
     throw new SessionClosedError();
   }
-  state.hostedMcpClose = hosted?.close;
-  state.hostedMcpTools = hosted?.customTools;
-  state.mcpServerNames = hosted ? ["orkestrator"] : allowHttpMcp ? Object.keys(mcpServers) : [];
+  const customTools =
+    hosted || research ? { ...research?.customTools, ...hosted?.customTools } : undefined;
+  const httpMcpServerNames = hosted ? [] : allowHttpMcp ? Object.keys(mcpServers) : [];
+  state.hostedMcpClose = closeHosted;
+  state.hostedMcpTools = customTools;
+  state.researchMcpServerNames = research?.serverNames;
+  state.mcpServerNames = [
+    ...(hosted ? ["orkestrator"] : httpMcpServerNames),
+    ...(research?.serverNames ?? []),
+  ];
   state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
   const options: AgentOptions = {
     apiKey,
@@ -478,7 +499,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
           : ["user"],
       sandboxOptions: { enabled: policy.sandbox === "provider" },
       autoReview: policy.sandbox === "provider" && policy.approvals === "auto-approve",
-      ...(hosted ? { customTools: hosted.customTools } : {}),
+      ...(customTools ? { customTools } : {}),
     },
     ...(readOnly
       ? {
@@ -499,7 +520,9 @@ async function attach(state: SessionState): Promise<SDKAgent> {
           return denied.length > 0 ? { disallowedTools: denied } : {};
         })()
       : {}),
-    ...(!hosted && allowHttpMcp && state.mcpServerNames.length > 0 ? { mcpServers } : {}),
+    ...(httpMcpServerNames.length > 0
+      ? { mcpServers: cursorInlineMcpServers(mcpServers, !readOnly && policy.projectResources) }
+      : {}),
   };
   const releaseWarmWorkspace = await prewarmCursorWorkspace(options, policy.sandbox);
   state.workspaceWarmRelease = releaseWarmWorkspace;
@@ -567,7 +590,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     state.agentLocalOptions = undefined;
     await Promise.allSettled([
       ...(releaseWarmWorkspace ? [releaseWarmWorkspace()] : []),
-      ...(hosted ? [hosted.close()] : []),
+      ...(closeHosted ? [closeHosted()] : []),
     ]);
     throw error;
   }
@@ -588,12 +611,10 @@ async function disposeIfClosed(state: SessionState, agent: SDKAgent): Promise<vo
   throw new SessionClosedError();
 }
 
-let warnedLegacyPolicy = false;
-
 export function resolveCursorExecutionPolicy(
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy {
-  const fallback: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy =
+  const resolved: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy =
     policy ??
     ({
       id: "interactive-host",
@@ -602,8 +623,8 @@ export function resolveCursorExecutionPolicy(
       projectResources: false,
       networkAccess: "full",
     } as const);
-  // Process authority first, so neither a request body nor the deprecated env
-  // overrides below can widen what a coordinator bridge runs under.
+  // Process authority first, so a request body cannot widen what a
+  // coordinator bridge runs under.
   if (process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY === "coordinator-read-only") {
     return {
       id: "coordinator-read-only",
@@ -614,27 +635,12 @@ export function resolveCursorExecutionPolicy(
       approvals: "deny",
       projectResources: false,
       // Follows the launcher's research setting: hosted search may be allowed,
-      // never fetch. Research MCP servers are not loaded on Cursor yet.
+      // never fetch. Research MCP servers are hosted in-process at attach.
       capabilityPolicy: coordinatorCapabilityPolicy(coordinatorWebResearchFromEnv(process.env)),
       networkAccess: "restricted",
       note: "Cursor applies these restrictions, but its SDK exposes no approval callback to verify them.",
     };
   }
-  const sandboxOverride = process.env.CURSOR_BRIDGE_SANDBOX;
-  const resourcesOverride = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
-  if ((sandboxOverride !== undefined || resourcesOverride !== undefined) && !warnedLegacyPolicy) {
-    warnedLegacyPolicy = true;
-    console.warn(
-      "[cursor-bridge] CURSOR_BRIDGE_SANDBOX/CURSOR_BRIDGE_PROJECT_SETTINGS are deprecated; configure the session execution policy instead.",
-    );
-  }
-  const resolved: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy = {
-    ...fallback,
-    ...(sandboxOverride !== undefined
-      ? { sandbox: sandboxOverride === "1" ? "provider" : "none" }
-      : {}),
-    ...(resourcesOverride !== undefined ? { projectResources: resourcesOverride === "1" } : {}),
-  };
   const notes = resolved.note ? [resolved.note] : [];
   // Its public network control is the provider sandbox switch rather than an
   // independent network policy. Restricted requests therefore force that
@@ -1102,12 +1108,27 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
   const unsubscribe = active.onDidChangeStatus(() => {
     state.revision += 1;
   });
+  // The provider's own reports for the tail of the run, by native call id. No
+  // probe window opens here: what the workspace holds now says nothing about
+  // what these calls did before this process existed.
+  const evidence = trackTurnEvidence(state.id, { mode: "reconciliation" });
   state.recoveringRun = (async () => {
     try {
       for await (const event of active.stream()) {
-        applyRecoveredStreamEvent(state, event);
+        applyRecoveredStreamEvent(state, event, evidence);
       }
-      await active.wait();
+      const result: { status?: string } | undefined = await active.wait();
+      evidence.end({
+        phase:
+          result?.status === "cancelled"
+            ? "cancelled"
+            : result?.status === "finished"
+              ? "succeeded"
+              : result?.status === "error"
+                ? "failed"
+                : "unknown",
+        terminal: true,
+      });
       // The whole transcript is rebuilt from the SDK's record, so everything
       // positional about the old one — open blocks, the assistant message the
       // turn was writing into, readers' absolute offsets — goes with it.
@@ -1122,6 +1143,7 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
       state.status = "error";
       state.error = error instanceof Error ? error.message : "Cursor run recovery failed";
     } finally {
+      evidence.end({ phase: "unknown", terminal: false });
       unsubscribe();
       if (state.activeRun === active) {
         state.activeRun = undefined;
@@ -1135,10 +1157,16 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
   })();
 }
 
-function applyRecoveredStreamEvent(state: SessionState, event: unknown): void {
+function applyRecoveredStreamEvent(
+  state: SessionState,
+  event: unknown,
+  evidence: TurnEvidence,
+): void {
   if (!isObject(event)) return;
   const update = isObject(event.update) ? event.update : event;
-  if (typeof update.type === "string") applyInteractionUpdate(state, update);
+  if (typeof update.type !== "string") return;
+  evidence.observe(update);
+  applyInteractionUpdate(state, update);
 }
 
 function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): void {

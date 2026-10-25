@@ -25,14 +25,16 @@ const SCANNED_ROOTS = [
  * imports still in the temporal dead zone, so a single new top-level read of an
  * imported binding turns into a `ReferenceError` whose reproduction depends on
  * which module the process happens to import first. That already happened once
- * here - `commands-runtime-state` loaded the git-status scanners through
- * `await import(...)` for exactly this reason until `DiffStatsTracking` took
- * the service out of it (`commands-runtime-state-load-order.test.ts`).
+ * here - the former `commands-runtime-state` module loaded the git-status
+ * scanners through `await import(...)` for exactly this reason until
+ * `DiffStatsTracking` took the service out of it.
  *
  * If this list is ever non-empty again, each entry needs a reason. Prefer
  * moving the shared symbol into a leaf both sides can depend on; where the
- * back-edge is a notification rather than a dependency (see
- * `setMergeCleanupScheduler`), invert it so the owner registers itself.
+ * back-edge is a notification rather than a dependency, inject it instead: the
+ * backend passes `scheduleMergeCleanupRecovery` from `commands-servers` to
+ * `BackendRuntime` as `prMonitor.scheduleMergeCleanup`, so the PR monitor never
+ * imports it.
  */
 const KNOWN_CYCLES: ReadonlyArray<{ cycle: readonly string[]; reason: string }> = [];
 

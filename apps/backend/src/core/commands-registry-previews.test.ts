@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { previewErrorFromUnknown } from "@orkestrator/protocol/preview-services";
 
@@ -114,7 +114,9 @@ describe("preview commands", () => {
       .definition.serviceId;
     const handoff = (await invoke("create_preview_handoff_url", { serviceId, path: "/x" })) as {
       url: string;
+      attachmentId: string;
     };
+    expect(handoff.attachmentId).toBeTruthy();
     const url = new URL(handoff.url);
     expect(url.origin).toBe("https://s-0123.preview.test");
     expect(url.pathname).toBe("/__orkestrator_preview/session");
@@ -122,5 +124,35 @@ describe("preview commands", () => {
     // The code yields exactly one host-bound session for this service.
     expect(harness.runtime.access.consumeSessionCode(code, serviceId).path).toBe("/x");
     expect(() => harness.runtime.access.consumeSessionCode(code, serviceId)).toThrow("forbidden");
+  });
+  test("a handoff failure after minting releases the attachment", async () => {
+    harness.runtime.publication = {
+      bootstrapAction: () => "https://bootstrap.preview.test/bootstrap",
+      originFor: () => "https://s-0123.preview.test",
+    };
+    harness.docker.containers.set("container-a", {
+      id: "container-a",
+      environmentId: "a",
+      owner: harness.owner,
+      ports: { "3000/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }] },
+    });
+    await invoke("update_preview_settings", { settings: { transport: true } });
+    await harness.runtime.registry.settle();
+    const serviceId = harness.runtime.registry.snapshot({ environmentId: "a" }).services[0]!
+      .definition.serviceId;
+    const consume = spyOn(harness.runtime.access, "consumeBootstrapGrant").mockImplementation(
+      () => {
+        expect(harness.runtime.access.stats().attachments).toBe(1);
+        throw new Error("forced grant failure");
+      },
+    );
+    try {
+      await expect(invoke("create_preview_handoff_url", { serviceId })).rejects.toThrow(
+        "forced grant failure",
+      );
+      expect(harness.runtime.access.stats().attachments).toBe(0);
+    } finally {
+      consume.mockRestore();
+    }
   });
 });

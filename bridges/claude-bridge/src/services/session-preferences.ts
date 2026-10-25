@@ -54,6 +54,42 @@ export interface SessionPreferences {
   localTranscript?: ClaudeLocalTranscriptEntry[];
   /** Shell-hook enrichment by launching call (one run); updates upsert the newest 256 calls. */
   shellTaskDetails?: ClaudeShellTaskDetails[];
+  /**
+   * Present while a turn is in flight, so a later bridge process can tell that
+   * a restart cut it short. Content-free. Cleared by writing `undefined` (the
+   * merge keeps the key and JSON drops it); a malformed value reads as absent.
+   */
+  turnInFlight?: ClaudeTurnInFlightMark;
+}
+
+/** Which bridge process had a turn in flight, and since when. */
+export interface ClaudeTurnInFlightMark {
+  /** Random per bridge process; never reused. */
+  bridgeInstanceId: string;
+  pid: number;
+  startedAt: number;
+}
+
+function parseTurnInFlightMark(value: unknown): ClaudeTurnInFlightMark | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.bridgeInstanceId !== "string" ||
+    record.bridgeInstanceId.length === 0 ||
+    record.bridgeInstanceId.length > 64 ||
+    typeof record.pid !== "number" ||
+    !Number.isSafeInteger(record.pid) ||
+    record.pid <= 0 ||
+    typeof record.startedAt !== "number" ||
+    !Number.isFinite(record.startedAt)
+  ) {
+    return undefined;
+  }
+  return {
+    bridgeInstanceId: record.bridgeInstanceId,
+    pid: record.pid,
+    startedAt: record.startedAt,
+  };
 }
 
 export interface ClaudeShellTaskDetails {
@@ -192,7 +228,7 @@ async function readLockSnapshot(lockPath: string): Promise<LockSnapshot | undefi
   }
 }
 
-function processIsAlive(pid: number): boolean {
+export function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -411,6 +447,8 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
       .map(parseShellTaskDetails)
       .filter((entry): entry is ClaudeShellTaskDetails => entry !== undefined);
   }
+  const turnInFlight = parseTurnInFlightMark(record.turnInFlight);
+  if (turnInFlight) preferences.turnInFlight = turnInFlight;
   return preferences;
 }
 

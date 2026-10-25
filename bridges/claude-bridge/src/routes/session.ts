@@ -11,6 +11,7 @@ import {
 import {
   DISPATCH_OUTCOME_LOST_KIND,
   NATIVE_AGENT_STEER_REJECTION_HTTP_STATUS,
+  type BridgePromptDispatchStatus,
 } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
@@ -31,6 +32,8 @@ import {
   getSessionInitData,
   claimPromptDispatch,
   getPromptDispatchState,
+  restoredDispatchClaimLost,
+  persistedDispatchClaimLost,
   respondToPlanApproval,
   getPendingPlanApprovals,
   respondToInteraction,
@@ -167,6 +170,14 @@ const STALE_PROMPT_STATUS = 409;
 
 function stalePrompt(message: string): { error: string; status: "stale" } {
   return { error: message, status: "stale" };
+}
+
+/** A workflow turn's artifact-only grant (`agentMcp.artifacts.token`), when well-formed. */
+function agentMcpArtifactsToken(record: Record<string, unknown>): string | undefined {
+  const artifacts = record.artifacts;
+  if (!artifacts || typeof artifacts !== "object" || Array.isArray(artifacts)) return undefined;
+  const token = (artifacts as Record<string, unknown>).token;
+  return typeof token === "string" && token.length > 0 && token.length <= 1024 ? token : undefined;
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -339,6 +350,11 @@ session.get("/:id", async (c) => {
     createdAt: sessionData.createdAt.toISOString(),
     lastActivity: sessionData.lastActivity.toISOString(),
     error: sessionData.error,
+    // Structured, so a workflow continues the turn without matching text.
+    // Only beside the failure it explains; the next turn clears it.
+    ...(sessionData.status === "error" && sessionData.interruption
+      ? { interruption: sessionData.interruption }
+      : {}),
     structuredOutputRequestId: sessionData.structuredOutputRequestId,
     structuredOutput: sessionData.structuredOutput,
     contextUsage: sessionData.inProgressUsage ?? sessionData.usage,
@@ -370,6 +386,9 @@ session.get("/:id", async (c) => {
     // Bridge-wide: the login belongs to the process, not the session. Present
     // only once Claude's own account read found no credential.
     ...readinessField(),
+    // Session-scoped: a login that stopped working during this session's
+    // turns. The backend shows it as the tab's `auth` notice.
+    ...(sessionData.authNotice ? { authNotice: sessionData.authNotice } : {}),
   });
 });
 
@@ -725,12 +744,14 @@ session.post("/:id/prompt", async (c) => {
       body.agentMcp && typeof body.agentMcp === "object" && !Array.isArray(body.agentMcp)
         ? (body.agentMcp as Record<string, unknown>)
         : undefined;
+    const artifactsToken = agentMcpRecord ? agentMcpArtifactsToken(agentMcpRecord) : undefined;
     const agentMcp =
       typeof agentMcpRecord?.url === "string" && typeof agentMcpRecord.token === "string"
         ? {
             url: agentMcpRecord.url,
             token: agentMcpRecord.token,
             ...(agentMcpRecord.design === true ? { design: true } : {}),
+            ...(artifactsToken ? { artifacts: { token: artifactsToken } } : {}),
           }
         : undefined;
     // Every prompt is deduplicated on this id, not just structured ones: a plain
@@ -1226,19 +1247,31 @@ session.get("/:id/runtime-health", (c) => {
  * parking it for the user to resolve by hand.
  *
  * `dispatched` is only ever an explicit positive: a turn this process is
- * running, or one it has finished. `new` and `not-found` both answer `unknown`,
- * because neither distinguishes "never sent" from "sent to a bridge process
- * that has since restarted" — and reporting the second as never-sent would have
- * the caller dispatch the same turn twice.
+ * running, or one it has finished. It wins over everything else. `lost` is
+ * exactly the prompt route's 410 `DISPATCH_OUTCOME_LOST_KIND`: an id an
+ * earlier process claimed (restored from disk without an outcome, or still in
+ * the durable journal of a session this process has not registered yet) that
+ * this one will refuse for good. Neither says "never sent". Everything else is
+ * `unknown`, because it cannot distinguish "never sent" from "sent to a bridge
+ * process that has since restarted" — and reporting the second as never-sent
+ * would have the caller dispatch the same turn twice.
  *
- * Registered before `/:id/...` catch-alls for the same reason as `/activity`.
+ * Read-only like `/activity`: no touch, no hydration, no re-attach. Registered
+ * before `/:id/...` catch-alls for the same reason.
  */
-session.get("/:id/dispatch", (c) => {
+session.get("/:id/dispatch", async (c) => {
+  const answer = (dispatch: BridgePromptDispatchStatus) => c.json({ dispatch });
   const requestId = c.req.query("requestId")?.trim();
-  if (!requestId) return c.json({ dispatch: "unknown" });
-  const state = getPromptDispatchState(c.req.param("id"), requestId);
-  const dispatched = state === "processing" || state === "already-processed";
-  return c.json({ dispatch: dispatched ? "dispatched" : "unknown" });
+  if (!requestId) return answer("unknown");
+  const id = c.req.param("id");
+  const state = getPromptDispatchState(id, requestId);
+  if (state === "processing" || state === "already-processed") return answer("dispatched");
+  if (state === "new") {
+    return answer(restoredDispatchClaimLost(peekSession(id), requestId) ? "lost" : "unknown");
+  }
+  // An error is not evidence of anything, so it answers `unknown`.
+  const lost = await persistedDispatchClaimLost(id, requestId).catch(() => false);
+  return answer(lost ? "lost" : "unknown");
 });
 
 // Get pending questions for a session

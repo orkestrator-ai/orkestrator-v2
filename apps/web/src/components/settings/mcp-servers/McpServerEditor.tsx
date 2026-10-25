@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import { cn } from "@/lib/utils";
 
 import {
@@ -99,6 +100,7 @@ export function McpServerEditor({
   onDirtyChange,
   onRestoreFocus,
 }: Props) {
+  const { machine } = useAccountMachine();
   const target = snapshot.target;
   const capabilities = target.capabilities;
   // Backend rollout gate: offer only what the backend will accept.
@@ -134,7 +136,9 @@ export function McpServerEditor({
   // deliberate reload re-pins it. Edits pin `definition.sourceRevision`.
   const pinnedRevisions = useRef<Record<string, string | null>>({});
   const draftRef = useRef(draft);
-  draftRef.current = draft;
+  useLayoutEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
   const backToForm = () => {
     requestIds.current = {};
     setStep("form");
@@ -149,7 +153,7 @@ export function McpServerEditor({
     if (mode.kind !== "edit") return;
     let cancelled = false;
     backend
-      .getMcpDefinition(target.targetId, mode.entryId)
+      .getMcpDefinition(target.targetId, mode.entryId, machine)
       .then((loaded) => {
         if (cancelled) return;
         setDefinition(loaded);
@@ -161,7 +165,7 @@ export function McpServerEditor({
     return () => {
       cancelled = true;
     };
-  }, [mode, target.targetId]);
+  }, [mode, target.targetId, machine]);
 
   const source = useMemo(
     () =>
@@ -201,13 +205,17 @@ export function McpServerEditor({
       : !!definition &&
         !isEmptyPatch(patchFromDraft(definition, draft, capabilities.fields.advanced));
   const onDirtyChangeRef = useRef(onDirtyChange);
-  onDirtyChangeRef.current = onDirtyChange;
+  useLayoutEffect(() => {
+    onDirtyChangeRef.current = onDirtyChange;
+  }, [onDirtyChange]);
   useEffect(() => {
     onDirtyChangeRef.current?.(dirty);
   }, [dirty]);
-  // The rollout gate changed under us: re-read so the controls match it.
+  // The rollout gate changed under us, or the container's file was edited
+  // inside it: re-read so the controls (and the import/reapply choice) match.
   const refreshIfGated = (error: unknown) => {
-    if (mcpManagementErrorFromUnknown(error)?.code === "management-disabled") onReload();
+    const code = mcpManagementErrorFromUnknown(error)?.code;
+    if (code === "management-disabled" || code === "environment-diverged") onReload();
   };
   const problemFrom = (error: unknown) =>
     mcpProblemFrom(error, { redact: typedSecretValues(draftRef.current) });
@@ -276,7 +284,7 @@ export function McpServerEditor({
     setBusy(true);
     setProblem(null);
     try {
-      const result = await backend.validateMcpMutation(mutation);
+      const result = await backend.validateMcpMutation(mutation, machine);
       setErrors(result.fieldErrors);
       if (result.valid && result.preview) {
         setPreview(result.preview);
@@ -297,7 +305,7 @@ export function McpServerEditor({
     setBusy(true);
     setProblem(null);
     try {
-      await backend.mutateMcpDefinition(mutation);
+      await backend.mutateMcpDefinition(mutation, machine);
       toast.success(applyIntent === "save" ? "Server saved" : "Server saved; applying");
       onClose();
     } catch (error) {
@@ -325,7 +333,7 @@ export function McpServerEditor({
     if (mode.kind === "edit") {
       const original = definition;
       try {
-        const latest = await backend.getMcpDefinition(target.targetId, mode.entryId);
+        const latest = await backend.getMcpDefinition(target.targetId, mode.entryId, machine);
         setDefinition(latest);
         // Carry only the fields the user changed onto the latest revision, so
         // another writer's change to an untouched field is not reverted.

@@ -14,10 +14,10 @@ const packageJson = JSON.parse(
  * for Arch-based distributions such as Omarchy, which update it through their
  * package manager.
  */
-export function createLinuxReleaseConfig(): Configuration {
+export function createLinuxReleaseConfig(version?: string): Configuration {
   return {
     ...packageJson.build,
-    publish: releasePublish,
+    publish: releasePublish(version),
     extraMetadata: {
       ...packageJson.build.extraMetadata,
       homepage: "https://github.com/orkestrator-ai/orkestrator-v2",

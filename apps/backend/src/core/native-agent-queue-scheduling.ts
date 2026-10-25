@@ -39,9 +39,11 @@ export type NativeQueueObligation = "in-flight" | "pending";
 export function nativeQueueObligation(
   queue: PersistedPromptQueue | null | undefined,
 ): NativeQueueObligation | null {
-  if (!queue || queue.dispatchError !== undefined) return null;
+  if (!queue) return null;
   const agent = queue.queueKey.split("\0", 1)[0];
   if (!BUILD_PIPELINE_AGENTS.includes(agent as BuildPipelineAgent)) return null;
+  if (queue.inFlight?.steer) return "in-flight";
+  if (queue.dispatchError !== undefined) return null;
   if (queue.inFlight !== undefined) return "in-flight";
   return queue.messages.length > 0 ? "pending" : null;
 }

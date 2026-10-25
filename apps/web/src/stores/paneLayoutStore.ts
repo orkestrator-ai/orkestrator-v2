@@ -2,6 +2,7 @@ import { createSessionKey } from "@/lib/utils";
 import { create } from "zustand";
 import type {
   BrowserAnnotationPanelState,
+  PullRequestTabData,
   PaneNode,
   PaneLeaf,
   PaneSplit,
@@ -266,6 +267,13 @@ interface PaneLayoutState {
     environmentId?: string,
     history?: string[],
     historyIndex?: number,
+    navigationRequestId?: string,
+  ) => void;
+  /** Re-open a pull request tab on `view`, or record its loaded title. */
+  updateTabPullRequest: (
+    tabId: string,
+    patch: { view?: PullRequestTabData["view"]; title?: string; reopen?: boolean },
+    environmentId?: string,
   ) => void;
   /** Persist only web annotation panel view preferences for a browser tab. */
   updateTabBrowserAnnotationPanel: (
@@ -1354,7 +1362,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     set({ environments });
   },
 
-  updateTabBrowserUrl: (tabId, url, environmentId, history, historyIndex) => {
+  updateTabBrowserUrl: (tabId, url, environmentId, history, historyIndex, navigationRequestId) => {
     const state = get();
     const envId = environmentId ?? state.activeEnvironmentId;
     if (!envId) return;
@@ -1364,7 +1372,12 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const paneWithTab = findPaneWithTab(envState.root, tabId);
     const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
     if (!paneWithTab || existingTab?.type !== "browser" || !existingTab.browserData) return;
-    if (existingTab.browserData.url === url && history === undefined && historyIndex === undefined)
+    if (
+      existingTab.browserData.url === url &&
+      history === undefined &&
+      historyIndex === undefined &&
+      navigationRequestId === undefined
+    )
       return;
 
     // A cursor without a new array still has to be clamped: it addresses the
@@ -1387,6 +1400,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
               browserData: {
                 ...tab.browserData,
                 url,
+                ...(url !== tab.browserData.url || navigationRequestId !== undefined
+                  ? { navigationRequestId: navigationRequestId ?? createUuid() }
+                  : {}),
                 ...(boundedHistory !== undefined ? { history: boundedHistory } : {}),
                 ...(boundedHistoryIndex !== undefined ? { historyIndex: boundedHistoryIndex } : {}),
               },
@@ -1395,6 +1411,39 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       ),
     }));
 
+    const environments = new Map(state.environments);
+    environments.set(envId, { ...envState, root: newRoot });
+    set({ environments });
+  },
+
+  updateTabPullRequest: (tabId, patch, environmentId) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return;
+    const envState = state.environments.get(envId);
+    if (!envState) return;
+    const paneWithTab = findPaneWithTab(envState.root, tabId);
+    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+    const current = existingTab?.type === "pull-request" ? existingTab.pullRequestData : undefined;
+    if (!paneWithTab || !current) return;
+    const title = patch.title?.slice(0, 300);
+    const next: PullRequestTabData = {
+      ...current,
+      ...(patch.view ? { view: patch.view } : {}),
+      ...(title !== undefined ? { title } : {}),
+      ...(patch.reopen ? { openRequest: (current.openRequest ?? 0) + 1 } : {}),
+    };
+    if (
+      next.view === current.view &&
+      next.title === current.title &&
+      next.openRequest === current.openRequest
+    ) {
+      return;
+    }
+    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) => (tab.id === tabId ? { ...tab, pullRequestData: next } : tab)),
+    }));
     const environments = new Map(state.environments);
     environments.set(envId, { ...envState, root: newRoot });
     set({ environments });

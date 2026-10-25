@@ -4,7 +4,11 @@ import type {
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
 } from "@orkestrator/protocol/native-agent";
-import { isSelectableOpenCodeProvider } from "@orkestrator/protocol/native-agent";
+import {
+  isSelectableOpenCodeProvider,
+  OPENCODE_MCP_SIGN_IN_GUIDANCE,
+} from "@orkestrator/protocol/native-agent";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";
 import { readOpenCodeCommandInventory } from "./opencode-commands.js";
 
@@ -12,27 +16,28 @@ const MAX_OPENCODE_AUTH_PROVIDERS = 128;
 const MAX_OPENCODE_HINT_PROVIDERS = 8;
 
 /**
- * OpenCode signs a provider in with its own CLI (`opencode auth login`, an
- * alias of `providers login`), and the running server picks the credential up
- * without a restart. Orkestrator's OpenCode settings cannot connect one.
+ * OpenCode signs a provider in through Settings → OpenCode, which drives the
+ * bundled server's own auth routes (`opencode-provider-login.ts`). The `opencode`
+ * on a user's PATH may be another major version that keeps its logins
+ * elsewhere, so the hints point at Settings rather than the CLI.
  */
 export const OPENCODE_SIGN_IN_REQUIRED_MESSAGE =
-  "OpenCode has no connected model provider. Run opencode auth login in a terminal to connect one.";
-export const OPENCODE_SIGN_IN_COMMAND_HINT = "Open a terminal and run opencode auth login.";
+  "OpenCode has no connected model provider. Sign one in from Settings → OpenCode.";
+export const OPENCODE_SIGN_IN_COMMAND_HINT = "Sign a provider in from Settings → OpenCode.";
 
 /** Names the allowlisted providers to connect, when the allowlist is narrow enough to list. */
 function openCodeSignInHint(
   allowedProviders: readonly string[],
   known: ReadonlyArray<{ id: string; label: string }>,
 ): string {
-  const fallback = "Connect a provider with opencode auth login in a terminal.";
+  const fallback = "Sign a provider in from Settings → OpenCode.";
   if (allowedProviders.length === 0 || allowedProviders.length > MAX_OPENCODE_HINT_PROVIDERS) {
     return fallback;
   }
   const labels = allowedProviders.map(
     (id) => known.find((provider) => provider.id.trim().toLowerCase() === id)?.label ?? id,
   );
-  return `Connect ${labels.length === 1 ? labels[0] : `one of ${labels.join(", ")}`} with opencode auth login in a terminal.`;
+  return `Sign ${labels.length === 1 ? labels[0] : `one of ${labels.join(", ")}`} in from Settings → OpenCode.`;
 }
 
 /** SDK-backed discovery and account operations that are independent of session rendering. */
@@ -76,13 +81,21 @@ export class OpenCodeCapabilities {
             id: name.slice(0, 256),
             name: name.slice(0, 256),
             status: normalized,
+            // No in-app sign-in: OpenCode completes MCP OAuth only for a
+            // request that waits for the callback (see the guidance's notes).
             actions:
               normalized === "connected"
                 ? ["disable"]
                 : normalized === "needs-auth"
-                  ? ["sign-in", "reconnect"]
+                  ? ["reconnect"]
                   : ["enable", "reconnect"],
-            ...(typeof status.error === "string" ? { error: status.error.slice(0, 2_000) } : {}),
+            ...(normalized === "needs-auth"
+              ? { hint: OPENCODE_MCP_SIGN_IN_GUIDANCE.replace("<server>", name.slice(0, 256)) }
+              : {}),
+            // A server's error can echo a URL or header with a token in it.
+            ...(typeof status.error === "string"
+              ? { error: redactSecrets(status.error).slice(0, 2_000) }
+              : {}),
           },
         ];
       });
@@ -101,14 +114,10 @@ export class OpenCodeCapabilities {
       return {};
     }
     if (action === "sign-in") {
-      const response = await this.client.mcp.auth.start(
-        { name: serverId, directory: this.directory },
-        this.requestOptions(),
-      );
-      assertSdkResponse(response, "OpenCode MCP sign in");
-      const data = asRecord(response.data);
-      const url = nonEmptyString(data?.authorizationUrl) ?? nonEmptyString(data?.url);
-      return url ? { url } : {};
+      // `mcp.auth.start` returns a URL whose callback OpenCode then refuses,
+      // because nothing waits for it; a renderer that still offers the
+      // action gets the route that does complete.
+      throw new Error(OPENCODE_MCP_SIGN_IN_GUIDANCE.replace("<server>", serverId.slice(0, 256)));
     }
     const response = await this.client.mcp.connect(
       { name: serverId, directory: this.directory },

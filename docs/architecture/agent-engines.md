@@ -138,6 +138,14 @@ the old per-provider semantics for *new* closes (an old Claude bridge's DELETE
 deletes history), and history that pre-retention builds already deleted cannot
 be recovered.
 
+A tab opened from **Resume Session** (an unassigned tab, then a platform)
+creates no provider session while its picker is open: the backend resumes into
+a tab with no mapping, and the tab starts its own session only if the picker is
+dismissed or the resume fails. The resume then sends no composer controls, so
+the conversation keeps its own settings. Before, every such resume created an
+empty conversation (one more row in OpenCode's and Grok's stores, and briefly a
+Grok agent process) and closed it again.
+
 Claude's bridge re-adopts a closed rollout as an idle session when
 `/session/list` reconciles the SDK listing. That is history discovery, not a
 resurrected tab: the backend mapping is gone, so nothing polls or reopens it
@@ -151,7 +159,8 @@ until the user resumes it.
 | `reconcile_tab_teardowns` (startup and the 60-second sweep) | Finish an earlier tab close | Same close |
 | `reconcile_orphaned_tab_resources` (tabs no pane layout references, after a one-hour grace) | Release ownership nobody holds | Native tabs (including a startup agent session) go through `teardown_tab` |
 | `teardown_tab` for `terminal` / `claude-tmux` | Stop a terminal process | Kills the process; the tmux Claude CLI keeps its own JSONL |
-| `resume_native_agent_session` replacing a tab's session | Release the session the tab no longer shows (a new tab's empty one, in practice) | `provider.closeSession` after the resume is adopted, under tab teardown's lock and last-owner rules; skipped while another tab maps it or a Multi Review owns it. Best effort |
+| `resume_native_agent_session` replacing a tab's session | Release the session the tab no longer shows | `provider.closeSession` after the resume is adopted, under tab teardown's lock and last-owner rules; skipped while another tab maps it or a Multi Review owns it. Journaled first as a teardown intent keyed `resume-replaced:<agent>:<digest>` (`replacedSessionCloseIntent`, `provider-session-ownership.ts`) and cleared on a confirmed close, so a pending or failed close is replayed by `reconcile_tab_teardowns` under the same rules. A tab opened only to resume creates no session of its own, so this replaces a session only when the tab had started one |
+| `reconcile_tab_teardowns` on a `resume-replaced:` intent | Finish a replaced session's close | Same close, without the tab-mapping checks (the backend wrote the id) and without revoking a tab credential. `teardown_tab` refuses that key prefix |
 | `MultiReviewService` cleanup | Remove a finished workflow and its tabs | `provider.closeSession`, so reviewer and fix conversations are kept |
 | `close_coordinator_conversation` | Close a coordinator conversation | Stops the projection and that conversation's bridge, revokes its credentials, invalidates the mapping. No DELETE |
 | `delete_environment` | Remove an environment | Stops processes, removes mappings, worktree or container. No provider DELETE; history inside a removed container goes with it |
@@ -171,7 +180,8 @@ bridges keep running. Backend stores are rows in `orkestrator.sqlite`
 | --- | --- | --- | --- |
 | Logical tab → provider session mapping | Backend `native-agent-sessions` store | Kept | Kept |
 | Tab teardown intent | Backend `environments` store, `tabTeardownIntents` | Kept | Kept; replayed by `reconcile_tab_teardowns` |
-| Parked prompt or steer with an unknown outcome | `pendingDispatch` on the native session record (`storage-native.ts`), with retry and discard controls | Kept | Kept |
+| Parked prompt or steer with an unknown outcome | `pendingDispatch` on the native session record (`storage-native.ts`), with retry and discard controls | Kept; a prompt the restarted bridge reports `lost` is retired without a click | Kept |
+| Last retired dispatch (content-free `requestId`, `retiredAt`) | `retiredDispatch` on the native session record, projected as `retiredDispatch` plus a warning notice | Kept | Kept; replaced by the next one, cleared by the next accepted dispatch, hidden after 24 hours |
 | Compose draft (text, attachments, metadata) | Backend `compose-drafts` store; the renderer copy is a cache | Kept | Kept |
 | Cursor session identity, prompt and steer journals, steer fence, rendered transcript | `CURSOR_BRIDGE_STATE_DIR/state.json` | Kept; unfinished prompts reload as `ambiguous`, transcripts may be shed with an explicit truncation base | Unaffected |
 | Cursor closing state | `closing` tombstones in `state.json` until the removal is published | Tombstone kept; close finished on start | Unaffected |
@@ -183,6 +193,30 @@ bridges keep running. Backend stores are rows in `orkestrator.sqlite`
 | Grok session state and journal | `ACP_STATE_DIR`; unfinished entries reload as `ambiguous` | Kept | Unaffected |
 | OpenCode session and history | The OpenCode server; the backend holds registration and subscriptions in memory | No bridge | Registration lost; the session persists on the server |
 | Transcript cursor | Request state; bridges answer from `droppedMessages` plus the retained window | A restart changes the window; an invalid cursor falls back to the retained window | Unaffected |
+
+## Activity observation
+
+The backend's activity sweep (every 2 s) is the one observer of whether a
+session is busy; everything else reads its shared observation. What each
+provider offers it is `NATIVE_AGENT_OBSERVATION_CAPABILITIES`
+(`apps/backend/src/core/native-agent-observation.ts`). The columns that drive
+policy:
+
+| Provider | Activity read | Idle backend wakeup | Client idle backoff | Idle view changes without a transition |
+| --- | --- | --- | --- | --- |
+| Claude | Bridge `/activity` (batched) | Bridge observation stream (`/event/subscribe?observe=1`) | Only while `turn.quietObservation` | Background tasks; announced from `contentRevision` |
+| Codex | Bridge `/activity` (batched) | Bridge observation stream (`/event/subscribe?observe=1`) | Only while `turn.quietObservation` | Async questions, late command changes; announced from `contentRevision` |
+| Cursor | Bridge `/activity` (batched) | None: every sweep | Yes | No |
+| Pi | Bridge `/activity` (batched) | None: every sweep | Yes | No |
+| Grok | Bridge `/activity` (batched) | None: every sweep | Yes | No |
+| OpenCode | Event-fed batch in the backend | SDK event stream | Yes | No |
+
+A wakeup only makes a stably idle group due; the sweep's no-touch read stays
+the source of truth, and a group without a live wakeup is read on every sweep.
+Client backoff also needs a backend that advertises stamped announcements. The
+announcements and the client side are in
+[event-snapshot-recovery.md](event-snapshot-recovery.md#native-observation-invalidations);
+cadences and budgets are in [recurring-work.md](recurring-work.md).
 
 ## Claude Code
 
@@ -348,11 +382,12 @@ restored sessions and every turn: filesystem denied except the project and
 managed Codex runtime, shell network off, hosted web search off or `cached`
 per the research setting (read back through `config/read` before every
 thread), isolated `CODEX_HOME` holding only the credential, project hooks and
-plugin/browser paths disabled. Claude uses the SDK command sandbox plus a
-read-only shell allowlist, with WebFetch denied (and WebSearch unless research
-is on). Pi's gate runs inside the bridge on every tool call. The injected MCP
-servers are the scoped Orkestrator endpoint and, on Claude and Codex, the
-remote research servers the user listed. The renderer stores pasted attachments outside
+plugin/browser paths disabled. Claude uses the SDK command sandbox, with
+writes to the checkout denied, plus a read-only shell allowlist, with WebFetch
+denied (and WebSearch unless research is on). Pi's gate runs inside the bridge
+on every tool call. The injected MCP servers are the scoped Orkestrator
+endpoint and, on every platform but Grok, the remote research servers the user
+listed. The renderer stores pasted attachments outside
 the checkout and hides mode/permission controls, resume/fork, and
 file-rewinding actions; the backend independently rejects write-capable
 history actions.
@@ -374,6 +409,15 @@ the repository-context revision included before the next coordinator turn.
 OpenCode is the exception: it ships its own HTTP server, so Orkestrator does not
 interpose a bridge process. The backend starts `opencode serve --port <port>`
 for the environment and talks to it directly.
+
+Every local server, and the short-lived catalogue and sign-in servers, opens
+the user's one `opencode.db` under XDG data. Two opening it in the same moment
+can lose one to SQLite's "database is locked", which exits the server before it
+is healthy. `opencode-host-start.ts` therefore lets one host server start at a
+time, from spawn until healthy or exited, and a local start whose server exits
+reporting a locked database is retried twice (0.5 s, then 2 s) before the
+dispatch that asked for it is refused with that reason. Container servers have
+their own database and are not serialised.
 
 `apps/backend/src/core/native-agent-provider.ts` is where the split happens —
 `createNativeAgentProvider()` returns an `OpenCodeProvider` for `opencode` and
@@ -419,8 +463,11 @@ nested `{ path, body }` objects, and the question APIs
 to `opencode serve`; the renderer has no OpenCode client. Build-pipeline and
 Multi Review transcripts are stored raw and normalized for display on the way
 out (`apps/backend/src/core/opencode-display-transcript.ts`), so the renderer
-carries no OpenCode normalizer. It only recognizes a raw envelope from a
-backend older than 2.19.17, to show an "update the backend" notice in its place
+carries no OpenCode normalizer. It accepts entries with display-row fields
+(`role`, `content`, or a `parts` array) and groups entries with none of those
+fields into a generic unrecognized-format notice suggesting an update of the
+older peer. The named pre-2.19.17 raw-envelope guard is retired; an envelope
+with a `parts` array follows the ordinary display-row path
 ([remote-gateway.md](remote-gateway.md#version-reminders)).
 
 Because the server is the vendor's rather than ours, the SSE event vocabulary is
@@ -562,8 +609,18 @@ configuration loads, and whether its commands reach the network. It renders
 them from the policy the bridge reports, and each bridge reports what it
 applies. Pi, Grok and OpenCode have no sandbox, so a `provider` sandbox and the
 network restriction it would hold are reported as unsandboxed with a note;
-Codex and Grok report project resources as on, because their own project trust
-decides; Cursor reports `ask` as the auto-approval it runs. When the policy turns
+Grok reports project resources as on, because its own folder trust decides;
+Cursor reports `ask` as the auto-approval it runs. Codex honours project
+resources off: every thread it starts, resumes or forks pins its cwd untrusted
+(a nested `projects` table in the thread config; Codex ignores a dotted
+`projects."<path>"` key there) and disables each repo-scope skill from
+`skills/list` in a thread-scoped `skills.config`, because the untrusted pin does
+not reach skills (`codexProjectTrustConfig`, `codexProjectSkillsConfig`). That
+keeps out the checkout's `.codex` config layer (MCP servers, hooks, model
+settings), its AGENTS.md and its skills, wins over a trusted main checkout, and
+stops a writable thread marking the project trusted in the user's
+`config.toml`. `live-project-trust.test.ts` proves it against the pinned
+binary. When the policy turns
 project resources on, the ACP bridge launches Grok with `GROK_FOLDER_TRUST=0` and
 `agent --no-leader` (`providerEnv`), so a checkout Grok never trusted, such as a
 container's `/workspace`, still loads its AGENTS.md, skills, commands, hooks and
@@ -580,7 +637,7 @@ decoder together.
 | Adapter | Policy mapping | `network` in `capabilityPolicy.deny` (search unless `allow` names `web.search`) |
 | --- | --- | --- |
 | Claude | `permissionMode` and the approval callback; `allowedTools`/`disallowedTools`; `settingSources`; SDK sandbox options | WebFetch, and WebSearch unless allowed, in `disallowedTools` (`claudeDisallowedTools`) |
-| Codex | `approvalPolicy`, thread sandbox and sandbox network; the coordinator's verified permission profile | `web_search = "disabled"`, or `"cached"` when search is allowed, on the thread; a coordinator also sets it as process configuration and has it read back through `config/read` |
+| Codex | `approvalPolicy`, thread sandbox and sandbox network; an untrusted project pin and disabled repo skills when project resources are off; the coordinator's verified permission profile | `web_search = "disabled"`, or `"cached"` when search is allowed, on the thread; a coordinator also sets it as process configuration and has it read back through `config/read` |
 | Cursor | local SDK sandbox/auto-review; `settingSources`; `tools`/`disallowedTools`, re-applied on resume | `webFetch`, `webSearch` and `task` in `disallowedTools`; the read-only allowlist never includes `webFetch`, and includes `webSearch` only when allowed |
 | Grok | `--always-approve` only for auto-approval, and under auto-approval the bridge also answers the ACP permission requests Grok still sends (allow option), except for a kind the policy denies (`autoApprovedPermissionOption`); ACP permission requests otherwise; `GROK_FOLDER_TRUST=0` and `agent --no-leader` when project resources are on, Grok's own folder trust otherwise | `--disable-web-search` and `agent --no-leader`, which remove search with fetch; an allowed search is not honoured |
 | Pi | approval extension; resource-loader exclusions and project trust; active SDK tool selection | No hosted tools; the read-only gate admits only its read tools by name |
@@ -774,6 +831,13 @@ user's own credentials, so:
 - **A model is a pair.** `provider` plus `modelId`, encoded flat as
   `provider/modelId` and split on the first slash only, because an OpenRouter
   id carries its own slashes. Identical to OpenCode's encoding, deliberately.
+- **A fresh session starts on Pi's saved default model** (`defaultProvider`/
+  `defaultModel` in `settings.json`, what `/model` writes) when a signed-in
+  provider serves it, the way `pi` itself starts, and only then on the
+  catalogue's first model. A login can refuse a model its provider lists, so
+  the first model is a last resort. An agent-test profile also receives the
+  host's saved default, which it uses when its own settings name no default
+  that a signed-in provider serves.
 - **"Signed in" is per provider.** `GET /global/auth` reports each provider's
   status; there is no single account. Sign-in itself is not served: Pi's login
   is an interactive multi-step prompt flow (`select`, `text`, `secret`) with no
@@ -849,7 +913,11 @@ server publishes three tools for that capability: one typed submission tool for
 the attempt's result kind, `validate_workflow_result` and
 `get_workflow_result_status`. A live Multi Review reviewer's attempt also gets
 `report_finding` (see "Provisional findings" below). No Kanban or mail tool is
-reachable through it, so a subagent cannot inherit anything broader. The turn carries no provider final-output schema, and the prompt states
+reachable through it, so a subagent cannot inherit anything broader. The one
+addition is a separate, artifact-only `orkestrator-artifacts` server bound to
+the turn's transcript-artifact grant (never to this capability), so workflow
+agents can publish artifacts into their own transcript; see
+[rich-transcripts.md](rich-transcripts.md#workflow-transcripts). The turn carries no provider final-output schema, and the prompt states
 that the tool instruction supersedes any earlier "final JSON only" guidance.
 
 **Legacy mode.** Review and pipeline attempts fall back to
@@ -910,20 +978,39 @@ session, under a fresh request id and result slot
   (`resultReminderSent`). It says the work is done and only the submission is
   missing.
 - **Restart continuation.** A turn the provider itself cut short is not failed.
-  The Codex bridge reports that on `/session/:id/status` as
-  `interruption: "restart"` beside `phase: "failed"`, and
-  `readProviderStatus` carries it. A result accepted before the restart still
-  counts. Otherwise the turn gets one `workflowRestartContinuationPrompt`
-  (`restartContinuationSent`), which asks the model to continue rather than
-  resubmit, and a second interruption fails it. No other bridge reports
-  interruptions yet, so their cut-short turns fail as before.
+  The bridge reports `interruption: "restart"` beside a failed status on its
+  session snapshot, and `readProviderStatus` carries it. A result accepted
+  before the restart still counts. Otherwise the turn gets one
+  `workflowRestartContinuationPrompt` (`restartContinuationSent`), which asks
+  the model to continue rather than resubmit, and a second interruption fails
+  it. Two bridges report one:
+  - **Codex**, on `/session/:id/status` beside `phase: "failed"`, when an
+    app-server restart stopped the turn.
+  - **Claude**, on `GET /session/:id`, in two cases
+    (`session-manager-turn-interruption.ts`). The bridge keeps a
+    content-free `turnInFlight` mark in the session's preferences file while
+    a turn runs (or owes a background continuation), and clears it when the
+    turn settles, is stopped or its tab closes. A later bridge process that
+    restores the session with the mark still there, written by a process
+    that is gone, reports the turn failed. The mark carries a per-process
+    instance id and pid, so a turn another live bridge sharing the Claude home
+    is running is left alone. The second case is a Claude Code process killed
+    by a signal under the turn while the bridge stayed up: the SDK classifies
+    that error (`errorClass: "process_killed_by_signal"`, pinned in
+    `sdk-compatibility.test.ts`). A non-zero exit is not a restart, because it
+    is as likely a launch or sign-in fault.
+
+  The other bridges report none yet, so their cut-short turns fail as before.
+  A step or reviewer whose bridge is unreachable keeps its state and
+  reconnects on the next pass, so a bridge that died and came back is read
+  for its own outcome rather than failing the step first.
 
 Both flags are persisted, so a backend restart cannot reset either budget.
 
 ### Provisional findings (`report_finding`)
 
 A Multi Review reviewer's report arrives whole, when its result is accepted.
-To let "Findings so far" fill in while reviewers work, a live reviewer's own
+To let the "Issues so far" list fill in while reviewers work, a live reviewer's own
 attempt capability also carries `report_finding`: one finding per call, in the
 shape of one entry of the report's `issues`. The reviewer instruction
 (`workflowResultInstruction(..., { provisionalFindings: true })`) encourages,
@@ -972,7 +1059,7 @@ the read-only turns of a packaged review:
 | Pi | Exempt as one of the turn's own attempt tools; see "Attempt tools in read-only turns" below |
 
 None of these has been run against a real reviewer on its provider yet; see
-[multi-review-flow-graph.md](../todo/multi-review-flow-graph.md).
+[0029-multi-review-flow-graph.md](../todo/coordinator-and-multi-review/0029-multi-review-flow-graph.md).
 
 ### Attempt tools in read-only turns (Grok, Pi)
 
@@ -1003,9 +1090,16 @@ approval policy, including read-only: its submission tool,
 
 An explicit `toolPolicy` deny still wins on both. A turn that declared no
 attempt (an ordinary, coordinator or older backend's turn) gets no exemption,
-and the backend still answers another key with `capability_denied`, because
-the attempt capability authorises only its own. Only the review fan-out
-declares the key today; consolidation and Fix turns on Grok or Pi do not yet.
+so a call naming another key has no read-only approval exemption. If a
+mismatched key reaches an attempt-scoped backend tool, it answers
+`invalid_result` (or `invalid_finding` for `report_finding`) with
+`nextAction: correct` and names only the connection's own key. The OpenCode
+broker gives the same correction after authenticating the capability against
+its own key and checking its environment, project, provider and result kind.
+Invalid capabilities, foreign scopes, provider mismatches and wrong result
+kinds still get `capability_denied` with `nextAction: stop`. Only the review
+fan-out declares the key today; consolidation and Fix turns on Grok or Pi do
+not yet.
 
 ### Provider qualification
 

@@ -80,6 +80,7 @@ function createHarness(
       return options.staged ?? { status: "staged" as const, version: "2.22.0" };
     }),
     installStaged: mock(async (_version: string) => options.install ?? true),
+    setChannel: mock((_channel: string) => undefined),
   };
   const confirmRestart = mock(
     options.confirmRestart ?? (async () => options.decision ?? ("restart" as const)),
@@ -217,6 +218,25 @@ describe("createHostUpdateExecutor", () => {
       latestVersion: "2.22.0",
       checkRequestId: "check-1",
     });
+  });
+
+  test("follows the host's update channel before running the check a switch asks for", async () => {
+    const harness = createHarness();
+    const order: string[] = [];
+    harness.engine.setChannel.mockImplementation((channel) => void order.push(channel));
+    harness.engine.checkSilently.mockImplementation(async () => void order.push("check"));
+    await harness.executor.start();
+    expect(order).toEqual(["stable"]);
+    harness.executor.handleEvent(
+      HOST_MAINTENANCE_EVENT,
+      snapshot({
+        revision: 2,
+        updateChannel: "beta",
+        checkRequest: { id: "check-2", requestedAt: "2026-10-16T12:00:00.000Z" },
+      }),
+    );
+    await harness.settle();
+    expect(order).toEqual(["stable", "beta", "check"]);
   });
 
   test("ignores events until it has started", () => {

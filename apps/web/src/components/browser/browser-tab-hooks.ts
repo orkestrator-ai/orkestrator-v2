@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type RefObject } from "react";
+
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
 export const BLOCKING_OVERLAY_SELECTOR = [
   '[role="dialog"]',
@@ -27,7 +29,7 @@ function isVisuallyPresent(element: Element): boolean {
   return true;
 }
 
-function isBlockingOverlay(element: Element): boolean {
+export function isBlockingOverlay(element: Element): boolean {
   const isClosing =
     element.getAttribute("aria-hidden") === "true" ||
     element.getAttribute("data-state") === "closed";
@@ -80,4 +82,70 @@ export function useBlockingOverlay(enabled: boolean): boolean {
     };
   }, [enabled]);
   return hasBlockingOverlay;
+}
+
+/**
+ * Cmd/Ctrl+L focuses and selects a browser tab's address field: from the app
+ * window, and from inside the tab's native preview, where main intercepts the
+ * key (`browser-preview-focus-address`) because the view has keyboard focus.
+ */
+export function useAddressBarShortcut({
+  tabId,
+  environmentId,
+  isActive,
+  enabled,
+  inputRef,
+}: {
+  tabId: string;
+  environmentId: string;
+  isActive: boolean;
+  enabled: boolean;
+  inputRef: RefObject<HTMLInputElement | null>;
+}): () => void {
+  const setActivePane = usePaneLayoutStore((state) => state.setActivePane);
+  const activePaneId = usePaneLayoutStore(
+    (state) => state.environments.get(environmentId)?.activePaneId,
+  );
+  const owningPaneId = usePaneLayoutStore(
+    (state) => state.findPaneWithTab(tabId, environmentId)?.id,
+  );
+  const focusAddressBar = useCallback(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [inputRef]);
+
+  useEffect(() => {
+    if (!isActive || !enabled) return;
+
+    return window.orkestrator?.listen<string>("browser-preview-focus-address", (requestedTabId) => {
+      if (requestedTabId !== tabId) return;
+      if (owningPaneId) {
+        setActivePane(owningPaneId, environmentId);
+      }
+      focusAddressBar();
+    });
+  }, [enabled, environmentId, focusAddressBar, isActive, owningPaneId, setActivePane, tabId]);
+
+  useEffect(() => {
+    if (!enabled || !isActive || activePaneId !== owningPaneId) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isAddressShortcut =
+        event.key.toLowerCase() === "l" &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey;
+      if (!isAddressShortcut) return;
+
+      event.preventDefault();
+      focusAddressBar();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activePaneId, enabled, focusAddressBar, isActive, owningPaneId]);
+
+  return focusAddressBar;
 }

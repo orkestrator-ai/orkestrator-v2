@@ -1,2 +1,5 @@
 [test]
+# The same preload the package scripts pass, so a bare `bun test <file>` from
+# here gets the suite's isolation: a temporary worktree root and Git config.
+preload = ["../../tests/setup-node.ts"]
 pathIgnorePatterns = ["dist/**"]

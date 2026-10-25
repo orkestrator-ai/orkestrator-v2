@@ -8,9 +8,9 @@ Orkestrator controls to delegate implementation to isolated worker environments.
 It cannot edit the project checkout itself.
 
 What is still missing — mainly provider parity — lives in
-[coordinator-read-only-adapters.md](../todo/coordinator-read-only-adapters.md),
-[coordinator-live-conformance.md](../todo/coordinator-live-conformance.md) and
-[coordinator-consistency-gaps.md](../todo/coordinator-consistency-gaps.md).
+[0026-coordinator-read-only-adapters.md](../todo/coordinator-and-multi-review/0026-coordinator-read-only-adapters.md),
+[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md) and
+[0028-coordinator-consistency-gaps.md](../todo/coordinator-and-multi-review/0028-coordinator-consistency-gaps.md).
 Engine internals live in [`agent-engines.md`](agent-engines.md). Control MCP
 operator detail lives in [`control-mcp.md`](control-mcp.md). Qualification
 invariants for agents live in `AGENTS.md` under **Coordinator qualification**.
@@ -52,6 +52,37 @@ sessions, pending mail, and workflows continue. Closing a conversation settles
 live approvals, revokes its credential, and tombstones its mailbox without
 deleting provider history or the checkout. Removing the project stops
 Coordinator and deletes the isolated runtime, never the user's local repository.
+
+## Multiple machines
+
+On a command node ([command-nodes.md](command-nodes.md)) a coordinator also
+works across the nodes that node controls:
+
+- `list_nodes` shows the connected nodes and whether each has a copy of this
+  project (matched by repository identity); `list_environments` lists the
+  project's environments on them as well.
+- Every environment and workflow tool takes an optional `nodeId` and works
+  on that node's copy with the same contract as here: launches, jobs,
+  prompts and messages open delegations that wake this conversation once,
+  and build pipelines and Multi Reviews there send status wakes. See
+  [command-nodes.md](command-nodes.md#one-tool-family-every-node).
+- A node without a copy needs one first: `request_project_on_node` asks the
+  user, who settles the location and files in the copy dialog.
+- `request_environment_deletion` only asks: the user confirms in a dialog
+  that names the node and the environment. A coordinator never deletes on
+  its own initiative, here or on its own node.
+
+The coordinator's context says whether its node is a command node. A command
+node attached to another runs in leaf mode: its coordinator's context names
+the controlling node, its node tools refuse, and it handles any message as
+an agent on that node would. Its conversations are kept but hidden behind a
+warning in the project's Coordinator tab.
+
+A command node's window reaching a leaf's project shows the leaf's
+coordinator directly when the sidebar is grouped by machine or project.
+Grouped by repository it leads to the command node's coordinator for that
+repository instead, when the command node has one
+([command-nodes.md](command-nodes.md#leaf-mode)).
 
 ## One main coordinator, and side agents
 
@@ -164,8 +195,8 @@ it.
 
 | Tier | Meaning | Platforms |
 | --- | --- | --- |
-| `enforced` | The provider or the OS blocks the mutation whatever the agent attempts | Codex; Claude where its command sandbox is available; Pi |
-| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor; Claude when the host has no command sandbox |
+| `enforced` | The provider or the OS blocks the mutation whatever the agent attempts | Codex; Claude where its command sandbox can start (macOS; Linux with `bwrap` and `socat` on `PATH`); Pi |
+| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor; Claude where the command sandbox cannot start (Windows; Linux without `bwrap` or `socat`) |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
 **Settings → Agent platforms → Coordinator safety level** chooses the weakest
@@ -183,13 +214,32 @@ What each enforced platform actually does:
   (`disabled`, or `cached` when research is on, never `live`), and the bridge
   refuses a thread unless `config/read` reports that mode.
 - **Claude** runs with the SDK command sandbox on and `allowUnsandboxedCommands`
-  off, `permissionMode: dontAsk`, an allowlist that excludes every writing tool
+  off, a permission mode capped by the deny policy (`plan` while the composer
+  is in plan mode, which a fresh coordinator composer selects, otherwise
+  `default`; never `bypassPermissions`, see `claudePermissionMode`), with
+  `canUseTool` refusing whatever reaches it. Not `dontAsk`: the pinned CLI
+  refuses AskUserQuestion outright in `dontAsk`, so a coordinator could not ask
+  the user anything. Then an allowlist that excludes every writing tool
   and WebFetch (and WebSearch unless research is on), `settingSources: []`, a private
   `CLAUDE_CONFIG_DIR` holding only the credential, and a bridge-owned
   `PreToolUse` hook. The hook is the real boundary for shell: it allows a fixed
   list of reading commands and refuses pipes, redirection, substitution and
-  chaining. On Windows, where there is no command sandbox, Claude drops to
-  `provider-configured` automatically.
+  chaining, writing arguments (`uniq in out`, `sort -o`, `git diff --output`,
+  gawk's in-place and program options), path-qualified programs and the
+  network-only `gh`, `curl` and `git ls-remote`. The SDK sandbox's default lets
+  a command write its working directory, so the coordinator sandbox denies
+  writes to the checkout (`filesystem.denyWrite`); before that, `uniq in.txt
+  out.txt` wrote the checkout of an `enforced` Claude coordinator.
+  `defaultCoordinatorHostCapabilities` decides whether the sandbox can start:
+  always on macOS, on Linux only with `bwrap` and `socat` on `PATH` (the CLI
+  refuses a required sandbox without either), never on Windows, where the
+  pinned CLI's sandbox sits behind a vendor flag that is off. Elsewhere Claude
+  is `provider-configured`. The launcher passes the same answer to the bridge
+  as process authority (`ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`, `required`
+  or `unavailable`; absent reads as `required`). `required` keeps
+  `failIfUnavailable` on, so a sandbox that fails to start fails the turn.
+  `unavailable` still asks for the sandbox but runs without it, with the hook
+  as the boundary, rather than failing every turn.
 - **Pi** blocks every tool outside its read-only set in its own `tool_call`
   gate, which runs in the bridge process and cannot be switched off by the
   workspace.
@@ -200,10 +250,14 @@ declares. Cursor applies the sandbox and a tool ban but exposes no approval
 callback, and is refused outright if its sandbox cannot be enabled.
 
 Grok deny-policy children load a private agent profile that removes `write`,
-`search_replace`, `run_terminal_cmd` and built-in subagents, with `--no-leader`
+`search_replace`, `run_terminal_cmd`, built-in subagents and 1.0.67's `monitor`
+waiting tool, with `--no-leader`
 so a shared process cannot bypass it. This also covers read-only review turns.
 Remaining ACP permission requests, including MCP calls, are refused by choosing
-`reject_once`. Other tools that never ask remain advisory. Grok
+`reject_once`. Other tools that never ask remain advisory, among them xAI's
+hosted X search tools (`x_keyword_search`, `x_semantic_search`,
+`x_user_search`, `x_thread_fetch`), which neither the profile nor
+`--disallowed-tools` removes on 1.0.67. Grok
 1.0.52 ends its turn on any answer except allow, so the bridge then sends the
 same session a fixed continuation saying the call was refused and must not be
 retried (`POLICY_DENIAL_CONTINUATION`, `acp-prompt.ts`). The continuation
@@ -255,10 +309,10 @@ Orkestrator injects each one itself, never from a file the checkout can edit.
 | --- | --- | --- | --- |
 | Codex | `web_search = "cached"` when allowed, else `"disabled"`; `features.standalone_web_search = false`. The engine reads the mode back through `config/read` once per app-server generation and refuses the thread on any other value. `cached` serves pages only from OpenAI's index: a live run had it refuse a fresh URL with "Cache miss" while `live` opened it. | No separate tool; `live` mode is never used | Process `-c mcp_servers.<name>` overrides, tools approved |
 | Claude | WebSearch on the allowlist when allowed, else in `disallowedTools` and refused by the hook | WebFetch denied by name and by the hook | Added to the inline MCP set, `mcp__<name>__*` on the allowlist and the hook |
-| OpenCode | `websearch` and `codesearch` allowed by name when allowed, else denied | `webfetch` denied after every allow; `task` subagents inherit it | Not yet |
-| Cursor | `webSearch` joins the read-only allowlist when allowed | `webFetch` never on the allowlist | Not yet |
-| Grok | Off: its only verified switch, `--disable-web-search`, removes search and fetch together. Also `--no-leader`, so a shared leader that ignores the flag is never used | Off | Not yet |
-| Pi | No hosted search | None; the read-only gate is a name allowlist, so an extension's web tool is refused | Not yet |
+| OpenCode | `websearch` and `codesearch` allowed by name when allowed, else denied | `webfetch` denied after every allow; `task` subagents inherit it | Registered on the coordinator's own `opencode serve` at launch (`POST /mcp`, replacing any project entry of the same name), before the conversation is ready. OpenCode 1.19.4 lists no MCP tools over HTTP, so the backend lists each server's tools itself and allows exactly `<name>_<tool>`, leaving out an id a project server named `<name>_…` could also produce (`opencode-coordinator-research.ts`) |
+| Cursor | `webSearch` joins the read-only allowlist when allowed | `webFetch` never on the allowlist | Hosted in-process as `<name>__<tool>` custom tools beside Orkestrator's, because a sandboxed read-only attach cannot call an HTTP MCP server; published under their own server name (`hostResearchCustomTools`) |
+| Grok | Off. On 1.0.67 the hosted `web_search` carries `open_page` and `open_page_with_find`, which open any URL, and neither the agent profile nor `--disallowed-tools` removes them (`scripts/coordinator-probes/grok-web-tools-probe.mjs`), so search there is fetch. `--disable-web-search` removes all three; `GROK_WEB_FETCH=0` removes only the client `web_fetch`. Also `--no-leader`, so a shared leader that ignores the flag is never used | Off | None |
+| Pi | No hosted search | None; the read-only gate is a name allowlist, so an extension's web tool is refused | Connected by the bridge-owned MCP client in a coordinator process only (`research` scope, reserved like `orkestrator` so a `mcp.json` entry cannot stand in), and admitted by the gate by exact registered name |
 
 The coordinator context tells the agent which of these it has, that commands
 and live page fetches are off, and to report a tool as refused only after a
@@ -298,7 +352,9 @@ another. Use `capabilityPolicy`, which names the operation rather than the tool.
 Before moving a platform to `enforced`, run the live read-only suite for it
 (`mise run test:agent:coordinator --credential-source <platform>`) and keep the
 summary it writes. The unit tests show that the bridge translates the policy.
-Only a live run shows that the provider holds it.
+Only a live run shows that the provider holds it. `coordinator-conformance.test.ts`
+fails if a platform the coordinator offers, enforced ones included, is missing
+from the live suite's platform list (`COORDINATOR_LIVE_PLATFORMS`).
 
 Where a platform cannot honour an axis, report it in the policy's `note` and
 leave the tier at `provider-configured`. Do not silently drop the axis, and do
@@ -776,14 +832,28 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `live-network-lock.test.ts`
 - per-bridge activity and policy tests already cover whether a bridge reports
   `idle` at turn end and how it translates `capabilityPolicy`
+- the Claude coordinator sandbox against the pinned CLI with a scripted local
+  model: the default sandbox writes the working directory, the coordinator
+  sandbox refuses it and still reads, and the hook refuses `uniq in out`:
+  `conformance-coordinator-sandbox-live.test.ts` (claude-bridge)
+- research servers on the pinned OpenCode, with a real `opencode serve` and a
+  local MCP server: `opencode-coordinator-research-live.test.ts`
 
-- the read-only boundary against real providers: `mise run
-  test:agent:coordinator` runs one live coordinator turn per platform in a
-  disposable profile. Each turn attempts every class of mutation, then the
-  suite checks that the checkout digest is unchanged and that read and
-  discovery tools still answer. It is opt-in and never runs in `mise run test`
-  or CI. See "Live coordinator suite" in
+- the same contracts against real providers: `mise run
+  test:agent:coordinator` runs four scenarios per platform in a disposable
+  profile. `read-only` attempts every class of mutation and checks that the
+  checkout digest is unchanged and that read and discovery tools still answer.
+  `async` launches real workers and checks the async launch result, that a
+  queued prompt runs before pending worker mail, one carrier per delegation, one
+  notice for a silent worker and the poll guard. `family` runs a two-worker
+  exchange of sixteen messages, including a follow-up to a busy worker, with
+  nobody answering anything. `peer` has two ordinary environments exchange
+  ten messages with Wake peers on and no coordinator involved. It is opt-in
+  and never runs in `mise run test` or CI. See "Live coordinator suite" in
   [`agent-testing.md`](../development/agent-testing.md).
+- an OpenCode coordinator keeps its scoped Control MCP credential on its server
+  through every later reconcile, and does not start until it is connected:
+  `commands-servers-coordinator-opencode.test.ts`
 
-The live async and mail scenarios, and the runs that qualify each platform, are
-in [coordinator-live-conformance.md](../todo/coordinator-live-conformance.md).
+The runs that qualify each platform, and the scenarios still to add, are in
+[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md).

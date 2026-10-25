@@ -400,6 +400,32 @@ export class ProjectGitService {
     }
   }
 
+  /** In-progress operation markers, resolved with one `rev-parse` rather than one per marker. */
+  private async operationMarkers(
+    root: string,
+  ): Promise<((typeof OPERATION_MARKERS)[number] | null)[]> {
+    const resolve = async (names: readonly string[]) =>
+      (
+        await runCommand("git", ["rev-parse", ...names.flatMap((name) => ["--git-path", name])], {
+          cwd: root,
+          timeoutMs: 10_000,
+        })
+      ).stdout.trim();
+    let gitPaths = (await resolve(OPERATION_MARKERS)).split("\n");
+    if (gitPaths.length !== OPERATION_MARKERS.length) {
+      // A Git directory whose path contains a newline cannot be split by line.
+      gitPaths = await Promise.all(OPERATION_MARKERS.map((name) => resolve([name])));
+    }
+    return Promise.all(
+      OPERATION_MARKERS.map((name, index) =>
+        fs.access(path.resolve(root, gitPaths[index]!)).then(
+          () => name,
+          () => null,
+        ),
+      ),
+    );
+  }
+
   private async readStatus(
     projectId: string,
     root: string,
@@ -417,20 +443,7 @@ export class ProjectGitService {
         cwd: root,
         timeoutMs: 10_000,
       }).catch(() => ({ stdout: "", stderr: "" })),
-      Promise.all(
-        OPERATION_MARKERS.map(async (name) => {
-          const gitPath = (
-            await runCommand("git", ["rev-parse", "--git-path", name], {
-              cwd: root,
-              timeoutMs: 10_000,
-            })
-          ).stdout.trim();
-          return fs.access(path.resolve(root, gitPath)).then(
-            () => name,
-            () => null,
-          );
-        }),
-      ),
+      this.operationMarkers(root),
       this.branches(root),
     ]);
     let branch: string | null = null;

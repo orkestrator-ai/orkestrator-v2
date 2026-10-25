@@ -1,8 +1,12 @@
+import {
+  coordinatorLiveBudgets,
+  coordinatorLiveRunnerTimeout,
+} from "./coordinator-live-budgets.js";
 import { afterEach, expect, test } from "bun:test";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { COORDINATOR_LIVE_PLATFORMS } from "./coordinator-live.js";
+import { COORDINATOR_LIVE_PLATFORMS, COORDINATOR_LIVE_SCENARIOS } from "./coordinator-live.js";
 import { COORDINATOR_LIVE_ROOT_ENV, runCoordinatorLive } from "./coordinator-live-runner.js";
 
 const roots: string[] = [];
@@ -31,7 +35,7 @@ const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE;
 const args = process.argv.slice(2);
 const browser = path.basename(process.argv[1]) === "bunx";
 const task = browser ? "playwright" : args[1];
-fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, pid: process.pid, runId: process.env.ORKESTRATOR_AGENT_TEST_RUN_ID, platforms: process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_PLATFORMS, live: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR }) + "\\n");
+fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, pid: process.pid, runId: process.env.ORKESTRATOR_AGENT_TEST_RUN_ID, platforms: process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_PLATFORMS, scenarios: process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_SCENARIOS, live: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR }) + "\\n");
 if (task === "dev:test") {
   fs.writeFileSync(path.join(root, "ready-" + profile), "yes");
   process.on("SIGTERM", () => process.exit(0));
@@ -43,10 +47,12 @@ if (task === "dev:test") {
   console.log(JSON.stringify({ profile, status: ready ? "ready" : "starting", live: { launcher: ready, vite: ready, electron: ready, backend: ready } }));
 } else if (browser) {
   const platform = process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_PLATFORMS;
-  const file = path.join(root, "output", "agent-testing", process.env.ORKESTRATOR_AGENT_TEST_RUN_ID, "coordinator", platform + ".json");
   const verdict = mode === "skip" ? "skipped" : mode === "pass" ? "passed" : "failed";
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ version: 1, platform, verdict, startedAt: "t", ...(verdict === "passed" ? {} : { reason: "spec says " + mode }) }));
+  for (const scenario of process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_SCENARIOS.split(",")) {
+    const file = path.join(root, "output", "agent-testing", process.env.ORKESTRATOR_AGENT_TEST_RUN_ID, "coordinator", platform + "-" + scenario + ".json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ version: 1, platform, scenario, verdict, startedAt: "t", ...(verdict === "passed" ? {} : { reason: "spec says " + mode }) }));
+  }
   fs.writeFileSync(path.join(root, "tests-started"), String(process.pid));
   if (mode === "test-hang" || mode === "launcher-dies") setInterval(() => {}, 1000);
   else process.exit(verdict === "failed" ? 1 : 0);
@@ -76,6 +82,7 @@ if (task === "dev:test") {
             pid: number;
             runId?: string;
             platforms?: string;
+            scenarios?: string;
             live?: string;
           },
       );
@@ -106,7 +113,11 @@ function alive(pid: number) {
   }
 }
 
-const quiet = { log: () => undefined, startupTimeoutMs: 5_000 };
+const quiet = {
+  log: () => undefined,
+  startupTimeoutMs: 5_000,
+  scenarios: ["read-only"] as const,
+};
 
 test("each platform's summary is found under its profile's run id and aggregated", async () => {
   const f = await fixture();
@@ -137,6 +148,30 @@ test("each platform's summary is found under its profile's run id and aggregated
     version: 1,
     runId: "run-pass",
     results: run.results,
+  });
+});
+
+test("every scenario runs by default, each in its own summary, combined per platform", async () => {
+  const f = await fixture();
+  const run = await runCoordinatorLive({
+    ...f,
+    log: quiet.log,
+    startupTimeoutMs: quiet.startupTimeoutMs,
+    platforms: platforms.slice(0, 1),
+    signal: new AbortController().signal,
+  });
+  expect(run.exitCode).toBe(0);
+  const tests = (await f.events()).filter((event) => event.task === "playwright");
+  expect(tests.map((event) => event.scenarios)).toEqual(["read-only,async,family,peer"]);
+  expect(run.results[0]).toMatchObject({
+    platform: "claude",
+    verdict: "passed",
+    scenarios: [
+      { scenario: "read-only", verdict: "passed" },
+      { scenario: "async", verdict: "passed" },
+      { scenario: "family", verdict: "passed" },
+      { scenario: "peer", verdict: "passed" },
+    ],
   });
 });
 
@@ -241,3 +276,32 @@ test.each(["SIGTERM", "SIGKILL"] as const)(
   },
   15000,
 );
+
+test("runner budgets cover selected Playwright timeouts, underlying waits and cleanup margin", () => {
+  for (const env of [
+    {},
+    {
+      ORKESTRATOR_AGENT_TEST_COORDINATOR_TURN_TIMEOUT_MS: "900000",
+      ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS: "1200000",
+      ORKESTRATOR_AGENT_TEST_COORDINATOR_FAMILY_TIMEOUT_MS: "3000000",
+      ORKESTRATOR_AGENT_TEST_COORDINATOR_PEER_TIMEOUT_MS: "2400000",
+    },
+  ]) {
+    const budgets = coordinatorLiveBudgets(env);
+    expect(budgets.waits.async).toBe(7 * budgets.step);
+    expect(budgets.waits.family).toBe(2 * budgets.step + budgets.family);
+    expect(budgets.waits.peer).toBe(2 * budgets.step + budgets.peer);
+    const all = COORDINATOR_LIVE_SCENARIOS;
+    for (const scenario of all) {
+      expect(budgets.tests[scenario]).toBeGreaterThanOrEqual(
+        budgets.waits[scenario] + budgets.overhead,
+      );
+      expect(coordinatorLiveRunnerTimeout([scenario], env)).toBeGreaterThanOrEqual(
+        budgets.tests[scenario] + budgets.processMargin,
+      );
+    }
+    expect(coordinatorLiveRunnerTimeout(all, env)).toBe(
+      all.reduce((sum, scenario) => sum + budgets.tests[scenario] + budgets.processMargin, 0),
+    );
+  }
+});

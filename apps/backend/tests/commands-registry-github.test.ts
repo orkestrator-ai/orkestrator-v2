@@ -1,4 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { setManagedGitHubCli } from "../src/core/github-cli-binary";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -28,7 +33,7 @@ describe("GitHub issue commands", () => {
     Object.assign(context.storage, {
       loadConfig: mock(async () => ({
         version: "1.0.0",
-        global: { githubToken: "github_secret_token" },
+        global: { useHostGitHubCredentials: false, githubToken: "github_secret_token" },
         repositories: {},
       })),
     });
@@ -231,7 +236,11 @@ describe("GitHub issue commands", () => {
     const { context } = createContext(createEnvironment());
 
     Object.assign(context.storage, {
-      loadConfig: mock(async () => ({ version: "1.0.0", global: {}, repositories: {} })),
+      loadConfig: mock(async () => ({
+        version: "1.0.0",
+        global: { useHostGitHubCredentials: false },
+        repositories: {},
+      })),
     });
     await expect(
       commands.get("get_github_issues")?.({ projectId: "project-1" }, context),
@@ -241,7 +250,7 @@ describe("GitHub issue commands", () => {
       getProject: mock(async () => null),
       loadConfig: mock(async () => ({
         version: "1.0.0",
-        global: { githubToken: "github_secret_token" },
+        global: { useHostGitHubCredentials: false, githubToken: "github_secret_token" },
         repositories: {},
       })),
     });
@@ -287,6 +296,53 @@ describe("GitHub issue commands", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("uses the host gh login when host GitHub credentials are selected", async () => {
+    const commands = createCommandRegistry();
+    const { context } = createContext(createEnvironment());
+    const binDir = await mkdtemp(path.join(os.tmpdir(), "ork-gh-"));
+    const gh = path.join(binDir, "gh");
+    const originalFetch = globalThis.fetch;
+    const authorizations: Array<string | null> = [];
+
+    Object.assign(context.storage, {
+      getProject: mock(async () => ({
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://github.com/acme/repo.git",
+      })),
+      loadConfig: mock(async () => ({
+        version: "1.0.0",
+        global: { useHostGitHubCredentials: true, githubToken: "stored_pat" },
+        repositories: {},
+      })),
+    });
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      authorizations.push(new Headers(init?.headers).get("authorization"));
+      return Response.json({ message: "Bad credentials" }, { status: 401 });
+    }) as unknown as typeof fetch;
+    try {
+      await writeFile(
+        gh,
+        '#!/bin/sh\n[ "$*" = "auth token --hostname github.com" ] && echo gho_host_token\n',
+      );
+      await chmod(gh, 0o755);
+      setManagedGitHubCli(gh);
+      await expect(
+        commands.get("get_github_issues")?.({ projectId: "project-1" }, context),
+      ).rejects.toThrow("GitHub authentication failed");
+      expect(authorizations[0]).toBe("Bearer gho_host_token");
+
+      await writeFile(gh, "#!/bin/sh\nexit 1\n");
+      await expect(
+        commands.get("get_github_issues")?.({ projectId: "project-1" }, context),
+      ).rejects.toThrow("gh auth login");
+    } finally {
+      setManagedGitHubCli(undefined);
+      globalThis.fetch = originalFetch;
+      await rm(binDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Electron backend command registry", () => {
@@ -314,7 +370,7 @@ describe("Electron backend command registry", () => {
     Object.assign(context.storage, {
       loadConfig: mock(async () => ({
         version: "1.0.0",
-        global: { githubToken: "github_secret_token" },
+        global: { useHostGitHubCredentials: false, githubToken: "github_secret_token" },
         repositories: {},
       })),
       getGitHubCompletionComment: mock(async () => completionRecord),
@@ -404,7 +460,7 @@ describe("Electron backend command registry", () => {
     Object.assign(context.storage, {
       loadConfig: mock(async () => ({
         version: "1.0.0",
-        global: { githubToken: "github_secret_token" },
+        global: { useHostGitHubCredentials: false, githubToken: "github_secret_token" },
         repositories: {},
       })),
       getGitHubCompletionComment: mock(async () => completionRecord),
@@ -469,7 +525,7 @@ describe("Electron backend command registry", () => {
     Object.assign(context.storage, {
       loadConfig: mock(async () => ({
         version: "1.0.0",
-        global: { githubToken: secret },
+        global: { useHostGitHubCredentials: false, githubToken: secret },
         repositories: {},
       })),
       getGitHubCompletionComment: mock(async () => completionRecord),
@@ -531,7 +587,7 @@ describe("Electron backend command registry", () => {
     Object.assign(context.storage, {
       loadConfig: mock(async () => ({
         version: "1.0.0",
-        global: { githubToken: "github_secret_token" },
+        global: { useHostGitHubCredentials: false, githubToken: "github_secret_token" },
         repositories: {},
       })),
       getGitHubCompletionComment: getCompletion,

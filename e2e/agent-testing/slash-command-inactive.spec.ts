@@ -9,26 +9,44 @@
  * supported). Nothing at module scope spawns `mise` or reads profile state, so
  * the file stays inert in profile-free runs.
  *
- * Each case plants project commands in a disposable environment's worktree
+ * Each case plants project commands in a disposable environment's workspace
  * (never this repository, never a provider home) and proves a command ran by a
  * nonce that exists only in the command file: the typed text never contains
- * it, so only the expanded command can produce it. The environments are
- * created with the execution-policy override `projectResources: true`, the
- * supported way to let a host session load project commands (Claude ignores
- * them otherwise).
+ * it, so only the expanded command can produce it. No case writes a
+ * user-scope command file.
+ *
+ * `ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT` picks where the commands run:
+ *
+ * - `local` (default): a host worktree, written directly. The environment is
+ *   created with the execution-policy override `projectResources: true`, the
+ *   supported way to let a host session load project commands (Claude ignores
+ *   them otherwise).
+ * - `container`: a containerized environment; the profile must have been
+ *   started with `--fixture-environments local,container` so its image
+ *   exists. The workspace is the container's own `/workspace` (a clone, not a
+ *   host mount) and the bridge runs inside the container, so every command
+ *   file and the execution marker are written, removed and read through
+ *   `docker exec` as the container's `node` user, never on the host. No
+ *   policy override is set: a container loads project resources by default,
+ *   and that default is what this variant qualifies. Bridge restarts use the
+ *   container bridge commands (`stop_<provider>_server`/`start_<provider>_server`).
+ *   The environment the case switches away to stays a host environment that is
+ *   never started; it is only somewhere else to be.
  *
  * Codex tabs are launched on `ORKESTRATOR_AGENT_TEST_MODEL` (default
  * `gpt-6.1-sol`, as in the build-pipeline steering case): a new profile's
  * default Codex model is not offered to a ChatGPT login, and a stored model
  * missing from the catalogue still runs (tracked in
- * docs/todo/slash-command-qualification.md). Claude tabs use the profile's
+ * docs/todo/cli-and-slash-commands/0015-slash-command-qualification.md). Claude tabs use the profile's
  * default model.
  *
- * What it checks (docs/todo/slash-command-qualification.md, item 2):
+ * What it checks (docs/todo/cli-and-slash-commands/0015-slash-command-qualification.md, item 2):
  *
  * - A selected command sent just before switching away completes while its
  *   environment is inactive, through an inventory change, a catalogue refresh
- *   and a browser outage long enough to need reconciliation, and runs once.
+ *   and a 10 s browser outage that really drops the page's event stream
+ *   (offline plus `window.stop()`, see `event-stream-outage.ts`), and runs
+ *   once. The page must then reconnect its stream.
  * - On return and after a hard reload: the result, the new inventory, a stale
  *   draft whose command disappeared (kept, refused, nothing sent) and the
  *   composer controls; then again in a narrow viewport.
@@ -39,32 +57,32 @@
  * Bridge restarts use the profile's own per-environment stop and start
  * commands, so only this case's bridge is touched.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { NativeAgentDispatchOutcome } from "@orkestrator/protocol/native-agent";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { watchEventStream } from "./event-stream-outage";
+import {
+  authenticatedInvoke,
+  containerWorkspace,
+  hostWorkspace,
+  profileStatus,
+  repositoryRoot,
+  sidebarNavigator,
+  type Environment,
+  type Project,
+} from "./slash-command-live-support";
 
-type Status = {
-  status: string;
-  profile?: string;
-  flavor?: string;
-  browserUrl?: string;
-  testProject?: string;
-};
-type Project = { id: string; name: string; localPath: string | null };
-type Environment = { id: string; name: string; worktreePath?: string | null };
 type Message = { role?: unknown; content?: unknown };
 type Projection = {
   turn: { phase: string; error?: string };
   messages?: Message[];
   slashCommands?: Array<{ name: string }>;
   recoverableDispatch?: { requestId: string; status?: "reconciling" | "action-required" };
+  retiredDispatch?: { requestId: string; message: string };
 } | null;
-type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
-const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const LIVE_OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_LIVE_SLASH === "1";
 const NARROW_VIEWPORT = { width: 390, height: 844 };
@@ -92,6 +110,21 @@ const PROVIDERS = {
 } as const;
 type Provider = keyof typeof PROVIDERS;
 
+const ENVIRONMENT_KINDS = ["local", "container"] as const;
+type EnvironmentKind = (typeof ENVIRONMENT_KINDS)[number];
+
+function selectedEnvironmentKind(): EnvironmentKind {
+  const raw = process.env.ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT?.trim() || "local";
+  if (!(ENVIRONMENT_KINDS as readonly string[]).includes(raw)) {
+    throw new Error(
+      `ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT: unsupported environment "${raw}" ` +
+        `(supported: ${ENVIRONMENT_KINDS.join(", ")})`,
+    );
+  }
+  return raw as EnvironmentKind;
+}
+const ENVIRONMENT_KIND: EnvironmentKind = LIVE_OPT_IN ? selectedEnvironmentKind() : "local";
+
 function selectedProviders(): Provider[] {
   const raw = process.env.ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS?.trim() || "codex";
   return raw.split(",").map((value) => {
@@ -104,73 +137,6 @@ function selectedProviders(): Provider[] {
     }
     return provider as Provider;
   });
-}
-
-function profileStatus(): Status {
-  const command = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-  });
-  if (!command.stdout.trim()) {
-    throw new Error(
-      `dev:status for profile "${profile}" returned no manifest: ${command.stderr.trim()}`,
-    );
-  }
-  return JSON.parse(command.stdout) as Status;
-}
-
-async function authenticatedInvoke(page: Page, status: Status): Promise<Invoke> {
-  // The one-shot login URL is parsed in memory and never copied into output.
-  const command = spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-  });
-  if (command.status !== 0) throw new Error(command.stderr || "dev:login failed");
-  const login = JSON.parse(command.stdout) as { loginUrl?: unknown };
-  if (typeof login.loginUrl !== "string") throw new Error("dev:login returned no login URL");
-  const response = await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
-  expect(response?.ok() ?? false).toBe(true);
-  return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
-    // `page.request` is not subject to `context.setOffline`, so backend truth
-    // stays readable while the page's own streams are cut.
-    const invokeResponse = await page.request.post(
-      new URL("/__orkestrator/invoke", status.browserUrl!).href,
-      { data: { command, args } },
-    );
-    expect(invokeResponse.ok(), `${command}: ${await invokeResponse.text()}`).toBe(true);
-    return ((await invokeResponse.json()) as { result: T }).result;
-  };
-}
-
-function sidebarNavigator(page: Page, projectName: string) {
-  return async (name: string) => {
-    const expand = page.getByRole("button", { name: `Expand project ${projectName}` });
-    const entry = page.getByText(name, { exact: true }).first();
-    // The mobile shell keeps the project list in a drawer.
-    const openDrawer = page.getByRole("button", { name: "Open projects and environments" });
-    await expect(expand.or(entry).or(openDrawer).first()).toBeVisible({ timeout: 30_000 });
-    for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
-      const continueButton = page.getByRole("button", { name: label, exact: true });
-      if (await continueButton.isVisible()) await continueButton.click();
-    }
-    // The mobile shell has a drawer toggle and may already show the drawer.
-    const mobile =
-      (await page
-        .getByRole("button", { name: /^(Open|Close) projects and environments$/ })
-        .count()) > 0;
-    if (mobile && (await openDrawer.isVisible())) await openDrawer.click();
-    await expect(expand.or(entry).first()).toBeVisible({ timeout: 30_000 });
-    if (await expand.isVisible()) await expand.click();
-    if (!mobile) {
-      // A sidebar tooltip from the previous hover can sit over the entry.
-      // Escape would also close the mobile drawer, so only on desktop.
-      await page.mouse.move(0, 0);
-      await page.keyboard.press("Escape");
-    }
-    await entry.click();
-    const closeDrawer = page.getByRole("button", { name: "Close projects and environments" });
-    if (await closeDrawer.first().isVisible()) await closeDrawer.first().click();
-  };
 }
 
 const textOf = (message: Message) => (typeof message.content === "string" ? message.content : "");
@@ -190,7 +156,7 @@ const replyExactly = (token: string) =>
 for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provider[])) {
   const spec = PROVIDERS[provider];
 
-  test.describe(`live slash commands in an inactive environment (${provider})`, () => {
+  test.describe(`live slash commands in an inactive ${ENVIRONMENT_KIND} environment (${provider})`, () => {
     test.skip(
       !LIVE_OPT_IN,
       "opt-in live slash-command turns against the isolated fixture with host credentials",
@@ -200,7 +166,9 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
       page,
       context,
     }, testInfo) => {
-      test.setTimeout(900_000);
+      const container = ENVIRONMENT_KIND === "container";
+      // A container's first start clones the workspace and runs its setup.
+      test.setTimeout(container ? 1_200_000 : 900_000);
       page.setDefaultTimeout(15_000);
       await page.setViewportSize(DESKTOP_VIEWPORT);
       // A dev profile's backend reports the Electron version as its own, so
@@ -214,11 +182,11 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
         },
       );
 
-      const status = profileStatus();
+      const status = profileStatus(profile);
       expect(status.profile, "dev:status answered for a different profile").toBe(profile);
       expect(status.status, `profile "${profile}" is not running`).toBe("ready");
       expect(status.flavor).toBe("agent-test");
-      const invoke = await authenticatedInvoke(page, status);
+      const invoke = await authenticatedInvoke(page, status, profile);
       const fixture = (await invoke<Project[]>("get_projects")).find(
         (project) => project.localPath === status.testProject,
       );
@@ -226,30 +194,57 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
 
       const environments: Environment[] = [];
       try {
-        for (const name of [`slash-${provider}-a`, `slash-${provider}-b`]) {
+        const localSettings = {
+          environmentType: "local",
+          agentSettings: { executionPolicy: { projectResources: true } },
+        };
+        for (const [name, settings] of [
+          // A container loads project resources by default; no override.
+          [`slash-${provider}-a`, container ? { environmentType: "containerized" } : localSettings],
+          [`slash-${provider}-b`, localSettings],
+        ] as const) {
           environments.push(
             await invoke<Environment>("create_environment", {
               projectId: fixture!.id,
               name: `${name}-${Date.now()}`,
               networkAccessMode: "restricted",
-              environmentType: "local",
-              agentSettings: { executionPolicy: { projectResources: true } },
+              ...settings,
             }),
           );
         }
         const [target, other] = environments as [Environment, Environment];
         await invoke("start_environment", { environmentId: target.id });
-        const worktree = (
-          await invoke<Environment>("get_environment", { environmentId: target.id })
-        ).worktreePath;
-        expect(worktree).toBeTruthy();
-        const writeCommand = (name: string, body: string) => {
-          const file = path.join(worktree!, spec.commandFile(name));
-          mkdirSync(path.dirname(file), { recursive: true });
-          writeFileSync(file, body);
-        };
-        const removeCommand = (name: string) =>
-          rmSync(path.join(worktree!, spec.commandFile(name)), { force: true });
+        let started = await invoke<Environment>("get_environment", { environmentId: target.id });
+        if (container) {
+          // Start returns once setup is launched; the clone lands later.
+          await expect
+            .poll(
+              async () => {
+                started = await invoke<Environment>("get_environment", {
+                  environmentId: target.id,
+                });
+                return (
+                  started.status === "running" &&
+                  !!started.containerId &&
+                  started.setupPhase !== "pending" &&
+                  started.setupPhase !== "running"
+                );
+              },
+              { timeout: 300_000, intervals: [2_000], message: "the container never started" },
+            )
+            .toBe(true);
+          expect(started.environmentType).toBe("containerized");
+          expect(started.setupPhase, "container setup failed").not.toBe("failed");
+        } else {
+          expect(started.worktreePath).toBeTruthy();
+        }
+        const containerId = container ? started.containerId! : null;
+        const workspace = container
+          ? containerWorkspace(containerId!)
+          : hostWorkspace(started.worktreePath!);
+        const writeCommand = (name: string, body: string) =>
+          workspace.write(spec.commandFile(name), body);
+        const removeCommand = (name: string) => workspace.remove(spec.commandFile(name));
 
         const runToken = nonce("SLASHRUN");
         const addedToken = nonce("SLASHADDED");
@@ -264,11 +259,8 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           "Always append a new line even if this file already has the same line. " +
           "Do not repeat that append or modify this file again within this invocation. Then ";
         const executions = (argument: string) =>
-          existsSync(path.join(worktree!, executionFile))
-            ? readFileSync(path.join(worktree!, executionFile), "utf8")
-                .split("\n")
-                .filter((line) => line === argument).length
-            : 0;
+          (workspace.read(executionFile) ?? "").split("\n").filter((line) => line === argument)
+            .length;
         writeCommand("slashq-run", commandBody("Inactive qualification", replyExactly(runToken)));
         writeCommand(
           "slashq-long",
@@ -291,7 +283,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           expectedRevision: layout?.revision ?? 0,
           layout: {
             version: PANE_LAYOUT_VERSION,
-            containerId: null,
+            containerId,
             activePaneId: "pane-slash",
             root: {
               kind: "leaf",
@@ -301,7 +293,12 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
                 {
                   id: tabId,
                   type: "agent-native",
-                  nativeAgentData: { environmentId: target.id, platform: provider, isLocal: true },
+                  nativeAgentData: {
+                    environmentId: target.id,
+                    platform: provider,
+                    ...(containerId ? { containerId } : {}),
+                    isLocal: !container,
+                  },
                   ...(spec.launchModel ? { initialAgentModel: spec.launchModel } : {}),
                 },
               ],
@@ -324,6 +321,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
         };
 
         const openEnvironment = sidebarNavigator(page, fixture!.name);
+        const stream = watchEventStream(page);
         const composeBar = page.getByTestId("shared-native-compose-bar");
         const input = composeBar.getByRole("textbox", { name: `Message ${spec.label}` });
         const send = composeBar.getByRole("button", { name: "Send", exact: true });
@@ -370,6 +368,21 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           .poll(() => hasRow("/slashq-run"), { timeout: 120_000, message: "cold discovery" })
           .toBe(true);
 
+        await test.step("composer clicks keep the picker open and clearing resets dismissal", async () => {
+          // The same 30 s budget as every other picker wait here: a container
+          // tab can take longer to apply its first catalogue (flake 0710).
+          await typeIntoComposer("/slashq-run");
+          await expect(picker).toBeVisible({ timeout: 30_000 });
+          await input.click();
+          await expect(picker).toBeVisible();
+          await input.press("Escape");
+          await expect(picker).toBeHidden();
+          await typeIntoComposer("/slashq-run");
+          await expect(picker).toBeVisible({ timeout: 30_000 });
+          await input.press("Escape");
+          await input.fill("");
+        });
+
         await test.step("a command sent just before switching away completes while inactive", async () => {
           await selectCommand("/slashq-run", "alpha");
           await sendDraft();
@@ -377,8 +390,10 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           await openEnvironment(other.name);
           await expect(input).toBeHidden();
 
-          // While inactive: an inventory change, a browser outage long enough
-          // to need reconciliation, and a catalogue refresh.
+          // While inactive: an inventory change, a browser outage that drops
+          // the event stream (offline alone leaves it connected), and a
+          // catalogue refresh. Whatever the page missed meanwhile must come
+          // back through reconnection and replay.
           writeCommand(
             "slashq-added",
             commandBody(
@@ -387,9 +402,11 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
             ),
           );
           removeCommand("slashq-gone");
-          await context.setOffline(true);
-          await page.waitForTimeout(10_000);
+          const outageStartedAt = Date.now();
+          await stream.cut(context);
+          await page.waitForTimeout(Math.max(0, 10_000 - (Date.now() - outageStartedAt)));
           await context.setOffline(false);
+          await stream.expectReconnected();
           await expect
             .poll(
               async () =>
@@ -456,11 +473,14 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           await openEnvironment(target.name);
           await expect(input).toHaveText("/slashq-gone beta", { timeout: 30_000 });
           await sendDraft();
+          // The refusal is the dispatch's own answer: the backend revalidates
+          // the selection against the bridge, which takes seconds in a busy
+          // container.
           await expect(
             page.getByText(
               "The selected command is no longer available. Choose it again from the menu.",
             ),
-          ).toBeVisible();
+          ).toBeVisible({ timeout: 30_000 });
           await expect(input).toHaveText("/slashq-gone beta");
           expect((await projection())?.messages?.length ?? 0).toBe(before);
           expect(count((await projection())?.messages, "user", "/slashq-gone")).toBe(0);
@@ -525,8 +545,13 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
          * not run the command a second time.
          */
         const restartBridge = async () => {
-          await invoke(`stop_local_${provider}_server_cmd`, { environmentId: target.id });
-          await invoke(`start_local_${provider}_server_cmd`, { environmentId: target.id });
+          if (containerId) {
+            await invoke(`stop_${provider}_server`, { containerId });
+            await invoke(`start_${provider}_server`, { containerId });
+          } else {
+            await invoke(`stop_local_${provider}_server_cmd`, { environmentId: target.id });
+            await invoke(`start_local_${provider}_server_cmd`, { environmentId: target.id });
+          }
           await invoke("await_bridge_ready", {
             environmentId: target.id,
             agent: provider,
@@ -548,15 +573,43 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           expect(typeof body.args.requestId).toBe("string");
           return body.args;
         };
-        const settleAfterRestart = async (typed: string) => {
+        const settleAfterRestart = async (typed: string, requestId?: unknown) => {
           let retried = false;
+          // An `unknown` retry answer leaves the card up, as it would for a
+          // user, who presses Retry again. A restarted Claude bridge answers
+          // 500 for up to 30 s while it waits out the killed process's
+          // preference lock (docs/todo 0059).
+          let retryAgain = false;
+          let retries = 0;
+          let retiredSeen = false;
           await expect
             .poll(
               async () => {
                 const current = await projection();
+                // The bridge said the id is lost, and the backend settled it
+                // without anyone pressing Retry.
+                if (
+                  !retiredSeen &&
+                  !retried &&
+                  requestId !== undefined &&
+                  current?.retiredDispatch?.requestId === requestId
+                ) {
+                  retiredSeen = true;
+                  expect(current.retiredDispatch.message).toMatch(
+                    /could not confirm this message, so it may not have run/,
+                  );
+                  testInfo.annotations.push({
+                    type: "retired-without-retry",
+                    description: `${typed}: settled as lost by reconciliation, no Retry needed`,
+                  });
+                }
                 const parked = current?.recoverableDispatch;
-                if (parked?.status === "action-required" && !retried) {
+                if (
+                  parked?.status === "action-required" &&
+                  (!retried || (retryAgain && retries < 4))
+                ) {
                   retried = true;
+                  retries += 1;
                   testInfo.annotations.push({
                     type: "parked",
                     description: `${typed}: parked after the restart; retried under the same request id`,
@@ -576,6 +629,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
                       ),
                     });
                   }
+                  retryAgain = outcome.outcome === "unknown";
                   testInfo.annotations.push({
                     type: "retry-outcome",
                     description: `${typed}: ${outcome.outcome}${outcome.outcome === "rejected" && outcome.requestIdRetired ? " (retired)" : ""}`,
@@ -625,12 +679,113 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           return replies;
         };
 
+        await test.step("a lost acknowledgement retires automatically after restart and preserves the draft", async () => {
+          // Claude's durable claim has no recoverable outcome after restart.
+          // Codex keeps a dispatched outcome, so it cannot exercise retirement.
+          if (provider !== "claude") return;
+          const typed = "/slashq-added lost-ack";
+          await selectCommand("/slashq-added", "lost-ack");
+          const submission = await sendRestartDraft(typed);
+          await expect.poll(() => settled(), { timeout: 180_000 }).toBe(true);
+          await expect.poll(() => executions("lost-ack"), { timeout: 90_000 }).toBe(1);
+          await openEnvironment(other.name);
+          // Hold the browser away from this session. Model the lost backend
+          // acknowledgement at the persistence boundary, while retaining the
+          // real bridge's durable claim and performing a real process restart.
+          await restartBridge();
+          expect(status.dataDir).toBeTruthy();
+          const staged = spawnSync(
+            "bun",
+            [
+              path.join(import.meta.dirname, "slash-command-lost-ack.ts"),
+              status.dataDir!,
+              target.id,
+              provider,
+              sessionKey,
+              String(submission.requestId),
+              typed,
+            ],
+            { cwd: repositoryRoot, encoding: "utf8" },
+          );
+          expect(staged.status, staged.stderr).toBe(0);
+          const draftKey = `${provider}:${target.id}:${encodeURIComponent(sessionKey)}`;
+          await invoke("save_compose_draft", {
+            draftKey,
+            ownerType: "environment",
+            ownerId: target.id,
+            value: {
+              text: typed,
+              mentions: [],
+              attachments: [],
+              annotations: [],
+              metadata: { platform: provider, requestId: submission.requestId },
+            },
+          });
+          const readSession = () =>
+            invoke<{
+              pendingDispatch?: { requestId: string };
+              retiredDispatch?: { requestId: string };
+              dispatchedRequestIds?: string[];
+            }>("get_native_agent_session", identity);
+          expect((await readSession()).pendingDispatch?.requestId).toBe(submission.requestId);
+          await expect
+            .poll(
+              async () => {
+                const current = await projection();
+                if (current?.retiredDispatch?.requestId === submission.requestId) return "retired";
+                const stored = await readSession();
+                return JSON.stringify({
+                  phase: current?.turn.phase,
+                  hasError: Boolean(current?.turn.error),
+                  pending: stored.pendingDispatch?.requestId === submission.requestId,
+                  retired: stored.retiredDispatch?.requestId === submission.requestId,
+                  acknowledged: stored.dispatchedRequestIds?.includes(String(submission.requestId)),
+                });
+              },
+              { timeout: 90_000 },
+            )
+            .toBe("retired");
+          const retired = (await projection())!;
+          expect(retired.recoverableDispatch).toBeUndefined();
+          expect(retired.retiredDispatch!.message).toMatch(/could not confirm this message/);
+          await page.reload();
+          await openEnvironment(target.name);
+          await expect(input).toHaveText(typed, { timeout: 90_000 });
+          const warning = page.getByText(retired.retiredDispatch!.message, { exact: true });
+          await expect(warning).toBeVisible({ timeout: 30_000 });
+          await expect(page.getByRole("button", { name: "Retry send" })).toHaveCount(0);
+          await expect(
+            page
+              .locator("[data-sonner-toast]")
+              .filter({ hasText: retired.retiredDispatch!.message }),
+          ).toHaveCount(0);
+          const readDraft = () =>
+            invoke<{
+              value: {
+                text: string;
+                metadata?: { requestId?: string; pendingTranscriptConfirmation?: unknown };
+              };
+            } | null>("get_compose_draft", { draftKey });
+          await expect
+            .poll(async () => (await readDraft())?.value.metadata?.requestId, {
+              timeout: 30_000,
+            })
+            .toBeUndefined();
+          const draft = await readDraft();
+          expect(draft?.value.text).toBe(typed);
+          expect(draft?.value.metadata?.pendingTranscriptConfirmation).toBeUndefined();
+          const resent = await sendRestartDraft(typed);
+          expect(resent.requestId).not.toBe(submission.requestId);
+          await expect.poll(() => executions("lost-ack"), { timeout: 180_000 }).toBe(2);
+          await expect.poll(() => settled(), { timeout: 180_000 }).toBe(true);
+        });
+
         await test.step("a bridge restart right after Send never runs the command twice", async () => {
           await selectCommand("/slashq-added", "gamma");
           const submission = await sendRestartDraft("/slashq-added gamma");
           await restartBridge();
           await openEnvironment(other.name);
-          const retried = await settleAfterRestart("/slashq-added gamma");
+          const retried = await settleAfterRestart("/slashq-added gamma", submission.requestId);
           // Replay the actual browser submission even when reconciliation
           // did not park it. This always exercises same-id retry admission.
           await invoke("dispatch_native_agent_intent", submission);
@@ -665,7 +820,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           );
           await openEnvironment(other.name);
           await restartBridge();
-          const retried = await settleAfterRestart("/slashq-long delta");
+          const retried = await settleAfterRestart("/slashq-long delta", submission.requestId);
           await invoke("dispatch_native_agent_intent", submission);
           await settleAfterRestart("/slashq-long delta");
           await openEnvironment(target.name);

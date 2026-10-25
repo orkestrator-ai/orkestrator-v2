@@ -9,6 +9,8 @@
  */
 import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import {
   callsOwnWorkflowResult,
   workflowResultTurnToolNames,
@@ -116,6 +118,8 @@ interface RegisteredMcpTool {
 interface PiMcpRuntime {
   inventory: NativeAgentMcpServer[];
   orkestratorToolNames: Set<string>;
+  /** Registered names of the coordinator's research server tools. */
+  researchToolNames: Set<string>;
   tools: RegisteredMcpTool[];
   connections: PiMcpConnection[];
   /** The tab credential these connections were prepared with; "" for the env. */
@@ -142,14 +146,17 @@ export function publicPiMcpServers(state: SessionState): NativeAgentMcpServer[] 
 }
 
 /**
- * A worker's Orkestrator mail tool. Always allowed, whatever the session's
- * approval policy: it writes only to Orkestrator's own message store, and it is
- * how a worker reports back.
+ * A worker's Orkestrator mail or transcript-artifact tool. Always allowed,
+ * whatever the session's approval policy: mail writes only to Orkestrator's
+ * own message store and is how a worker reports back; artifact tools write
+ * only to Orkestrator's bounded artifact store, never the workspace. Matched
+ * by exact registered name from the Orkestrator server, never by prefix.
  */
 export function isOrkestratorMailTool(state: SessionState, toolName: string): boolean {
   return (
     runtimes.get(state)?.orkestratorToolNames.has(toolName) === true &&
-    (AGENT_MAIL_TOOL_NAMES as readonly string[]).includes(toolName)
+    ((AGENT_MAIL_TOOL_NAMES as readonly string[]).includes(toolName) ||
+      (ARTIFACT_TOOL_NAMES as readonly string[]).includes(toolName))
   );
 }
 
@@ -175,6 +182,29 @@ export function isOwnWorkflowResultCall(
     !state.policy?.toolPolicy?.deny?.includes(toolName) &&
     callsOwnWorkflowResult(turn, input)
   );
+}
+
+/**
+ * A transcript-artifact tool from an Orkestrator server. It writes only to
+ * Orkestrator's bounded artifact store, never the workspace, so a read-only
+ * review turn may call it like its own result tools. An explicit
+ * `toolPolicy` deny still wins.
+ */
+export function isOrkestratorArtifactTool(state: SessionState, toolName: string): boolean {
+  return (
+    runtimes.get(state)?.orkestratorToolNames.has(toolName) === true &&
+    (ARTIFACT_TOOL_NAMES as readonly string[]).includes(toolName) &&
+    !state.policy?.toolPolicy?.deny?.includes(toolName)
+  );
+}
+
+/**
+ * A tool from one of the coordinator's research servers, by the exact name it
+ * was registered under. Those servers are remote HTTPS endpoints the launcher
+ * named; their tools read documentation and cannot reach the checkout.
+ */
+export function isResearchMcpTool(state: SessionState, toolName: string): boolean {
+  return runtimes.get(state)?.researchToolNames.has(toolName) === true;
 }
 
 export function isOrkestratorMcpTool(state: SessionState, toolName: string): boolean {
@@ -284,8 +314,15 @@ export async function mcpConfigNeedsRefresh(state: SessionState): Promise<boolea
   return runtime.configKey !== (await piMcpConfigFingerprint(state, runtime.configPaths));
 }
 
+/** Any change, the artifact grant included, rebuilds the connections. */
 function mcpConnectionKey(state: SessionState): string {
-  return state.agentMcp ? `${state.agentMcp.url}\u0000${state.agentMcp.token}` : "";
+  return state.agentMcp
+    ? JSON.stringify([
+        state.agentMcp.url,
+        state.agentMcp.token,
+        state.agentMcp.artifacts?.token ?? null,
+      ])
+    : "";
 }
 
 export async function preparePiMcp(
@@ -297,6 +334,7 @@ export async function preparePiMcp(
   const runtime: PiMcpRuntime = {
     inventory: [],
     orkestratorToolNames: new Set(),
+    researchToolNames: new Set(),
     tools: [],
     connections: [],
     connectionKey: mcpConnectionKey(state),
@@ -458,12 +496,13 @@ async function connectAndRegister(
     runtime.tools.push(registered);
     names.push(registered.name);
     if (server.scope === "orkestrator") runtime.orkestratorToolNames.add(registered.name);
+    if (server.scope === "research") runtime.researchToolNames.add(registered.name);
   }
   return {
     id: server.id,
     name: server.id,
     status: "connected",
-    scope: server.scope,
+    scope: publicMcpScope(server.scope),
     transport: server.transport,
     toolCount: names.length,
     tools: names,
@@ -471,12 +510,21 @@ async function connectAndRegister(
   };
 }
 
+/**
+ * The scope an inventory row reports. Research servers are configured in
+ * Orkestrator's own settings, not in a Pi file, so they are reported as
+ * Orkestrator's.
+ */
+function publicMcpScope(scope: ResolvedMcpServer["scope"]): NativeAgentMcpServer["scope"] {
+  return scope === "research" ? "orkestrator" : scope;
+}
+
 function detachedServer(server: ResolvedMcpServer): NativeAgentMcpServer {
   return {
     id: server.id,
     name: server.id,
     status: "failed",
-    scope: server.scope,
+    scope: publicMcpScope(server.scope),
     transport: server.transport,
     error: "MCP connection was detached before it completed",
     actions: [],
@@ -499,7 +547,7 @@ function recordConnectFailure(
     id: server.id,
     name: server.id,
     status: "failed",
-    scope: server.scope,
+    scope: publicMcpScope(server.scope),
     transport: server.transport,
     error: publicMcpError(error),
     actions: [],
@@ -675,5 +723,7 @@ function formatMcpContent(result: { content?: unknown }): string {
 
 function publicMcpError(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
-  return text.replace(/Bearer\s+\S+/gi, "Bearer [redacted]").slice(0, 500);
+  // The shared rules cover bearer tokens and the other credential shapes an
+  // MCP server's error can echo (keys in URLs, headers, provider tokens).
+  return redactSecrets(text).slice(0, 500);
 }

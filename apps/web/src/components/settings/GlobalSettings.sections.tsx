@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettings";
+import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
 import type {
   CoordinatorResearchMcpServer,
@@ -98,13 +99,10 @@ import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { PlanUsageSection } from "./PlanUsageSection";
 import { AgentAccountsSection } from "./AgentAccountsSection";
+import { AgentSignInCard } from "./AgentSignInCard";
+import { OpenCodeProvidersSection } from "./OpenCodeProvidersSection";
 import { isAgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
-import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
-import { useProjectStore, useUIStore } from "@/stores";
-import {
-  refreshSettingsModelCatalog,
-  resolveSettingsCatalogProjectId,
-} from "./agent/refresh-model-catalog";
+import { useSettingsModelCatalog } from "./agent/useSettingsModelCatalog";
 import {
   MAX_DEBUG_LOG_RETENTION_DAYS,
   MIN_DEBUG_LOG_RETENTION_DAYS,
@@ -249,6 +247,9 @@ function CredentialClearButton({
 }
 
 export function GlobalSettingsSections({ activeSection, settings }: GlobalSettingsSectionsProps) {
+  // Another machine's files are not on this one, so there is nothing to reveal.
+  const { machine } = useAccountMachine();
+  const canRevealFiles = isWindowMachine(machine);
   const {
     global,
     envPatterns,
@@ -266,6 +267,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     sshAgentSocketPath,
     setSshAgentSocketPath,
     sshAgentSocketPathValidationError,
+    defaultProjectsDirectory,
+    setDefaultProjectsDirectory,
+    defaultProjectsDirectoryValidationError,
     useHostClaudeCredentials,
     setUseHostClaudeCredentials,
     githubToken,
@@ -367,12 +371,19 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     | { state: "unreported" }
     | { state: "failed" }
   >({ state: "loading" });
+  // Entering the debug section, or switching machine while on it, probes again.
+  const [probedSection, setProbedSection] = useState(activeSection);
+  const [probedMachine, setProbedMachine] = useState(machine);
+  if (probedSection !== activeSection || (activeSection === "debug" && probedMachine !== machine)) {
+    setProbedSection(activeSection);
+    setProbedMachine(machine);
+    if (activeSection === "debug") setBackendVersion({ state: "loading" });
+  }
   useEffect(() => {
     if (activeSection !== "debug") return;
     let cancelled = false;
-    setBackendVersion({ state: "loading" });
     backend
-      .getAppVersion()
+      .getAppVersion(machine)
       .then((reported) => {
         if (cancelled) return;
         const version = normalizeBackendVersion(reported);
@@ -387,7 +398,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     return () => {
       cancelled = true;
     };
-  }, [activeSection]);
+  }, [activeSection, machine]);
 
   const versionReminder =
     backendVersion.state === "reported"
@@ -534,12 +545,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     </div>
   );
 
-  const selectedProjectId = useUIStore((state) => state.selectedProjectId);
-  const projects = useProjectStore((state) => state.projects);
-  const projectIds = useMemo(() => projects.map((project) => project.id), [projects]);
-  const catalogProjectId = resolveSettingsCatalogProjectId(selectedProjectId, projectIds);
-  const catalogProject = projects.find((project) => project.id === catalogProjectId);
-  const catalogProjectLabel = catalogProject?.name ?? catalogProjectId;
+  const { catalog, catalogProjectId, catalogProjectLabel, selectedProjectId, refresh } =
+    useSettingsModelCatalog();
   const openCodeCatalogScopeDescription = !catalogProjectId
     ? "Add a repository to load and refresh OpenCode models."
     : catalogProjectId === selectedProjectId
@@ -549,11 +556,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         : `No repository is selected; models are loaded from ${catalogProjectLabel}.`;
   const [refreshingModelCatalog, setRefreshingModelCatalog] = useState<AgentPlatform | null>(null);
   const refreshingModelCatalogRef = useRef<AgentPlatform | null>(null);
-  // Repository-scoped so an OpenCode catalogue cached for the open project is
-  // offered here too. Global Settings can open before the user selects one, so
-  // fall back to the first repository rather than presenting a refresh action
-  // that can only fail. The Claude/Codex/Cursor/Grok catalogues are global.
-  const catalog = useProjectModelCatalog(catalogProjectId ?? "", true);
   const agentTiers = { global: agentSettings };
 
   const refreshModelCatalog = useCallback(
@@ -562,7 +564,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       refreshingModelCatalogRef.current = platform;
       setRefreshingModelCatalog(platform);
       try {
-        const result = await refreshSettingsModelCatalog(platform, catalogProjectId);
+        const result = await refresh(platform);
         const scope =
           platform === "opencode" && catalogProjectLabel ? ` for ${catalogProjectLabel}` : "";
         toast.success(
@@ -579,7 +581,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         setRefreshingModelCatalog(null);
       }
     },
-    [catalogProjectId, catalogProjectLabel],
+    [catalogProjectLabel, refresh],
   );
 
   const renderDefaults = () => (
@@ -597,18 +599,45 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     />
   );
 
-  const renderPlatform = (platform: AgentPlatform, extras?: React.ReactNode) => (
+  const [accountStatusToken, setAccountStatusToken] = useState(0);
+  const accountsChanged = useCallback(() => setAccountStatusToken((token) => token + 1), []);
+
+  const renderPlatform = (
+    platform: AgentPlatform,
+    extras?: React.ReactNode,
+    signInControls?: React.ReactNode,
+  ) => (
     <div className="max-w-2xl space-y-5">
-      {/* Platforms with accounts show usage on each account instead. */}
-      {isAgentAccountPlatform(platform) ? (
-        <AgentAccountsSection
-          key={`accounts-${platform}`}
-          platform={platform}
-          reloadToken={planUsageRefreshToken}
-        />
-      ) : (PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (
-        <PlanUsageSection key={platform} platform={platform} reloadToken={planUsageRefreshToken} />
-      ) : null}
+      <>
+        {/* Read without a session, so it is there before any environment runs it. */}
+        {enabledAgentPlatforms.includes(platform) ? (
+          <AgentSignInCard
+            key={`sign-in-${platform}`}
+            platform={platform}
+            reloadToken={planUsageRefreshToken + accountStatusToken}
+          >
+            {signInControls}
+          </AgentSignInCard>
+        ) : (
+          signInControls
+        )}
+        {/* Platforms with accounts show usage on each account instead. */}
+        {isAgentAccountPlatform(platform) ? (
+          <AgentAccountsSection
+            key={`accounts-${platform}`}
+            platform={platform}
+            onAccountsChanged={accountsChanged}
+            reloadToken={planUsageRefreshToken}
+          />
+        ) : (PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (
+          <PlanUsageSection
+            key={platform}
+            platform={platform}
+            reloadToken={planUsageRefreshToken}
+          />
+        ) : null}
+        {platform === "opencode" ? <OpenCodeProvidersSection /> : null}
+      </>
       <AgentPlatformPane
         platform={platform}
         tier={agentSettings}
@@ -685,7 +714,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             GitHub authentication
           </h3>
           <p className="text-xs text-muted-foreground mt-1">
-            Used by containers to clone private repositories and push over HTTPS.
+            Used for GitHub issues and pull requests, and by containers to clone private
+            repositories and push over HTTPS.
           </p>
         </div>
         <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
@@ -783,6 +813,56 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
         <div className="space-y-3 border-t border-zinc-800 pt-4">
           <div className="space-y-1">
+            <Label htmlFor="default-projects-directory" className="text-sm font-medium">
+              Default projects folder
+            </Label>
+            <p
+              id="default-projects-directory-help"
+              className="text-xs leading-relaxed text-muted-foreground"
+            >
+              Where a project copied to this machine from another one is cloned. Leave blank to use
+              the folder most of this machine's projects are in, or ~/Projects.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Input
+              id="default-projects-directory"
+              aria-label="Default projects folder"
+              aria-invalid={defaultProjectsDirectoryValidationError ? true : undefined}
+              aria-describedby="default-projects-directory-help"
+              value={defaultProjectsDirectory}
+              onChange={(event) => setDefaultProjectsDirectory(event.target.value)}
+              placeholder="Same folder as existing projects"
+              spellCheck={false}
+              className="flex-1 font-mono"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Browse for the default projects folder"
+              disabled={!canRevealFiles}
+              onClick={() => {
+                void pickHostPath({
+                  mode: "directory",
+                  title: "Select the default projects folder",
+                  defaultPath: defaultProjectsDirectory.trim() || undefined,
+                }).then((selected) => selected && setDefaultProjectsDirectory(selected));
+              }}
+            >
+              <FolderOpen className="h-4 w-4" />
+            </Button>
+          </div>
+          {defaultProjectsDirectoryValidationError && (
+            <p role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {defaultProjectsDirectoryValidationError}
+            </p>
+          )}
+        </div>
+
+        <div className="space-y-3 border-t border-zinc-800 pt-4">
+          <div className="space-y-1">
             <Label htmlFor="ssh-agent-socket" className="text-sm font-medium">
               SSH agent socket
             </Label>
@@ -807,6 +887,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               variant="outline"
               size="icon"
               aria-label="Browse for SSH agent socket"
+              disabled={!canRevealFiles}
               onClick={() => {
                 void pickHostPath({
                   mode: "file",
@@ -1383,20 +1464,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             name, and its value is redacted from creation errors.
           </p>
         </div>
-
-        <div className="space-y-3 border-t border-border/60 pt-5">
-          <div>
-            <h3 className="text-sm font-medium text-foreground">Cursor sign-in</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Cursor sessions run through Cursor&apos;s TypeScript SDK.
-            </p>
-          </div>
-          <CursorSdkSignIn
-            credentialRevision={`${global.cursorApiKeyConfigured === true}:${global.cursorApiKeySource ?? "none"}`}
-            onCredentialChange={() => setPlanUsageRefreshToken((token) => token + 1)}
-          />
-        </div>
       </>,
+      // Cursor's own sign-in is that platform's card body.
+      <CursorSdkSignIn
+        credentialRevision={`${global.cursorApiKeyConfigured === true}:${global.cursorApiKeySource ?? "none"}`}
+        onCredentialChange={() => setPlanUsageRefreshToken((token) => token + 1)}
+      />,
     );
 
   const renderCodex = () =>
@@ -1717,15 +1790,16 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     }
   }, [copyGatewayToken, gatewayToken]);
 
+  const webClientUrl = webClientStatus?.url;
   const handleCopyWebClientUrl = useCallback(async () => {
-    if (!webClientStatus?.url) return;
+    if (!webClientUrl) return;
     try {
-      await copyWebClientUrl(webClientStatus.url);
+      await copyWebClientUrl(webClientUrl);
     } catch (error) {
       console.error("[settings] Failed to copy web client URL:", error);
       toast.error("Failed to copy web client URL");
     }
-  }, [copyWebClientUrl, webClientStatus?.url]);
+  }, [copyWebClientUrl, webClientUrl]);
 
   const handleResetTailscaleServe = useCallback(async () => {
     setIsResettingTailscaleServe(true);
@@ -1994,7 +2068,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
         <p className="text-xs leading-relaxed text-muted-foreground/70">
           When enabled, enter the HTTPS address shown above and this gateway token at
-          www.orkestrator.dev. Both devices must be on the same tailnet.
+          www.orkestrator.dev/connect. Both devices must be on the same tailnet.
         </p>
       </div>
     );
@@ -2137,10 +2211,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         {logDirectory && (
           <button
             type="button"
+            disabled={!canRevealFiles}
             onClick={() => {
               if (logDirectory) backend.revealInFileManager(logDirectory).catch(() => {});
             }}
-            className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full"
+            className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full disabled:text-muted-foreground disabled:no-underline"
             title={logDirectory}
           >
             <FolderOpen className="h-3 w-3 shrink-0" />
@@ -2238,10 +2313,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </p>
           <button
             type="button"
+            disabled={!canRevealFiles}
             onClick={() => {
               if (logDirectory) backend.revealInFileManager(logDirectory).catch(() => {});
             }}
-            className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full"
+            className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full disabled:text-muted-foreground disabled:no-underline"
             title={`${logDirectory}/codex-raw`}
           >
             <FolderOpen className="h-3 w-3 shrink-0" />

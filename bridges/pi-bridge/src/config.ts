@@ -48,6 +48,18 @@ export function commandChangeJournalPath(piSessionId: string | undefined): strin
 }
 
 /**
+ * Where unacknowledged change evidence is spooled, or undefined when this
+ * bridge is stateless (the spool is then memory-only).
+ *
+ * A sibling of the command-change journal, so a bridge restart re-offers
+ * evidence the backend had not yet acknowledged.
+ */
+export function changeEvidenceDirectory(): string | undefined {
+  const directory = process.env.PI_BRIDGE_STATE_DIR?.trim();
+  return directory ? resolve(directory, "change-evidence") : undefined;
+}
+
+/**
  * Pi's own configuration directory, holding `auth.json`, `models.json` and
  * `settings.json`.
  *
@@ -85,6 +97,23 @@ export function runtimeStorePaths(): { authPath?: string; modelsPath?: string } 
 }
 
 /**
+ * A `provider/modelId` to try when Pi's own settings name no default or name
+ * one unavailable from a signed-in provider, or undefined.
+ *
+ * An agent-test profile that shares the host's `auth.json` keeps its own
+ * settings, so nothing in them says which model that login can use. The
+ * backend passes the host's saved `defaultProvider` and `defaultModel` here,
+ * and nothing else from the host's settings. A value that names no provider is
+ * ignored rather than guessed at.
+ */
+export function fallbackDefaultModelId(): string | undefined {
+  const value = process.env.PI_BRIDGE_DEFAULT_MODEL?.trim();
+  if (!value || Buffer.byteLength(value) > MAX_MODEL_ID_BYTES) return undefined;
+  const separator = value.indexOf("/");
+  return separator > 0 && separator < value.length - 1 ? value : undefined;
+}
+
+/**
  * Where Pi writes its own session transcripts.
  *
  * Pi owns this file format and resumes a conversation from it, so it is the
@@ -96,31 +125,6 @@ export function sessionDirectory(): string | undefined {
   const directory = process.env.PI_SESSION_DIR?.trim();
   return directory ? resolve(directory) : undefined;
 }
-
-/**
- * Whether the agent's tool calls are routed through the approval flow.
- *
- * Off by default and deliberately so: an Orkestrator Pi tab is an interactive
- * agent session in an already-isolated worktree or container, matching the
- * permissive default every other bridge here uses. The container boundary, not
- * a per-call prompt, is what isolates an agent. When it *is* on, every timeout,
- * disconnect and malformed answer denies — see `interactions.ts`.
- */
-export function approvalsEnabled(): boolean {
-  return process.env.PI_BRIDGE_REQUIRE_APPROVAL === "1";
-}
-
-/**
- * Ambient project-local resources the SDK is allowed to load from the workspace.
- *
- * Pi discovers `.pi/` extensions, skills and prompt templates out of the
- * repository, and an extension is arbitrary TypeScript that runs in this
- * process. Cloning a repository must not be enough to run its code, so the
- * project layer is opt-in and only the container launcher opts in — exactly the
- * boundary `ACP_APPROVE_PROJECT_MCPS` draws for the ACP bridge. Every other
- * value, including unset and a stray ambient one, fails closed.
- */
-export const projectResourcesEnabled = process.env.PI_BRIDGE_PROJECT_RESOURCES === "1";
 
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 /**

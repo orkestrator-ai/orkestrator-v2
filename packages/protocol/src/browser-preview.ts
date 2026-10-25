@@ -30,6 +30,12 @@ export interface BrowserPreviewAttachInput {
   url?: string;
   /** Service previews: resolved and authorized in the main process. */
   service?: BrowserPreviewServiceTarget;
+  /**
+   * Service previews: the view navigation (`BrowserPreviewState.service.navigation`)
+   * that `service.path` was chosen against. A path chosen against an older
+   * navigation is stale and never navigates the view. Absent from older renderers.
+   */
+  navigationBasis?: number;
   bounds: BrowserPreviewBounds;
   visible: boolean;
 }
@@ -51,8 +57,12 @@ export interface BrowserPreviewState {
   canGoBack: boolean;
   canGoForward: boolean;
   error: string | null;
-  /** Present for service previews: the durable identity and app-relative path. */
-  service?: { serviceId: string; path: string; displayUrl: string };
+  /**
+   * Present for service previews: the durable identity and app-relative path.
+   * `navigation` counts the view's main-frame navigations (links, redirects,
+   * history, in-page routes); echo it as `navigationBasis`.
+   */
+  service?: { serviceId: string; path: string; displayUrl: string; navigation?: number };
   transport?: BrowserPreviewTransportState;
 }
 
@@ -394,8 +404,16 @@ export interface BrowserPreviewShowOnPageResult {
    * `navigation-required`: the preview cannot address the stored route; ask
    * the user to navigate and reselect. `timeout`: the page did not load in
    * time. `navigation-failed`: the load failed or left the preview scope.
+   * `hidden`: the anchor matched an element that renders no box (for example
+   * inside a closed dialog or a collapsed menu), so nothing could be shown.
    */
-  outcome: "shown" | "not-found" | "navigation-required" | "timeout" | "navigation-failed";
+  outcome:
+    | "shown"
+    | "hidden"
+    | "not-found"
+    | "navigation-required"
+    | "timeout"
+    | "navigation-failed";
   navigated: boolean;
   resolution: WebAnnotationAnchorResolution;
   documentGeneration: number;
@@ -511,4 +529,25 @@ export interface BrowserPreviewCaptureApi {
   captureResponsiveSet?(
     input: BrowserPreviewResponsiveSetInput,
   ): Promise<BrowserPreviewResponsiveSetResult>;
+  /** Content-free spool and anchor counters of this desktop process. */
+  getCaptureDiagnostics?(): Promise<BrowserPreviewCaptureDiagnostics>;
+}
+
+/**
+ * Content-free capture diagnostics of one desktop process: counts and bytes
+ * only, keyed by closed vocabularies. Never ids, URLs, selectors or text.
+ */
+export interface BrowserPreviewCaptureDiagnostics {
+  /** The pending spool now; null when this build has no spool. */
+  spool: {
+    pending: number;
+    imageBytes: number;
+    maxPending: number;
+    maxImageBytes: number;
+  } | null;
+  /**
+   * Anchor resolutions returned by Show pins and Show on page since the app
+   * started, keyed `state|rule` (for example `matched|stable-id`).
+   */
+  anchorResolutions: Record<string, number>;
 }

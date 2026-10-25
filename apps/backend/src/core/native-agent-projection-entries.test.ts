@@ -23,6 +23,7 @@ import {
   nativeAgentSessionStorageKey,
 } from "./native-agent-service-shared.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
+import { collaborators } from "./native-agent-service-test-collaborators.js";
 
 type PromptPresentation = { kind: "coordinator-delegation"; frame: string } | undefined;
 
@@ -85,7 +86,9 @@ function countVisits(view: ProjectionInternals): { readonly count: number; reset
   };
 }
 
-const view = (service: NativeAgentService) => service as unknown as ProjectionInternals;
+/** The service's projection collaborator, with the private steps these tests drive. */
+const view = (service: NativeAgentService) =>
+  collaborators(service).projections as unknown as ProjectionInternals;
 
 /** Run `body` against a cached service and an uncached twin. */
 async function withTwins(

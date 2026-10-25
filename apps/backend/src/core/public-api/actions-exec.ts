@@ -1,6 +1,9 @@
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import type { PublicExecOutputWindow } from "@orkestrator/protocol/public-api-resources";
+import type { Environment } from "../models.js";
+import { CommandFailedError } from "../shell.js";
 import { requireEnvironment } from "./actions-discovery.js";
 import { loadOperation } from "./actions-runs.js";
 import { assertReadyForAgents } from "./actions-sessions.js";
@@ -42,6 +45,40 @@ import type {
 
 const inFlight = new Map<string, Promise<OperationPatch | null>>();
 
+/**
+ * Whether the exec control claimed the operation (`state.json` exists). The
+ * control starts a worker only after that claim, so once the control process
+ * has exited, a missing claim proves no worker exists or ever will. Read
+ * without Bun: a launcher that cannot start is exactly when this matters.
+ * Container transports never prove remote exit, so they always return unknown.
+ */
+async function workerClaimed(
+  environment: Environment,
+  directory: string,
+): Promise<boolean | undefined> {
+  if (environment.environmentType !== "local") return undefined;
+  return fs.lstat(path.join(directory, "state.json")).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? false : undefined),
+  );
+}
+
+function neverStarted(error: unknown) {
+  return {
+    state: "failed" as const,
+    stage: "completed",
+    execution: {
+      state: "failed",
+      evidence: "none",
+      reason: `The command's worker never started (${boundedMessage(error)})`,
+    },
+    error: {
+      code: "exec-failed" as const,
+      message: "The command's worker never started; it was not run",
+    },
+  } satisfies OperationPatch;
+}
+
 async function reconcileExec(
   record: PublicOperationRecord,
   context: PublicActionContext,
@@ -73,14 +110,17 @@ async function reconcileExec(
     ) {
       return null;
     }
+    const directory = execDirectory(environment, record.operationId, context.command);
     let state: ExecState;
     try {
       state = (await control(environment, context.command, {
         action: "status",
         operationId: record.operationId,
-        directory: execDirectory(environment, record.operationId, context.command),
+        directory,
       })) as ExecState;
     } catch {
+      // A failed status read proves nothing about the original controller,
+      // especially across Docker transport loss. Never infer non-execution here.
       if (environment.status !== "running") {
         return {
           state: "interrupted",
@@ -97,6 +137,8 @@ async function reconcileExec(
       }
       return null;
     }
+    // An unconfirmed controller may claim later, even after status said missing.
+    if (state.status === "missing" && record.result?.launch === "unconfirmed") return null;
     const { patch } = executionFromState(state);
     if (!patch.state && JSON.stringify(patch.execution) === JSON.stringify(record.execution))
       return null;
@@ -218,6 +260,15 @@ const environmentExec: MutationActionHandler<ExecInput> = {
             maxOutputBytes: PUBLIC_API_LIMITS.execOutputMaxBytes,
           })) as ExecState;
         } catch (error) {
+          // A control that exited without claiming the operation never
+          // started a worker (a timed-out one may still be dying, so leave
+          // that to reconciliation).
+          if (
+            !(error instanceof CommandFailedError && error.timedOut) &&
+            (await workerClaimed(environment, directory)) === false
+          ) {
+            return { ...neverStarted(error), result: { operationId: operation.operationId } };
+          }
           // The control may have claimed and started the worker before its
           // response was lost; never start a second one. Reconcile instead.
           return {

@@ -313,6 +313,82 @@ esac
       },
     );
   });
+
+  test("a budget a rootless daemon cannot enforce is refused before anything is created", async () => {
+    const dir = await tempDir("ork-rootless-gate-");
+    cleanup.push(dir);
+    const { context } = memoryLifecycleContext([lifecycleEnvironment()], dir);
+    Object.assign(context.storage, {
+      getProject: async () => ({
+        id: "project-1",
+        gitUrl: "https://github.com/example/project.git",
+        localPath: null,
+      }),
+      loadConfig: async () => ({
+        version: "1.0.0",
+        global: {
+          allowedDomains: [],
+          containerResourceLimits: { cpus: 2, memoryMiB: 4096, pids: null },
+        },
+        repositories: {},
+      }),
+    });
+    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const { resetResourceCaches } = await import("../src/core/container-resources");
+    // A rootless daemon without delegated cgroups (driver `none`) would accept
+    // these limits, record them in HostConfig and enforce none of them.
+    const info = JSON.stringify({
+      OSType: "linux",
+      OperatingSystem: "Ubuntu 24.04",
+      Architecture: "x86_64",
+      ServerVersion: "29.9.2",
+      SecurityOptions: ["name=seccomp,profile=builtin", "name=rootless", "name=cgroupns"],
+      CgroupVersion: "2",
+      CgroupDriver: "none",
+      CpuCfsQuota: false,
+      MemoryLimit: false,
+      PidsLimit: false,
+    });
+    resetResourceCaches();
+    try {
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  context) printf 'unix:///run/user/1000/docker.sock\\n' ;;
+  info) printf '%s\\n' '${info}' ;;
+esac
+`,
+        async (log) => {
+          await expect(createDockerContainer(lifecycleEnvironment(), context)).rejects.toThrow(
+            "ContainerLifecycleError:unsupported-topology: This Docker engine (rootless) cannot enforce the CPU, memory limits in the environment's budget. Nothing was created.",
+          );
+          expect(await log.read()).not.toMatch(/^(create|network create|volume create) /m);
+        },
+      );
+      // The capacity probe fails after the topology probe saw a rootless
+      // daemon: support is unknown, so the budget is still not passed through.
+      resetResourceCaches();
+      resetDockerTopologyCache();
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  context) printf 'unix:///run/user/1000/docker.sock\\n' ;;
+  info) [ "$3" = '{{json .}}' ] && exit 1; printf '%s\\n' '${info}' ;;
+esac
+`,
+        async (log) => {
+          await expect(createDockerContainer(lifecycleEnvironment(), context)).rejects.toThrow(
+            "ContainerLifecycleError:daemon-unavailable: Docker runs rootless",
+          );
+          expect(await log.read()).not.toMatch(/^(create|network create|volume create) /m);
+        },
+      );
+    } finally {
+      resetResourceCaches();
+    }
+  });
 });
 
 describe("pinned image identity", () => {
@@ -375,6 +451,73 @@ esac
     } finally {
       if (originalPolicy === undefined) delete process.env.ORKESTRATOR_NETWORK_POLICY;
       else process.env.ORKESTRATOR_NETWORK_POLICY = originalPolicy;
+    }
+  });
+
+  test("a capable image ignores the retired host-mount and shared-bridge opt-outs", async () => {
+    const dir = await tempDir("ork-retired-switches-");
+    cleanup.push(dir);
+    const environment = lifecycleEnvironment();
+    const { context } = memoryLifecycleContext([environment], dir);
+    Object.assign(context, { runtimeFlavor: "agent-test", credentialSources: new Set() });
+    Object.assign(context.storage, {
+      getProject: async () => ({
+        id: "project-1",
+        gitUrl: "https://example.invalid/project.git",
+        localPath: null,
+      }),
+      loadConfig: async () => ({
+        version: "1.0.0",
+        global: { enabledAgentPlatforms: [] },
+        repositories: {},
+      }),
+    });
+    await fs.writeFile(
+      path.join(dir, "github-ranges.txt"),
+      "# github-ranges fixture\n203.0.113.0/24\n",
+    );
+    const tar = await tarOf(
+      "image-manifest.json",
+      validManifest({
+        capabilities: { "network-policy": 3, "network-refresh": 1, "staged-inputs": 2 },
+      }),
+    );
+    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const saved = {
+      ORKESTRATOR_NETWORK_POLICY: process.env.ORKESTRATOR_NETWORK_POLICY,
+      ORKESTRATOR_PORTABLE_INPUTS: process.env.ORKESTRATOR_PORTABLE_INPUTS,
+    };
+    process.env.ORKESTRATOR_NETWORK_POLICY = "1";
+    process.env.ORKESTRATOR_PORTABLE_INPUTS = "host-mounts";
+    try {
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  context) printf 'unix:///var/run/docker.sock\\n' ;;
+  info) printf '{"OSType":"linux","OperatingSystem":"Debian","Architecture":"x86_64","SecurityOptions":[]}\\n' ;;
+  create) printf 'created-retired\\n' ;;
+  cp) cat '${tar}' ;;
+  network) [ "$2" = inspect ] && { echo "network not found" >&2; exit 1; }; exit 0 ;;
+esac
+`,
+        async (log) => {
+          expect(await createDockerContainer(environment, context, { imageId: IMAGE_ID })).toBe(
+            "created-retired",
+          );
+          const create = (await log.read())
+            .split("\n")
+            .find((line) => line.startsWith("create --name"));
+          expect(create).toContain("--label orkestrator-network-policy=3");
+          expect(create).toContain("--network ork-");
+          expect(create).toContain("--label orkestrator-inputs-revision=");
+        },
+      );
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 

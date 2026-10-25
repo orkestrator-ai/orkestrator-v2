@@ -12,6 +12,10 @@
  * The result lives on the part as `commandChanges`. Claude's JSONL never
  * carries it, so each measurement is also appended to a per-session journal
  * and laid back over the transcript whenever it is rebuilt from disk.
+ *
+ * The same window is also reported to the backend as a change-evidence
+ * observation (`change-evidence.ts`), with its boundary and overlap kept
+ * apart rather than folded into `approximate`.
  */
 
 import type { HookCallback, HookCallbackMatcher } from "@anthropic-ai/claude-agent-sdk";
@@ -23,6 +27,11 @@ import { isFileEditToolName, type MeasuredWorkspaceChange } from "@orkestrator/p
 import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import { join } from "node:path";
 import type { NormalizedMessage } from "../types/index.js";
+import {
+  legacyCommandChange,
+  recordClaudeObservation,
+  recordClaudeToolExecuted,
+} from "./change-evidence.js";
 import { claudeCommandChangesDir } from "./claude-home.js";
 
 /** One per bridge process: snapshots are shared and serialized per repository. */
@@ -79,12 +88,21 @@ function isMeasuredCommand(toolName: string, toolInput: unknown): boolean {
   return input.run_in_background !== true;
 }
 
+/** The task id a PostToolUse response names when the call went to the background. */
+function backgroundTaskIdOf(response: unknown): string | undefined {
+  const id = (response as { backgroundTaskId?: unknown } | undefined)?.backgroundTaskId;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
 /**
  * Hooks for one query. `onMeasured` receives every non-empty measurement; the
  * journal write happens here so it is not tied to the turn that asked.
+ * `conversationId` (the bridge session id) names the change-evidence binding
+ * every observation is reported under.
  */
 export function commandChangeHooks(
   onMeasured: (toolUseId: string, change: MeasuredWorkspaceChange) => void,
+  conversationId?: string,
 ): {
   PreToolUse: HookCallbackMatcher;
   PostToolUse: HookCallbackMatcher;
@@ -104,12 +122,23 @@ export function commandChangeHooks(
       return {};
     }
     if (!input.tool_use_id) return {};
+    // A post-tool hook is the proof that the call ran, failed or not.
+    recordClaudeToolExecuted(
+      input.tool_use_id,
+      input.hook_event_name === "PostToolUse" ? backgroundTaskIdOf(input.tool_response) : undefined,
+    );
     // Awaited: the next call must not start writing before the "after"
     // snapshot has read the tree.
-    const change = await commandChangeProbe.end(input.tool_use_id);
+    const observation = await commandChangeProbe.endObservation(input.tool_use_id);
+    const change = legacyCommandChange(observation);
     if (change && hasMeasuredChanges(change)) {
       void commandChangeJournal(input.session_id)?.append(input.tool_use_id, change);
       onMeasured(input.tool_use_id, change);
+    }
+    // A failed command that ran is still observed; a noted edit or a
+    // background launch opened no measured window and reports nothing.
+    if (observation && conversationId) {
+      recordClaudeObservation(conversationId, input.tool_use_id, observation);
     }
     return {};
   };

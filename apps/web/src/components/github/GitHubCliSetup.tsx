@@ -13,6 +13,7 @@ import {
   type GitHubCliStatus,
 } from "@/lib/backend";
 import { cn } from "@/lib/utils";
+import { useAccountMachine } from "@/components/settings/account-machine";
 
 const POLL_INTERVAL_MS = 1_500;
 const GITHUB_CLI_INSTALL_URL = "https://cli.github.com/";
@@ -46,6 +47,8 @@ export function GitHubCliSetup({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const mounted = useRef(true);
+  // Settings may point this at another machine; the startup reminder never does.
+  const { machine } = useAccountMachine();
   const onStatusChangeRef = useRef(onStatusChange);
   useEffect(() => {
     onStatusChangeRef.current = onStatusChange;
@@ -53,7 +56,7 @@ export function GitHubCliSetup({
 
   const refresh = useCallback(async () => {
     try {
-      const next = await getGitHubCliStatus();
+      const next = await getGitHubCliStatus(machine);
       if (!mounted.current) return;
       setStatus(next);
       setError(null);
@@ -63,7 +66,7 @@ export function GitHubCliSetup({
     } finally {
       if (mounted.current) setChecking(false);
     }
-  }, []);
+  }, [machine]);
 
   const checkAgain = () => {
     setChecking(true);
@@ -76,7 +79,7 @@ export function GitHubCliSetup({
     // oxlint-disable-next-line react/set-state-in-effect
     void refresh();
     // A sign-in outlives this view: reopening it resumes the one running.
-    void getGitHubCliLogin()
+    void getGitHubCliLogin(machine)
       .then((progress) => {
         if (mounted.current && progress.state === "pending") setLogin(progress);
       })
@@ -84,7 +87,7 @@ export function GitHubCliSetup({
     return () => {
       mounted.current = false;
     };
-  }, [refresh]);
+  }, [machine, refresh]);
 
   useEffect(() => {
     if (login.state !== "pending") return;
@@ -93,7 +96,7 @@ export function GitHubCliSetup({
     const poll = async () => {
       let pending = true;
       try {
-        const next = await getGitHubCliLogin();
+        const next = await getGitHubCliLogin(machine);
         if (cancelled) return;
         pending = next.state === "pending";
         setLogin(next);
@@ -110,7 +113,7 @@ export function GitHubCliSetup({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [login.state, login.operationId, pollIntervalMs, refresh]);
+  }, [login.state, login.operationId, machine, pollIntervalMs, refresh]);
 
   const run = async (operation: () => Promise<void>) => {
     setError(null);
@@ -124,7 +127,7 @@ export function GitHubCliSetup({
   const beginLogin = () =>
     run(async () => {
       setCopied(false);
-      setLogin(await startGitHubCliLogin());
+      setLogin(await startGitHubCliLogin(machine));
     });
 
   const restoreReminder = () =>
@@ -135,7 +138,7 @@ export function GitHubCliSetup({
 
   const cancelLogin = () =>
     run(async () => {
-      setLogin(await cancelGitHubCliLogin(login.operationId));
+      setLogin(await cancelGitHubCliLogin(login.operationId, machine));
     });
 
   const copyCode = (code: string) =>

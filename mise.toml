@@ -1,5 +1,5 @@
 [tools]
-bun = "1.4.3"
+bun = "1.4.4"
 
 [tasks.dev]
 description = "Start the Electron development application"
@@ -183,15 +183,20 @@ description = "Smoke-test the packed CLI"
 run = "bun run --cwd packages/cli smoke:pack"
 
 [tasks."publish:cli"]
-description = "Smoke-test and publish the CLI"
-run = ["mise run smoke:cli", "bun publish --cwd packages/cli --access public"]
+description = "Smoke-test and publish the CLI under its update channel's npm dist-tag"
+run = ["mise run smoke:cli", "bun scripts/publish-cli.ts"]
 
 [tasks.preview]
 description = "Preview the production renderer"
 run = "bun run --cwd apps/web preview"
 
 [tasks.test]
-description = "Run the complete non-iOS test suite"
+description = "Run the non-iOS test suite, including the area suites this change can reach"
+run = "bun scripts/test-all.ts"
+
+[tasks."test:full"]
+description = "Run the complete non-iOS test suite, including every area suite"
+env = { ORKESTRATOR_TEST_AREAS = "all" }
 run = "bun scripts/test-all.ts"
 
 [tasks."test:changed"]
@@ -201,7 +206,7 @@ run = "bun scripts/test-all.ts"
 
 [tasks."test:all"]
 description = "Run the complete test suite, including iOS"
-env = { ORKESTRATOR_INCLUDE_IOS = "1" }
+env = { ORKESTRATOR_INCLUDE_IOS = "1", ORKESTRATOR_TEST_AREAS = "all" }
 run = "bun scripts/test-all.ts"
 
 [tasks."test:logged"]
@@ -210,8 +215,8 @@ raw_args = true
 run = "bun scripts/run-logged.ts"
 
 [tasks."test:browser"]
-description = "Run the component browser suite"
-run = "bunx tsc --noEmit -p e2e/tsconfig.json && bunx playwright test --config e2e/playwright.config.ts"
+description = "Run the component and public-site browser suites"
+run = "bun check -p e2e/tsconfig.json && bunx playwright test --config e2e/playwright.config.ts && bunx playwright test --config e2e/public-site/playwright.config.ts"
 
 [tasks."test:agent:browser"]
 description = "Run browser agent tests against an already-running profile (use test:agent:browser:isolated for one-shot validation)"
@@ -240,6 +245,29 @@ description = "Run the Docker agent browser fixture"
 env = { ORKESTRATOR_AGENT_TEST_DOCKER = "1" }
 run = "bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts --grep 'Docker fixture'"
 
+[tasks."test:preview:docker"]
+description = "Opt-in service preview checks on real Docker: same-port containers, host decoy, recreation, docker exec relay (needs ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE)"
+run = """
+: "${ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE:?Set ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE to the image under test}"
+export ORKESTRATOR_TEST_DOCKER_RELAY_IMAGE="${ORKESTRATOR_TEST_DOCKER_RELAY_IMAGE:-$ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE}"
+bun test --cwd apps/backend ./src/core/preview-docker.test.ts ./src/preview-relay-supervisor.test.ts --parallel=1
+"""
+
+[tasks."test:preview:browser"]
+description = "Opt-in Chromium, Firefox and WebKit private-origin checks (set ORKESTRATOR_TEST_PREVIEW_VITE_DIR for HMR)"
+raw_args = true
+run = "bunx playwright test --config e2e/preview/playwright.preview.config.ts"
+
+[tasks."test:preview:bench"]
+description = "Opt-in loopback latency of the preview routes, and a loopback self-test of the two-machine baseline tool"
+# The bounded test console drops console.log unless asked; the numbers are the output.
+env = { ORKESTRATOR_PREVIEW_BENCH = "1", ORKESTRATOR_TEST_VERBOSE_CONSOLE = "1" }
+run = "bun test --cwd apps/backend ./src/preview-bench.test.ts ./src/preview-latency-baseline.test.ts --parallel=1"
+
+[tasks."test:agent:paused-interactions"]
+description = "Opt-in billed provider qualification past ten minutes against an already-running disposable profile"
+run = "bunx playwright test --config e2e/agent-testing/playwright.paused-interactions.config.ts"
+
 [tasks."test:agent:coordinator"]
 description = "Opt-in live coordinator suite: a disposable profile and real provider turn per platform (--credential-source <platform> narrows)"
 raw_args = true
@@ -266,9 +294,9 @@ run = "bun scripts/efficiency/run.ts"
 description = "Typecheck every workspace package, the root and e2e tests, and repository scripts"
 run = [
   "bunx turbo --cwd . run typecheck",
-  "bunx tsc --noEmit -p tests/tsconfig.json",
-  "bunx tsc --noEmit -p e2e/tsconfig.json",
-  "bunx tsc --noEmit -p e2e/agent-testing/tsconfig.json",
+  "bun check -p tests/tsconfig.json",
+  "bun check -p e2e/tsconfig.json",
+  "bun check -p e2e/agent-testing/tsconfig.json",
 ]
 
 [tasks."disk:report"]
@@ -278,11 +306,11 @@ run = "bun scripts/disk-report.ts"
 
 [tasks.format]
 description = "Format the repository"
-run = "bunx oxfmt ."
+run = "bun fmt ."
 
 [tasks."format:check"]
 description = "Check repository formatting"
-run = "bunx oxfmt --check ."
+run = "bun fmt --check ."
 
 [tasks.lint]
 description = "Lint the repository"
@@ -307,6 +335,11 @@ run = [
 [tasks."verify:claude:mcp-live"]
 description = "Prove Claude MCP removal and rename on a running CLI (real CLI, no credentials)"
 run = "bun test --cwd bridges/claude-bridge ./src/services/session-manager-prompt-mcp-sync.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
+
+[tasks."verify:opencode:mcp-live"]
+description = "Prove OpenCode's in-place MCP reload on the pinned binary (real binary, no credentials)"
+env = { RUN_LIVE_OPENCODE_MCP = "1" }
+run = "bun test --cwd apps/backend ./tests/opencode-mcp-reload-live.test.ts --parallel=1"
 
 [tasks."verify:toolchains:live"]
 description = "Verify live toolchain artifacts"
@@ -364,6 +397,11 @@ run = [
   "bunx electron-builder --mac --config electron-builder.release.config.ts --publish never",
   "bun scripts/install-packaged-app-mac.ts",
 ]
+
+[tasks."release:version"]
+description = "Set the Orkestrator version in every manifest and regenerate the lockfiles"
+raw_args = true
+run = "bun scripts/set-version.ts"
 
 [tasks."release:desktop"]
 description = "Build this platform's desktop release and upload it to the draft GitHub release"

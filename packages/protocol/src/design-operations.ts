@@ -169,13 +169,49 @@ export type DesignSessionRole = "design" | "implementation";
 
 export interface DesignSessionLink {
   id: string;
+  /**
+   * The pane tab the conversation was last opened in. A temporary handle: it
+   * names the backend's native-session mapping for that tab only while the tab
+   * is open, so `sessionId` is recorded from it before the tab closes.
+   */
   tabId: string;
+  /**
+   * The identity a resume of this conversation names (Codex's thread id; the
+   * provider session id elsewhere), recorded when the tab closes.
+   */
   sessionId?: string;
   platform: "claude" | "codex" | string;
   role: DesignSessionRole;
   createdAt: string;
   checkpointId?: string;
   label?: string;
+}
+
+/**
+ * What the backend maps for one link's tab, read from its durable
+ * native-session record (never a bridge or a liveness route). Whether the tab
+ * is open is the client's pane layout to answer.
+ */
+export interface DesignSessionLinkState {
+  linkId: string;
+  /**
+   * `retained`: the backend maps the link's tab to a native session.
+   * `missing`: it does not: the tab closed (its session, if any, is then on the
+   * link) or the conversation never started.
+   */
+  session: "retained" | "missing";
+}
+
+/** A resumed link and the live provider session its new tab adopts. */
+export interface DesignSessionResumeResult {
+  link: DesignSessionLink;
+  providerSessionId: string;
+}
+
+export interface DesignSessionLinkStates {
+  /** The canvas's links after any `sessionId` was recorded from the backend. */
+  sessions: DesignSessionLink[];
+  states: DesignSessionLinkState[];
 }
 
 export interface DesignWorkspaceMeta {

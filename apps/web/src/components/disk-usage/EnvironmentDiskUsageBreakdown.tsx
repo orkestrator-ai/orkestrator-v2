@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { Container, FolderGit2, HardDrive, Loader2, RefreshCw } from "lucide-react";
 
 import { formatBytes, formatRelativeTime } from "@/components/docker/docker-stats-format";
 import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
-import type { DiskUsageItem, EnvironmentDiskUsage } from "@/lib/backend";
+import type { AccountMachine, DiskUsageItem, EnvironmentDiskUsage } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
 export function formatDiskBytes(bytes: number | null | undefined): string {
@@ -17,15 +17,15 @@ export function formatDiskBytes(bytes: number | null | undefined): string {
  */
 export function useEnvironmentDiskUsage(
   environmentId: string,
-  options: { enabled?: boolean; initial?: EnvironmentDiskUsage } = {},
+  options: { enabled?: boolean; initial?: EnvironmentDiskUsage; machine?: AccountMachine } = {},
 ) {
   const enabled = options.enabled ?? true;
+  const machine = options.machine;
   const [usage, setUsage] = useState<EnvironmentDiskUsage | null>(options.initial ?? null);
   const [loading, setLoading] = useState(!options.initial && enabled);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
   const usageRef = useRef(usage);
-  usageRef.current = usage;
   const incomingIdentityRef = useRef<string | null>(null);
 
   const load = useCallback(
@@ -34,7 +34,7 @@ export function useEnvironmentDiskUsage(
       setLoading(true);
       setError(null);
       try {
-        const result = await backend.getEnvironmentDiskUsage(environmentId, refresh);
+        const result = await backend.getEnvironmentDiskUsage(environmentId, refresh, machine);
         if (request !== requestRef.current) return null;
         setUsage(result);
         return result;
@@ -47,19 +47,23 @@ export function useEnvironmentDiskUsage(
         if (request === requestRef.current) setLoading(false);
       }
     },
-    [environmentId],
+    [environmentId, machine],
   );
 
   const initial = options.initial?.environmentId === environmentId ? options.initial : undefined;
-  const initialRef = useRef(initial);
-  initialRef.current = initial;
+  const readInitial = useEffectEvent(() => initial);
+  // The committed usage, for the snapshot comparison below.
   useEffect(() => {
+    usageRef.current = usage;
+  }, [usage]);
+  useEffect(() => {
+    const seeded = readInitial();
     incomingIdentityRef.current = null;
-    usageRef.current = initialRef.current ?? null;
+    usageRef.current = seeded ?? null;
     setUsage(usageRef.current);
     setError(null);
     setLoading(false);
-    if (enabled && !initialRef.current) void load(false);
+    if (enabled && !seeded) void load(false);
     return () => {
       requestRef.current += 1;
     };
@@ -278,14 +282,20 @@ export function EnvironmentDiskUsageBreakdown({
   environmentId,
   initial,
   onMeasured,
+  machine,
   className,
 }: {
   environmentId: string;
   initial?: EnvironmentDiskUsage;
   onMeasured?: (usage: EnvironmentDiskUsage) => void;
+  /** The machine the environment is on, from Settings; see `AccountMachine`. */
+  machine?: AccountMachine;
   className?: string;
 }) {
-  const { usage, loading, error, refresh } = useEnvironmentDiskUsage(environmentId, { initial });
+  const { usage, loading, error, refresh } = useEnvironmentDiskUsage(environmentId, {
+    initial,
+    machine,
+  });
   return (
     <EnvironmentDiskUsageView
       usage={usage}

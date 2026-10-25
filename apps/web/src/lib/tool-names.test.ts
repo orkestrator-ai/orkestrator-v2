@@ -3,35 +3,11 @@ import { describe, expect, test } from "bun:test";
 import {
   getToolDisplayName,
   getToolTitleDisplayName,
-  isEditTool,
   isReadTool,
   normalizeToolLabelKey,
 } from "./tool-names";
 
 describe("tool name helpers", () => {
-  test("detects edit tools case-insensitively", () => {
-    expect(isEditTool("edit")).toBe(true);
-    expect(isEditTool("Write")).toBe(true);
-    expect(isEditTool("MultiEdit")).toBe(true);
-    expect(isEditTool("STR_REPLACE_EDITOR")).toBe(true);
-    // The full shared set is pinned here so a later edit to FILE_EDIT_TOOL_NAMES
-    // cannot silently strip edit treatment from one of these tools.
-    for (const name of [
-      "file_edit",
-      "replace",
-      "create_file",
-      "patch",
-      "apply_patch",
-      "notebookedit",
-      "insert",
-    ]) {
-      expect(isEditTool(name)).toBe(true);
-      expect(isEditTool(name.toUpperCase())).toBe(true);
-    }
-    expect(isEditTool("bash")).toBe(false);
-    expect(isEditTool()).toBe(false);
-  });
-
   test("detects file-read tools without collapsing nearby names into read", () => {
     expect(isReadTool("Read")).toBe(true);
     expect(isReadTool("read_file")).toBe(true);

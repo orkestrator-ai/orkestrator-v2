@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>Task time calculator</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        font:
+          16px/1.4 system-ui,
+          sans-serif;
+        margin: 24px;
+        color: #1b1f24;
+        background: #ffffff;
+      }
+      [data-theme="dark"] body {
+        color: #e6edf3;
+        background: #0d1117;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        margin: 12px 0;
+      }
+      label {
+        min-width: 10rem;
+      }
+      input[type="number"] {
+        width: 6rem;
+        font: inherit;
+      }
+      output {
+        font-size: 28px;
+        font-weight: 600;
+      }
+      @media (max-width: 480px) {
+        label {
+          min-width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Task time</h1>
+    <div class="row">
+      <label for="tasks">Number of tasks</label>
+      <input
+        id="tasks"
+        type="range"
+        min="0"
+        max="20"
+        step="1"
+        value="5"
+        data-artifact-test="tasks"
+      />
+      <span id="tasks-value" aria-hidden="true">5</span>
+    </div>
+    <div class="row">
+      <label for="minutes">Minutes per task</label>
+      <input
+        id="minutes"
+        type="number"
+        min="0"
+        max="600"
+        step="1"
+        value="12"
+        data-artifact-test="minutes"
+      />
+    </div>
+    <p>
+      Total:
+      <output id="total" for="tasks minutes" aria-live="polite" data-artifact-test="total"
+        >60</output
+      >
+      minutes
+    </p>
+    <script>
+      const tasks = document.getElementById("tasks");
+      const minutes = document.getElementById("minutes");
+      const total = document.getElementById("total");
+      const tasksValue = document.getElementById("tasks-value");
+      function update() {
+        const count = Number(tasks.value);
+        const each = Number(minutes.value);
+        tasksValue.textContent = String(count);
+        const product = count * each;
+        total.textContent = String(Number.isFinite(product) ? product : 0);
+      }
+      tasks.addEventListener("input", update);
+      minutes.addEventListener("input", update);
+      update();
+    </script>
+  </body>
+</html>

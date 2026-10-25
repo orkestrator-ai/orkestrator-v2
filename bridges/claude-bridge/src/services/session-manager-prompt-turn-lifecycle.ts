@@ -12,6 +12,7 @@ import { applySessionPlanMode, recordStructuredOutput, sessions } from "./sessio
 import { recordPromptDispatch } from "./session-manager-lifecycle.js";
 import { MAX_RESULT_INPUT_UUIDS } from "./session-manager-messages.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
+import { syncTurnInFlightMark } from "./session-manager-turn-interruption.js";
 import {
   armClaudeRuntimeIdleDetach,
   disarmClaudeRuntimeIdleDetach,
@@ -180,6 +181,7 @@ export function releaseCompletedTurnToBackgroundTasks(
   if (turn.dispatchRequestId) {
     recordPromptDispatch(sessionId, turn.dispatchRequestId, "already-processed");
   }
+  syncTurnInFlightMark(session);
   eventEmitter.emit({
     type: "session.idle",
     sessionId,
@@ -202,6 +204,7 @@ export function stopWaitingForContinuation(turn: TurnState) {
       session.retainedContinuationRequestIds = undefined;
     }
   }
+  syncTurnInFlightMark(session);
 }
 
 /**
@@ -217,6 +220,8 @@ export function waitForContinuationAfterNotification(turn: TurnState) {
   if (turn.dispatchRequestId) {
     (session.retainedContinuationRequestIds ??= new Set()).add(turn.dispatchRequestId);
   }
+  // The CLI owes the root loop more of this turn; a restart now cuts it short.
+  syncTurnInFlightMark(session);
   if (turn.runtime?.idleTimer) armClaudeRuntimeIdleDetach(turn.runtime);
 }
 

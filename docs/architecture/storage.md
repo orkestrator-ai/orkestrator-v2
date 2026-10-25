@@ -12,7 +12,9 @@ namespace), their per-file lock files and five-deep backup ladders.
 | `apps/backend/src/core/storage-stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention and scrubbing |
 | `apps/backend/src/core/storage-record-upgrades.ts` | One-shot upgrades of record shapes only older builds wrote |
 | `apps/backend/src/core/storage-backups.ts` | Pre-migration and daily snapshots, rotation |
-| `apps/backend/src/core/storage-base.ts` | `StorageService` primitives: `loadJson`/`saveJson` routing, `updateStore`, `serializeMutation`, `atomically` |
+| `apps/backend/src/core/storage-context.ts` | `StorageContext`, the state every store shares: database handle, `loadJson`/`saveJson` routing, `updateStore`, `serialize` (with the lease order), `atomically` |
+| `apps/backend/src/core/storage-changes.ts` | `StorageChanges`: resource announcements, the change journal and the revision manifests |
+| `apps/backend/src/core/storage-base.ts` | Base of the `StorageService` chain: store names, lease wrappers, and forwarders to its `StorageContext` |
 | `packages/protocol/src/node/storage-database.ts` | On-disk format and a read-only reader for Bun scripts |
 | `apps/backend/src/core/storage-test-support.ts` | Test helpers: seed, read and inspect stores |
 
@@ -49,10 +51,12 @@ These keep their own modules but store their state as database rows:
 | --- | --- | --- |
 | Environment cleanup ledger | `environment-cleanup-ledger` (envelope `entries`), `environment-cleanup-sweeps` | Each step is one `updateStore`; imported by the version 2 import |
 | Workflow results | `workflow-results` (envelope `entries`), `workflow-result-tools` | Row-level writes; reads validate one row; fails closed on an invalid store; 64 MiB of row bytes |
-| Native display tails | `native-agent-display-tail-records` (one row per session, owner = environment) | LRU eviction inside the put transaction (128 rows, 64 MiB); old cache files are deleted, not imported |
+| Native display tails | `native-agent-display-tail-records` (one row per session, owner = environment) | LRU eviction inside the put transaction (128 rows, 64 MiB); old cache files are deleted, not imported. Checkpoint policy: [native-transcripts.md](native-transcripts.md#restart-previews-display-tails) |
 | Build-pipeline transcripts | `build-pipeline-transcripts/manifests` (one row per session, owner = pipeline), `/totals`, `/legacy-manifest-migration` | Chunks are written and fsynced first; the manifests commit in the same transaction as the pipeline record; old `.rec` manifests import in the background |
 | Web annotations | `web-annotations/<environmentId>` (envelope: annotations, captures, entries, requests, results, assets metadata, receipts, drafts, records, meta) | Each commit is one transaction that reloads whatever another backend committed; old JSON is imported lazily per environment |
+| Compatibility-path usage | `compatibility-path-usage` (document: per path id, a count and the first and last use) | Counts are merged at most once a minute, on read and at shutdown, in one transaction; content-free ([version-compatibility.md](version-compatibility.md#usage-counters)) |
 | Host maintenance | `host-maintenance` (document: the current or last update job, the pending check request, the last check) | Each change is one transaction; a job left in progress by the previous process is settled at startup from the running version, never resumed |
+| Agent usage history | `usage-history` (one row per agent session, owner = environment) | Each recorded turn is one `updateStoreRow`; reports walk every row uncached and never prune (retention is swept from the write path); day buckets past 400 days and the least recently used rows above 20,000 are pruned hourly. Turn ids are scoped by provider session, because a row outlives the conversation in its tab. A turn is bucketed by the day its bridge finalized it (`NativeAgentTurnUsage.at`), falling back to the day it was first seen. Rows outlive the environment they came from and are deleted only on request |
 
 Large engines read and write through `database.rows(store)`, an uncached
 row API, so they never hold a whole store in memory; the cached APIs stay
@@ -158,6 +162,12 @@ scope commits after it is released. `storage-writer-guards.test.ts` parses the
 `StorageService` chain and enforces all of this per store, following private,
 protected and `#private` helpers to every caller, with no exceptions; a write
 it cannot follow fails.
+The primitives are implemented on `StorageContext` (`storage-context.ts`,
+whose `serialize` also records the lease order) and the chain reaches them
+only through `StorageBase`'s forwarders of the same names. The guard fails a
+layer that touches `this.context` directly, and any class other than
+`StorageBase` that names `StorageContext`, so a repository that takes the
+context has to be added to the scan first.
 
 Whole-store reads are cached per store and revalidated against the committed
 revision on every read (one indexed lookup), which also observes other
@@ -174,8 +184,16 @@ even when the cache serves it, because a cached whole-store read still parses
 every row. A revision check that lets a caller reuse values it already decoded
 is a `storage-stat`. That covers a write diffing against cached rows, row-size
 accounting, the build-pipeline control-record cache and the remaining file stat
-cache. Reads through `StorageDatabase.rows()` and hits in the workflow-result
-entry index are not charged yet.
+cache, and a hit in the workflow-result entry index. Every query through the
+uncached `StorageDatabase.rows()` that returns rows or keys (display tails,
+build-pipeline transcript manifests, deletion fences, web annotations,
+artifact grants) is a `storage-read`; its writes charge nothing there. Every
+connection `openBackendDatabase` opens reports this way, not only
+`StorageService`'s. Content fetched from the database (a cache miss's whole
+store, a single-row or owner query, a `rows()` read) also charges its
+serialized length as `bytes` (`observeFetch`), so a cache miss shows bytes
+beside its read while a cache-served read shows none. Blob files outside the
+stores (terminal session buffers, Kanban images) are `file-read`s.
 
 Several backends may share a data directory (the desktop app and `orkestrator
 serve` default to the same one). WAL lets them read concurrently, and the
@@ -238,6 +256,14 @@ prompt-queue dispatch errors) and its readers have no legacy branch. Readers
 that default or normalize values current writers may still omit (environment
 setup phase, agent settings, mail defaults) stay where they are. Only shapes
 no current writer can produce belong in an upgrade migration.
+
+Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking
+ledger: the first engine with its own indexed tables (worktrees, evidence,
+snapshots, turn boundaries, measurements, selections, outbox, restore
+records) because its queries need joins and range scans. Its file contents
+live under `<dataDir>/change-tracking/` (a content-addressed object store and
+evidence bodies), so a backup of change history must include that directory
+as well as `orkestrator.sqlite`. See [change-tracking.md](change-tracking.md).
 
 ### Version 2: legacy JSON import
 

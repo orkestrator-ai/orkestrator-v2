@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import {
   MULTI_REVIEW_STEP_TRANSCRIPT_MAX_BYTES,
   MULTI_REVIEW_STEP_TRANSCRIPT_MAX_MESSAGES,
@@ -8,8 +8,14 @@ import {
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import {
   readMultiReviewStepTranscript,
+  readMultiReviewStepToolDetails,
   type StepTranscriptHost,
 } from "./multi-review-step-transcript.js";
+
+import {
+  bridgeTranscriptSummaryUpdate,
+  readBridgeTranscriptDetail,
+} from "@orkestrator/protocol/node/bridge-transcript-summary";
 
 const STARTED = "2026-10-16T00:00:00.000Z";
 
@@ -272,5 +278,158 @@ describe("step transcript reads", () => {
     expect(restarted.reads).toEqual(["consolidation"]);
     expect(answer).toMatchObject({ session: "own", messages: [], transcript: "snapshot" });
     expect(answer.sourceToken).toBeUndefined();
+  });
+});
+
+describe("step deferred tool details", () => {
+  const output = "Deferred step Bash output\n".repeat(400);
+  const messages = [
+    {
+      ...row(1),
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "pwd" },
+          toolOutput: output,
+        },
+      ],
+    },
+  ];
+  function provider() {
+    const transcriptDetail = mock(async (_sessionId: string, ref: string) =>
+      readBridgeTranscriptDetail(messages, ref),
+    );
+    const transcriptSnapshot = mock(
+      async (_sessionId: string, options: { representation?: string }) => {
+        expect(options.representation).toBe("summary");
+        const update = bridgeTranscriptSummaryUpdate(messages, {
+          sessionIdentity: "step-session",
+          generation: "g",
+          contentEpoch: 1,
+          revision: 1,
+          limit: 100,
+          targetBytes: 256 * 1024,
+          complete: true,
+        });
+        if (update.status !== "snapshot") throw new Error("Expected summary snapshot");
+        return {
+          messages: update.value.messages,
+          sourceToken: update.token,
+          complete: true,
+          representation: "summary",
+        };
+      },
+    );
+    return {
+      provider: {
+        agent: "codex",
+        transcriptDetail,
+        transcriptSnapshot,
+      } as unknown as BuildPipelineProvider,
+      transcriptDetail,
+      transcriptSnapshot,
+    };
+  }
+
+  for (const step of ["prepare", "consolidate", "fix"] as const) {
+    test(`${step} resolves a summary-only row against the workflow's owned session`, async () => {
+      const fake = provider();
+      const target = workflow({
+        phase: step === "prepare" ? "preparing" : step === "fix" ? "fixing" : "consolidating",
+        preparationSession: session("prepare-session"),
+        reviewSession: session("consolidate-session"),
+        fixSession: session("fix-session"),
+      });
+      const reader = host([target], fake.provider);
+      const loadWorkflow = mock(reader.loadWorkflow);
+      const scoped = { ...reader, loadWorkflow };
+      const tail = await readMultiReviewStepTranscript(scoped, "workflow-scope", step, undefined);
+      const part = (
+        tail.messages[0] as { parts: Array<{ detailRef: string; toolOutput?: string }> }
+      ).parts[0]!;
+      expect(part.toolOutput).toBeUndefined();
+      expect(part.detailRef).toStartWith("bd1.");
+      await expect(
+        readMultiReviewStepToolDetails(scoped, "workflow-scope", step, part.detailRef),
+      ).resolves.toMatchObject({ toolOutput: output });
+      expect(loadWorkflow).toHaveBeenLastCalledWith("workflow-scope");
+      expect(fake.transcriptDetail).toHaveBeenCalledWith(`${step}-session`, part.detailRef);
+
+      const broken = {
+        ...fake.provider,
+        transcriptDetail: async () => {
+          throw new Error("provider unavailable");
+        },
+      } as BuildPipelineProvider;
+      await expect(
+        readMultiReviewStepToolDetails(
+          host([target], broken),
+          "workflow-scope",
+          step,
+          part.detailRef,
+        ),
+      ).rejects.toThrow("provider unavailable");
+      await expect(
+        readMultiReviewStepToolDetails(scoped, "workflow-scope", step, "forged-reference"),
+      ).rejects.toThrow("reference is invalid");
+
+      const replacement = {
+        ...target,
+        preparationSession: session("new-prepare"),
+        reviewSession: session("new-consolidate"),
+        fixSession: session("new-fix"),
+      };
+      await expect(
+        readMultiReviewStepToolDetails(
+          host([target, replacement], fake.provider),
+          "workflow-scope",
+          step,
+          part.detailRef,
+        ),
+      ).rejects.toThrow("no longer available");
+    });
+  }
+
+  test("refuses details before and after a shared session handoff", async () => {
+    const fake = provider();
+    const shared = session("shared");
+    const before = workflow({ reviewModel: undefined, fixSession: shared });
+    const after = workflow({
+      reviewModel: undefined,
+      fixSession: shared,
+      phase: "fixing",
+      activeRequest: { kind: "fix", requestId: "fix-1", state: "sent", createdAt: STARTED },
+    });
+    const tail = await readMultiReviewStepTranscript(
+      host([before], fake.provider),
+      "multi-1",
+      "consolidate",
+      undefined,
+    );
+    const ref = (tail.messages[0] as { parts: Array<{ detailRef: string }> }).parts[0]!.detailRef;
+    await expect(
+      readMultiReviewStepToolDetails(host([after], fake.provider), "multi-1", "consolidate", ref),
+    ).rejects.toThrow("no longer available");
+    expect(fake.transcriptDetail).not.toHaveBeenCalled();
+    await expect(
+      readMultiReviewStepToolDetails(
+        host([before, after], fake.provider),
+        "multi-1",
+        "consolidate",
+        ref,
+      ),
+    ).rejects.toThrow("no longer available");
+    expect(fake.transcriptDetail).toHaveBeenCalledTimes(1);
+    await expect(
+      readMultiReviewStepToolDetails(
+        host([workflow({})], fake.provider),
+        "multi-1",
+        "prepare",
+        ref,
+      ),
+    ).rejects.toThrow("no longer available");
   });
 });

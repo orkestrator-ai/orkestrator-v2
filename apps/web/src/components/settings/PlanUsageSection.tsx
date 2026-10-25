@@ -3,8 +3,20 @@ import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AccountQuotaList } from "@/components/layout/AgentInfoButton.panels";
 import { getPlanUsage } from "@/lib/backend";
+import { useAccountMachine } from "./account-machine";
+import { formatRelativeTime } from "@/lib/format-relative-time";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+
+/** Says how old a stale reading is and why a fresh one could not be made. */
+export function StalePlanUsageNote({ snapshot }: { snapshot: PlanUsageSnapshot }) {
+  return (
+    <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground/70">
+      Last known usage, as of {formatRelativeTime(snapshot.fetchedAt)}.
+      {snapshot.message ? ` ${snapshot.message}` : null}
+    </p>
+  );
+}
 
 /**
  * Provider plan/quota shown at the top of a platform's settings pane.
@@ -26,6 +38,7 @@ export function PlanUsageSection({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
+  const { machine } = useAccountMachine();
 
   const load = useCallback(
     async (force = false) => {
@@ -33,7 +46,7 @@ export function PlanUsageSection({
       setLoading(true);
       setError(null);
       try {
-        const next = await getPlanUsage(platform, { force });
+        const next = await getPlanUsage(platform, { force }, machine);
         if (requestId !== requestRef.current) return;
         setSnapshot(next);
       } catch (err) {
@@ -43,7 +56,7 @@ export function PlanUsageSection({
         if (requestId === requestRef.current) setLoading(false);
       }
     },
-    [platform],
+    [machine, platform],
   );
 
   const seenReloadTokenRef = useRef(reloadToken);
@@ -108,7 +121,9 @@ export function PlanUsageSection({
         ) : windows.length > 0 ? (
           <>
             <AccountQuotaList account={windows} />
-            {snapshot ? (
+            {snapshot?.stale ? (
+              <StalePlanUsageNote snapshot={snapshot} />
+            ) : snapshot ? (
               <p className="mt-3 text-[10px] text-muted-foreground/70">
                 Updated {new Date(snapshot.fetchedAt).toLocaleTimeString()}
               </p>

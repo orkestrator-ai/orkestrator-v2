@@ -23,6 +23,7 @@ import {
   normalizeOpenCodeModelProviders,
   openCodeModelDisplayLabel,
   openCodeModelProviderId,
+  reasoningOptionLabel,
   synthesizedOpenCodeAgentModel,
 } from "@orkestrator/protocol/native-agent";
 import type {
@@ -32,17 +33,22 @@ import type {
   OpenCodeModelCatalogEntry,
 } from "./models.js";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
-import {
-  configureTerminalHistoryRetention,
-  pruneTerminalHistoryStorage,
-} from "./terminal-history.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import {
   claudeModelParameters,
   claudeModelReasoningIds,
 } from "@orkestrator/protocol/claude-model-catalog";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
-import { localServerStopCommandName } from "./commands-runtime-state.js";
+import { localServerStopCommandName } from "./local-server-runtime.js";
+import { getBridgePath } from "./commands-servers.js";
+import { resolveBunBinary } from "./commands-agent-support.js";
+import {
+  cancelCursorSdkLogin,
+  cursorSdkAuthStatus,
+  cursorSdkLoginProgress,
+  cursorSdkLogout,
+  startCursorSdkLogin,
+} from "./cursor-sdk-bridge.js";
 import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
@@ -112,13 +118,8 @@ async function waitForFirstUseSeed(
   }
 }
 
-function effortLabel(effort: string): string {
-  if (effort === "xhigh") return "Extra high";
-  return effort.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase());
-}
-
 function reasoningOptions(ids: readonly string[]): AgentReasoningOption[] {
-  return ids.map((effort) => ({ id: effort, label: effortLabel(effort) }));
+  return ids.map((effort) => ({ id: effort, label: reasoningOptionLabel(effort) }));
 }
 
 function normalizedClaudeModels(models: readonly ClaudeModelCatalogEntry[]): AgentModel[] {
@@ -918,13 +919,13 @@ export function registerProjectCommands(
       { preserveCredentials: true },
     );
     const savedGlobal = (await storage.loadConfig()).global;
-    configureTerminalHistoryRetention({
+    context.runtime.terminals.history.configureRetention({
       enabled: savedGlobal.terminalHistoryEnabled,
       sessionMb: savedGlobal.terminalHistoryRetentionMb,
       globalMb: savedGlobal.terminalHistoryGlobalRetentionMb,
       days: savedGlobal.terminalHistoryRetentionDays,
     });
-    await pruneTerminalHistoryStorage(storage.getDataDir());
+    await context.runtime.terminals.history.pruneStorage(storage.getDataDir());
     // A whole-config write can move any repository's baseline; see
     // `update_repository_config`.
     void context.runtime.diffStats.sync(context).catch(() => undefined);
@@ -943,18 +944,29 @@ export function registerProjectCommands(
     const force = args.force === undefined ? false : asRequiredBoolean(args.force, "force");
     return planUsageReader(context, platform, { force });
   });
-  register("update_global_config", async ({ global }, { storage }) => {
+  register("update_global_config", async ({ global, preserveInheritedSettings }, context) => {
+    const { storage } = context;
     const updated = await storage.updateGlobalConfig(
       stripRendererCredentials(asRecord(global, "global")),
-      { preserveCredentials: true },
+      {
+        preserveCredentials: true,
+        ...(preserveInheritedSettings === undefined
+          ? {}
+          : {
+              preserveInheritedSettings: asRequiredBoolean(
+                preserveInheritedSettings,
+                "preserveInheritedSettings",
+              ),
+            }),
+      },
     );
-    configureTerminalHistoryRetention({
+    context.runtime.terminals.history.configureRetention({
       enabled: updated.global.terminalHistoryEnabled,
       sessionMb: updated.global.terminalHistoryRetentionMb,
       globalMb: updated.global.terminalHistoryGlobalRetentionMb,
       days: updated.global.terminalHistoryRetentionDays,
     });
-    await pruneTerminalHistoryStorage(storage.getDataDir());
+    await context.runtime.terminals.history.pruneStorage(storage.getDataDir());
     return redactAppConfig(updated);
   });
   register("update_notification_sound_settings", async ({ settings }, { storage }) =>
@@ -989,30 +1001,27 @@ export function registerProjectCommands(
    * storing the credential, cancelling — stays here; the settings pane only
    * opens the returned URL and polls.
    */
-  register("cursor_sdk_login_start", async (_payload, context) => {
-    const { getBridgePath } = await import("./commands-servers.js");
-    const { resolveBunBinary } = await import("./commands-agent-support.js");
-    const { startCursorSdkLogin } = await import("./cursor-sdk-bridge.js");
+  register("cursor_sdk_login_start", async (payload, context) => {
     return startCursorSdkLogin(context, {
       bridgeEntrypoint: nodePath.join(getBridgePath(context, "cursor-bridge"), "dist", "index.js"),
       runtime: resolveBunBinary(context),
+      // A client opens the link in its own browser, which may be on another
+      // machine. Without the flag (an older client) this machine's desktop
+      // opens it, as before.
+      openBrowser: payload.openBrowser !== false,
     });
   });
   register("cursor_sdk_login_status", async (_payload, context) => {
-    const { cursorSdkLoginProgress } = await import("./cursor-sdk-bridge.js");
     const config = await context.storage.loadConfig();
     // The stored key is read only to report *which* credential is in play; it
     // is never returned.
     return cursorSdkLoginProgress(context, config.global.cursorApiKey);
   });
   register("cursor_sdk_login_cancel", async () => {
-    const { cancelCursorSdkLogin } = await import("./cursor-sdk-bridge.js");
     cancelCursorSdkLogin();
     return { cancelled: true };
   });
   register("cursor_sdk_logout", async (_payload, context) => {
-    const { cancelCursorSdkLogin, cursorSdkAuthStatus, cursorSdkLogout } =
-      await import("./cursor-sdk-bridge.js");
     cancelCursorSdkLogin();
     await cursorSdkLogout(context);
     const config = await context.storage.loadConfig();

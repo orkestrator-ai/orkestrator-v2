@@ -7,6 +7,7 @@
 
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 import type { CommandChangeProbe } from "./sessions/command-changes.js";
+import type { CodexChangeEvidence } from "./change-evidence.js";
 import type {
   RefusedCell,
   RefusedCellTail,
@@ -92,12 +93,20 @@ export interface AppServerRuntimeOptions {
   skillInventoryTtlMs?: number;
   /** Test/embedding override for the coalesced `skills/changed` re-read delay. */
   skillRefreshDebounceMs?: number;
+  /** Skill inventory settle wait after a child's first answer; 0 trusts it. */
+  skillColdSettleMs?: number;
   /**
    * Measures what each shell command changed in its worktree, for the +N −M
    * badge on its row. One per process, supplied by the composition root;
    * omitted, commands are simply not measured.
    */
   commandChangeProbe?: CommandChangeProbe;
+  /**
+   * The process's change-evidence adapter (`change-evidence.ts`). Every call
+   * is a synchronous, bounded spool append from the notification path;
+   * omitted, no evidence is recorded.
+   */
+  changeEvidence?: CodexChangeEvidence;
   /**
    * Asks for a read of a turn's rollout records, for code-mode cells
    * app-server reports no item for (`RefusedCellTail`). A 200 ms timer by

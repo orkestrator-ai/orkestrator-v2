@@ -4,6 +4,7 @@ import { sessionHealth } from "../../types/index.js";
 import { eventEmitter } from "../event-emitter.js";
 import { recordTerminalSlashCommands } from "../claude-terminal-commands.js";
 import { pluginStatusesFromInit } from "../init-plugins.js";
+import { initMcpServerStatus } from "../mcp-runtime-status.js";
 import { debugLog } from "../logger.js";
 import { recordInitCommandInventory } from "../session-manager-commands.js";
 import {
@@ -54,15 +55,10 @@ export async function handleInitMessage(turn: TurnState, message: SDKMessage): P
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const regularMcpServers = allMcpServers.filter((s: any) => !s.name?.startsWith("plugin:"));
 
-  const mcpServerStatuses: McpServerRuntimeStatus[] = regularMcpServers.map(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (s: any) => ({
-      name: s.name,
-      status: s.status === "connected" ? "connected" : "failed",
-      error: s.error,
-      tools: s.tools,
-    }),
-  );
+  // Statuses are kept as reported: a server still connecting or waiting for a
+  // sign-in is not a failure, and the live panel's no-control fallback reads
+  // these rows as they are.
+  const mcpServerStatuses: McpServerRuntimeStatus[] = regularMcpServers.map(initMcpServerStatus);
 
   const { statuses: pluginStatuses, errors: pluginErrors } = pluginStatusesFromInit(initMsg);
   const previousPluginErrors = new Set(session.pluginErrorSignatures);

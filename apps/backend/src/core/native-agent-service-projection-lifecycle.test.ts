@@ -21,10 +21,11 @@ import {
   captureWarnings,
   createProviderStub,
   createStorage,
-  internals,
   pendingInteractionSnapshot,
+  waitForCondition,
   withService,
 } from "./native-agent-service-projection-test-support.js";
+import { collaborators } from "./native-agent-service-test-collaborators.js";
 
 describe("NativeAgentService projection lifecycle", () => {
   test("keeps non-blocking questions visible without blocking the active turn", async () => {
@@ -184,6 +185,210 @@ describe("NativeAgentService projection lifecycle", () => {
     );
   });
 
+  test("withdraws a stopped environment's dead requests in a new announced revision", async () => {
+    // C11: the bridge died with the container, but a failed read keeps the
+    // last projection, so the public CLI and coordinator saw `pending`.
+    let bridge: "up" | "down" | "restarted" = "up";
+    const gone = () => {
+      throw new ProviderUnavailableError("bridge is not running");
+    };
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => {
+        if (bridge === "down") gone();
+        return { status: "running", messages: [] };
+      },
+      interactions: {
+        listPendingInteractions: async () => {
+          if (bridge === "down") gone();
+          // Parked requests do not survive a bridge restart.
+          return bridge === "up"
+            ? pendingInteractionSnapshot(10_000, ["permission"])
+            : { version: AGENT_INTERACTION_CONTRACT_VERSION, revision: 0, requests: [] };
+        },
+        resolveInteraction: async () => ({
+          result: "stale",
+          interactionId: "interaction-0",
+          sessionId: "provider-session",
+          revision: 1,
+        }),
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-native-stop-withdraw-", provider: async () => stub.provider },
+      async ({ storage, service }) => {
+        await addEnvironment(storage, { id: "env-2", worktreePath: "/tmp/env-2" });
+        const stopped = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-1",
+        };
+        const other = {
+          environmentId: "env-2",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-2:tab-1",
+        };
+        await service.ensureSession(stopped);
+        await service.ensureSession(other);
+        expect((await service.getProjection(stopped))?.interactions).toHaveLength(1);
+        expect((await service.getProjection(other))?.interactions).toHaveLength(1);
+
+        bridge = "down";
+        const stale = await service.getProjection(stopped);
+        expect(stale?.connection).toBe("error");
+        expect(stale?.interactions.map((request) => request.state)).toEqual(["pending"]);
+        expect(await service.sessionPendingInteractions(stopped)).toHaveLength(1);
+
+        const announced: Array<{ resource: string; id: string }> = [];
+        const unsubscribe = storage.addResourceChangeListener((change) => {
+          announced.push({ resource: change.resource, id: change.id });
+        });
+        try {
+          service.withdrawEnvironmentInteractions("env-1");
+        } finally {
+          unsubscribe();
+        }
+
+        const withdrawn = service.cachedProjectionSnapshot("env-1", "codex", "env-env-1:tab-1");
+        expect(withdrawn?.interactions).toEqual([]);
+        expect(withdrawn!.revision).toBeGreaterThan(stale!.revision);
+        expect(withdrawn?.connection).toBe("error");
+        expect(announced).toContainEqual({ resource: "native-agent-session", id: "env-1" });
+        expect(announced.some((change) => change.id === "env-2")).toBe(false);
+        // Another environment's request is still live and still listed.
+        expect(
+          service.cachedProjectionSnapshot("env-2", "codex", "env-env-2:tab-1")?.interactions,
+        ).toHaveLength(1);
+
+        // Nothing read while stopped brings it back.
+        expect((await service.getProjection(stopped))?.interactions).toEqual([]);
+        expect(await service.sessionPendingInteractions(stopped)).toEqual([]);
+
+        // Nor does the session reattaching on the next start.
+        bridge = "restarted";
+        const reattached = await service.getProjection(stopped);
+        expect(reattached?.connection).toBe("connected");
+        expect(reattached?.interactions).toEqual([]);
+      },
+    );
+  });
+
+  for (const initial of ["pending", "empty", "absent"] as const) {
+    for (const representation of [undefined, "sync-v1"] as const) {
+      test(`stop fences a refresh with ${initial} projection (${representation ?? "legacy"})`, async () => {
+        let pending = initial === "pending";
+        let interactionsRead = false;
+        let hold: Promise<void> | null = null;
+        let release!: () => void;
+        let snapshotHeld = false;
+        const stub = createProviderStub("codex", {
+          interactiveSnapshot: async () => {
+            if (hold) {
+              snapshotHeld = true;
+              await hold;
+            }
+            return { status: "running", messages: [] };
+          },
+          interactions: {
+            listPendingInteractions: async () => {
+              interactionsRead = true;
+              return pendingInteractionSnapshot(10_000, pending ? ["permission"] : []);
+            },
+            resolveInteraction: async () => ({
+              result: "stale",
+              interactionId: "interaction-0",
+              sessionId: "provider-session",
+              revision: 1,
+            }),
+          },
+        });
+        await withService(
+          {
+            prefix: "orkestrator-native-stop-withdraw-fence-",
+            provider: async () => stub.provider,
+          },
+          async ({ service }) => {
+            const identity = {
+              representation,
+              environmentId: "env-1",
+              agent: "codex" as const,
+              logicalSessionKey: "env-env-1:tab-1",
+            };
+            await service.ensureSession(identity);
+            if (initial !== "absent") {
+              expect((await service.getProjection(identity))?.interactions).toHaveLength(
+                initial === "pending" ? 1 : 0,
+              );
+            }
+            pending = true;
+            interactionsRead = false;
+
+            hold = new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            const inFlight = service.getProjection(identity);
+            await waitForCondition(() => snapshotHeld && interactionsRead);
+            service.withdrawEnvironmentInteractions("env-1");
+            release();
+
+            const refreshed = await inFlight;
+            if (initial !== "absent") expect(refreshed?.interactions).toEqual([]);
+            expect(
+              service.cachedProjectionSnapshot("env-1", "codex", "env-env-1:tab-1")?.interactions ??
+                [],
+            ).toEqual([]);
+          },
+        );
+      });
+    }
+  }
+
+  for (const overlapping of [false, true]) {
+    test(`stop evicts pending reads without a projection (overlapping=${overlapping})`, async () => {
+      let offline = false;
+      let readEntered = false;
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const stub = createProviderStub("codex", {
+        interactions: {
+          listPendingInteractions: async () => {
+            if (offline) throw new ProviderUnavailableError("stopped");
+            readEntered = true;
+            if (overlapping) await held;
+            return pendingInteractionSnapshot(10_000, ["permission"]);
+          },
+          resolveInteraction: async () => ({
+            result: "stale",
+            interactionId: "interaction-0",
+            sessionId: "provider-session",
+            revision: 1,
+          }),
+        },
+      });
+      await withService(
+        { prefix: "orkestrator-stop-pending-only-", provider: async () => stub.provider },
+        async ({ service }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: "tab-1",
+          };
+          await service.ensureSession(identity);
+          const reading = service.sessionPendingInteractions(identity);
+          if (overlapping) await waitForCondition(() => readEntered);
+          else expect(await reading).toHaveLength(1);
+          expect(service.cachedProjectionSnapshot("env-1", "codex", "tab-1")).toBeNull();
+          service.withdrawEnvironmentInteractions("env-1");
+          offline = true;
+          release();
+          if (overlapping) expect(await reading).toBeNull();
+          expect(await service.sessionPendingInteractions(identity)).toBeNull();
+        },
+      );
+    });
+  }
+
   test("invalidates a missing session through the status fallback", async () => {
     const { provider, status } = createProviderStub("codex", {
       status: async () => "missing",
@@ -247,7 +452,7 @@ describe("NativeAgentService projection lifecycle", () => {
           // carrying a prompt the user is waiting on, and disposing it aborts
           // every request it has in flight.
           expect(stale.dispose).not.toHaveBeenCalled();
-          expect(internals(service).providerRegistry.stateForTesting().providers.size).toBe(0);
+          expect(collaborators(service).providerRegistry.stateForTesting().providers.size).toBe(0);
 
           clock += 2_000;
           await service.reconcileAgentActivity();
@@ -322,7 +527,7 @@ describe("NativeAgentService projection lifecycle", () => {
       activity: async () => {
         // Stand in for a tab that resolved a fresh provider while this
         // read-only sweep was in flight.
-        internals(serviceRef!)
+        collaborators(serviceRef!)
           .providerRegistry.stateForTesting()
           .providers.set("env-1\u0000codex", replacement.provider);
         throw new ProviderUnavailableError("bridge stopped");
@@ -348,7 +553,7 @@ describe("NativeAgentService projection lifecycle", () => {
           await service.reconcileAgentActivity();
         });
 
-        expect(internals(service).providerRegistry.cached("env-1\u0000codex")).toBe(
+        expect(collaborators(service).providerRegistry.cached("env-1\u0000codex")).toBe(
           replacement.provider,
         );
         expect(replacement.dispose).not.toHaveBeenCalled();

@@ -69,6 +69,52 @@ export function parseGitHubDeviceLoginOutput(output: string): ParsedLoginPrompt 
   return { ...(url ? { url } : {}), ...(userCode ? { userCode } : {}) };
 }
 
+const FAILURE_LINE_PATTERN =
+  /\b(error|fail(?:ed|ure)?|couldn'?t|could not|cannot|can't|unable|denied|invalid|locked|not allowed|expired|refused|forbidden)\b/i;
+/** Anything long enough to be a token, a state value or a key. */
+const SECRET_SHAPE_PATTERN = /[A-Za-z0-9_\-.~+/=]{24,}/g;
+const MAX_FAILURE_REASON_LENGTH = 200;
+
+/**
+ * Why a login CLI exited unsuccessfully, from its own output, or undefined
+ * when it printed nothing recognisable.
+ *
+ * Only the requesting client sees this; it is never logged. It is still
+ * scrubbed, because the output also holds the authorize URL (PKCE challenge
+ * and state) and the device code: lines with a URL or a code are skipped
+ * outright, and anything shaped like a token is cut from the line chosen.
+ */
+export function loginFailureReason(output: string): string | undefined {
+  const lines = stripAnsi(output)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line &&
+        !/https?:\/\//i.test(line) &&
+        !DEVICE_CODE_PATTERN.test(line) &&
+        FAILURE_LINE_PATTERN.test(line),
+    );
+  const line = lines.at(-1);
+  if (!line) return undefined;
+  const scrubbed = line.replace(SECRET_SHAPE_PATTERN, "…").replace(/\s+/g, " ").trim();
+  return scrubbed.length > MAX_FAILURE_REASON_LENGTH
+    ? `${scrubbed.slice(0, MAX_FAILURE_REASON_LENGTH - 1)}…`
+    : scrubbed;
+}
+
+/** The message for a login CLI that exited with `code`, naming what to do where it can. */
+export function loginFailureMessage(code: number | null, output: string): string {
+  const reason = loginFailureReason(output);
+  if (!reason) return `The sign-in did not complete (exit code ${code ?? "unknown"})`;
+  const hint = /keychain/i.test(reason)
+    ? " Unlock this machine's login keychain (sign in at its desktop), then try again."
+    : /\b(invalid|state)\b.*\bcode\b|\bcode\b.*\b(invalid|expired)\b/i.test(reason)
+      ? " Start the sign-in again and paste the code from the newest browser page."
+      : "";
+  return `The sign-in did not complete: ${reason}${hint}`;
+}
+
 /** Which CLI a login drives: an agent account, or the host's GitHub CLI. */
 export type LoginFlowKind = AgentAccountPlatform | "github";
 
@@ -235,9 +281,7 @@ export async function beginAgentAccountLogin(
     clearTimeout(startupTimer);
     clearTimeout(totalTimer);
     const error = new Error(
-      cancelled || signal
-        ? "The sign-in was cancelled"
-        : `The sign-in did not complete (exit code ${code ?? "unknown"})`,
+      cancelled || signal ? "The sign-in was cancelled" : loginFailureMessage(code, output),
     );
     rejectPrompt(error);
     settleCompletion(code === 0 && !cancelled ? undefined : error);

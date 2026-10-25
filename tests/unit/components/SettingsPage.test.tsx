@@ -59,6 +59,9 @@ mock.module("../../../apps/web/src/components/settings/FullscreenSettingsLayout"
 
 const { SettingsPage } = await import("../../../apps/web/src/components/settings/SettingsPage");
 const invokeMock = invoke as ReturnType<typeof mock>;
+// The machine list also reads the portal layout; only config loads count here.
+const configReads = () =>
+  invokeMock.mock.calls.filter(([command]) => command === "get_config").length;
 const originalConsoleError = console.error;
 
 afterAll(() => {
@@ -214,14 +217,14 @@ describe("SettingsPage", () => {
   test("reuses a successful initial load when the page is reopened", async () => {
     const { rerender } = render(<SettingsPage open onOpenChange={() => undefined} />);
     await screen.findByTestId("active-settings-section");
-    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(configReads()).toBe(1);
 
     rerender(<SettingsPage open={false} onOpenChange={() => undefined} />);
     rerender(<SettingsPage open onOpenChange={() => undefined} />);
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(configReads()).toBe(1);
     expect(screen.getByTestId("active-settings-section")).toBeTruthy();
   });
 
@@ -236,6 +239,6 @@ describe("SettingsPage", () => {
 
     rerender(<SettingsPage open={false} onOpenChange={() => undefined} />);
     rerender(<SettingsPage open onOpenChange={() => undefined} />);
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(configReads()).toBe(2));
   });
 });

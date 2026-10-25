@@ -41,6 +41,23 @@ export function handlePromptStart(message: JsonObject): boolean {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return true;
     }
+    // Standard ACP `session_info_update`, with the fields given as JSON after
+    // the marker (`SESSION_INFO:{"title":"Fix login"}`).
+    if (prompt.startsWith("SESSION_INFO:")) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "session_info_update",
+            ...(JSON.parse(prompt.slice("SESSION_INFO:".length)) as JsonObject),
+          },
+        },
+      });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
+    }
     // A stand-in for an agent interpreting its own command grammar: it answers
     // with the command token it ran and ends the turn.
     if (prompt.startsWith("/")) {

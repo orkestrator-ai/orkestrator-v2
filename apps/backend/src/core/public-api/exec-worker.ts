@@ -85,11 +85,13 @@ async function main() {
   let timedOut = false;
   let cancelled = false;
   let killTimer = null;
+  // Tests may only shorten the TERM-to-KILL grace; production uses 5s.
+  const killGraceMs = Math.max(100, Math.min(5000, Number(process.env.ORKESTRATOR_TEST_EXEC_KILL_GRACE_MS) || 5000));
   const terminate = () => {
     if (!pgid) return;
     signalGroup(pgid, "SIGTERM");
     if (!killTimer) {
-      killTimer = setTimeout(() => signalGroup(pgid, "SIGKILL"), 5000);
+      killTimer = setTimeout(() => signalGroup(pgid, "SIGKILL"), killGraceMs);
     }
   };
   const pump = (stream, fd, name) => stream.on("data", (chunk) => {

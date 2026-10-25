@@ -23,6 +23,8 @@ import {
 
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 
+import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
+
 import {
   isLoopedReviewWorkflow,
   isReviewPackageReference,
@@ -40,7 +42,10 @@ import { APP_SLUG, APP_VERSION } from "../src/core/constants";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
-import { BackendRuntime } from "../src/core/backend-runtime";
+import { BackendRuntime, type BackendRuntimeOptions } from "../src/core/backend-runtime";
+import { terminateProcessTree } from "../src/core/process-tree";
+
+import { createOwnedTempDir, sweepStaleTempDirs } from "../../../tests/temp-sweep";
 
 type MockPtyProcess = {
   write: ReturnType<typeof mock>;
@@ -79,9 +84,45 @@ export async function createCommandFixtures() {
   const shutdownRuntimes = () => {
     for (const runtime of runtimes.splice(0)) runtime.shutdown();
   };
+  /**
+   * Process launch and teardown for every runtime this fixture builds. A test
+   * swaps one in for its own duration; teardown restores the real ones.
+   */
+  const localServerHooks: {
+    spawn: typeof spawnCommand;
+    terminateProcessTree: typeof terminateProcessTree;
+  } = { spawn: spawnCommand, terminateProcessTree };
+  const resetLocalServerHooks = () => {
+    localServerHooks.spawn = spawnCommand;
+    localServerHooks.terminateProcessTree = terminateProcessTree;
+  };
+  const runtimeOptions = (
+    emit: CommandContext["emit"],
+    options: Omit<BackendRuntimeOptions, "emit"> = {},
+  ): BackendRuntimeOptions => ({
+    ...options,
+    emit,
+    localServers: {
+      spawn: (...args) => localServerHooks.spawn(...args),
+      terminateProcessTree: (...args) => localServerHooks.terminateProcessTree(...args),
+      ...options.localServers,
+    },
+    // As in the backend (`index.ts`), so a merged PR's cleanup runs as in production.
+    prMonitor: {
+      scheduleMergeCleanup: (environmentId, context) =>
+        scheduleMergeCleanupRecovery(environmentId, context),
+      ...options.prMonitor,
+    },
+  });
   /** A runtime for a hand-built context, released with the fixture's own. */
-  const createRuntime = (emit: CommandContext["emit"] = () => undefined): BackendRuntime =>
-    trackRuntime(new BackendRuntime({ emit }));
+  const createRuntime = (
+    emit: CommandContext["emit"] = () => undefined,
+    options: Omit<BackendRuntimeOptions, "emit"> = {},
+  ): BackendRuntime => trackRuntime(new BackendRuntime(runtimeOptions(emit, options)));
+  /** Drains every fixture runtime's owned local servers, as backend shutdown does. */
+  const shutdownLocalServers = async (options: { operationDrainTimeoutMs?: number } = {}) => {
+    for (const runtime of runtimes) await runtime.localServers.shutdown(options);
+  };
 
   const ptySpawn = mock((command: string, _args: string[], options: Record<string, unknown>) => {
     const dataCallbacks: Array<(data: string) => void> = [];
@@ -124,7 +165,6 @@ export async function createCommandFixtures() {
 
   const {
     __testing: commandTesting,
-    closeLocalServerAdmission,
     CONTAINER_UNTRACKED_STATS_SCANNER,
     createCommandRegistry,
     environmentBranchBase,
@@ -132,8 +172,7 @@ export async function createCommandFixtures() {
     isImmutableCommitRef,
     resolveBrowserOpenCommand,
     resolveFileManagerRevealCommands,
-    shutdownLocalServers,
-    shutdownPrMonitorTracking,
+    scheduleMergeCleanupRecovery,
     toClientEnvironment,
   } = await import("../src/core/commands");
 
@@ -141,7 +180,24 @@ export async function createCommandFixtures() {
 
   const { setAgentSkillsHomeForTesting } = await import("../src/core/agent-skills");
 
+  const { cancelScheduledEnvironmentCleanup } =
+    await import("../src/core/environment-cleanup-reconciler");
+
+  const { closeEnvironmentCleanupStorage } = await import("../src/core/environment-cleanup-ledger");
+
   const tempDirs: string[] = [];
+
+  // The default data directory belongs to this process. A fixed `$TMPDIR` path
+  // was shared by every command-fixture file in every concurrent test process
+  // on the host: its SQLite cleanup ledger (a busy handler that blocks the
+  // event loop while another process writes) stalled deletions past their
+  // deadlines, background cleanup passes retried other processes' entries, and
+  // processes removed each other's terminal histories (flakes 0194, 0162, 0235).
+  const FIXTURE_ROOT_PREFIX = "orkestrator-command-fixtures-";
+  sweepStaleTempDirs({ prefix: FIXTURE_ROOT_PREFIX, maxAgeMs: 60 * 60 * 1_000 });
+  const fixtureRoot = createOwnedTempDir(FIXTURE_ROOT_PREFIX);
+  const DEFAULT_DATA_DIR = path.join(fixtureRoot, "data");
+  await fs.mkdir(DEFAULT_DATA_DIR);
 
   const SETUP_DONE_OSC = "\u001b]9999;setup_done\u0007";
 
@@ -429,6 +485,9 @@ export async function createCommandFixtures() {
       ) => Promise<unknown>;
       dataDir?: string;
       worktreeDir?: string;
+      /** Shares state with another context, as two callers of one backend do. */
+      runtime?: BackendRuntime;
+      runtimeOptions?: Omit<BackendRuntimeOptions, "emit">;
     } = {},
   ): {
     context: CommandContext;
@@ -460,14 +519,14 @@ export async function createCommandFixtures() {
       resourceRoot: "",
       worktreeDir: options.worktreeDir ?? createWorktreeDir(),
       environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-      runtime: trackRuntime(
-        new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
-      ),
+      runtime:
+        options.runtime ??
+        createRuntime((event, payload) => context.emit(event, payload), options.runtimeOptions),
       emit: mock((event: string, payload: unknown) => {
         emitted.push({ event, payload });
       }),
       storage: {
-        getDataDir: () => options.dataDir ?? path.join(os.tmpdir(), "orkestrator-command-tests"),
+        getDataDir: () => options.dataDir ?? DEFAULT_DATA_DIR,
         withGitHubCompletionCommentLock: mock(
           async (_pipelineId: string, operation: () => Promise<unknown>) => operation(),
         ),
@@ -475,10 +534,7 @@ export async function createCommandFixtures() {
         // No added agent accounts: every launch uses the host login.
         loadAgentAccounts: mock(async () => ({ version: 1, accounts: [], active: {} })),
         agentAccountsDirectory: () =>
-          path.join(
-            options.dataDir ?? path.join(os.tmpdir(), "orkestrator-command-tests"),
-            "agent-accounts",
-          ),
+          path.join(options.dataDir ?? DEFAULT_DATA_DIR, "agent-accounts"),
         saveConfig: mock(async (nextConfig: typeof config) => {
           Object.assign(config, nextConfig);
         }),
@@ -743,6 +799,8 @@ export async function createCommandFixtures() {
     options: {
       isHealthy: () => boolean;
       isAuthorized: (request: http.IncomingMessage) => boolean;
+      /** Records OpenCode's directory-scoped status reads (instance warm-up). */
+      statusReads?: Array<{ url: string; authorized: boolean }>;
     },
   ): Promise<{ close: () => Promise<void> }> {
     const server = http.createServer((request, response) => {
@@ -750,6 +808,13 @@ export async function createCommandFixtures() {
         // A stopped container process refuses the connection. This lets the
         // production reachability check distinguish it from a live 401.
         request.socket.destroy();
+        return;
+      }
+      if (options.statusReads && request.url?.startsWith("/session/status")) {
+        const authorized = options.isAuthorized(request);
+        options.statusReads.push({ url: request.url, authorized });
+        response.writeHead(authorized ? 200 : 401);
+        response.end("{}");
         return;
       }
       if (request.url === "/global/health") {
@@ -836,11 +901,37 @@ export async function createCommandFixtures() {
     return stdout.trim();
   }
 
+  // A committed worktree whose `origin` has `main` costs ten Git processes (a
+  // bare init and a push among them). It is built once per file outside the
+  // per-test temporary directories and copied per test, so every test still
+  // owns an independent repository and remote.
+  let gitWorktreeTemplate: Promise<string> | undefined;
+
   async function createGitWorktreeWithOrigin(): Promise<{ worktree: string; remote: string }> {
+    gitWorktreeTemplate ??= buildGitWorktreeWithOrigin(
+      path.join(fixtureRoot, "git-worktree-template"),
+    ).catch((error: unknown) => {
+      gitWorktreeTemplate = undefined;
+      throw error;
+    });
+    const templateRoot = await gitWorktreeTemplate;
     const root = await createTempDir("ork-electron-git-");
+    await fs.cp(templateRoot, root, { recursive: true });
+    // The worktree's `origin` is an absolute path; point it at this copy's remote.
+    const configPath = path.join(root, "worktree", ".git", "config");
+    const config = await fs.readFile(configPath, "utf8");
+    if (!config.includes(templateRoot)) {
+      throw new Error("The template worktree config no longer names its origin path");
+    }
+    await fs.writeFile(configPath, config.replaceAll(templateRoot, root));
+    return { worktree: path.join(root, "worktree"), remote: path.join(root, "origin.git") };
+  }
+
+  async function buildGitWorktreeWithOrigin(root: string): Promise<string> {
     const remote = path.join(root, "origin.git");
     const worktree = path.join(root, "worktree");
 
+    await fs.mkdir(root, { recursive: true });
     await runGit(root, ["init", "--bare", remote]);
     await fs.mkdir(worktree, { recursive: true });
     await runGit(worktree, ["init"]);
@@ -853,7 +944,7 @@ export async function createCommandFixtures() {
     await runGit(worktree, ["remote", "add", "origin", remote]);
     await runGit(worktree, ["push", "-u", "origin", "main"]);
 
-    return { worktree, remote };
+    return root;
   }
 
   // Points the Codex lookup at empty managed/resource roots so it falls back to the
@@ -912,12 +1003,15 @@ export async function createCommandFixtures() {
     };
   }
 
+  // The start path records the canonical root (`validateWorktreeLocation`), so
+  // a root under a symlink such as macOS `/tmp` or `/var/folders` appears in
+  // storage under its real path.
   function expectedManagedWorktreePath(
     context: CommandContext,
     projectName: string,
     branch: string,
   ): string {
-    return path.join(context.worktreeDir!, `${projectName}-${branch}`);
+    return path.join(canonicalWorktreePath(context.worktreeDir!), `${projectName}-${branch}`);
   }
 
   async function expectLocalWorktreeRolledBack(
@@ -1369,9 +1463,7 @@ exec '${realGit}' "$@"
   }
 
   /** Registry owner of the default fixture data directory. */
-  const FIXTURE_DOCKER_OWNER = dockerOwnerNamespace(
-    path.join(os.tmpdir(), "orkestrator-command-tests"),
-  );
+  const FIXTURE_DOCKER_OWNER = dockerOwnerNamespace(DEFAULT_DATA_DIR);
   /**
    * Shell lines answering the lifecycle ownership probe (`owner\tstatus\tapp\tid`)
    * for any container as owned by `owner` and in `state`. Insert them after a
@@ -1380,6 +1472,10 @@ exec '${realGit}' "$@"
   const ownedContainerInspect = (owner = FIXTURE_DOCKER_OWNER, state = "running") =>
     `if [ "$1" = "inspect" ]; then
   case "$*" in
+    *'{{.State.Running}}'*)
+      printf '%s\\n' '${state === "running" ? "true" : "false"}'
+      exit 0
+      ;;
     *'index .Config.Labels "orkestrator-owner"'*)
       printf '%s\\t%s\\torkestrator-v2\\t%s\\n' '${owner}' '${state}' "$4"
       exit 0
@@ -1421,14 +1517,11 @@ exit 0
       await shutdownLocalServers();
     } finally {
       setAgentSkillsHomeForTesting(undefined);
-      shutdownRuntimes();
       // Commands like set_environment_pr arm PR monitoring as a side effect;
-      // dropping the entries here keeps a scheduled poll from spawning `gh`
-      // against a fixture worktree later in the run.
-      shutdownPrMonitorTracking();
-      commandTesting.resetLocalServerLifecycle();
-      commandTesting.resetDockerContainerStateCache();
-      commandTesting.resetTerminalOutputBuffers();
+      // shutting each runtime down drops those entries, so a scheduled poll
+      // cannot spawn `gh` against a fixture worktree later in the run.
+      shutdownRuntimes();
+      resetLocalServerHooks();
       await Promise.all(
         tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
       );
@@ -1448,6 +1541,9 @@ exit 0
       shutdownRuntimes();
       if (originalDockerHost === undefined) delete process.env.DOCKER_HOST;
       else process.env.DOCKER_HOST = originalDockerHost;
+      cancelScheduledEnvironmentCleanup(DEFAULT_DATA_DIR);
+      closeEnvironmentCleanupStorage(DEFAULT_DATA_DIR);
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
 
@@ -1472,7 +1568,6 @@ exit 0
     UNATTENDED_AGENT_INTERACTION_POLICY,
     afterAll,
     afterEach,
-    closeLocalServerAdmission,
     codexSlugScript,
     commandTesting,
     configuredGitPushBehaviour,
@@ -1531,8 +1626,8 @@ exit 0
     resolveFileManagerRevealCommands,
     runGit,
     setAgentSkillsHomeForTesting,
+    localServerHooks,
     shutdownLocalServers,
-    shutdownPrMonitorTracking,
     spawnCommand,
     spawnSync,
     spyOn,

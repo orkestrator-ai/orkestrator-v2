@@ -339,6 +339,75 @@ describe("HTTP bridge provider (ACP)", () => {
     expect(bodies.at(-1)).toEqual({ decision: "deny" });
   });
 
+  test("maps a Grok command or file change onto its own approval kind", async () => {
+    const requestedAt = Date.now();
+    const bodies: unknown[] = [];
+    const options = [
+      { optionId: "allow", name: "Allow once", kind: "allow_once" },
+      { optionId: "reject", name: "Reject", kind: "reject_once" },
+    ];
+    const timing = { requestedAt, expiresAt: requestedAt + 300_000 };
+    const { provider } = httpProvider((url, init) => {
+      if (url.includes("/approvals/")) {
+        bodies.push(JSON.parse(String(init.body)));
+        return Response.json({ resolved: true });
+      }
+      if (url.endsWith("/approvals")) {
+        return Response.json({
+          approvals: [
+            {
+              id: "cmd",
+              title: "Run tests",
+              kind: "command",
+              command: "bun test",
+              options,
+              ...timing,
+            },
+            {
+              id: "edit",
+              title: "Edit files",
+              kind: "file-change",
+              paths: ["src/a.ts", "src/b.ts"],
+              options,
+              ...timing,
+            },
+            // A command the bridge could not read stays a generic permission.
+            { id: "bare", title: "Run something", kind: "command", options, ...timing },
+            { id: "old", title: "Older bridge", options, ...timing },
+          ],
+        });
+      }
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
+      return Response.json({ sessionId: "grok-1" });
+    }, grokConnection);
+
+    await provider.createSession("build", "Grok");
+    const { requests } = await provider.interactions!.listPendingInteractions("grok-1");
+    expect(requests.map((request) => [request.kind, request.presentation.body])).toEqual([
+      ["command-approval", "Command: bun test"],
+      ["file-approval", "File: src/a.ts\nFile: src/b.ts"],
+      ["permission", undefined],
+      ["permission", undefined],
+    ]);
+    // The agent's own options are still the choices, whatever the kind.
+    const command = requests[0]!;
+    expect(command.presentation.questions[0]?.options.map((option) => option.label)).toEqual([
+      "Allow once",
+      "Reject",
+    ]);
+    await provider.interactions!.resolveInteraction(
+      "grok-1",
+      command.id,
+      answerResolution(command),
+    );
+    await provider.interactions!.resolveInteraction(
+      "grok-1",
+      requests[1]!.id,
+      declineResolution(requests[1]!),
+    );
+    expect(bodies).toEqual([{ optionId: "allow" }, { decision: "deny" }]);
+  });
+
   test("unreadable successful dispatch bodies remain retryable", async () => {
     const bodies = [
       "{",
@@ -397,6 +466,41 @@ describe("HTTP bridge provider (ACP)", () => {
     // Only the ACP bridge keeps this journal.
     expect(httpProvider(() => Response.json({}), cursorConnection).provider.turnTerminalError).toBe(
       undefined,
+    );
+  });
+
+  test("routes Grok's compact action to the bridge and refuses every other action", async () => {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ accepted: true }, { status: 202 }),
+      grokConnection,
+    );
+    await expect(provider.performSessionAction!("grok-1", { kind: "compact" })).resolves.toEqual({
+      outcome: "applied",
+    });
+    expect(requests.map((request) => [request.url, request.init.method])).toEqual([
+      ["http://grok.test/session/grok-1/compact", "POST"],
+    ]);
+    await expect(
+      provider.performSessionAction!("grok-1", {
+        kind: "steer",
+        text: "Keep going",
+        requestId: "steer-1",
+        expectedRunId: "turn-1",
+      }),
+    ).rejects.toThrow("grok does not support steer");
+    expect(requests).toHaveLength(1);
+
+    // A session whose agent offers no `/compact` says so; nothing was sent.
+    const refused = httpProvider(
+      () =>
+        Response.json(
+          { error: "Grok does not offer /compact in this session", kind: "command-unavailable" },
+          { status: 422 },
+        ),
+      grokConnection,
+    ).provider;
+    await expect(refused.performSessionAction!("grok-1", { kind: "compact" })).rejects.toThrow(
+      "Grok does not offer /compact in this session",
     );
   });
 });

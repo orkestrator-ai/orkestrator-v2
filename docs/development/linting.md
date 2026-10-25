@@ -1,13 +1,29 @@
 # Formatting and linting
 
-Status: Living — oxfmt/oxlint configuration, severity policy and its rationale.
+Status: Living — formatter, linter and type checker configuration and rationale.
 
 The short rules live in the root `AGENTS.md`. This guide keeps the reasons.
 
-Formatting is [oxfmt](https://oxc.rs) (`.oxfmtrc.json`), linting is
-[oxlint](https://oxc.rs) (`.oxlintrc.json`). Both are single Rust binaries and
+Formatting is [`bun fmt`](https://bun.com/docs/format), built into the pinned
+Bun runtime, and linting is [oxlint](https://oxc.rs) (`.oxlintrc.json`). Both
 run over the whole repo in well under a second, so there is no turbo task and no
 per-package config — always run them from the repo root.
+
+`bun fmt` reads `.oxfmtrc.json` and prints what oxfmt 0.72 prints, so the
+config file keeps its oxfmt name and the oxfmt package is no longer installed.
+Do not move the options into a `[fmt]` section of `bunfig.toml`: without an
+oxfmt config file or dependency, `bun fmt` formats like Prettier (80 columns by
+default) rather than like oxfmt. `bun fmt --doctor` shows which config it
+picked up.
+
+Typechecking is [`bun check`](https://bun.com/docs/runtime/check), which reports
+the same errors as `tsc` from TypeScript 7 and uses every core. Each package's
+`typecheck` script runs `bun check -p <tsconfig>` per project, and `mise run
+typecheck` runs those through turbo plus the root `tests/` and `e2e/` projects.
+`bun check` never emits, so the `typescript` dev dependency stays only so editors
+use the same TypeScript version (`bun -p process.versions.typescript`). A
+`package.json` `check` script would shadow the type checker (`bun check` runs
+the script), so packages name theirs `typecheck`.
 
 ```bash
 mise run format         # rewrite files in place
@@ -17,19 +33,20 @@ mise run lint:fix       # apply the auto-fixable subset
 mise run check          # format:check && lint && typecheck
 ```
 
-`.github/workflows/lint.yml` runs `format:check` and `lint` on every pull
-request. The lint step uses `if: ${{ !cancelled() }}` so a formatting failure
-does not hide lint output — one push reports both.
+The `CI` workflow (`.github/workflows/ci.yml`) runs `format:check` and `lint`
+on every pull request, alongside the typecheck and test jobs. The lint step
+uses `if: ${{ !cancelled() }}` so a formatting failure does not hide lint
+output — one push reports both.
 
 ## What is excluded, and why
 
-`bridges/codex-bridge/src/app-server/generated/**` is excluded from both tools.
-It is a lockfile: `mise run verify:codex:protocol` regenerates it and compares
-byte-for-byte, so reformatting it would fail that check against a generator this
-repo does not control. `test-fixtures/**` is excluded from linting because those
+`bridges/codex-bridge/src/app-server/generated/**` is excluded from both the
+formatter and the linter. It is a lockfile: `mise run verify:codex:protocol`
+regenerates it and compares byte-for-byte, so reformatting it would fail that
+check against a generator this repo does not control. `test-fixtures/**` is excluded from linting because those
 files deliberately contain failing and malformed code.
 
-Markdown and `docs/**` are excluded from oxfmt. The prose in this repo is
+Markdown and `docs/**` are excluded from `bun fmt`. The prose in this repo is
 hand-wrapped and several documents are read as much as they are rendered;
 reflowing them would produce churn with no reader benefit.
 
@@ -43,17 +60,29 @@ Clean them up opportunistically in files you are already touching. Do not
 silence the rule, and do not raise it to `error` until the backlog is actually
 gone.
 
-The React Compiler rules oxlint 1.79 moved into `correctness` are warnings for
-the same reason: `react/refs`, `react/set-state-in-effect`,
+The React Compiler rules oxlint 1.79 moved into `correctness` are errors like
+the rest of the category: `react/refs`, `react/set-state-in-effect`,
 `react/immutability`, `react/preserve-manual-memoization`, `react/globals`,
-`react/purity` and `react/use-memo`. When oxlint 1.88 was adopted (2026-10-13)
-they reported 337 findings in 129 files, almost all in `apps/web` — 149 refs
-read or written during render and 125 synchronous `setState` calls in effects.
-Several are genuine React 19 correctness issues, but the fixes touch hot
-rendering paths such as the chat transcript, so they are burned down in their
-own reviewed changes rather than in a linter bump. Do not add new findings for
-these rules, fix them in files you are already changing, and raise each rule
-back to `error` once its count reaches zero.
+`react/purity` and `react/use-memo`. They were warnings from the oxlint 1.88
+adoption (2026-10-13, 337 findings in 129 files, almost all `apps/web`) until
+the backlog reached zero on 2026-10-25 (317 findings in 114 files at the
+time), when all seven went back to `error`. The usual fixes:
+
+- Reset state on a prop or key change during render (keep the previous key in
+  state and compare), not in an effect.
+- Write "latest value" refs in `useLayoutEffect`, or use `useEffectEvent`;
+  never read or write `ref.current` during render.
+- Read clocks through `useSyncExternalStore` or a `useState` initialiser, not
+  `Date.now()` in render.
+- In a loader an effect calls, set state only after the request settles; a
+  click handler that wants an immediate loading state sets it itself.
+
+Thirteen sites (2026-10-25) keep a disable directive for these rules, each
+with its reason above it. Twelve are `react/set-state-in-effect` where the
+state change has to happen in the same effect as a side effect (a native
+cancel, a flush before unmount, a tab opened in the parent) or must follow a
+commit (the design canvas restores its saved view only after the first
+default-view commit has marked the visible frames live).
 
 The `jsx-a11y` plugin is not enabled. Its interaction rules reported 58
 findings that are real accessibility gaps, but fixing them means adding keyboard

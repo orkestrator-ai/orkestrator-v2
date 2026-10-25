@@ -15,6 +15,7 @@ import type { UserPromptPresentationKind } from "@orkestrator/protocol/review-ev
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { AgentMailKind, AgentMailNotice } from "@orkestrator/protocol/agent-mail";
+import type { TranscriptArtifactRef } from "@orkestrator/protocol/transcript-artifacts";
 
 export interface NativeToolDiffMetadata {
   filePath?: string;
@@ -328,6 +329,18 @@ export interface NativeTaskGroupPart extends NativeBasePart {
 
 export type NativeAgentActivityPart = NativeSubagentPart | NativeTaskGroupPart;
 
+/**
+ * A published transcript artifact. Only the backend's publication ledger
+ * produces this part; text, JSON or tool output that looks like a reference
+ * never becomes one. The renderer resolves content by reference.
+ */
+export interface NativeArtifactPart extends NativeBasePart {
+  type: "artifact";
+  artifact: TranscriptArtifactRef;
+  publishedAt: string;
+  conversationSequence: number;
+}
+
 export interface NativeAgentGroupPart extends NativeBasePart {
   type: "agent-group";
   parts: NativeAgentActivityPart[];
@@ -348,7 +361,8 @@ export type NativeMessagePart =
   | NativeCompactionPart
   | NativeRetryPart
   | NativeImagePart
-  | NativeStatusPart;
+  | NativeStatusPart
+  | NativeArtifactPart;
 
 export interface NativeMessage {
   id: string;
@@ -361,6 +375,12 @@ export interface NativeMessage {
    * multiple source messages. Forks use this instead of the stable display id.
    */
   latestSourceMessageId?: string;
+  /**
+   * First source message of a coalesced display row. The row's own `id` is a
+   * surviving identity that history merging in front does not rename; this
+   * says where the row now starts.
+   */
+  earliestSourceMessageId?: string;
   /**
    * Earliest source-row clock represented by a coalesced display row.
    * Settled child cards use it for placement while `createdAt` remains the
@@ -403,4 +423,10 @@ export interface PeerMailPresentation {
   body: string;
   /** Workflow notices only: what the notice is about and how to weigh it. */
   notice?: AgentMailNotice;
+  /** Sender and recipient participant keys, when known: the tile opens their conversation. */
+  participants?: [string, string];
+  /** `out` for mail this transcript's agent sent; absent for mail it received. */
+  direction?: "in" | "out";
+  /** Delivery state, for mail this agent sent. */
+  status?: { label: string; tone: "muted" | "progress" | "warning" | "error" };
 }

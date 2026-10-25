@@ -7,8 +7,8 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const manifest = await Bun.file(path.join(packageRoot, "package.json")).json();
 const version = typeof manifest.version === "string" ? manifest.version : "0.0.0";
 
-// Decide service versus client before the backend is imported: help, version
-// and client commands must never initialize storage, listeners, or bridges.
+// Decide service versus client before the backend is imported: help, version,
+// --fix and client commands must never initialize storage, listeners, or bridges.
 const client = await import("../dist/client.js");
 const argv = process.argv.slice(2);
 const invocation = client.classifyInvocation(argv);
@@ -27,6 +27,9 @@ if (invocation.mode === "serve") {
   await import("../dist/main.js");
 } else if (invocation.mode === "client") {
   process.exitCode = await client.runClientProcess(invocation.argv, version);
+} else if (invocation.mode === "fix") {
+  // Opens a coding agent to help report a problem; no backend is started.
+  process.exitCode = await client.runFixProcess(invocation.argv, version);
 } else {
   process.exitCode = client.renderInvocationError(argv, invocation.message);
 }

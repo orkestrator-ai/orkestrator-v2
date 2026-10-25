@@ -2,7 +2,7 @@
  * Authoritative projection state: connection grace, composer capabilities,
  * execution profiles, the bounded read cache, and resume.
  */
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 
 import { AGENT_INTERACTION_CONTRACT_VERSION } from "@orkestrator/protocol/agent-interactions";
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
@@ -39,11 +39,12 @@ import {
   NATIVE_PROJECTION_CACHE_LIMIT,
   nativeAgentSessionStorageKey,
 } from "./native-agent-service.js";
+import { collaborators, projectionInternals } from "./native-agent-service-test-collaborators.js";
 import {
   mergeContextUsageTurns,
   mergeNativeAgentQueueItems,
   withProviderContextWindow,
-} from "./native-agent-service-projection.js";
+} from "./native-agent-transcript-projection.js";
 
 describe("usage projection history", () => {
   test("merges sparse turn updates by id and retains only the newest twenty", () => {
@@ -271,7 +272,6 @@ describe("usage projection history", () => {
 
 import {
   createProviderStub,
-  internals,
   waitForCondition,
   withService,
   type Invoke,
@@ -558,14 +558,7 @@ describe("NativeAgentService", () => {
     await withService(
       { prefix: "orkestrator-recoverable-status-", now: () => now },
       async ({ service }) => {
-        const status = (
-          service as unknown as {
-            recoverableDispatchStatus(
-              createdAt: string,
-              kind?: "prompt" | "steer",
-            ): "reconciling" | "action-required";
-          }
-        ).recoverableDispatchStatus.bind(service);
+        const status = projectionInternals(service).recoverableDispatchStatus;
 
         // Inside the grace window a prompt is still reconciling.
         expect(status(new Date(now - 5_000).toISOString(), "prompt")).toBe("reconciling");
@@ -819,6 +812,57 @@ describe("NativeAgentService", () => {
       );
     },
   );
+
+  test.each([true, false])(
+    "cancelling a sign-in forwards to the provider when it can cancel (%s)",
+    async (canCancel) => {
+      const stub = createProviderStub("codex");
+      const cancelSignIn = mock(async () => ({ cancelled: true }));
+      if (canCancel) Object.assign(stub.provider, { cancelSignIn });
+      await withService(
+        { prefix: "orkestrator-sign-in-cancel-", provider: async () => stub.provider },
+        async ({ service }) => {
+          await expect(
+            service.cancelProjectionSignIn({
+              environmentId: "env-1",
+              agent: "codex",
+              logicalSessionKey: "env-env-1:tab-sign-in",
+            }),
+          ).resolves.toEqual({ cancelled: canCancel });
+          expect(cancelSignIn).toHaveBeenCalledTimes(canCancel ? 1 : 0);
+        },
+      );
+    },
+  );
+
+  test("cancelling with an absent bridge only observes and invalidates the projection", async () => {
+    const invoke = mock(async (command: string): Promise<never> => {
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    await withService({ prefix: "orkestrator-cancel-absent-", invoke }, async ({ service }) => {
+      const internal = service as unknown as {
+        observeBridgeConnection: () => Promise<undefined>;
+        projections: { invalidateProjection: (key: string) => void };
+      };
+      const observe = spyOn(internal, "observeBridgeConnection").mockResolvedValue(undefined);
+      const invalidate = spyOn(internal.projections, "invalidateProjection");
+      try {
+        expect(
+          await service.cancelProjectionSignIn({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey: "tab-sign-in",
+          }),
+        ).toEqual({ cancelled: false });
+        expect(observe).toHaveBeenCalledTimes(1);
+        expect(invoke).not.toHaveBeenCalled();
+        expect(invalidate).toHaveBeenCalledTimes(1);
+      } finally {
+        observe.mockRestore();
+        invalidate.mockRestore();
+      }
+    });
+  });
 
   test("account reads preserve auth failures rather than reporting unsupported", async () => {
     const stub = createProviderStub("cursor", {
@@ -1275,8 +1319,8 @@ describe("NativeAgentService", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        await internals(service).flushDisplayTailPersist(sessionKey);
-        internals(service).progressiveTranscriptCache.clear();
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
+        projectionInternals(service).progressiveTranscriptCache.clear();
 
         const cold = await service.getTranscriptUpdate({
           ...identity,
@@ -2218,6 +2262,70 @@ describe("NativeAgentService", () => {
         await service.ensureSession(identity);
         const projection = await service.getProjection(identity);
         expect(projection?.composer?.selectedModelId).toBe("cursor/model-b");
+      },
+    );
+  });
+
+  test("carries the bridge's premium indicator only for the selection it describes", async () => {
+    const pricing = { tier: "premium" as const, label: "Max mode", description: "Premium rates." };
+    const stub = createProviderStub("cursor", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [
+            { platform: "cursor", id: "cursor/model-a", label: "Model A" },
+            {
+              platform: "cursor",
+              id: "cursor/model-b",
+              label: "Model B",
+              parameters: [
+                {
+                  id: "context",
+                  label: "Context",
+                  kind: "select",
+                  options: [
+                    { id: "200k", label: "200K" },
+                    { id: "1m", label: "1M" },
+                  ],
+                  scope: "turn",
+                },
+              ],
+            },
+          ],
+          selectedModelId: "cursor/model-b",
+          parameterValues: { context: "1m" },
+          fastModeEnabled: null,
+          fastModeAvailable: false,
+          modes: [],
+          // Untrusted bridge text: the projection bounds and re-shapes it.
+          selectionPricing: { ...pricing, extra: "dropped" } as typeof pricing,
+        },
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-cursor-selection-pricing-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:tab-cursor-pricing",
+        };
+        await service.ensureSession(identity);
+        expect((await service.getProjection(identity))?.composer?.selectionPricing).toEqual(
+          pricing,
+        );
+
+        // A stored selection the bridge has not echoed yet is a different
+        // combination, so the bridge's verdict no longer describes it.
+        await service.updateProjectionControls({
+          ...identity,
+          update: { parameterValues: { context: "200k" } },
+        });
+        expect((await service.getProjection(identity))?.composer?.selectionPricing).toBeUndefined();
       },
     );
   });
@@ -3188,7 +3296,7 @@ describe("NativeAgentService", () => {
         // Cached first, so it is the oldest key the capacity sweep will drop.
         expect(await service.getProjection(evicted)).not.toBeNull();
 
-        const cache = internals(service).projectionCache;
+        const cache = projectionInternals(service).projectionCache;
         const evictedKey = nativeAgentSessionStorageKey(
           evicted.environmentId,
           evicted.agent,
@@ -3334,16 +3442,17 @@ describe("NativeAgentService", () => {
           .performProjectionAction({ ...identity, action: { kind: "compact" } })
           .catch(() => undefined);
         await service.getProjection(identity);
-        const epochs = internals(service).projectionEpochs;
+        const epochs = projectionInternals(service).projectionEpochs;
         expect(epochs.size).toBeLessThanOrEqual(
-          internals(service).projectionCache.size + internals(service).projectionRefreshes.size,
+          projectionInternals(service).projectionCache.size +
+            projectionInternals(service).projectionRefreshes.size,
         );
 
         // Once the session is gone the projection resolves to nothing, the cache
         // entry goes with it, and the epoch must not outlive either.
         await storage.invalidateNativeAgentSession(key, session.providerSessionId);
         await expect(service.getProjection(identity)).resolves.toBeNull();
-        expect(internals(service).projectionCache.has(key)).toBe(false);
+        expect(projectionInternals(service).projectionCache.has(key)).toBe(false);
         expect(epochs.has(key)).toBe(false);
       },
     );
@@ -3896,14 +4005,11 @@ describe("NativeAgentService", () => {
 
         // A failed optional endpoint must not be re-probed on every 500ms
         // projection poll, so the retained entry carries an explicit back-off.
-        const caches = service as unknown as {
-          modelCatalogCache: Map<string, { expiresAt: number }>;
-          commandCatalogues: { expiresAt(key: string): number | undefined };
-        };
+        const { catalogs } = collaborators(service);
         await waitForCondition(
           () =>
-            caches.modelCatalogCache.get("env-1")?.expiresAt === now + 5_000 &&
-            caches.commandCatalogues.expiresAt("env-1\0codex\0provider-session") === now + 5_000,
+            catalogs.cachedModels("env-1")?.expiresAt === now + 5_000 &&
+            catalogs.commandExpiresAt(identity, "provider-session") === now + 5_000,
         );
         expect(catalogReads).toBe(2);
         expect(commandReads).toBe(2);

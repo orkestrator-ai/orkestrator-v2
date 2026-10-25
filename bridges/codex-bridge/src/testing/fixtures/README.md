@@ -46,6 +46,11 @@ committed.
   would report no unknown methods while rendering a transcript with every patch
   missing.
 
+`rollouts/` holds rollout JSONL (Codex's on-disk history, not app-server
+traffic) for reload tests; the replay harness does not read it. Its tests scrub
+it the same way. `code-mode-mcp-publish.jsonl` is hand-written in the recorded
+shape of a code-mode `publish_artifact` call.
+
 ## Scenarios worth recording
 
 Ticked off as they land. Each needs one real model run.

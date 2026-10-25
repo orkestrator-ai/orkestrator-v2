@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Play, Volume2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -11,26 +11,29 @@ import { Switch } from "@/components/ui/switch";
 import * as backend from "@/lib/backend";
 import { playNotificationSound, type NotificationSoundKind } from "@/lib/notification-sounds";
 import { useConfigStore } from "@/stores/configStore";
+import { isWindowMachine, useAccountMachine } from "./account-machine";
+import { useSettingsConfig } from "./settings-config";
 
 export function SoundsSettings() {
-  const storedSettings = useConfigStore((state) => state.config.global.notificationSounds);
-  const setConfig = useConfigStore((state) => state.setConfig);
+  const { machine } = useAccountMachine();
+  const { config: settingsConfig, setConfig } = useSettingsConfig();
+  const storedSettings = settingsConfig.global.notificationSounds;
   const updateGlobalConfig = useConfigStore((state) => state.updateGlobalConfig);
-  const [settings, setSettings] = useState<NotificationSoundSettings>(() =>
-    normalizeNotificationSoundSettings(storedSettings),
+  const savedSettings = useMemo(
+    () => normalizeNotificationSoundSettings(storedSettings),
+    [storedSettings],
   );
-  const settingsRef = useRef(settings);
+  // The optimistic value while a save is in flight; otherwise the stored config wins.
+  const [pendingSettings, setSettings] = useState<NotificationSoundSettings>(savedSettings);
   const [saving, setSaving] = useState(false);
+  const settings = saving ? pendingSettings : savedSettings;
+  const settingsRef = useRef(settings);
   const saveGenerationRef = useRef(0);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
-    if (!saving) {
-      const next = normalizeNotificationSoundSettings(storedSettings);
-      settingsRef.current = next;
-      setSettings(next);
-    }
-  }, [saving, storedSettings]);
+    if (!saving) settingsRef.current = savedSettings;
+  }, [saving, savedSettings]);
 
   const updateSettings = (updates: Partial<NotificationSoundSettings>) => {
     const next = { ...settingsRef.current, ...updates };
@@ -40,7 +43,8 @@ export function SoundsSettings() {
     setSaving(true);
     // Keep root-level notification services in sync immediately. Persistence
     // is serialized below so fast toggles cannot land at the backend out of order.
-    updateGlobalConfig({ notificationSounds: next });
+    // Another machine's preference is not this window's.
+    if (isWindowMachine(machine)) updateGlobalConfig({ notificationSounds: next });
     const previousSave = saveQueueRef.current;
     const queuedSave = (async () => {
       try {
@@ -49,7 +53,7 @@ export function SoundsSettings() {
         // A failed older generation must not block the latest preference.
       }
       try {
-        const savedConfig = await backend.updateNotificationSoundSettings(next);
+        const savedConfig = await backend.updateNotificationSoundSettings(next, machine);
         if (generation === saveGenerationRef.current) setConfig(savedConfig);
       } catch (error) {
         if (generation !== saveGenerationRef.current) return;
@@ -57,7 +61,7 @@ export function SoundsSettings() {
           description: error instanceof Error ? error.message : String(error),
         });
         try {
-          const config = await backend.getConfig();
+          const config = await backend.getConfig(machine);
           setConfig(config);
           const restored = normalizeNotificationSoundSettings(config.global.notificationSounds);
           settingsRef.current = restored;

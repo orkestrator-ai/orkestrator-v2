@@ -1,5 +1,9 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
   COORDINATOR_WEB_RESEARCH_ENV,
@@ -9,13 +13,17 @@ import {
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   MAX_CODEX_CONCURRENT_THREADS,
+  MAX_CODEX_DISABLED_SKILLS,
   ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
   ORKESTRATOR_AGENT_MCP_URL_ENV,
   codexAppServerConfigOverrides,
   codexCoordinatorPolicy,
   codexHostedNetworkLockGaps,
+  codexToolHistoryGaps,
   codexNetworkDeniedConfig,
   codexNetworkDeniedSearchMode,
+  codexProjectSkillsConfig,
+  codexProjectTrustConfig,
   codexReadOnlyTurnPolicy,
   resolveCodexMaxConcurrentThreads,
 } from "./codex-config.js";
@@ -56,6 +64,8 @@ describe("Codex app-server configuration", () => {
     expect(codexAppServerConfigOverrides({})).toEqual({
       "agents.max_concurrent_threads_per_session": "5",
       "features.multi_agent_v2.max_concurrent_threads_per_session": "6",
+      // Tools stay out of thread history, on every bridge (codex 0.164).
+      "features.incremental_tools": "false",
     });
     // Native sessions must inherit Codex's default (flag off) so 2025-era
     // HTTP MCP servers such as Paper.design can complete initialize.
@@ -70,6 +80,7 @@ describe("Codex app-server configuration", () => {
     ).toEqual({
       "agents.max_concurrent_threads_per_session": "8",
       "features.multi_agent_v2.max_concurrent_threads_per_session": "9",
+      "features.incremental_tools": "false",
     });
   });
 
@@ -385,31 +396,42 @@ describe("Codex app-server configuration", () => {
   });
 
   test("reads the hosted web search mode back from an effective configuration", () => {
+    const off = { incremental_tools: false };
     expect(
       codexHostedNetworkLockGaps({
         web_search: "disabled",
-        features: { standalone_web_search: false },
+        features: { standalone_web_search: false, ...off },
       }),
     ).toEqual([]);
-    expect(codexHostedNetworkLockGaps({ web_search: "disabled" })).toEqual([]);
-    expect(codexHostedNetworkLockGaps({ web_search: "cached" }, "cached")).toEqual([]);
+    expect(codexHostedNetworkLockGaps({ web_search: "disabled", features: off })).toEqual([]);
+    expect(codexHostedNetworkLockGaps({ web_search: "cached", features: off }, "cached")).toEqual(
+      [],
+    );
     // No setting leaves the mode to Codex, which is not a confirmation.
-    expect(codexHostedNetworkLockGaps({ web_search: null })).toEqual([
+    expect(codexHostedNetworkLockGaps({ web_search: null, features: off })).toEqual([
       'web_search is null, not "disabled"',
     ]);
-    expect(codexHostedNetworkLockGaps({ web_search: "cached" })).toEqual([
+    expect(codexHostedNetworkLockGaps({ web_search: "cached", features: off })).toEqual([
       'web_search is "cached", not "disabled"',
     ]);
     // `live` opens any URL the model names; it never passes.
-    expect(codexHostedNetworkLockGaps({ web_search: "live" }, "cached")).toEqual([
+    expect(codexHostedNetworkLockGaps({ web_search: "live", features: off }, "cached")).toEqual([
       'web_search is "live", not "cached"',
     ]);
     expect(
       codexHostedNetworkLockGaps({
         web_search: "disabled",
-        features: { standalone_web_search: true },
+        features: { standalone_web_search: true, ...off },
       }),
     ).toEqual(["features.standalone_web_search is on"]);
+    // Tools declared into history would outlive the mode (codex 0.164).
+    expect(codexHostedNetworkLockGaps({ web_search: "disabled" })).toEqual([
+      "features.incremental_tools is null, not false",
+    ]);
+    expect(codexToolHistoryGaps({ features: { incremental_tools: true } })).toEqual([
+      "features.incremental_tools is true, not false",
+    ]);
+    expect(codexToolHistoryGaps({ features: off })).toEqual([]);
     for (const malformed of [undefined, null, "disabled", ["disabled"]]) {
       expect(codexHostedNetworkLockGaps(malformed)).toEqual([
         "config/read returned no configuration",
@@ -531,8 +553,10 @@ describe("Codex app-server configuration", () => {
       "mcp_servers.orkestrator.bearer_token_env_var",
       "mcp_servers.orkestrator.required",
       "mcp_servers.orkestrator.startup_timeout_sec",
-      // The mail tools alone are approved; the server default is untouched.
-      ...AGENT_MAIL_TOOL_NAMES.map((name) => `mcp_servers.orkestrator.tools.${name}.approval_mode`),
+      // The mail and artifact tools alone are approved; the server default is untouched.
+      ...[...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map(
+        (name) => `mcp_servers.orkestrator.tools.${name}.approval_mode`,
+      ),
     ]);
     expect(overrides["mcp_servers.orkestrator.tools.send_message.approval_mode"]).toBe(
       JSON.stringify("approve"),
@@ -569,5 +593,91 @@ describe("Codex app-server configuration", () => {
     ]) {
       expect(resolveCodexMaxConcurrentThreads(value)).toBe(DEFAULT_CODEX_MAX_CONCURRENT_THREADS);
     }
+  });
+});
+
+describe("codexProjectTrustConfig", () => {
+  const policy = {
+    id: "interactive-host",
+    sandbox: "none",
+    approvals: "auto-approve",
+    networkAccess: "full",
+  } as const;
+
+  test("pins the cwd untrusted as a nested table when project resources are off", () => {
+    expect(
+      codexProjectTrustConfig({ ...policy, projectResources: false }, "/no/such/checkout"),
+    ).toEqual({ projects: { "/no/such/checkout": { trust_level: "untrusted" } } });
+  });
+
+  test("leaves Codex's own trust decision alone when project resources are on or unknown", () => {
+    expect(codexProjectTrustConfig({ ...policy, projectResources: true }, "/checkout")).toEqual({});
+    expect(codexProjectTrustConfig(undefined, "/checkout")).toEqual({});
+    expect(codexProjectTrustConfig({ ...policy, projectResources: false }, undefined)).toEqual({});
+    expect(codexProjectTrustConfig({ ...policy, projectResources: false }, "relative")).toEqual({});
+  });
+
+  test("pins both the given path and its canonical form", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-trust-pin-"));
+    try {
+      const link = join(root, "link");
+      await symlink(root, link);
+      const canonical = await realpath(root);
+      const pinned = codexProjectTrustConfig({ ...policy, projectResources: false }, link) as {
+        projects: Record<string, unknown>;
+      };
+      expect(Object.keys(pinned.projects).sort()).toEqual([canonical, link].sort());
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("codexProjectSkillsConfig", () => {
+  const listed = (skills: unknown[]) => ({ data: [{ cwd: "/w", errors: [], skills }] });
+
+  test("disables repo, unknown-scope and already-disabled skills, keeping enabled user skills", () => {
+    expect(
+      codexProjectSkillsConfig(
+        listed([
+          { name: "repo", path: "/w/.agents/skills/repo/SKILL.md", scope: "repo", enabled: true },
+          { name: "user", path: "/u/skills/user/SKILL.md", scope: "user", enabled: true },
+          { name: "system", path: "/c/skills/.system/s/SKILL.md", scope: "system", enabled: true },
+          { name: "off", path: "/u/skills/off/SKILL.md", scope: "user", enabled: false },
+          { name: "new", path: "/x/new/SKILL.md", scope: "workspace", enabled: true },
+        ]),
+      ),
+    ).toEqual({
+      skills: {
+        config: [
+          { path: "/w/.agents/skills/repo/SKILL.md", enabled: false },
+          { path: "/u/skills/off/SKILL.md", enabled: false },
+          { path: "/x/new/SKILL.md", enabled: false },
+        ],
+      },
+    });
+  });
+
+  test("adds nothing when every listed skill is the user's and enabled", () => {
+    expect(
+      codexProjectSkillsConfig(
+        listed([{ name: "user", path: "/u/skills/user/SKILL.md", scope: "user", enabled: true }]),
+      ),
+    ).toEqual({});
+    expect(codexProjectSkillsConfig({ data: [] })).toEqual({});
+  });
+
+  test("refuses what it cannot disable", () => {
+    expect(() => codexProjectSkillsConfig({})).toThrow("no skill inventory");
+    expect(() =>
+      codexProjectSkillsConfig(listed([{ name: "repo", scope: "repo", enabled: true }])),
+    ).toThrow("without a path");
+    const many = Array.from({ length: MAX_CODEX_DISABLED_SKILLS + 1 }, (_, index) => ({
+      name: `s${index}`,
+      path: `/w/.codex/skills/s${index}/SKILL.md`,
+      scope: "repo",
+      enabled: true,
+    }));
+    expect(() => codexProjectSkillsConfig(listed(many))).toThrow("more than");
   });
 });

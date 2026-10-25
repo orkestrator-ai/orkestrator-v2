@@ -33,7 +33,6 @@ import {
   type NativeBackgroundTaskStatus,
   type NativeMessagePart,
   type NativeTaskGroupPart,
-  type NativeToolGroupPart,
 } from "@/lib/chat/native-message-types";
 import {
   AgentPlatformContext,
@@ -944,9 +943,11 @@ function BackgroundTaskActivitySlot({
    * provider accepted but did not honour from disabling the only way to ask
    * again. A tab remounted mid-stop starts from the snapshot, never this flag.
    */
-  useEffect(() => {
+  const [stoppingFor, setStoppingFor] = useState({ status, taskId });
+  if (stoppingFor.status !== status || stoppingFor.taskId !== taskId) {
+    setStoppingFor({ status, taskId });
     setStopping(false);
-  }, [status, taskId]);
+  }
 
   const label = backgroundTaskLabel(task);
   const stop = useCallback(async () => {
@@ -1087,15 +1088,19 @@ export function BackgroundTaskCard({
 
   // The failure belongs to the attempt, not the task: a later status change
   // means the question the message answered is no longer being asked.
-  useEffect(() => {
+  const [stopErrorStatus, setStopErrorStatus] = useState(task.status);
+  if (stopErrorStatus !== task.status) {
+    setStopErrorStatus(task.status);
     setStopError(null);
-  }, [task.status]);
+  }
 
   return (
     <Collapsible
       open={open && hasBody}
       onOpenChange={onOpenChange}
       className={cn(STOPPABLE_CARD_GROUP, !embedded && agentCardClassName)}
+      data-background-task-id={task.id}
+      data-background-task-status={task.status}
     >
       <div className="flex items-start gap-3 px-3 py-2.5">
         <BackgroundTaskActivitySlot
@@ -1149,6 +1154,8 @@ export function BackgroundTaskCard({
               </div>
             ) : null}
           </div>
+          {/* The rail sits before the chevron so every card's chevron lines up at the edge. */}
+          <BackgroundTaskRail usage={usage} durationLabel={durationLabel} />
           <ChevronRight
             className={cn(
               "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
@@ -1158,7 +1165,6 @@ export function BackgroundTaskCard({
             )}
           />
         </CollapsibleTrigger>
-        <BackgroundTaskRail usage={usage} durationLabel={durationLabel} />
       </div>
 
       {stopError ? (
@@ -1366,43 +1372,6 @@ export function AgentGroupPart({
   );
 }
 
-export function ToolGroupPart({
-  part,
-  containerId,
-  partKey,
-}: {
-  part: NativeToolGroupPart;
-  containerId?: string;
-  partKey: string;
-}) {
-  // An empty group would still paint its border and padding.
-  if (part.parts.length === 0) {
-    return null;
-  }
-
-  return (
-    /*
-      Padding lives on the rows, not the card, so the separators run the full
-      width of the block rather than stopping short of its outline.
-
-      Only the horizontal padding is the wrapper's to give: each row's own
-      trigger already carries `py-1.5`, so anything more than a hairline here
-      is added to that rather than replacing it.
-    */
-    <div className="my-0 divide-y divide-divider overflow-hidden rounded-lg border border-divider bg-sidebar">
-      {part.parts.map((child, index) => (
-        <div key={`tool-group-part-${index}-${child.type}`} className="px-2 py-0.5">
-          <NativeMessagePartRenderer
-            part={child}
-            containerId={containerId}
-            partKey={`${partKey}/tool-${index}`}
-          />
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function TaskGroupPart({
   part,
   containerId,
@@ -1421,9 +1390,12 @@ export function TaskGroupPart({
     backgroundTask && isTaskTool(part.task.toolName) ? backgroundTask : undefined;
   const standaloneBackgroundTask =
     backgroundTask && !backgroundAgentTask ? backgroundTask : undefined;
-  useEffect(() => {
+  // A stop failure belongs to the attempt: a later status change clears it.
+  const [stopErrorStatus, setStopErrorStatus] = useState(backgroundTask?.status);
+  if (stopErrorStatus !== backgroundTask?.status) {
+    setStopErrorStatus(backgroundTask?.status);
     setStopError(null);
-  }, [backgroundTask?.status]);
+  }
   const toolLabel =
     getToolTitleDisplayName(part.task.toolTitle, part.task.toolName, part.task.content) ||
     getToolDisplayName(part.task.toolName, "Agent");
@@ -1570,7 +1542,9 @@ export function TaskGroupPart({
                 </div>
               ) : null}
             </div>
-            {backgroundUsage ? null : (
+            {backgroundUsage ? (
+              <BackgroundTaskRail usage={backgroundUsage} durationLabel={durationLabel} />
+            ) : (
               <AgentUsageStats
                 hasExternalUsage={hasExternalUsage}
                 tokenOnlyUsage={tokenOnlyUsage}
@@ -1589,9 +1563,6 @@ export function TaskGroupPart({
             />
           </div>
         </CollapsibleTrigger>
-        {backgroundUsage ? (
-          <BackgroundTaskRail usage={backgroundUsage} durationLabel={durationLabel} />
-        ) : null}
       </div>
       {stopError ? (
         <div role="alert" className="px-3 pb-2 text-xs text-destructive">

@@ -18,6 +18,10 @@ import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { StorageService } from "./storage.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import type { NativeAgentProvider } from "./models.js";
+import { replacedSessionCloseIntent } from "./provider-session-ownership.js";
+import { DesignService } from "./design/service.js";
+import { createTestRenderer } from "./design/test-support.js";
+import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 
 /**
  * Tab close retains conversation history on every platform. These cover the
@@ -47,6 +51,8 @@ async function withTeardown<T>(
     deleteTimeoutMs?: number;
     closeTimeoutMs?: number;
     closeProvider?: ProviderCloseResponder;
+    design?: Pick<DesignService, "recordTabSession">;
+    resumableSessionId?: (agent: string, providerSessionId: string) => Promise<string | undefined>;
   } = {},
 ): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-tab-close-"));
@@ -96,7 +102,17 @@ async function withTeardown<T>(
     toolchainBinDir: "",
     emit: () => undefined,
     storage,
+    ...(options.design ? { design: options.design } : {}),
     nativeAgents: {
+      ...(options.resumableSessionId
+        ? {
+            resumableSessionIdIfRunning: (
+              _environmentId: string,
+              agent: string,
+              providerSessionId: string,
+            ) => options.resumableSessionId!(agent, providerSessionId),
+          }
+        : {}),
       releaseProviderSession: (environmentId: string, agent: string, sessionId: string) =>
         released.push([environmentId, agent, sessionId]),
       // OpenCode tab close goes through the provider (see the provider's own
@@ -248,6 +264,265 @@ describe("tab close retains conversation history", () => {
         expect(await storage.getNativeAgentSession(key)).toBeNull();
       },
       { deleteTimeoutMs: 20, closeTimeoutMs: 200 },
+    );
+  });
+
+  test("records the closing session on a design link as the tab mapping is retired", async () => {
+    const designDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-tab-close-design-"));
+    const design = new DesignService(designDir, () => undefined, createTestRenderer());
+    try {
+      const canvas = await design.create("e1", "Linked", undefined, "user");
+      const link = await design.linkSession("e1", canvas.id, {
+        tabId: "tab-design",
+        platform: "claude",
+        role: "design",
+      });
+      const other = await design.linkSession("e1", canvas.id, {
+        tabId: "tab-other",
+        platform: "claude",
+        role: "design",
+      });
+      await withTeardown(
+        retained,
+        async ({ invoke, storage }) => {
+          const key = await mapTab(storage, "claude", "tab-design", "claude-kept");
+          await expect(
+            invoke("teardown_tab", {
+              environmentId: "e1",
+              tabId: "tab-design",
+              kind: "claude-native",
+            }),
+          ).resolves.toEqual({ completed: true });
+          // The tab's mapping is retired; the link keeps the conversation.
+          expect(await storage.getNativeAgentSession(key)).toBeNull();
+        },
+        { design },
+      );
+      const snapshot = await design.snapshot("e1", canvas.id);
+      if (snapshot.kind !== "snapshot") throw new Error(snapshot.kind);
+      const sessions = new Map(snapshot.workspace.sessions.map((entry) => [entry.id, entry]));
+      expect(sessions.get(link.id)?.sessionId).toBe("claude-kept");
+      expect(sessions.get(other.id)?.sessionId).toBeUndefined();
+    } finally {
+      await design.close();
+      await fs.rm(designDir, { recursive: true, force: true });
+    }
+  });
+
+  test("records a Codex thread, read before the close, and never guesses one", async () => {
+    const recordTabSession = mock(async () => 1);
+    const design = { recordTabSession } as unknown as Pick<DesignService, "recordTabSession">;
+    const order: string[] = [];
+    await withTeardown(
+      (call) => {
+        order.push(`bridge ${call.method}`);
+        return retained();
+      },
+      async ({ invoke, storage }) => {
+        const key = await mapTab(storage, "codex", "tab-codex", "codex-live");
+        await expect(
+          invoke("teardown_tab", { environmentId: "e1", tabId: "tab-codex", kind: "codex-native" }),
+        ).resolves.toEqual({ completed: true });
+        expect(recordTabSession).toHaveBeenCalledWith({
+          environmentId: "e1",
+          tabId: "tab-codex",
+          platform: "codex",
+          providerSessionId: "thread-1",
+        });
+        // Read while the session was still open.
+        expect(order[0]).toBe("read thread");
+        expect(await storage.getNativeAgentSession(key)).toBeNull();
+      },
+      {
+        design,
+        resumableSessionId: async () => {
+          order.push("read thread");
+          return "thread-1";
+        },
+      },
+    );
+
+    recordTabSession.mockClear();
+    await withTeardown(
+      retained,
+      async ({ invoke, storage }) => {
+        await mapTab(storage, "codex", "tab-codex", "codex-live");
+        await invoke("teardown_tab", {
+          environmentId: "e1",
+          tabId: "tab-codex",
+          kind: "codex-native",
+        });
+        // A bridge session id is not something a Codex resume accepts.
+        expect(recordTabSession).not.toHaveBeenCalled();
+      },
+      { design, resumableSessionId: async () => undefined },
+    );
+  });
+
+  test("a lost close response journals the thread for reconciliation after restart", async () => {
+    const designDir = await fs.mkdtemp(path.join(tmpdir(), "ork-close-response-"));
+    const design = new DesignService(designDir, () => undefined, createTestRenderer());
+    let removed = false;
+    try {
+      const canvas = await design.create("e1", "Linked", undefined, "user");
+      // The draft was preselected Claude, but the actual first send chose Codex.
+      const link = await design.linkSession("e1", canvas.id, {
+        tabId: "switched",
+        platform: "claude",
+        role: "design",
+      });
+      await withTeardown(
+        async () => {
+          removed = true;
+          return new Promise<Response>(() => undefined);
+        },
+        async ({ invoke, storage }) => {
+          const key = await mapTab(storage, "codex", "switched", "bridge-live");
+          await expect(
+            invoke("teardown_tab", {
+              environmentId: "e1",
+              tabId: "switched",
+              kind: "codex-native",
+            }),
+          ).rejects.toThrow("timed out");
+          expect(removed).toBe(true);
+          const restarted = new StorageService(storage.getDataDir());
+          await restarted.init();
+          expect(
+            (await restarted.getEnvironment("e1"))?.tabTeardownIntents?.switched
+              ?.resumableSessionId,
+          ).toBe("thread-captured");
+          // Recreate the command registry and storage, as a restarted backend does.
+          const commands = createCommandRegistry({
+            tabTeardown: {
+              peekBridge: async () => ({ port: 4000, authToken: "test" }),
+              fetch: (async () => new Response(null, { status: 404 })) as unknown as typeof fetch,
+            },
+          });
+          const context = {
+            storage: restarted,
+            design,
+            nativeAgents: { resumableSessionIdIfRunning: async () => undefined },
+          } as unknown as CommandContext;
+          expect(await commands.get("reconcile_tab_teardowns")!({}, context)).toEqual({
+            completed: 1,
+          });
+          expect(await restarted.getNativeAgentSession(key)).toBeNull();
+          expect(
+            (await restarted.getEnvironment("e1"))?.tabTeardownIntents?.switched,
+          ).toBeUndefined();
+        },
+        {
+          design,
+          closeTimeoutMs: 10,
+          resumableSessionId: async () => (removed ? undefined : "thread-captured"),
+        },
+      );
+      const snapshot = await design.snapshot("e1", canvas.id);
+      if (snapshot.kind !== "snapshot") throw new Error(snapshot.kind);
+      expect(snapshot.workspace.sessions[0]).toMatchObject({
+        id: link.id,
+        platform: "codex",
+        sessionId: "thread-captured",
+      });
+      const resume = mock(
+        async (
+          _link: import("@orkestrator/protocol/design-operations").DesignSessionLink,
+          _tabId: string,
+        ) => "resumed-live",
+      );
+      await design.resumeSessionLink(
+        "e1",
+        canvas.id,
+        { linkId: link.id, expectedTabId: "switched", tabId: "reopened" },
+        { mapped: async () => null, resume },
+      );
+      expect(resume.mock.calls[0]?.[0]).toMatchObject({
+        sessionId: "thread-captured",
+        platform: "codex",
+      });
+    } finally {
+      await design.close();
+      await fs.rm(designDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["missing", "idle"] as const)(
+    "Codex teardown preserves an existing thread when snapshot is %s without a thread ID",
+    async (status) => {
+      const dir = await fs.mkdtemp(path.join(tmpdir(), "ork-close-missing-thread-"));
+      const design = new DesignService(dir, () => undefined, createTestRenderer());
+      try {
+        const canvas = await design.create("e1", "Linked", undefined, "user");
+        await design.linkSession("e1", canvas.id, {
+          tabId: "tab-codex",
+          sessionId: "verified-thread",
+          platform: "codex",
+          role: "design",
+        });
+        const stub = createProviderStub("codex", {
+          sessionStateSnapshot: async () => ({ status }),
+        });
+        await withService(
+          {
+            prefix: "ork-close-snapshot-",
+            environment: { id: "e1" },
+            provider: async () => stub.provider,
+          },
+          async ({ service }) => {
+            await withTeardown(
+              retained,
+              async ({ invoke, storage }) => {
+                await mapTab(storage, "codex", "tab-codex", "bridge-live");
+                await invoke("teardown_tab", {
+                  environmentId: "e1",
+                  tabId: "tab-codex",
+                  kind: "codex-native",
+                });
+              },
+              {
+                design,
+                resumableSessionId: async (_agent, providerSessionId) =>
+                  service.resumableSessionIdIfRunning("e1", "codex", providerSessionId),
+              },
+            );
+          },
+        );
+        const snapshot = await design.snapshot("e1", canvas.id);
+        if (snapshot.kind !== "snapshot") throw new Error(snapshot.kind);
+        expect(snapshot.workspace.sessions[0]?.sessionId).toBe("verified-thread");
+      } finally {
+        await design.close();
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("a design link that cannot be updated never holds up the close", async () => {
+    const recordTabSession = mock(async () => {
+      throw new Error("design storage unavailable");
+    });
+    await withTeardown(
+      retained,
+      async ({ invoke, storage }) => {
+        const key = await mapTab(storage, "claude", "tab-claude", "claude-kept");
+        await expect(
+          invoke("teardown_tab", {
+            environmentId: "e1",
+            tabId: "tab-claude",
+            kind: "claude-native",
+          }),
+        ).resolves.toEqual({ completed: true });
+        // Claude resumes by the session id itself.
+        expect(recordTabSession).toHaveBeenCalledWith({
+          environmentId: "e1",
+          tabId: "tab-claude",
+          platform: "claude",
+          providerSessionId: "claude-kept",
+        });
+        expect(await storage.getNativeAgentSession(key)).toBeNull();
+      },
+      { design: { recordTabSession } as unknown as Pick<DesignService, "recordTabSession"> },
     );
   });
 
@@ -708,6 +983,107 @@ describe("tab close concurrency and retry", () => {
         expect(await storage.getNativeAgentSession(key)).toBeNull();
         expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
       },
+    );
+  });
+});
+
+describe("replaying the close of a session a resume replaced", () => {
+  test("a pending replaced-session close is retried until the bridge confirms it", async () => {
+    let pending = true;
+    await withTeardown(
+      () =>
+        pending
+          ? Response.json(
+              { closed: false, pending: true, error: "Session close did not complete" },
+              { status: 503 },
+            )
+          : retained(),
+      async ({ invoke, storage, calls, released, clock }) => {
+        const intent = replacedSessionCloseIntent("grok", "acp-session:replaced");
+        await storage.setTabTeardownIntent("e1", intent);
+
+        await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 0 });
+        expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toHaveProperty(
+          intent.tabId,
+        );
+        expect(released).toEqual([]);
+
+        pending = false;
+        clock.now += 30_000;
+        await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+        const closePath = `/session/${encodeURIComponent("acp-session:replaced")}/close`;
+        expect(calls.map((call) => `${call.method} ${new URL(call.url).pathname}`)).toEqual([
+          `POST ${closePath}`,
+          `POST ${closePath}`,
+        ]);
+        expect(released).toEqual([["e1", "grok", "acp-session:replaced"]]);
+        expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+      },
+    );
+  });
+
+  test("closes the replaced session once, never with DELETE, and clears the intent", async () => {
+    await withTeardown(retained, async ({ invoke, storage, calls, released }) => {
+      const intent = replacedSessionCloseIntent("pi", "/sessions/2026_abc.jsonl");
+      await storage.setTabTeardownIntent("e1", intent);
+
+      await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+      expect(calls.map((call) => call.method)).toEqual(["POST"]);
+      expect(released).toEqual([["e1", "pi", "/sessions/2026_abc.jsonl"]]);
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    });
+  });
+
+  test("leaves a replaced session another tab resumed again to that tab", async () => {
+    await withTeardown(retained, async ({ invoke, storage, calls }) => {
+      await mapTab(storage, "codex", "tab-again", "codex-replaced");
+      await storage.setTabTeardownIntent(
+        "e1",
+        replacedSessionCloseIntent("codex", "codex-replaced"),
+      );
+
+      await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+      expect(calls).toEqual([]);
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    });
+  });
+
+  test("closes a replaced OpenCode session through the provider", async () => {
+    await withTeardown(retained, async ({ invoke, storage, calls, providerCloses }) => {
+      await storage.setTabTeardownIntent("e1", replacedSessionCloseIntent("opencode", "ses_old"));
+
+      await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+      expect(providerCloses).toEqual([["e1", "opencode", "ses_old"]]);
+      expect(calls).toEqual([]);
+    });
+  });
+
+  test("no caller can name a replaced-session key through teardown_tab", async () => {
+    await withTeardown(retained, async ({ invoke, storage, calls }) => {
+      const { tabId } = replacedSessionCloseIntent("grok", "someone-elses-session");
+      await expect(
+        invoke("teardown_tab", {
+          environmentId: "e1",
+          tabId,
+          kind: "grok-native",
+          sessionId: "someone-elses-session",
+        }),
+      ).rejects.toThrow("tabId is reserved");
+      expect(calls).toEqual([]);
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    });
+  });
+
+  test("one key per replaced session, carrying no session content", () => {
+    const first = replacedSessionCloseIntent("pi", "/home/me/.pi/sessions/2026_secret.jsonl", "a");
+    const again = replacedSessionCloseIntent("pi", "/home/me/.pi/sessions/2026_secret.jsonl", "b");
+    expect(again.tabId).toBe(first.tabId);
+    expect(first.tabId).not.toContain("secret");
+    expect(
+      replacedSessionCloseIntent("grok", "/home/me/.pi/sessions/2026_secret.jsonl", "a").tabId,
+    ).not.toBe(first.tabId);
+    expect(unfenceTabTeardownSessionId(first.sessionId).sessionId).toBe(
+      "/home/me/.pi/sessions/2026_secret.jsonl",
     );
   });
 });

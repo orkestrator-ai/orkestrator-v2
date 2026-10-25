@@ -23,12 +23,13 @@ BOOT_PHASE=""
 BOOT_FAILURE_CODE=""
 
 # Portable input contract (docker/image-manifest.ts):
-# ORKESTRATOR_CAPABILITY staged-inputs=1
+# ORKESTRATOR_CAPABILITY staged-inputs=2
 #
 # Agent configuration and credentials arrive only at the read-only mount
 # points below (/claude-config, /codex-home, /opencode-*, /grok-*, /pi-config,
-# /claude-config.json, /tmp/gitconfig), and this script copies a bounded
-# allowlist from each. A backend that sees this capability stages exactly that
+# /cursor-config, /claude-config.json, /tmp/gitconfig), and this script copies
+# a bounded allowlist from each. Version 2 adds /cursor-config (Cursor's
+# mcp.json only). A backend that sees this capability stages exactly that
 # allowlist for enabled providers and binds the staged copies instead of whole
 # host agent homes (apps/backend/src/core/portable-inputs.ts); the two lists
 # must stay in step.
@@ -107,6 +108,74 @@ report_agent_copy_skips() {
         log_progress "  (symlinked, oversized or unreadable entries are skipped by design - see the warnings above)"
     fi
     AGENT_COPY_SKIPPED=""
+}
+
+# Claude, Codex and Grok refresh tokens are single-use, and most OpenCode and Pi
+# OAuth logins rotate theirs: a container copy that refreshed would spend the
+# token the host still holds and sign the host and other containers out.
+# The backend stages these logins access-only
+# (packages/protocol/src/login-snapshots.ts); this blanks the refresh token
+# again in the container's own copy, so a host-mounted home or a copy imported
+# before that change cannot refresh either. Codex's `last_refresh` is set to now
+# so it uses the access token until it expires rather than trying a refresh it
+# cannot make. OpenCode and Pi keep API keys and the OAuth logins whose refresh
+# token is reused rather than rotated (NON_ROTATING_OAUTH_PROVIDERS there).
+# Their files also hold logins made inside the container, which are its own to
+# refresh, so only the providers the mounted host file (source root and
+# relative path, the 4th and 5th arguments) holds as rotating OAuth are
+# blanked, and nothing is touched when there is no such file. A file that
+# cannot be read as JSON is removed, never kept whole.
+restrict_imported_login() {
+    local file="$1"
+    local kind="$2"
+    local label="$3"
+    local source_root="${4:-}"
+    local source_relative="${5:-}"
+    local source=""
+
+    [ -f "$file" ] && [ ! -L "$file" ] || return 0
+    if [ "$kind" = opencode ] || [ "$kind" = pi ]; then
+        agent_source_path_has_symlink "$source_root" "$source_relative" && return 0
+        source="$source_root/$source_relative"
+        [ -f "$source" ] || return 0
+    fi
+    if ! node -e '
+        const fs = require("fs");
+        const [file, kind, source] = process.argv.slice(1);
+        const login = JSON.parse(fs.readFileSync(file, "utf8"));
+        if (!login || typeof login !== "object" || Array.isArray(login)) process.exit(1);
+        if (kind === "claude") {
+          const strip = (entry) => {
+            if (entry && typeof entry === "object") delete entry.refreshToken;
+          };
+          strip(login.claudeAiOauth);
+          if (login.mcpOAuth && typeof login.mcpOAuth === "object") Object.values(login.mcpOAuth).forEach(strip);
+        } else if (kind === "grok") {
+          for (const entry of Object.values(login)) {
+            if (entry && typeof entry === "object" && "refresh_token" in entry) entry.refresh_token = "";
+          }
+        } else if (kind === "opencode" || kind === "pi") {
+          const reusable = { opencode: ["github-copilot"], pi: ["github-copilot", "meta"] }[kind];
+          const rotating = (entries) =>
+            Object.entries(entries && typeof entries === "object" && !Array.isArray(entries) ? entries : {})
+              .filter(([provider, entry]) => entry && typeof entry === "object" && entry.type === "oauth" && !reusable.includes(provider))
+              .map(([provider]) => provider);
+          let host = [];
+          try { host = rotating(JSON.parse(fs.readFileSync(source, "utf8"))); } catch {}
+          for (const provider of rotating(login)) {
+            if (host.includes(provider)) login[provider].refresh = "";
+          }
+        } else if (login.tokens && typeof login.tokens === "object") {
+          if ("refresh_token" in login.tokens) login.tokens.refresh_token = "";
+          login.last_refresh = new Date().toISOString();
+        }
+        const temporary = `${file}.${process.pid}.tmp`;
+        fs.writeFileSync(temporary, JSON.stringify(login), { mode: 0o600, flag: "wx" });
+        fs.renameSync(temporary, file);
+    ' "$file" "$kind" "$source" 2>/dev/null; then
+        rm -f "$file" "$file".*.tmp
+        log_progress "Warning: removed an unreadable $label login; sign in again inside the container if needed"
+    fi
 }
 
 # Allowlist entries can be nested ("plugins/cache"), so testing only the final
@@ -235,11 +304,26 @@ publish_claude_credentials() {
         echo "Failed to write Claude credentials" >&2
         return 1
     fi
-    if ! chmod 600 "$temporary_path" || ! mv -f "$temporary_path" "$destination_path"; then
+    # Sanitize the private payload before publication. A concurrent backend
+    # push must win even if it lands while this import is being restricted.
+    restrict_imported_login "$temporary_path" claude Claude
+    if [ ! -f "$temporary_path" ]; then return 1; fi
+    if ! chmod 600 "$temporary_path"; then
+        rm -f "$temporary_path"
+        return 1
+    fi
+    # Atomic create-if-absent, unlike a test followed by rename. The backend
+    # replaces this file atomically, so its newer payload always wins.
+    if ! node -e 'require("fs").linkSync(process.argv[1], process.argv[2])' "$temporary_path" "$destination_path" 2>/dev/null; then
+        if [ -f "$destination_path" ] && [ ! -L "$destination_path" ]; then
+            rm -f "$temporary_path"
+            return 0
+        fi
         rm -f "$temporary_path"
         echo "Failed to publish Claude credentials" >&2
         return 1
     fi
+    rm -f "$temporary_path"
     chmod 600 "$destination_path"
 }
 
@@ -453,7 +537,7 @@ copy_agent_directory() {
 }
 
 # User-authored extension directories (Claude's commands/agents/ide/plugins,
-# OpenCode's storage/snapshot) copy per-entry rather than all-or-nothing.
+# Grok's hooks/skills) copy per-entry rather than all-or-nothing.
 # A dotfiles manager symlinking one file into ~/.claude/commands is ordinary;
 # the strict directory helper above would reject the whole directory over that
 # single link and silently drop every custom command. This walker copies each
@@ -819,29 +903,19 @@ if [ -d /opencode-config ]; then
 fi
 
 if [ -d /opencode-data ]; then
-    # This directory is dominated by opencode.db — the host's session database,
-    # which reaches multiple GB and is not portable state a fresh container needs.
-    # The previous `find -maxdepth 1 -type f` copied every top-level file, so that
-    # database (and its -wal/-shm siblings) was copied on every single start.
-    # Allowlist the portable inputs instead, and route them through the shared
-    # copy helpers so OpenCode gets the same symlink, size and entry-count
-    # bounds. The data directories copy per-entry so a symlinked or oversized
-    # record in one cannot drop the whole storage tree.
-    for file in \
-        auth.json \
-        account.json
-    do
-        copy_agent_file /opencode-data "$HOME/.local/share/opencode" "$file" OpenCode
-    done
-
-    for dir in \
-        storage \
-        snapshot
-    do
-        copy_agent_directory_entries /opencode-data "$HOME/.local/share/opencode" "$dir" OpenCode
-    done
+    # Only the login is portable. The host's opencode.db (its session database,
+    # often several GB) is never copied; nor are snapshot/, storage/ or
+    # account.json. OpenCode 1.19.4 keeps console accounts and the selected
+    # organization in SQLite (preserved via OPENCODE_DB), not account.json.
+    # scripts/qualify-opencode-seeded-data.sh exercises an active account
+    # against an authenticated local console with and without the host seed.
+    # Snapshots are keyed by the worktree path; of storage/ only the legacy
+    # migration index is needed, and an empty storage/ recreates it. Copying
+    # the host seed cost bytes on every start and offered nothing a container uses.
+    copy_agent_file /opencode-data "$HOME/.local/share/opencode" auth.json OpenCode
 
     chmod 600 "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true
+    restrict_imported_login "$HOME/.local/share/opencode/auth.json" opencode OpenCode /opencode-data auth.json
     report_agent_copy_skips OpenCode
     if [ -n "$DEBUG" ]; then
         echo "Copied OpenCode data files:"
@@ -862,6 +936,11 @@ log_progress "OpenCode configuration ready"
 # The host's ~/.codex is mounted read-only at /codex-home
 log_progress "Setting up Codex configuration..."
 mkdir -p "$HOME/.codex"
+
+# Invalidate before importing: a backend restart or a later boot failure must
+# never leave a previous account marker certifying the newly imported login.
+# Only idle bridge reconciliation can acknowledge the account actually copied.
+(umask 077; printf '%s' unstaged > /tmp/orkestrator-codex-account)
 
 if [ -d /codex-home ]; then
     # A Codex home contains far more than configuration. Session rollouts, logs,
@@ -896,6 +975,7 @@ if [ -d /codex-home ]; then
     done
 
     chmod 600 "$HOME/.codex/auth.json" 2>/dev/null || true
+    restrict_imported_login "$HOME/.codex/auth.json" codex Codex
     report_agent_copy_skips Codex
     if [ -n "$DEBUG" ]; then
         echo "Copied Codex files:"
@@ -912,6 +992,7 @@ mkdir -p "$HOME/.grok" "$HOME/.config/grok"
 
 if [ -d /grok-home ]; then
     for file in \
+        xai-api-key \
         auth.json \
         config.toml \
         trusted_folders.toml \
@@ -928,7 +1009,9 @@ if [ -d /grok-home ]; then
         copy_agent_directory_entries /grok-home "$HOME/.grok" "$dir" Grok
     done
 
+    chmod 600 "$HOME/.grok/xai-api-key" 2>/dev/null || true
     chmod 600 "$HOME/.grok/auth.json" 2>/dev/null || true
+    restrict_imported_login "$HOME/.grok/auth.json" grok Grok
 fi
 
 if [ -d /grok-config ]; then
@@ -974,6 +1057,7 @@ if [ -d /pi-config/agent ]; then
     done
 
     chmod 600 "$HOME/.pi/agent/auth.json" 2>/dev/null || true
+    restrict_imported_login "$HOME/.pi/agent/auth.json" pi Pi /pi-config/agent auth.json
     # The bridge's MCP client reads user servers from here; definitions can
     # carry literal header or environment values, so keep it owner-only.
     if [ -f "$HOME/.pi/agent/mcp.json" ] && [ ! -L "$HOME/.pi/agent/mcp.json" ]; then
@@ -983,6 +1067,25 @@ fi
 
 report_agent_copy_skips Pi
 log_progress "Pi configuration ready"
+
+# Set up Cursor configuration. Only the user's MCP servers (~/.cursor/mcp.json,
+# Cursor's user setting source) are imported; the bridge reads them from here.
+# Cursor's account, IDE state, hooks, plugins and SDK state stay on the host,
+# and its login arrives through the backend's key sync instead.
+log_progress "Setting up Cursor configuration..."
+mkdir -p "$HOME/.cursor"
+
+if [ -d /cursor-config ]; then
+    copy_agent_file /cursor-config "$HOME/.cursor" mcp.json Cursor
+    # Definitions can carry literal header or environment values, so keep the
+    # copy owner-only.
+    if [ -f "$HOME/.cursor/mcp.json" ] && [ ! -L "$HOME/.cursor/mcp.json" ]; then
+        chmod 600 "$HOME/.cursor/mcp.json" 2>/dev/null || true
+    fi
+fi
+
+report_agent_copy_skips Cursor
+log_progress "Cursor configuration ready"
 
 # Verify the config file exists and is valid
 if [ -f "$HOME/.claude.json" ]; then

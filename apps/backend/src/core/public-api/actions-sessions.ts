@@ -23,7 +23,18 @@ import {
   sessionTarget,
   textInput,
 } from "./input.js";
-import { resolveSession, sessionActivity } from "./sessions.js";
+import {
+  assertAttachmentSupport,
+  assertQueueSupport,
+  attachmentIntent,
+  enqueuePrompt,
+  parseAttachments,
+  parseEnqueue,
+  parseLiteral,
+  stageAttachments,
+  type ParsedAttachment,
+} from "./prompt-delivery.js";
+import { resolveSession, sessionActivity, type ResolvedSession } from "./sessions.js";
 import type {
   ExecuteOutcome,
   MutationActionHandler,
@@ -178,6 +189,8 @@ interface StartInput extends AgentSelection {
   environmentId: string;
   prompt: string;
   title?: string;
+  literal?: true;
+  attachments?: ParsedAttachment[];
 }
 
 const sessionStart: MutationActionHandler<StartInput> = {
@@ -194,12 +207,27 @@ const sessionStart: MutationActionHandler<StartInput> = {
       PUBLIC_API_LIMITS.promptMaxBytes,
     );
     const title = optionalString(input, "title", PUBLIC_API_LIMITS.titleMaxChars)?.trim();
-    const value: StartInput = { environmentId, prompt, ...selection, ...(title ? { title } : {}) };
-    return { value, scope: `environment:${environmentId}`, intent: value };
+    const literal = parseLiteral(input);
+    const attachments = parseAttachments(input);
+    const value: StartInput = {
+      environmentId,
+      prompt,
+      ...selection,
+      ...(title ? { title } : {}),
+      ...(literal ? { literal } : {}),
+      ...(attachments ? { attachments } : {}),
+    };
+    // Optional fields are absent when unset, so earlier fingerprints still match.
+    return {
+      value,
+      scope: `environment:${environmentId}`,
+      intent: { ...value, attachments: attachmentIntent(attachments) },
+    };
   },
   async prepare(input, context) {
     const environment = await requireEnvironment(context, input.environmentId);
     assertReadyForAgents(environment);
+    assertAttachmentSupport(input.agent, input.attachments);
     const resolved = await resolveSelection(input, environment, context);
     return {
       resolved: {
@@ -221,6 +249,16 @@ const sessionStart: MutationActionHandler<StartInput> = {
         const tabId = `agent-job-${jobId}`;
         const sessionId = encodePublicSessionId(environment.id, tabId);
         await operation.update({
+          stage: "staging-attachments",
+          resources: { dispatchRequestId: requestId, tabId, sessionId },
+        });
+        const attachments = await stageAttachments(
+          context,
+          environment,
+          operation.operationId,
+          input.attachments,
+        );
+        await operation.update({
           stage: "dispatching",
           resources: { dispatchRequestId: requestId, tabId, sessionId },
         });
@@ -239,6 +277,8 @@ const sessionStart: MutationActionHandler<StartInput> = {
             ...(resolved.model ? { modelId: resolved.model } : {}),
             ...(resolved.reasoningEffort ? { reasoningId: resolved.reasoningEffort } : {}),
             ...(resolved.fastMode !== undefined ? { fastMode: resolved.fastMode } : {}),
+            ...(input.literal ? { literal: true } : {}),
+            ...(attachments.length ? { attachments } : {}),
             activateTab: false,
           },
         );
@@ -262,6 +302,78 @@ interface PromptInput {
   tabId: string;
   prompt: string;
   mode?: "plan" | "build";
+  literal?: true;
+  enqueue?: true;
+  attachments?: ParsedAttachment[];
+}
+
+/**
+ * Admission checks shared by every prompt-shaped action on an existing
+ * session (`session.prompt`, `session.command`): the session must have a
+ * provider conversation and no parked dispatch. A busy session refuses an
+ * ordinary prompt; with `enqueue` the prompt waits in the backend's durable
+ * queue instead. Nothing ever turns a prompt into a steer.
+ */
+export function assertSessionAcceptsPrompt(
+  context: PublicActionContext,
+  session: ResolvedSession,
+  enqueue: boolean,
+): void {
+  assertReadyForAgents(session.environment);
+  if (!session.record) {
+    throw new PublicActionError("not-ready", "The session has no provider conversation yet");
+  }
+  if (session.record.pendingDispatch || session.record.pendingSteer) {
+    throw new PublicActionError(
+      "dispatch-parked",
+      "An earlier message is awaiting confirmation; `run retry` or `run discard` it first",
+      {
+        details: {
+          requestId:
+            session.record.pendingDispatch?.requestId ??
+            session.record.pendingSteer?.requestId ??
+            null,
+        },
+      },
+    );
+  }
+  if (enqueue) {
+    assertQueueSupport(session.agent);
+    return;
+  }
+  const activity = sessionActivity(context, {
+    environmentId: session.environment.id,
+    agent: session.agent,
+    logicalSessionKey: session.logicalSessionKey,
+  });
+  if (activity === "working" || activity === "waiting") {
+    // Ordinary follow-ups never queue or steer implicitly.
+    throw new PublicActionError(
+      "busy",
+      activity === "waiting"
+        ? "The session is waiting for an answer to a pending interaction"
+        : "The session is busy; wait for the turn to end, enqueue the prompt, or use `session steer`",
+      { details: { activity } },
+    );
+  }
+}
+
+/** Keep the conversation's own mode unless the caller chose one. */
+export function sessionPromptMode(
+  context: PublicActionContext,
+  session: ResolvedSession,
+  requested: "plan" | "build" | undefined,
+): "plan" | "build" | undefined {
+  if (requested || !nativeAgentCapabilities(session.agent).composer.mode) return requested;
+  // Several providers persist a prompt's mode on the session.
+  const current =
+    session.record?.controls?.mode ??
+    context.command.nativeAgents?.cachedProjectionSnapshot(
+      session.environment.id,
+      session.agent,
+      session.logicalSessionKey,
+    )?.composer?.selectedModeId;
+  return current === "plan" || current === "build" ? current : "build";
 }
 
 const sessionPrompt: MutationActionHandler<PromptInput> = {
@@ -277,59 +389,42 @@ const sessionPrompt: MutationActionHandler<PromptInput> = {
       PUBLIC_API_LIMITS.promptMaxBytes,
     );
     const mode = oneOf(input, "mode", ["plan", "build"] as const);
-    const value: PromptInput = { ...target, prompt, ...(mode ? { mode } : {}) };
-    return { value, scope: `session:${target.sessionId}`, intent: { prompt, mode: mode ?? null } };
+    const literal = parseLiteral(input);
+    const enqueue = parseEnqueue(input);
+    const attachments = parseAttachments(input);
+    const value: PromptInput = {
+      ...target,
+      prompt,
+      ...(mode ? { mode } : {}),
+      ...(literal ? { literal } : {}),
+      ...(enqueue ? { enqueue } : {}),
+      ...(attachments ? { attachments } : {}),
+    };
+    return {
+      value,
+      scope: `session:${target.sessionId}`,
+      // New fields are absent when unset, so earlier fingerprints still match.
+      intent: {
+        prompt,
+        mode: mode ?? null,
+        literal,
+        enqueue,
+        attachments: attachmentIntent(attachments),
+      },
+    };
   },
   async prepare(input, context) {
     const session = await resolveSession(context, input);
-    assertReadyForAgents(session.environment);
-    if (!session.record) {
-      throw new PublicActionError("not-ready", "The session has no provider conversation yet");
-    }
-    if (session.record.pendingDispatch || session.record.pendingSteer) {
-      throw new PublicActionError(
-        "dispatch-parked",
-        "An earlier message is awaiting confirmation; `run retry` or `run discard` it first",
-        {
-          details: {
-            requestId:
-              session.record.pendingDispatch?.requestId ??
-              session.record.pendingSteer?.requestId ??
-              null,
-          },
-        },
-      );
-    }
-    const activity = sessionActivity(context, {
-      environmentId: session.environment.id,
-      agent: session.agent,
-      logicalSessionKey: session.logicalSessionKey,
-    });
-    if (activity === "working" || activity === "waiting") {
-      // Ordinary follow-ups never queue or steer implicitly.
-      throw new PublicActionError(
-        "busy",
-        activity === "waiting"
-          ? "The session is waiting for an answer to a pending interaction"
-          : "The session is busy; wait for the turn to end or use `session steer`",
-        { details: { activity } },
-      );
-    }
-    // Keep the conversation's own mode unless the caller chose one: several
-    // providers persist a prompt's mode on the session.
-    let mode = input.mode;
-    if (!mode && nativeAgentCapabilities(session.agent).composer.mode) {
-      const current =
-        session.record.controls?.mode ??
-        context.command.nativeAgents?.cachedProjectionSnapshot(
-          session.environment.id,
-          session.agent,
-          session.logicalSessionKey,
-        )?.composer?.selectedModeId;
-      mode = current === "plan" || current === "build" ? current : "build";
-    }
+    assertSessionAcceptsPrompt(context, session, input.enqueue === true);
+    assertAttachmentSupport(session.agent, input.attachments);
+    const mode = sessionPromptMode(context, session, input.mode);
+    const command = input.literal ? ({ kind: "literal" } as const) : undefined;
     return {
-      resolved: { agent: session.agent, mode: mode ?? null },
+      resolved: {
+        agent: session.agent,
+        mode: mode ?? null,
+        ...(input.enqueue ? { delivery: "queue" } : {}),
+      },
       resources: {
         environmentId: session.environment.id,
         projectId: session.environment.projectId,
@@ -338,6 +433,31 @@ const sessionPrompt: MutationActionHandler<PromptInput> = {
       },
       async execute(operation) {
         const requestId = operation.operationId;
+        await operation.update({
+          stage: "staging-attachments",
+          resources: { dispatchRequestId: requestId },
+        });
+        const attachments = await stageAttachments(
+          context,
+          session.environment,
+          requestId,
+          input.attachments,
+        );
+        const result = { runId: requestId, sessionId: session.sessionId };
+        if (input.enqueue) {
+          return enqueuePrompt(
+            context,
+            operation,
+            session,
+            {
+              text: input.prompt,
+              ...(mode ? { mode } : {}),
+              ...(command ? { command } : {}),
+              attachments,
+            },
+            result,
+          );
+        }
         await operation.update({
           stage: "dispatching",
           resources: { dispatchRequestId: requestId },
@@ -351,12 +471,11 @@ const sessionPrompt: MutationActionHandler<PromptInput> = {
             requestId,
             prompt: input.prompt,
             ...(mode ? { mode } : {}),
+            ...(command ? { command } : {}),
+            ...(attachments.length ? { attachments } : {}),
           },
         );
-        return dispatchOutcome(outcome.outcome, outcome.error, {
-          runId: requestId,
-          sessionId: session.sessionId,
-        });
+        return dispatchOutcome(outcome.outcome, outcome.error, result);
       },
     };
   },

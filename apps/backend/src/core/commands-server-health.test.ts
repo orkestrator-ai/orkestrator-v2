@@ -1,11 +1,15 @@
 import { describe, expect, mock, test } from "bun:test";
 
-import { confirmRunningServerHealth } from "./commands-server-health.js";
+import {
+  confirmRunningServerHealth,
+  OPENCODE_INSTANCE_WARM_TIMEOUT_MS,
+  warmOpenCodeInstance,
+} from "./commands-server-health.js";
 import {
   LOCAL_SERVER_REUSE_FIRST_PROBE_TIMEOUT_MS,
   LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS,
   LOCAL_SERVER_REUSE_RETRY_PROBE_TIMEOUT_MS,
-} from "./commands-runtime-state.js";
+} from "./commands-server-health.js";
 
 describe("confirmRunningServerHealth", () => {
   test("exits when the child dies after the first failed probe", async () => {
@@ -54,5 +58,32 @@ describe("confirmRunningServerHealth", () => {
     ]);
     expect(delay).toHaveBeenCalledTimes(2);
     expect(delay).toHaveBeenCalledWith(LOCAL_SERVER_REUSE_HEALTH_INTERVAL_MS);
+  });
+});
+
+describe("warmOpenCodeInstance", () => {
+  test("names the directory on an authenticated status read with the long deadline", async () => {
+    const checkHealth = mock(async () => true);
+    const headers = { Authorization: "Basic test" };
+
+    expect(await warmOpenCodeInstance(4321, "/workspace", headers, { checkHealth })).toBe(true);
+    expect(checkHealth).toHaveBeenCalledTimes(1);
+    expect(checkHealth).toHaveBeenCalledWith(
+      4321,
+      "/session/status?directory=%2Fworkspace",
+      headers,
+      OPENCODE_INSTANCE_WARM_TIMEOUT_MS,
+    );
+    // Longer than the 30 s bridge request deadline the status read uses.
+    expect(OPENCODE_INSTANCE_WARM_TIMEOUT_MS).toBeGreaterThan(30_000);
+  });
+
+  test("reports a server that does not finish loading without throwing", async () => {
+    const checkHealth = mock(async () => false);
+
+    expect(await warmOpenCodeInstance(4321, "/workspace", {}, { checkHealth, timeoutMs: 5 })).toBe(
+      false,
+    );
+    expect(checkHealth).toHaveBeenCalledWith(4321, expect.any(String), {}, 5);
   });
 });

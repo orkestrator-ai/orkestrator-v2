@@ -21,80 +21,10 @@ export const DOCKER_LABEL_INPUTS_REVISION = "orkestrator-inputs-revision";
 /** Role of an owned volume/network/helper (workspace, state, network, helper…). */
 export const DOCKER_LABEL_RESOURCE_ROLE = "orkestrator-resource-role";
 
-/** Endpoints each managed provider requires in restricted containers. */
-export const AGENT_NETWORK_DOMAINS_BY_PLATFORM = Object.freeze({
-  /**
-   * Codex signed in with ChatGPT talks to ChatGPT's backend and refreshes its
-   * token at OpenAI's auth host. Without them its turns complete with no
-   * reply in a restricted container.
-   */
-  codex: Object.freeze(["chatgpt.com", "auth.openai.com"] as readonly string[]),
-  cursor: Object.freeze([
-    "api2.cursor.sh",
-    "api3.cursor.sh",
-    "api4.cursor.sh",
-    "api5.cursor.sh",
-    "repo42.cursor.sh",
-    "authenticator.cursor.sh",
-    "marketplace.cursorapi.com",
-    "cursor-cdn.com",
-    "cursor.com",
-  ] as readonly string[]),
-  grok: Object.freeze([
-    "x.ai",
-    "auth.x.ai",
-    "api.x.ai",
-    "cli-chat-proxy.grok.com",
-  ] as readonly string[]),
-  /**
-   * Pi is a harness in front of other people's models, so "the hosts Pi needs"
-   * is really "the hosts the user's own providers need". This list covers Pi's
-   * own catalogue router and the mainstream providers it ships credentials
-   * support for; a provider outside it — a self-hosted endpoint, a regional
-   * mirror, an OpenAI-compatible gateway — is a host only the user knows, and
-   * belongs in the environment's `allowedDomains` rather than being guessed at
-   * here. Adding all of them unconditionally would quietly widen the isolation
-   * boundary for every Pi environment to reach every vendor Pi has ever known.
-   */
-  pi: Object.freeze([
-    "pi.dev",
-    "radius.pi.dev",
-    "api.anthropic.com",
-    "api.openai.com",
-    "generativelanguage.googleapis.com",
-    "api.x.ai",
-    "api.mistral.ai",
-    "api.groq.com",
-    "api.deepseek.com",
-    "api.cerebras.ai",
-    "api.together.ai",
-    "openrouter.ai",
-  ] as readonly string[]),
-} as const);
-
-/**
- * Hosts that must be reachable for the agent platforms this install has
- * enabled.
- *
- * These are deliberately NOT part of the default allowlist: an explicit
- * allowlist is the isolation boundary the user configured, and a restricted
- * container running none of these platforms has no reason to reach their
- * vendors. Container creation unions in only what the enabled platforms need.
- */
-export function requiredAgentNetworkDomains(
-  enabledPlatforms: readonly string[] | undefined,
-): readonly string[] {
-  if (!enabledPlatforms) return [];
-  const domains = new Set<string>();
-  for (const platform of ["codex", "cursor", "grok", "pi"] as const) {
-    if (enabledPlatforms.includes(platform)) {
-      for (const domain of AGENT_NETWORK_DOMAINS_BY_PLATFORM[platform]) {
-        domains.add(domain);
-      }
-    }
-  }
-  return Array.from(domains);
-}
+export {
+  AGENT_NETWORK_DOMAINS_BY_PLATFORM,
+  requiredAgentNetworkDomains,
+} from "@orkestrator/protocol/network-allowlist";
 
 export const OPENCODE_SERVER_PORT = 4096;
 export const CLAUDE_BRIDGE_PORT = 4097;

@@ -1,9 +1,13 @@
 import type { CanUseTool, HookCallback, Options } from "@anthropic-ai/claude-agent-sdk";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { createHash } from "node:crypto";
 import type { SessionState } from "../types/index.js";
-import { claudeWorkflowResultTools } from "./claude-workflow-result-tools.js";
+import {
+  claudeArtifactServerTools,
+  claudeWorkflowResultTools,
+} from "./claude-workflow-result-tools.js";
 import { backgroundCommandInstruction } from "./background-commands.js";
 import {
   claudeAsksForApproval,
@@ -34,7 +38,11 @@ import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import { claudeExecutableOptions, sdkSessionIdFromBridgeId } from "./session-manager-core.js";
 import { answerClaudeElicitation } from "./session-manager-parked-interactions.js";
 import { buildSdkPrompt } from "./session-manager-persistence.js";
-import { commandChangeHookFor, shellTaskHooks } from "./session-manager-prompt-hooks.js";
+import {
+  commandChangeHookFor,
+  recordingHookDenials,
+  shellTaskHooks,
+} from "./session-manager-prompt-hooks.js";
 import {
   type ClaudeRuntimeMcp,
   createStaleMcpServerHook,
@@ -135,10 +143,14 @@ export async function resolveQueryPlan(
       ];
   const coordinatorReadOnly = isCoordinatorReadOnlyPolicy(policy);
   // A worker can always report back, whatever its approval setting: under
-  // "deny" only allowed tools run, and the mail tools must be among them. An
-  // explicit toolPolicy deny still wins.
+  // "deny" only allowed tools run, and the mail tools must be among them. The
+  // transcript-artifact tools share that footing: they write only to
+  // Orkestrator's own bounded artifact store and never touch the workspace.
+  // An explicit toolPolicy deny still wins.
   const agentMailTools = mcpServerNames.has(AGENT_MCP_SERVER_NAME)
-    ? AGENT_MAIL_TOOL_NAMES.map((name) => `mcp__${AGENT_MCP_SERVER_NAME}__${name}`)
+    ? [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map(
+        (name) => `mcp__${AGENT_MCP_SERVER_NAME}__${name}`,
+      )
     : [];
   const allowedTools = coordinatorReadOnly
     ? claudeReadOnlyAllowedTools({
@@ -156,6 +168,7 @@ export async function resolveQueryPlan(
         ...(policy?.toolPolicy?.allow ?? defaultAllowedTools),
         ...agentMailTools,
         ...claudeWorkflowResultTools(mcpServerNames),
+        ...claudeArtifactServerTools(mcpServerNames),
       ];
   // Provider tool names, not the policy's own: `toolPolicy.deny` carries
   // Codex's vocabulary, and passing it to `disallowedTools` matches nothing.
@@ -286,7 +299,7 @@ export function claudeQueryOptions(
     (...args) =>
       pick(turnFor())(...args);
   const backgroundTaskHook = latestTurnHook((target) => target.recordBackgroundTaskHook);
-  const commandChangeHook = commandChangeHookFor(turnFor);
+  const commandChangeHook = commandChangeHookFor(turnFor, session.id);
   const shellTaskHook = shellTaskHooks(session);
   return {
     cwd,
@@ -345,7 +358,9 @@ export function claudeQueryOptions(
     allowedTools,
     ...(disallowedTools?.length ? { disallowedTools } : {}),
     ...(policy?.sandbox === "provider" || coordinatorReadOnly
-      ? { sandbox: claudeExecutionSandbox(policy, claudeAsksForApproval(policy, options)) }
+      ? {
+          sandbox: claudeExecutionSandbox(policy, claudeAsksForApproval(policy, options), { cwd }),
+        }
       : {}),
     abortController,
     // A deterministic UUID makes the bridge id recoverable from the SDK's
@@ -363,17 +378,22 @@ export function claudeQueryOptions(
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
-      append: [
-        "IMPORTANT: You MUST read a file before editing or writing to it. The Edit and Write tools will fail if you have not first used the Read tool to read the file in this conversation. Always read files before attempting to modify them.",
-        // Since Claude Code 2.1.285 an Agent SDK session stops a background
-        // shell command at its `timeout`, so a dev server Claude starts here
-        // does not outlive the ceiling configured in Settings.
-        backgroundCommandInstruction(queryEnvironment),
-        // The claude.ai Claude Docs connector and docs skill steer reports
-        // into remote docs that only an Artifact tool can open, and
-        // Orkestrator has none, so the report never shows up here.
-        "When the user asks for a document (a report, design doc, plan, analysis, guide, or other writing to keep), prefer writing it as a Markdown file in a `docs/` folder at the root of the working directory over creating a Claude Doc or claude.ai artifact, and tell the user the file's path. Project instructions (such as CLAUDE.md or AGENTS.md), local skills, and the user's own request take priority over this default when they say where or how to write documents.",
-      ].join("\n\n"),
+      append: coordinatorReadOnly
+        ? "You are a read-only coordinator. Inspect the checkout with reading tools and use the trusted research tools available for this turn. Delegate all mutations and artifact creation to worker environments through Orkestrator tools. Present findings directly in your response."
+        : [
+            "IMPORTANT: You MUST read a file before editing or writing to it. The Edit and Write tools will fail if you have not first used the Read tool to read the file in this conversation. Always read files before attempting to modify them.",
+            // Since Claude Code 2.1.285 an Agent SDK session stops a background
+            // shell command at its `timeout`, so a dev server Claude starts here
+            // does not outlive the ceiling configured in Settings.
+            backgroundCommandInstruction(queryEnvironment),
+            // The claude.ai Claude Docs connector and docs skill steer reports
+            // into remote docs that only an Artifact tool can open, and
+            // Orkestrator has none, so the report never shows up here.
+            "When the user asks for a document (a report, design doc, plan, analysis, guide, or other writing to keep), prefer writing it as a Markdown file in a `docs/` folder at the root of the working directory over creating a Claude Doc or claude.ai artifact, and tell the user the file's path. Project instructions (such as CLAUDE.md or AGENTS.md), local skills, and the user's own request take priority over this default when they say where or how to write documents.",
+            // Host preview reads exclude project-home checkouts even though they
+            // are a session's working directory. Keep the storage boundary explicit.
+            "When you show the user an image in your reply (a screenshot, rendered preview, or chart) using Markdown image syntax, reference it by its absolute path. In a managed worktree or container environment, save the file inside the working directory, preferably in a git-ignored folder so preview files stay out of the change set. Local image previews are limited to Orkestrator-managed workspace storage or the container's /workspace. Project-home checkouts are excluded from host preview reads, even when they are the working directory, so images saved there cannot be previewed from a local Markdown path. Paths outside previewable storage, such as /tmp, also show a placeholder.",
+          ].join("\n\n"),
     },
     // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)
     // Using "user" lets the SDK handle MCP server loading natively, which supports all transport types
@@ -410,9 +430,9 @@ export function claudeQueryOptions(
       // snapshotted, and the measuring hook only opens a window.
       PreToolUse: [
         ...(coordinatorReadOnly && policy
-          ? [{ hooks: [createCoordinatorReadOnlyHook(policy)] }]
+          ? [{ hooks: [recordingHookDenials(createCoordinatorReadOnlyHook(policy), session.id)] }]
           : []),
-        { hooks: [createStaleMcpServerHook(mcp)] },
+        { hooks: [recordingHookDenials(createStaleMcpServerHook(mcp), session.id)] },
         commandChangeHook.PreToolUse,
         shellTaskHook.PreToolUse,
       ],
@@ -429,7 +449,7 @@ export function claudeQueryOptions(
     // events a failed lifecycle hook would silently leave task or
     // compaction projection stale.
     includeHookEvents: true,
-    // Pinned against @anthropic-ai/claude-agent-sdk 0.3.296: although the
+    // Pinned against @anthropic-ai/claude-agent-sdk 0.3.309: although the
     // SDK warns that bypassPermissions shadows canUseTool for ordinary
     // tool permission checks, AskUserQuestion is a special case. A live
     // contract probe confirmed it still reaches this callback and the SDK

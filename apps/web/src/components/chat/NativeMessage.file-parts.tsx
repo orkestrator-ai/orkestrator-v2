@@ -1,22 +1,15 @@
-import { createPortal } from "react-dom";
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { FileText, Image as ImageIcon, Quote, X } from "lucide-react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Image as ImageIcon, Quote } from "lucide-react";
+import { FRONTEND_RENDER_POLICY } from "@orkestrator/protocol/rich-content-policy";
 import { cn } from "@/lib/utils";
-import { readContainerFileBase64, readFileBase64 } from "@/lib/backend";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
+import { richMarkdownComponents } from "@/components/chat/rich/RichMarkdownBlocks";
+import { MediaScopeContext } from "@/components/chat/rich/MediaBlock";
+import { useStreamingDisplayText } from "@/lib/chat/rich-markdown/streaming-text";
 import { JsonPayloadPart } from "@/components/chat/JsonPayloadPart";
 import { userPromptPresentation } from "@/lib/chat/user-prompt-display";
 import type { UserPromptPresentationKind } from "@orkestrator/protocol/review-evidence-frames";
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
-import { MODAL_OVERLAY_CLASS_NAME } from "@/components/ui/modal-theme";
 import { parseJsonPayload } from "@/lib/chat/json-payload";
 import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
@@ -25,8 +18,29 @@ import {
   isImagePreviewUnavailable,
   markImagePreviewUnavailable,
   readImagePreviewCache,
-  writeImagePreviewCache,
+  readImagePreviewDimensions,
+  writeImagePreviewDimensions,
 } from "@/lib/chat/image-preview-cache";
+import { useRichMessageIdentity } from "@/lib/chat/rich-identity";
+import { useTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
+import {
+  galleryItems,
+  useGalleryItem,
+  type GalleryItem,
+} from "@/lib/chat/rich-markdown/media-gallery-registry";
+import {
+  getSafeContainerRelativePath,
+  isAbsoluteHostPath,
+  isRemoteMediaUrl,
+  resolveMediaUrl,
+} from "@/lib/chat/rich-markdown/media-resolver";
+import {
+  base64Prefix,
+  dataUrlBase64,
+  imageDimensionsFromBytes,
+} from "@/lib/chat/rich-markdown/media-types";
+import { MediaGalleryDialog } from "@/components/chat/rich/MediaGallery";
+import { FilePreview } from "@/components/chat/rich/FilePreview";
 import {
   cacheToolDetails,
   cachedToolDetails,
@@ -36,77 +50,6 @@ import {
   UserPromptEvidenceContext,
 } from "./NativeMessage.shared";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
-
-function ImagePreviewOverlay({
-  imageSrc,
-  filename,
-  onClose,
-}: {
-  imageSrc: string;
-  filename: string;
-  onClose: () => void;
-}) {
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    },
-    [onClose],
-  );
-
-  useLayoutEffect(() => {
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleKeyDown]);
-
-  return createPortal(
-    <div
-      className={cn(
-        "fixed inset-0 z-50 flex items-center justify-center p-8",
-        MODAL_OVERLAY_CLASS_NAME,
-      )}
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Image preview: ${filename}`}
-    >
-      <div className="relative max-w-full max-h-full" onClick={(e) => e.stopPropagation()}>
-        <button
-          onClick={onClose}
-          className="absolute -top-10 right-0 p-2 text-white/70 hover:text-white transition-colors"
-          aria-label="Close image preview"
-          autoFocus
-        >
-          <X className="w-6 h-6" />
-        </button>
-        <div className="text-white/70 text-sm mb-2 text-center">{filename}</div>
-        <img
-          src={imageSrc}
-          alt={filename}
-          className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
-        />
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-function getMimeType(path: string): string {
-  const ext = path.split("?")[0]?.split("#")[0]?.split(".").pop()?.toLowerCase();
-  const mimeTypes: Record<string, string> = {
-    png: "image/png",
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    gif: "image/gif",
-    webp: "image/webp",
-    avif: "image/avif",
-    svg: "image/svg+xml",
-    bmp: "image/bmp",
-    ico: "image/x-icon",
-    tiff: "image/tiff",
-    tif: "image/tiff",
-  };
-  return mimeTypes[ext || ""] || "image/png";
-}
 
 function isImageReference(pathOrUrl?: string): boolean {
   if (!pathOrUrl) return false;
@@ -127,43 +70,34 @@ function isImageReference(pathOrUrl?: string): boolean {
   ].some((ext) => lower.includes(ext));
 }
 
-function isRemoteImageUrl(fileUrl?: string): boolean {
-  return typeof fileUrl === "string" && /^https?:\/\//i.test(fileUrl);
+/** The decoded image would exceed the viewer's pixel ceiling. */
+class ImageTooLargeError extends Error {
+  constructor(
+    readonly width: number,
+    readonly height: number,
+  ) {
+    super("Image exceeds the preview decode limit");
+    this.name = "ImageTooLargeError";
+  }
 }
 
-function isAbsoluteHostPath(path: string): boolean {
-  return path.startsWith("/") || /^[a-z]:[\\/]/i.test(path) || path.startsWith("\\\\");
-}
-
-function getSafeContainerRelativePath(path: string): string | null {
-  if (!path || path.includes("\0") || path.includes("\n") || path.includes("\r")) {
-    return null;
+/** Refuse to decode an image whose header declares more pixels than the ceiling. */
+function assertDecodableImage(url: string): void {
+  const base64 = dataUrlBase64(url);
+  if (!base64) return;
+  let dimensions: { width: number; height: number } | null = null;
+  try {
+    dimensions = imageDimensionsFromBytes(base64Prefix(base64, 64 * 1024));
+  } catch {
+    // Undecodable here; the <img> reports its own decode failure.
+    return;
   }
-  if (path.split(/[\\/]+/).some((segment) => segment === "..")) {
-    return null;
+  if (
+    dimensions &&
+    dimensions.width * dimensions.height > FRONTEND_RENDER_POLICY.imageDecodeMaxPixels
+  ) {
+    throw new ImageTooLargeError(dimensions.width, dimensions.height);
   }
-  if (path.startsWith("~")) {
-    return null;
-  }
-  if (/^[a-z]:[\\/]/i.test(path) || path.startsWith("\\")) {
-    return null;
-  }
-  if (path.startsWith("/workspace/")) {
-    const relativePath = path.slice("/workspace/".length);
-    if (
-      !relativePath ||
-      relativePath.startsWith("/") ||
-      relativePath.startsWith("\\") ||
-      /^[a-z]:[\\/]/i.test(relativePath)
-    ) {
-      return null;
-    }
-    return relativePath;
-  }
-  if (path.startsWith("/")) {
-    return null;
-  }
-  return path;
 }
 
 /**
@@ -184,7 +118,7 @@ export function canLoadImagePreview(
   fileUrl: string | undefined,
   containerId: string | undefined,
 ): boolean {
-  if (fileUrl?.startsWith("data:image/") || isRemoteImageUrl(fileUrl)) return true;
+  if (fileUrl?.startsWith("data:image/") || isRemoteMediaUrl(fileUrl)) return true;
 
   const localFilePath = fileUrl?.startsWith("file://") ? parseLocalFilePathFromUrl(fileUrl) : null;
 
@@ -203,6 +137,7 @@ export function FilePart({
   eagerPreview = false,
   detailRef,
   alwaysImage = false,
+  hideThumbnailCaption = false,
   onLoadUnavailable,
 }: {
   path: string;
@@ -224,6 +159,11 @@ export function FilePart({
    */
   alwaysImage?: boolean;
   /**
+   * Show a thumbnail tile as the image alone. A user's own attachment needs no
+   * filename caption; the name stays available to assistive technology.
+   */
+  hideThumbnailCaption?: boolean;
+  /**
    * The bytes could not be resolved, so the owner should stop showing this row.
    *
    * Supplied only by a preview the renderer synthesized rather than one the
@@ -236,11 +176,19 @@ export function FilePart({
 }) {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const cacheKey = imagePreviewCacheKey(containerId, path, fileUrl, detailRef);
-  const [previewOpen, setPreviewOpen] = useState(false);
+  const [gallery, setGallery] = useState<{ items: GalleryItem[]; index: number } | null>(null);
   const [imageSrc, setImageSrc] = useState<string | null>(() => readImagePreviewCache(cacheKey));
   const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState(false);
+  const [decodedImage, setDecodedImage] = useState(() => {
+    const dimensions = readImagePreviewDimensions(cacheKey, imageSrc);
+    return dimensions && imageSrc ? { source: imageSrc, ...dimensions } : null;
+  });
+  const loadedImageSrc = decodedImage?.source ?? null;
+  const imageDimensions = decodedImage?.source === imageSrc ? decodedImage : null;
+  const [loadError, setLoadError] = useState<"unavailable" | "too-large" | null>(null);
   const imageLoadRef = useRef<Promise<string | null> | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const galleryGroup = useRichMessageIdentity()?.messageId ?? "detached";
   // Held in a ref rather than closed over: putting the callback in `loadImage`'s
   // dependencies would rebuild it whenever the owner re-rendered, and the eager
   // effect keyed on that identity would then retry a read that has already
@@ -267,71 +215,27 @@ export function FilePart({
     if (cached) return Promise.resolve(cached);
 
     setLoading(true);
-    setLoadError(false);
+    setLoadError(null);
     const request = (async () => {
       try {
-        // No path and no inline copy on the part: the bytes live behind the
-        // deferred detail reference. Fetch them before choosing a source.
-        let resolvedFileUrl = fileUrl;
-        if (
-          detailRef &&
-          loadToolDetails &&
-          (!resolvedFileUrl ||
-            (!containerId &&
-              !resolvedFileUrl.startsWith("data:") &&
-              !isRemoteImageUrl(resolvedFileUrl)))
-        ) {
-          let details = cachedToolDetails(detailRef);
-          if (!details) {
-            details = await loadToolDetails(detailRef);
-            cacheToolDetails(details);
-          }
-          resolvedFileUrl = details.fileDataUrl;
-        }
-
-        if (resolvedFileUrl?.startsWith("data:image/")) {
-          return resolvedFileUrl;
-        }
-
-        if (isRemoteImageUrl(resolvedFileUrl)) {
-          return resolvedFileUrl ?? null;
-        }
-
-        const localFilePath = resolvedFileUrl?.startsWith("file://")
-          ? parseLocalFilePathFromUrl(resolvedFileUrl)
-          : null;
-
-        if (containerId) {
-          const containerPath = localFilePath ?? path;
-          const relativePath = getSafeContainerRelativePath(containerPath);
-          if (!relativePath) {
-            throw new Error("Unsafe container image path");
-          }
-
-          const base64 = await readContainerFileBase64(containerId, relativePath);
-          const mimeType = getMimeType(containerPath);
-          const dataUrl = `data:${mimeType};base64,${base64}`;
-          writeImagePreviewCache(cacheKey, dataUrl);
-          return dataUrl;
-        }
-
-        const filePath = localFilePath ?? (isAbsoluteHostPath(path) ? path : null);
-
-        if (!filePath) {
-          throw new Error("No readable local image path available");
-        }
-
-        const base64 = await readFileBase64(filePath);
-        const mimeType = getMimeType(filePath);
-        const dataUrl = `data:${mimeType};base64,${base64}`;
-        writeImagePreviewCache(cacheKey, dataUrl);
-        return dataUrl;
+        // The shared, environment-scoped resolver: deferred detail, inline
+        // data, remote URL, or a backend-confined workspace/host read.
+        const url = await resolveMediaUrl(
+          { path, fileUrl, detailRef, containerId },
+          {
+            loadToolDetails,
+            detailCache: { read: cachedToolDetails, write: cacheToolDetails },
+            cacheImage: true,
+          },
+        );
+        assertDecodableImage(url);
+        return url;
       } catch (err) {
         console.error("[NativeMessage] Failed to load image preview:", err, {
           path,
           fileUrl,
         });
-        setLoadError(true);
+        setLoadError(err instanceof ImageTooLargeError ? "too-large" : "unavailable");
         if (onLoadUnavailableRef.current) {
           // Remembered only for an owner that drops the row. A first-class file
           // row keeps its badge and stays retryable, which is the behaviour a
@@ -353,7 +257,7 @@ export function FilePart({
   }, [cacheKey, isImage, path, fileUrl, containerId, detailRef, loadToolDetails]);
 
   useEffect(() => {
-    if (!eagerPreview || !isImage || imageSrc || isRemoteImageUrl(fileUrl)) return;
+    if (!eagerPreview || !isImage || imageSrc || isRemoteMediaUrl(fileUrl)) return;
     // This exact reference already failed while the transcript was scrolled
     // past. Report it straight back rather than re-issuing the read.
     if (ownerDropsUnreadable && isImagePreviewUnavailable(cacheKey)) {
@@ -362,77 +266,119 @@ export function FilePart({
     }
     let cancelled = false;
 
-    void loadImage().then((source) => {
-      if (!cancelled && source) setImageSrc(source);
-    });
+    // Start the asynchronous read after effect setup, and skip it if the row
+    // unmounts before then. Loading state belongs to the read, not setup.
+    void Promise.resolve()
+      .then(() => (cancelled ? null : loadImage()))
+      .then((source) => {
+        if (!cancelled && source) setImageSrc(source);
+      });
 
     return () => {
       cancelled = true;
     };
   }, [cacheKey, eagerPreview, fileUrl, imageSrc, isImage, loadImage, ownerDropsUnreadable]);
 
+  // Every image of the message shares one gallery, in document order.
+  useGalleryItem(galleryGroup, isImage, {
+    title: displayName,
+    element: () => buttonRef.current,
+    load: loadImage,
+  });
+
   const handleClick = useCallback(async () => {
     if (!isImage) return;
-    if (imageSrc) {
-      setPreviewOpen(true);
-      return;
+    let source = imageSrc;
+    if (!source) {
+      source = await loadImage();
+      if (!source) return;
+      setImageSrc(source);
     }
+    const items = galleryItems(galleryGroup);
+    const index = items.findIndex((item) => item.element() === buttonRef.current);
+    const self: GalleryItem = {
+      title: displayName,
+      element: () => buttonRef.current,
+      load: loadImage,
+    };
+    setGallery(index >= 0 ? { items, index } : { items: [self], index: 0 });
+  }, [displayName, galleryGroup, imageSrc, isImage, loadImage]);
 
-    const source = await loadImage();
-    if (!source) return;
-    setImageSrc(source);
-    setPreviewOpen(true);
-  }, [imageSrc, isImage, loadImage]);
+  const closeGallery = useCallback((open: boolean) => {
+    if (!open) setGallery(null);
+  }, []);
 
-  const closePreview = useCallback(() => setPreviewOpen(false), []);
+  if (!isImage) {
+    // Not an image: a MIME-aware preview that reads nothing until opened.
+    return <FilePreview reference={{ path, fileUrl, detailRef, containerId }} name={displayName} />;
+  }
 
   return (
     <>
       <button
+        ref={buttonRef}
         onClick={handleClick}
-        disabled={!isImage}
-        aria-label={isImage ? `Open full image: ${displayName}` : undefined}
-        aria-busy={isImage ? loading : undefined}
+        aria-label={`Open full image: ${displayName}`}
+        aria-busy={loading}
+        data-image-presentation={showThumbnailTile ? "thumbnail" : "chip"}
         className={cn(
           "text-xs my-0 rounded-md border transition-colors",
           showThumbnailTile
-            ? "group relative block w-40 max-w-full shrink-0 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
-            : "inline-flex items-center gap-1.5 py-1.5 px-2.5",
-          !showThumbnailTile &&
-            (isImage
-              ? "bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-zoom-in"
-              : "bg-muted/30 border-border/50 cursor-default"),
-          isImage &&
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+            ? // Two tiles plus the flow's gap must fit the widest user bubble
+              // (82% of max-w-3xl, less its padding), so attachments pair up.
+              "group relative block w-72 max-w-full shrink-0 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
+            : "inline-flex items-center gap-1.5 py-1.5 px-2.5 bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-zoom-in",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           loading && "opacity-50",
         )}
       >
-        {showThumbnailTile && imageSrc ? (
+        {showThumbnailTile && imageSrc && !loadError ? (
           <img
             src={imageSrc}
             alt={`Thumbnail: ${displayName}`}
-            className="h-24 w-full bg-black/10 object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+            referrerPolicy="no-referrer"
+            width={imageDimensions?.width}
+            height={imageDimensions?.height}
+            onLoad={(event) => {
+              const { naturalWidth: width, naturalHeight: height } = event.currentTarget;
+              writeImagePreviewDimensions(cacheKey, imageSrc, { width, height });
+              setDecodedImage({ source: imageSrc, width, height });
+              setLoadError(null);
+            }}
+            onError={() => {
+              setDecodedImage(null);
+              setLoadError("unavailable");
+            }}
+            // Reserve the placeholder height until decode. Cached dimensions
+            // reserve the final aspect ratio immediately on transcript remounts.
+            className={cn(
+              "block max-h-96 w-full bg-black/10 object-contain",
+              imageDimensions ? "h-auto" : "h-48",
+            )}
           />
         ) : showThumbnailTile ? (
-          <span className="flex h-24 w-full items-center justify-center bg-muted/40">
+          <span className="flex h-48 w-full items-center justify-center bg-muted/40">
             <ImageIcon className="size-5 text-muted-foreground" />
           </span>
-        ) : isImage ? (
-          <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
         ) : (
-          <FileText className="w-3.5 h-3.5 text-muted-foreground" />
+          <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
         )}
-        <span
-          className={cn(
-            "font-mono truncate text-muted-foreground",
-            showThumbnailTile
-              ? "block border-t border-border/60 px-2 py-1.5 text-left"
-              : "max-w-[240px]",
-          )}
-        >
-          {displayName}
-        </span>
-        {loading && !isImage && <span className="text-muted-foreground">(loading...)</span>}
+        {showThumbnailTile &&
+        hideThumbnailCaption &&
+        loadedImageSrc === imageSrc &&
+        imageSrc &&
+        !loadError ? null : (
+          <span
+            className={cn(
+              "font-mono truncate text-muted-foreground",
+              showThumbnailTile
+                ? "block border-t border-border/60 px-2 py-1.5 text-left"
+                : "max-w-[240px]",
+            )}
+          >
+            {displayName}
+          </span>
+        )}
         {loadError && !onLoadUnavailable && (
           <span
             className={cn(
@@ -441,13 +387,19 @@ export function FilePart({
                 "absolute right-1.5 top-1.5 rounded bg-background/90 px-1.5 py-0.5",
             )}
           >
-            preview unavailable
+            {loadError === "too-large" ? "image too large to preview" : "preview unavailable"}
           </span>
         )}
       </button>
 
-      {previewOpen && imageSrc && (
-        <ImagePreviewOverlay imageSrc={imageSrc} filename={displayName} onClose={closePreview} />
+      {gallery && (
+        <MediaGalleryDialog
+          open
+          items={gallery.items}
+          initialIndex={gallery.index}
+          initialSource={imageSrc}
+          onOpenChange={closeGallery}
+        />
       )}
     </>
   );
@@ -496,6 +448,8 @@ export function TextPart({
   promptPresentation,
   renderJsonPayload = true,
   expansionKey,
+  richPartId,
+  containerId,
 }: {
   content: string;
   showCopy?: boolean;
@@ -508,18 +462,32 @@ export function TextPart({
   renderJsonPayload?: boolean;
   /** Stable identity used to persist the folded payload's and prompt's expansion state. */
   expansionKey: string;
+  /**
+   * Stable source-part identity for rich block view state (code wrap,
+   * disclosure, diagram viewport). Defaults to `expansionKey`.
+   */
+  richPartId?: string;
+  /** Environment that Markdown images with local paths resolve against. */
+  containerId?: string;
 }) {
   // Expanding a long prompt grows its virtualized row, which can remount it;
   // local state would reset and snap the prompt shut again.
   const [isExpanded, setIsExpanded] = useMessagePartExpansion(`${expansionKey}/prompt-truncation`);
   const promptEvidence = useContext(UserPromptEvidenceContext);
+  // Display-only coalescing: at most one parse per frame and 20 per second
+  // while streaming; copy actions below still use the canonical `content`.
+  const streaming = useStreamingDisplayText(content);
+  // Rollout switch: off renders the plain Markdown path (find follows it).
+  const richEnabled = useTranscriptArtifactCapabilities()?.rolloutFlags?.richMarkdown !== false;
+  const displaySource = streaming.text;
   const presentedPrompt = useMemo(
     () =>
       truncateUserPrompt
-        ? userPromptPresentation(content, promptPresentation)
-        : { displayText: content, evidencePayload: null },
-    [content, promptPresentation, truncateUserPrompt],
+        ? userPromptPresentation(displaySource, promptPresentation)
+        : { displayText: displaySource, evidencePayload: null },
+    [displaySource, promptPresentation, truncateUserPrompt],
   );
+  const mediaScope = useMemo(() => ({ containerId }), [containerId]);
   const evidencePayload = promptEvidence ? null : presentedPrompt.evidencePayload;
   const displayContent = presentedPrompt.displayText;
   const lineCount = useMemo(() => displayContent.split(/\r\n|\r|\n/).length, [displayContent]);
@@ -577,7 +545,14 @@ export function TextPart({
             : undefined
         }
       >
-        <MessageMarkdown content={displayContent} components={markdownComponents} />
+        <MediaScopeContext value={mediaScope}>
+          <MessageMarkdown
+            content={displayContent}
+            components={richEnabled ? richMarkdownComponents : markdownComponents}
+            richPartId={richEnabled ? (richPartId ?? expansionKey) : undefined}
+            live={streaming.live}
+          />
+        </MediaScopeContext>
       </div>
       {shouldTruncate ? (
         <button

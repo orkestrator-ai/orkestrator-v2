@@ -15,7 +15,7 @@ export async function hydrateAgentModelCatalogCache(
   const cursorModelsBeforeRead = useAgentModelCatalogStore.getState().cursorModels;
   const grokModelsBeforeRead = useAgentModelCatalogStore.getState().grokModels;
   const piModelsBeforeRead = useAgentModelCatalogStore.getState().piModels;
-  const cache = await getAgentModelCatalogCache(options);
+  const cache = await getAgentModelCatalogCache(undefined, options);
   if (
     cache.claude?.models.length &&
     useAgentModelCatalogStore.getState().claudeModels === claudeModelsBeforeRead

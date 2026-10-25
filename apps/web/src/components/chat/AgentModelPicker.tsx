@@ -7,7 +7,6 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
-  type MutableRefObject,
 } from "react";
 import {
   DndContext,
@@ -286,19 +285,28 @@ function preferredCatalogView(
     : (selectedPlatform ?? models[0]?.platform ?? "favorites");
 }
 
+/**
+ * Keeps the picker open after a model, reasoning, or speed choice.
+ *
+ * The three choices are made together, so closing on each one would force a
+ * reopen per column. Radix still delivers the radio group's `onValueChange`
+ * when an item's select event is cancelled; only the close is skipped.
+ */
+function keepPickerOpen(event: Event) {
+  event.preventDefault();
+}
+
 function ModelRow({
   model,
   isFavorite,
   disabled,
   sortable = false,
-  suppressSelectRef,
   onToggleFavorite,
 }: {
   model: PickerModel;
   isFavorite: boolean;
   disabled?: boolean;
   sortable?: boolean;
-  suppressSelectRef?: MutableRefObject<boolean>;
   onToggleFavorite?: (model: AgentModel) => void;
 }) {
   const modelKey = modelRowKey(model);
@@ -307,9 +315,7 @@ function ModelRow({
       <DropdownMenuRadioItem
         value={modelKey}
         disabled={disabled || model.unavailable === true}
-        onSelect={(event) => {
-          if (suppressSelectRef?.current) event.preventDefault();
-        }}
+        onSelect={keepPickerOpen}
         className={cn(
           MODEL_ROW_HEIGHT_CLASS,
           RADIO_ROW_CLASS,
@@ -366,7 +372,6 @@ function SortableModelRow({
   model,
   isFavorite,
   disabled,
-  suppressSelectRef,
   onToggleFavorite,
 }: Omit<Parameters<typeof ModelRow>[0], "sortable">) {
   const modelKey = modelRowKey(model);
@@ -377,7 +382,7 @@ function SortableModelRow({
     <div
       ref={setNodeRef}
       data-favorite-sortable={modelKey}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn("select-none", isDragging && "z-10 opacity-50")}
       onContextMenu={(event) => event.preventDefault()}
       {...attributes}
@@ -388,7 +393,6 @@ function SortableModelRow({
         isFavorite={isFavorite}
         disabled={disabled}
         sortable
-        suppressSelectRef={suppressSelectRef}
         onToggleFavorite={onToggleFavorite}
       />
     </div>
@@ -466,7 +470,6 @@ function SortableFavoriteItems({
               model={model}
               isFavorite={favoriteKeys.has(modelRowKey(model))}
               disabled={disabled}
-              suppressSelectRef={suppressSelectRef}
               onToggleFavorite={onToggleFavorite}
             />
           ))}
@@ -571,6 +574,7 @@ function ReasoningItems({
           key={option.id}
           value={option.id}
           disabled={disabled || !onReasoningChange}
+          onSelect={keepPickerOpen}
           className={RADIO_ROW_CLASS}
         >
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -623,6 +627,7 @@ function SpeedItems({
         <DropdownMenuRadioItem
           value="inherit"
           disabled={disabled || !onFastModeInherit}
+          onSelect={keepPickerOpen}
           className={RADIO_ROW_CLASS}
         >
           <span className="flex min-w-0 flex-col">
@@ -633,13 +638,23 @@ function SpeedItems({
           </span>
         </DropdownMenuRadioItem>
       ) : null}
-      <DropdownMenuRadioItem value="normal" disabled={!canChange} className={RADIO_ROW_CLASS}>
+      <DropdownMenuRadioItem
+        value="normal"
+        disabled={!canChange}
+        onSelect={keepPickerOpen}
+        className={RADIO_ROW_CLASS}
+      >
         <span className="flex min-w-0 flex-col">
           <span>Normal</span>
           <span className="text-xs text-muted-foreground">Standard speed and credit rate</span>
         </span>
       </DropdownMenuRadioItem>
-      <DropdownMenuRadioItem value="fast" disabled={!canChange} className={RADIO_ROW_CLASS}>
+      <DropdownMenuRadioItem
+        value="fast"
+        disabled={!canChange}
+        onSelect={keepPickerOpen}
+        className={RADIO_ROW_CLASS}
+      >
         <span className="flex min-w-0 flex-col">
           <span className="flex items-center gap-1">
             Fast <Zap className={cn("h-3 w-3 text-amber-500", fastModeEnabled && "fill-current")} />

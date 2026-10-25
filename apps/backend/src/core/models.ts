@@ -427,6 +427,8 @@ export interface Environment {
       kind: TabTeardownKind;
       sessionId?: string;
       persistentSessionId?: string;
+      /** Backend-captured resume identity, durable before provider close. */
+      resumableSessionId?: string;
       createdAt: string;
     }
   >;
@@ -658,6 +660,9 @@ export interface PersistedNativeAgentPendingSteer {
   inputDigest: string;
   expectedRunId: string;
   state: "prepared" | "unknown";
+  /** Source reservation survives until delivery or definitive non-delivery. */
+  sourceQueue?: true;
+  queueSettlement?: "applied" | "restore" | "discard";
   createdAt: string;
 }
 
@@ -696,6 +701,16 @@ export interface PersistedNativeAgentSession {
   /** Retained until an ambiguous steer is authoritatively reconciled or discarded. */
   pendingSteer?: PersistedNativeAgentPendingSteer;
   /**
+   * The last parked dispatch the backend retired because the provider reported
+   * its outcome lost. Content-free; renderers rehydrate it to release the
+   * draft's request id. Replaced by the next retirement, cleared by the next
+   * accepted dispatch, and ignored by readers once
+   * `NATIVE_AGENT_RETIRED_DISPATCH_TTL_MS` has passed. Deliberately not
+   * validated with the session record: a malformed value reads as absent
+   * rather than making the session unreadable.
+   */
+  retiredDispatch?: PersistedNativeAgentRetiredDispatch;
+  /**
    * Content-free authoritative recovery outcome rehydrated by every tab.
    *
    * The field keeps the name it was first persisted under, when OpenCode was
@@ -718,6 +733,11 @@ export interface PersistedNativeAgentSession {
   interruptedRequestIds?: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PersistedNativeAgentRetiredDispatch {
+  requestId: string;
+  retiredAt: string;
 }
 
 /** A session's incomplete-turn notice, independent of its persisted field name. */
@@ -762,6 +782,8 @@ export interface PersistedPromptQueue {
     message: unknown;
     requestId: string;
     reservedAt: string;
+    /** Manual steering reservations must never drain as ordinary prompts. */
+    steer?: true;
     /** Persisted immediately before crossing the irreversible tmux boundary. */
     submittingAt?: string;
     /** Persisted after tmux accepted the prompt, before queue acknowledgement. */
@@ -785,9 +807,11 @@ export interface PersistedPromptQueue {
     failedAt: string;
   };
   /**
-   * A durable, exclusive claim on the message currently being handed to an
-   * agent. The message stays here until the renderer acknowledges that the
-   * bridge accepted it, so a renderer crash cannot silently discard it.
+   * A durable, exclusive claim on the message an older renderer was handing to
+   * an agent through the removed prompt-queue claim commands. Only backends
+   * older than this one write it now, into a shared data directory. It still
+   * validates, blocks dispatch of the queue while live, and expiry recovery
+   * (`recoverExpiredPromptQueueClaims`) restores the message to the head.
    */
   outstandingClaim?: {
     token: string;
@@ -936,6 +960,12 @@ export interface AppConfig {
     githubCliReminderDismissed?: boolean;
     /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
     sshAgentSocketPath?: string;
+    /**
+     * Absolute directory new projects are cloned into on this machine, for
+     * example when a project is copied here from another machine. Absent
+     * means the most common parent of the existing projects, else `~/Projects`.
+     */
+    defaultProjectsDirectory?: string;
     /**
      * Deliver the host's Claude Code OAuth credential into containers.
      *

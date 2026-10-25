@@ -21,6 +21,7 @@ import {
   MAX_TOOL_OUTPUT_BYTES,
   MAX_TOOL_TITLE_BYTES,
 } from "./config.js";
+import { CURSOR_CUSTOM_USER_TOOLS_SERVER, hostedToolOwner } from "./mcp.js";
 import { boundText } from "./transcript.js";
 import {
   isObject,
@@ -339,8 +340,12 @@ function renderSemSearch(rendered: RenderedToolCall, args: JsonObject, result: T
 
 function renderMcp(rendered: RenderedToolCall, args: JsonObject, result: ToolResult): void {
   const provider = readString(args.providerIdentifier);
-  const publishedProvider = provider === "custom-user-tools" ? "orkestrator" : provider;
-  const tool = readString(args.toolName);
+  const named = readString(args.toolName);
+  // Hosted calls arrive under the SDK's carrier server; publish the owner.
+  const hosted =
+    provider === CURSOR_CUSTOM_USER_TOOLS_SERVER && named ? hostedToolOwner(named) : undefined;
+  const publishedProvider = hosted?.server ?? provider;
+  const tool = hosted?.tool ?? named;
   // Name the card after the MCP tool rather than "mcp": a session with several
   // servers attached is otherwise a column of identical cards. The qualified
   // `mcp__<server>__<tool>` form is also how `publicCursorMcpServers` learns
@@ -358,12 +363,23 @@ function renderMcp(rendered: RenderedToolCall, args: JsonObject, result: ToolRes
   if (!value) return;
   const content = Array.isArray(value.content) ? value.content : [];
   const text = content
-    .map((entry) =>
-      isObject(entry) ? (readRawText(entry.text) ?? stringify(entry)) : String(entry),
-    )
+    .map((entry) => (isObject(entry) ? (mcpContentText(entry) ?? stringify(entry)) : String(entry)))
     .join("\n");
   if (value.isError === true) rendered.toolError = boundText(text, MAX_TOOL_OUTPUT_BYTES);
   else rendered.toolOutput = boundText(text, MAX_TOOL_OUTPUT_BYTES);
+}
+
+/**
+ * The text of one MCP result item. The SDK wraps it (`{ text: { text } }`,
+ * see `McpToolResultContentItemSchema`); a bare `{ text }` is accepted too.
+ * Reading only the bare form showed every MCP result as a JSON wrapper with
+ * escaped quotes instead of the text the tool returned. An image item is
+ * named, never inlined: its base64 would fill the card's whole budget.
+ */
+function mcpContentText(entry: JsonObject): string | undefined {
+  if (isObject(entry.text)) return readRawText(entry.text.text);
+  if (isObject(entry.image)) return "[image]";
+  return readRawText(entry.text);
 }
 
 function renderCreatePlan(rendered: RenderedToolCall, args: JsonObject, _result: ToolResult): void {

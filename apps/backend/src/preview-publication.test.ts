@@ -182,6 +182,10 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
       "plain=published-app; Path=/",
       "widened=1; Path=/",
     ]);
+    // Both forwarded requests timed their upstream connect and response head.
+    const { histograms } = harness.runtime.metrics.snapshot();
+    expect(histograms["http.connect_ms"]?.count).toBe(2);
+    expect(histograms["http.first_byte_ms"]?.count).toBe(2);
   });
 
   test("grants are one-use and sessions are bound to their own host", async () => {
@@ -255,6 +259,36 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
       forwardedHost: undefined,
       forwardedProto: "https",
     });
+  });
+
+  test("cross-service subresource reads are refused before forwarding; links still open", async () => {
+    const { cookie, host } = await signIn();
+    const reached = () => fixture.requests.filter((entry) => entry.path === "/echo").length;
+    const fetchMetadata = (mode: string, dest: string) => ({
+      cookie,
+      "sec-fetch-site": "same-site",
+      "sec-fetch-mode": mode,
+      "sec-fetch-dest": dest,
+    });
+    const blind = await request(host, "/echo", { headers: fetchMetadata("no-cors", "empty") });
+    expect(blind.status).toBe(403);
+    expect(blind.body).toContain("Cross-site request refused");
+    const framed = await request(host, "/echo", { headers: fetchMetadata("navigate", "iframe") });
+    expect(framed.status).toBe(403);
+    const cors = await request(host, "/echo", {
+      headers: { cookie, origin: `https://s-sibling.${DOMAIN}:${port}` },
+    });
+    expect(cors.status).toBe(403);
+    expect(reached()).toBe(0);
+    expect(harness.runtime.metrics.snapshot().counters["http.rejected{forbidden}"]).toBe(3);
+
+    const link = await request(host, "/echo", { headers: fetchMetadata("navigate", "document") });
+    expect(link.status).toBe(200);
+    const own = await request(host, "/echo", {
+      headers: { cookie, "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors" },
+    });
+    expect(own.status).toBe(200);
+    expect(reached()).toBe(2);
   });
 
   test("revocation denies new requests", async () => {

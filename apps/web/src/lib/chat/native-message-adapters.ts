@@ -6,6 +6,7 @@ import type {
   NativeBackgroundTask,
   NativeBackgroundTaskStatus,
   NativeFilePart,
+  NativeImagePart,
   NativeMessage,
   NativeMessagePart,
   NativeTaskGroupPart,
@@ -18,8 +19,13 @@ import {
 import { createNativeAgentSettleAnchors } from "./native-agent-pinning";
 import { parseLocalFilePathFromUrl } from "./file-url";
 import type { AcpMessage } from "@/lib/acp-client";
-import { stripInitialPromptAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
+import {
+  extractMarkedAttachmentReferences,
+  stripInitialPromptAttachmentReferences,
+} from "@orkestrator/protocol/initial-prompt-attachments";
 import { parsePromptTranscriptReferences } from "./transcript-annotations";
+import { agentMailToolCall } from "./agent-mail-tool-call";
+import { dedupeArtifactPublications } from "./artifact-publication-dedupe";
 
 interface AttachmentTag {
   type: string;
@@ -99,7 +105,13 @@ export function parseNativeAttachmentsFromContent(content: string): {
   return { cleanContent, attachments };
 }
 
-function attachmentReference(part: NativeFilePart): { name: string; path: string } {
+type AttachmentPart = NativeFilePart | NativeImagePart;
+
+function isAttachmentPart(part: NativeMessagePart): part is AttachmentPart {
+  return part.type === "file" || (part.type === "image" && part.imageSource === "attachment");
+}
+
+function attachmentReference(part: AttachmentPart): { name: string; path: string } {
   const path = fileAttachmentIdentity(part);
   const pathWithoutTrailingSeparators = path.replace(/[\\/]+$/, "");
   const separatorIndex = Math.max(
@@ -114,20 +126,42 @@ function attachmentReference(part: NativeFilePart): { name: string; path: string
 
 function parseNativeUserContent(
   content: string,
-  structuredAttachments: readonly NativeFilePart[] = [],
+  structuredAttachments: readonly AttachmentPart[] = [],
 ): {
   cleanContent: string;
   parts: NativeMessagePart[];
 } {
   const parsedReferences = parsePromptTranscriptReferences(content);
   const parsedAttachments = parseNativeAttachmentsFromContent(parsedReferences.cleanPrompt);
+  const markedReferences = extractMarkedAttachmentReferences(parsedAttachments.cleanContent);
+  const knownAttachments = [...structuredAttachments, ...parsedAttachments.attachments];
+  const knownIdentities = new Set(knownAttachments.map(fileAttachmentIdentity));
+  const referencedAttachments: NativeFilePart[] = [];
+  for (const { name, path } of markedReferences.attachments) {
+    const identity = parseLocalFilePathFromUrl(path) ?? path;
+    // Inline/deferred attachments may retain only a bare filename. Match that
+    // spelling only when it identifies a single marked reference; equal
+    // basenames in different directories must remain separate attachments.
+    const matchingBareName = knownAttachments.some((part) => {
+      const known = fileAttachmentIdentity(part);
+      return (
+        known === name &&
+        !/[\\/]/.test(known) &&
+        markedReferences.attachments.filter((reference) => reference.name === name).length === 1
+      );
+    });
+    if (knownIdentities.has(identity) || matchingBareName) continue;
+    referencedAttachments.push({ type: "file", content: path, filename: name });
+    knownIdentities.add(identity);
+  }
   return {
     cleanContent: stripInitialPromptAttachmentReferences(
-      parsedAttachments.cleanContent,
-      [...structuredAttachments, ...parsedAttachments.attachments].map(attachmentReference),
+      markedReferences.prompt,
+      knownAttachments.map(attachmentReference),
     ),
     parts: [
       ...parsedAttachments.attachments,
+      ...referencedAttachments,
       ...parsedReferences.references.map((reference) => ({
         type: "transcript-reference" as const,
         content: reference.selectedText,
@@ -155,6 +189,14 @@ function isToolActivity(part: NativeMessagePart): boolean {
   return part.type === "thinking" || part.type === "tool-invocation";
 }
 
+/**
+ * A mail call is a message, not tool activity: it stays out of the collapsed
+ * tool group so what an agent sent or read is visible in the transcript.
+ */
+function isAgentMailActivity(part: NativeMessagePart): boolean {
+  return part.type === "tool-invocation" && !part.toolDenied && agentMailToolCall(part) !== null;
+}
+
 function isAgentActivity(part: NativeMessagePart): part is NativeAgentActivityPart {
   return part.type === "subagent" || part.type === "task-group";
 }
@@ -172,6 +214,8 @@ export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart 
     case "agent-group":
     case "tool-group":
     case "task-group":
+    // A published artifact is a first-class transcript part, never tool activity.
+    case "artifact":
       return part;
     default:
       return null;
@@ -207,7 +251,12 @@ function groupTaskParts(
   let currentTask: NativeTaskGroupPart | null = null;
 
   for (const part of parts) {
-    const explicitParent = part.parentTaskUseId ? taskGroups.get(part.parentTaskUseId) : undefined;
+    // Artifact publications stay visible at the top level: a task group never
+    // adopts one, even when the publishing call ran inside a subagent.
+    const explicitParent =
+      part.parentTaskUseId && part.type !== "artifact"
+        ? taskGroups.get(part.parentTaskUseId)
+        : undefined;
     if (explicitParent && !(part.type === "tool-invocation" && shouldPromote(part))) {
       explicitParent.childTools.push(part);
       currentTask = explicitParent;
@@ -218,7 +267,8 @@ function groupTaskParts(
       part.type === "text" ||
       part.type === "transcript-reference" ||
       part.type === "async-question" ||
-      part.type === "file"
+      part.type === "file" ||
+      part.type === "artifact"
     ) {
       currentTask = null;
       result.push(part);
@@ -352,6 +402,12 @@ export function groupNativeToolActivity(parts: NativeMessagePart[]): NativeMessa
       continue;
     }
 
+    if (isAgentMailActivity(part)) {
+      flushToolGroup();
+      rendered.push(part);
+      continue;
+    }
+
     if (isToolActivity(part)) {
       toolGroup.push(part);
       continue;
@@ -435,6 +491,9 @@ export function messageHasVisibleContent(message: NativeMessage): boolean {
         return part.content.trim().length > 0;
       case "async-question":
         return part.asyncQuestion.questions.length > 0;
+      // A published artifact always renders a card (at least its summary).
+      case "artifact":
+        return true;
       // Tool results are rendered inline with their invocation, never on their
       // own, so a message holding only results is still an empty block.
       case "tool-result":
@@ -502,7 +561,7 @@ const normalizedNativeMessageCache = new WeakMap<NativeMessage, NativeMessage>()
  * would render the same image twice. A `data:` URL carries no identity beyond
  * its own bytes, so those fall back to the part's content.
  */
-function fileAttachmentIdentity(part: NativeFilePart): string {
+function fileAttachmentIdentity(part: AttachmentPart): string {
   const fileUrl = part.fileUrl;
   if (fileUrl && !fileUrl.startsWith("data:")) {
     return parseLocalFilePathFromUrl(fileUrl) ?? fileUrl;
@@ -513,9 +572,7 @@ function fileAttachmentIdentity(part: NativeFilePart): string {
 function normalizeNativeUserPresentation(message: NativeMessage): NativeMessage {
   if (message.role !== "user") return message;
 
-  const structuredAttachments = message.parts.filter(
-    (part): part is NativeFilePart => part.type === "file",
-  );
+  const structuredAttachments = message.parts.filter(isAttachmentPart);
   const parsedContent = parseNativeUserContent(message.content, structuredAttachments);
   let parsedPresentationPart = false;
   const parsedParts = message.parts.flatMap((part): NativeMessagePart[] => {
@@ -602,7 +659,7 @@ export function normalizeNativeMessage(message: NativeMessage): NativeMessage {
 }
 
 export function normalizeNativeMessages(messages: readonly NativeMessage[]): NativeMessage[] {
-  const rows = messages.flatMap((message) =>
+  const rows = dedupeArtifactPublications(messages).flatMap((message) =>
     splitAssistantTranscriptBlocks(normalizeNativeMessage(message)),
   );
   return coalesceAdjacentToolMessages(rows);
@@ -625,20 +682,6 @@ function isToolOnlyAssistantMessage(message: NativeMessage): boolean {
   if (message.parts.length === 0) return false;
   if (!messageHasVisibleContent(message)) return false;
   return message.parts.every(isMergeableToolPart);
-}
-
-function isSameMinuteStamp(a?: string, b?: string): boolean {
-  if (!a || !b) return false;
-  const first = new Date(a);
-  const second = new Date(b);
-  if (Number.isNaN(first.getTime()) || Number.isNaN(second.getTime())) return false;
-  return (
-    first.getFullYear() === second.getFullYear() &&
-    first.getMonth() === second.getMonth() &&
-    first.getDate() === second.getDate() &&
-    first.getHours() === second.getHours() &&
-    first.getMinutes() === second.getMinutes()
-  );
 }
 
 function flattenMergeableParts(parts: readonly NativeMessagePart[]): NativeMessagePart[] {
@@ -680,6 +723,7 @@ function mergeAdjacentToolMessages(previous: NativeMessage, message: NativeMessa
     content: "",
     createdAt: latestMessageCreatedAt(previous.createdAt, message.createdAt),
     latestSourceMessageId: getNativeMessageBoundarySourceId(message),
+    earliestSourceMessageId: previous.earliestSourceMessageId ?? previous.id,
     settleAnchorCreatedAt: previous.settleAnchorCreatedAt ?? previous.createdAt,
   };
   const resultCache = cachedForPrevious ?? new WeakMap<NativeMessage, NativeMessage>();
@@ -689,17 +733,89 @@ function mergeAdjacentToolMessages(previous: NativeMessage, message: NativeMessa
 }
 
 /**
- * Merge consecutive tool-only assistant rows in the same minute into one block.
+ * Merge consecutive tool-only assistant rows into one block.
  *
  * OpenCode (and other bridges) can emit each tool call as its own backend
  * message. Within a message tools are already grouped into a single
  * `tool-group` card, but across messages each row renders its own card — so a
  * burst of Reads shows as several one-row blocks. When there is no text in
- * between and the clocks agree to the minute, readers experience it as one
- * block, so display it as one.
+ * between, readers experience it as one block, so display it as one. Timing
+ * is deliberately ignored: a slow tool must not split a collapsed tool block
+ * just because the clock rolled over to the next minute.
  */
-export function coalesceAdjacentToolMessages(messages: readonly NativeMessage[]): NativeMessage[] {
+/**
+ * The row id each source message was last displayed under inside a coalesced
+ * tool run. A run keeps that id while any member survives, so history paging
+ * that merges older calls in front (or live calls behind) does not rename the
+ * row — which would remount it and reset everything the reader opened inside.
+ * Weakly held: a member that leaves the projection takes its alias with it.
+ */
+const coalescedRowAliases = new WeakMap<NativeMessage, string>();
+const renamedCoalescedRows = new WeakMap<NativeMessage, Map<string, NativeMessage>>();
+
+function withRowId(row: NativeMessage, id: string): NativeMessage {
+  if (row.id === id) return row;
+  let byId = renamedCoalescedRows.get(row);
+  if (!byId) {
+    byId = new Map();
+    renamedCoalescedRows.set(row, byId);
+  }
+  let renamed = byId.get(id);
+  if (!renamed) {
+    renamed = { ...row, id };
+    byId.set(id, renamed);
+  }
+  return renamed;
+}
+
+/**
+ * Surviving row ids for a projection whose source objects are rebuilt on
+ * every read (a reviewer transcript parsed from raw records), keyed by member
+ * message id. Owned by the view that renders the projection and pruned to it
+ * on every pass, so it is bounded by the loaded history.
+ */
+export type CoalescedRowAliases = Map<string, string>;
+
+/** Give each coalesced run its surviving id; never two rows one id. */
+function assignCoalescedRowIds(
+  merged: NativeMessage[],
+  members: NativeMessage[][],
+  byId: CoalescedRowAliases | undefined,
+): void {
+  const used = new Set<string>();
+  members.forEach((group, index) => {
+    if (group.length < 2) used.add(merged[index]!.id);
+  });
+  members.forEach((group, index) => {
+    if (group.length < 2) return;
+    let id: string | undefined;
+    for (const member of group) {
+      const alias = byId ? byId.get(member.id) : coalescedRowAliases.get(member);
+      if (alias !== undefined && !used.has(alias)) {
+        id = alias;
+        break;
+      }
+    }
+    id ??= used.has(merged[index]!.id) ? group.at(-1)!.id : merged[index]!.id;
+    used.add(id);
+    for (const member of group) {
+      if (byId) byId.set(member.id, id);
+      else coalescedRowAliases.set(member, id);
+    }
+    merged[index] = withRowId(merged[index]!, id);
+  });
+  if (byId) {
+    const present = new Set(members.flatMap((group) => group.map((member) => member.id)));
+    for (const key of Array.from(byId.keys())) if (!present.has(key)) byId.delete(key);
+  }
+}
+
+export function coalesceAdjacentToolMessages(
+  messages: readonly NativeMessage[],
+  aliases?: CoalescedRowAliases,
+): NativeMessage[] {
   const merged: NativeMessage[] = [];
+  const members: NativeMessage[][] = [];
   for (const message of messages) {
     if (message.role === "assistant" && !messageHasVisibleContent(message)) {
       continue;
@@ -709,7 +825,6 @@ export function coalesceAdjacentToolMessages(messages: readonly NativeMessage[])
       previous &&
       isToolOnlyAssistantMessage(previous) &&
       isToolOnlyAssistantMessage(message) &&
-      isSameMinuteStamp(previous.createdAt, message.createdAt) &&
       previous.modelId === message.modelId &&
       previous.turnId === message.turnId &&
       /*
@@ -721,10 +836,13 @@ export function coalesceAdjacentToolMessages(messages: readonly NativeMessage[])
       (previous.planReview === true) === (message.planReview === true)
     ) {
       merged[merged.length - 1] = mergeAdjacentToolMessages(previous, message);
+      members[members.length - 1]!.push(message);
       continue;
     }
     merged.push(message);
+    members.push([message]);
   }
+  assignCoalescedRowIds(merged, members, aliases);
   return merged;
 }
 
@@ -745,20 +863,26 @@ export function normalizeClaudeMessage(message: ClaudeMessage): NativeMessage {
 }
 
 function normalizeClaudeMessageUncached(message: ClaudeMessage): NativeMessage {
-  const { cleanContent, parts: presentationParts } =
-    message.role === "user"
-      ? parseNativeUserContent(message.content)
-      : { cleanContent: message.content, parts: [] };
-
-  const rawParts =
-    message.role === "user"
-      ? [
-          ...(cleanContent ? [{ type: "text" as const, content: cleanContent }] : []),
-          ...presentationParts,
-        ]
-      : message.parts
+  if (message.role === "user") {
+    return normalizeNativeMessage({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      parts: [
+        ...(message.content ? [{ type: "text" as const, content: message.content }] : []),
+        ...message.parts
+          .filter((part) => part.type !== "text")
           .map(normalizeClaudePart)
-          .filter((part): part is NativeMessagePart => part !== null);
+          .filter((part): part is NativeMessagePart => part !== null),
+      ],
+      createdAt: message.createdAt,
+      ...(message.modelId ? { modelId: message.modelId } : {}),
+    });
+  }
+  const cleanContent = message.content;
+  const rawParts = message.parts
+    .map(normalizeClaudePart)
+    .filter((part): part is NativeMessagePart => part !== null);
 
   const taskGroupedParts =
     message.role === "assistant"
@@ -1552,7 +1676,8 @@ function isTextSectionPart(part: NativeMessagePart): boolean {
     part.type === "text" ||
     part.type === "transcript-reference" ||
     part.type === "async-question" ||
-    part.type === "file"
+    part.type === "file" ||
+    part.type === "artifact"
   );
 }
 
@@ -1632,7 +1757,9 @@ function splitAssistantTranscriptBlocksUncached(message: NativeMessage): NativeM
  */
 export function normalizeClaudeMessagesForDisplay(messages: ClaudeMessage[]): NativeMessage[] {
   return coalesceAdjacentToolMessages(
-    messages.flatMap((message) => splitAssistantTranscriptBlocks(normalizeClaudeMessage(message))),
+    dedupeArtifactPublications(messages.map(normalizeClaudeMessage)).flatMap((message) =>
+      splitAssistantTranscriptBlocks(message),
+    ),
   );
 }
 

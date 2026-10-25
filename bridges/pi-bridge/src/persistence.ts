@@ -219,6 +219,9 @@ function toPersisted(state: SessionState): PersistedSession {
     // selection before the session has re-attached.
     ...(state.slashCommands.length > 0 ? { commands: state.slashCommands } : {}),
     ...(state.commandCatalogue.truncated ? { commandsTruncated: true } : {}),
+    ...(state.commandCatalogue.attachPending && state.slashCommands.length > 0
+      ? { commandsAttachPending: true }
+      : {}),
   };
 }
 
@@ -282,6 +285,10 @@ function restoreSession(entry: unknown): SessionState | undefined {
     status: "stale",
     revision: 0,
     ...(entry.commandsTruncated === true ? { truncated: true } : {}),
+    // Rows a resource-only read produced still lack extension commands.
+    ...(entry.commandsAttachPending === true && state.slashCommands.length > 0
+      ? { attachPending: true }
+      : {}),
   };
   // The whole transcript is unmeasured after a restore, so the first read
   // re-bounds it rather than trusting a budget this process never charged.
@@ -393,6 +400,9 @@ function restoreUsage(value: unknown): SessionState["usage"] {
             }
             if (nonBlank(candidate.requestId)) entry.requestId = candidate.requestId;
             if (nonBlank(candidate.modelId)) entry.modelId = candidate.modelId;
+            // Restored so a turn kept across a restart is still dated by when
+            // it ran, not by when the reattached session republishes it.
+            if (nonBlank(candidate.at)) entry.at = candidate.at;
             return [entry];
           }),
         }

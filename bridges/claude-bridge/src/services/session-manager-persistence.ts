@@ -28,6 +28,7 @@ import {
   type SessionPreferences,
 } from "./session-preferences.js";
 import { debugLog, isDebugLoggingEnabled } from "./logger.js";
+import { restoredTurnInterruption } from "./session-manager-turn-interruption.js";
 import { constants, type Stats } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -205,7 +206,8 @@ export async function reconcilePersistedSessions(): Promise<void> {
       id,
       title: info.customTitle || info.summary || `Session ${info.sessionId.slice(-6)}`,
       messages: [],
-      status: "idle",
+      // Failed, not idle, when a restart cut this session's last turn short.
+      ...restoredTurnInterruption(storedPreferences),
       createdAt: new Date(info.createdAt ?? info.lastModified),
       lastActivity: new Date(info.lastModified),
       sdkSessionId: info.sessionId,
@@ -271,7 +273,8 @@ export async function materializePersistedSessionState(
     id: sessionId,
     title: info.customTitle || info.summary || `Session ${sdkId.slice(-6)}`,
     messages: [],
-    status: "idle",
+    // Failed, not idle, when a restart cut this session's last turn short.
+    ...restoredTurnInterruption(preferences),
     createdAt: new Date(info.createdAt ?? info.lastModified),
     lastActivity: new Date(info.lastModified),
     sdkSessionId: sdkId,
@@ -346,6 +349,10 @@ export async function readPersistedSessionMessages(session: SessionState): Promi
   const sdk = await claudeSdk();
   if (typeof sdk.getSessionMessages !== "function") return undefined;
   const [persisted, commandChanges, preferences] = await Promise.all([
+    // No `limit`/`offset`: the SDK parses the whole JSONL and rebuilds the
+    // message chain before it slices (offset counts from the start), and the
+    // task registry needs every launch the tail's reports fold onto. Its own
+    // bound is skipping pre-compaction bytes once a file passes 5 MiB.
     sdk.getSessionMessages(session.sdkSessionId, {
       dir: currentWorkingDirectory(),
       includeSystemMessages: true,

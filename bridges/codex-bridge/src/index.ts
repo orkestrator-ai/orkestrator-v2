@@ -26,7 +26,11 @@ import { streamSSE } from "hono/streaming";
 import { registerMcpReloadRoute } from "./mcp-reload-route.js";
 import { registerSessionCloseRoute } from "./session-close-route.js";
 import { registerSessionActivityBatchRoute } from "./session-activity-batch-route.js";
-import { registerCodexTranscriptRoutes } from "./transcript-routes.js";
+import {
+  registerCodexChangeEvidenceRoutes,
+  registerCodexTranscriptRoutes,
+} from "./transcript-routes.js";
+import { createCodexChangeEvidence } from "./change-evidence.js";
 import { isCodexApprovalMode } from "./codex-approval-mode.js";
 import {
   generateSessionTitleWithCodexExec,
@@ -37,7 +41,7 @@ import { AppServerRuntime, SESSION_CLOSING_ERROR } from "./app-server-runtime.js
 import { AppServerEngine, type AppServerEngineOptions } from "./engine/app-server-engine.js";
 import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
-import { redactSecrets } from "./app-server/redaction.js";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { parseInteractionAnswer, type InteractionAnswer } from "./app-server/interactions.js";
 import type { ParkedHoldResponse } from "./app-server-runtime-approvals.js";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
@@ -103,19 +107,6 @@ function isScopedAgentMcp(value: unknown): value is { url: string; token: string
     return false;
   }
 }
-
-// The normalized message model and the item renderer live in ./messages so both
-// engines share one implementation. Re-exported here because existing importers
-// (and item-to-parts.test.ts) resolve them from this module.
-export { itemToParts, stringifyUnknown } from "./messages/normalization.js";
-export type {
-  FileChangeDiffContext,
-  MessageRole,
-  NormalizedMessage,
-  NormalizedPart,
-  ToolDiffMetadata,
-  ToolState,
-} from "./messages/types.js";
 
 interface SseEvent {
   type:
@@ -209,6 +200,31 @@ type SseSubscriber = (
   serializedData: string,
 ) => Promise<void> | void;
 const subscribers = new Set<SseSubscriber>();
+/**
+ * Observation subscribers (`/event/subscribe?observe=1`): the backend's
+ * activity observer, which only needs to know *that* a session changed. They
+ * receive content-free frames, never force a payload to be serialized and do
+ * not keep the replay ring alive, so they are notified even while retention
+ * has lapsed.
+ */
+const observers = new Set<SseSubscriber>();
+
+/** An observation frame's data: the session it names, never the payload. */
+function observationFrameData(sessionId: string | undefined): string {
+  return JSON.stringify(sessionId === undefined ? {} : { sessionId });
+}
+
+function notifyObservers(event: SseEvent, revision: number): void {
+  for (const observer of observers) {
+    try {
+      void Promise.resolve(observer(event, revision, "{}")).catch((error) => {
+        console.error("[codex-bridge] Failed to notify SSE observer:", error);
+      });
+    } catch (error) {
+      console.error("[codex-bridge] Failed to notify SSE observer:", error);
+    }
+  }
+}
 export const MAX_REPLAY_SSE_BYTES = 4 * 1024 * 1024;
 export const REPLAY_IDLE_RETENTION_MS = 60_000;
 /** Flat cost charged to a collapsed frame, which carries no payload. */
@@ -441,6 +457,24 @@ function createShutdownHandler(
   };
 }
 
+function createParentExitHandler(
+  interrupt: (budgetMs: number) => Promise<number>,
+  shutdown: () => void,
+  report: (turns: number, elapsedMs: number) => void = (turns, ms) => {
+    console.error(`[codex-bridge] Stopped ${turns} running turn(s) in ${ms} ms`);
+  },
+): () => Promise<void> {
+  return async () => {
+    const detectedAt = performance.now();
+    try {
+      const turns = await interrupt(PARENT_EXIT_INTERRUPT_BUDGET_MS).catch(() => 0);
+      report(turns, Math.round(performance.now() - detectedAt));
+    } finally {
+      shutdown();
+    }
+  };
+}
+
 const FALLBACK_MODELS: BridgeModel[] = [
   {
     id: "gpt-5.4",
@@ -605,7 +639,7 @@ function emit(event: SseEvent): void {
     // Preserve the cursor gap without snapshotting, estimating, stringifying or
     // retaining a payload nobody can replay. A returning client sees the
     // advanced revision and is sent through authoritative reconciliation.
-    eventRing.advance();
+    notifyObservers(event, eventRing.advance());
     return;
   }
   const sessionId = event.sessionId;
@@ -642,6 +676,7 @@ function emit(event: SseEvent): void {
     serialize: () => eager ?? serializeSseEventData({ sessionId, data: payload }),
     bytes,
   });
+  notifyObservers(event, revision);
   for (const subscriber of subscribers) {
     try {
       void Promise.resolve(subscriber(event, revision, eager ?? "{}")).catch((error) => {
@@ -761,6 +796,15 @@ function createCodexEngine(
 
 const codexEngine = createCodexEngine();
 
+/**
+ * One change-evidence spool per process, persisted beside the bridge's other
+ * sidecar state so unacknowledged evidence survives a restart.
+ */
+const codexChangeEvidence = createCodexChangeEvidence({
+  codexHome: getCodexHomeDir(),
+  cwd: getWorkingDirectory(),
+});
+
 const appServerRuntime = new AppServerRuntime({
   engine: codexEngine,
   codexHome: getCodexHomeDir(),
@@ -777,6 +821,7 @@ const appServerRuntime = new AppServerRuntime({
   // One probe per process: it serializes snapshots per repository across every
   // thread working in it.
   commandChangeProbe: new WorkspaceChangeProbe(),
+  changeEvidence: codexChangeEvidence,
 });
 
 /**
@@ -876,6 +921,7 @@ export const __testing = {
   createCodexProcessDiagnosticsForTesting: createCodexProcessDiagnostics,
   createSharedTranscriptMetaLoaderForTesting: createSharedTranscriptMetaLoader,
   createShutdownHandlerForTesting: createShutdownHandler,
+  createParentExitHandlerForTesting: createParentExitHandler,
   emitForTesting: emit,
   eventRingForTesting: () => eventRing,
   /**
@@ -1125,7 +1171,7 @@ app.get("/global/health", (c) => {
       },
       // A rising `dropped` with clients still reconnecting means the ring is too
       // small for this workload and reconnects are falling back to full resyncs.
-      events: { ...eventRing.getStats(), subscribers: subscribers.size },
+      events: { ...eventRing.getStats(), subscribers: subscribers.size, observers: observers.size },
     },
     terminal ? 503 : 200,
   );
@@ -1183,6 +1229,15 @@ app.post("/global/auth/login", async (c) => {
   });
 });
 
+/**
+ * Abandon the in-tab sign-in this bridge started (`account/login/cancel`).
+ * Answers only whether one was open; the login id never leaves the bridge.
+ */
+app.post("/global/auth/login/cancel", async (c) => {
+  const status = await appServerRuntime.cancelAuthLogin();
+  return c.json({ cancelled: status === "canceled" });
+});
+
 app.post("/global/auth/logout", async (c) => {
   await appServerRuntime.logoutAuth();
   return c.json({ ok: true });
@@ -1198,16 +1253,6 @@ app.get("/global/usage", async (c) => {
   // `null` means the read produced no authoritative snapshot; the backend maps
   // it to unavailable instead of "no metered limits".
   return c.json({ account: account ?? null });
-});
-
-/**
- * Legacy global list for clients that predate `/session/:id/commands`.
- * Templates and bridge built-ins only: reading it never starts Codex. Rows
- * carry the version-1 descriptor fields, which older clients ignore.
- */
-app.get("/global/slash-commands", async (c) => {
-  const cwd = getWorkingDirectory();
-  return c.json({ commands: await appServerRuntime.listGlobalCommandRows(), cwd });
 });
 
 /**
@@ -1296,6 +1341,7 @@ app.get("/session/:id/messages", async (c) => {
 
 // `GET /session/:id/transcript` and its detail and page reads.
 registerCodexTranscriptRoutes(app, appServerRuntime);
+registerCodexChangeEvidenceRoutes(app, codexChangeEvidence.spool);
 
 app.get("/session/:id/status", (c) => {
   const status = appServerRuntime.getStatus(c.req.param("id"));
@@ -1827,10 +1873,11 @@ app.get("/session/:id/mcp", async (c) => {
         ...(typeof server.pluginId === "string" ? { scope: "plugin" as const } : {}),
         toolCount: tools.length,
         tools,
+        // Redacted before the cut, so a bound never leaves part of a token.
         ...(typeof server.error === "string"
-          ? { error: server.error.slice(0, 1_000) }
+          ? { error: redactSecrets(server.error).slice(0, 1_000) }
           : typeof server.toolsError === "string"
-            ? { error: server.toolsError.slice(0, 1_000) }
+            ? { error: redactSecrets(server.toolsError).slice(0, 1_000) }
             : {}),
         actions: status === "needs-auth" ? ["sign-in" as const] : ["reconnect" as const],
       },
@@ -1897,6 +1944,7 @@ app.get("/event/subscribe", (c) => {
   const cursor =
     parseEventCursor(c.req.query("since")) ?? parseEventCursor(c.req.header("last-event-id"));
   const sessionFilter = c.req.query("sessionId")?.trim() || null;
+  const observe = c.req.query("observe") === "1";
 
   return streamSSE(c, async (stream) => {
     let open = true;
@@ -1945,7 +1993,7 @@ app.get("/event/subscribe", (c) => {
         // The `id:` is what makes replay possible at all — it is the cursor the
         // client echoes back on its next connection.
         id: String(revision),
-        data: serializeData(),
+        data: observe ? observationFrameData(event.sessionId) : serializeData(),
       };
     };
 
@@ -1959,7 +2007,7 @@ app.get("/event/subscribe", (c) => {
      */
     // Snapshot the fresh-client anchor before subscribing. These statements are
     // synchronous, so no event can land between the snapshot and registration.
-    const releaseReplayRetention = acquireReplayRetention();
+    const releaseReplayRetention = observe ? () => {} : acquireReplayRetention();
     const anchorRevision = cursor ?? eventRing.latestRevision;
     let buffered: Array<{
       event: Pick<SseEvent, "type" | "sessionId">;
@@ -1988,7 +2036,7 @@ app.get("/event/subscribe", (c) => {
       highestSent = revision;
       await writeWhileOpen(frameFor(event, revision, () => serializedData));
     };
-    subscribers.add(listener);
+    (observe ? observers : subscribers).add(listener);
 
     let keepalive: ReturnType<typeof setInterval> | undefined;
 
@@ -2018,6 +2066,8 @@ app.get("/event/subscribe", (c) => {
           // Tells the client whether the frames that follow are a replay or a
           // fresh start, so it knows if it still owes itself a reconcile.
           replayed: replay?.complete === true ? replay.events.length : 0,
+          // Confirms observation mode; an older bridge ignores the parameter.
+          ...(observe ? { observe: true } : {}),
         }),
       });
 
@@ -2080,6 +2130,8 @@ app.get("/event/subscribe", (c) => {
         writeWhileOpen,
         5_000,
         () => {
+          // An observer only needs proof the connection is alive.
+          if (observe) return false;
           if (!sessionFilter) return true;
           const activity = appServerRuntime.getActivity(sessionFilter);
           return activity === "working" || activity === "waiting";
@@ -2100,6 +2152,7 @@ app.get("/event/subscribe", (c) => {
       open = false;
       if (keepalive) clearInterval(keepalive);
       subscribers.delete(listener);
+      observers.delete(listener);
       releaseReplayRetention();
     }
   });
@@ -2133,13 +2186,25 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 // serving — down with it.
 installFatalRejectionGuard({ label: "[codex-bridge]" });
 
+/**
+ * How long a dead backend's running turns get to stop before the drain ends
+ * app-server anyway. The next backend reaps an orphaned bridge about 5 s after
+ * it starts, so detection (`PARENT_WATCH_INTERVAL_MS`) plus this stays inside it.
+ */
+const PARENT_EXIT_INTERRUPT_BUDGET_MS = 2_000;
+
 const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
 if (parentPid !== null) {
   startParentWatchdog({
     parentPid,
     onParentExit: () => {
       console.error(`[codex-bridge] Backend process ${parentPid} is gone; shutting down`);
-      shutdownHandler();
+      // Nothing supervises a turn once its backend is gone: stop it now rather
+      // than letting the agent keep editing until the drain kills app-server.
+      void createParentExitHandler(
+        (budgetMs) => appServerRuntime.interruptForParentExit(budgetMs),
+        shutdownHandler,
+      )();
     },
   });
 }

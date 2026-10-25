@@ -3,7 +3,9 @@ import {
   isValidElement,
   memo,
   useCallback,
+  useEffect,
   useMemo,
+  useState,
   type AnchorHTMLAttributes,
   type HTMLAttributes,
   type MouseEvent as ReactMouseEvent,
@@ -11,15 +13,41 @@ import {
   type ReactNode,
 } from "react";
 import { CheckSquare, Square } from "lucide-react";
-import Markdown, { defaultUrlTransform, type Components, type UrlTransform } from "react-markdown";
-import remarkBreaks from "remark-breaks";
-import remarkGfm from "remark-gfm";
+import Markdown, { type Components, type ExtraProps } from "react-markdown";
+import type { PluggableList } from "unified";
 import { toast } from "sonner";
-import type { PluggableList, Processor } from "unified";
 import { useOptionalTerminalContext } from "@/contexts";
 import { openInBrowser } from "@/lib/backend";
 import { parseLocalFileLinkTarget } from "@/lib/chat/file-url";
+import { usePullRequestOpener } from "@/lib/pull-request-opener";
+import { parseGitHubPullRequestLink } from "@orkestrator/protocol/github-pull-requests";
+import {
+  blockMarkdownPlugins,
+  INLINE_MARKDOWN_ELEMENTS,
+  INLINE_PLUGINS,
+  MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS,
+  MAX_INLINE_MARKDOWN_RENDER_CHARACTERS,
+  markdownRenderSource,
+  markdownUrlTransform,
+} from "@/lib/chat/rich-markdown/markdown-plugins";
+import {
+  RichMarkdownRenderContext,
+  type RichMarkdownRenderState,
+} from "@/lib/chat/rich-markdown/render-context";
+import { copyRichText } from "@/lib/chat/rich-markdown/clipboard";
+import {
+  IncrementalMarkdownCache,
+  remarkIncrementalParse,
+} from "@/lib/chat/rich-markdown/incremental-parse";
+import { SourceViewerDialog } from "@/components/chat/rich/CodeBlockViewer";
 import { cn } from "@/lib/utils";
+
+export {
+  MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS,
+  MAX_INLINE_MARKDOWN_RENDER_CHARACTERS,
+  markdownRenderSource,
+};
+export type { MarkdownRenderSource } from "@/lib/chat/rich-markdown/markdown-plugins";
 
 /*
  * Inline code is tinted rather than grey. Almost every inline span in a
@@ -33,82 +61,6 @@ import { cn } from "@/lib/utils";
 const DEFAULT_MARKDOWN_CLASSNAME =
   "text-sm text-foreground leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2 prose-code:text-xs prose-code:font-normal prose-code:text-blue-300 prose-code:bg-primary/12 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:before:content-none prose-code:after:content-none prose-pre:bg-muted prose-pre:p-3 prose-pre:rounded-md prose-table:text-xs prose-table:my-2 [&_pre_code]:bg-transparent [&_pre_code]:px-0 [&_pre_code]:py-0 [&_pre_code]:text-foreground";
 
-const PLUGINS_WITH_BREAKS: PluggableList = [remarkGfm, remarkBreaks];
-const PLUGINS_WITHOUT_BREAKS: PluggableList = [remarkGfm];
-
-/**
- * Hard parser-boundary budgets. Transcript-specific presentation helpers may
- * apply smaller limits, but no caller can make react-markdown parse beyond
- * these caps accidentally.
- */
-export const MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS = 32_000;
-export const MAX_INLINE_MARKDOWN_RENDER_CHARACTERS = 8_000;
-
-export interface MarkdownRenderSource {
-  source: string;
-  omittedCharacters: number;
-}
-
-export function markdownRenderSource(content: string, limit: number): MarkdownRenderSource {
-  if (content.length <= limit) return { source: content, omittedCharacters: 0 };
-  return {
-    source: content.slice(0, limit),
-    omittedCharacters: content.length - limit,
-  };
-}
-
-/**
- * Block constructs that must not fire on a single-line inline render.
- *
- * An inline caller has already flattened its text onto one line, so none of
- * these can carry the meaning they normally would — they can only consume
- * their own marker. `- read the reducer` would render as `read the reducer`,
- * `# Plan` as `Plan`, and a line that is exactly `---` as nothing at all,
- * silently dropping text the caller asked to display. Disabling them keeps the
- * source characters visible and guarantees the parse yields one paragraph.
- *
- * `labelStartImage` is in the list for the same reason: an image is not
- * phrasing content this renderer emits, so `![alt](url)` would unwrap to an
- * empty string rather than showing the text the author wrote.
- */
-const INLINE_ONLY_DISABLED_CONSTRUCTS = [
-  "blockQuote",
-  "codeFenced",
-  "codeIndented",
-  "definition",
-  "headingAtx",
-  "htmlFlow",
-  "labelStartImage",
-  "list",
-  "setextUnderline",
-  "thematicBreak",
-];
-
-/**
- * `micromarkExtensions` is contributed to unified's `Data` by `remark-parse`,
- * which reaches this package only as a transitive dependency of react-markdown
- * and so cannot be imported here for its type augmentation. Name the one field
- * this plugin touches rather than widening `data` to `any`.
- */
-type MicromarkExtensionData = {
-  micromarkExtensions?: Array<{ disable?: { null?: Array<string> } }>;
-};
-
-function remarkInlineOnly(this: Processor): undefined {
-  const data = this.data() as MicromarkExtensionData;
-  data.micromarkExtensions ??= [];
-  data.micromarkExtensions.push({ disable: { null: INLINE_ONLY_DISABLED_CONSTRUCTS } });
-}
-
-const INLINE_PLUGINS: PluggableList = [remarkGfm, remarkInlineOnly];
-const INLINE_MARKDOWN_ELEMENTS = ["p", "strong", "em", "del", "code", "a"];
-const markdownUrlTransform: UrlTransform = (url, key, node) => {
-  if (key === "href" && node.tagName === "a" && parseLocalFileLinkTarget(url)) {
-    return url;
-  }
-
-  return defaultUrlTransform(url);
-};
 const INLINE_MARKDOWN_COMPONENTS: Components = {
   // The preview sits inside a button, whose content must remain phrasing
   // content. Keep Markdown's paragraph parsing without emitting a block-level
@@ -204,9 +156,12 @@ export function MarkdownLink({
   children,
   className,
   onClick,
+  // react-markdown passes its hast node; it is not a DOM attribute.
+  node: _node,
   ...props
-}: AnchorHTMLAttributes<HTMLAnchorElement>) {
+}: AnchorHTMLAttributes<HTMLAnchorElement> & ExtraProps) {
   const createFileTab = useOptionalTerminalContext()?.createFileTab;
+  const openPullRequest = usePullRequestOpener();
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLAnchorElement>) => {
       onClick?.(event);
@@ -237,11 +192,15 @@ export function MarkdownLink({
         return;
       }
 
+      // Pull request links open in the app; Cmd/Ctrl-click opens GitHub.
+      const pullRequest = event.metaKey || event.ctrlKey ? null : parseGitHubPullRequestLink(href);
+      if (pullRequest && openPullRequest(pullRequest, pullRequest.view)) return;
+
       void openInBrowser(href).catch((error) => {
         console.error("[MessageMarkdown] Failed to open link:", error);
       });
     },
-    [createFileTab, href, onClick],
+    [createFileTab, href, onClick, openPullRequest],
   );
 
   return (
@@ -269,6 +228,20 @@ interface MessageMarkdownProps {
   className?: string;
   /** When false, single newlines are NOT converted to <br>. Defaults to true. */
   enableBreaks?: boolean;
+  /**
+   * Enables the rich transcript pipeline (code blocks, diagrams, callouts,
+   * disclosures, tables) and names the stable source part its blocks belong
+   * to. Callers pass the matching rich `components` map.
+   */
+  richPartId?: string;
+  /** The part's text is still streaming (display hint for rich blocks). */
+  live?: boolean;
+  /**
+   * Replaces the block plugin list chosen from `enableBreaks`/`richPartId`.
+   * Must be a hoisted constant, for the same memoization reason as
+   * `components`.
+   */
+  remarkPlugins?: PluggableList;
 }
 
 /** Render Markdown phrasing without introducing block or interactive nodes. */
@@ -324,35 +297,128 @@ export const MessageMarkdown = memo(function MessageMarkdown({
   components,
   className,
   enableBreaks = true,
+  richPartId,
+  live = false,
+  remarkPlugins: pluginOverride,
 }: MessageMarkdownProps) {
   const renderSource = useMemo(
     () => markdownRenderSource(content, MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS),
     [content],
   );
+  const rich = richPartId !== undefined;
+  const clipped = renderSource.omittedCharacters > 0;
   const plugins = useMemo(
-    () => (enableBreaks ? PLUGINS_WITH_BREAKS : PLUGINS_WITHOUT_BREAKS),
-    [enableBreaks],
+    () => pluginOverride ?? blockMarkdownPlugins({ rich, enableBreaks, clipped }),
+    [pluginOverride, rich, enableBreaks, clipped],
+  );
+  // While the part streams, the completed prefix's syntax tree is parsed once
+  // and reused; only the tail is parsed per update. The final (non-live)
+  // render always parses in full. A new configuration gets a fresh cache.
+  const incremental = useMemo(() => new IncrementalMarkdownCache(plugins), [plugins]);
+  useEffect(() => {
+    if (!live) incremental.reset();
+  }, [incremental, live]);
+  const remarkPlugins = useMemo(
+    () =>
+      live ? ([[remarkIncrementalParse, incremental], ...plugins] as typeof plugins) : plugins,
+    [incremental, live, plugins],
   );
   const mergedComponents = useMemo(
     () => (components ? { ...DEFAULT_COMPONENTS, ...components } : DEFAULT_COMPONENTS),
     [components],
   );
+  // The original is kept separately from the bounded slice it renders.
+  const richState = useMemo<RichMarkdownRenderState | null>(
+    () =>
+      rich
+        ? {
+            partId: richPartId,
+            clipped,
+            omittedCharacters: renderSource.omittedCharacters,
+            live,
+            renderedSource: renderSource.source,
+            fullSource: content,
+          }
+        : null,
+    [rich, richPartId, clipped, renderSource, live, content],
+  );
+
+  const markdown = (
+    <Markdown
+      remarkPlugins={remarkPlugins}
+      components={mergedComponents}
+      urlTransform={markdownUrlTransform}
+    >
+      {renderSource.source}
+    </Markdown>
+  );
 
   return (
     <div className={cn(DEFAULT_MARKDOWN_CLASSNAME, className)}>
-      <Markdown
-        remarkPlugins={plugins}
-        components={mergedComponents}
-        urlTransform={markdownUrlTransform}
-      >
-        {renderSource.source}
-      </Markdown>
-      {renderSource.omittedCharacters > 0 ? (
-        <p data-markdown-truncated="true" className="mt-2 text-xs italic text-muted-foreground">
-          {renderSource.omittedCharacters} additional characters omitted from this rendered view to
-          keep it responsive.
-        </p>
+      {richState ? (
+        <RichMarkdownRenderContext value={richState}>{markdown}</RichMarkdownRenderContext>
+      ) : (
+        markdown
+      )}
+      {clipped ? (
+        <MarkdownOmissionNotice
+          omittedCharacters={renderSource.omittedCharacters}
+          fullSource={rich ? content : null}
+        />
       ) : null}
     </div>
   );
 });
+
+/**
+ * The parser-cap notice. Chrome, not content: find and copy skip it. Rich
+ * renders also offer the exact full source, which the cap never altered.
+ */
+function MarkdownOmissionNotice({
+  omittedCharacters,
+  fullSource,
+}: {
+  omittedCharacters: number;
+  fullSource: string | null;
+}) {
+  const [viewerOpen, setViewerOpen] = useState(false);
+  return (
+    <div
+      data-markdown-truncated="true"
+      data-rich-chrome="true"
+      className="not-prose mt-2 flex select-none flex-wrap items-center gap-x-3 gap-y-1 text-xs italic text-muted-foreground"
+    >
+      <span>
+        {omittedCharacters} additional characters omitted from this rendered view to keep it
+        responsive.
+      </span>
+      {fullSource !== null ? (
+        <>
+          <button
+            type="button"
+            className="not-italic underline-offset-2 hover:text-foreground hover:underline"
+            onClick={() => void copyRichText(fullSource, "full source")}
+          >
+            Copy full source
+          </button>
+          <button
+            type="button"
+            className="not-italic underline-offset-2 hover:text-foreground hover:underline"
+            onClick={() => setViewerOpen(true)}
+          >
+            Open full source
+          </button>
+          {viewerOpen ? (
+            <SourceViewerDialog
+              open={viewerOpen}
+              onOpenChange={setViewerOpen}
+              title="Full message source"
+              source={fullSource}
+              copyLabel="full source"
+            />
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}

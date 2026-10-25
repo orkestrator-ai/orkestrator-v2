@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
@@ -33,6 +33,7 @@ import {
   designApi,
   designBackendKey,
   failureOf,
+  getCapabilities,
   importDesignDocument,
   importDesignHostFile,
 } from "@/lib/design-client";
@@ -126,7 +127,9 @@ export function DesignWorkspaceDialog({
   const backendKey = designBackendKey();
   const scope = `${backendKey}\u0000${environmentId}`;
   const scopeRef = useRef(scope);
-  scopeRef.current = scope;
+  useLayoutEffect(() => {
+    scopeRef.current = scope;
+  }, [scope]);
 
   const [mode, setMode] = useState<DesignWorkspaceMode>(initialMode);
   // The draft lives here, outside the tab panels, so switching modes, closing
@@ -205,8 +208,9 @@ export function DesignWorkspaceDialog({
   useEffect(() => {
     if (open) refreshReadiness();
   }, [open, scope, refreshReadiness]);
-  useEffect(() => {
-    importEpoch.current++;
+  const [renderedScope, setRenderedScope] = useState(scope);
+  if (renderedScope !== scope) {
+    setRenderedScope(scope);
     setBusy(false);
     setUploadFallback(false);
     setError(null);
@@ -214,6 +218,9 @@ export function DesignWorkspaceDialog({
     setNotice(null);
     // Images were written into the previous environment's workspace.
     setBriefImages([]);
+  }
+  useEffect(() => {
+    importEpoch.current++;
   }, [scope]);
 
   // Layout facts follow the pane store so open/focus choices stay current.
@@ -295,12 +302,22 @@ export function DesignWorkspaceDialog({
     const originPaneId = usePaneLayoutStore
       .getState()
       .environments.get(environmentId)?.activePaneId;
-    const sessions = view?.protocol === "v2" && view.capabilities?.sessions;
     const images = withAgent ? briefImages : [];
     setBusy(true);
     setError(null);
     setRecovery(null);
     try {
+      // Readiness also probes the renderer, so it can still be loading when
+      // Create is pressed. Session support does not depend on the renderer:
+      // read it directly rather than silently leave the agent unlinked.
+      const sessions = view
+        ? view.protocol === "v2" && Boolean(view.capabilities?.sessions)
+        : withAgent &&
+          (await getCapabilities().then(
+            (capabilities) => Boolean(capabilities?.sessions),
+            () => false,
+          ));
+      if (launchScope !== scopeRef.current) return;
       const result = await launchDesignWorkspace({
         name,
         agent: withAgent ? agent : null,

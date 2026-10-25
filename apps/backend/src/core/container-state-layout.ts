@@ -33,12 +33,12 @@ export interface ProviderStateEntry {
  * (docs/development/upgrade-agents.md, "Re-trace preserved provider state").
  */
 export const PROVIDER_STATE_TRACED_VERSIONS: Record<AgentPlatform, string> = {
-  claude: "2.1.296",
-  codex: "0.162.1",
-  opencode: "1.19.0",
-  pi: "1.2.0",
-  cursor: "1.0.37",
-  grok: "1.0.52",
+  claude: "2.1.309",
+  codex: "0.164.0",
+  opencode: "1.19.4",
+  pi: "1.4.0",
+  cursor: "1.0.40",
+  grok: "1.0.67",
 };
 
 /** Codex runtime databases on persistent storage (`CODEX_SQLITE_HOME`). */
@@ -166,7 +166,7 @@ export const PROVIDER_PRESERVATION: Record<
   codex: {
     level: "partial",
     limitations:
-      "Rollouts, archived rollouts, the runtime databases and the bridge session map and title index are preserved. Codex's own thread-name index at its home root is not, so a name set inside the Codex CLI rather than in Orkestrator is lost; the relocated runtime databases are pending qualification against the pinned Codex.",
+      "Rollouts, archived rollouts, the runtime databases and the bridge session map and title index are preserved, and a conversation continues from them after a rebuild. Codex's own thread-name index at its home root is not, so a name set inside the Codex CLI rather than in Orkestrator is lost.",
   },
   opencode: {
     level: "partial",

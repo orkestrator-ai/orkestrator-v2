@@ -15,6 +15,7 @@ import type {
   BrowserPreviewBounds,
   BrowserPreviewCaptureAck,
   BrowserPreviewCaptureCapabilities,
+  BrowserPreviewCaptureDiagnostics,
   BrowserPreviewCaptureEvent,
   BrowserPreviewExpiredCaptureNotice,
   BrowserPreviewOpenLinkEvent,
@@ -33,7 +34,7 @@ import type {
   BrowserPreviewState,
   BrowserPreviewTransportState,
 } from "@orkestrator/protocol/browser-preview";
-import { previewFailure } from "@orkestrator/protocol/preview-services";
+import { normalizePreviewPath, previewFailure } from "@orkestrator/protocol/preview-services";
 import { createContextMenuTemplate, type MenuLike } from "./context-menu.js";
 import {
   BrowserPreviewCaptureSessions,
@@ -68,9 +69,15 @@ interface ManagedPreview {
   /**
    * Service previews: transport key, the partition the view was created with,
    * and the transport holder the view keeps (unique per attach, so a stale
-   * attach can release its own hold without dropping a newer one).
+   * attach can release its own hold without dropping a newer one). `path` is
+   * the path the renderer last asked for, which can lag the view's own.
    */
-  service?: { key: string; partition: string; holderId: string };
+  service?: { key: string; partition: string; holderId: string; path: string };
+  /**
+   * Main-frame navigations (commits, and history moves from the moment they
+   * start), reported to the renderer as `service.navigation`.
+   */
+  navigation: number;
 }
 
 /**
@@ -442,16 +449,27 @@ export class BrowserPreviewManager {
       preview = undefined;
     }
     const scope = `service:${descriptor.serviceKey}`;
+    // `acquire` validated the path; this is its canonical form.
+    const path = normalizePreviewPath(target.path);
     if (!preview) {
       preview = this.createPreview(input.tabId, descriptor.url, scope, {
         session: transport.sessionFor(descriptor.partition),
-        service: { key: descriptor.serviceKey, partition: descriptor.partition, holderId },
+        service: { key: descriptor.serviceKey, partition: descriptor.partition, holderId, path },
       });
     } else {
       // The view already holds this service; this attach's hold is a duplicate.
       transport.release(descriptor.serviceKey, holderId);
       const current = transport.describe(preview.requestedUrl);
-      if (current?.serviceKey !== descriptor.serviceKey || current.path !== target.path) {
+      // The renderer learns the view's path from state events, so an attach
+      // sent before it applied one (after a link, a redirect or Back) still
+      // carries the previous path, and loading it would undo the navigation.
+      // A path chosen against an older navigation is stale. Renderers that
+      // send no basis fall back to: only a path not already asked for is new.
+      const basis = input.navigationBasis;
+      const requested =
+        basis === undefined ? preview.service?.path !== path : basis >= preview.navigation;
+      if (preview.service) preview.service.path = path;
+      if (current?.serviceKey !== descriptor.serviceKey || (requested && current.path !== path)) {
         this.clipboardUserActivations.delete(preview.view.webContents);
         preview.requestedUrl = descriptor.url;
         preview.navigationScope = scope;
@@ -649,6 +667,13 @@ export class BrowserPreviewManager {
     return this.pins.getPinResults(tabId);
   }
 
+  async getCaptureDiagnostics(): Promise<BrowserPreviewCaptureDiagnostics> {
+    return {
+      spool: (await this.options.captureStore?.stats?.()) ?? null,
+      anchorResolutions: this.pins.anchorResolutionCounts(),
+    };
+  }
+
   showOnPage(input: BrowserPreviewShowOnPageInput): Promise<BrowserPreviewShowOnPageResult> {
     return this.pins.showOnPage(input);
   }
@@ -740,6 +765,7 @@ export class BrowserPreviewManager {
       loading: true,
       error: null,
       documentGeneration: 0,
+      navigation: 0,
       ...(service ? { service: service.service } : {}),
     };
     this.previews.set(tabId, preview);
@@ -889,12 +915,14 @@ export class BrowserPreviewManager {
     contents.on("did-navigate", (_event, url) => {
       this.clipboardUserActivations.delete(contents);
       this.advanceDocument(tabId, preview);
+      preview.navigation += 1;
       if (this.withinScope(url, preview.navigationScope)) preview.requestedUrl = url;
       this.emit(tabId, preview);
     });
     contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
       if (isMainFrame) {
         this.advanceDocument(tabId, preview);
+        preview.navigation += 1;
         const url = contents.getURL();
         if (this.withinScope(url, preview.navigationScope)) preview.requestedUrl = url;
         this.emit(tabId, preview);
@@ -957,6 +985,9 @@ export class BrowserPreviewManager {
     preview.error = null;
     preview.loadGeneration += 1;
     preview.loading = true;
+    // The view's path is the destination from here on, so a renderer path
+    // chosen before this call is stale even though the commit is still to come.
+    preview.navigation += 1;
     this.advanceDocument(tabId, preview);
     this.clipboardUserActivations.delete(preview.view.webContents);
     if (offset === -1) history.goBack();
@@ -992,6 +1023,7 @@ export class BrowserPreviewManager {
                     serviceId: described.serviceId,
                     path: described.path,
                     displayUrl: described.displayUrl,
+                    navigation: preview.navigation,
                   },
                 }
               : {}),

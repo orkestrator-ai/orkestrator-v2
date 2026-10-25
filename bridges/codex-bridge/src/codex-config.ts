@@ -1,4 +1,5 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import {
   coordinatorCapabilityPolicy,
   coordinatorResearchMcpServersFromEnv,
@@ -9,6 +10,7 @@ import {
   nativeAgentPolicyDeniesWebSearch,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
+import { realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
 export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
@@ -72,6 +74,86 @@ export function codexNetworkDeniedConfig(
   };
 }
 
+/**
+ * Thread configuration that keeps a checkout's own `.codex` configuration out
+ * of a session whose policy turns project resources off; empty otherwise.
+ *
+ * Codex loads a project's `.codex` layer (model settings, MCP servers, hooks)
+ * once the user trusts the project, or its main checkout, in Codex. Pinning
+ * the thread's cwd untrusted drops that layer for this thread only, and stops
+ * a writable thread from marking the project trusted in the user's
+ * `config.toml`. Verified against 0.164.0 (`live-project-trust.test.ts`):
+ *
+ * - The pin must be a nested table. A dotted `projects."<path>".trust_level`
+ *   key, which works as a process `-c` override, is ignored in thread config.
+ * - Pinning the worktree wins over a trusted main checkout, and holds for a
+ *   cwd below the pinned root.
+ *
+ * Both the given path and its canonical form are pinned, because Codex may
+ * compare either. Without a policy (an older backend) Codex keeps its own
+ * trust decision.
+ */
+export function codexProjectTrustConfig(
+  policy: NativeAgentExecutionPolicy | undefined,
+  cwd: string | undefined,
+): Record<string, unknown> {
+  if (!policy || policy.projectResources || !cwd || !isAbsolute(cwd)) return {};
+  const roots = new Set([cwd]);
+  try {
+    roots.add(realpathSync(cwd));
+  } catch {
+    // A missing cwd fails thread/start on its own; the given path is pinned.
+  }
+  return {
+    projects: Object.fromEntries([...roots].map((root) => [root, { trust_level: "untrusted" }])),
+  };
+}
+
+/** More skills than any real inventory; past it the thread is refused. */
+export const MAX_CODEX_DISABLED_SKILLS = 1_024;
+
+const KEPT_SKILL_SCOPES = new Set(["user", "system", "admin"]);
+
+/**
+ * Thread `skills.config` that keeps a checkout's own skills out of a session
+ * whose policy turns project resources off, from a `skills/list` answer for
+ * the thread's cwd.
+ *
+ * The untrusted pin (`codexProjectTrustConfig`) does not reach skills: Codex
+ * 0.162.1 still offers `.codex/skills` and `.agents/skills` from an untrusted
+ * checkout. A thread-scoped `{ path, enabled: false }` entry does remove one
+ * (`live-project-trust.test.ts`). The thread's list replaces the user's own
+ * `skills.config` list rather than adding to it, so every skill Codex already
+ * reports disabled is listed again. Anything else that is not an enabled
+ * user, system or admin skill is disabled too, which is the safe direction
+ * for a scope this bridge does not know. A skill that cannot be disabled by
+ * path, or an inventory too large to list, refuses the thread.
+ */
+export function codexProjectSkillsConfig(listed: unknown): Record<string, unknown> {
+  const data =
+    listed && typeof listed === "object" && Array.isArray((listed as { data?: unknown }).data)
+      ? ((listed as { data: unknown[] }).data as unknown[])
+      : undefined;
+  if (!data) throw new Error("Codex skills/list returned no skill inventory");
+  const disabled = new Set<string>();
+  for (const entry of data) {
+    const skills = (entry as { skills?: unknown } | null)?.skills;
+    for (const skill of Array.isArray(skills) ? skills : []) {
+      const { path, scope, enabled } = (skill ?? {}) as Record<string, unknown>;
+      if (enabled === true && typeof scope === "string" && KEPT_SKILL_SCOPES.has(scope)) continue;
+      if (typeof path !== "string" || !isAbsolute(path)) {
+        throw new Error("Codex listed a project skill without a path it can be disabled by");
+      }
+      disabled.add(path);
+    }
+  }
+  if (disabled.size > MAX_CODEX_DISABLED_SKILLS) {
+    throw new Error(`Codex listed more than ${MAX_CODEX_DISABLED_SKILLS} skills to disable`);
+  }
+  if (disabled.size === 0) return {};
+  return { skills: { config: [...disabled].map((path) => ({ path, enabled: false })) } };
+}
+
 /** Stands in for a session restored without a policy; only its denial matters. */
 const READ_ONLY_TURN_FALLBACK_POLICY: NativeAgentExecutionPolicy = Object.freeze({
   id: "interactive-host",
@@ -103,8 +185,34 @@ export function codexReadOnlyTurnPolicy(
 }
 
 /**
+ * Whether an effective configuration (`config/read`) keeps tool declarations
+ * out of thread history.
+ *
+ * With `features.incremental_tools` (stable and on by default since codex
+ * 0.164.0) each turn's tools are appended to the history as an
+ * `additional_tools` record, and a resumed thread replays them: a turn that
+ * denies hosted search would still carry an earlier turn's `web__run`. Off,
+ * the request declares only the current turn's tools and writes no record
+ * (`live-network-lock.test.ts`). Thread configuration cannot turn it off, so
+ * the process override must hold; only an explicit `false` passes.
+ */
+export function codexToolHistoryGaps(config: unknown): string[] {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return ["config/read returned no configuration"];
+  }
+  const features = (config as Record<string, unknown>).features;
+  const value =
+    features && typeof features === "object" && !Array.isArray(features)
+      ? (features as Record<string, unknown>).incremental_tools
+      : undefined;
+  return value === false
+    ? []
+    : [`features.incremental_tools is ${JSON.stringify(value ?? null)}, not false`];
+}
+
+/**
  * Whether an effective configuration (`config/read`) runs search in the
- * expected mode.
+ * expected mode, with tool declarations kept out of history.
  *
  * Returns what is wrong, so a refusal can say which switch failed. An empty
  * list is the only passing answer; a missing or unparseable `config` fails.
@@ -129,6 +237,7 @@ export function codexHostedNetworkLockGaps(
   ) {
     gaps.push("features.standalone_web_search is on");
   }
+  gaps.push(...codexToolHistoryGaps(config));
   return gaps;
 }
 
@@ -195,6 +304,9 @@ export function codexAppServerConfigOverrides(
     // Supplying both CLI overrides makes the Orkestrator setting authoritative
     // regardless of which multi-agent implementation Codex selects.
     "features.multi_agent_v2.max_concurrent_threads_per_session": String(childLimit + 1),
+    // Off for every bridge, since any thread can later run a turn that denies
+    // hosted search. See `codexToolHistoryGaps`.
+    "features.incremental_tools": "false",
   };
   const rawUrl = env[ORKESTRATOR_AGENT_MCP_URL_ENV]?.trim();
   const token = env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV]?.trim();
@@ -363,9 +475,10 @@ export function codexAppServerConfigOverrides(
             JSON.stringify("approve");
         } else {
           // A worker's mail tools are always approved, whatever its ask/deny
-          // policy: they are how it reports back. Its other Orkestrator tools
-          // keep Codex's defaults.
-          for (const name of AGENT_MAIL_TOOL_NAMES) {
+          // policy: they are how it reports back. Artifact tools likewise only
+          // write to Orkestrator's own store. Its other Orkestrator tools keep
+          // Codex's defaults.
+          for (const name of [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES]) {
             overrides[`mcp_servers.orkestrator.tools.${name}.approval_mode`] =
               JSON.stringify("approve");
           }

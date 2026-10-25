@@ -7,7 +7,7 @@
  * every renderer.
  */
 import { describe, expect, test } from "bun:test";
-import { attachProgressToToolRows } from "./native-agent-service-projection.js";
+import { attachProgressToToolRows } from "./native-agent-transcript-projection.js";
 
 describe("attachProgressToToolRows", () => {
   test("moves a progress part onto the tool row it names", () => {

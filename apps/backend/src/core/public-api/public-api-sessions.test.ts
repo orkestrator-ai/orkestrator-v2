@@ -9,7 +9,7 @@ import {
 import { AmbiguousPromptDispatchError } from "../agent-provider-contract.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
-import { requestKey } from "./operation-ledger.js";
+import { intentFingerprint, requestKey } from "./operation-ledger.js";
 import type { PublicApiHarness } from "./test-support.js";
 
 /**
@@ -38,6 +38,66 @@ async function startSession(harness: PublicApiHarness, requestId: string, prompt
 }
 
 describe("session.start and request-specific completion", () => {
+  test("recovery validates canonical intent and scope before returning any receipt", async () => {
+    const { harness } = await setup();
+    const original = { environmentId: "env-1", agent: "claude", prompt: "original" };
+    const started = await startSession(harness, "recover-intent", "original");
+    for (const submittedInput of [
+      { ...original, prompt: "changed" },
+      { ...original, environmentId: "another-env" },
+    ]) {
+      const conflict = await harness.call("run.get", {
+        requestId: "recover-intent",
+        action: "session.start",
+        namespace: started.receipt!.namespace,
+        submittedInput,
+      });
+      expect(!conflict.ok && conflict.error.code).toBe(
+        submittedInput.environmentId === "env-1" ? "request-conflict" : "not-found",
+      );
+      expect(conflict.receipt).toBeUndefined();
+    }
+    const found = await harness.call("run.get", {
+      requestId: "recover-intent",
+      action: "session.start",
+      namespace: started.receipt!.namespace,
+      submittedInput: original,
+    });
+    expect(found.ok).toBe(true);
+    expect(found.receipt!.operationId).toBe(started.receipt!.operationId);
+    expect(JSON.stringify(found)).not.toContain("original");
+    // The same key can legitimately name another environment's operation.
+    // Recovery must select its exact scope before checking for ambiguity.
+    const otherInput = { ...original, environmentId: "env-other" };
+    const other = await harness.storage.admitPublicOperation({
+      authority: "operator",
+      action: "session.start",
+      scope: "environment:env-other",
+      requestId: "recover-intent",
+      namespace: started.receipt!.namespace,
+      requestKey: requestKey(
+        "operator",
+        "session.start",
+        "environment:env-other",
+        "recover-intent",
+      ),
+      fingerprint: intentFingerprint("session.start", otherInput),
+      generation: "test",
+    });
+    for (const [submittedInput, operationId] of [
+      [original, started.receipt!.operationId],
+      [otherInput, other.record.operationId],
+    ] as const) {
+      const scoped = await harness.call("run.get", {
+        requestId: "recover-intent",
+        action: "session.start",
+        namespace: started.receipt!.namespace,
+        submittedInput,
+      });
+      expect(scoped.receipt?.operationId).toBe(operationId);
+    }
+  });
+
   test("restart during dispatch recovers a journaled turn", async () => {
     const { harness } = await setup();
     const started = await startSession(harness, "journaled-restart");
@@ -54,27 +114,32 @@ describe("session.start and request-specific completion", () => {
     expect(run.state).toBe("running");
   });
 
-  test("restart during dispatch without a session settles interrupted", async () => {
-    const { harness } = await setup();
-    const admitted = await harness.storage.admitPublicOperation({
-      authority: "operator",
-      action: "session.start",
-      scope: "environment:env-1",
-      requestId: "orphan-start",
-      requestKey: requestKey("operator", "session.start", "environment:env-1", "orphan-start"),
-      fingerprint: "f".repeat(64),
-      resources: { environmentId: "env-1", dispatchRequestId: "orphan-dispatch" },
-      generation: "previous-generation",
+  for (const stage of ["executing", "dispatching"]) {
+    test(`restart during ${stage} without a session settles interrupted`, async () => {
+      const { harness } = await setup();
+      const admitted = await harness.storage.admitPublicOperation({
+        authority: "operator",
+        action: "session.start",
+        scope: "environment:env-1",
+        requestId: "orphan-start",
+        requestKey: requestKey("operator", "session.start", "environment:env-1", "orphan-start"),
+        fingerprint: "f".repeat(64),
+        resources: { environmentId: "env-1", dispatchRequestId: "orphan-dispatch" },
+        generation: "previous-generation",
+      });
+      await harness.storage.updatePublicOperation(admitted.record.operationId, (record) => ({
+        ...record,
+        state: "running",
+        stage,
+        generation: "previous-generation",
+      }));
+      const restarted = await harness.restart();
+      expect(await receipt(restarted, admitted.record.operationId)).toMatchObject({
+        state: "interrupted",
+        dispatch: { state: "not-sent" },
+      });
     });
-    await harness.storage.updatePublicOperation(admitted.record.operationId, (record) => ({
-      ...record,
-      state: "running",
-      stage: "dispatching",
-      generation: "previous-generation",
-    }));
-    const restarted = await harness.restart();
-    expect((await receipt(restarted, admitted.record.operationId)).state).toBe("interrupted");
-  });
+  }
 
   test("restart during a parked prompt dispatch stays recoverable", async () => {
     const { harness, service, stub } = await setup();

@@ -106,11 +106,12 @@ const HANDLED_SESSION_EVENTS: Record<AgentSessionEvent["type"], boolean> = {
   turn_start: false,
   agent_start: false,
   agent_end: false,
-  // Pi retrying its own summarization. Becomes a `retry` part in plan 03;
-  // until then the compaction card is what the user sees.
-  summarization_retry_scheduled: false,
-  summarization_retry_attempt_start: false,
-  summarization_retry_finished: false,
+  // Pi retrying a compaction's summary request: the shared retry row, settled
+  // by `compaction_end`. A branch summary's retries are not rendered (see
+  // `applySummarizationRetry`).
+  summarization_retry_scheduled: true,
+  summarization_retry_attempt_start: true,
+  summarization_retry_finished: true,
   // Pi appending to its own JSONL session file. The bridge builds its
   // transcript from the message and tool events instead, so consuming this too
   // would double every row. Plan 03 uses it for historic replay, not live.
@@ -191,6 +192,14 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
     case "auto_retry_start":
       if (!turnFramesWelcome(state)) break;
       applyRetryStart(state, event);
+      break;
+    case "summarization_retry_scheduled":
+      applySummarizationRetry(state, event);
+      break;
+    case "summarization_retry_attempt_start":
+    case "summarization_retry_finished":
+      // The row stays pending until `compaction_end`: `finished` fires on
+      // success and on giving up alike, and says which to neither.
       break;
     case "auto_retry_end":
       // Settles the row `auto_retry_start` opened. Without this the card stayed
@@ -610,6 +619,7 @@ function applyQueueUpdate(state: SessionState, event: JsonObject): void {
  * (the context did not shrink), not a boundary that happened.
  */
 function applyCompaction(state: SessionState, event: JsonObject): void {
+  settleCompactionRetry(state, event);
   if (event.aborted === true) {
     state.revision += 1;
     return;
@@ -676,8 +686,62 @@ function applyResponseOutcome(state: SessionState, message: unknown): void {
       : undefined;
 }
 
+/**
+ * Pi retrying a compaction's summary request, as the retry row a turn's own
+ * retries use, on the row the compaction lands on. One row per compaction: a
+ * later attempt updates it rather than stacking rows that never settle.
+ *
+ * Pi also retries a branch summary (history navigation), with the same events
+ * and no source on this one. That runs outside a compaction, and the navigate
+ * route answers with its outcome, so it is not rendered.
+ */
+function applySummarizationRetry(state: SessionState, event: JsonObject): void {
+  if (!state.compacting) return;
+  const open = compactionRetryPart(state);
+  if (open?.part.toolState === "pending") {
+    if (nonBlank(event.errorMessage)) {
+      open.part.content = boundText(event.errorMessage.trim(), MAX_TOOL_TITLE_BYTES);
+    }
+    if (typeof event.attempt === "number") open.part.retryAttempt = event.attempt;
+    rowChanged(state, open.message);
+    return;
+  }
+  const { message, part } = applyRetryStart(state, event);
+  state.compactionRetry = { messageId: message.id, sourcePartId: part.sourcePartId };
+}
+
+function compactionRetryPart(
+  state: SessionState,
+): { message: BridgeMessage; part: BridgeRetryPart } | undefined {
+  const target = state.compactionRetry;
+  if (!target) return undefined;
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const message = state.messages[index]!;
+    if (message.id !== target.messageId) continue;
+    const part = message.parts.find((candidate) => candidate.sourcePartId === target.sourcePartId);
+    return part?.type === "retry" ? { message, part } : undefined;
+  }
+  return undefined;
+}
+
+/** Settle the compaction's retry row with the compaction's own outcome. */
+function settleCompactionRetry(state: SessionState, event: JsonObject): void {
+  const open = compactionRetryPart(state);
+  state.compactionRetry = undefined;
+  if (open?.part.toolState !== "pending") return;
+  const failed = event.aborted === true || nonBlank(event.errorMessage);
+  open.part.toolState = failed ? "failure" : "success";
+  if (nonBlank(event.errorMessage)) {
+    open.part.content = boundText(event.errorMessage.trim(), MAX_TOOL_TITLE_BYTES);
+  }
+  rowChanged(state, open.message);
+}
+
 /** Open a retry row for the request that just failed. */
-function applyRetryStart(state: SessionState, event: JsonObject): void {
+function applyRetryStart(
+  state: SessionState,
+  event: JsonObject,
+): { message: BridgeMessage; part: BridgeRetryPart } {
   const message = currentAssistantMessage(state);
   closeTextParts(state);
   const sourcePartId = `retry:${nextPartOrdinal(message)}`;
@@ -696,6 +760,7 @@ function applyRetryStart(state: SessionState, event: JsonObject): void {
   message.parts.push(part);
   chargeNewEntry(state, part);
   rowChanged(state, message);
+  return { message, part };
 }
 
 /**
@@ -907,8 +972,68 @@ function chargeAppended(state: SessionState, before: string, after: string): voi
   chargeTranscript(state, jsonStringContentBytes(after.slice(before.length)));
 }
 
+/**
+ * Rebuild on resume the cards of the calls a tool made through
+ * `ctx.executeTool()`, from its result's `nestedCalls` record.
+ *
+ * Live, each nested call arrives as its own `tool_execution_*` frames naming
+ * its parent. The session file keeps only the calling tool's bounded record of
+ * them, so without this a resumed codemode card lost its children. Pi ids a
+ * nested call `<caller>/<n>`, which also recovers a grandchild's parent. The
+ * record keeps no results: a replayed child has its title, arguments, outcome
+ * and duration, never output.
+ */
+export function replayNestedToolCalls(
+  message: BridgeMessage,
+  parentToolCallId: string,
+  nestedCalls: unknown,
+): void {
+  if (!isObject(nestedCalls) || !Array.isArray(nestedCalls.calls)) return;
+  for (const call of nestedCalls.calls) {
+    if (!isObject(call) || !nonBlank(call.id) || call.id === parentToolCallId) continue;
+    const id = call.id;
+    if (message.parts.some((part) => part.type === "tool-invocation" && part.toolUseId === id)) {
+      continue;
+    }
+    const rendered = renderToolCall({
+      toolName: nonBlank(call.name) ? call.name : "tool",
+      input: call.arguments,
+    });
+    const slash = id.lastIndexOf("/");
+    const failed = call.status !== "ok";
+    const durationMs = providerDuration(call.durationMs);
+    const part: BridgeToolPart = {
+      type: "tool-invocation",
+      content: rendered.toolTitle ?? rendered.toolName,
+      sourcePartId: `${message.id}:${nextPartOrdinal(message)}`,
+      sourceMessageId: message.id,
+      toolUseId: id,
+      parentTaskUseId:
+        id.startsWith(`${parentToolCallId}/`) && slash > parentToolCallId.length
+          ? id.slice(0, slash)
+          : parentToolCallId,
+      toolName: rendered.toolName,
+      ...(rendered.toolTitle ? { toolTitle: rendered.toolTitle } : {}),
+      ...(rendered.toolArgs ? { toolArgs: rendered.toolArgs } : {}),
+      toolState: failed ? "failure" : "success",
+      ...(durationMs !== undefined ? { toolDurationMs: durationMs } : {}),
+    };
+    if (failed) {
+      part.toolError = boundText(
+        call.status === "unfinished"
+          ? "Still running when the calling tool finished."
+          : nonBlank(call.error)
+            ? call.error
+            : `The ${rendered.toolName} tool failed`,
+        MAX_TOOL_TITLE_BYTES,
+      );
+    }
+    message.parts.push(part);
+  }
+}
+
 /** A provider-measured duration, or undefined when it is not a usable one. */
-function providerDuration(value: unknown): number | undefined {
+export function providerDuration(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.round(value)
     : undefined;

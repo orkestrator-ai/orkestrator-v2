@@ -193,6 +193,110 @@ describe("agent handoff serialization", () => {
     expect(parseAgentHandoffSnapshot(handoff)).toEqual(handoff);
   });
 
+  test("never writes client counts: an unmeasured edit says so instead of +0/-0", () => {
+    const unknownCounts: NativeMessage[] = [
+      {
+        id: "assistant-unknown",
+        role: "assistant",
+        content: "",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "write",
+            toolName: "Write",
+            toolUseId: "call-write",
+            toolState: "success",
+            // A legacy payload with no counts at all.
+            toolDiff: { filePath: "src/new.ts" },
+          },
+        ],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      },
+    ];
+    for (const handoff of [createHandoff(), createHandoff({ messages: unknownCounts })]) {
+      expect(handoff.bootstrapPrompt).not.toContain("+0/-0");
+      expect(handoff.bootstrapPrompt).not.toMatch(/\(\+\d+\/-\d+\)/);
+      expect(handoff.bootstrapPrompt).toContain("changes: not measured");
+    }
+    expect(createHandoff().bootstrapPrompt).toContain("changed: src/fix.ts");
+    expect(createHandoff({ messages: unknownCounts }).bootstrapPrompt).toContain(
+      "changed: src/new.ts",
+    );
+  });
+
+  test("shell rows name their measured paths but leave counts to the backend", () => {
+    const handoff = createHandoff({
+      messages: [
+        {
+          id: "assistant-shell",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "sed",
+              toolName: "Bash",
+              toolUseId: "call-shell",
+              toolState: "success",
+              commandChanges: {
+                additions: 3,
+                deletions: 1,
+                files: [
+                  { path: "a.ts", status: "M", additions: 3, deletions: 1 },
+                  {
+                    path: "b.ts",
+                    previousPath: "old-b.ts",
+                    status: "R",
+                    additions: 0,
+                    deletions: 0,
+                  },
+                ],
+              },
+            },
+          ],
+          createdAt: "2026-07-27T10:00:00.000Z",
+        },
+      ],
+    });
+    expect(handoff.bootstrapPrompt).toContain("changed: a.ts");
+    expect(handoff.bootstrapPrompt).toContain("changed: old-b.ts -\\u003e b.ts");
+    expect(handoff.bootstrapPrompt).toContain("changes: not measured");
+    expect(handoff.bootstrapPrompt).not.toContain("+3");
+  });
+
+  test("writes backend-measured change text per tool call and keeps it across a reload", () => {
+    const measured: NativeMessage[] = [
+      {
+        id: "assistant-measured",
+        role: "assistant",
+        content: "",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "edit",
+            toolName: "Edit",
+            toolUseId: "call-edit",
+            toolState: "success",
+            toolDiff: { filePath: "src/fix.ts" },
+          },
+        ],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      },
+    ];
+    const handoff = createHandoff({
+      messages: measured,
+      changeSummaries: {
+        "call-edit": "- tool change (observed in the workspace): +unknown -2, 1 file",
+      },
+    });
+    expect(handoff.bootstrapPrompt).toContain("changes (measured by Orkestrator):");
+    expect(handoff.bootstrapPrompt).toContain("+unknown -2, 1 file");
+    expect(handoff.bootstrapPrompt).not.toContain("changes: not measured");
+    const reloaded = parseAgentHandoffSnapshot(JSON.parse(JSON.stringify(handoff)));
+    expect(reloaded).toEqual(handoff);
+    expect(parseAgentHandoffSnapshot({ ...handoff, changeSummaries: { x: 42 } })).toBeNull();
+  });
+
   test("preserves transcript references in the snapshot and destination prompt", () => {
     const rawContent = buildPromptWithTranscriptAnnotations("Confirm the deployment", [
       {

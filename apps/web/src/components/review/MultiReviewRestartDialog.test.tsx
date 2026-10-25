@@ -52,6 +52,7 @@ describe("MultiReviewRestartDialog", () => {
         name: "Extra high",
       }),
     );
+    fireEvent.keyDown(document.body, { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Restart Consolidation" }));
 
     expect(onSubmit).toHaveBeenCalledWith({

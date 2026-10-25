@@ -1,4 +1,5 @@
-import { beginEnvironmentMove, endEnvironmentMove } from "./environment-replacement-fence.js";
+import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { describe, expect, mock, test } from "bun:test";
 
 import { promises as fs } from "node:fs";
@@ -31,6 +32,7 @@ import {
 } from "./native-agent-service.js";
 
 import { StorageService } from "./storage.js";
+import { launchInternals } from "./native-agent-service-test-collaborators.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -154,6 +156,7 @@ async function withService(
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
+    environmentFence?: NativeAgentServiceOptions["environmentFence"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -162,6 +165,7 @@ async function withService(
   await addEnvironment(storage, setup.environment);
   const service = new NativeAgentService(storage, setup.invoke ?? refusingInvoke, {
     ...(setup.provider ? { provider: setup.provider } : {}),
+    ...(setup.environmentFence ? { environmentFence: setup.environmentFence } : {}),
     ...(setup.now ? { now: setup.now } : {}),
     ...(setup.delay ? { delay: setup.delay } : {}),
     ...(setup.interactionMonitorMode
@@ -717,7 +721,7 @@ describe("NativeAgentService", () => {
       ],
     });
     const createSession = mock(async () => "provider-session");
-    const send = mock(async () => undefined);
+    const send = mock<AgentSessionProvider["send"]>(async () => undefined);
     const provider = {
       agent: "codex",
       createSession,
@@ -764,11 +768,18 @@ describe("NativeAgentService", () => {
       expect(createSession).toHaveBeenCalledTimes(1);
       expect(send).toHaveBeenCalledTimes(1);
       expect(attachmentWrites).toBe(1);
+      expect(extractMarkedAttachmentReferences(send.mock.calls[0]![1])).toEqual({
+        prompt: "Inspect the screenshots",
+        attachments: [
+          {
+            name: "requirements.md",
+            path: "/workspace/.orkestrator/initial-prompt/batch/requirements.md",
+          },
+        ],
+      });
       expect(send).toHaveBeenCalledWith(
         "provider-session",
-        expect.stringMatching(
-          /Inspect the screenshots[\s\S]*requirements\.md: \/workspace\/\.orkestrator\/initial-prompt\/batch\/requirements\.md/,
-        ),
+        expect.any(String),
         expect.objectContaining({
           requestId: "initial-prompt:env-1:startup-agent",
           images: [{ filename: "reference.png", data: "cG5n" }],
@@ -953,10 +964,7 @@ describe("NativeAgentService", () => {
       await otherProcess.updateEnvironment("env-1", {
         deletionRequestedAt: new Date().toISOString(),
       });
-      const reconcilePendingLaunches = () =>
-        (
-          service as unknown as { reconcilePendingLaunches(): Promise<void> }
-        ).reconcilePendingLaunches();
+      const reconcilePendingLaunches = () => launchInternals(service).reconcilePendingLaunches();
       await reconcilePendingLaunches();
       expect(dispose).not.toHaveBeenCalled();
 
@@ -1142,8 +1150,13 @@ test("move admission refuses a prompt waiting for session creation or send ackno
         }
       },
     });
+    const fence = new EnvironmentMutationFence();
     await withService(
-      { prefix: "ork-move-prompt-race-", provider: async () => stub.provider },
+      {
+        prefix: "ork-move-prompt-race-",
+        provider: async () => stub.provider,
+        environmentFence: fence,
+      },
       async ({ service, storage }) => {
         const sending = service.dispatchPrompt({
           environmentId: "env-1",
@@ -1157,14 +1170,14 @@ test("move admission refuses a prompt waiting for session creation or send ackno
           expect((await storage.getEnvironment("env-1"))?.agentActivityState ?? "idle").toBe(
             "idle",
           );
-          expect(() => beginEnvironmentMove("env-1")).toThrow("submission is still in progress");
+          expect(() => fence.beginMove("env-1")).toThrow("submission is still in progress");
           expect(stub.dispose).not.toHaveBeenCalled();
         } finally {
           release();
           await sending;
         }
-        expect(beginEnvironmentMove("env-1")).toBe(true);
-        endEnvironmentMove("env-1");
+        expect(fence.beginMove("env-1")).toBe(true);
+        fence.endMove("env-1");
       },
     );
   }
@@ -1172,8 +1185,13 @@ test("move admission refuses a prompt waiting for session creation or send ackno
 
 test("move refuses an acknowledged turn before persisted activity catches up", async () => {
   const stub = createProviderStub("codex", { activity: async () => "working" });
+  const fence = new EnvironmentMutationFence();
   await withService(
-    { prefix: "ork-move-acknowledged-", provider: async () => stub.provider },
+    {
+      prefix: "ork-move-acknowledged-",
+      provider: async () => stub.provider,
+      environmentFence: fence,
+    },
     async ({ service, storage }) => {
       await service.dispatchPrompt({
         environmentId: "env-1",
@@ -1184,13 +1202,13 @@ test("move refuses an acknowledged turn before persisted activity catches up", a
       });
       expect((await storage.getEnvironment("env-1"))?.agentActivityState ?? "idle").toBe("idle");
       expect((await storage.listNativeAgentSessions())[0]?.pendingDispatch).toBeUndefined();
-      expect(beginEnvironmentMove("env-1")).toBe(true);
+      expect(fence.beginMove("env-1")).toBe(true);
       try {
         await expect(service.assertEnvironmentIdleForMove("env-1")).rejects.toThrow(
           "agent is running",
         );
       } finally {
-        endEnvironmentMove("env-1");
+        fence.endMove("env-1");
       }
       expect(stub.activity).toHaveBeenCalledWith("provider-session");
       expect(stub.dispose).not.toHaveBeenCalled();

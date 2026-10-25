@@ -1,19 +1,18 @@
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
-  beginEnvironmentMove,
-  endEnvironmentMove,
-} from "../src/core/environment-replacement-fence";
-import { describe, expect, mock, spyOn, test } from "bun:test";
+  type ControlledTimeout,
+  installControlledTimeout,
+} from "../../../tests/helpers/controlled-timeout";
+import * as containerAccounts from "../src/core/agent-accounts-containers";
 import type { AgentAccountStore } from "../src/core/agent-accounts-store";
+import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/terminal-runtime";
 import { MAX_TEXT_FILE_BYTES } from "../src/core/path-safety";
-import { terminalAccountHomes } from "../src/core/terminal-account-usage";
 
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
   ASYNC_TEST_BUDGET_MS,
   RUNNING_CONTAINER_DOCKER_SCRIPT,
-  TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS,
-  commandTesting,
   createCommandRegistry,
   createContext,
   createDeferred,
@@ -42,16 +41,33 @@ const {
   withGitSubcommandLog,
 } = await createCommandFixtures();
 
-const {
-  configureTerminalHistory,
-  configureTerminalHistoryRetention,
-  flushTerminalHistories,
-  getTerminalStateSnapshot,
-  terminalHistoryTesting,
-} = await import("../src/core/terminal-history");
 const { beginSetupPreparationSession } = await import("../src/core/commands-environment");
 
 type RunCommand = typeof import("../src/core/shell").runCommand;
+
+let settleClock: ControlledTimeout | undefined;
+
+/**
+ * Captures the tracked-terminal output settle debounce so a test fires it on
+ * demand instead of sleeping past it. The default single pending timer also
+ * proves each new output chunk cleared the previous debounce before re-arming.
+ */
+function controlSettleTimer(): ControlledTimeout {
+  settleClock = installControlledTimeout(TERMINAL_ACTIVITY_SETTLE_MS, {
+    label: "terminal activity settle",
+  });
+  return settleClock;
+}
+
+/** Lets promise continuations started by a fired timer run before asserting. */
+function flushMacrotask(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+afterEach(() => {
+  settleClock?.restore();
+  settleClock = undefined;
+});
 
 describe("Electron backend command registry", () => {
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
@@ -97,18 +113,18 @@ describe("Electron backend command registry", () => {
       expect(await commands.get("get_terminal_output_snapshot")?.({ sessionId }, context)).toEqual(
         beforeExit,
       );
-      expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(1);
+      expect(context.runtime.terminals.retainedOutputCount()).toBe(1);
 
       // Retention is bounded in time; pin the expiry result without making the
       // suite sleep for the production recovery window.
-      commandTesting.deleteRetainedTerminalOutputBuffer(sessionId);
+      context.runtime.terminals.deleteRetainedOutput(sessionId);
       expect(await commands.get("get_terminal_output_snapshot")?.({ sessionId }, context)).toEqual({
         output: "",
         revision: 0,
         generation: 0,
         truncated: false,
       });
-      expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+      expect(context.runtime.terminals.retainedOutputCount()).toBe(0);
     },
     ASYNC_TEST_BUDGET_MS,
   );
@@ -275,9 +291,10 @@ describe("Electron backend command registry", () => {
         containerId: null,
         status: "running",
       });
-      const { context } = createContext(environment);
+      const { context } = createContext(environment, {
+        runtimeOptions: { terminals: { outputRetentionMs: 5 } },
+      });
       const commands = createCommandRegistry();
-      commandTesting.setTerminalOutputRetentionMs(5);
 
       const sessionId = terminalSessionResult(
         await commands.get("create_local_terminal_session")?.(
@@ -288,11 +305,11 @@ describe("Electron backend command registry", () => {
       await commands.get("start_local_terminal_session")?.({ sessionId }, context);
       ptyProcesses.at(-1)?.emitData("short-lived tail");
       ptyProcesses.at(-1)?.emitExit({ exitCode: 0 });
-      expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(1);
+      expect(context.runtime.terminals.retainedOutputCount()).toBe(1);
 
       await new Promise((resolve) => setTimeout(resolve, 20));
 
-      expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+      expect(context.runtime.terminals.retainedOutputCount()).toBe(0);
       expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context)).toEqual({
         output: "",
         revision: 0,
@@ -328,7 +345,7 @@ describe("Electron backend command registry", () => {
 
       await commands.get("close_local_terminal_session")?.({ sessionId }, context);
 
-      expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+      expect(context.runtime.terminals.retainedOutputCount()).toBe(0);
       expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context)).toEqual({
         output: "",
         revision: 0,
@@ -368,7 +385,7 @@ describe("Electron backend command registry", () => {
         process.emitExit({ exitCode: 0 });
       }
 
-      expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(32);
+      expect(context.runtime.terminals.retainedOutputCount()).toBe(32);
       expect(
         await commands.get("get_terminal_output_snapshot")?.({ sessionId: sessionIds[0] }, context),
       ).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
@@ -416,12 +433,14 @@ describe("Electron backend command registry", () => {
       for (let index = 0; index < 2_048; index += 1) {
         ptyProcesses[0]?.emitData("x");
       }
-      expect(commandTesting.terminalOutputBufferStats(sessionId)).toMatchObject({
+      expect(context.runtime.terminals.outputBufferStats(sessionId)).toMatchObject({
         chars: maxChars,
         sequence: 2_050,
         chunks: expect.any(Number),
       });
-      expect(commandTesting.terminalOutputBufferStats(sessionId).chunks).toBeLessThanOrEqual(1_024);
+      expect(context.runtime.terminals.outputBufferStats(sessionId).chunks).toBeLessThanOrEqual(
+        1_024,
+      );
       const buffer = (await commands.get("get_terminal_output_buffer")?.(
         { sessionId },
         context,
@@ -1498,8 +1517,13 @@ exit 1
         );
         expect(dockerExec).toContain('grep -qxF "$pattern" "$exclude_file"');
         expect(dockerExec).toContain("tail -c 1");
-        expect(dockerExec).toContain('git diff --name-status -z -M "$base" $end_ref');
-        expect(dockerExec).toContain('git diff --numstat -z -M "$base" $end_ref');
+        expect(dockerExec).toContain("export GIT_OPTIONAL_LOCKS=0");
+        expect(dockerExec).toContain(
+          'git -c diff.autoRefreshIndex=false diff --name-status -z -M "$base" $end_ref',
+        );
+        expect(dockerExec).toContain(
+          'git -c diff.autoRefreshIndex=false diff --numstat -z -M "$base" $end_ref',
+        );
       },
     );
   });
@@ -1634,7 +1658,9 @@ exit 1
 
         const dockerExec = await fs.readFile(logs.exec, "utf8");
         expect(dockerExec).toContain("end_ref=HEAD");
-        expect(dockerExec).toContain('git diff --name-status -z -M "$base" $end_ref');
+        expect(dockerExec).toContain(
+          'git -c diff.autoRefreshIndex=false diff --name-status -z -M "$base" $end_ref',
+        );
         expect(dockerExec).not.toContain("git status --porcelain");
         expect(dockerExec).not.toContain("node -e");
       },
@@ -1849,6 +1875,13 @@ exit 0
         const dockerExec = await fs.readFile(logs.exec, "utf8");
         expect(dockerExec).toContain("set -euo pipefail");
         expect(dockerExec).toContain("git diff --name-status -z -M");
+        // The revert's fetch goes through the container fetch policy's own
+        // bounded script; the revert script no longer fetches inline.
+        const revertAt = dockerExec.indexOf('git restore --source="$base"');
+        const policyFetchAt = dockerExec.indexOf("ORKESTRATOR_FETCH_END");
+        expect(policyFetchAt).toBeGreaterThan(-1);
+        expect(policyFetchAt).toBeLessThan(revertAt);
+        expect(dockerExec).not.toContain('git fetch origin "$branch"');
         expect(dockerExec).toContain('assert_safe_path "$source_path"');
         expect(dockerExec).toContain(
           'git restore --source="$base" --staged --worktree -- "$candidate"',
@@ -2162,6 +2195,106 @@ exec sleep 30
     ).rejects.toThrow("not containerized");
   });
 
+  test("validates and registers container workspace path checks before spawning Docker", async () => {
+    const commands = createCommandRegistry();
+    const handler = commands.get("check_container_workspace_paths");
+    expect(handler).toBeDefined();
+    const context = createContext(
+      createEnvironment({ containerId: "container-1", environmentType: "containerized" }),
+    ).context;
+    for (const containerId of [
+      undefined,
+      1,
+      "",
+      " ",
+      "--help",
+      "container/name",
+      "container\nname",
+    ]) {
+      await expect(
+        handler!(
+          { containerId, paths: ["src/file.ts"] },
+          createContext(
+            createEnvironment({
+              containerId: typeof containerId === "string" ? containerId : null,
+            }),
+          ).context,
+        ),
+      ).rejects.toThrow();
+    }
+    for (const paths of [
+      null,
+      "file",
+      [1],
+      ["../escape"],
+      ["/etc/passwd"],
+      Array(201).fill("file"),
+    ]) {
+      await expect(handler!({ containerId: "container-1", paths }, context)).rejects.toThrow(
+        "workspace-relative paths",
+      );
+    }
+    await withFakeDocker(
+      `#!/bin/sh
+[ "$1" = exec ] && [ "$2" = -i ] && [ "$3" = container-1 ] && [ "$4" = node ] || exit 2
+payload=$(cat)
+[ "$payload" = '["src/file.ts","missing.ts"]' ] || exit 3
+printf '["exists","missing"]'
+`,
+      async () => {
+        expect(
+          await handler!(
+            { containerId: "container-1", paths: ["src/file.ts", "missing.ts"] },
+            context,
+          ),
+        ).toEqual(["exists", "missing"]);
+      },
+    );
+  });
+
+  liveDockerTest(
+    "checks workspace paths through the registered command in a live container",
+    async () => {
+      const { stdout } = await execFileAsync("docker", [
+        "run",
+        "-d",
+        "--rm",
+        "--entrypoint",
+        "sleep",
+        process.env.ORKESTRATOR_TEST_DOCKER_IMAGE ??
+          (() => {
+            throw new Error(
+              "Set ORKESTRATOR_TEST_DOCKER_IMAGE to a disposable profile development image",
+            );
+          })(),
+        "infinity",
+      ]);
+      const containerId = stdout.trim();
+      try {
+        await execFileAsync("docker", [
+          "exec",
+          containerId,
+          "sh",
+          "-c",
+          "mkdir -p /workspace/src; touch /workspace/src/check.txt; ln -s /etc/passwd /workspace/src/escape",
+        ]);
+        const handler = createCommandRegistry().get("check_container_workspace_paths")!;
+        const context = createContext(
+          createEnvironment({ containerId, environmentType: "containerized" }),
+        ).context;
+        expect(
+          await handler(
+            { containerId, paths: ["src/check.txt", "src/missing.txt", "src/escape"] },
+            context,
+          ),
+        ).toEqual(["exists", "missing", "outside-workspace"]);
+      } finally {
+        await execFileAsync("docker", ["rm", "-f", containerId]);
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
   liveDockerTest(
     "executes rename-aware and containment-safe file mutations in a live container",
     async () => {
@@ -2407,9 +2540,11 @@ exec sleep 30
       const launchEnv = ptySpawn.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv | undefined;
       expect(launchEnv?.CODEX_HOME).toBe(accountHome);
       expect(launchEnv?.OPENAI_API_KEY).toBeUndefined();
-      expect(terminalAccountHomes.get(`${sessionId}:${accountHome}`)).toBe(accountHome);
+      expect(context.runtime.terminals.accountHome(`${sessionId}:${accountHome}`)).toBe(
+        accountHome,
+      );
       await commands.get("close_local_terminal_session")?.({ sessionId }, context);
-      expect(terminalAccountHomes.has(`${sessionId}:${accountHome}`)).toBe(false);
+      expect(context.runtime.terminals.accountHome(`${sessionId}:${accountHome}`)).toBeUndefined();
     } finally {
       if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = originalApiKey;
@@ -2429,7 +2564,7 @@ exec sleep 30
     ).sessionId;
     await commands.get("start_local_terminal_session")?.({ sessionId }, context);
     for (let index = 0; index < 8; index += 1) {
-      configureTerminalHistory({
+      context.runtime.terminals.history.configure({
         sessionId: `saturated-${index}`,
         dataDir: context.storage.getDataDir(),
         stableIdentity: `saturated-terminal-${index}`,
@@ -2442,13 +2577,27 @@ exec sleep 30
       commands.get("local_terminal_resize")?.({ sessionId, cols: 1_000, rows: 1_000 }, context),
     ).toEqual({ delivered: true });
     expect(ptyProcesses[0]?.resize).toHaveBeenCalledWith(1_000, 1_000);
-    await flushTerminalHistories();
+    await context.runtime.terminals.history.flush();
   });
 
   test("contains terminal-history checkpoint failures on PTY exit", async () => {
     const worktreePath = await createTempDir("ork-electron-terminal-history-exit-");
     const environment = createEnvironment({ worktreePath });
-    const { context } = createContext(environment);
+    let failSerialization = false;
+    let serializationAttempted = false;
+    const { context } = createContext(environment, {
+      runtimeOptions: {
+        terminals: {
+          history: {
+            serializeHook: () => {
+              if (!failSerialization) return;
+              serializationAttempted = true;
+              throw new Error("snapshot too large");
+            },
+          },
+        },
+      },
+    });
     const commands = createCommandRegistry();
     const sessionId = terminalSessionResult(
       await commands.get("create_local_terminal_session")?.(
@@ -2458,11 +2607,7 @@ exec sleep 30
     ).sessionId;
     await commands.get("start_local_terminal_session")?.({ sessionId }, context);
 
-    let serializationAttempted = false;
-    terminalHistoryTesting.setSerializeHook(() => {
-      serializationAttempted = true;
-      throw new Error("snapshot too large");
-    });
+    failSerialization = true;
     try {
       ptyProcesses[0]?.emitExit({ exitCode: 0 });
       await waitForCondition(
@@ -2470,12 +2615,11 @@ exec sleep 30
         "the terminal history completion checkpoint",
       );
     } finally {
-      terminalHistoryTesting.setSerializeHook(null);
+      failSerialization = false;
     }
 
-    const snapshot = await getTerminalStateSnapshot(sessionId);
+    const snapshot = await context.runtime.terminals.history.stateSnapshot(sessionId);
     expect(snapshot).toMatchObject({ completed: true, historyGap: true });
-    terminalHistoryTesting.clear();
   });
 
   test("creates and attaches terminals and setup sessions when history admission is exhausted", async () => {
@@ -2483,9 +2627,9 @@ exec sleep 30
     const environment = createEnvironment({ worktreePath });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    configureTerminalHistoryRetention({ sessionMb: 8, globalMb: 128, days: 7 });
+    context.runtime.terminals.history.configureRetention({ sessionMb: 8, globalMb: 128, days: 7 });
     for (let index = 0; index < 42; index += 1) {
-      configureTerminalHistory({
+      context.runtime.terminals.history.configure({
         sessionId: `admission-${index}`,
         dataDir: context.storage.getDataDir(),
         stableIdentity: `admission-terminal-${index}`,
@@ -2502,7 +2646,7 @@ exec sleep 30
     );
     expect(created.created).toBe(true);
     expect(created.sessionId).toBeString();
-    expect(await getTerminalStateSnapshot(created.sessionId)).toBeNull();
+    expect(await context.runtime.terminals.history.stateSnapshot(created.sessionId)).toBeNull();
     await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
       const containerCreated = terminalSessionResult(
         await commands.get("create_terminal_session")?.(
@@ -2512,19 +2656,20 @@ exec sleep 30
       );
       expect(containerCreated.created).toBe(true);
       expect(containerCreated.sessionId).toBeString();
-      expect(await getTerminalStateSnapshot(containerCreated.sessionId)).toBeNull();
+      expect(
+        await context.runtime.terminals.history.stateSnapshot(containerCreated.sessionId),
+      ).toBeNull();
       const attached = await commands.get("attach_terminal")?.(
         { containerId: "container-without-history", cols: 80, rows: 24 },
         context,
       );
       expect(attached).toBeString();
-      expect(await getTerminalStateSnapshot(String(attached))).toBeNull();
+      expect(await context.runtime.terminals.history.stateSnapshot(String(attached))).toBeNull();
     });
     const setupSessionId = beginSetupPreparationSession(environment, context);
     expect(setupSessionId).toBe(`${environment.id}:setup`);
-    expect(await getTerminalStateSnapshot(setupSessionId)).toBeNull();
-    await flushTerminalHistories();
-    terminalHistoryTesting.clear();
+    expect(await context.runtime.terminals.history.stateSnapshot(setupSessionId)).toBeNull();
+    await context.runtime.terminals.history.flush();
   });
 
   test("atomically bootstraps a terminal session at most once", async () => {
@@ -2771,6 +2916,7 @@ exec sleep 30
       const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<
         typeof mock
       >;
+      const settle = controlSettleTimer();
 
       const sessionId = terminalSessionResult(
         await commands.get("create_local_terminal_session")?.(
@@ -2792,7 +2938,7 @@ exec sleep 30
 
       await withFixedDate("2026-07-23T10:05:00.000Z", async () => {
         ptyProcesses[0]?.emitData("work complete\r\n");
-        await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+        expect(settle.advance()).toBe(1);
       });
       expect(recordCompletion).toHaveBeenLastCalledWith(environment.id, "2026-07-23T10:05:00.000Z");
       await waitForCondition(
@@ -2846,6 +2992,7 @@ exec sleep 30
       notifyAgentTurnCompleted.mockRejectedValueOnce(new Error("command temporarily unavailable"));
       context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
       const commands = createCommandRegistry();
+      const settle = controlSettleTimer();
 
       const sessionId = terminalSessionResult(
         await commands.get("create_local_terminal_session")?.(
@@ -2861,6 +3008,7 @@ exec sleep 30
       await commands.get("start_local_terminal_session")?.({ sessionId }, context);
       await commands.get("local_terminal_write")?.({ sessionId, data: "codex\r" }, context);
       ptyProcesses[0]?.emitData("done\r\n");
+      expect(settle.advance()).toBe(1);
 
       await waitForCondition(
         () =>
@@ -2877,7 +3025,8 @@ exec sleep 30
       ).toHaveLength(1);
 
       ptyProcesses[0]?.emitData("late background output");
-      await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+      settle.advance();
+      await flushMacrotask();
       expect(recordCompletion).toHaveBeenCalledTimes(2);
       expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(2);
       await commands.get("close_local_terminal_session")?.({ sessionId }, context);
@@ -2903,6 +3052,7 @@ exec sleep 30
         typeof mock
       >;
       const commands = createCommandRegistry();
+      const settle = controlSettleTimer();
       const sessionId = terminalSessionResult(
         await commands.get("create_local_terminal_session")?.(
           {
@@ -2918,16 +3068,21 @@ exec sleep 30
 
       await commands.get("local_terminal_write")?.({ sessionId, data: "first\r" }, context);
       ptyProcesses[0]?.emitData("first done\r\n");
+      expect(settle.advance()).toBe(1);
       await waitForCondition(
         () => notifyAgentTurnCompleted.mock.calls.length === 1,
         "first generation notification",
       );
       ptyProcesses[0]?.emitData("late output from first generation");
-      await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+      // The first notification is still pending, so the prompt stays armed and
+      // the late output settles again; the generation dedupe must drop it.
+      expect(settle.advance()).toBe(1);
+      await flushMacrotask();
       expect(recordCompletion).toHaveBeenCalledTimes(1);
 
       await commands.get("local_terminal_write")?.({ sessionId, data: "second\r" }, context);
       ptyProcesses[0]?.emitData("second done\r\n");
+      expect(settle.advance()).toBe(1);
       await waitForCondition(
         () => notifyAgentTurnCompleted.mock.calls.length === 2,
         "second generation notification",
@@ -2968,6 +3123,7 @@ exec sleep 30
       context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
       const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
       const commands = createCommandRegistry();
+      const settle = controlSettleTimer();
       try {
         const sessionId = terminalSessionResult(
           await commands.get("create_local_terminal_session")?.(
@@ -2992,7 +3148,8 @@ exec sleep 30
         const recordsAfterExhaustion = recordCompletion.mock.calls.length;
         const notificationsAfterExhaustion = notifyAgentTurnCompleted.mock.calls.length;
         ptyProcesses[0]?.emitData("stray output after exhausted completion");
-        await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+        settle.advance();
+        await flushMacrotask();
 
         expect(recordCompletion).toHaveBeenCalledTimes(recordsAfterExhaustion);
         expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(notificationsAfterExhaustion);
@@ -3032,6 +3189,7 @@ exec sleep 30
         typeof mock
       >;
       const commands = createCommandRegistry();
+      const settle = controlSettleTimer();
       const args = {
         environmentId: environment.id,
         terminalKey: "agent-tab",
@@ -3067,7 +3225,8 @@ exec sleep 30
         context,
       );
       ptyProcesses[1]?.emitData("$ ");
-      await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+      settle.advance();
+      await flushMacrotask();
 
       expect(recordCompletion).toHaveBeenCalledTimes(1);
       expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(1);
@@ -3101,6 +3260,7 @@ exec sleep 30
       const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<
         typeof mock
       >;
+      const settle = controlSettleTimer();
 
       const sessionId = terminalSessionResult(
         await commands.get("create_local_terminal_session")?.(
@@ -3117,7 +3277,8 @@ exec sleep 30
 
       await commands.get("local_terminal_write")?.({ sessionId, data: "unfinished" }, context);
       ptyProcesses[0]?.emitData("shell echo");
-      await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+      settle.advance();
+      await flushMacrotask();
       expect(recordActivity).not.toHaveBeenCalled();
 
       await commands.get("local_terminal_write")?.({ sessionId, data: "\r" }, context);
@@ -3125,24 +3286,27 @@ exec sleep 30
       recordActivity.mockClear();
 
       ptyProcesses[0]?.emitData("first chunk");
-      await Bun.sleep(400);
+      expect(settle.pendingCount()).toBe(1);
       ptyProcesses[0]?.emitData("second chunk");
-      // The second chunk restarts the 750ms settle window, so nothing may have been
-      // recorded 500ms later. This sleep is load-bearing: it is the reset itself
-      // being asserted, and it leaves 250ms of slack against a stalled machine.
-      await Bun.sleep(500);
+      // The second chunk restarts the 750ms settle window: it must clear the first
+      // chunk's timer before arming its own. The controlled timer allows only one
+      // pending settle, so a timer the reset failed to clear would throw here, and
+      // nothing may be recorded until the restarted window itself elapses.
+      expect(settle.pendingCount()).toBe(1);
+      await flushMacrotask();
       expect(recordCompletion).not.toHaveBeenCalled();
 
-      // Wait for the restarted window to elapse rather than sleeping exactly past
-      // it, so a scheduling stall delays the test instead of failing it.
+      expect(settle.advance()).toBe(1);
       await waitForCondition(
         () => recordCompletion.mock.calls.length > 0,
         "debounced terminal completion to settle",
       );
       expect(recordCompletion).toHaveBeenCalledTimes(1);
       recordCompletion.mockClear();
+      await flushMacrotask();
       ptyProcesses[0]?.emitData("background output after completion");
-      await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+      settle.advance();
+      await flushMacrotask();
       expect(recordCompletion).not.toHaveBeenCalled();
       await commands.get("close_local_terminal_session")?.({ sessionId }, context);
     },
@@ -3209,6 +3373,7 @@ exec sleep 30
     const commands = createCommandRegistry();
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
     const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
+    const settle = controlSettleTimer();
 
     const sessionId = terminalSessionResult(
       await commands.get("create_local_terminal_session")?.(
@@ -3226,8 +3391,10 @@ exec sleep 30
     recordActivity.mockClear();
 
     ptyProcesses[0]?.emitData("work in progress");
+    expect(settle.pendingCount()).toBe(1);
     await commands.get("close_local_terminal_session")?.({ sessionId }, context);
-    await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+    settle.advance();
+    await flushMacrotask();
 
     expect(recordActivity).not.toHaveBeenCalled();
     expect(recordCompletion).not.toHaveBeenCalled();
@@ -3617,7 +3784,7 @@ test("a terminal suspended in account preparation cannot spawn after move cleanu
         throw new Error("Terminal spawned before account preparation");
       }),
     ]);
-    expect(beginEnvironmentMove(environment.id)).toBe(true);
+    expect(context.runtime.environments.fence.beginMove(environment.id)).toBe(true);
     await commands.get("close_local_terminal_session")!({ sessionId }, context);
     gate.resolve();
     await expect(starting).rejects.toThrow("being moved");
@@ -3628,7 +3795,7 @@ test("a terminal suspended in account preparation cannot spawn after move cleanu
   } finally {
     gate.resolve();
     accounts.mockRestore();
-    endEnvironmentMove(environment.id);
+    context.runtime.environments.fence.endMove(environment.id);
   }
 });
 
@@ -3654,12 +3821,67 @@ test("terminal creation rechecks a move admitted during its environment read", a
   void creating.catch(() => undefined);
   try {
     await entered.promise;
-    expect(beginEnvironmentMove(environment.id)).toBe(true);
+    expect(context.runtime.environments.fence.beginMove(environment.id)).toBe(true);
     gate.resolve();
     await expect(creating).rejects.toThrow("being moved");
   } finally {
     gate.resolve();
     read.mockRestore();
-    endEnvironmentMove(environment.id);
+    context.runtime.environments.fence.endMove(environment.id);
   }
 });
+
+test.each([false, true])(
+  "container terminal waits for account handoff and rechecks replacement (%s)",
+  async (replace) => {
+    const environment = createEnvironment({
+      id: "env-handoff-race",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const args = {
+      containerId: "container-1",
+      environmentId: environment.id,
+      terminalKey: "handoff",
+      user: "node",
+    };
+    const { sessionId } = terminalSessionResult(
+      await commands.get("create_terminal_session")!(args, context),
+    );
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const handoff = spyOn(
+      containerAccounts,
+      "applyActiveAgentAccountsForContainerTerminal",
+    ).mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const count = ptyProcesses.length;
+    const starting = Promise.resolve(
+      commands.get("start_terminal_session")!({ sessionId }, context),
+    );
+    void starting.catch(() => undefined);
+    try {
+      await entered.promise;
+      expect(ptyProcesses.length).toBe(count);
+      expect(handoff).toHaveBeenCalledWith(context, "container-1");
+      if (replace)
+        await commands.get("create_terminal_session")!({ ...args, user: "root" }, context);
+      release.resolve();
+      if (replace) {
+        await expect(starting).rejects.toThrow("Container terminal session is no longer available");
+        expect(ptyProcesses.length).toBe(count);
+      } else {
+        await starting;
+        expect(ptyProcesses.length).toBe(count + 1);
+      }
+    } finally {
+      release.resolve();
+      handoff.mockRestore();
+    }
+  },
+);

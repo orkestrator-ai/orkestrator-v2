@@ -15,7 +15,8 @@ with [agent-testing.md](agent-testing.md).
 | Test one file | `mise run test:logged -- --name focused -- bun test ./path/to/file.test.ts --parallel=1 --only-failures` | First feedback while editing one owner |
 | Test root unit tests | `mise run test:logged -- --name root-unit -- mise run test:unit` | Root `tests/unit` only |
 | Test changed code | `mise run test:changed` | Fast local feedback across affected packages and files |
-| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff |
+| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff; runs only the [area suites](#area-suites) the change can reach |
+| Test the repository, every area | `mise run test:full` | What CI runs; every area suite regardless of the change |
 | Test everything, including iOS | `mise run test:all` | Release-sensitive or iOS validation on a Mac with Xcode |
 | Check format, lint, and types | `mise run test:logged -- --name check -- mise run check` | Static validation; this does not run tests |
 | Run browser component tests | `mise run test:logged -- --name browser -- mise run test:browser` | Playwright component/browser coverage |
@@ -23,9 +24,14 @@ with [agent-testing.md](agent-testing.md).
 | Run design-only real-stack tests | `mise run test:agent:design:isolated` | Same lifecycle, only `design-canvas.spec.ts` |
 | Run Electron agent tests | `mise run test:logged -- --name agent-electron -- mise run test:agent:electron` | Main process, preload, IPC, clipboard, and shutdown |
 | Run Docker agent tests | `mise run test:logged -- --name agent-docker -- mise run test:agent:docker` | Opt-in container ownership and fixture coverage |
+| Qualify live paused interactions | `mise run test:logged -- --name paused-interactions-live -- mise run test:agent:paused-interactions` | Opt-in billed turns in a disposable profile; set `ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1` ([agent-testing.md](agent-testing.md#live-paused-interactions)) |
 | Run the live coordinator suite | `mise run test:agent:coordinator --credential-source <platform>` | Manual and opt-in: real provider turns, one disposable profile per platform ([agent-testing.md](agent-testing.md#live-coordinator-suite)) |
 
-A normal implementation loop is:
+Choose validation scope using [AGENTS.md](../../AGENTS.md#choosing-validation-for-a-change)
+before applying this loop. Documentation-only changes need only
+`mise run format:check`.
+
+A normal code implementation loop is:
 
 1. Run the owning test file while iterating.
 2. Run `mise run test:changed` after the local behavior is green.
@@ -33,6 +39,31 @@ A normal implementation loop is:
    handoff.
 4. Add the relevant browser, agent, Docker, or iOS suite when the changed area
    requires it.
+
+### Area suites
+
+A few slow, self-contained test sets are area suites, declared in
+`scripts/test-areas.ts`: the real-Chromium transcript-artifact suites and the
+tmux suites. `mise run test` runs an area only when the change can reach it,
+and prints an `AREA RUN` or `AREA SKIP` line with the reason.
+
+An area runs when any file in its import graph differs from the merge base
+with local `main`, including uncommitted and untracked files. The graph starts
+at the area's test files and its package's preloads and follows every runtime
+import into workspace packages; type-only imports do not count. Each area also
+lists triggers for inputs an import cannot express, such as fixtures read by
+path. Dependency, lockfile, `bunfig.toml`, `tsconfig`, `mise.toml`, Turbo, and
+test-runner changes run every area, and so does anything uncertain: no merge
+base, a Git failure, or an unreadable graph.
+
+CI runs `mise run test:full`, which sets `ORKESTRATOR_TEST_AREAS=all`, so a
+coupling the graph cannot see is still caught before merge. `test:all` also
+runs every area. Set `ORKESTRATOR_TEST_AREA_BASE` to compare against a branch
+other than `main`.
+
+Add an area only for a slow test set whose import graph is narrow. Measure
+first: an area whose graph reaches shared hubs such as storage or the protocol
+package runs on most changes and saves little.
 
 `test:changed` is an optimization, not final proof. It uses Turbo's affected
 package graph and Bun's changes from the local `main` ref. Configuration files,
@@ -52,6 +83,44 @@ design specs, and `e2e/agent-testing/backend-store.ts` reads and writes stores
 behind a running profile. `tests/unit/playwright-spec-loading.test.ts` lists
 every Playwright config under Node in `mise run test`, so such an import fails
 there first.
+
+### Documentation-only merge conflicts
+
+The repository's
+[merge-conflict exception](../../AGENTS.md#documentation-only-merge-conflict-resolution)
+allows format-only validation when the complete original conflicted-path list
+is known, every conflict was in prose documentation or other non-code text not
+consumed by tests, builds, or tooling, and manual resolution changes only those
+files. Confirm no conflict markers remain and run `mise run format:check`; do
+not run tests, lint, typechecking, builds, or scenario suites for that
+resolution, including when code, configuration, or tests auto-merge. This
+repository policy takes precedence over generic merge-validation guidance.
+
+Retain the original unmerged path list before staging, tied to the merge's
+parent commit IDs, for resumed work. Resolving a source conflict to one parent's
+version does not make it a documentation-only conflict. If the list is missing
+or incomplete, run relevant validation on the merged result, including the full
+suite when impact cannot be scoped; do not reconstruct a prose-only scope from
+staged or combined diffs. New code/configuration edits,
+non-documentation resolutions, tooling-consumed documentation, and outstanding
+feature validation still follow the normal requirements.
+
+### Public-site smoke tests
+
+`mise run test:browser` also runs `e2e/public-site/` against a fresh production
+build of the public client. To run only that smoke flow:
+
+```bash
+mise run test:logged -- --name public-browser -- \
+  bunx playwright test --config e2e/public-site/playwright.config.ts
+```
+
+It checks landing-page login, deferred connection-screen loading, direct loads
+and reloads of `/connect`, the home link, and install-command clipboard feedback
+at desktop and narrow widths. This pre-connection flow needs no backend,
+credentials, or isolated application profile. The server is owned and stopped
+by Playwright; `ORKESTRATOR_PUBLIC_E2E_PORT` overrides its default port 4423.
+Authenticated renderer flows still use isolated profiles as described below.
 
 ### Native browser controls
 
@@ -126,7 +195,7 @@ or start a production backend.
 
 | Group | Contents | Scheduling |
 | --- | --- | --- |
-| Workspace | Web, backend, desktop, public web, CLI, toolchain, and protocol package tests | Turbo runs at most two package tasks; each package gets two Bun workers when the budget is six or more |
+| Workspace | Web, backend, desktop, public web, CLI, toolchain, and protocol package tests | Turbo runs at most two package tasks; each package gets two Bun workers when the budget is six or more, including the backend, capped at two while port and deadline-sensitive tests need higher-concurrency qualification |
 | Root | Root renderer and repository-contract tests plus agent artifact and fixture-server support tests | Receives the remaining worker budget: one worker on a large host, up to two on smaller ones |
 | Bridges | ACP, Claude, Codex, Cursor, and Pi bridge tests | Turbo runs two bridge tasks, each with one Bun worker |
 | Protocol | Regeneration check for the committed Codex protocol lockfile | One independent command |
@@ -134,9 +203,11 @@ or start a production backend.
 All cooperating runs share a host budget: one worker slot per logical core by
 default (`ORKESTRATOR_TEST_HOST_WORKERS` may raise it to four per core), plus a
 memory admission budget of 65% of physical memory. This suite still plans at
-most eight Bun workers of its own; the larger host budget lets other worktrees
-and review validations run beside it. The protocol check reserves one slot too. Groups run together
-when they fit; smaller machines queue groups instead of spawning extra workers.
+most eight Bun workers of its own, including the backend pool, whose
+Node-preloaded integration suites do not load happy-dom. The larger host budget
+lets other worktrees and review validations run beside it. The protocol check
+reserves one slot too. Groups run together when they fit; smaller machines queue
+groups instead of spawning extra workers.
 The per-suite plan includes the protocol slot in its eight-slot ceiling.
 Each ordinary group reserves an estimated 1 GiB per worker (bounded by the host
 memory budget). These are admission estimates, not operating-system CPU or
@@ -175,6 +246,38 @@ and it reports errors thrown from its queues instead of letting them become
 uncaught exceptions. A server-side test there is not exercising the runtime the
 code ships in. `tests/unit/test-suite-ownership.test.ts` therefore rejects
 root tests that import backend or desktop sources.
+
+The same guard gives every test file exactly one owner. It derives the owners
+from what actually runs: the aggregate's groups (`buildConcurrentGroups` in
+`scripts/test-all.ts`) and each package's test selectors, not a list kept
+beside them. A new test file that no suite selects, or that two suites select,
+fails it.
+
+### Controlled time
+
+Wait for an explicit signal, not wall time. To skip an application delay,
+capture it with `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`,
+tested by `tests/unit/controlled-timeout.test.ts`). It intercepts only timers
+scheduled at one exact delay, leaving Testing Library, promises and unrelated
+timers real, and it throws when more timers are pending at that delay than
+expected (by default one, which suits a debounce) so a colliding module is not
+captured by accident. `advance()` runs the captured timers, `pendingCount()`
+says whether one is armed, and `restore()` reports any it drops. The
+`GlobalSettings`, `PersistentTerminal`, `AddProjectDialog` and desktop
+`BackendProcess` suites use it.
+
+- A negative assertion needs evidence that its deadline has passed or cannot
+  arrive: advance the captured timer, or show that none is armed. Do not
+  shorten a sleep without that.
+- Fake time in the parent cannot advance a child process; use an explicit
+  completion signal or a controllable fixture boundary instead.
+- Avoid global fake time across a real HTTP handshake.
+- Never run all timers on loops that re-arm themselves (retries, polling).
+- Install controlled time before rendering, advance inside `act`, settle the
+  promises the advance triggers, and restore real time even when an assertion
+  fails.
+- Do not swap a sleep for an async query that waits the same wall time, and
+  never change a production debounce or retry constant to make a test cheaper.
 
 `mise run typecheck` covers every location: package tests through each
 package's typecheck script (`tsconfig.test.json` in the backend and desktop),
@@ -226,24 +329,75 @@ directories, CAs, and owner labels. Install the Vite fixture into an isolated
 copy first (see `test-fixtures/preview-vite/README.md`).
 
 ```bash
-# Real Docker: same-port containers, host decoy, recreation, docker exec relay
+# Real Docker: same-port containers, host decoy, recreation, docker exec relay.
+# The image is required; the relay image defaults to it.
 ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE=orkestrator-v2:latest \
-ORKESTRATOR_TEST_DOCKER_RELAY_IMAGE=orkestrator-v2:latest \
-  mise run test:logged -- --name preview-docker -- bun test --cwd apps/backend \
-  ./src/core/preview-docker.test.ts ./src/preview-relay-supervisor.test.ts --parallel=1
+  mise run test:logged -- --name preview-docker -- mise run test:preview:docker
 
-# Real Chromium against private preview origins (add the Vite variable for HMR)
+# Real Chromium, Firefox and WebKit against private preview origins.
+# Install the engines once: mise exec -- bunx playwright install chromium firefox webkit
+# Add the Vite variable for HMR; --project=firefox or --grep can narrow the run.
 ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite \
-  mise run test:logged -- --name preview-browser -- \
-  bunx playwright test --config e2e/preview/playwright.preview.config.ts
+  mise run test:logged -- --name preview-browser -- mise run test:preview:browser
 
-# Loopback route latency for the evidence log
-ORKESTRATOR_PREVIEW_BENCH=1 mise run test:logged -- --name preview-bench -- \
-  bun test --cwd apps/backend ./src/preview-bench.test.ts --parallel=1
+# Loopback route latency for the evidence log (prints one [preview-bench] line)
+mise run test:preview:bench
 ```
 
+The preview suite uses a browser-local loopback proxy, throwaway certificates
+and fresh contexts; it changes neither system DNS nor the trust store. Chromium
+pins the test leaf. Firefox and WebKit bypass certificate validation only in
+those contexts. WebKit engine coverage does **not** qualify shipping Safari or
+iOS. The suite covers sibling reads/frames, visible links, hostile workers and
+same-service iframe returns through a synthetic external identity provider.
+
+Live Tailscale Serve header preservation is a separate opt-in transport check:
+
+```bash
+ORKESTRATOR_TEST_TAILSCALE_SERVE_METADATA=1 \
+  mise run test:logged -- --name tailscale-metadata-live -- \
+  bun test --cwd apps/backend ./src/tailscale-serve-metadata.test.ts --parallel=1
+```
+
+It requires a signed-in tailnet node with HTTPS enabled and unused HTTPS port
+18443 (`ORKESTRATOR_TEST_TAILSCALE_SERVE_PORT` overrides it). It creates a
+synthetic loopback metadata receiver and a temporary, tailnet-only Serve root
+handler. Existing listeners are refused, teardown removes only that handler,
+and no tailnet names or credentials are recorded. It verifies `Sec-Fetch-Site`,
+`Sec-Fetch-Mode`, `Sec-Fetch-Dest` and `Sec-Purpose` (including prefetch/prerender)
+arrive unchanged, then evaluates the read policy on the received headers.
+This is transport evidence; wildcard DNS, preview certificates and a browser
+through `publicPort` still need the real deployment qualification in
+[the two-machine runbook](preview-two-machine-runbook.md#5-publication-from-the-second-machine).
+
+These opt-in scenarios do not run in `mise run test` or in CI. The preview
+spec-loading check runs in the default suite; the live metadata case is
+reported as skipped unless its opt-in variable is set.
+
+The real Electron window with the desktop tunnel on needs no variable: it is
+`e2e/agent-testing/service-preview-electron.spec.ts`, part of
+`mise run test:agent:electron`. It launches Electron on a disposable
+agent-test profile with `ORKESTRATOR_PREVIEW_TRANSPORT=1` (agent-test backends
+keep that variable and `ORKESTRATOR_PREVIEW_RELAY`) and two preview-app
+fixtures. Run it alone with
+`bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts`.
+
 Record results in the evidence log of
-[service-preview-rollout.md](../todo/service-preview-rollout.md#evidence-log).
+[0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md#evidence-log).
+
+### Opt-in design checks
+
+Design export from a real running container (the shipped helper over
+`docker exec -i`, `/workspace` on a `volume-nocopy` named volume, interrupted
+by killing the client, stopping or restarting the container and emptying the
+workspace) is skipped unless its image variable is set. The container and
+volume carry a throwaway owner label and are removed by id.
+
+```bash
+ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE=orkestrator-v2:latest \
+  mise run test:logged -- --name design-export-container -- bun test --cwd apps/backend \
+  ./src/core/design/export-container.test.ts
+```
 
 ### CLI scenarios
 
@@ -286,7 +440,7 @@ mise run dev:stop --profile qa-cli-live && mise run dev:reset --profile qa-cli-l
 
 The run manifest (IDs, exit codes, stages — no prompts or tokens) is written to
 `output/cli-scenarios/<run>/manifest.json`. Record live results in the
-[evidence log](../todo/cli-qualification.md#evidence-log), against the coverage
+[evidence log](../todo/cli-and-slash-commands/0014-cli-qualification.md#evidence-log), against the coverage
 table in [cli-testing.md](cli-testing.md#coverage-by-layer).
 See [public-cli.md](../architecture/public-cli.md#targeted-scenarios).
 
@@ -318,7 +472,7 @@ fires.
 recurring owners attempt work and the physical work that implies. Run it when
 a change touches a cadence, a cache or join, admission, or a workflow or
 observation driver (see [recurring-work.md](../architecture/recurring-work.md)).
-It takes seconds and needs no Docker, Git remote, GitHub or provider.
+It takes about 30 s and needs no Docker, Git remote, GitHub or provider.
 
 ```bash
 # Print a fresh artifact; --out writes it, --overhead adds a real-time
@@ -363,13 +517,16 @@ Generate the reference before making the change; no artifact is committed
 - **Driven blocks.** `nativeObservation` (`recurring-baseline-native.ts`)
   runs the real native activity sweep and queue scan against fake providers,
   in rollback and shared modes. `workflows` (`recurring-baseline-workflows.ts`)
-  runs the real feature-planning, build-pipeline and looped-review
-  supervisors over a temporary store, in whole-store rollback and keyed modes.
-  Each domain reports `storageReads` (store content decoded, cached or not)
-  beside `storageStats` (reuse of already-decoded records). The test holds
-  every attempt to a per-domain budget (`STORAGE_PER_ATTEMPT` in
-  `recurring-baseline.test.ts`), so one extra read per pass fails it. Multi
-  review is not driven.
+  runs the real feature-planning, build-pipeline, looped-review and
+  multi-review supervisors over a temporary store, in rollback and keyed
+  modes, on one manual clock. Rollback is what
+  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects: the whole-store tick, or for
+  multi review its `WorkflowDueScheduler` (15 s reconciliation scan,
+  per-workflow due passes). Each domain reports `storageReads` (store content
+  decoded, cached or not, and uncached row queries) beside `storageStats`
+  (reuse of already-decoded records). The test holds every attempt to a
+  per-domain budget (`STORAGE_PER_ATTEMPT` in `recurring-baseline.test.ts`),
+  so one extra read per pass fails it.
 
 It is a call-count model, not a profile. It does not measure durations, CPU,
 RSS or I/O bytes; provider, transcript and storage cost behind the modelled
@@ -377,9 +534,53 @@ jobs; change-to-visible freshness against the
 [latency budgets](../architecture/recurring-work.md#latency-budgets); renderer
 polling other than the Files panel; or bridge-side recurrence. Those need the
 live isolated profile tracked in
-[recurring-work-qualification.md](../todo/recurring-work-qualification.md).
+[0048-recurring-work-qualification.md](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
 Live counters for a running backend come from `get_recurring_work_diagnostics`
 or the `recurringWork` block of `/__orkestrator/metrics`.
+
+#### Live idle A/B
+
+`scripts/recurring-live-ab.ts` is the committed form of the live idle A/B.
+Per arm and repeat it starts a disposable credential-free profile
+(`dev:test --fixture --fixture-environments local,container
+--no-agent-credentials`), waits for `ready`, settles for 60 s, and then samples
+`recurringWork` plus the backend and Electron processes' CPU time and RSS
+every 30 s over a 6-minute window (longer than the 5-minute container fetch
+cooldown). It then times edit-to-detection: it appends to a tracked file in
+each fixture environment and waits for the `diff-scan` `changed` counter to
+move. Probes start at random offsets across one 15 s container poll period,
+so they are not phase-locked to the poll. Last, it counts `Unhandled promise rejection (continuing)` guard lines in
+the profile logs, stops the profile with `dev:stop` and resets it with
+`dev:reset`. Each invocation adds a unique suffix to its profile names and
+checks the owned launcher PID and start identity before sampling, stopping or
+resetting. SIGINT and SIGTERM cancel active waits and requests, then wait for
+owned-profile cleanup before exiting (130 and 143 respectively). Existing or
+unverifiable profiles are refused. `--keep-profiles` retains stopped state.
+
+Freshness probes require a valid pre-write metrics baseline; failed baselines
+and counter resets are reported as unusable, outside the latency percentiles.
+Kind rates use their first and last observed samples and label shortened
+intervals partial; kinds that disappear remain in the report. A reset or
+disappearance inside an observed interval invalidates that rate.
+
+Arms are `candidate` (defaults), `rollback`
+(`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
+`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`) and `metrics-off`
+(`ORKESTRATOR_RECURRING_METRICS=0`, CPU and RSS only). Build the CLI first; the
+freshness probes use it.
+
+```bash
+mise run build:cli
+mise exec -- bun scripts/recurring-live-ab.ts --arms candidate,rollback,metrics-off \
+  --repeats 1 --out output/benchmarks/recurring-live-ab.json
+```
+
+Each run takes about 10 minutes. The JSON holds kinds, counts, durations and
+process totals only. The script reads the gateway token from the profile's
+auth file and sends it only as a loopback request header. Stdout is a Markdown
+summary. Measured limits: the Electron window is a client (its renderer
+polls), bridges and Docker are not in the CPU/RSS totals, and detection is
+backend-side, a lower bound on change-to-visible.
 
 For transcript, projection and storage cost, use the
 [efficiency harness](efficiency-harness.md) (`mise run efficiency:baseline`).
@@ -438,7 +639,9 @@ also keeps Bun's report for every failing test it sees, wherever it appeared.
 That report is the `(fail)` line plus the preceding error, expectation and
 stack lines. Context comes only from lines with the same Turbo task prefix,
 because streamed tasks interleave. These reports print under `--- Failing tests
-in <group> ---` after the tail. On GitHub Actions, `lint.yml` points
+in <group> ---` after the tail, and every tail line is capped at 2,000
+characters: one longer line once cut the GitHub Actions log off before the
+reports. On GitHub Actions, `ci.yml` points
 `ORKESTRATOR_TEST_LOG_DIR` at the runner's temporary directory and uploads the
 compressed logs as the `test-logs-<run>-<attempt>` artifact when the job fails.
 
@@ -635,6 +838,10 @@ then records the redundant entry as skipped with its covering command ID. Failed
 coverage remains incomplete. Coverage is deduplicated only when the covering
 command also depends on the required prerequisites and no dependency cycle is
 introduced. Dependent checks wait for the actual covering result. The original plan stays immutable.
+A repeated identical command (the same command line and directory) is covered
+by its first copy the same way, recorded as `(identical command)`, unless the
+repeat waits on a prerequisite the first copy did not, which may make the rerun
+meaningful. Discovery is also told never to plan a command twice.
 
 A missing `.orkestrator-test-scheduler.json` is normal and silent. One that is
 present but unreadable, oversized, or invalid is *ignored* rather than fatal:
@@ -682,11 +889,17 @@ executed nothing, and this repository still tracks live flakes in
 `docs/tests/flaky-tests/0000-index.md`, so a green that proves only "the inputs are unchanged" is
 not worth the seconds it saves. Every aggregate invocation runs every test.
 
-`build` stays cacheable, and it is the expensive dependency. `test:workspace`
-still depends on it, so a warm run skips the rebuild and goes straight to the
-tests. Both test tasks keep their `inputs` declarations, which name the shared
-Bun configuration and preload files alongside the package files, so the wiring
-is already correct if caching is ever reconsidered.
+`build` stays cacheable, and it is the expensive dependency. Only the backend
+and CLI `test:workspace` tasks depend on it, through the root `turbo.json`,
+because `apps/backend/tests/standalone.test.ts` and
+`packages/cli/tests/cli.test.ts` consume `dist`. Web, web-public, desktop and
+protocol override `dependsOn` to `[]` in their own `turbo.json`: their tests
+consume no build output. The workspace group asks Turbo for `build` and
+`test:workspace` in one invocation, so every build still runs while
+independent tests overlap it, and a warm run skips the rebuilds. Both test
+tasks keep their `inputs` declarations, which name the shared Bun configuration
+and preload files alongside the package files, so the wiring is already correct
+if caching is ever reconsidered.
 
 Turborepo 2.8 automatically shares its local cache across linked Git worktrees
 when no explicit cache directory is configured. Do not add a relative
@@ -713,8 +926,12 @@ Turbo runs each package script from that package's directory, and Bun reads
 root. Backend, desktop, package and bridge test scripts therefore name the
 Node-only preload explicitly with `--preload ../../tests/setup-node.ts`.
 Dropping it is not a silent no-op: it is what sets `CODEX_BRIDGE_NO_SERVER`,
-isolates the git configuration, and installs the bounded diagnostics, so
-without it the codex bridge suite binds a real port and fails.
+isolates the git configuration and the worktree root, and installs the bounded
+diagnostics, so without it the codex bridge suite binds a real port and fails.
+`apps/backend/bunfig.toml` names the same preload, so a bare `bun test <file>`
+from `apps/backend` is isolated too; Bun loads a preload named in both places
+once. Without it a backend test fell back to `ORKESTRATOR_WORKTREE_DIR` from
+the shell, or to a non-canonical `os.tmpdir()` such as macOS `/tmp`.
 
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate
@@ -822,8 +1039,10 @@ Use this order:
 5. Rerun the affected group or `mise run test:changed`; finish with the full
    suite once the cause is addressed.
 
-Keep [the flake index](../tests/flaky-tests/0000-index.md) current for
-credible flakes. Search the index first; open only the matching case file.
+Keep [the flake registry](../tests/flaky-tests/0000-index.md) current for
+credible flakes. Its top-level index only lists the ten group folders; each
+group's own `0000-index.md` table tracks its cases. Search the group indexes
+first; open only the matching case file.
 Record the exact test and file, original command and worker configuration,
 failure message and duration, suite counts, isolated rerun command and result,
 observation date, and an evidence-backed hypothesis. Do not skip, loosen, or

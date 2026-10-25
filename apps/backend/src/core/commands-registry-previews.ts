@@ -127,15 +127,21 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
       ...args,
       surface: "browser-top-level",
     });
-    if (!attachment.bootstrap) throw previewFailure("unsupported");
-    const { code, origin } = runtime.access.consumeBootstrapGrant(
-      attachment.attachmentId,
-      attachment.bootstrap.grant,
-    );
-    return {
-      url: `${origin}${PREVIEW_SESSION_PATH}?code=${encodeURIComponent(code)}`,
-      expiresAt: new Date(Date.now() + PREVIEW_SESSION_CODE_TTL_MS).toISOString(),
-    };
+    try {
+      if (!attachment.bootstrap) throw previewFailure("unsupported");
+      const { code, origin } = runtime.access.consumeBootstrapGrant(
+        attachment.attachmentId,
+        attachment.bootstrap.grant,
+      );
+      return {
+        attachmentId: attachment.attachmentId,
+        url: `${origin}${PREVIEW_SESSION_PATH}?code=${encodeURIComponent(code)}`,
+        expiresAt: new Date(Date.now() + PREVIEW_SESSION_CODE_TTL_MS).toISOString(),
+      };
+    } catch (error) {
+      runtime.access.releaseAttachment(attachment.attachmentId);
+      throw error;
+    }
   });
 
   /** The clean, shareable private origin of a published service (no credential). */

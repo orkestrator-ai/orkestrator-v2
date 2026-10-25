@@ -64,7 +64,7 @@ import {
   toClientEnvironment,
   getDockerStatus,
   getHostPort,
-  resolveContainerGitHubToken,
+  resolveGitHubToken,
   syncContainerGitHubCredential,
   ensureContainerProjectFilesAccess,
   createDockerContainer,
@@ -74,7 +74,10 @@ import {
   stopEnvironmentTask,
   resolveOperationImage,
 } from "./commands-helpers.js";
-import { syncContainerAgentAccountsOnStart } from "./agent-accounts-containers.js";
+import {
+  startContainerWithAgentAccounts,
+  syncContainerAgentAccountsOnStart,
+} from "./agent-accounts-containers.js";
 
 const lastDockerAvailabilityDiagnosticByLogger = new WeakMap<(message: string) => void, string>();
 
@@ -246,12 +249,12 @@ export function registerDockerCommands(
       // An environment's runtime starts through the lifecycle authority.
       await startAssignedContainerRuntimeTask(assigned.id, context);
     } else {
-      await runCommand("docker", ["start", id], { timeoutMs: 60_000 });
+      await startContainerWithAgentAccounts(context, null, id);
       await ensureContainerProjectFilesAccess(id);
     }
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
-      await syncContainerGitHubCredential(id, await resolveContainerGitHubToken(config.global));
+      await syncContainerGitHubCredential(id, await resolveGitHubToken(config.global));
     }
     await syncContainerAgentAccountsOnStart(context, assigned ?? null, id, config.global);
   });
@@ -641,7 +644,7 @@ export function registerDockerCommands(
   });
   register("propagate_github_token_to_containers", async (_args, { storage }) => {
     const config = await storage.loadConfig();
-    const githubToken = await resolveContainerGitHubToken(config.global);
+    const githubToken = await resolveGitHubToken(config.global);
     const environments = await storage.loadEnvironments();
     const updated: string[] = [];
     const failed: [string, string][] = [];

@@ -172,6 +172,14 @@ export interface PromptAttachmentInput {
   filename?: string;
 }
 
+/** A turn-time sign-in notice; see {@link ThreadContext.authNotice}. */
+export interface ThreadAuthNotice {
+  state: "needs-auth" | "expired";
+  message: string;
+  /** Distinguishes a new occurrence from one the user already dismissed. */
+  occurrenceId: string;
+}
+
 export interface ThreadContext {
   threadId: string;
   /** Engine-side address; changes when a generation restart re-resumes. */
@@ -184,6 +192,7 @@ export interface ThreadContext {
    * resume in the same generation cannot certify configuration was applied.
    */
   promptThreadConfig?: string;
+  projectSkillsRevision?: number;
   bridgeSessionIds: Set<string>;
   /** The one canonical transcript for this Codex thread. */
   messages: NormalizedMessage[];
@@ -228,6 +237,13 @@ export interface ThreadContext {
   modelId?: string;
   /** Turn-scoped confirmations take precedence over thread settings. */
   confirmedModelsByTurn: Map<string, string>;
+  /**
+   * Codex re-authenticating a model provider during this thread's turns
+   * (`modelProvider/authRecovery*`). Served on `/session/:id/status` and shown
+   * as the tab's `auth` notice. In memory only: it describes the running
+   * app-server, and a restart starts a fresh login read.
+   */
+  authNotice?: ThreadAuthNotice;
   /**
    * True once this process has finished reading the rollout body, or confirmed
    * there is none to read (a freshly started thread).

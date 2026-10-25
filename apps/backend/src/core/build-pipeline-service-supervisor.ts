@@ -57,6 +57,12 @@ import {
   REVIEW_VALIDATION_PLAN_SCHEMA,
 } from "./review-validation-prompts.js";
 import { validationPreparation } from "./review-validation-service.js";
+import {
+  LAST_ASSISTANT_TEXT_READ_LIMIT,
+  lastAssistantText,
+  workflowRestartContinuationPrompt,
+  workflowResultReminderPrompt,
+} from "./workflow-result-missing.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
@@ -65,6 +71,7 @@ import {
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import {
+  type WorkflowResultKind,
   workflowResultInstruction,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
@@ -112,6 +119,7 @@ import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import type { BuildPipelineInteractions } from "./build-pipeline-service-interactions.js";
+import type { ReviewPackageVerification } from "./commands-review.js";
 
 /**
  * Shown in the build header while the pipeline waits for a person. Says what
@@ -175,6 +183,7 @@ export class BuildPipelineSupervisor {
           this.ctx.workflowToolEnabled(agent as BuildPipelineAgent, kind),
         agentMcp: (pipeline, resultKey, provider, stage) =>
           this.ctx.workflowAgentMcp(pipeline, resultKey, provider, stage),
+        artifactDispatch: this.ctx.options.artifactDispatch,
         concurrency: this.ctx.options.reviewFanoutConcurrency,
         efficiency: this.ctx.options.efficiency,
         pollGate: (pipeline) => ({
@@ -491,6 +500,7 @@ export class BuildPipelineSupervisor {
       turnSettled,
       backgroundWorkLive,
       retainedContinuationRequestIds,
+      interruption,
     } = await readProviderStatus(provider, session.sdkSessionId, session.structuredRequestId);
     // Only the harness that was recorded as unreachable can clear its own
     // reconnect attempt. A stage transition resolves the *next* step's provider
@@ -514,7 +524,34 @@ export class BuildPipelineSupervisor {
     if (status === "missing") {
       throw new Error(`The ${session.label.toLowerCase()} is no longer available`);
     }
-    if (status === "error") {
+    if (status === "error" && interruption === "restart") {
+      // A submitted result survives the process that produced it. Otherwise
+      // continue this stage once, under a new durable dispatch/result key.
+      const result = session.structuredRequestId
+        ? await this.ctx.readWorkflowResult<unknown>(provider, session, session.structuredRequestId)
+        : null;
+      if (result?.ok !== true) {
+        if (
+          pipeline.pendingPromptAttempt?.sessionId === session.sdkSessionId &&
+          session.restartContinuationSent
+        ) {
+          await this.dispatchPending(pipeline, provider);
+          return;
+        }
+        if (!session.restartContinuationSent) {
+          await this.continueInterruptedStage(pipeline, provider, session);
+          return;
+        }
+        throw new Error(
+          `The ${session.label.toLowerCase()} failed: ${statusDetail ?? "interrupted again"}`,
+        );
+      }
+      // The result proves this dispatch ran, including an attempt whose HTTP
+      // acceptance was lost before the restart.
+      if (pipeline.pendingPromptAttempt?.sessionId === session.sdkSessionId) {
+        delete pipeline.pendingPromptAttempt;
+      }
+    } else if (status === "error") {
       throw new Error(
         statusDetail
           ? `The ${session.label.toLowerCase()} failed: ${statusDetail}`
@@ -597,6 +634,12 @@ export class BuildPipelineSupervisor {
     const wasRunning = session.status === "running";
     session.status = "idle";
     delete pipeline.stallWarning;
+    // The turn ended, and its artifact grant with it.
+    this.ctx.settleArtifactTurn(
+      pipeline,
+      session,
+      pipeline.activePromptContext?.requestId ?? pipeline.pendingPromptAttempt?.requestId,
+    );
     // The pass that sees the turn end reads the whole transcript whatever the
     // probe says, so the handoff window and request-id recovery below see the
     // final copy. Later idle passes (a structured-result wait, PR detection)
@@ -891,7 +934,12 @@ export class BuildPipelineSupervisor {
       session.structuredRequestId,
     );
     if (!result) {
-      await this.recovery.awaitStructuredResult(pipeline, session, "review package preparation");
+      await this.recovery.awaitStructuredResult(
+        pipeline,
+        provider,
+        session,
+        "review package preparation",
+      );
       return;
     }
     delete session.structuredWaitStartedAt;
@@ -987,8 +1035,8 @@ export class BuildPipelineSupervisor {
   async assertReviewPackageIntegrity(
     environmentId: string,
     reviewPackage: ReviewPackageReference,
-  ): Promise<void> {
-    const verification = await this.ctx.invoke<{ valid: boolean; reason?: string }>(
+  ): Promise<ReviewPackageVerification> {
+    const verification = await this.ctx.invoke<ReviewPackageVerification>(
       "verify_looped_review_package",
       { environmentId, reviewPackage },
     );
@@ -997,6 +1045,7 @@ export class BuildPipelineSupervisor {
         `Review package integrity verification failed: ${verification.reason ?? "unknown reason"}`,
       );
     }
+    return verification;
   }
 
   private async startVerifiedReviewOrPrepare(pipeline: BuildPipeline): Promise<void> {
@@ -1421,6 +1470,7 @@ export class BuildPipelineSupervisor {
       return {
         provider,
         sessionId,
+        sessionKey,
         prompt,
         requestId,
         images,
@@ -1439,6 +1489,7 @@ export class BuildPipelineSupervisor {
     const {
       provider,
       sessionId,
+      sessionKey,
       prompt,
       requestId,
       images,
@@ -1470,12 +1521,21 @@ export class BuildPipelineSupervisor {
             `build pipeline ${phase} step`,
           )
         : undefined;
+    const stageSession = { sessionKey, sdkSessionId: sessionId };
+    const artifactTurn = this.ctx.beginArtifactTurn(
+      pipeline,
+      stageSession,
+      requestId,
+      agent,
+      agentMcp,
+    );
+    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
     await attachBeforeDispatch(
       provider,
       sessionId,
-      agentMcp
+      turnAgentMcp
         ? {
-            agentMcp,
+            agentMcp: turnAgentMcp,
             ...(resultKind ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
           }
         : undefined,
@@ -1496,7 +1556,8 @@ export class BuildPipelineSupervisor {
           effort,
           ...(typeof fastMode === "boolean" ? { fastMode } : {}),
           mode,
-          ...(agentMcp ? { agentMcp } : {}),
+          ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
+          ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
           ...(agentMcp && resultKind
             ? { workflowResultTool: workflowResultToolName(resultKind) }
             : {}),
@@ -1505,6 +1566,9 @@ export class BuildPipelineSupervisor {
       delete pipeline.pendingPromptAttempt;
       await this.ctx.save(pipeline, pipeline.backendRevision);
     } catch (error) {
+      if (!(error instanceof AmbiguousPromptDispatchError)) {
+        this.ctx.settleArtifactTurn(pipeline, stageSession, requestId);
+      }
       if (error instanceof AmbiguousPromptDispatchError) {
         // The bridge may have accepted the stable request before the response
         // was lost. Keep the durable attempt; the next tick reconciles status
@@ -1514,6 +1578,146 @@ export class BuildPipelineSupervisor {
       }
       throw error;
     }
+  }
+
+  private async continueInterruptedStage(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<void> {
+    const phase = resumablePhase(pipeline.phase);
+    if (!phase) throw new Error("Interrupted stage is not resumable");
+    const validationPlan = pipeline.activePromptContext?.validationPlan === true;
+    const resultKind = session.structuredRequestId
+      ? this.ctx.workflowResultKind(phase, validationPlan)
+      : undefined;
+    await this.sendStageFollowUp(pipeline, provider, session, {
+      phase,
+      spend: "restartContinuationSent",
+      validationPlan,
+      prompt: workflowRestartContinuationPrompt({
+        workLabel: session.label.toLowerCase(),
+        resultLabel: resultKind ? workflowResultLabel(resultKind) : "completed work",
+        ...(session.resultTransport === "tool-v1" && resultKind
+          ? { toolName: workflowResultToolName(resultKind) }
+          : {}),
+      }),
+    });
+  }
+
+  /**
+   * Queues the one result reminder for a tool-mode stage turn that went idle
+   * with no accepted result, in place of failing it. Returns false when the
+   * reminder does not apply or was already spent, so the caller fails as
+   * before.
+   *
+   * The same once-only, persisted contract as the reviewers' and Multi
+   * Review's steps: the stage's work is done and only delivery failed, so a
+   * fresh stage would redo all of it. The turn's prompt context is gone by
+   * now, so the result slot's own binding names what it was waiting for.
+   */
+  async remindMissingStageResult(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<boolean> {
+    const phase = resumablePhase(pipeline.phase);
+    const previousRequestId = session.structuredRequestId;
+    if (
+      !phase ||
+      !previousRequestId ||
+      session.resultTransport !== "tool-v1" ||
+      session.resultReminderSent === true ||
+      // Accepted-but-unread and budget-exhausted slots are not a delivery gap
+      // another turn can close.
+      session.resultSubmission === "received" ||
+      session.resultSubmission === "needs-attention"
+    ) {
+      return false;
+    }
+    const binding = await this.ctx.options.workflowResults
+      ?.binding(
+        { environmentId: pipeline.environmentId, projectId: pipeline.projectId },
+        previousRequestId,
+      )
+      .catch(() => null);
+    const resultKind = binding?.kind;
+    if (
+      !resultKind ||
+      this.ctx.workflowResultKind(phase, resultKind === "validation-plan") !== resultKind
+    ) {
+      return false;
+    }
+    const finalText = await provider
+      .messages(session.sdkSessionId, { limit: LAST_ASSISTANT_TEXT_READ_LIMIT })
+      .then(lastAssistantText, () => undefined);
+    await this.sendStageFollowUp(pipeline, provider, session, {
+      phase,
+      spend: "resultReminderSent",
+      validationPlan: resultKind === "validation-plan",
+      prompt: workflowResultReminderPrompt({
+        resultLabel: workflowResultLabel(resultKind),
+        toolName: workflowResultToolName(resultKind),
+        submission: session.resultSubmission,
+        finalText,
+        workLabel: `${session.label.toLowerCase()} work`,
+      }),
+    });
+    return true;
+  }
+
+  /**
+   * One automatic follow-up turn in the stage's own session, under a new
+   * durable dispatch and result key. The spent flag is saved with the attempt,
+   * so a restart before dispatch retries this follow-up instead of earning
+   * another.
+   */
+  private async sendStageFollowUp(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+    followUp: {
+      phase: NonNullable<ReturnType<typeof resumablePhase>>;
+      spend: "restartContinuationSent" | "resultReminderSent";
+      validationPlan: boolean;
+      prompt: string;
+    },
+  ): Promise<void> {
+    const { phase } = followUp;
+    const previousRequestId = session.structuredRequestId;
+    const requestId = randomUUID();
+    const startedAt = new Date().toISOString();
+    session[followUp.spend] = true;
+    session.turnStartedAt = startedAt;
+    delete session.structuredWaitStartedAt;
+    if (previousRequestId) {
+      session.structuredRequestId = requestId;
+      session.structuredResultStatus = "pending";
+      if (session.resultTransport === "tool-v1") session.resultSubmission = "preparing";
+      if (phase === "reviewing") pipeline.structuredReviewRequestId = requestId;
+    }
+    pipeline.pendingPromptAttempt = {
+      id: randomUUID(),
+      sessionId: session.sdkSessionId,
+      requestId,
+      phase,
+      prompt: withUnattendedPolicy(followUp.prompt),
+      useTaskImages: false,
+      structuredReview: previousRequestId !== undefined,
+      validationPlan: followUp.validationPlan,
+      resultTransport: session.resultTransport,
+      startedAt,
+    };
+    pipeline.activePromptContext = {
+      ...pipeline.pendingPromptAttempt,
+      kind: "prompt-dispatch",
+    };
+    delete pipeline.stallWarning;
+    await this.ctx.save(pipeline, pipeline.backendRevision);
+    if (session.resultTransport === "tool-v1" && previousRequestId) {
+      await this.ctx.options.workflowResults?.close(previousRequestId, "superseded");
+    }
+    await this.dispatchPending(pipeline, provider);
   }
 
   async dispatchPending(pipeline: BuildPipeline, provider: BuildPipelineProvider): Promise<void> {
@@ -1587,12 +1791,20 @@ export class BuildPipelineSupervisor {
             `build pipeline ${attempt.phase} step`,
           )
         : undefined;
+    const artifactTurn = this.ctx.beginArtifactTurn(
+      pipeline,
+      session,
+      attempt.requestId,
+      step?.agent ?? (session ? sessionAgent(pipeline, session) : undefined),
+      agentMcp,
+    );
+    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
     await attachBeforeDispatch(
       provider,
       attempt.sessionId,
-      agentMcp
+      turnAgentMcp
         ? {
-            agentMcp,
+            agentMcp: turnAgentMcp,
             ...(resultKind ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
           }
         : undefined,
@@ -1613,7 +1825,8 @@ export class BuildPipelineSupervisor {
           model: step?.model,
           effort: step?.effort,
           ...(typeof step?.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
-          ...(agentMcp ? { agentMcp } : {}),
+          ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
+          ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
           ...(agentMcp && resultKind
             ? { workflowResultTool: workflowResultToolName(resultKind) }
             : {}),
@@ -1629,6 +1842,7 @@ export class BuildPipelineSupervisor {
       await this.ctx.save(pipeline, pipeline.backendRevision);
     } catch (error) {
       if (error instanceof AmbiguousPromptDispatchError) return;
+      this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
       throw error;
     }
   }
@@ -1741,7 +1955,7 @@ export class BuildPipelineSupervisor {
     if (!requestId) throw new Error("Review result key is missing");
     const result = await this.ctx.readWorkflowResult<unknown>(provider, session, requestId);
     if (!result) {
-      await this.recovery.awaitStructuredResult(pipeline, session, "review");
+      await this.recovery.awaitStructuredResult(pipeline, provider, session, "review");
       return;
     }
     delete session.structuredWaitStartedAt;
@@ -1766,4 +1980,9 @@ export class BuildPipelineSupervisor {
     await this.startStage(pipeline, "verify", "verifying");
     await this.ctx.consumeWorkflowResult(pipeline, session, requestId);
   }
+}
+
+/** Prompt wording for a result kind, e.g. "review-report" → "review report". */
+function workflowResultLabel(kind: WorkflowResultKind): string {
+  return kind.replaceAll("-", " ");
 }

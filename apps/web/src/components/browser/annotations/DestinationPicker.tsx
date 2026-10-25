@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Loader2, Plus, RefreshCw } from "lucide-react";
+import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import {
   WEB_ANNOTATION_COMMANDS,
   type WebAnnotationDestination,
   type WebAnnotationDestinationOption,
+  type WebAnnotationRequestOperation,
 } from "@orkestrator/protocol/web-annotations";
 import { Button } from "@/components/ui/button";
 import {
@@ -43,6 +45,19 @@ export function imageSupportLabel(option: WebAnnotationDestinationOption): strin
     : "Images supported";
 }
 
+/** How Discuss runs in this session: read-only, or advisory and why. */
+export function discussModeLabel(option: WebAnnotationDestinationOption): string {
+  if (option.planMode) {
+    return option.planModeScope === "session"
+      ? "Discuss runs in this session's Plan mode (read-only)"
+      : "Discuss uses read-only plan mode";
+  }
+  const composer = nativeAgentCapabilities(option.destination.agent).composer;
+  return composer.mode && composer.modeScope === "session"
+    ? "Discuss is advisory: switch this session to Plan in its chat for read-only"
+    : "Discuss is advisory (no read-only mode)";
+}
+
 export function destinationName(destination: WebAnnotationDestination | null | undefined) {
   if (!destination) return "an agent";
   return destination.label ?? destination.agent;
@@ -59,6 +74,7 @@ export function DestinationPicker({
   fallback,
   defaultFor,
   excludeTabId,
+  operation,
 }: {
   environmentId: string;
   value: WebAnnotationDestinationOption | null;
@@ -69,38 +85,67 @@ export function DestinationPicker({
   defaultFor?: { annotationId: string; metadataRevision: number } | null;
   /** A session this choice must not return to (the one being retargeted away from). */
   excludeTabId?: string | null;
+  /**
+   * The operation being prepared. For Discuss in a session that cannot run it
+   * read-only, the sessions that can are offered instead; nothing changes the
+   * chosen session's own mode.
+   */
+  operation?: WebAnnotationRequestOperation | null;
 }) {
   const [options, setOptions] = useState<WebAnnotationDestinationOption[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
+  // Each environment (or excluded session) loads its options afresh.
+  const optionsKey = `${environmentId}\0${excludeTabId ?? ""}`;
+  const [loadingFor, setLoadingFor] = useState(optionsKey);
+  if (optionsKey !== loadingFor) {
+    setLoadingFor(optionsKey);
     setLoading(true);
     setError(null);
-    try {
-      const result = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.destinations, {
-        environmentId,
-      });
-      const usable = excludeTabId
-        ? result.options.filter((option) => option.destination.tabId !== excludeTabId)
-        : result.options;
-      setOptions(usable);
-      return usable;
-    } catch (loadError) {
-      setError(describeWebAnnotationError(loadError));
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, [environmentId, excludeTabId]);
+  }
 
   const valueTabId = value?.destination.tabId ?? null;
   // Preselect once per load; later renders must not override a user choice.
   const latest = useRef({ onChange, fallback, valueTabId });
-  latest.current = { onChange, fallback, valueTabId };
+  useLayoutEffect(() => {
+    latest.current = { onChange, fallback, valueTabId };
+  });
+
+  /**
+   * Callers mark the list loading first (while rendering above, or in
+   * `refresh`); state changes only once the request settles.
+   */
+  const fetchOptions = useCallback(
+    () =>
+      webAnnotationCommand(WEB_ANNOTATION_COMMANDS.destinations, { environmentId })
+        .then((result) => {
+          const usable = excludeTabId
+            ? result.options.filter((option) => option.destination.tabId !== excludeTabId)
+            : result.options;
+          setOptions(usable);
+          const selected = usable.find(
+            (option) => option.destination.tabId === latest.current.valueTabId,
+          );
+          if (selected) latest.current.onChange(selected);
+          return usable;
+        })
+        .catch((loadError: unknown) => {
+          setError(describeWebAnnotationError(loadError));
+          return null;
+        })
+        .finally(() => {
+          setLoading(false);
+        }),
+    [environmentId, excludeTabId],
+  );
+  const refresh = () => {
+    setLoading(true);
+    setError(null);
+    void fetchOptions();
+  };
   useEffect(() => {
-    void load().then((loaded) => {
+    void fetchOptions().then((loaded) => {
       const { onChange: select, fallback: annotationDefault, valueTabId: chosen } = latest.current;
       if (!loaded || chosen) return;
       const remembered = rememberedDestinationTabId(environmentId);
@@ -115,7 +160,7 @@ export function DestinationPicker({
         null;
       if (preferred) select(preferred);
     });
-  }, [environmentId, load]);
+  }, [environmentId, fetchOptions]);
 
   const choose = (option: WebAnnotationDestinationOption) => {
     onChange(option);
@@ -138,8 +183,10 @@ export function DestinationPicker({
   };
 
   return (
-    <fieldset className="space-y-1.5">
-      <legend className="flex w-full items-center justify-between text-[11px] font-medium text-muted-foreground">
+    // `min-w-0`: a fieldset defaults to `min-inline-size: min-content`, so a
+    // long session title would otherwise push it past a narrow sidebar.
+    <fieldset className="min-w-0 space-y-1.5">
+      <legend className="flex w-full flex-wrap items-center justify-between gap-x-2 text-[11px] font-medium text-muted-foreground">
         <span>Agent session</span>
         <span className="flex gap-1">
           <Button
@@ -147,7 +194,7 @@ export function DestinationPicker({
             size="sm"
             variant="ghost"
             className="h-6 gap-1 px-1.5 text-[11px]"
-            onClick={() => void load()}
+            onClick={refresh}
             aria-label="Refresh agent sessions"
           >
             <RefreshCw
@@ -159,7 +206,7 @@ export function DestinationPicker({
             type="button"
             size="sm"
             variant="ghost"
-            className="h-6 gap-1 px-1.5 text-[11px]"
+            className="h-auto min-h-6 gap-1 whitespace-normal px-1.5 text-left text-[11px]"
             onClick={() => {
               const opened = openNewAgentSession(environmentId);
               setNotice(
@@ -206,11 +253,11 @@ export function DestinationPicker({
                 data-destination={option.destination.tabId}
                 onClick={() => choose(option)}
                 className={cn(
-                  "block w-full rounded border px-2 py-1.5 text-left text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  "block w-full min-w-0 rounded border px-2 py-1.5 text-left break-words text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   selected ? "border-primary/60 bg-primary/10" : "border-border/60",
                 )}
               >
-                <span className="block truncate font-medium text-foreground">
+                <span className="line-clamp-2 font-medium text-foreground">
                   {option.title}
                   {option.isDefault ? " · default" : ""}
                 </span>
@@ -220,9 +267,7 @@ export function DestinationPicker({
                   {imageSupportLabel(option)}
                 </span>
                 <span className="block text-muted-foreground">
-                  {option.planMode
-                    ? "Discuss uses read-only plan mode"
-                    : "Discuss is advisory (no read-only mode)"}
+                  {discussModeLabel(option)}
                   {option.resultTools ? " · reports structured results" : ""}
                 </span>
                 {option.holds.map((hold) => (
@@ -235,6 +280,58 @@ export function DestinationPicker({
           })}
         </div>
       )}
+      {operation === "discuss" && value && !value.planMode && options && (
+        <ReadOnlyAlternatives
+          options={options.filter(
+            (option) => option.planMode && option.destination.tabId !== value.destination.tabId,
+          )}
+          onChoose={choose}
+        />
+      )}
     </fieldset>
+  );
+}
+
+/**
+ * Discuss in a session without a read-only mode runs under that session's
+ * own permissions. Offer the sessions in this environment that can discuss
+ * read-only instead (a per-turn plan mode, or a session already in Plan);
+ * when there are none the advisory label stands. No session's mode is
+ * changed to make this work.
+ */
+function ReadOnlyAlternatives({
+  options,
+  onChoose,
+}: {
+  options: WebAnnotationDestinationOption[];
+  onChoose: (option: WebAnnotationDestinationOption) => void;
+}) {
+  if (options.length === 0) {
+    return (
+      <p className="text-[11px] text-muted-foreground" data-read-only-alternatives="none">
+        No session in this environment can discuss read-only. Use a Claude session, or switch a
+        Codex, Cursor or Grok session to Plan in its chat, then refresh.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-1 text-[11px]" data-read-only-alternatives>
+      <p className="text-muted-foreground">Discuss read-only in another session instead:</p>
+      <div className="flex flex-wrap gap-1">
+        {options.map((option) => (
+          <Button
+            key={option.destination.tabId}
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-auto min-h-6 max-w-full whitespace-normal break-words px-2 py-0.5 text-left text-[11px]"
+            data-read-only-alternative={option.destination.tabId}
+            onClick={() => onChoose(option)}
+          >
+            {option.title} ({option.destination.agent})
+          </Button>
+        ))}
+      </div>
+    </div>
   );
 }

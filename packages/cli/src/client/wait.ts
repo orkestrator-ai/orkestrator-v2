@@ -46,6 +46,10 @@ export function signalName(signal: AbortSignal | undefined): "SIGINT" | "SIGTERM
   return signal?.reason === "SIGTERM" ? "SIGTERM" : "SIGINT";
 }
 
+export function throwIfInterrupted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new CliError("observation-interrupted", "Interrupted");
+}
+
 export async function observe<T>(
   check: () => Promise<ObservationStep<T>>,
   options: ObserveOptions,

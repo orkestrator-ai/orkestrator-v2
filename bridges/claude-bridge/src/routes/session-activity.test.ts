@@ -65,9 +65,19 @@ describe("POST /sessions/activity", () => {
 
     const observations = await batch([idle.id, background.id, "not-a-session-id"]);
     expect(observations).toEqual({
-      [idle.id]: { activity: "idle", readyForInput: true, completionPending: false },
+      [idle.id]: {
+        activity: "idle",
+        readyForInput: true,
+        completionPending: false,
+        contentRevision: expect.any(String),
+      },
       // Background work keeps the environment working while input is ready.
-      [background.id]: { activity: "working", readyForInput: true, completionPending: true },
+      [background.id]: {
+        activity: "working",
+        readyForInput: true,
+        completionPending: true,
+        contentRevision: expect.any(String),
+      },
       "not-a-session-id": { activity: "missing" },
     });
     for (const id of [idle.id, background.id, "not-a-session-id"]) {
@@ -95,6 +105,7 @@ describe("POST /sessions/activity", () => {
             activity: "working",
             readyForInput: true,
             completionPending: taskType !== "local_bash",
+            contentRevision: expect.any(String),
           });
           expect((await batch([state.id]))[state.id]).toEqual(await single(state.id));
         }
@@ -113,7 +124,10 @@ describe("POST /sessions/activity", () => {
     const call = await nextQueryCall();
     try {
       const observations = await batch([state.id]);
-      expect(observations[state.id]).toEqual({ activity: "working" });
+      expect(observations[state.id]).toEqual({
+        activity: "working",
+        contentRevision: expect.any(String),
+      });
       expect(observations[state.id]).toEqual(await single(state.id));
     } finally {
       call.finish();
@@ -136,8 +150,8 @@ describe("POST /sessions/activity", () => {
       [gone]: { activity: "missing" },
       // An error is not evidence of deletion: answering `missing` here would
       // have the backend drop the user's session mapping.
-      [unreadable]: { activity: "idle" },
-      [onDisk]: { activity: "idle" },
+      [unreadable]: { activity: "idle", contentRevision: expect.any(String) },
+      [onDisk]: { activity: "idle", contentRevision: expect.any(String) },
     });
     // Answering must not have made the on-disk session resident.
     expect(peekSession(onDisk)).toBeUndefined();
@@ -162,6 +176,33 @@ describe("POST /sessions/activity", () => {
     // The contrast: `getSession` is the touching read the sweep must avoid.
     getSession(state.id);
     expect(state.lastAccessedAt).toBeGreaterThan(readAt);
+  });
+
+  test("moves the content revision for transcript and background-task changes only", async () => {
+    const state = createSession("content-revision");
+    track(state.id);
+    const revision = async () =>
+      ((await single(state.id)) as { contentRevision?: string }).contentRevision;
+    const first = await revision();
+    expect(typeof first).toBe("string");
+    // Reading changes nothing and touches nothing.
+    const readAt = state.lastAccessedAt;
+    expect(await revision()).toBe(first);
+    expect(state.lastAccessedAt).toBe(readAt);
+
+    // A background task reports progress: the view changed, activity did not.
+    const { emitBackgroundTaskSnapshot } = await import("../services/session-manager.js");
+    state.backgroundTasks = { "task-1": { id: "task-1", status: "completed" } };
+    emitBackgroundTaskSnapshot(state);
+    const afterTask = await revision();
+    expect(afterTask).not.toBe(first);
+
+    // A transcript change moves it too.
+    const { markTranscriptChanged } = await import("../services/transcript-revision.js");
+    markTranscriptChanged(state);
+    const afterTranscript = await revision();
+    expect(afterTranscript).not.toBe(afterTask);
+    expect((await batch([state.id]))[state.id]).toEqual(await single(state.id));
   });
 
   test("refuses requests outside the contract", async () => {

@@ -347,3 +347,40 @@ test("a backend that fails before readiness cannot report update success to its 
     error: { message: "2.22.0 did not start, so the host went back to 2.21.1" },
   });
 });
+
+test("channel mutations persist, replay by request key, conflict on changed intent, and refuse during updates", async () => {
+  const { harness, service } = await setup();
+  const first = await harness.call<{ host: HostMaintenanceSnapshot }>(
+    "host.update.channel",
+    { channel: "beta" },
+    { requestId: "channel" },
+  );
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  expect(first.result.host.updateChannel).toBe("beta");
+  expect(first.result.host.checkRequest).not.toBeNull();
+  const revision = service.snapshot().revision;
+  const replay = await harness.call(
+    "host.update.channel",
+    { channel: "beta" },
+    { requestId: "channel" },
+  );
+  expect(replay.receipt?.replayed).toBe(true);
+  expect(service.snapshot().revision).toBe(revision);
+  expect(
+    (await harness.call("host.update.channel", { channel: "unstable" }, { requestId: "channel" }))
+      .ok,
+  ).toBe(false);
+  expect(
+    (await harness.call("host.update.channel", { channel: "canary" }, { requestId: "invalid" })).ok,
+  ).toBe(false);
+  service.requestUpdate({ requestedVersion: null });
+  const busy = await harness.call(
+    "host.update.channel",
+    { channel: "stable" },
+    { requestId: "busy-channel" },
+  );
+  expect(busy.ok).toBe(false);
+  if (!busy.ok) expect(busy.error.code).toBe("busy");
+  expect(service.snapshot().updateChannel).toBe("beta");
+});

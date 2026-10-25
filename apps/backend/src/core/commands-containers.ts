@@ -4,7 +4,7 @@ import {
   boundDiagnosticTail,
 } from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
@@ -40,10 +40,6 @@ import type {
 import type { AgentToolConnection } from "./agent-tools.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
-  BRIDGE_TOKEN_PATTERN,
-  retryableBridgeStartupError,
-  CLAUDE_MODEL_CATALOG_TTL_MS,
-  CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS,
   CONTAINER_GITHUB_CREDENTIAL_FILE,
   CLAUDE_GITHUB_CREDENTIAL_FILE_ENV,
   CLAUDE_GITHUB_ENV_FINGERPRINT_FILE,
@@ -52,7 +48,8 @@ import {
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE,
   OPENCODE_GITHUB_ENV_PLUGIN_SOURCE,
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
-} from "./commands-runtime-state.js";
+} from "./agent-credential-files.js";
+import { BRIDGE_TOKEN_PATTERN, retryableBridgeStartupError } from "./local-server-runtime.js";
 import { resolveAnthropicApiKey, resolveCursorApiKey } from "./commands-validation.js";
 import { quoteShell } from "./commands-agent-support.js";
 import {
@@ -60,7 +57,6 @@ import {
   claudeBashMaxTimeoutEnvValue,
 } from "@orkestrator/protocol/claude-background-commands";
 import {
-  invalidateDockerContainerStateCache,
   isContainerRunning,
   getHostPort,
   shouldAddDockerHostGatewayAlias,
@@ -81,8 +77,9 @@ import {
   openCodeHealthHeaders,
   claudeBridgeAuthHeaders,
   agentToolConnectionFingerprint,
+  warmOpenCodeInstance,
 } from "./commands-server-health.js";
-import type { LocalServerKind } from "./commands-runtime-state.js";
+import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { ContainerLifecycleError, findOperationContainers } from "./container-lifecycle-service.js";
 import {
@@ -92,6 +89,8 @@ import {
   imageWritesVolumeStorage,
 } from "./docker-image.js";
 import { storageMountArguments } from "./container-storage.js";
+import { seedFilesDir } from "./nodes/node-files.js";
+import { readSeedManifest } from "./nodes/node-seed.js";
 import {
   allowedDomainsArgument,
   containerAllowedDomains,
@@ -101,8 +100,9 @@ import {
 } from "./container-network.js";
 import { githubRangesSeed } from "./github-ranges-cache.js";
 import {
-  dockerCapacity,
+  dockerAdmissionCapacity,
   logDriverArguments,
+  refuseUnenforceableLimits,
   resolveResourceLimits,
   resourceArguments,
   sharedMemoryMiB,
@@ -114,8 +114,12 @@ import {
 } from "./portable-inputs.js";
 import { pruneEnvironmentInputRevisions, selectedInputProviders } from "./portable-input-status.js";
 import type { ContainerStorageIdentity } from "@orkestrator/protocol/container-lifecycle";
+import { imageCopiesCursorMcpConfig } from "@orkestrator/protocol/image-manifest";
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
+
+export const CLAUDE_MODEL_CATALOG_TTL_MS = 5 * 60_000;
+export const CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS = 30_000;
 
 const AGENT_TEST_LOCAL_GIT_REMOTE_PATH = "/orkestrator-agent-test-origin.git";
 
@@ -178,7 +182,12 @@ export async function createDockerContainer(
   if (!project) throw new Error(`Project not found: ${environment.projectId}`);
   const config = await context.storage.loadConfig();
   const repoConfig = config.repositories[project.id] ?? defaultRepositoryConfig();
-  const configuredFilesToCopy = normalizeConfiguredProjectFiles(repoConfig.filesToCopy);
+  const seedRoot = seedFilesDir(context.storage.getDataDir(), environment.id);
+  const seededFiles = await readSeedManifest(seedRoot);
+  const configuredFilesToCopy = normalizeConfiguredProjectFiles([
+    ...(repoConfig.filesToCopy ?? []),
+    ...seededFiles,
+  ]);
   if (configuredFilesToCopy.length > 0 && !project.localPath) {
     throw new Error("Project has files configured to copy, but no local path is set");
   }
@@ -223,6 +232,12 @@ export async function createDockerContainer(
       "This image cannot write the environment's persistent storage format. Nothing was created; use the image the environment was built with or a newer one.",
     );
   }
+  // A budget the daemon cannot enforce is refused, never passed through: a
+  // rootless daemon without cgroups records it and enforces nothing. The
+  // topology probe's rootless flag survives a failed capacity probe.
+  const resourceLimits = resolveResourceLimits(environment, config.global).limits;
+  const capacity = await dockerAdmissionCapacity(topology);
+  refuseUnenforceableLimits(resourceLimits, capacity, "Nothing was created.");
   const runtimeGeneration = identity.runtimeGeneration ?? 1;
   const args = [
     "create",
@@ -267,15 +282,24 @@ export async function createDockerContainer(
     // Shared memory is charged to the memory limit, so under a budget it is
     // at most half of it.
     "--shm-size",
-    `${sharedMemoryMiB(resolveResourceLimits(environment, config.global).limits)}m`,
+    `${sharedMemoryMiB(resourceLimits)}m`,
     // Opt-in budget (environment override, else global default); none means
     // unrestricted, as before. Read back from inspect, never assumed.
-    ...resourceArguments(resolveResourceLimits(environment, config.global).limits),
+    ...resourceArguments(resourceLimits),
     // Bounded container stdout/stderr (10 MiB × 3) where the daemon offers
     // the local driver.
-    ...logDriverArguments((await dockerCapacity()).logDrivers),
+    ...logDriverArguments(capacity.logDrivers),
+    // The bind-mounted fixture keeps its host owner, which the container's
+    // user often is not, so Git refuses it as dubiously owned. Git reads
+    // safe.directory only from global or system config, so workspace setup
+    // trusts this one fixed path when told to; production containers are not.
     ...(agentTestLocalGitRemote
-      ? ["-v", `${agentTestLocalGitRemote}:${AGENT_TEST_LOCAL_GIT_REMOTE_PATH}`]
+      ? [
+          "-v",
+          `${agentTestLocalGitRemote}:${AGENT_TEST_LOCAL_GIT_REMOTE_PATH}`,
+          "-e",
+          `ORKESTRATOR_AGENT_TEST_GIT_REMOTE=${AGENT_TEST_LOCAL_GIT_REMOTE_PATH}`,
+        ]
       : []),
     // Linux Engine does not provide Docker Desktop's host.docker.internal DNS
     // entry automatically. Do not add this override on macOS/Windows: there it
@@ -367,16 +391,23 @@ export async function createDockerContainer(
   // files of enabled providers, copied into a private per-environment
   // revision; older images keep the read-only home mounts their entrypoint
   // expects. A running legacy container keeps its mounts until it is rebuilt.
-  const stagedInputs =
-    identity.imageId &&
-    process.env.ORKESTRATOR_PORTABLE_INPUTS !== "host-mounts" &&
-    (await imageCapabilities(identity.imageId, context))?.["staged-inputs"]
-      ? await stagePortableInputs(context.storage.getDataDir(), environment.id, inputProviders, {
-          ...defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
-          ...(await activeAgentAccountInputRoots(context)),
-          includeClaudeCredentials: allowClaudeCredentials,
-        })
-      : null;
+  // There is no switch back to home mounts for a capable image: they exposed
+  // whole host agent homes and put the Anthropic key in `docker inspect`.
+  const stagingCapabilities = identity.imageId
+    ? await imageCapabilities(identity.imageId, context)
+    : null;
+  // An entrypoint older than Cursor's copy would ignore `/cursor-config`, and
+  // staging it anyway would report Cursor's MCP servers as delivered.
+  const stagedProviders = imageCopiesCursorMcpConfig(stagingCapabilities)
+    ? inputProviders
+    : new Set([...inputProviders].filter((provider) => provider !== "cursor"));
+  const stagedInputs = stagingCapabilities?.["staged-inputs"]
+    ? await stagePortableInputs(context.storage.getDataDir(), environment.id, stagedProviders, {
+        ...defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
+        ...(await activeAgentAccountInputRoots(context)),
+        includeClaudeCredentials: allowClaudeCredentials,
+      })
+    : null;
   if (anthropicApiKey && stagedInputs) {
     const keyDir = path.join(stagedInputs.directory, "claude-config");
     await mkdir(keyDir, { recursive: true, mode: 0o700 });
@@ -465,9 +496,15 @@ export async function createDockerContainer(
     }
   }
 
+  // A command node may have staged seed files this node's project root lacks;
+  // the node's own copy always wins.
   if (project.localPath) {
-    await bindIfExists(path.join(project.localPath, ".env"), "/project-env/.env");
-    await bindIfExists(path.join(project.localPath, ".env.local"), "/project-env/.env.local");
+    for (const envFile of [".env", ".env.local"]) {
+      const own = path.join(project.localPath, envFile);
+      // Staged dotenv files are copied into the stopped container with the
+      // other seed inputs below, so no host secret mount survives setup.
+      await bindIfExists(own, `/project-env/${envFile}`);
+    }
     await bindIfExists(path.join(project.localPath, "opencode.json"), "/opencode-project-json");
   }
 
@@ -525,7 +562,7 @@ export async function createDockerContainer(
     });
     containerId = stdout.trim();
   } catch (error) {
-    invalidateDockerContainerStateCache();
+    context.runtime.containerStates.invalidate();
     if (!identity.operationId) throw error;
     // A timeout or dropped connection does not say whether Docker created the
     // container. Resolve it by exact label identity before reporting failure,
@@ -546,7 +583,7 @@ export async function createDockerContainer(
       );
     }
   }
-  invalidateDockerContainerStateCache();
+  context.runtime.containerStates.invalidate();
   if (stagedInputs) {
     // Earlier revisions no container binds any more (recovery copies keep
     // theirs) are removed. Best effort: a failure only leaves a revision for
@@ -559,6 +596,7 @@ export async function createDockerContainer(
         containerId,
         project.localPath,
         configuredFilesToCopy,
+        (await pathExists(seedRoot)) ? seedRoot : undefined,
       );
     }
   } catch (error) {
@@ -566,6 +604,8 @@ export async function createDockerContainer(
       () => undefined,
     );
     throw error;
+  } finally {
+    await rm(seedRoot, { recursive: true, force: true });
   }
   return containerId;
 }
@@ -714,6 +754,12 @@ export async function startContainerOpenCodeServer(
       );
     },
   );
+  // A fresh container layer installs OpenCode's plugin dependencies again on
+  // the first request naming /workspace; absorb that here, not in a prompt's
+  // status read.
+  if (!(await warmOpenCodeInstance(hostPort, "/workspace", openCodeHealthHeaders(authToken)))) {
+    console.warn(`[opencode] /workspace did not finish loading in container ${containerId}`);
+  }
   return { hostPort, wasRunning: false, authToken };
 }
 

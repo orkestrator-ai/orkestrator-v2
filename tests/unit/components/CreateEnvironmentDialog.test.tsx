@@ -122,11 +122,13 @@ async function selectAgentModel(name: string | RegExp) {
     fireEvent.click(screen.getByRole("button", { name: `${platform} models` }));
   }
   fireEvent.click(await screen.findByRole("menuitemradio", { name }));
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 }
 
 async function selectReasoning(name: string) {
   openAgentModelPicker();
   fireEvent.click(await screen.findByRole("menuitemradio", { name }));
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 }
 
 describe("resolveAgentDefaults", () => {
@@ -1111,6 +1113,7 @@ describe("resolveAgentDefaults", () => {
     expect(screen.getByRole("menuitemradio", { name: /Cursor Grok 4\.6/ })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /Composer 2\.5/ })).toBeTruthy();
     fireEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
@@ -1654,6 +1657,7 @@ describe("resolveAgentDefaults", () => {
     fireEvent.click(await screen.findByRole("button", { name: "opencode models" }));
     expect(await screen.findByRole("menuitemradio", { name: /Model A/ })).toBeTruthy();
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Model B/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
@@ -1736,6 +1740,7 @@ describe("resolveAgentDefaults", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: "opencode models" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Durable Model B/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(getAgentModelPicker().textContent).toContain("Durable Model B");
     expect(getAgentModelPicker().textContent).toContain("Default");
 
@@ -1874,6 +1879,7 @@ describe("resolveAgentDefaults", () => {
     openAgentModelPicker();
     fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Codex Favorite/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     await waitFor(() => {
       expect(getAgentModelPicker().textContent).toContain("Codex Favorite");
@@ -2147,6 +2153,7 @@ describe("resolveAgentDefaults", () => {
     expect(configuredOption).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /Cached Model/ })).toBeTruthy();
     fireEvent.click(configuredOption);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() =>
@@ -3687,6 +3694,179 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(screen.getByLabelText(/Feature name/i)).toBeTruthy();
     expect(screen.getByLabelText(/Acceptance criteria/i)).toBeTruthy();
     expect(screen.queryByLabelText(/Initial Prompt/i) === null).toBe(true);
+  });
+
+  test("shares the initial prompt text with the feature description in both directions", () => {
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={mock(async () => {})}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+      target: { value: "Add a dark mode toggle." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    const description = screen.getByLabelText(/^Description$/i) as HTMLTextAreaElement;
+    expect(description.value).toBe("Add a dark mode toggle.");
+
+    fireEvent.change(description, {
+      target: { value: "Add a dark mode toggle to the header." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+      "Add a dark mode toggle to the header.",
+    );
+  });
+
+  test("saves a feature description on cancel and restores it for either intent", () => {
+    const props = {
+      projectId: "feature-description-draft",
+      onOpenChange: mock(() => {}),
+      onCreate: mock(async () => {}),
+      onCreateFeatureBuild: mock(async () => true),
+    };
+    const { rerender } = render(<CreateEnvironmentDialog open {...props} />);
+    chooseFeature({ description: "  Keep this feature description.  " });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(props.onOpenChange).toHaveBeenCalledWith(false);
+
+    rerender(<CreateEnvironmentDialog open={false} {...props} />);
+    rerender(<CreateEnvironmentDialog open {...props} />);
+    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+      "Keep this feature description.",
+    );
+    chooseFeature({});
+    expect((screen.getByLabelText(/^Description$/i) as HTMLTextAreaElement).value).toBe(
+      "Keep this feature description.",
+    );
+  });
+
+  test("preserves edited feature drafts through mobile navigation and Launch Agent changes", async () => {
+    const props = {
+      projectId: "feature-draft-navigation",
+      onOpenChange: mock(() => {}),
+      onCreate: mock(async () => {}),
+      onCreateFeatureBuild: mock(async (_input: CreateFeatureBuildInput) => true),
+    };
+    const { rerender } = render(<CreateEnvironmentDialog open {...props} />);
+    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+      target: { value: "Saved draft A" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    rerender(<CreateEnvironmentDialog open={false} {...props} />);
+    rerender(<CreateEnvironmentDialog open {...props} />);
+    chooseFeature({});
+    props.onOpenChange.mockClear();
+    const description = screen.getByLabelText(/^Description$/i) as HTMLTextAreaElement;
+    expect(description.value).toBe("Saved draft A");
+    fireEvent.change(description, { target: { value: "Edited description B" } });
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Agent" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(screen.getByRole("tab", { name: "Agent" }).getAttribute("aria-selected")).toBe("true");
+    expect(description.value).toBe("Edited description B");
+    const launchAgent = screen.getByRole("checkbox", { name: "Launch Agent" });
+    fireEvent.click(launchAgent);
+    expect(launchAgent.getAttribute("aria-checked")).toBe("false");
+    expect(description.value).toBe("Edited description B");
+    fireEvent.click(launchAgent);
+    expect(description.value).toBe("Edited description B");
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Prompt" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(description.value).toBe("Edited description B");
+
+    submitFeature();
+    await waitFor(() => expect(props.onOpenChange).toHaveBeenLastCalledWith(false));
+    expect(props.onCreateFeatureBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ description: "Edited description B" }),
+    );
+    expect(props.onCreate).not.toHaveBeenCalled();
+  });
+
+  for (const outcome of ["successful", "deferred", "rejected"] as const) {
+    test(`${outcome} feature creation ${outcome === "successful" ? "clears" : "preserves"} the saved draft`, async () => {
+      const props = {
+        projectId: `feature-draft-${outcome}`,
+        onOpenChange: mock(() => {}),
+        onCreate: mock(async () => {}),
+        onCreateFeatureBuild: mock(async (_input: CreateFeatureBuildInput) => {
+          if (outcome === "rejected") throw new Error("Feature creation failed");
+          return outcome === "successful";
+        }),
+      };
+      const view = render(<CreateEnvironmentDialog open {...props} />);
+      chooseFeature({ description: "Saved feature draft" });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      view.rerender(<CreateEnvironmentDialog open={false} {...props} />);
+      view.rerender(<CreateEnvironmentDialog open {...props} />);
+      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+        "Saved feature draft",
+      );
+      props.onOpenChange.mockClear();
+      chooseFeature({ description: "Edited feature submission" });
+
+      await act(async () => {
+        submitFeature();
+      });
+      expect(props.onCreateFeatureBuild).toHaveBeenCalledWith(
+        expect.objectContaining({ description: "Edited feature submission" }),
+      );
+      if (outcome === "successful") {
+        expect(props.onOpenChange).toHaveBeenCalledWith(false);
+      } else {
+        expect(props.onOpenChange).not.toHaveBeenCalled();
+        expect((screen.getByLabelText(/^Description$/i) as HTMLTextAreaElement).value).toBe(
+          "Edited feature submission",
+        );
+        if (outcome === "rejected") {
+          expect(toastErrorMock).toHaveBeenCalledWith("Could not create environment", {
+            description: "Feature creation failed",
+          });
+        }
+      }
+
+      // Remount without cancelling: cancellation would write a new draft and
+      // hide whether submission preserved or deleted the previously saved one.
+      view.unmount();
+      render(<CreateEnvironmentDialog open {...props} />);
+      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+        outcome === "successful" ? "" : "Saved feature draft",
+      );
+    });
+  }
+
+  test("submits the prompt text as the feature description", async () => {
+    const onCreate = mock(async () => {});
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+      target: { value: "Add sign in with passkeys." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    const createButton = screen.getByRole("button", { name: "Create Environment" });
+    expect((createButton as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(createButton);
+
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(onCreateFeatureBuild.mock.calls[0]![0].description).toBe("Add sign in with passkeys.");
   });
 
   test("submits the ticket to the feature build handler instead of creating an environment", async () => {

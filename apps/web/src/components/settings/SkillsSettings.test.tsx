@@ -1,6 +1,18 @@
-import { afterAll, afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  jest,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
+import * as backend from "@/lib/backend";
+import { AccountMachineProvider } from "./account-machine";
 import type { AgentSkill, AgentSkillProvider, AgentSkillScan } from "@/lib/backend";
 
 /**
@@ -1107,3 +1119,37 @@ describe("SkillsSettings", () => {
     await waitFor(() => expect(footerText()).toBe("1 of 2 skills · 1 of 1 directories present"));
   });
 });
+
+for (const machine of [null, "other"]) {
+  test(`selected ${machine ?? "command node"} skill reads remain scoped and cannot reveal leaf files`, async () => {
+    window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+    const scan = spyOn(backend, "listAgentSkills").mockResolvedValue({
+      ...emptyScan("claude"),
+      skills: [skill({ name: "selected-skill", filePath: "/selected/SKILL.md" })],
+    } as never);
+    const read = spyOn(backend, "readAgentSkill").mockResolvedValue({
+      path: "/selected/SKILL.md",
+      content: "# Selected machine skill",
+      truncated: false,
+    });
+    try {
+      render(
+        <AccountMachineProvider value={{ machine, name: "Selected" }}>
+          <SkillsSettings />
+        </AccountMachineProvider>,
+      );
+      await screen.findByText("Selected machine skill");
+      expect(scan).toHaveBeenCalledWith("claude", machine);
+      expect(read).toHaveBeenCalledWith("claude", "/selected/SKILL.md", machine);
+      expect(screen.queryByRole("button", { name: "Reveal skill in file manager" }) === null).toBe(
+        true,
+      );
+      expect(invokeCalls.some((call) => call.command === "reveal_in_file_manager")).toBe(false);
+    } finally {
+      cleanup();
+      scan.mockRestore();
+      read.mockRestore();
+      delete window.orkestratorWorkspaceTarget;
+    }
+  });
+}

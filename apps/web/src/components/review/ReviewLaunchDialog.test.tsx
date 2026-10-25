@@ -196,8 +196,8 @@ const openPicker = () => {
 
 /**
  * An open menu marks the rest of the dialog `aria-hidden`, so anything queried
- * by role outside it is invisible until the menu is dismissed. Choosing an item
- * dismisses it; browsing the platform rail does not.
+ * by role outside it is invisible until the menu is dismissed. Neither choosing
+ * an item nor browsing the platform rail dismisses it.
  */
 const closePicker = () => {
   fireEvent.keyDown(document.body, { key: "Escape" });
@@ -217,11 +217,13 @@ const chooseModel = (name: RegExp, agent?: string) => {
   openPicker();
   showProviderModels(agent ?? "claude");
   fireEvent.click(modelItem(name));
+  closePicker();
 };
 
 const chooseReasoning = (name: RegExp) => {
   openPicker();
   fireEvent.click(reasoningItems().getByRole("menuitemradio", { name }));
+  closePicker();
 };
 
 const chooseProvider = (agent: string) => {
@@ -698,6 +700,7 @@ describe("ReviewLaunchDialog", () => {
     expect(reasoningItems().queryByRole("menuitemradio", { name: "Xhigh" }) === null).toBe(true);
 
     fireEvent.click(reasoningItems().getByRole("menuitemradio", { name: "Extra high" }));
+    closePicker();
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
       tabType: "claude",
@@ -1069,6 +1072,7 @@ describe("ReviewLaunchDialog on a phone", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Codex A/ }));
+    closePicker();
     expect(picker().textContent).toContain("Codex A");
     expect(picker().textContent).toContain("Medium");
 
@@ -1076,6 +1080,7 @@ describe("ReviewLaunchDialog on a phone", () => {
     openPicker();
     fireEvent.click(document.querySelector<HTMLElement>("[data-native-mobile-reasoning-trigger]")!);
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+    closePicker();
 
     expect(picker().textContent).toContain("High");
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
@@ -1093,6 +1098,7 @@ describe("ReviewLaunchDialog on a phone", () => {
     openPicker();
     fireEvent.click(screen.getByRole("button", { name: "claude models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Claude Fixed/ }));
+    closePicker();
 
     expect(screen.getByText("This model uses its default reasoning setting.")).toBeTruthy();
     openPicker();

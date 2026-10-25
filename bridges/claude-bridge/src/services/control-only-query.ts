@@ -2,7 +2,7 @@
  * A Claude query opened only for its control channel (commands, models,
  * account, MCP status, plan usage). It must never run a turn.
  *
- * `maxTurns: 0` does not ensure that. Agent SDK 0.3.296 passes `--max-turns`
+ * `maxTurns: 0` does not ensure that. Agent SDK 0.3.309 passes `--max-turns`
  * to the CLI only when the value is truthy, so a zero is dropped, and a string
  * prompt — even `""` — is sent as a user message that starts a real model turn
  * while the caller is still reading its control answer. Observed live on CLI

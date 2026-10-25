@@ -4,7 +4,7 @@
  * The bridge owns one command inventory per session and serves it as the
  * enhanced catalogue (version 1, see docs/architecture/native-agent-commands.md).
  * Everything here is grounded in the installed Agent SDK declaration
- * (`@anthropic-ai/claude-agent-sdk` 0.3.296, `sdk.d.ts`):
+ * (`@anthropic-ai/claude-agent-sdk` 0.3.309, `sdk.d.ts`):
  *
  * - `SlashCommand` is `{ name, description, argumentHint, aliases?, builtin? }`.
  *   It has no source, scope or terminal marker, so provenance is `unknown`

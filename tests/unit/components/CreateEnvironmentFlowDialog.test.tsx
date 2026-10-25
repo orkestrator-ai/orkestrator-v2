@@ -1077,8 +1077,10 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
     fireEvent.click(await screen.findByRole("button", { name: "codex models" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /GPT-5\.4-Mini/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());

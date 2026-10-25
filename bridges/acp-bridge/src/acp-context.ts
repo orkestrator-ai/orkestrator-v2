@@ -24,7 +24,12 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { WorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import type { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import { PARENT_WATCH_INTERVAL_MS } from "@orkestrator/protocol/parent-watchdog";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import {
+  ORKESTRATOR_ARTIFACT_MCP_PATH,
+  ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+} from "@orkestrator/protocol/transcript-artifacts";
 import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import type { AcpTurnUsage } from "./usage.js";
 import { formatAcpRpcError } from "./acp-errors.js";
@@ -498,6 +503,12 @@ export interface SessionState {
   commandsRevision?: number;
   /** The last pushed inventory dropped advertised rows. */
   commandsTruncated?: boolean;
+  /**
+   * The agent's own name for the session, from standard ACP
+   * `session_info_update` (bounded and single-line). Persisted; absent until
+   * the agent names the session, and removed when it clears the title.
+   */
+  title?: string;
   /** Whether session/load is replaying transcript updates into this state. */
   historyReplay: false | "hydrate" | "ignore";
   /**
@@ -540,6 +551,8 @@ export interface ParkedDeadline {
 export interface ApprovalState extends ParkedDeadline {
   id: string;
   title: string;
+  /** What the call runs, so the card can be a command or file approval. */
+  detail?: import("./acp-session.js").AcpApprovalDetail;
   options: Array<{ optionId: string; name: string; kind?: string }>;
   respond(optionId?: string): void;
 }
@@ -586,6 +599,7 @@ export interface PersistedSession {
   availableCommands?: NativeAgentSlashCommand[];
   commandsRevision?: number;
   commandsTruncated?: boolean;
+  title?: string;
   subagentLimitExceeded?: boolean;
   settledCursorAgentIds?: string[];
 }
@@ -684,6 +698,12 @@ export const agentRuntime: {
 export interface AgentMcpConnection {
   url: string;
   token: string;
+  /**
+   * A backend workflow turn's artifact-only connection: an
+   * `orkestrator-artifacts` server at this connection's origin
+   * (`/artifact-mcp`), authenticated by the turn's artifact grant.
+   */
+  artifacts?: { token: string };
 }
 
 export interface AcpSpawnOptions {
@@ -704,14 +724,25 @@ export function parseAgentMcpConnection(value: unknown): AgentMcpConnection | un
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
-    return { url, token };
+    const artifacts = isObject(value.artifacts) ? value.artifacts.token : undefined;
+    const artifactToken = typeof artifacts === "string" ? artifacts.trim() : "";
+    return {
+      url,
+      token,
+      ...(artifactToken && Buffer.byteLength(artifactToken, "utf8") <= 1024
+        ? { artifacts: { token: artifactToken } }
+        : {}),
+    };
   } catch {
     return undefined;
   }
 }
 
+/** Any change, the artifact grant included, re-attaches the agent with the new set. */
 export function mcpConnectionKey(connection?: AgentMcpConnection): string {
-  return connection ? `${connection.url}\u0000${connection.token}` : "";
+  return connection
+    ? JSON.stringify([connection.url, connection.token, connection.artifacts?.token ?? null])
+    : "";
 }
 
 /**
@@ -732,6 +763,7 @@ export function configuredAcpMcpServers(connection?: AgentMcpConnection): McpSer
       actions: [],
     },
   ];
+  const artifactToken = connection?.artifacts?.token;
   return [
     {
       name: "orkestrator",
@@ -739,6 +771,17 @@ export function configuredAcpMcpServers(connection?: AgentMcpConnection): McpSer
       url,
       headers: [{ name: "Authorization", value: `Bearer ${token}` }],
     },
+    // A workflow turn's artifact-only server; its bearer is the turn's grant.
+    ...(connection && artifactToken
+      ? [
+          {
+            name: ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+            type: "http" as const,
+            url: new URL(ORKESTRATOR_ARTIFACT_MCP_PATH, connection.url).toString(),
+            headers: [{ name: "Authorization", value: `Bearer ${artifactToken}` }],
+          },
+        ]
+      : []),
   ];
 }
 
@@ -944,7 +987,7 @@ export const RETRIABLE_PROVIDER_RETRY_BASE_MS = parseDuration(
 );
 export const PARENT_WATCHDOG_INTERVAL_MS = parseDuration(
   process.env.ACP_PARENT_WATCHDOG_INTERVAL_MS,
-  15_000,
+  PARENT_WATCH_INTERVAL_MS,
 );
 export const ACP_TOKEN_HEADER = "x-orkestrator-acp-token";
 

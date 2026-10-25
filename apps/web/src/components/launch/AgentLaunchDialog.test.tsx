@@ -86,9 +86,9 @@ function openPicker() {
 }
 
 /**
- * Choosing a platform leaves the menu open, and an open Radix menu hides the
- * rest of the dialog from the accessibility tree, so the dialog's own controls
- * are unreachable until it is dismissed.
+ * Choosing a platform, model or effort leaves the menu open, and an open Radix
+ * menu hides the rest of the dialog from the accessibility tree, so the
+ * dialog's own controls are unreachable until it is dismissed.
  */
 function closePicker() {
   act(() => {
@@ -294,6 +294,7 @@ describe("AgentLaunchDialog", () => {
     openPicker();
     fireEvent.click(screen.getByRole("button", { name: "opencode models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /OpenCode A/ }));
+    closePicker();
 
     submit();
     expect(onConfirm).toHaveBeenCalledWith({
@@ -317,6 +318,7 @@ describe("AgentLaunchDialog", () => {
 
     openPicker();
     fireEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+    closePicker();
 
     expect(picker().textContent).toContain("High");
     submit();
@@ -336,6 +338,7 @@ describe("AgentLaunchDialog", () => {
     openPicker();
     fireEvent.click(screen.getByRole("button", { name: "claude models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Claude Fixed/ }));
+    closePicker();
 
     expect(screen.getByText("This model uses its default reasoning setting.")).toBeTruthy();
     submit();

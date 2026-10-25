@@ -3,7 +3,7 @@ import {
   type AgentInteractionKind,
   type AgentInteractionRequest,
 } from "./agent-interactions.js";
-import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
+import { AGENT_PLATFORM_LABELS, isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 import {
   applyNativeAgentMessagePatch,
   isNativeAgentMessagePatchList,
@@ -58,6 +58,19 @@ export interface AgentReasoningOption {
   label: string;
   description?: string;
   annotation?: string;
+}
+
+/**
+ * Display label for a reasoning or effort id a provider reports without one.
+ *
+ * Every provider names the same levels (`minimal`, `low`, `high`, `xhigh`,
+ * `max`, …), so labels come from this one vocabulary rather than each
+ * catalogue: `xhigh` reads "Extra high"; any other id has separators turned
+ * into spaces and its first letter capitalised ("max-thinking" → "Max thinking").
+ */
+export function reasoningOptionLabel(id: string): string {
+  if (id === "xhigh") return "Extra high";
+  return id.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase());
 }
 
 /**
@@ -475,6 +488,57 @@ export interface NativeAgentComposerState {
   /** The provider's own approval modes, capped by the session's execution policy. */
   approvalModes?: NativeAgentApprovalModeOption[];
   selectedApprovalModeId?: string;
+  /**
+   * Set when the *current* combination of model, reasoning, speed and
+   * parameters bills above the provider's standard rate. Computed by the
+   * bridge from its provider's own rule and recomputed on every publication;
+   * absent means standard or unknown, never premium.
+   */
+  selectionPricing?: NativeAgentSelectionPricing;
+}
+
+/**
+ * Whether a selection or a run billed at the provider's standard rate or a
+ * premium one (Cursor Max mode, Claude long-context pricing, Codex priority
+ * credit rates). Provider-neutral: the provider's own name for it belongs in
+ * {@link NativeAgentSelectionPricing.label}.
+ */
+export type NativeAgentPricingTier = "standard" | "premium";
+
+/**
+ * A premium-rate selection, described for display. Attached to the composer
+ * rather than to a parameter option because it is usually a property of the
+ * combination (Cursor: every catalogue variant matching the chosen parameters
+ * is Max mode), not of any one value.
+ */
+export interface NativeAgentSelectionPricing {
+  tier: "premium";
+  /** Short provider-supplied badge text, e.g. "Max mode". */
+  label: string;
+  /** One sentence on why the selection is premium, for a tooltip. */
+  description?: string;
+}
+
+export function isNativeAgentPricingTier(value: unknown): value is NativeAgentPricingTier {
+  return value === "standard" || value === "premium";
+}
+
+/**
+ * Read a bridge's `selectionPricing` defensively. Bridge payloads are
+ * untrusted, so anything other than a premium tier with a non-blank label is
+ * dropped and the text is bounded.
+ */
+export function normalizeNativeAgentSelectionPricing(
+  value: unknown,
+): NativeAgentSelectionPricing | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.tier !== "premium" || typeof record.label !== "string") return undefined;
+  const label = record.label.trim().slice(0, 64);
+  if (!label) return undefined;
+  const description =
+    typeof record.description === "string" ? record.description.trim().slice(0, 512) : "";
+  return { tier: "premium", label, ...(description ? { description } : {}) };
 }
 
 /**
@@ -649,6 +713,43 @@ export type NativeAgentConnectionState = "connecting" | "connected" | "error";
 export const DISPATCH_OUTCOME_LOST_KIND = "dispatch-outcome-lost";
 
 /**
+ * What `GET /session/:id/dispatch?requestId=` answers.
+ *
+ * `dispatched` is an explicit positive from the bridge's own dispatch journal.
+ * `lost` is the read-only twin of the prompt route's 410
+ * {@link DISPATCH_OUTCOME_LOST_KIND}: an earlier bridge process recorded the id
+ * and this one cannot tell whether its turn ran, so it will refuse the id for
+ * good. Everything else is `unknown`. Older bridges never answer `lost`.
+ */
+export type BridgePromptDispatchStatus = "dispatched" | "unknown" | "lost";
+
+/** How long a retired dispatch stays visible on its native agent session. */
+export const NATIVE_AGENT_RETIRED_DISPATCH_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** What the user is told when a bridge can no longer say whether a prompt ran. */
+export function dispatchOutcomeLostMessage(platform: AgentPlatform): string {
+  return `${AGENT_PLATFORM_LABELS[platform] ?? platform} could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.`;
+}
+
+/** Notice identity for a retired dispatch, so a dismissal sticks to that request. */
+export function dispatchOutcomeLostOccurrenceId(requestId: string): string {
+  return `${DISPATCH_OUTCOME_LOST_KIND}:${requestId}`;
+}
+
+/**
+ * A parked dispatch the backend resolved on its own because the provider
+ * reported its outcome lost (`BridgePromptDispatchStatus` `lost`). Content-free
+ * apart from the fixed {@link dispatchOutcomeLostMessage}. A renderer whose
+ * draft still holds `requestId` drops that id, keeps the text and shows
+ * `message`, exactly as for a retry answered with `requestIdRetired`.
+ */
+export interface NativeAgentRetiredDispatch {
+  requestId: string;
+  retiredAt: string;
+  message: string;
+}
+
+/**
  * A dispatch may have reached the provider even when its HTTP response was
  * lost. Callers must reconcile `unknown`; they must never retry it blindly.
  */
@@ -728,6 +829,15 @@ export interface NativeAgentTurnState {
   error?: string;
   /** Present only while the turn is running and the provider reported one. */
   activity?: NativeAgentTurnActivity;
+  /**
+   * The backend announces every change to this session's idle view: activity
+   * transitions and, for a provider whose idle view can change without one
+   * (Claude background tasks, Codex async questions), content revisions from
+   * the provider's no-touch activity read. Set only while the provider
+   * reports those revisions, so a view of an older bridge keeps its baseline
+   * cadence. See `NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS`.
+   */
+  quietObservation?: true;
 }
 
 /**
@@ -933,7 +1043,10 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
       // a sibling `…-fast` model id, and both announce session modes. They are
       // per-build, not per-platform, so the flag means "this platform may offer
       // it" and the live composer's `fastModeAvailable` / `modes` decides.
-      actions: agent === "cursor" ? { steer: true, rewindMessages: true } : {},
+      // Grok compacts through its own `/compact`, which the ACP bridge runs as
+      // a selected command; a session whose live inventory lacks it answers
+      // the action 422 `command-unavailable`.
+      actions: agent === "cursor" ? { steer: true, rewindMessages: true } : { compact: true },
       // Cursor's SDK exposes no approval hook at all, so a Cursor tab never
       // raises anything. Grok's ACP wire does: it answers
       // `session/request_permission` for tool calls. Reporting the empty set
@@ -993,7 +1106,8 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         executionProfile: true,
       },
       agentTools: false,
-      actions: { compact: true, undo: true, redo: true, share: true },
+      // No `share`: OpenCode 1.19.1 discontinued session sharing upstream.
+      actions: { compact: true, undo: true, redo: true },
       // `permission.asked` and the v2-only `question.asked`. No MCP
       // elicitation surface on the v1 wire this repo uses.
       interactions: { kinds: ["question", "permission", "command-approval", "file-approval"] },
@@ -1013,9 +1127,9 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         mode: false,
       },
       actions: { compact: true, steer: true, rewindMessages: true, branches: true },
-      // Pi's approval gate is off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, so
-      // this is what the platform *may* raise. The live session reports the
-      // empty set when the gate is off — see the bridge's status projection.
+      // Pi asks only under an `ask` execution policy, so this is what the
+      // platform *may* raise. The live session reports the empty set under any
+      // other policy — see `publicInteractionKinds` in the bridge.
       interactions: { kinds: ["command-approval", "file-approval"] },
     };
   }
@@ -1025,11 +1139,15 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
     // Codex binds its collaboration mode to the thread and persists it.
     composer: { ...capabilities.composer, modeScope: "session" },
     actions: { compact: true, steer: true, review: true, rewindMessages: true },
-    // Codex: `item/tool/requestUserInput` questions, MCP elicitations in both
-    // form and url modes, and command/file approvals through
-    // `item/permissions/requestApproval`.
+    // Codex: MCP elicitations in both form and url modes, and command/file
+    // approvals through `item/permissions/requestApproval`. Not `question`:
+    // the bridge sets no collaboration mode, so every turn runs in Codex's
+    // Default mode, where `request_user_input` is refused and the model asks
+    // in plain text instead. The bridge still parks an
+    // `item/tool/requestUserInput` that does arrive (a user's own Codex config
+    // can turn `default_mode_request_user_input` on).
     interactions: {
-      kinds: ["question", "command-approval", "file-approval", "permission", "mcp-form", "mcp-url"],
+      kinds: ["command-approval", "file-approval", "permission", "mcp-form", "mcp-url"],
     },
   };
 }
@@ -1115,6 +1233,44 @@ export interface NativeAgentAsyncQuestionResponse {
   state: "queued" | "dispatching" | "sent" | "failed";
 }
 
+/**
+ * Provider-neutral names for rows of a context-window breakdown. A bridge maps
+ * its provider's own row ids onto these; a row it cannot place carries no id,
+ * and readers then fall back to the provider's display `name`. `reserved` is
+ * the compaction reserve; the `deferred-` rows are tool schemas the provider
+ * holds outside the window, so they do not count toward its use.
+ */
+export const NATIVE_AGENT_CONTEXT_CATEGORY_IDS = [
+  "system-prompt",
+  "tools",
+  "deferred-tools",
+  "mcp-tools",
+  "deferred-mcp-tools",
+  "mcp-instructions",
+  "agents",
+  "memory",
+  "skills",
+  "messages",
+  "reserved",
+  "free-space",
+] as const;
+
+export type NativeAgentContextCategoryId = (typeof NATIVE_AGENT_CONTEXT_CATEGORY_IDS)[number];
+
+export function isNativeAgentContextCategoryId(
+  value: unknown,
+): value is NativeAgentContextCategoryId {
+  return (NATIVE_AGENT_CONTEXT_CATEGORY_IDS as readonly unknown[]).includes(value);
+}
+
+export interface NativeAgentContextCategory {
+  /** Stable row identity; match on this, never on the English `name`. */
+  id?: NativeAgentContextCategoryId;
+  name: string;
+  tokens: number;
+  color?: string;
+}
+
 export interface NativeAgentContextUsage {
   usedTokens: number;
   maximumTokens?: number;
@@ -1144,7 +1300,7 @@ export interface NativeAgentContextUsage {
     unlimited?: boolean;
     balance?: string;
   };
-  contextCategories?: Array<{ name: string; tokens: number; color?: string }>;
+  contextCategories?: NativeAgentContextCategory[];
   permissionDenials?: number;
   /** Bounded, non-secret descriptions of permission denials from the provider. */
   permissionDenialDetails?: Array<{
@@ -1162,6 +1318,16 @@ export interface NativeAgentContextUsage {
 
 export interface NativeAgentTurnUsage {
   turnId: string;
+  /**
+   * When the bridge finalized this turn, ISO-8601.
+   *
+   * Providers republish their recent turns on every usage read, and several
+   * bridges restore them across a restart, so the moment a consumer first sees
+   * a turn can be long after it ran. Anything bucketing usage by time has to
+   * read this rather than its own clock. A bridge that cannot date a turn
+   * leaves it unset.
+   */
+  at?: string;
   costUsd?: number;
   /** Cursor's undiscounted price, retained separately from charged cost. */
   rawCostUsd?: number;
@@ -1178,6 +1344,8 @@ export interface NativeAgentTurnUsage {
   toolCalls?: number;
   requestId?: string;
   modelId?: string;
+  /** The rate the provider says this run actually billed at; absent when unreported. */
+  pricingTier?: NativeAgentPricingTier;
 }
 
 export interface NativeAgentAccountUsageWindow {
@@ -1437,14 +1605,31 @@ export interface NativeAgentMcpServer {
   id: string;
   name: string;
   status: "connected" | "connecting" | "failed" | "needs-auth" | "disabled" | "unknown";
-  scope?: "user" | "project" | "orkestrator" | "plugin";
+  scope?: "user" | "project" | "local" | "orkestrator" | "plugin";
   transport?: "stdio" | "sse" | "http";
   toolCount?: number;
   tools?: string[];
   /** Provider error text, redacted and bounded by the adapter. */
   error?: string;
+  /**
+   * What the user can do outside Orkestrator about this server's state, when
+   * no action here can (OpenCode's MCP sign-in). Short, user-facing, never a
+   * credential.
+   */
+  hint?: string;
   actions: NativeAgentMcpServerAction[];
 }
+
+/**
+ * OpenCode completes an MCP OAuth sign-in only when the request that started
+ * it waits for the browser's callback (`mcp.auth.authenticate`, or the CLI's
+ * `opencode mcp auth`). A sign-in started with `mcp.auth.start` alone has no
+ * waiter, and OpenCode's callback server (127.0.0.1:19876 by default) refuses
+ * the browser's redirect as an unknown state (traced in OpenCode 1.19.4). The
+ * CLI runs the whole flow and stores the token where the server reads it.
+ */
+export const OPENCODE_MCP_SIGN_IN_GUIDANCE =
+  "Sign in from a terminal where this environment's OpenCode runs: opencode mcp auth <server>, then reconnect the server.";
 
 export type NativeAgentAuthState =
   | "signed-in"
@@ -1966,6 +2151,8 @@ export const NATIVE_AGENT_COMMAND_CATALOGUE_ERROR_CODES = [
   "malformed",
   "too-large",
   "provider-error",
+  /** The bridge is older than catalogue version 1: its session route answered 404. */
+  "outdated-bridge",
 ] as const;
 export type NativeAgentCommandCatalogueErrorCode =
   (typeof NATIVE_AGENT_COMMAND_CATALOGUE_ERROR_CODES)[number];
@@ -1983,6 +2170,12 @@ export interface NativeAgentCommandCatalogueState {
   freshness?: "push" | "ttl";
   fetchedAt?: string;
   truncated?: boolean;
+  /**
+   * The provider lists more commands once its session attaches (first turn
+   * or an explicit refresh); the rows are what it could read before that.
+   * Only ever set on a `stale` list.
+   */
+  attachPending?: boolean;
   error?: { code: NativeAgentCommandCatalogueErrorCode; message?: string };
   lastRefresh?: { outcome: NativeAgentCommandRefreshOutcome; at: string; message?: string };
 }
@@ -2115,6 +2308,8 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   notices?: NativeAgentNotice[];
   /** Content-free marker for an idempotent backend-owned retry. */
   recoverableDispatch?: NativeAgentRecoverableDispatch;
+  /** The last parked dispatch the backend retired on its own; absent from older backends. */
+  retiredDispatch?: NativeAgentRetiredDispatch;
   backgroundTasks?: NativeAgentBackgroundTaskSummary[];
   suggestedPrompt?: string;
   completionBlockedByBackgroundTasks?: boolean;
@@ -2211,6 +2406,7 @@ export interface NativeAgentSessionStateView {
    */
   notices: NativeAgentNotice[];
   recoverableDispatch?: NativeAgentRecoverableDispatch;
+  retiredDispatch?: NativeAgentRetiredDispatch;
   backgroundTasks?: NativeAgentBackgroundTaskSummary[];
   suggestedPrompt?: string;
   completionBlockedByBackgroundTasks?: boolean;
@@ -2343,6 +2539,7 @@ export type NativeAgentProjectionField =
   | "runtimeHealthAuthoritative"
   | "notices"
   | "recoverableDispatch"
+  | "retiredDispatch"
   | "backgroundTasks"
   | "suggestedPrompt"
   | "completionBlockedByBackgroundTasks"
@@ -2432,6 +2629,7 @@ const PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "runtimeHealthAuthoritative",
   "notices",
   "recoverableDispatch",
+  "retiredDispatch",
   "backgroundTasks",
   "suggestedPrompt",
   "completionBlockedByBackgroundTasks",
@@ -2455,6 +2653,7 @@ const OPTIONAL_PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "runtimeHealthAuthoritative",
   "notices",
   "recoverableDispatch",
+  "retiredDispatch",
   "backgroundTasks",
   "suggestedPrompt",
   "completionBlockedByBackgroundTasks",

@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
 import "./lib/native/web-gateway";
+import App from "./App";
 import { renderReactRoot } from "./lib/app-renderer";
 import { startApp } from "./lib/app-startup";
 import { createReactRootErrorOptions } from "./lib/react-root-errors";

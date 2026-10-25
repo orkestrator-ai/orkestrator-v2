@@ -17,13 +17,19 @@ const PHASES = [
 
 type Box = { x: number; y: number; width: number; height: number };
 
+function pipeline(page: Page) {
+  return page.getByRole("tablist", { name: "Multi Review pipeline" });
+}
+
 async function nodeBoxes(page: Page): Promise<Box[]> {
-  return page.getByRole("tab").evaluateAll((nodes) =>
-    nodes.map((node) => {
-      const { x, y, width, height } = node.getBoundingClientRect();
-      return { x, y, width, height };
-    }),
-  );
+  return pipeline(page)
+    .getByRole("tab")
+    .evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const { x, y, width, height } = node.getBoundingClientRect();
+        return { x, y, width, height };
+      }),
+    );
 }
 
 function overlapping(boxes: Box[]): Array<[number, number]> {
@@ -48,7 +54,7 @@ for (const phase of PHASES) {
   test(`renders the ${phase} phase as a pipeline without overlapping nodes`, async ({ page }) => {
     await page.goto(`/multi-review-flow?phase=${phase}&reviewers=4`);
     const pipeline = page.getByRole("tablist", { name: "Multi Review pipeline" });
-    await expect(pipeline.getByRole("tab")).toHaveCount(7);
+    await expect(pipeline.getByRole("tab")).toHaveCount(8);
     // Exactly one node is inspected, and the inspector names it.
     const selected = pipeline.locator('[role="tab"][aria-selected="true"]');
     await expect(selected).toHaveCount(1);
@@ -67,7 +73,10 @@ for (const count of [1, 2, 4, 8]) {
     const boxes = await nodeBoxes(page);
     expect(overlapping(boxes)).toEqual([]);
     const viewport = page.viewportSize()!;
-    for (const box of boxes) expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+    // The PR column, last, runs past the right edge rather than narrowing the rest.
+    for (const box of boxes.slice(0, -1)) {
+      expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+    }
   });
 }
 
@@ -156,17 +165,44 @@ test("settles across the graph breakpoint with an 8px scrollbar gutter", async (
 
 test("walks the pipeline from the keyboard", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
-  const selected = page.locator('[role="tab"][aria-selected="true"]');
+  const selected = pipeline(page).getByRole("tab", { selected: true });
   await expect(selected).toHaveAttribute("aria-label", /^Reviewer 2 ·/);
   await selected.focus();
   await page.keyboard.press("ArrowDown");
   await expect(selected).toHaveAttribute("aria-label", /^Reviewer 3 ·/);
   await expect(selected).toBeFocused();
   await page.keyboard.press("End");
-  await expect(selected).toHaveAttribute("aria-label", /^Fix,/);
+  await expect(selected).toHaveAttribute("aria-label", /^Pull request,/);
   await expect(
     page.getByTestId("multi-review-inspector").getByRole("heading", { level: 2 }).first(),
-  ).toHaveText("Fix");
+  ).toHaveText("Pull request");
+  await page.keyboard.press("ArrowLeft");
+  await expect(selected).toHaveAttribute("aria-label", /^Fix,/);
+});
+
+test("centres each new stage as far as the graph scrolls", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
+  const viewportLocator = page.locator("[data-flow-viewport]");
+  test.skip(
+    await viewportLocator.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    "The whole pipeline fits, so nothing scrolls",
+  );
+  const scrollLeft = () => viewportLocator.evaluate((element) => element.scrollLeft);
+  // The browser's own limit, which can differ from scrollWidth - clientWidth
+  // by the reserved scrollbar gutter.
+  const maxScroll = await viewportLocator.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth;
+    const max = element.scrollLeft;
+    element.scrollLeft = 0;
+    return max;
+  });
+  // The review starts at the left edge, the PR column out of view.
+  expect(await scrollLeft()).toBe(0);
+  await page.getByRole("tab", { name: /^Pull request,/ }).click();
+  // At the far right the canvas stops at its edge rather than centring the node.
+  await expect.poll(scrollLeft).toBe(maxScroll);
+  await page.getByRole("tab", { name: /^Review package,/ }).click();
+  await expect.poll(scrollLeft).toBe(0);
 });
 
 async function viewportBox(page: Page): Promise<Box> {
@@ -194,32 +230,20 @@ async function visibleFrame(page: Page): Promise<Box> {
   return { x: 0, y: 0, width, height };
 }
 
-test("fits the 32-reviewer maximum and zooms within bounds", async ({ page }) => {
+test("scrolls the 32-reviewer maximum and zooms within bounds", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=32");
   await expect(page.getByRole("tab", { name: /^Reviewer \d+ ·/ })).toHaveCount(32);
+  const controls = page.getByRole("group", { name: "Zoom" });
+  await expect(controls.getByRole("button")).toHaveCount(4);
+  await expect(page.getByRole("button", { name: "Fit the whole pipeline" })).toHaveCount(0);
   const level = page.getByTestId("multi-review-zoom-level");
   await expect(level).toHaveText("100%");
-
-  await page.getByRole("button", { name: "Fit the whole pipeline" }).click();
-  await expect(level).not.toHaveText("100%");
-  // Every node at once: inside the graph's viewport, or for the stacked
-  // column, on the screen once Fit has brought the column's top into view.
-  await expect
-    .poll(async () => {
-      const frame = await visibleFrame(page);
-      return (await nodeBoxes(page)).every((box) => inside(box, frame));
-    })
-    .toBe(true);
-  // Layout overflow must agree with the scaled canvas, including at Fit.
-  const overflow = await page.locator("[data-flow-viewport]").evaluate((element) => ({
-    x: element.scrollWidth - element.clientWidth,
-    y: element.scrollHeight - element.clientHeight,
-  }));
-  expect(overflow.x).toBeLessThanOrEqual(1);
-  expect(overflow.y).toBeLessThanOrEqual(1);
   const boxes = await nodeBoxes(page);
-  expect(boxes).toHaveLength(35);
+  expect(boxes).toHaveLength(36);
   expect(overlapping(boxes)).toEqual([]);
+  await page.getByRole("tab", { name: /^Reviewer 32 ·/ }).click();
+  const selectedBox = (await page.getByRole("tab", { name: /^Reviewer 32 ·/ }).boundingBox())!;
+  expect(inside(selectedBox, await visibleFrame(page))).toBe(true);
 
   const zoomIn = page.getByRole("button", { name: "Zoom in" });
   while (await zoomIn.isEnabled()) await zoomIn.click();
@@ -239,7 +263,7 @@ test("keeps the node reached from the keyboard in view at the 32-reviewer maximu
     await page.getByRole("button", { name: "Zoom in" }).click();
     await page.getByRole("button", { name: "Zoom in" }).click();
   }
-  const selected = page.locator('[role="tab"][aria-selected="true"]');
+  const selected = pipeline(page).getByRole("tab", { selected: true });
   await selected.focus();
   await page.keyboard.press("Home");
   for (let step = 0; step < 30; step += 1) await page.keyboard.press("ArrowDown");
@@ -278,7 +302,7 @@ test("pans the zoomed graph by dragging the canvas and with Ctrl + wheel zoom", 
     expect(await viewportLocator.evaluate((element) => element.scrollTop)).toBe(0);
   } else {
     const frame = await viewportBox(page);
-    // Drag from empty canvas below the Fix column's label.
+    // Drag from empty canvas below the PR column's label.
     const start = { x: frame.x + frame.width - 60, y: frame.y + frame.height - 80 };
     await page.mouse.move(start.x, start.y);
     await page.mouse.down();
@@ -332,7 +356,7 @@ test("the stacked zoom controls are full-size touch targets", async ({ page }) =
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
   test.skip(!isStacked(page), "The wide graph's controls are sized for a fine pointer");
   const controls = page.getByRole("group", { name: "Zoom" });
-  await expect(controls.getByRole("button")).toHaveCount(5);
+  await expect(controls.getByRole("button")).toHaveCount(4);
   for (const button of await controls.getByRole("button").all()) {
     const box = (await button.boundingBox())!;
     expect(box.width).toBeGreaterThanOrEqual(44);
@@ -344,7 +368,7 @@ test("the stacked zoom controls are full-size touch targets", async ({ page }) =
   expect(groupBox.x + groupBox.width).toBeLessThanOrEqual(width);
 });
 
-test("fullscreen covers its tab and keeps Fit and scrolling usable", async ({ page }) => {
+test("fullscreen covers its tab and keeps zoom and scrolling usable", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=8&paneControls");
   // The overlay covers the tab root, including its header and inspector.
   const root = page.getByTestId("review-pane");
@@ -360,21 +384,26 @@ test("fullscreen covers its tab and keeps Fit and scrolling usable", async ({ pa
       );
     })
     .toBeLessThanOrEqual(1);
-  await page.getByRole("button", { name: "Fit the whole pipeline" }).click();
-  const frame = (await overlay.boundingBox())!;
-  for (const box of await nodeBoxes(page)) {
-    expect(box.y).toBeGreaterThanOrEqual(frame.y);
-    expect(box.y + box.height).toBeLessThanOrEqual(frame.y + frame.height + 1);
-  }
+  const level = page.getByTestId("multi-review-zoom-level");
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await expect(level).toHaveText("125%");
+  await level.click();
+  await expect(level).toHaveText("100%");
   if (isStacked(page)) {
-    await page.getByTestId("multi-review-zoom-level").click();
     await overlay.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
     await expect.poll(() => overlay.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
     await expect(page.getByRole("button", { name: "Exit fullscreen" })).toBeInViewport();
-    await page.getByRole("button", { name: "Fit the whole pipeline" }).click();
-    await expect.poll(() => overlay.evaluate((element) => element.scrollTop)).toBe(0);
+  } else {
+    const zoomIn = page.getByRole("button", { name: "Zoom in" });
+    while (await zoomIn.isEnabled()) await zoomIn.click();
+    await expect(level).toHaveText("200%");
+    const viewport = page.locator("[data-flow-viewport]");
+    await viewport.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   }
   await page.getByRole("button", { name: "Exit fullscreen" }).press("Escape");
   await expect(overlay).toHaveCount(0);
@@ -446,10 +475,245 @@ test("shows a failed reviewer's error on its node, with the whole text in a tool
 
 test("shows the selected step's transcript tail in the inspector", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=consolidating&reviewers=4");
-  const selected = page.locator('[role="tab"][aria-selected="true"]');
+  const selected = pipeline(page).getByRole("tab", { selected: true });
   await expect(selected).toHaveAttribute("aria-label", /^Consolidation,/);
   const tail = page.getByRole("log", { name: "Latest consolidation activity" });
   await expect(tail).toContainText("Merging four reviewer reports");
+});
+
+test("the transcript tail fills the inspector down to the footer", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1400 });
+  await page.goto("/multi-review-flow?phase=consolidating&reviewers=4");
+  const tail = page.getByRole("log", { name: "Latest consolidation activity" });
+  await expect(tail).toContainText("Merging four reviewer reports");
+  const footer = page.getByRole("button", { name: "Cancel" }).locator("xpath=..");
+  const tailBox = (await tail.boundingBox())!;
+  const footerBox = (await footer.boundingBox())!;
+  // Only the inspector's bottom padding sits between them.
+  const gap = footerBox.y - (tailBox.y + tailBox.height);
+  expect(gap).toBeGreaterThanOrEqual(0);
+  expect(gap).toBeLessThanOrEqual(24);
+  await page.screenshot({ path: "output/playwright/multi-review-tail-fill.png" });
+});
+
+test("a completed overflowing transcript follows pane resizing until the reader scrolls up", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 1800 });
+  await page.goto("/multi-review-flow?phase=consolidating&longTranscript");
+  await page.getByRole("tab", { name: /^Reviewer 1 ·/ }).click();
+  const tail = page.getByTestId("multi-review-transcript-tail");
+  await expect(tail).toContainText("Transcript entry 40.");
+  await expect(tail).not.toContainText("Working…");
+  const bottomGap = () =>
+    tail.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
+  const height = () => tail.evaluate((element) => element.clientHeight);
+  const scrollTop = () => tail.evaluate((element) => element.scrollTop);
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+  expect(await tail.evaluate((element) => element.scrollHeight)).toBeGreaterThan(await height());
+  const initialHeight = await height();
+  await page.setViewportSize({ width: 1280, height: 1500 });
+  await expect.poll(height).toBeLessThan(initialHeight);
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+
+  // Real wheel input scrolls only the log, leaving the overview in place.
+  await tail.scrollIntoViewIfNeeded();
+  const overview = page.getByTestId("multi-review-overview-scroll");
+  const overviewTop = await overview.evaluate((element) => element.scrollTop);
+  const beforeWheel = await scrollTop();
+  await tail.hover();
+  await page.mouse.wheel(0, -300);
+  await expect.poll(scrollTop).toBeLessThan(beforeWheel - 100);
+  const readingTop = await scrollTop();
+  const readingHeight = await height();
+  await page.setViewportSize({ width: 1280, height: 1200 });
+  await expect.poll(height).toBeLessThan(readingHeight);
+  await expect.poll(scrollTop).toBe(readingTop);
+  expect(await bottomGap()).toBeGreaterThan(100);
+  expect(await overview.evaluate((element) => element.scrollTop)).toBe(overviewTop);
+
+  await page.mouse.wheel(0, 100_000);
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+  expect(await overview.evaluate((element) => element.scrollTop)).toBe(overviewTop);
+  const followingHeight = await height();
+  await page.setViewportSize({ width: 1280, height: 1050 });
+  await expect.poll(height).toBeLessThan(followingHeight);
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+});
+
+for (const viewport of [
+  { width: 1280, height: 900 },
+  { width: 390, height: 844 },
+  { width: 1024, height: 600 },
+]) {
+  test(`inspector grid contains the tail and report at ${viewport.width}x${viewport.height}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/multi-review-flow?phase=ready&longTranscript");
+    await page.getByRole("tab", { name: /^Reviewer 1 ·/ }).click();
+    const inspector = page.getByTestId("multi-review-inspector");
+    const tail = page.getByTestId("multi-review-transcript-tail");
+    await expect(tail).toContainText("Transcript entry 40.");
+    const overview = page.getByTestId("multi-review-overview-scroll");
+    // Return to the inspector's start so the badge has not stuck over its body.
+    await overview.evaluate((element) => {
+      const panel = element.querySelector('[data-testid="multi-review-inspector"]')!;
+      element.scrollTop +=
+        panel.getBoundingClientRect().top - element.getBoundingClientRect().top - 16;
+    });
+    const badge = page.getByTestId("multi-review-findings-badge");
+    const header = inspector.getByRole("heading", { level: 2 }).first().locator("xpath=..");
+    const body = inspector.locator(":scope > div").nth(1);
+    const badgeBox = (await badge.boundingBox())!;
+    const headerBox = (await header.boundingBox())!;
+    expect(overlapping([badgeBox, headerBox])).toEqual([]);
+    expect(badgeBox.y).toBeLessThan(headerBox.y + headerBox.height);
+    expect(badgeBox.y + badgeBox.height).toBeLessThanOrEqual((await body.boundingBox())!.y + 1);
+    const tailBox = (await tail.boundingBox())!;
+    expect(tailBox.height).toBeGreaterThanOrEqual(448);
+    expect(inside(tailBox, (await inspector.boundingBox())!)).toBe(true);
+    expect(tailBox.x).toBeGreaterThanOrEqual(0);
+    expect(tailBox.x + tailBox.width).toBeLessThanOrEqual(viewport.width);
+    // The consolidated report belongs to Consolidation's Report view.
+    await pipeline(page)
+      .getByRole("tab", { name: /^Consolidation,/ })
+      .click();
+    await inspector
+      .getByRole("tablist", { name: "Inspector views" })
+      .getByRole("tab", { name: "Report", exact: true })
+      .click();
+    await expect(inspector.getByRole("log")).toHaveCount(0);
+    const article = inspector.getByRole("article", { name: "Consolidated Multi Review" });
+    const report = article.getByRole("heading", { name: "Consolidated Multi Review", exact: true });
+    await expect(report).toBeVisible();
+    const reportBox = (await article.boundingBox())!;
+    expect(inside(reportBox, (await inspector.boundingBox())!)).toBe(true);
+    expect(reportBox.x).toBeGreaterThanOrEqual(0);
+    expect(reportBox.x + reportBox.width).toBeLessThanOrEqual(viewport.width);
+    expect(await overview.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
+    await report.scrollIntoViewIfNeeded();
+    await expect(report).toBeInViewport();
+    await expect(badge).toBeInViewport();
+    await page.screenshot({
+      path: `output/playwright/multi-review-report-${viewport.width}x${viewport.height}.png`,
+    });
+  });
+}
+
+test("inspector report content and selected views belong to each pipeline node", async ({
+  page,
+}) => {
+  await page.goto("/multi-review-flow?phase=ready");
+  const inspector = page.getByTestId("multi-review-inspector");
+  const views = inspector.getByRole("tablist", { name: "Inspector views" });
+  const transcript = views.getByRole("tab", { name: "Transcript", exact: true });
+  const report = views.getByRole("tab", { name: "Report", exact: true });
+
+  await pipeline(page)
+    .getByRole("tab", { name: /^Reviewer 1 ·/ })
+    .click();
+  await expect(transcript).toHaveAttribute("aria-selected", "true");
+  await expect(inspector.getByRole("article")).toHaveCount(0);
+  await report.click();
+  const reviewerReport = inspector.getByRole("article", { name: "Reviewer report" });
+  await expect(reviewerReport).toBeVisible();
+  await reviewerReport.getByRole("button", { name: "Issues · 3", exact: true }).click();
+  await expect(reviewerReport).toContainText("Restart resets runtime for shared fix session");
+  await expect(reviewerReport).not.toContainText("Consolidation drops coverage gaps");
+
+  await pipeline(page)
+    .getByRole("tab", { name: /^Consolidation,/ })
+    .click();
+  await expect(transcript).toHaveAttribute("aria-selected", "true");
+  await expect(inspector.getByRole("log")).toContainText("Merging four reviewer reports");
+  await report.click();
+  const consolidated = inspector.getByRole("article", { name: "Consolidated Multi Review" });
+  await expect(consolidated).toBeVisible();
+  await consolidated.getByRole("button", { name: /^Issues ·/ }).click();
+  await expect(consolidated).toContainText(
+    "Consolidation drops coverage gaps from stopped reviewers",
+  );
+
+  await pipeline(page)
+    .getByRole("tab", { name: /^Reviewer 1 ·/ })
+    .click();
+  await expect(report).toHaveAttribute("aria-selected", "true");
+  await expect(reviewerReport).toBeVisible();
+  await transcript.click();
+  await pipeline(page)
+    .getByRole("tab", { name: /^Reviewer 2 ·/ })
+    .click();
+  await expect(transcript).toHaveAttribute("aria-selected", "true");
+  await pipeline(page)
+    .getByRole("tab", { name: /^Consolidation,/ })
+    .click();
+  await expect(report).toHaveAttribute("aria-selected", "true");
+  await expect(consolidated).toBeVisible();
+  await pipeline(page)
+    .getByRole("tab", { name: /^Reviewer 1 ·/ })
+    .click();
+  await expect(transcript).toHaveAttribute("aria-selected", "true");
+  await expect(inspector.getByRole("log")).toBeVisible();
+});
+
+test("an overflowing transcript keeps its reading position and follow mode behind Report", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto("/multi-review-flow?phase=ready&longTranscript&transcriptControls");
+  await pipeline(page)
+    .getByRole("tab", { name: /^Reviewer 1 ·/ })
+    .click();
+  const inspector = page.getByTestId("multi-review-inspector");
+  const views = inspector.getByRole("tablist", { name: "Inspector views" });
+  const tail = inspector.getByTestId("multi-review-transcript-tail");
+  const bottomGap = () =>
+    tail.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
+  const scrollTop = () => tail.evaluate((element) => element.scrollTop);
+  const append = page.getByRole("button", { name: "Append transcript entry" });
+  await expect(tail).toContainText("Transcript entry 32.");
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+  expect(await scrollTop()).toBeGreaterThan(300);
+  const mountedTail = await tail.elementHandle();
+
+  // Following survives a hide/show, including an authoritative update while hidden.
+  await views.getByRole("tab", { name: "Report", exact: true }).click();
+  await expect(tail).toBeHidden();
+  await append.click();
+  await expect(tail).toContainText("Transcript entry 33.");
+  await views.getByRole("tab", { name: "Transcript", exact: true }).click();
+  expect(await tail.evaluate((element, original) => element === original, mountedTail)).toBe(true);
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+
+  await tail.scrollIntoViewIfNeeded();
+  await tail.hover();
+  const beforeWheel = await scrollTop();
+  await page.mouse.wheel(0, -300);
+  await expect.poll(scrollTop).toBeLessThan(beforeWheel - 100);
+  const readingTop = await scrollTop();
+  await views.getByRole("tab", { name: "Report", exact: true }).click();
+  await views.getByRole("tab", { name: "Transcript", exact: true }).click();
+  await expect.poll(scrollTop).toBe(readingTop);
+
+  // New output behind Report must not turn following back on for a reader.
+  await views.getByRole("tab", { name: "Report", exact: true }).click();
+  await append.click();
+  await expect(tail).toContainText("Transcript entry 34.");
+  await views.getByRole("tab", { name: "Transcript", exact: true }).click();
+  await expect.poll(scrollTop).toBe(readingTop);
+  expect(await bottomGap()).toBeGreaterThan(100);
+
+  // Returning to the bottom explicitly resumes following new hidden output.
+  await tail.scrollIntoViewIfNeeded();
+  await tail.hover();
+  await page.mouse.wheel(0, 100_000);
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+  await views.getByRole("tab", { name: "Report", exact: true }).click();
+  await append.click();
+  await expect(tail).toContainText("Transcript entry 35.");
+  await views.getByRole("tab", { name: "Transcript", exact: true }).click();
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
 });
 
 test("shows each queued reviewer's place in the admission queue", async ({ page }) => {
@@ -462,6 +726,7 @@ test("shows each queued reviewer's place in the admission queue", async ({ page 
 
 test("marks findings a running reviewer reported as provisional", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
+  await page.getByTestId("multi-review-findings-badge").click();
   const count = page.getByTestId("multi-review-findings-count");
   await expect(count).toContainText("provisional");
   const row = page.getByRole("listitem").filter({ hasText: "Zoom level label reads 99%" });
@@ -484,8 +749,191 @@ for (const phase of ["ready", "interactive", "reviewing", "consolidating"]) {
     await page.goto(`/multi-review-flow?phase=${phase}&cleanReviewPr`);
     await expect(page.getByRole("tablist", { name: "Multi Review pipeline" })).toBeVisible();
     await expect(page.getByTestId("multi-review-auto-pr-notice")).toHaveCount(0);
+    const assertCurrentReview = async () => {
+      const pr = page.getByRole("tab", { name: /^Pull request,/ });
+      await expect(pr).toHaveAttribute("data-flow-state", "not-started");
+      await expect(pr).toHaveAttribute("aria-selected", "false");
+      const edge = page.locator('[data-flow-edge="into-pr"]');
+      await expect(edge).toHaveAttribute("data-edge-state", "pending");
+      if (await page.locator('[data-flow-layout="graph"]').count()) {
+        const right = await page
+          .locator('[data-flow-node="fix"]')
+          .evaluate(
+            (node: HTMLElement) => parseFloat(node.style.left) + parseFloat(node.style.width),
+          );
+        expect(await edge.getAttribute("d")).toMatch(new RegExp(`^M${right} `));
+      }
+      await pr.click();
+      await expect(page.getByTestId("multi-review-inspector")).not.toContainText(
+        "The review found nothing to fix",
+      );
+      await expect(page.getByTestId("multi-review-inspector")).toContainText("earlier review");
+    };
+    await assertCurrentReview();
     await page.reload();
     await expect(page.getByRole("tablist", { name: "Multi Review pipeline" })).toBeVisible();
     await expect(page.getByTestId("multi-review-auto-pr-notice")).toHaveCount(0);
+    await assertCurrentReview();
   });
 }
+
+test("findings stay reachable, fit the viewport and scroll internally", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=4&manyFindings&paneControls");
+  const badge = page.getByTestId("multi-review-findings-badge");
+  const panel = page.getByTestId("multi-review-findings");
+  await badge.scrollIntoViewIfNeeded();
+  await expect(badge).toBeInViewport();
+  const inspector = page.getByTestId("multi-review-inspector");
+  const header = inspector.getByRole("heading", { level: 2 }).first();
+  const badgeBox = (await badge.boundingBox())!;
+  expect(overlapping([badgeBox, (await header.boundingBox())!])).toEqual([]);
+  await badge.click();
+  await expect(panel).toBeInViewport();
+  const { width, height } = page.viewportSize()!;
+  expect(inside((await panel.boundingBox())!, { x: 0, y: 0, width, height })).toBe(true);
+  const list = panel.getByRole("list");
+  await expect(panel.getByRole("listitem")).toHaveCount(41);
+  await list.hover();
+  const pageScroll = await badge.evaluate((element) => {
+    let parent = element.parentElement;
+    while (parent && parent.scrollHeight <= parent.clientHeight) parent = parent.parentElement;
+    return parent?.scrollTop ?? 0;
+  });
+  await page.mouse.wheel(0, 10_000);
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(panel.getByText("Additional finding 35", { exact: true })).toBeInViewport();
+  expect(
+    await badge.evaluate((element) => {
+      let parent = element.parentElement;
+      while (parent && parent.scrollHeight <= parent.clientHeight) parent = parent.parentElement;
+      return parent?.scrollTop ?? 0;
+    }),
+  ).toBe(pageScroll);
+  await panel.click({ position: { x: 10, y: 10 } });
+  await expect(panel).toBeVisible();
+  await badge.press("Escape");
+  await expect(panel).toHaveCount(0);
+  await expect(badge).toBeFocused();
+  await badge.click();
+  await header.click();
+  await expect(panel).toHaveCount(0);
+  await badge.click();
+  const outside = page.getByRole("textbox", { name: "Other pane input" });
+  expect(
+    await outside.evaluate((element) => {
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      element.dispatchEvent(event);
+      return event.defaultPrevented;
+    }),
+  ).toBe(false);
+  await expect(panel).toBeVisible();
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  await page.getByRole("button", { name: "Activate review pane" }).click();
+  await expect(panel).toHaveCount(0);
+  // Sticky positioning keeps the badge in view while reading further down.
+  await inspector.evaluate((element) => {
+    let parent = element.parentElement;
+    while (parent && parent.scrollHeight <= parent.clientHeight) parent = parent.parentElement;
+    if (parent) parent.scrollTop += 150;
+  });
+  await expect(badge).toBeInViewport();
+});
+
+for (const scale of [0.75, 1, 1.5]) {
+  test(`divider follows a captured mouse at ${scale * 100}% application CSS zoom`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1800, height: 1400 });
+    await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
+    await page.evaluate((zoom) => {
+      document.documentElement.style.zoom = String(zoom);
+    }, scale);
+    const divider = page.getByRole("separator", { name: "Resize graph" });
+    await expect(divider).toBeVisible();
+    const before = Number(await divider.getAttribute("aria-valuenow"));
+    const box = (await divider.boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await expect(divider).toBeFocused();
+    // One jump beyond the original hit area exercises native pointer capture.
+    await page.mouse.move(x, y + 90);
+    await expect(divider).toHaveAttribute("aria-valuenow", String(before + Math.round(90 / scale)));
+    const moved = (await divider.boundingBox())!;
+    expect(Math.abs(moved.y - box.y - 90)).toBeLessThanOrEqual(1);
+    await page.mouse.up();
+    await page.reload();
+    await expect(page.getByRole("separator", { name: "Resize graph" })).toHaveAttribute(
+      "aria-valuenow",
+      String(before + Math.round(90 / scale)),
+    );
+    await page.getByRole("separator", { name: "Resize graph" }).press("Enter");
+    await page.reload();
+    await expect(page.getByRole("separator", { name: "Resize graph" })).toHaveAttribute(
+      "aria-valuenow",
+      String(before),
+    );
+  });
+}
+
+test("a divider click keeps automatic sizing and supports keyboard resizing without tabbing", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1400, height: 1000 });
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
+  const divider = page.getByRole("separator", { name: "Resize graph" });
+  const before = Number(await divider.getAttribute("aria-valuenow"));
+  await divider.click();
+  await expect(divider).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(divider).toHaveAttribute("aria-valuenow", String(before - 16));
+  await page.keyboard.press("Enter");
+  await divider.click();
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=8");
+  await expect(page.getByRole("separator", { name: "Resize graph" })).not.toHaveAttribute(
+    "aria-valuenow",
+    String(before),
+  );
+});
+
+test("touch resize captures the finger beyond the handle and prevents page panning", async ({
+  page,
+  context,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "Requires native touch input");
+  // A tablet-sized touch client uses the wide graph and its divider.
+  await page.setViewportSize({ width: 1400, height: 1200 });
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
+  const divider = page.getByRole("separator", { name: "Resize graph" });
+  const before = Number(await divider.getAttribute("aria-valuenow"));
+  const box = (await divider.boundingBox())!;
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  const scrollY = await page.evaluate(() => window.scrollY);
+  const cdp = await context.newCDPSession(page);
+  try {
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x, y, id: 1 }],
+    });
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x, y: y + 80, id: 1 }],
+    });
+    await expect(divider).toHaveAttribute("aria-valuenow", String(before + 80));
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrollY);
+    await page.reload();
+    await expect(page.getByRole("separator", { name: "Resize graph" })).toHaveAttribute(
+      "aria-valuenow",
+      String(before + 80),
+    );
+  } finally {
+    await cdp.detach();
+  }
+});

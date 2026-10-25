@@ -16,6 +16,8 @@ import {
   noteClaudeAuthenticationWorked,
   readClaudeAuthStatus,
 } from "./claude-sign-in.js";
+import { getSession } from "./session-manager-core.js";
+import { CLAUDE_LOGIN_REFUSED_MESSAGE } from "./session-auth-notice.js";
 import {
   AUTH_SECRET_CANARIES,
   captureOutput,
@@ -24,20 +26,23 @@ import {
   expectNothingSecretLogged,
 } from "../../../../tests/helpers/auth-secret-canaries.js";
 
-// What `accountInfo()` answers with an empty config directory (Claude 0.3.296).
+// What `accountInfo()` answers with an empty config directory (Claude 0.3.309).
 const SIGNED_OUT = { tokenSource: "none", apiProvider: "firstParty" } as const;
 const NOT_LOGGED_IN = "Not logged in · Please run /login";
 
 const LOCKED = {
   state: "authentication-required",
   message: CLAUDE_SIGN_IN_REQUIRED_MESSAGE,
-  signIn: { kind: "terminal", hint: "Open a Claude terminal tab and run /login." },
+  signIn: {
+    kind: "terminal",
+    hint: "Sign in to Claude from the sign-in card in this tab or from Settings → Claude.",
+  },
 };
 
 /** Run one turn that Claude refuses for want of a login, then answer its account probe. */
-async function refuseTurnForMissingLogin(): Promise<void> {
-  const session = createSession("Signed out");
-  track(session.id);
+async function refuseTurnForMissingLogin(sessionId?: string): Promise<string> {
+  const session = sessionId ? { id: sessionId } : createSession("Signed out");
+  if (!sessionId) track(session.id);
   const turn = sendPrompt(session.id, "hello");
   const call = await nextQueryCall();
   call.push({
@@ -57,6 +62,7 @@ async function refuseTurnForMissingLogin(): Promise<void> {
   // Control only: no prompt string, so no user message and no turn.
   expect(typeof probe.prompt).not.toBe("string");
   await waitFor(() => probe.isClosed());
+  return session.id;
 }
 
 describe("Claude account normalization", () => {
@@ -97,14 +103,17 @@ describe("Claude prompt admission", () => {
     expect((await readClaudeAuthStatus()).state).toBe("needs-auth");
   });
 
-  test("a refused turn with a credential present stays a turn error", async () => {
+  test("a refused turn with a credential present reads as expired without locking", async () => {
     // An expired login still has a source; the probe cannot tell it from a good one.
     queryControlOverrides.accountInfo = mock(async () => ({ tokenSource: "claude.ai" }));
 
     await refuseTurnForMissingLogin();
 
-    expect((await readClaudeAuthStatus()).state).toBe("signed-in");
+    expect((await readClaudeAuthStatus()).state).toBe("expired");
     expect(claudeReadiness()).toBeUndefined();
+    // A model answering again proves the login works.
+    noteClaudeAuthenticationWorked();
+    expect((await readClaudeAuthStatus()).state).toBe("signed-in");
   });
 
   test("a failed account read never locks", async () => {
@@ -210,6 +219,33 @@ describe("Claude prompt admission", () => {
     expect(claudeReadiness()).toBeUndefined();
   });
 
+  test("a login refused mid-turn raises the session's auth notice until a model answers", async () => {
+    // A credential is present, so readiness stays open: only the notice and
+    // the transcript's sign-in card say what happened.
+    queryControlOverrides.accountInfo = mock(async () => ({ tokenSource: "claude.ai" }));
+    const sessionId = await refuseTurnForMissingLogin();
+
+    expect(claudeReadiness()).toBeUndefined();
+    expect(getSession(sessionId)?.authNotice).toEqual({
+      state: "expired",
+      message: CLAUDE_LOGIN_REFUSED_MESSAGE,
+      occurrenceId: "not-logged-in",
+    });
+
+    const turn = sendPrompt(sessionId, "again");
+    const call = await nextQueryCall();
+    call.push({
+      type: "assistant",
+      uuid: "answer",
+      message: { id: "answer-message", role: "assistant", content: [{ type: "text", text: "Hi" }] },
+    });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await turn;
+
+    expect(getSession(sessionId)?.authNotice).toBeUndefined();
+  });
+
   test("re-reads an expired lock in the background so a terminal login unlocks the tab", async () => {
     const accountInfo = mock(async (): Promise<Record<string, string>> => SIGNED_OUT);
     queryControlOverrides.accountInfo = accountInfo;
@@ -285,7 +321,9 @@ describe("Claude auth status carries no credential", () => {
       );
       expectAuthStatusShape(authBody);
       expect(authBody).toEqual(status);
-      expect(loginBody).toEqual({ error: "Open a Claude terminal tab and run /login." });
+      expect(loginBody).toEqual({
+        error: "Claude signs in from the sign-in card in its tab or from Settings → Claude.",
+      });
       expect(logoutBody).toEqual({ error: "Claude sign-out is available from a terminal tab." });
       expectNoCanary([authBody, loginBody, logoutBody], "Claude auth routes");
       expectNothingSecretLogged(routeOutput, "Claude auth routes");
@@ -296,4 +334,29 @@ describe("Claude auth status carries no credential", () => {
       }
     }
   });
+});
+
+test("a fresh probe after terminal reauthentication can clear expired without a model turn", async () => {
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    queryControlOverrides.accountInfo = mock(async () => ({
+      tokenSource: "claude.ai",
+      subscriptionType: "max",
+    }));
+    noteClaudeAuthenticationFailure();
+    const failedProbe = await nextQueryCall();
+    await waitFor(() => failedProbe.isClosed());
+    expect((await readClaudeAuthStatus()).state).toBe("expired");
+    now += 30_001;
+    queryControlOverrides.accountInfo = mock(async () => ({
+      tokenSource: "claude.ai",
+      subscriptionType: "team",
+    }));
+    const status = await readClaudeAuthStatus();
+    expect(status).toMatchObject({ state: "signed-in", account: { plan: "team" } });
+    expect(claudeReadiness()).toBeUndefined();
+  } finally {
+    clock.mockRestore();
+  }
 });

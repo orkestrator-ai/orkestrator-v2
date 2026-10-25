@@ -6,7 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Maximize, Minimize, Minus, Plus, Scan } from "lucide-react";
+import { Maximize, Minimize, Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
@@ -16,8 +16,7 @@ import {
   FLOW_ZOOM_MAX,
   canZoomIn,
   canZoomOut,
-  fitFlowView,
-  fitStackedFlowZoom,
+  centerFlowRect,
   flowContentOffset,
   flowViewportHeight,
   pinchFlowZoom,
@@ -64,25 +63,23 @@ function touchMidpoint(touches: TouchList): { clientX: number; clientY: number }
  *
  * The wide graph scrolls both ways inside a viewport of bounded height. The
  * stacked column scrolls only sideways: its viewport grows with the scaled
- * column, so vertical scrolling stays with the page, and Fit fits the column
- * to the height `fitHeight` reports the page shows it in.
+ * column, so vertical scrolling stays with the page.
  *
- * In fullscreen the wide graph's viewport is `fillHeight` tall, the height it
- * is given, instead of its own.
+ * Given a `fillHeight`, the wide graph's viewport is that tall instead of its
+ * own height: the overlay's height in fullscreen, or the height dragged with
+ * the divider.
  */
 export function useFlowViewport({
   viewKey,
   measuredWidth,
   content,
   layout = "graph",
-  fitHeight,
   fillHeight = null,
 }: {
   viewKey: string;
   measuredWidth: number | null;
   content: FlowSize;
   layout?: "graph" | "stacked";
-  fitHeight?: () => number | null;
   fillHeight?: number | null;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -105,9 +102,9 @@ export function useFlowViewport({
   const zoomRef = useRef(zoom);
   /** A scroll position waiting for the render at its zoom. */
   const pendingRef = useRef<FlowView | null>(null);
-  const sizesRef = useRef({ content, viewport, measuredWidth, viewKey, stacked, fitHeight });
+  const sizesRef = useRef({ content, viewport, measuredWidth, viewKey });
   useLayoutEffect(() => {
-    sizesRef.current = { content, viewport, measuredWidth, viewKey, stacked, fitHeight };
+    sizesRef.current = { content, viewport, measuredWidth, viewKey };
   });
 
   const attachViewport = useCallback((element: HTMLDivElement | null) => {
@@ -211,41 +208,43 @@ export function useFlowViewport({
 
   const resetZoom = useCallback(() => zoomTo(DEFAULT_FLOW_VIEW.zoom), [zoomTo]);
 
-  const fit = useCallback(() => {
-    const {
-      content: size,
-      viewport: box,
-      stacked: column,
-      fitHeight: available,
-    } = sizesRef.current;
-    apply(
-      column
-        ? {
-            zoom: fitStackedFlowZoom(size.height, available?.() ?? null),
-            scrollLeft: 0,
-            scrollTop: 0,
-          }
-        : fitFlowView(size, box),
-    );
-  }, [apply]);
-
-  /** Bring a node (canvas coordinates) into view before it takes focus. */
-  const reveal = useCallback(
-    (rect: FlowRect) => {
+  const scrollTo = useCallback(
+    (next: FlowView, smooth: boolean) => {
       const element = viewportRef.current;
       if (!element) return;
-      const { content: size, viewport: box } = sizesRef.current;
       const view = currentView();
-      const next = revealFlowRect(view, rect, size, box);
       if (next.scrollLeft === view.scrollLeft && next.scrollTop === view.scrollTop) return;
       if (pendingRef.current) pendingRef.current = next;
-      else {
+      else if (smooth && typeof element.scrollTo === "function" && !prefersReducedMotion()) {
+        element.scrollTo({ left: next.scrollLeft, top: next.scrollTop, behavior: "smooth" });
+      } else {
         element.scrollLeft = next.scrollLeft;
         element.scrollTop = next.scrollTop;
       }
       save(next);
     },
     [currentView, save],
+  );
+
+  /** Bring a node (canvas coordinates) into view before it takes focus. */
+  const reveal = useCallback(
+    (rect: FlowRect) => {
+      const { content: size, viewport: box } = sizesRef.current;
+      scrollTo(revealFlowRect(currentView(), rect, size, box), false);
+    },
+    [currentView, scrollTo],
+  );
+
+  /**
+   * Centre a node (canvas coordinates) across the viewport, within the scroll
+   * range. `smooth` glides there, unless the user prefers reduced motion.
+   */
+  const center = useCallback(
+    (rect: FlowRect, { smooth = false }: { smooth?: boolean } = {}) => {
+      const { content: size, viewport: box } = sizesRef.current;
+      scrollTo(centerFlowRect(currentView(), rect, size, box), smooth);
+    },
+    [currentView, scrollTo],
   );
 
   const zoomToRef = useRef(zoomTo);
@@ -381,13 +380,20 @@ export function useFlowViewport({
     viewportHandlers,
     zoomBy,
     resetZoom,
-    fit,
     reveal,
+    center,
   };
 }
 
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
 /**
- * −, the zoom level (which resets to 100%), +, Fit and Fullscreen. Over the wide graph's
+ * −, the zoom level (which resets to 100%), + and Fullscreen. Over the wide graph's
  * bottom-right corner; at the top of the stacked column, where they stay in
  * reach while it scrolls. Touch targets are 44 px wherever the pointer is
  * coarse, and always in the stacked layout, which is the phone layout.
@@ -397,7 +403,6 @@ export function FlowZoomControls({
   onZoomOut,
   onZoomIn,
   onReset,
-  onFit,
   fullscreen,
   onToggleFullscreen,
   placement = "corner",
@@ -406,7 +411,6 @@ export function FlowZoomControls({
   onZoomOut: () => void;
   onZoomIn: () => void;
   onReset: () => void;
-  onFit: () => void;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   placement?: "corner" | "inline";
@@ -467,17 +471,6 @@ export function FlowZoomControls({
         variant="ghost"
         size="icon"
         className={CONTROL_CLASS}
-        aria-label="Fit the whole pipeline"
-        title="Fit"
-        onClick={onFit}
-      >
-        <Scan className="size-3.5" />
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className={CONTROL_CLASS}
         aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
         aria-pressed={fullscreen}
         title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
@@ -486,6 +479,129 @@ export function FlowZoomControls({
       >
         {fullscreen ? <Minimize className="size-3.5" /> : <Maximize className="size-3.5" />}
       </Button>
+    </div>
+  );
+}
+
+/** How far an arrow key moves the divider. */
+const DIVIDER_KEY_STEP = 16;
+
+/**
+ * The graph's bottom edge, dragged to make the graph taller or shorter. While
+ * it drags, `onResize` follows the pointer; `onCommit` takes the height it was
+ * let go at. A double-click, or Enter, gives the graph its own height back
+ * (`null`). Arrow keys move it in steps; Home and End go to either limit.
+ */
+export function FlowHeightDivider({
+  height,
+  min,
+  max,
+  onResize,
+  onCommit,
+}: {
+  height: number;
+  min: number;
+  max: number;
+  onResize: (height: number | null) => void;
+  onCommit: (height: number | null) => void;
+}) {
+  const dragRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startHeight: number;
+    scale: number;
+    moved: boolean;
+  } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const heightAt = (clientY: number) => {
+    const drag = dragRef.current!;
+    return Math.round(
+      Math.min(max, Math.max(min, drag.startHeight + (clientY - drag.startY) / drag.scale)),
+    );
+  };
+  const end = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const next = heightAt(event.clientY);
+    dragRef.current = null;
+    setDragging(false);
+    if (drag.moved) onCommit(next);
+  };
+  const cancel = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    setDragging(false);
+    onResize(null);
+  };
+  useEffect(
+    () => () => {
+      if (!dragRef.current) return;
+      dragRef.current = null;
+      onResize(null);
+    },
+    [onResize],
+  );
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize graph"
+      aria-valuenow={height}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      tabIndex={0}
+      data-testid="multi-review-graph-divider"
+      title="Drag to resize · double-click to reset"
+      className={cn(
+        "group absolute inset-x-0 -bottom-1 z-20 flex h-2 cursor-row-resize touch-none items-center outline-hidden",
+        dragging && "select-none",
+      )}
+      onPointerDown={(event) => {
+        if (event.button !== 0 || dragRef.current) return;
+        event.preventDefault();
+        event.currentTarget.focus();
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        // CSS zoom scales client coordinates, while native page zoom already
+        // reports them in layout pixels. Measure their ratio in either host.
+        const renderedHeight = event.currentTarget.getBoundingClientRect().height;
+        const layoutHeight = event.currentTarget.offsetHeight;
+        dragRef.current = {
+          pointerId: event.pointerId,
+          startY: event.clientY,
+          startHeight: height,
+          scale: renderedHeight > 0 && layoutHeight > 0 ? renderedHeight / layoutHeight : 1,
+          moved: false,
+        };
+        setDragging(true);
+      }}
+      onPointerMove={(event) => {
+        const drag = dragRef.current;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        if (Math.abs(event.clientY - drag.startY) / drag.scale >= 2) drag.moved = true;
+        if (drag.moved) onResize(heightAt(event.clientY));
+      }}
+      onPointerUp={end}
+      onPointerCancel={cancel}
+      onLostPointerCapture={cancel}
+      onDoubleClick={() => onCommit(null)}
+      onKeyDown={(event) => {
+        let next: number | null | undefined;
+        if (event.key === "ArrowUp") next = height - DIVIDER_KEY_STEP;
+        else if (event.key === "ArrowDown") next = height + DIVIDER_KEY_STEP;
+        else if (event.key === "Home") next = min;
+        else if (event.key === "End") next = max;
+        else if (event.key === "Enter") next = null;
+        if (next === undefined) return;
+        event.preventDefault();
+        onCommit(next === null ? null : Math.min(max, Math.max(min, next)));
+      }}
+    >
+      <div
+        className={cn(
+          "h-0.5 w-full transition-colors group-hover:bg-primary/50 group-focus-visible:bg-primary/70",
+          dragging && "bg-primary/70",
+        )}
+      />
     </div>
   );
 }

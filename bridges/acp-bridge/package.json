@@ -1,21 +1,21 @@
 {
   "name": "acp-bridge",
-  "version": "2.22.3",
+  "version": "2.30.0-beta",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "bun build src/index.ts --target=node --format=esm --outfile=dist/index.js",
     "test:bridge": "bun test src --preload ../../tests/setup-node.ts --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/acp-bridge.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-1}",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
+    "typecheck": "bun check && bun check -p tsconfig.test.json",
     "start": "bun dist/index.js"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.8.0",
+    "@agentclientprotocol/sdk": "2.0.1",
     "@orkestrator/protocol": "workspace:*"
   },
   "devDependencies": {
-    "@types/bun": "~1.4.3",
+    "@types/bun": "~1.4.4",
     "@types/node": "^26.6.5",
     "typescript": "~7.0.2"
   }

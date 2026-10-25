@@ -46,6 +46,46 @@ describe("session authentication readiness", () => {
   });
 });
 
+describe("turn-time auth notice", () => {
+  test("a provider login renewal shows on the session until a turn completes", async () => {
+    const h = await harness({
+      "thread/start": () => ({ thread: threadPayload("thread-1") }),
+      "turn/start": () => ({ turn: { id: "turn-1" } }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "hi", requestId: "req-auth", attachments: [] });
+    expect(h.runtime.getStatus(sessionId)?.authNotice).toBeUndefined();
+
+    h.child().notify("modelProvider/authRecoveryStarted", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      provider: "openai",
+      message: "Refreshing the OpenAI login",
+    });
+    await h.drain();
+    const raised = h.runtime.getStatus(sessionId)?.authNotice;
+    expect(raised).toMatchObject({ state: "expired", message: "Refreshing the OpenAI login" });
+    expect(
+      h.events.some(
+        (event) =>
+          event.type === "session.updated" &&
+          event.sessionId === sessionId &&
+          (event.data as { authNotice?: unknown }).authNotice === raised,
+      ),
+    ).toBe(true);
+
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    await waitUntil(
+      () => h.runtime.getStatus(sessionId)?.authNotice === undefined,
+      "a completed turn did not clear the auth notice",
+    );
+  });
+});
+
 describe("same thread in two tabs", () => {
   test("both tabs share one canonical transcript", async () => {
     const h = await harness({

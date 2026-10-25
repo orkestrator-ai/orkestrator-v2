@@ -177,6 +177,35 @@ describe("Orkestrator control MCP server", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
+  /**
+   * A ready coordinator conversation's credential. Operator credentials run
+   * the shared launch, prompt, ticket and mail tools through public actions
+   * (`control-mcp-operator-tools.test.ts`); coordinators keep these
+   * implementations, which is what the tests below exercise.
+   */
+  function coordinatorCredential(capabilities: string[]) {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+      },
+    }));
+    overrides.set("open_coordinator_delegation", () => ({ opened: false }));
+    overrides.set("assert_coordinator_delegation_available", () => ({ available: true }));
+    return server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities,
+    });
+  }
+  const BASE = { baseBranch: "main", baseCommit: "a".repeat(40) };
+
   for (const mode of ["off", "settled"] as const) {
     test(`workflow tool wake promises match the ${mode} observer policy`, async () => {
       const world = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
@@ -316,8 +345,12 @@ describe("Orkestrator control MCP server", () => {
     const info = server.getInfo();
     expect(info).not.toBeNull();
     const descriptor = await readControlMcpDescriptor(info!.descriptorFile);
-    expect(descriptor).toMatchObject({ version: 1, url: info!.url, pid: process.pid });
+    expect(descriptor).toMatchObject({ version: 2, url: info!.url, pid: process.pid });
     expect(descriptor.token.length).toBeGreaterThanOrEqual(32);
+    // The first start creates the default credential with the full profile.
+    expect(descriptor.credentials).toEqual([
+      expect.objectContaining({ id: "default", profile: "full", token: descriptor.token }),
+    ]);
     expect((await stat(info!.descriptorFile)).mode & 0o777).toBe(0o600);
 
     const unauthorized = await rpc(descriptor.url, `${descriptor.token}x`, "tools/list");
@@ -941,6 +974,85 @@ describe("Orkestrator control MCP server", () => {
     ).not.toBe(true);
   });
 
+  test("authenticated coordinator transfers authorize both nested endpoints before admission", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [{ id: "conversation-1", mailboxIncarnationId: "incarnation-1" }],
+      },
+    }));
+    overrides.set("get_node_status", () => ({
+      nodeId: "bk_self",
+      mode: "command",
+      controllers: [],
+    }));
+    overrides.set("get_projects", () => [
+      { id: "project-1", gitUrl: "https://git.test/team/repo.git" },
+    ]);
+    overrides.set("get_environment", (args) => ({
+      id: args.environmentId,
+      projectId: args.environmentId === "other" ? "project-2" : "project-1",
+      projectHome: args.environmentId === "home",
+    }));
+    overrides.set("get_node_summaries", () => ({
+      nodes: [
+        {
+          nodeId: "bk_leaf",
+          view: { displayName: "Leaf" },
+          projects: [{ ref: { projectId: "leaf-project" }, repositoryHint: "git.test/team/repo" }],
+          environments: [
+            { ref: { environmentId: "own" }, projectId: "leaf-project" },
+            { ref: { environmentId: "other" }, projectId: "unrelated" },
+            { ref: { environmentId: "home" }, projectId: "leaf-project", isProjectHome: true },
+          ],
+        },
+      ],
+    }));
+    overrides.set("transfer_node_files", () => ({ status: "completed" }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["environments", "discovery"],
+    });
+    const call = (from: unknown, to: unknown) =>
+      rpc(credential.url, credential.token, "tools/call", {
+        name: "transfer_files",
+        arguments: { from, to, files: ["x.txt"] },
+      });
+    for (const side of ["from", "to"])
+      for (const nodeId of ["bk_self", "bk_leaf"])
+        for (const environmentId of ["other", "home"]) {
+          invocations.length = 0;
+          const endpoints = {
+            from: { nodeId: "bk_self", environmentId: "own" },
+            to: { nodeId: "bk_leaf", environmentId: "own" },
+            [side]: { nodeId, environmentId },
+          };
+          expect((await call(endpoints.from, endpoints.to)).body.result?.isError).toBe(true);
+          expect(invocations.some((entry) => entry.command === "transfer_node_files")).toBe(false);
+        }
+    expect(
+      (
+        await call(
+          { nodeId: "bk_self", projectRoot: true },
+          { nodeId: "bk_leaf", projectRoot: true },
+        )
+      ).body.result?.isError,
+    ).toBe(true);
+    expect(
+      (
+        await call(
+          { nodeId: "bk_self", projectRoot: true },
+          { nodeId: "bk_leaf", environmentId: "own" },
+        )
+      ).body.result?.isError,
+    ).not.toBe(true);
+  });
+
   test("never lets a coordinator credential act on the project home", async () => {
     overrides.set("get_project_coordinator", () => ({
       workspace: {
@@ -1042,11 +1154,13 @@ describe("Orkestrator control MCP server", () => {
     }
   });
 
-  test("exposes the bounded core tools without leaking project paths", async () => {
+  test("keeps the original operator tools first without leaking project paths", async () => {
     const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
     const listed = await rpc(descriptor.url, descriptor.token, "tools/list");
     expect(listed.response.status).toBe(200);
-    expect(listed.body.result?.tools?.map(({ name }) => name)).toEqual([
+    // The full profile lists the original tools first; the voice core, the
+    // gateway and the direct tools follow (control-mcp-voice.test.ts).
+    expect(listed.body.result?.tools?.map(({ name }) => name).slice(0, 18)).toEqual([
       "list_projects",
       "get_launch_options",
       "list_environments",
@@ -1077,7 +1191,8 @@ describe("Orkestrator control MCP server", () => {
       });
     }
 
-    const projects = await rpc(descriptor.url, descriptor.token, "tools/call", {
+    const coordinator = coordinatorCredential(["discovery"]);
+    const projects = await rpc(coordinator.url, coordinator.token, "tools/call", {
       name: "list_projects",
       arguments: {},
     });
@@ -1095,61 +1210,6 @@ describe("Orkestrator control MCP server", () => {
     expect(JSON.stringify(projects.body.result?.structuredContent)).not.toContain("git@");
   });
 
-  test("lists mailboxes and sends body-free external-message results", async () => {
-    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
-    overrides.set("list_agent_mailboxes", () => ({
-      mailboxes: [
-        {
-          mailboxId: "env-1\0agent",
-          environmentId: "env-1",
-          tabId: "agent",
-          title: "Agent",
-        },
-      ],
-      total: 1,
-      offset: 0,
-      limit: 100,
-    }));
-    overrides.set("send_external_agent_mail", (args) => ({
-      id: "message-1",
-      requestId: args.requestId,
-      placement: "stored",
-      body: args.body,
-    }));
-
-    const listed = await rpc(descriptor.url, descriptor.token, "tools/call", {
-      name: "list_mailboxes",
-      arguments: {},
-    });
-    expect(listed.body.result?.structuredContent).toMatchObject({ total: 1 });
-
-    const sent = await rpc(descriptor.url, descriptor.token, "tools/call", {
-      name: "send_message",
-      arguments: {
-        requestId: "external-request",
-        toEnvironmentId: "env-1",
-        toTabId: "agent",
-        body: "sensitive body",
-      },
-    });
-    expect(sent.body.result?.structuredContent).toEqual({
-      message: {
-        id: "message-1",
-        requestId: "external-request",
-        placement: "stored",
-      },
-    });
-    expect(invocations.at(-1)).toEqual({
-      command: "send_external_agent_mail",
-      args: {
-        requestId: "external-request",
-        toEnvironmentId: "env-1",
-        toTabId: "agent",
-        body: "sensitive body",
-      },
-    });
-  });
-
   test("does not publish messaging tools while messaging is disabled", async () => {
     overrides.set("get_config", () => ({
       global: { enabledAgentPlatforms: ["codex"], agentMessaging: { enabled: false } },
@@ -1162,7 +1222,7 @@ describe("Orkestrator control MCP server", () => {
   });
 
   test("validates and routes an idempotent job launch into an existing environment", async () => {
-    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const descriptor = coordinatorCredential(["discovery", "environments", "jobs"]);
     const launched = await rpc(descriptor.url, descriptor.token, "tools/call", {
       name: "launch_job",
       arguments: {
@@ -1184,7 +1244,8 @@ describe("Orkestrator control MCP server", () => {
       tabId: "agent-job-job-1",
       status: "accepted",
     });
-    expect(invocations.find(({ command }) => command === "launch_control_job")?.args).toEqual({
+    const launch = invocations.find(({ command }) => command === "launch_control_job")?.args;
+    expect(launch).toMatchObject({
       activateTab: true,
       requestId: "external-job-1",
       environmentId: "env-1",
@@ -1194,12 +1255,13 @@ describe("Orkestrator control MCP server", () => {
       fastMode: true,
       conversationMode: "build",
       title: "Fix the failing suite",
-      prompt: "Diagnose and fix the failing test suite.",
     });
+    // A coordinator's prompt is framed as a delegation around the original text.
+    expect(String(launch?.prompt)).toContain("Diagnose and fix the failing test suite.");
   });
 
   test("rejects disabled agents and invalid model or reasoning selections", async () => {
-    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const descriptor = coordinatorCredential(["discovery", "environments", "jobs"]);
     const call = (arguments_: Record<string, unknown>) =>
       rpc(descriptor.url, descriptor.token, "tools/call", {
         name: "launch_job",
@@ -1235,101 +1297,6 @@ describe("Orkestrator control MCP server", () => {
     const unavailableFastMode = await call({ modelId: "gpt-5.6-codex", fastMode: true });
     expect(unavailableFastMode.body.result?.isError).toBe(true);
     expect(invocations.filter(({ command }) => command === "launch_control_job")).toHaveLength(0);
-  });
-
-  test("launches the first project environment with an explicitly cached model", async () => {
-    overrides.set("get_environment_snapshots", () => []);
-    overrides.set("get_agent_model_catalog_cache", () => ({
-      schemaVersion: 1,
-      codex: {
-        updatedAt: new Date().toISOString(),
-        models: [
-          {
-            id: "gpt-5.6-codex",
-            name: "GPT-5.6 Codex",
-            reasoningOptions: [{ effort: "high", label: "High" }],
-            defaultReasoningEffort: "high",
-          },
-        ],
-      },
-    }));
-    let creationCalls = 0;
-    overrides.set("create_environment", () => ({
-      id: "env-new",
-      projectId: "project-1",
-      status: creationCalls++ === 0 ? "stopped" : "creating",
-    }));
-    overrides.set("start_environment_background", () => undefined);
-    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
-
-    const launched = await rpc(descriptor.url, descriptor.token, "tools/call", {
-      name: "launch_environment",
-      arguments: {
-        requestId: "environment-request-1",
-        projectId: "project-1",
-        environmentType: "local",
-        agent: "codex",
-        modelId: "gpt-5.6-codex",
-        reasoningId: "high",
-        fastMode: true,
-        conversationMode: "plan",
-        prompt: "Plan the implementation.",
-      },
-    });
-
-    expect(launched.body.result?.isError).not.toBe(true);
-    expect(launched.body.result?.structuredContent).toEqual({
-      environmentId: "env-new",
-      tabId: "startup-agent",
-      status: "accepted",
-      selection: {
-        agent: "codex",
-        model: "gpt-5.6-codex",
-        reasoning: "high",
-        source: "requested",
-        advisory: true,
-      },
-    });
-    expect(invocations.find(({ command }) => command === "create_environment")?.args).toMatchObject(
-      {
-        projectId: "project-1",
-        initialPrompt: "Plan the implementation.",
-        pendingAgentLaunch: true,
-        initialAgentModel: "gpt-5.6-codex",
-        initialReasoningEffort: "high",
-        initialConversationMode: "plan",
-        agentSettings: {
-          defaultAgent: "codex",
-          platforms: { codex: { mode: "native", fastMode: true } },
-        },
-        controlRequestId: "environment-request-1",
-      },
-    );
-    expect(
-      invocations.filter(({ command }) => command === "start_environment_background"),
-    ).toHaveLength(1);
-
-    const replayed = await rpc(descriptor.url, descriptor.token, "tools/call", {
-      name: "launch_environment",
-      arguments: {
-        requestId: "environment-request-1",
-        projectId: "project-1",
-        environmentType: "local",
-        agent: "codex",
-        modelId: "gpt-5.6-codex",
-        reasoningId: "high",
-        fastMode: true,
-        conversationMode: "plan",
-        prompt: "Plan the implementation.",
-      },
-    });
-    expect(replayed.body.result?.structuredContent).toMatchObject({
-      environmentId: "env-new",
-      status: "accepted",
-    });
-    expect(
-      invocations.filter(({ command }) => command === "start_environment_background"),
-    ).toHaveLength(1);
   });
 
   test("get_launch_options marks what an omitted model and effort resolve to", async () => {
@@ -1411,12 +1378,10 @@ describe("Orkestrator control MCP server", () => {
         defaultReasoningId: "low",
       },
     ]);
-    overrides.set("create_environment", () => ({
-      id: "env-new",
-      projectId: "project-1",
-      status: "creating",
+    overrides.set("launch_coordinator_environment", () => ({
+      environment: { id: "env-new", projectId: "project-1", status: "creating" },
     }));
-    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const descriptor = coordinatorCredential(["discovery", "environments", "jobs"]);
     const job = (arguments_: Record<string, unknown>) =>
       rpc(descriptor.url, descriptor.token, "tools/call", {
         name: "launch_job",
@@ -1464,6 +1429,7 @@ describe("Orkestrator control MCP server", () => {
         projectId: "project-1",
         agent: "codex",
         prompt: "Build it.",
+        ...BASE,
       },
     });
     expect(environment.body.result?.structuredContent?.selection).toEqual({
@@ -1473,19 +1439,20 @@ describe("Orkestrator control MCP server", () => {
       source: "default",
       advisory: true,
     });
-    const created = invocations.find(({ command }) => command === "create_environment");
-    expect(created?.args.initialAgentModel).toBeUndefined();
-    expect(created?.args.initialReasoningEffort).toBeUndefined();
+    const created = invocations.find(({ command }) => command === "launch_coordinator_environment")
+      ?.args.input as Record<string, unknown> | undefined;
+    expect(created?.initialAgentModel).toBeUndefined();
+    expect(created?.initialReasoningEffort).toBeUndefined();
   });
 
   test("environment replay reports persisted startup controls after defaults change", async () => {
     const accepted = { id: "env-replayed", projectId: "project-1", status: "running" };
-    overrides.set("create_environment", () => accepted);
+    overrides.set("launch_coordinator_environment", () => ({ environment: accepted }));
     overrides.set("get_native_agent_session", () => ({
       agent: "codex",
       controls: { modelId: "original-model", reasoningId: "high" },
     }));
-    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const descriptor = coordinatorCredential(["discovery", "environments"]);
     const launch = () =>
       rpc(descriptor.url, descriptor.token, "tools/call", {
         name: "launch_environment",
@@ -1494,6 +1461,7 @@ describe("Orkestrator control MCP server", () => {
           projectId: "project-1",
           agent: "codex",
           prompt: "Work",
+          ...BASE,
         },
       });
     const first = await launch();
@@ -1511,13 +1479,15 @@ describe("Orkestrator control MCP server", () => {
       source: "default",
     });
     // The transient startup snapshot is authoritative too, including terminal launches.
-    overrides.set("create_environment", () => ({
-      ...accepted,
-      startupAgentSession: {
-        agent: "codex",
-        model: "terminal-model",
-        reasoningEffort: "medium",
-        style: "terminal",
+    overrides.set("launch_coordinator_environment", () => ({
+      environment: {
+        ...accepted,
+        startupAgentSession: {
+          agent: "codex",
+          model: "terminal-model",
+          reasoningEffort: "medium",
+          style: "terminal",
+        },
       },
     }));
     expect((await launch()).body.result?.structuredContent?.selection).toMatchObject({
@@ -1539,12 +1509,10 @@ describe("Orkestrator control MCP server", () => {
         defaultReasoningId: "low",
       },
     ]);
-    overrides.set("create_environment", () => ({
-      id: "env-new",
-      projectId: "project-1",
-      status: "creating",
+    overrides.set("launch_coordinator_environment", () => ({
+      environment: { id: "env-new", projectId: "project-1", status: "creating" },
     }));
-    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const descriptor = coordinatorCredential(["discovery", "environments"]);
     const result = await rpc(descriptor.url, descriptor.token, "tools/call", {
       name: "launch_environment",
       arguments: {
@@ -1553,6 +1521,7 @@ describe("Orkestrator control MCP server", () => {
         agent: "codex",
         modelId: "mini",
         prompt: "Work",
+        ...BASE,
       },
     });
     expect(result.body.result?.structuredContent?.selection).toEqual({
@@ -1562,22 +1531,21 @@ describe("Orkestrator control MCP server", () => {
       source: "requested",
       advisory: true,
     });
-    const created = invocations.find(({ command }) => command === "create_environment")!;
-    expect(created.args.initialAgentModel).toBe("mini");
+    const created = invocations.find(({ command }) => command === "launch_coordinator_environment")!
+      .args.input as Record<string, unknown>;
+    expect(created.initialAgentModel).toBe("mini");
     // Startup resolves this absent override directly from the repository tier.
-    expect(created.args.initialReasoningEffort).toBeUndefined();
+    expect(created.initialReasoningEffort).toBeUndefined();
   });
 
   test("settings failures omit advisory defaults and selection without failing launch", async () => {
     overrides.set("get_repository_config", () => {
       throw new Error("settings unavailable");
     });
-    overrides.set("create_environment", () => ({
-      id: "env-new",
-      projectId: "project-1",
-      status: "creating",
+    overrides.set("launch_coordinator_environment", () => ({
+      environment: { id: "env-new", projectId: "project-1", status: "creating" },
     }));
-    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const descriptor = coordinatorCredential(["discovery", "environments"]);
     const options = await rpc(descriptor.url, descriptor.token, "tools/call", {
       name: "get_launch_options",
       arguments: { projectId: "project-1" },
@@ -1591,22 +1559,19 @@ describe("Orkestrator control MCP server", () => {
         projectId: "project-1",
         agent: "codex",
         prompt: "Work",
+        ...BASE,
       },
     });
     expect(launch.body.result?.isError).not.toBe(true);
     expect(launch.body.result?.structuredContent?.selection).toBeUndefined();
   });
 
-  test("reports a created environment when background start admission fails", async () => {
-    overrides.set("create_environment", () => ({
-      id: "env-new",
-      projectId: "project-1",
-      status: "stopped",
+  test("reports a created environment when its start is not admitted", async () => {
+    overrides.set("launch_coordinator_environment", () => ({
+      environment: { id: "env-new", projectId: "project-1", status: "stopped" },
+      startError: "Lifecycle admission closed",
     }));
-    overrides.set("start_environment_background", () => {
-      throw new Error("Lifecycle admission closed");
-    });
-    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const descriptor = coordinatorCredential(["discovery", "environments"]);
     const launched = await rpc(descriptor.url, descriptor.token, "tools/call", {
       name: "launch_environment",
       arguments: {
@@ -1614,6 +1579,7 @@ describe("Orkestrator control MCP server", () => {
         projectId: "project-1",
         agent: "codex",
         prompt: "Build it.",
+        ...BASE,
       },
     });
 
@@ -1622,6 +1588,206 @@ describe("Orkestrator control MCP server", () => {
       status: "created",
       error: "Lifecycle admission closed",
     });
+  });
+
+  test("a coordinator's tools act on another node's copy of the project when given its nodeId", async () => {
+    const layout = {
+      activePaneId: "pane-1",
+      root: {
+        kind: "leaf",
+        id: "pane-1",
+        activeTabId: "startup-agent",
+        tabs: [
+          { id: "startup-agent", type: "agent-native", nativeAgentData: { platform: "codex" } },
+        ],
+      },
+    };
+    const routed: Array<{ command: string; args: Record<string, unknown>; requestKey?: unknown }> =
+      [];
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coord-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+      },
+    }));
+    overrides.set("get_node_status", () => ({
+      nodeId: "bk_self",
+      mode: "command",
+      controllers: [],
+    }));
+    overrides.set("get_node_summaries", () => ({
+      selfId: "bk_self",
+      nodes: [
+        {
+          nodeId: "bk_leaf",
+          available: true,
+          view: { displayName: "Build box", connection: { state: "connected" } },
+          projects: [
+            {
+              ref: { backendId: "bk_leaf", projectId: "p-leaf" },
+              repositoryHint: "example.invalid/secret/repo",
+            },
+          ],
+          environments: [],
+        },
+      ],
+    }));
+    overrides.set("invoke_on_node", (args) => {
+      const inner = {
+        command: String(args.command),
+        args: args.args as Record<string, unknown>,
+        requestKey: args.requestKey,
+      };
+      routed.push(inner);
+      const answers: Record<string, unknown> = {
+        get_environment: { id: inner.args.environmentId, projectId: "p-leaf", status: "running" },
+        get_pane_layout: layout,
+        get_native_agent_projection: {
+          messages: [{ id: "m1", role: "assistant", content: "Done on the leaf." }],
+        },
+        dispatch_native_agent_intent: { outcome: "accepted" },
+        verify_project_launch_base: { contained: true },
+        // The node's own launch options.
+        get_project: { id: "p-leaf", name: "Orkestrator" },
+        get_config: {
+          global: { enabledAgentPlatforms: ["codex"], agentMessaging: { enabled: true } },
+        },
+        get_native_agent_model_catalog: [
+          {
+            id: "gpt-5.6-codex",
+            name: "GPT-5.6 Codex",
+            platform: "codex",
+            reasoning: [{ id: "high", name: "High" }],
+          },
+        ],
+        get_agent_model_catalog_cache: { schemaVersion: 1 },
+        get_repository_config: {},
+        get_environment_snapshots: [],
+      };
+      return { outcome: "ok", result: answers[inner.command] ?? null };
+    });
+    overrides.set("assert_coordinator_node_delegation_available", () => ({ available: true }));
+    overrides.set("open_coordinator_node_delegation", () => ({ opened: true }));
+    overrides.set("launch_coordinator_node_environment", () => ({
+      environment: { id: "leaf-new", status: "creating" },
+      coordinatorDelegationOpened: true,
+    }));
+    overrides.set("send_coordinator_node_mail", (args) => ({
+      nodeId: args.nodeId,
+      toEnvironmentId: args.toEnvironmentId,
+      coordinatorDelegationOpened: true,
+    }));
+    overrides.set("get_agent_mail_message", () => ({
+      id: "msg-1",
+      from: {
+        kind: "node",
+        nodeId: "bk_leaf",
+        nodeName: "Build box",
+        role: "agent",
+        projectId: "project-1",
+        environmentId: "leaf-env",
+        tabId: "startup-agent",
+        title: null,
+      },
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["environments", "jobs", "mail", "discovery"],
+    });
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = await rpc(credential.url, credential.token, "tools/call", {
+        name,
+        arguments: args,
+      });
+      if (result.body.result?.isError) throw new Error(JSON.stringify(result.body.result));
+      return result.body.result!.structuredContent!;
+    };
+
+    const transcript = await call("get_tab_transcript", {
+      environmentId: "leaf-env",
+      tabId: "startup-agent",
+      nodeId: "bk_leaf",
+    });
+    expect(transcript).toMatchObject({ nodeId: "bk_leaf", node: "Build box", agent: "codex" });
+    expect(JSON.stringify(transcript.messages)).toContain("Done on the leaf.");
+
+    const prompted = await call("send_prompt_to_tab", {
+      requestId: "prompt-remote",
+      environmentId: "leaf-env",
+      tabId: "startup-agent",
+      prompt: "Run the tests.",
+      nodeId: "bk_leaf",
+    });
+    expect(prompted).toMatchObject({ nodeId: "bk_leaf", delivery: "async" });
+    expect(routed.find((entry) => entry.command === "dispatch_native_agent_intent")).toMatchObject({
+      args: { environmentId: "leaf-env", logicalSessionKey: "env-leaf-env:startup-agent" },
+      requestKey: "prompt:prompt-remote",
+    });
+    expect(
+      invocations.find(({ command }) => command === "open_coordinator_node_delegation")?.args,
+    ).toMatchObject({ nodeId: "bk_leaf", environmentId: "leaf-env", tabId: "startup-agent" });
+    // The node's own dispatch never ran here.
+    expect(invocations.some(({ command }) => command === "dispatch_native_agent_intent")).toBe(
+      false,
+    );
+
+    const launched = await call("launch_environment", {
+      requestId: "launch-remote",
+      projectId: "project-1",
+      agent: "codex",
+      prompt: "Fix it.",
+      baseBranch: "main",
+      baseCommit: "a".repeat(40),
+      nodeId: "bk_leaf",
+    });
+    expect(launched).toMatchObject({ environmentId: "leaf-new", nodeId: "bk_leaf" });
+    expect(routed.find((entry) => entry.command === "verify_project_launch_base")?.args).toEqual({
+      projectId: "p-leaf",
+      branch: "main",
+      commit: "a".repeat(40),
+    });
+    expect(
+      invocations.find(({ command }) => command === "launch_coordinator_node_environment")?.args,
+    ).toMatchObject({ nodeId: "bk_leaf", requestId: "launch-remote" });
+
+    // A reply to an agent on another node goes back across the node link.
+    await call("send_message", {
+      requestId: "reply-remote",
+      toEnvironmentId: "coordinator",
+      replyToMessageId: "msg-1",
+      body: "Thanks; now lint.",
+    });
+    expect(
+      invocations.find(({ command }) => command === "send_coordinator_node_mail")?.args,
+    ).toMatchObject({
+      nodeId: "bk_leaf",
+      toEnvironmentId: "leaf-env",
+      toTabId: "startup-agent",
+      body: "Thanks; now lint.",
+    });
+
+    // This node's own ID is this node.
+    overrides.set("get_pane_layout", () => layout);
+    routed.length = 0;
+    await call("list_tabs", { environmentId: "env-1", nodeId: "bk_self" });
+    expect(routed).toEqual([]);
+  });
+
+  test("only a coordinator may name a node", async () => {
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const result = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "list_tabs",
+      arguments: { environmentId: "env-1", nodeId: "bk_leaf" },
+    });
+    expect(result.body.result?.isError).toBe(true);
+    expect(invocations.some(({ command }) => command === "invoke_on_node")).toBe(false);
   });
 
   test("routes prompts only to native tabs with their durable logical session key", async () => {
@@ -1641,7 +1807,7 @@ describe("Orkestrator control MCP server", () => {
       },
     }));
     overrides.set("dispatch_native_agent_intent", () => ({ outcome: "accepted" }));
-    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const descriptor = coordinatorCredential(["discovery", "jobs"]);
     const sent = await rpc(descriptor.url, descriptor.token, "tools/call", {
       name: "send_prompt_to_tab",
       arguments: {
@@ -1875,7 +2041,7 @@ describe("Orkestrator control MCP server", () => {
       ...ticket,
       comments: [{ id: "comment-1", text, createdAt: new Date(0).toISOString() }],
     }));
-    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const descriptor = coordinatorCredential(["discovery", "tickets"]);
 
     const listed = await rpc(descriptor.url, descriptor.token, "tools/call", {
       name: "list_tickets",

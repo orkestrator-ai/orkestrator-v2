@@ -1,13 +1,13 @@
 import { lazy, memo, useCallback, useRef, useLayoutEffect, useState, type ReactNode } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
-import { usePaneLayoutStore, useEnvironmentStore, useConfigStore } from "@/stores";
+import { usePaneLayoutStore } from "@/stores";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import type { MultiReviewTabData, PaneLeaf } from "@/types/paneLayout";
 import { createTabbarDroppableId, getNativeAgentData } from "@/types/paneLayout";
 import { cn } from "@/lib/utils";
-import { environmentBaselineCommit, resolveComparisonRef } from "@/lib/diff-baseline";
+import { fileTabChangeDiffTarget } from "@/components/terminal/change-diff-target";
 import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
 import { clearPersistedVirtuosoState } from "@/hooks";
 import { DraggableTabBar } from "./DraggableTabBar";
@@ -39,6 +39,9 @@ const LazyLoopedReviewTab = lazy(async () => ({
 }));
 const LazyMultiReviewTab = lazy(async () => ({
   default: (await import("@/components/review/MultiReviewTab")).MultiReviewTab,
+}));
+const LazyPullRequestPaneTab = lazy(async () => ({
+  default: (await import("./PullRequestPaneTab")).PullRequestPaneTab,
 }));
 const LazyBrowserTab = lazy(async () => ({
   default: (await import("@/components/browser/BrowserTab")).BrowserTab,
@@ -133,19 +136,6 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   const activePaneId = currentEnvState?.activePaneId ?? "default";
   const containerRef = useRef<HTMLDivElement>(null);
   const [tabRefreshRequestIds, setTabRefreshRequestIds] = useState(() => new Map<string, number>());
-
-  // Read the diff baseline reactively from the environment/config stores.
-  const { projectId, baselineCommit } = useEnvironmentStore(
-    useShallow((state) => {
-      const env = state.getEnvironmentById(environmentId);
-      return { projectId: env?.projectId, baselineCommit: environmentBaselineCommit(env) };
-    }),
-  );
-  const repositories = useConfigStore((state) => state.config.repositories);
-  const comparisonRef = resolveComparisonRef(
-    baselineCommit,
-    projectId ? repositories[projectId] : undefined,
-  );
 
   // Set up droppable for tabbar
   const { setNodeRef, isOver } = useDroppable({
@@ -274,9 +264,9 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isLocalEnvironment={tab.fileData.isLocalEnvironment}
                   isActive={isTabActive && isActive}
                   language={tab.fileData.language}
-                  isDiff={tab.fileData.isDiff}
-                  gitStatus={tab.fileData.gitStatus}
-                  baseBranch={tab.fileData.isDiff ? comparisonRef : tab.fileData.baseBranch}
+                  // A diff tab renders the backend's hunks for its target. Legacy
+                  // `isDiff` tabs without one show this environment's current file.
+                  changeDiff={fileTabChangeDiffTarget(tab.fileData, environmentId)}
                 />
               </LazyLoadBoundary>
             );
@@ -300,6 +290,23 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     const owner = layoutStore.findPaneWithTab(tab.id, environmentId);
                     if (owner) layoutStore.removeTab(owner.id, tab.id, environmentId);
                   }}
+                />
+              </LazyLoadBoundary>
+            );
+          }
+
+          if (tab.type === "pull-request" && tab.pullRequestData) {
+            return (
+              <LazyLoadBoundary
+                key={tab.id}
+                loadingFallback={renderTabFallback(isTabActive && isActive)}
+                renderError={renderTabError(isTabActive && isActive)}
+              >
+                <LazyPullRequestPaneTab
+                  tabId={tab.id}
+                  environmentId={environmentId}
+                  data={tab.pullRequestData}
+                  isActive={isTabActive && isActive}
                 />
               </LazyLoadBoundary>
             );

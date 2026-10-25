@@ -15,6 +15,10 @@ import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coor
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { readJsonSliceCached, readJsonSliceCachedWithDigest } from "./json-file-cache.js";
 import { isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
+import {
+  ORKESTRATOR_ARTIFACT_MCP_PATH,
+  ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+} from "@orkestrator/protocol/transcript-artifacts";
 import type {
   ClaudeJsonConfig,
   McpJsonConfig,
@@ -58,7 +62,31 @@ export const AGENT_MCP_SERVER_NAME = "orkestrator";
 const AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
 const AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
 
-export type AgentMcpConnection = { url: string; token: string; design?: boolean };
+export type AgentMcpConnection = {
+  url: string;
+  token: string;
+  design?: boolean;
+  /**
+   * A backend workflow turn's artifact-only connection: an
+   * `orkestrator-artifacts` server at this connection's origin, authenticated
+   * by the turn's artifact grant (never the workflow-result credential).
+   */
+  artifacts?: { token: string };
+};
+
+/** The artifact-only server of a backend workflow turn, when its connection names one. */
+export function getOrkestratorArtifactMcpServer(
+  connection: AgentMcpConnection | undefined,
+): SdkMcpHttpServerConfig | null {
+  const token = connection?.artifacts?.token?.trim();
+  const agentServer = getOrkestratorAgentMcpServerFromConnection(connection);
+  if (!token || Buffer.byteLength(token, "utf8") > 1024 || !agentServer) return null;
+  return {
+    ...agentServer,
+    url: new URL(ORKESTRATOR_ARTIFACT_MCP_PATH, agentServer.url).toString(),
+    headers: { Authorization: `Bearer ${token}` },
+  };
+}
 
 export function getOrkestratorAgentMcpServerFromConnection(
   connection: AgentMcpConnection | undefined,
@@ -426,6 +454,11 @@ export async function getMcpRuntimeConfig(
         url: new URL("/design-mcp", agentServer.url).toString(),
       };
   }
+  // Reserved like the agent server: a configured server of this name never
+  // receives the grant or stands in for the backend's artifact tools.
+  const artifactServer = getOrkestratorArtifactMcpServer(connection);
+  if (artifactServer) servers[ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME] = artifactServer;
+  else delete servers[ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME];
   // A coordinator loads no configured servers (`none`), only the remote
   // research servers its launcher named as process authority. They come from
   // the environment, never from a file the checkout could edit.
@@ -439,10 +472,12 @@ export async function getMcpRuntimeConfig(
   return {
     servers,
     names: new Set([
-      ...Object.keys(configs),
+      // A configured server under the reserved artifact name is never loaded.
+      ...Object.keys(configs).filter((name) => name !== ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME),
       ...(agentServer
         ? [AGENT_MCP_SERVER_NAME, ...(connection?.design ? ["orkestrator-design"] : [])]
         : []),
+      ...(artifactServer ? [ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME] : []),
       ...research.map((server) => server.name),
     ]),
     revision,

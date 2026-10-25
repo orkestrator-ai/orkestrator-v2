@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { usePanelRef } from "react-resizable-panels";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { Sidebar } from "./Sidebar";
 import { ActionBar } from "./ActionBar";
 import { OpenFileDialog } from "./OpenFileDialog";
+import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { FilesPanel } from "@/components/files-panel";
 import {
   useConfigStore,
@@ -15,6 +17,10 @@ import {
   getAllLeaves,
 } from "@/stores";
 import { useMediaQuery } from "@/hooks";
+import {
+  PULL_REQUEST_PANEL_MIN_WIDTH_PX,
+  PULL_REQUEST_PANEL_WIDTH_PX,
+} from "@/stores/filesPanelStore";
 import { DEFAULT_TERMINAL_APPEARANCE, resolveTerminalBackgroundColor } from "@/constants/terminal";
 import { getCurrentWindow } from "@/lib/native/window";
 import { cn } from "@/lib/utils";
@@ -22,16 +28,93 @@ import { MOBILE_SHELL_MEDIA_QUERY, MobileAppShellLayout } from "./MobileAppShell
 import { getApplicationTitle } from "@/lib/application-title";
 import { AgentInfoButton } from "./AgentInfoButton";
 import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
+import { AgentMailPanel } from "@/components/agent-mail/AgentMailPanel";
 import { SystemUsageIndicator } from "./SystemUsageIndicator";
 import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
+import { RemoteWorkspaceRegion } from "@/components/federation/RemoteWorkspaceRegion";
+import {
+  RealmAgentInfoTrigger,
+  RealmSystemUsageMeters,
+  RealmTitleBarPanels,
+  useRealmPanelDismiss,
+} from "@/components/federation/RealmTitleBar";
+import { useFederation } from "@/components/federation/FederationProvider";
+import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
+import {
+  useRemoteWorkspaceStore,
+  type RemoteWorkspaceSelection,
+} from "@/stores/remoteWorkspaceStore";
 
 interface AppShellProps {
   children?: React.ReactNode;
 }
 
+/** Wide enough for a pull request opened in the panel; files views stay narrow by choice. */
+const FILES_PANEL_MAX_SIZE = "960px";
+
+/**
+ * Widens a narrow files panel when it shows a pull request, once per opened
+ * tab, so the user's own narrower width for files is otherwise kept.
+ */
+function useFilesPanelPullRequestWidth(open: boolean) {
+  const panelRef = usePanelRef();
+  const activeTab = useFilesPanelStore((state) => state.activeTab);
+  const showsPullRequest = open && activeTab.startsWith("pull-request:");
+  useEffect(() => {
+    if (!showsPullRequest) return;
+    // A panel that opens with this tab registers with its group after this
+    // effect runs, and reading its size before then throws. Retry for a few
+    // frames; widening is cosmetic, so giving up is safe.
+    let frame = 0;
+    let attempts = 0;
+    const widen = () => {
+      const panel = panelRef.current;
+      try {
+        if (panel && panel.getSize().inPixels < PULL_REQUEST_PANEL_MIN_WIDTH_PX) {
+          panel.resize(`${PULL_REQUEST_PANEL_WIDTH_PX}px`);
+        }
+        if (panel) return;
+      } catch {
+        // Not laid out yet.
+      }
+      if (++attempts < 10) frame = requestAnimationFrame(widen);
+    };
+    frame = requestAnimationFrame(widen);
+    return () => cancelAnimationFrame(frame);
+  }, [panelRef, showsPullRequest, activeTab]);
+  return panelRef;
+}
+
+/** Names of the other node's project and environment the central region shows. */
+function useRemoteWorkspaceNames(active: RemoteWorkspaceSelection | null) {
+  const { portalState } = useFederation();
+  return useMemo(() => {
+    if (!active) return null;
+    const node = portalState.nodes.find((candidate) => candidate.nodeId === active.nodeId);
+    const project = node?.projects.find(
+      (candidate) => candidate.ref.projectId === active.projectId,
+    );
+    const environment = node?.environments.find(
+      (candidate) => candidate.ref.environmentId === active.environmentId,
+    );
+    return { projectName: project?.name ?? null, environmentName: environment?.name ?? null };
+  }, [active, portalState.nodes]);
+}
+
 export function AppShell({ children }: AppShellProps) {
   const isMobile = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
+  // Another node's workspace inside a command node's window: only the
+  // central region, without the window's title bar and sidebar.
+  const [workspaceRealm] = useState(isWorkspaceRealm);
+  // In the window: the other node whose workspace the central region shows.
+  // The title bar, toolbar row and sidebar around it stay the command node's.
+  const remoteWorkspace = useRemoteWorkspaceStore((state) =>
+    workspaceRealm ? null : state.active,
+  );
+  const remoteNames = useRemoteWorkspaceNames(remoteWorkspace);
+  const [centralColumn, setCentralColumn] = useState<HTMLDivElement | null>(null);
+  const [mobileContent, setMobileContent] = useState<HTMLDivElement | null>(null);
   // The desktop and mobile layouts are different trees, so rendering `children`
   // in each would remount every pane at the 768px breakpoint, closing dialogs
   // and dropping pane state when a window narrows or a phone rotates. The
@@ -48,6 +131,7 @@ export function AppShell({ children }: AppShellProps) {
   const [desktopShown, setDesktopShown] = useState(!isMobile);
   if (!isMobile && !desktopShown) setDesktopShown(true);
   const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
+  const filesPanelRef = useFilesPanelPullRequestWidth(filesPanelOpen);
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
@@ -90,9 +174,9 @@ export function AppShell({ children }: AppShellProps) {
   };
 
   const windowTitle = getApplicationTitle(
-    activeProjectName,
+    remoteNames ? remoteNames.projectName : activeProjectName,
     isMobile,
-    activeEnvironmentName,
+    remoteNames ? remoteNames.environmentName : activeEnvironmentName,
     import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim() || null,
   );
   const activeTab = useMemo(() => {
@@ -106,14 +190,61 @@ export function AppShell({ children }: AppShellProps) {
   }, [paneEnvironments, selectedEnvironmentId]);
 
   useEffect(() => {
-    document.title = windowTitle;
-  }, [windowTitle]);
+    // A realm's document title is not shown; the window's is.
+    if (!workspaceRealm) document.title = windowTitle;
+  }, [windowTitle, workspaceRealm]);
+  useRealmPanelDismiss(isMobile ? null : (remoteWorkspace?.nodeId ?? null));
+
+  if (workspaceRealm) {
+    return (
+      <div className="flex h-full w-full flex-col overflow-hidden">
+        <OpenFileDialog />
+        <KeyboardShortcutsDialog />
+        <AppDialogHost />
+        <HostPark parkRef={contentParkRef} />
+        {/*
+          The window's title bar shows this node's host meters and agent
+          button, as it does for its own node's environments; their popovers
+          open here, under it.
+        */}
+        <RealmTitleBarPanels activeTab={activeTab} />
+        <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+          <ResizablePanel defaultSize={filesPanelOpen ? 70 : 100} minSize={30}>
+            <div className="flex h-full flex-col" style={centralPanelThemeVars}>
+              <ActionBar />
+              <main className="min-h-0 flex-1 overflow-hidden bg-background">
+                <HostSlot host={contentHost} parkRef={contentParkRef} />
+              </main>
+            </div>
+          </ResizablePanel>
+          {filesPanelOpen && !isMobile && (
+            <>
+              <ResizableHandle />
+              <ResizablePanel
+                defaultSize={30}
+                minSize="240px"
+                maxSize={FILES_PANEL_MAX_SIZE}
+                panelRef={filesPanelRef}
+              >
+                <FilesPanel />
+              </ResizablePanel>
+            </>
+          )}
+        </ResizablePanelGroup>
+        {createPortal(children, contentHost)}
+      </div>
+    );
+  }
+
+  const remoteShown = remoteWorkspace !== null;
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       <OpenFileDialog />
+      <KeyboardShortcutsDialog />
       {/* Outside both layouts, so a dialog outlives the drawer that requested it. */}
       <AppDialogHost />
+      <AgentMailPanel />
       <HostPark parkRef={contentParkRef} />
       {isMobile ? (
         <MobileAppShellLayout
@@ -134,7 +265,13 @@ export function AppShell({ children }: AppShellProps) {
           initialSidebarOpen={!desktopShown}
           onTitleBarMouseDown={handleTitleBarMouseDown}
         >
-          <HostSlot host={contentHost} parkRef={contentParkRef} />
+          <div
+            ref={setMobileContent}
+            className={cn("h-full w-full", remoteShown && "invisible")}
+            aria-hidden={remoteShown || undefined}
+          >
+            <HostSlot host={contentHost} parkRef={contentParkRef} />
+          </div>
         </MobileAppShellLayout>
       ) : (
         <>
@@ -172,7 +309,15 @@ export function AppShell({ children }: AppShellProps) {
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               onMouseDown={(event) => event.stopPropagation()}
             >
-              <SystemUsageIndicator />
+              {/*
+                Another node's workspace reports its agent and machine, so
+                they show here as this node's do.
+              */}
+              {remoteWorkspace ? (
+                <RealmSystemUsageMeters nodeId={remoteWorkspace.nodeId} region={centralColumn} />
+              ) : (
+                <SystemUsageIndicator />
+              )}
               <span
                 aria-hidden="true"
                 data-testid="title-bar-usage-separator"
@@ -180,7 +325,11 @@ export function AppShell({ children }: AppShellProps) {
               />
               <div className="flex items-center gap-1">
                 <AgentMailButton />
-                <AgentInfoButton activeTab={activeTab} />
+                {remoteWorkspace ? (
+                  <RealmAgentInfoTrigger nodeId={remoteWorkspace.nodeId} region={centralColumn} />
+                ) : (
+                  <AgentInfoButton activeTab={activeTab} />
+                )}
               </div>
             </div>
           </div>
@@ -198,8 +347,17 @@ export function AppShell({ children }: AppShellProps) {
             )}
 
             {/* Main Content Panel */}
-            <ResizablePanel defaultSize={filesPanelOpen ? 50 : 78} minSize={30}>
-              <div className="flex h-full flex-col" style={centralPanelThemeVars}>
+            <ResizablePanel defaultSize={filesPanelOpen && !remoteShown ? 50 : 78} minSize={30}>
+              {/*
+                Under another node's workspace this window's own stays mounted
+                (its selection cleared), hidden; that workspace covers it.
+              */}
+              <div
+                ref={setCentralColumn}
+                className={cn("flex h-full flex-col", remoteShown && "invisible")}
+                aria-hidden={remoteShown || undefined}
+                style={centralPanelThemeVars}
+              >
                 <ActionBar />
                 <main className={cn("flex-1 overflow-hidden bg-background")}>
                   <HostSlot host={contentHost} parkRef={contentParkRef} />
@@ -207,11 +365,16 @@ export function AppShell({ children }: AppShellProps) {
               </div>
             </ResizablePanel>
 
-            {/* Files Panel (conditional) */}
-            {filesPanelOpen && (
+            {/* Files Panel (conditional); another node's workspace has its own. */}
+            {filesPanelOpen && !remoteShown && (
               <>
                 <ResizableHandle />
-                <ResizablePanel defaultSize={22} minSize="240px" maxSize="500px">
+                <ResizablePanel
+                  defaultSize={22}
+                  minSize="240px"
+                  maxSize={FILES_PANEL_MAX_SIZE}
+                  panelRef={filesPanelRef}
+                >
                   <FilesPanel />
                 </ResizablePanel>
               </>
@@ -219,6 +382,8 @@ export function AppShell({ children }: AppShellProps) {
           </ResizablePanelGroup>
         </>
       )}
+      {/* Outside both layouts, so a realm is never moved (a moved frame reloads). */}
+      <RemoteWorkspaceRegion anchor={isMobile ? mobileContent : centralColumn} />
       {/* After the layouts, so a slot holds the host before content effects run. */}
       {createPortal(children, contentHost)}
     </div>

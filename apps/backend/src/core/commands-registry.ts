@@ -1,7 +1,10 @@
+import { registerChangeCommands } from "./commands-registry-changes.js";
 import { registerDesignCommands } from "./commands-registry-design.js";
 import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
 import { registerPreviewCommands } from "./commands-registry-previews.js";
 import { registerWebAnnotationCommands } from "./commands-registry-web-annotations.js";
+import { registerTranscriptArtifactCommands } from "./transcript-artifacts/commands.js";
+import { registerTranscriptArtifactPdfCommands } from "./transcript-artifacts/commands-pdf.js";
 import type { AwaitBridgeReadyResult } from "@orkestrator/protocol/bridge-readiness";
 import type { ClaudeModelCatalogSnapshot } from "./models.js";
 import type {
@@ -19,7 +22,6 @@ import {
   assertDockerContainerOwned,
   enqueueEnvironmentLifecycleOperation,
   renameEnvironmentFromPrompt,
-  syncPrMonitorTracking,
 } from "./commands-helpers.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
 import { assertRuntimeGeneration } from "./container-lifecycle-service.js";
@@ -29,21 +31,31 @@ import type {
   CommandRegistryOptions,
   RegistryDependencies,
 } from "./commands-registry-types.js";
+import { registerBackendProfileCommands } from "./commands-registry-backend-profile.js";
+import { registerNodeCommands } from "./commands-registry-nodes.js";
 import { registerBuildPipelineCommands } from "./commands-registry-build.js";
 import { registerControlCommands } from "./commands-registry-control.js";
 import { registerCoordinatorCommands } from "./commands-registry-coordinator.js";
+import { registerControllerWorkflowCommands } from "./commands-registry-controller-workflows.js";
+import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
 import { registerDockerCommands } from "./commands-registry-docker.js";
 import { registerEnvironmentCommands } from "./commands-registry-environments.js";
 import { registerGitHubCommands } from "./commands-registry-github.js";
+import { registerGitHubPullRequestCommands } from "./commands-registry-github-pull-requests.js";
 import { registerKanbanCommands } from "./commands-registry-kanban.js";
 import { registerAgentMailCommands } from "./commands-registry-mail.js";
 import { registerDiskUsageCommands } from "./commands-registry-disk-usage.js";
-import { registerAgentAccountCommands } from "./commands-registry-accounts.js";
+import { registerUsageCommands } from "./commands-registry-usage.js";
+import {
+  registerAgentAccountCommands,
+  registerOpenCodeProviderLoginCommands,
+} from "./commands-registry-accounts.js";
 import { registerWorkflowResultCommands } from "./commands-registry-workflow-results.js";
 import { registerLinearCommands } from "./commands-registry-linear.js";
 import { registerNativeAgentCommands } from "./commands-registry-native.js";
 import { registerPullRequestCommands } from "./commands-registry-pr.js";
 import { registerProjectCommands } from "./commands-registry-projects.js";
+import { registerProjectCopyCommands } from "./commands-registry-project-copy.js";
 import { registerPromptCommands } from "./commands-registry-prompts.js";
 import { registerReviewWorkflowCommands } from "./commands-registry-reviews.js";
 import { registerServerCommands } from "./commands-registry-servers.js";
@@ -160,7 +172,7 @@ export function createCommandRegistry(
           // branch inside an environment that can no longer accept the prompt.
           if (!prompt || environment?.status !== "running") return;
           await renameEnvironmentFromPrompt(environmentId, prompt, context, prompt);
-          await syncPrMonitorTracking(context);
+          await context.runtime.prMonitor.sync(context);
         }),
       )
       .then(() => {
@@ -276,13 +288,21 @@ export function createCommandRegistry(
   registerPreviewCommands(register);
   registerMcpManagementCommands(register);
   registerWebAnnotationCommands(register);
+  registerTranscriptArtifactCommands(register);
+  registerTranscriptArtifactPdfCommands(register, (name) => commands.get(name));
   registerProjectCommands(register, dependencies);
+  registerProjectCopyCommands(register, dependencies);
   registerControlCommands(register, dependencies);
   registerCoordinatorCommands(register, dependencies);
+  registerControllerWorkflowCommands(register, dependencies);
+  registerCoordinatorNodeCommands(register);
   registerLinearCommands(register, dependencies);
   registerGitHubCommands(register, dependencies);
+  registerGitHubPullRequestCommands(register, dependencies);
   registerEnvironmentCommands(register, dependencies);
   registerSystemCommands(register);
+  registerBackendProfileCommands(register);
+  registerNodeCommands(register);
   registerHostFileCommands(register);
   registerHostMaintenanceCommands(register);
   registerDockerCommands(register, dependencies);
@@ -294,11 +314,14 @@ export function createCommandRegistry(
   registerBuildPipelineCommands(register, dependencies);
   registerPromptCommands(register, dependencies);
   registerTerminalCommands(register, dependencies);
+  registerChangeCommands(register);
   registerPullRequestCommands(register, dependencies);
   registerKanbanCommands(register, dependencies);
   registerAgentMailCommands(register);
   registerDiskUsageCommands(register);
+  registerUsageCommands(register);
   registerAgentAccountCommands(register, dependencies);
+  registerOpenCodeProviderLoginCommands(register);
   registerWorkflowResultCommands(register);
   registerTeardownCommands(register, dependencies);
   // Last: the public contract composes the commands registered above.

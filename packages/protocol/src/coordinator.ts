@@ -4,6 +4,26 @@ export const COORDINATOR_WORKSPACE_VERSION = 1 as const;
 export const COORDINATOR_EXECUTION_POLICY = "coordinator-read-only" as const;
 export const COORDINATOR_RUNTIME_PREFIX = "coordinator:" as const;
 
+/**
+ * Launch-time process authority: whether this host can start the coordinator's
+ * OS command sandbox, as the backend's qualification probe found it.
+ *
+ * `required` means the platform was qualified on that sandbox, so a bridge must
+ * refuse to run commands without it. `unavailable` means it was qualified
+ * without one (Claude on Windows, or Linux without bubblewrap and socat), so a
+ * bridge asks for the sandbox but runs without it, and its own command filter is
+ * the boundary. Anything else, including absent, reads as `required`: an older
+ * launcher must not turn a missing sandbox into an unsandboxed coordinator.
+ */
+export const COORDINATOR_COMMAND_SANDBOX_ENV = "ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX";
+export type CoordinatorCommandSandbox = "required" | "unavailable";
+
+export function coordinatorCommandSandboxFromEnv(
+  env: NodeJS.ProcessEnv,
+): CoordinatorCommandSandbox {
+  return env[COORDINATOR_COMMAND_SANDBOX_ENV] === "unavailable" ? "unavailable" : "required";
+}
+
 export type AgentSessionOwner =
   | { kind: "environment"; projectId: string; environmentId: string }
   | { kind: "coordinator"; projectId: string; coordinatorId: string };
@@ -249,6 +269,12 @@ export interface CoordinatorWorkflowAssociation {
   conversationId?: string;
   kind: "environment" | "build-pipeline" | "multi-review";
   resourceId: string;
+  /**
+   * The node that holds the resource, when it is not this one: a worker
+   * environment or workflow a command node's coordinator started on a node
+   * it controls. Its ID is that node's, and it is read through the node link.
+   */
+  nodeId?: string;
   requestId: string;
   payloadHash?: string;
   /** Additional idempotency keys that reattached to this same resource. */
@@ -286,6 +312,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "adopt_workflow",
   "cancel_build_pipeline",
   "cancel_multi_review",
+  "compare_project_files",
   "create_ticket",
   "get_build_pipeline",
   "get_environment",
@@ -300,9 +327,12 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "launch_environment",
   "launch_job",
   "launch_multi_review",
+  "launch_node_environment",
   "list_agents",
   "list_environments",
   "list_mailboxes",
+  "list_node_environments",
+  "list_nodes",
   "list_projects",
   "list_tabs",
   "list_tickets",
@@ -311,13 +341,23 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "open_multi_review_fix",
   "pause_build_pipeline",
   "read_messages",
+  "read_node_environment",
+  "request_env_value_reveal",
+  "request_environment_deletion",
+  "request_project_file_update",
+  "request_project_on_node",
   "resume_build_pipeline",
   "send_message",
+  "send_node_message",
+  "send_prompt_to_node_tab",
   "send_prompt_to_tab",
   "start_build_pipeline",
   "start_environment",
   "start_multi_review",
+  "start_node_environment",
   "stop_environment",
+  "stop_node_environment",
+  "transfer_files",
   "update_ticket",
 ] as const);
 

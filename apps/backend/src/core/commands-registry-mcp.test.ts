@@ -1,10 +1,20 @@
+import * as fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { runInNewContext } from "node:vm";
+
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { mcpManagementErrorFromUnknown } from "@orkestrator/protocol/mcp-management";
 
 import { createCommandRegistry } from "./commands.js";
 import type { CommandContext } from "./commands-context.js";
-import { createMcpRuntimeProbe } from "./commands-registry-mcp.js";
+import {
+  CONTAINER_WRITER_SCRIPT,
+  createStagedDefaultsWriter,
+  createMcpRuntimeProbe,
+} from "./commands-registry-mcp.js";
 import { SENTINEL, createFixture, type Fixture } from "./mcp-management/test-support.js";
 
 describe("MCP management commands", () => {
@@ -36,6 +46,9 @@ describe("MCP management commands", () => {
       "apply_mcp_configuration",
       "get_mcp_operation",
       "cancel_mcp_apply",
+      "resolve_mcp_environment_overlay",
+      "preview_mcp_environment_defaults",
+      "refresh_mcp_environment_defaults",
     ]) {
       expect(commands.has(name)).toBe(true);
     }
@@ -210,6 +223,60 @@ describe("Codex reload probe", () => {
   });
 });
 
+describe("OpenCode reload probe", () => {
+  function openCodeContext(outcome: string, names?: string[]) {
+    const calls: unknown[][] = [];
+    const forgotten: string[] = [];
+    const statusReads: string[] = [];
+    const context = {
+      nativeAgents: {
+        reloadMcpConfigurationIfRunning: async (...args: unknown[]) => {
+          calls.push(args);
+          return outcome;
+        },
+        openCodeMcpServerNamesIfRunning: async (...args: unknown[]) => {
+          calls.push(["names", ...args]);
+          return names;
+        },
+      },
+      runtime: {
+        localServers: {
+          openCodeAgentTools: { forget: (key: string) => forgotten.push(key) },
+          enqueueEnvironmentOperation: (environmentId: string) => {
+            statusReads.push(environmentId);
+            return Promise.resolve({ running: false, port: null, pid: null });
+          },
+        },
+      },
+    } as unknown as CommandContext;
+    return { probe: createMcpRuntimeProbe(context), calls, forgotten, statusReads };
+  }
+
+  test("a rebuilt instance gets Orkestrator's entry back and reports its listing", async () => {
+    const { probe, calls, forgotten, statusReads } = openCodeContext("reloaded", ["fixture"]);
+    await expect(probe.reloadOpenCode!("env-1")).resolves.toEqual({
+      outcome: "reloaded",
+    });
+    await expect(probe.openCodeMcpServerNames!("env-1")).resolves.toEqual(["fixture"]);
+    expect(calls).toEqual([
+      ["env-1", "opencode"],
+      ["names", "env-1"],
+    ]);
+    // Disposal dropped the runtime-only entry; it is posted again at once.
+    expect(forgotten).toEqual(["local:env-1"]);
+    expect(statusReads).toEqual(["env-1"]);
+  });
+
+  test("anything but a reload touches nothing else", async () => {
+    const { probe, calls, forgotten } = openCodeContext("busy");
+    await expect(probe.reloadOpenCode!("env-1")).resolves.toEqual({ outcome: "busy" });
+    expect(calls).toEqual([["env-1", "opencode"]]);
+    expect(forgotten).toEqual([]);
+    const none = createMcpRuntimeProbe({} as unknown as CommandContext);
+    await expect(none.reloadOpenCode!("env-1")).resolves.toEqual({ outcome: "not-running" });
+  });
+});
+
 describe("MCP configuration evidence probe", () => {
   test("reads through the observation-only service path and copies only the evidence fields", async () => {
     const calls: unknown[][] = [];
@@ -264,4 +331,143 @@ describe("MCP configuration evidence probe", () => {
       undefined,
     ]);
   });
+});
+
+describe("container MCP writer program without Docker", () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-writer-"));
+    fs.mkdirSync(path.join(root, "home/node"), { recursive: true });
+    fs.mkdirSync(path.join(root, "workspace"));
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  // Run the exact production program with real file I/O, remapping its two
+  // container roots into scratch space. Only stdin and process.exit are virtual.
+  function run(file: string, expected: string, input: string, max = 1024, mode = "private") {
+    const bytes = Buffer.from(input);
+    let offset = 0;
+    const remap = (value: string) => path.join(root, value);
+    const handles = new Set<number>();
+    const virtualFs = {
+      ...fs,
+      lstatSync: (file: string) => fs.lstatSync(remap(file)),
+      mkdirSync: (file: string, options: fs.MakeDirectoryOptions) =>
+        fs.mkdirSync(remap(file), options),
+      openSync: (file: string, flags: number, mode?: number) => {
+        const fd = fs.openSync(remap(file), flags, mode);
+        handles.add(fd);
+        return fd;
+      },
+      closeSync: (fd: number) => {
+        handles.delete(fd);
+        fs.closeSync(fd);
+      },
+      renameSync: (from: string, to: string) => fs.renameSync(remap(from), remap(to)),
+      unlinkSync: (file: string) => fs.unlinkSync(remap(file)),
+      readSync: (
+        fd: number,
+        buffer: Buffer,
+        start: number,
+        length: number,
+        position: number | null,
+      ) => {
+        if (fd !== 0) return fs.readSync(fd, buffer, start, length, position);
+        const read = bytes.copy(buffer, start, offset, offset + length);
+        offset += read;
+        return read;
+      },
+    };
+    const exited = Symbol("exit");
+    let code = 0;
+    try {
+      runInNewContext(CONTAINER_WRITER_SCRIPT, {
+        require: (name: string) =>
+          name === "fs" ? virtualFs : name === "path" ? path : { createHash },
+        Buffer,
+        process: {
+          argv: ["node", file, expected, mode, String(max)],
+          pid: process.pid,
+          exit: (value: number) => {
+            code = value;
+            throw exited;
+          },
+        },
+      });
+    } catch (error) {
+      if (error !== exited) throw error;
+    } finally {
+      for (const fd of handles) fs.closeSync(fd);
+    }
+    return code;
+  }
+
+  test("creates private parents and atomically replaces the intended file", () => {
+    expect(run("/home/node/.codex/config.toml", "absent", "first")).toBe(0);
+    const file = path.join(root, "home/node/.codex/config.toml");
+    expect(fs.readFileSync(file, "utf8")).toBe("first");
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.dirname(file)).mode & 0o777).toBe(0o700);
+    const digest = "sha256:" + createHash("sha256").update("first").digest("base64url");
+    expect(run("/home/node/.codex/config.toml", digest, "second")).toBe(0);
+    expect(fs.readFileSync(file, "utf8")).toBe("second");
+    expect(fs.readdirSync(path.dirname(file))).toEqual(["config.toml"]);
+  });
+
+  test("refuses paths outside the exact roots and traversal or noncanonical paths", () => {
+    for (const file of [
+      "/tmp/x",
+      "/etc/passwd",
+      "/home/nodes/x",
+      "/workspace-other/x",
+      "/home/node/../root/x",
+      "/workspace//x",
+      "relative",
+    ]) {
+      expect(run(file, "absent", "payload")).toBe(4);
+    }
+  });
+
+  test("refuses symlink files, symlink parents and nonregular destinations", () => {
+    const outside = path.join(root, "outside");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "original"), "safe");
+    fs.symlinkSync(path.join(outside, "original"), path.join(root, "home/node/link"));
+    fs.symlinkSync(outside, path.join(root, "home/node/linked-parent"));
+    fs.mkdirSync(path.join(root, "workspace/directory"));
+    for (const file of [
+      "/home/node/link",
+      "/home/node/linked-parent/new",
+      "/workspace/directory",
+    ]) {
+      expect(run(file, "absent", "payload")).toBe(4);
+    }
+    expect(fs.readdirSync(outside)).toEqual(["original"]);
+    expect(fs.readFileSync(path.join(outside, "original"), "utf8")).toBe("safe");
+  });
+
+  test("a digest mismatch or oversized stdin leaves the existing bytes alone", () => {
+    const file = path.join(root, "workspace/config.json");
+    fs.writeFileSync(file, "safe");
+    expect(run("/workspace/config.json", "sha256:wrong", "payload")).toBe(3);
+    const digest = "sha256:" + createHash("sha256").update("safe").digest("base64url");
+    expect(run("/workspace/config.json", digest, "oversized", 3)).toBe(5);
+    expect(fs.readFileSync(file, "utf8")).toBe("safe");
+    expect(fs.readdirSync(path.dirname(file))).toEqual(["config.json"]);
+  });
+});
+
+test("Claude staging is refreshed on start so defaults refresh needs no staged writer", async () => {
+  const writer = createStagedDefaultsWriter({
+    storage: {
+      getDataDir: () => {
+        throw new Error("should not read staging");
+      },
+    },
+  } as never);
+  expect(
+    await writer.update("env", "container", "claude:user", () => {
+      throw new Error("should not rewrite");
+    }),
+  ).toBe("not-needed");
 });

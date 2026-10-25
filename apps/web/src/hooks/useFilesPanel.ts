@@ -1,13 +1,17 @@
-import { useEffect, useCallback, useRef, useState } from "react";
+import { useEffect, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores";
 import { useUIStore, useEnvironmentStore, useProjectStore } from "@/stores";
+import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import * as backend from "@/lib/backend";
 import { environmentBaselineCommit, resolveComparisonRef } from "@/lib/diff-baseline";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { useWorktreeSnapshotRevisions } from "@/hooks/useWorktreeSnapshotRevisions";
 import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
+import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
+import { isChangeProjection } from "@orkestrator/protocol/change-resources";
 import type { WorktreeReadStamp } from "@orkestrator/protocol/worktree-snapshots";
 import type { Environment } from "@/types";
 
@@ -211,12 +215,25 @@ function formatBatchFailure(completed: number, total: number, message: string): 
  * the only trigger for legacy backends and unwatched targets (containers), and
  * the backend answers it for a quiet watched worktree from valid watched state
  * without rescanning.
+ *
+ * On a backend with change tracking the Changes tab shows the environment's
+ * `environment-net` projection instead (`ChangesView`; the same measurement as
+ * the sidebar badge). The projection is event driven, so while it owns the
+ * Changes tab the legacy change list is neither polled nor re-read on
+ * announcements; an explicit refresh asks the backend for a fenced
+ * `changes_refresh`. The file tree (and the change list it highlights from)
+ * keeps the behaviour above.
  */
 export function useFilesPanel() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const { isOpen, activeTab } = useFilesPanelStore(
-    useShallow((state) => ({ isOpen: state.isOpen, activeTab: state.activeTab })),
+    useShallow((state) => ({
+      // Pull request tabs read GitHub, not this target's files: while one is
+      // shown the file views are treated as closed and nothing polls.
+      isOpen: state.isOpen && isFilesPanelFileTab(state.activeTab),
+      activeTab: state.activeTab === "all-files" ? ("all-files" as const) : ("changes" as const),
+    })),
   );
   // Actions are stable references on the store.
   const { setChanges, setFileTree, setLoadingChanges, setLoadingTree, setTargetBranch } =
@@ -265,6 +282,11 @@ export function useFilesPanel() {
   const targetId = isProjectScope
     ? projectRootFilesTargetId(rootProject!.id)
     : selectedEnvironmentId;
+  // The backend's change projection for the environment the panel shows.
+  // `undefined` on an older backend: the legacy list stays in charge.
+  const changeProjection = useEnvironmentChangeProjection(snapshotEnvironmentId);
+  const changeResourceKey = changeProjection?.resourceKey ?? null;
+  const projectionOwnsChanges = changeResourceKey !== null && activeTab === "changes";
 
   // Detect environment type and get appropriate identifiers
   const isLocalEnvironment = isProjectScope || selectedEnvironment?.environmentType === "local";
@@ -322,7 +344,10 @@ export function useFilesPanel() {
   const loadingChangesRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
   const loadingTreeRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
   const activeSnapshotKeyRef = useRef(environmentSnapshotKey);
-  activeSnapshotKeyRef.current = environmentSnapshotKey;
+  // Published at commit, before any effect below starts a read for the new key.
+  useLayoutEffect(() => {
+    activeSnapshotKeyRef.current = environmentSnapshotKey;
+  }, [environmentSnapshotKey]);
   const [fileActionPending, setFileActionPending] = useState<string | null>(null);
   // Owner stamps of the list and tree the panel last applied (state, so an
   // announcement that raced an in-flight read is re-checked when it lands).
@@ -575,10 +600,37 @@ export function useFilesPanel() {
     ],
   );
 
+  // Asks the backend for a fenced refresh of the environment projection; the
+  // settled projection (or the later event) updates every view of it.
+  const refreshChangeProjection = useCallback(
+    async (showLoading: boolean): Promise<void> => {
+      if (!changeResourceKey) return;
+      if (showLoading) setLoadingChanges(true);
+      try {
+        const result = await backend.refreshChanges(changeResourceKey);
+        if (result.kind === "settled" && isChangeProjection(result.projection)) {
+          useChangeProjectionStore.getState().applyProjection(result.projection);
+        }
+      } catch (err) {
+        console.error("Failed to refresh changes:", err);
+      } finally {
+        if (showLoading && activeSnapshotKeyRef.current === environmentSnapshotKey) {
+          setLoadingChanges(false);
+        }
+      }
+    },
+    [changeResourceKey, environmentSnapshotKey, setLoadingChanges],
+  );
+
   // Load data for the active tab, showing the loading indicator. Joins an
   // equivalent snapshot request already in flight.
   const loadVisible = useCallback(
     (options?: backend.SnapshotReadOptions) => {
+      if (projectionOwnsChanges) {
+        // The projection subscription keeps the rows current; only an
+        // explicit refresh asks the backend for a new pass.
+        return options?.refresh ? refreshChangeProjection(true) : Promise.resolve();
+      }
       if (activeTab === "changes") {
         return loadChanges(false, options);
       } else {
@@ -587,17 +639,18 @@ export function useFilesPanel() {
         );
       }
     },
-    [activeTab, loadChanges, loadFileTree],
+    [activeTab, loadChanges, loadFileTree, projectionOwnsChanges, refreshChangeProjection],
   );
 
   // Silent refresh for auto-refresh (no loading indicator)
   const silentRefresh = useCallback(() => {
+    if (projectionOwnsChanges) return Promise.resolve();
     if (activeTab === "changes") {
       return loadChanges(true);
     } else {
       return Promise.all([loadFileTree(true), loadChanges(true)]).then(() => undefined);
     }
-  }, [activeTab, loadChanges, loadFileTree]);
+  }, [activeTab, loadChanges, loadFileTree, projectionOwnsChanges]);
 
   // The 5 s auto-refresh is owned by the shared read coordinator: one timer
   // per environment/tab key, paused while the document is hidden,
@@ -608,7 +661,11 @@ export function useFilesPanel() {
     key: { resource: "files-panel", target: environmentSnapshotKey, options: activeTab },
     enabled: isAvailable,
     readOnSubscribe: false,
-    demand: { active: isOpen && isAvailable, intervalMs: AUTO_REFRESH_INTERVAL },
+    // Not while the event-driven projection owns the Changes tab.
+    demand: {
+      active: isOpen && isAvailable && !projectionOwnsChanges,
+      intervalMs: AUTO_REFRESH_INTERVAL,
+    },
     read: async (context) => {
       if (!context.explicit) return silentRefresh();
       // An explicit refresh needs a post-click observation, so it must not
@@ -630,8 +687,11 @@ export function useFilesPanel() {
     // began, then take a guaranteed post-mutation snapshot of both views.
     await Promise.all([loadChanges(true), loadFileTree(true)]);
     if (activeSnapshotKeyRef.current !== environmentSnapshotKey) return;
+    // The projection settles from the backend's own pass; it is not awaited
+    // so a slow container scan does not hold the action's result.
+    void refreshChangeProjection(false);
     await Promise.all([loadChanges(true), loadFileTree(true)]);
-  }, [environmentSnapshotKey, loadChanges, loadFileTree]);
+  }, [environmentSnapshotKey, loadChanges, loadFileTree, refreshChangeProjection]);
 
   const revertFile = useCallback(
     async (filePath: string) => {
@@ -1040,6 +1100,7 @@ export function useFilesPanel() {
     const changesView =
       appliedChangesView?.key === environmentSnapshotKey ? appliedChangesView.stamp : undefined;
     if (
+      !projectionOwnsChanges &&
       isAnnouncedNewer(
         { targetGeneration: announced.targetGeneration, revision: announced.fileListRevision },
         ownerGeneration,
@@ -1072,6 +1133,7 @@ export function useFilesPanel() {
     environmentSnapshotKey,
     loadChanges,
     loadFileTree,
+    projectionOwnsChanges,
   ]);
 
   // Load data when panel opens, tab changes, or environment changes
@@ -1101,6 +1163,8 @@ export function useFilesPanel() {
     environmentId: targetId,
     /** Set when the panel shows a project's root checkout instead of an environment. */
     projectScopeProjectId: isProjectScope ? projectId : null,
+    /** Environment whose change projection the Changes tab shows (null: legacy list only). */
+    changeEnvironmentId: snapshotEnvironmentId,
     revertFile,
     deleteFile,
     moveFile,

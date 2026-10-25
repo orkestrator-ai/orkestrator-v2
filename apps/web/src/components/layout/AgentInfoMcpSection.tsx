@@ -10,6 +10,7 @@ import type {
 import { requestMcpServerSettings } from "@/lib/mcp-settings-navigation";
 import { listen } from "@/lib/native/events";
 import { dispatchResourceChange } from "@/lib/resource-sync";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 
 import { McpServersPanel } from "./AgentInfoButton.panels";
 
@@ -55,6 +56,19 @@ export function useMcpRuntimeRefresh(
 }
 
 /**
+ * Where an environment's MCP servers start and connect from, in the words the
+ * MCP settings use for the same target (`McpTargetContext.locationLabel`).
+ */
+export function mcpExecutionLocationLabel(environment: {
+  name: string;
+  environmentType?: string;
+}): string {
+  return environment.environmentType === "local"
+    ? `Worktree of ${environment.name} on this backend`
+    : `Container of ${environment.name}`;
+}
+
+/**
  * MCP servers the live session loaded, plus links into saved-configuration
  * management. The panel-level link is always present, including when the
  * session reports no servers, because that is exactly when a user goes
@@ -77,11 +91,28 @@ export function AgentInfoMcpSection({
   onAction: (server: NativeAgentMcpServer, action: NativeAgentMcpServerAction) => void;
 }) {
   useMcpRuntimeRefresh(environmentId, provider, sessionKey);
-  const manage = (serverName?: string) =>
+  const environment = useEnvironmentStore((state) =>
+    state.environments.find((candidate) => candidate.id === environmentId),
+  );
+  // A failing server is usually diagnosed by where it was reached from: a
+  // container cannot see the host's localhost or its absolute paths.
+  const unhealthy = servers?.some(
+    (server) => server.status === "failed" || server.status === "needs-auth",
+  );
+  // A row link carries the row's exact name and layer plus this session, so
+  // the section can pick the saved row this session loads, not every row
+  // that happens to share the name.
+  const manage = (server?: NativeAgentMcpServer) =>
     requestMcpServerSettings({
       provider,
       environmentId,
-      ...(serverName ? { serverName } : {}),
+      ...(server
+        ? {
+            serverName: provider === "claude" ? server.id : server.name,
+            ...(server.scope ? { serverScope: server.scope } : {}),
+            logicalSessionKey: sessionKey,
+          }
+        : {}),
     });
   return (
     <div className="space-y-1.5">
@@ -90,11 +121,16 @@ export function AgentInfoMcpSection({
           servers={servers}
           busyAction={busyAction}
           onAction={onAction}
-          onManageServer={(server) => manage(server.name)}
+          onManageServer={(server) => manage(server)}
         />
       ) : servers ? (
         <p className="text-xs text-muted-foreground">
           This session has not loaded any MCP servers.
+        </p>
+      ) : null}
+      {unhealthy && environment ? (
+        <p className="text-xs text-muted-foreground">
+          Connects from {mcpExecutionLocationLabel(environment)}, not from this browser.
         </p>
       ) : null}
       <button

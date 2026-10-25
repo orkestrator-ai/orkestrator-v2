@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { PARENT_WATCH_INTERVAL_MS } from "@orkestrator/protocol/parent-watchdog";
 import { FakeIntervals } from "@orkestrator/protocol/testing/fake-intervals";
 import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
@@ -50,7 +51,7 @@ function seedSession(lastAccessed: number) {
 }
 
 describe("Pi bridge server lifecycle", () => {
-  test("start arms one idle sweep and a five-second parent watch", async () => {
+  test("start arms one idle sweep and the shared parent watch", async () => {
     await start(0, {
       timers,
       parentPid: 4213,
@@ -60,12 +61,12 @@ describe("Pi bridge server lifecycle", () => {
     });
 
     expect(server.listening).toBe(true);
-    expect(timers.periods()).toEqual([5_000, 60_000]);
+    expect(timers.periods()).toEqual([PARENT_WATCH_INTERVAL_MS, 60_000]);
   });
 
   test("a repeated start rejects without arming or binding anything more", async () => {
     await expect(start(0, { timers, signals: null })).rejects.toThrow("already started");
-    expect(timers.periods()).toEqual([5_000, 60_000]);
+    expect(timers.periods()).toEqual([PARENT_WATCH_INTERVAL_MS, 60_000]);
   });
 
   test("the armed sweep detaches an idle session and leaves an active one", async () => {

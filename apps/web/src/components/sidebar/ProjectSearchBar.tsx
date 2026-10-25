@@ -26,6 +26,9 @@ import {
   type ProjectSearchHit,
 } from "@/lib/project-search";
 import { cn } from "@/lib/utils";
+import { FederatedSearchSection } from "@/components/federation/FederatedSearchSection";
+import { useFederation } from "@/components/federation/FederationProvider";
+import { MachineDot } from "@/components/federation/MachineDot";
 import type { Environment, Project } from "@/types";
 
 const FILTER_LABELS: Record<ProjectSearchFilter, string> = {
@@ -63,6 +66,13 @@ function ShortcutHint({ keys, label }: { keys: string; label: string }) {
       <span>{label}</span>
     </span>
   );
+}
+
+/** This window's machine dot, when several machines are in view. */
+function BoundMachineDot() {
+  const { enabled, boundMachine } = useFederation();
+  if (!enabled || !boundMachine) return null;
+  return <MachineDot colorToken={boundMachine.colorToken} machineName={boundMachine.name} />;
 }
 
 function ProjectSearchRow({
@@ -128,6 +138,7 @@ function ProjectSearchRow({
       )}
     >
       <StatusIndicator status={hit.environment.status} className="shrink-0" />
+      <BoundMachineDot />
       <span className="min-w-0 flex-1 truncate text-sm">{hit.environment.name}</span>
       <span className="flex min-w-0 items-center gap-2 overflow-hidden text-[11px] text-zinc-500">
         {age ? <span className="tabular-nums">{age}</span> : null}
@@ -195,6 +206,17 @@ export function ProjectSearchBar({
   }, [hits, selectedHitId]);
   const selectedHit = selectedIndex >= 0 ? hits[selectedIndex] : undefined;
 
+  // Relative times are measured from when the search opens.
+  const openSearch = () => {
+    if (open) return;
+    setNow(new Date());
+    setOpen(true);
+  };
+  const handleOpenChange = (next: boolean) => {
+    if (next) openSearch();
+    else setOpen(false);
+  };
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -210,7 +232,8 @@ export function ProjectSearchBar({
       ) {
         if (isTypingTarget(event.target) && !open) return;
         event.preventDefault();
-        setOpen((current) => !current);
+        if (!open) setNow(new Date());
+        setOpen(!open);
         return;
       }
 
@@ -224,25 +247,26 @@ export function ProjectSearchBar({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open]);
 
-  useEffect(() => {
+  // Closing clears the search; a new query or filter moves the selection back
+  // to the first hit.
+  const [searchScope, setSearchScope] = useState({ open, query, filter });
+  if (searchScope.open !== open || searchScope.query !== query || searchScope.filter !== filter) {
+    setSearchScope({ open, query, filter });
+    setSelectedHitId(null);
     if (!open) {
       setQuery("");
       setFilter("all");
-      setSelectedHitId(null);
-      return;
     }
+  }
 
-    setNow(new Date());
+  useEffect(() => {
+    if (!open) return;
     const timeoutId = window.setTimeout(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
     }, 0);
     return () => window.clearTimeout(timeoutId);
   }, [open]);
-
-  useEffect(() => {
-    setSelectedHitId(null);
-  }, [query, filter]);
 
   useEffect(() => {
     selectedItemRef.current?.scrollIntoView({ block: "nearest" });
@@ -294,7 +318,7 @@ export function ProjectSearchBar({
     }
   };
 
-  const shortcutLabel = useMemo(searchShortcutLabel, []);
+  const shortcutLabel = useMemo(() => searchShortcutLabel(), []);
   const hasQuery = parseProjectSearchQuery(query).length > 0;
   const projectHeading = hasQuery ? "Projects" : "Recent projects";
   const environmentHeading = hasQuery ? "Environments" : "Recent environments";
@@ -312,7 +336,7 @@ export function ProjectSearchBar({
         data-testid="project-search-trigger"
         aria-label="Search projects and environments"
         aria-keyshortcuts="Meta+K Control+K"
-        onClick={() => setOpen(true)}
+        onClick={openSearch}
         // Borderless, so the padding is purely optical: it puts the icon's ink
         // under the header's "Projects" title (pl-3) and the badge's right edge
         // under the ink of the header's 28px "+" button (pr-2).
@@ -329,7 +353,7 @@ export function ProjectSearchBar({
         </kbd>
       </button>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
           showCloseButton={false}
           data-testid="project-search-dialog"
@@ -467,6 +491,7 @@ export function ProjectSearchBar({
                 ) : null}
               </div>
             )}
+            <FederatedSearchSection query={query} onOpened={() => setOpen(false)} />
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 border-t border-border/70 px-4 py-2 text-[11px] text-zinc-500">

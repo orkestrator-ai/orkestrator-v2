@@ -15,7 +15,10 @@ import type { StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
 import { StorageService } from "./storage.js";
-import { BuildPipelineService } from "./build-pipeline-service.js";
+import {
+  BuildPipelineService,
+  type BuildPipelineServiceOptions,
+} from "./build-pipeline-service.js";
 import { ReviewSnapshotChangedError } from "./review-fanout.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
@@ -107,6 +110,8 @@ export class FanoutProvider implements BuildPipelineProvider {
     requestId: string;
     model?: string;
     fastMode?: boolean;
+    agentMcp?: ProviderSendOptions["agentMcp"];
+    artifactGrant?: string;
   }> = [];
   readonly aborted: string[] = [];
   readonly steers: Array<{ sessionId: string; action: unknown }> = [];
@@ -164,6 +169,12 @@ export class FanoutProvider implements BuildPipelineProvider {
 
   registerSession(): void {}
 
+  async dispatchStatus(_sessionId: string, requestId: string) {
+    return this.sent.some((entry) => entry.requestId === requestId)
+      ? ("dispatched" as const)
+      : ("unknown" as const);
+  }
+
   async createSession(
     phase: PipelineSessionPhase,
     label: string,
@@ -180,12 +191,16 @@ export class FanoutProvider implements BuildPipelineProvider {
   }
 
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
+    // Model the provider's request-ID deduplication across lost acknowledgements.
+    if (this.sent.some((entry) => entry.requestId === options.requestId)) return;
     this.sent.push({
       sessionId,
       prompt,
       requestId: options.requestId,
       model: options.model,
       fastMode: options.fastMode,
+      ...(options.agentMcp ? { agentMcp: options.agentMcp } : {}),
+      ...(options.artifactGrant ? { artifactGrant: options.artifactGrant } : {}),
     });
     const model = this.sessionModels.get(sessionId);
     if (model && this.ambiguousModels.has(model) && !this.ambiguityRaised.has(model)) {
@@ -313,6 +328,7 @@ function transcriptMessage(sessionId: string, version: number) {
 export async function withPipeline(
   run: (context: {
     service: BuildPipelineService;
+    createService: () => BuildPipelineService;
     storage: StorageService;
     provider: FanoutProvider;
     providers: Map<BuildPipelineAgent, FanoutProvider>;
@@ -336,6 +352,8 @@ export async function withPipeline(
     environmentType?: "local" | "containerized";
     assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
     efficiency?: RecordingEfficiencyObserver;
+    artifactDispatch?: BuildPipelineServiceOptions["artifactDispatch"];
+    structuredResultDeadlineMs?: number;
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-fanout-"));
@@ -415,29 +433,35 @@ export async function withPipeline(
     return undefined as T;
   };
   const workflowResults = options.toolMode ? new WorkflowResultService(dataDir) : undefined;
-  const service = new BuildPipelineService(storage, invoke, {
-    autoAdvance: false,
-    provider: async (_pipeline, agent) => providers.get(agent)!,
-    transcriptPersistIntervalMs: options.transcriptPersistIntervalMs,
-    ...(options.efficiency ? { efficiency: options.efficiency } : {}),
-    ...(workflowResults
-      ? {
-          workflowResults,
-          resolveAgentToolConnection: () => ({
-            url: "http://127.0.0.1:1234/mcp",
-            token: "test-token",
-          }),
-          workflowResultRollout: new WorkflowResultRollout(async () => ({
-            enabled: true,
-            providers: ["claude"],
-            kinds: options.toolKinds ?? ["consolidated-review"],
-          })),
-        }
-      : {}),
-    ...(options.assertAgentToolsReachable
-      ? { assertAgentToolsReachable: options.assertAgentToolsReachable }
-      : {}),
-  });
+  const createService = () =>
+    new BuildPipelineService(storage, invoke, {
+      autoAdvance: false,
+      provider: async (_pipeline, agent) => providers.get(agent)!,
+      transcriptPersistIntervalMs: options.transcriptPersistIntervalMs,
+      ...(options.structuredResultDeadlineMs !== undefined
+        ? { structuredResultDeadlineMs: options.structuredResultDeadlineMs }
+        : {}),
+      ...(options.efficiency ? { efficiency: options.efficiency } : {}),
+      ...(options.artifactDispatch ? { artifactDispatch: options.artifactDispatch } : {}),
+      ...(workflowResults
+        ? {
+            workflowResults,
+            resolveAgentToolConnection: () => ({
+              url: "http://127.0.0.1:1234/mcp",
+              token: "test-token",
+            }),
+            workflowResultRollout: new WorkflowResultRollout(async () => ({
+              enabled: true,
+              providers: ["claude"],
+              kinds: options.toolKinds ?? ["consolidated-review"],
+            })),
+          }
+        : {}),
+      ...(options.assertAgentToolsReachable
+        ? { assertAgentToolsReachable: options.assertAgentToolsReachable }
+        : {}),
+    });
+  const service = createService();
   const read = async (id: string): Promise<BuildPipeline> => {
     const record = await storage.getBuildPipeline(id);
     if (!record) throw new Error("Pipeline disappeared");
@@ -446,6 +470,7 @@ export async function withPipeline(
   try {
     await run({
       service,
+      createService,
       storage,
       provider,
       providers,

@@ -1,4 +1,4 @@
-import { useErrorDialogStore } from "@/stores";
+import { formatErrorContext, useErrorDialogStore } from "@/stores";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,11 +15,16 @@ import { toast } from "sonner";
 export function ErrorDetailsDialog() {
   const error = useErrorDialogStore((state) => state.error);
   const closeError = useErrorDialogStore((state) => state.closeError);
+  const context = formatErrorContext(error?.context);
 
   const handleCopyError = async () => {
     if (!error) return;
 
-    let errorText = `${error.title}\n\n${error.message}`;
+    let errorText = error.title;
+    if (context) {
+      errorText += `\n${context}`;
+    }
+    errorText += `\n\n${error.message}`;
     if (error.initialPrompt) {
       errorText += `\n\nInitial Prompt:\n${error.initialPrompt}`;
     }
@@ -52,6 +57,7 @@ export function ErrorDetailsDialog() {
           </AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div className="space-y-3">
+              {context && <p className="text-sm font-medium text-foreground">{context}</p>}
               <pre className="whitespace-pre-wrap break-words rounded-md bg-muted p-3 text-sm font-mono text-foreground max-h-[30vh] overflow-y-auto">
                 {error?.message}
               </pre>

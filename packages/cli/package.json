@@ -1,6 +1,6 @@
 {
   "name": "orkestrator",
-  "version": "2.22.3",
+  "version": "2.30.0-beta",
   "description": "Run the Orkestrator backend service without the desktop application",
   "homepage": "https://orkestrator.dev",
   "repository": {
@@ -31,10 +31,10 @@
     "smoke:pack": "bun scripts/smoke-packed.ts",
     "test": "bun run build && bun test --preload ../../tests/setup-node.ts tests --parallel",
     "test:workspace": "bun test --preload ../../tests/setup-node.ts tests --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/cli.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
-    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
+    "typecheck": "bun check -p tsconfig.json"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.296",
+    "@anthropic-ai/claude-agent-sdk": "0.3.309",
     "playwright-core": "1.64.0",
     "sharp": "0.35.5"
   },
@@ -43,7 +43,7 @@
     "@orkestrator/toolchain": "workspace:*"
   },
   "engines": {
-    "bun": ">=1.4.3"
+    "bun": ">=1.4.4"
   },
   "//dependencies": "Only modules scripts/build.ts leaves unbundled belong here; everything else is inlined into dist/ and resources/. tests/cli.test.ts derives this list from the built artifacts and fails if it drifts."
 }

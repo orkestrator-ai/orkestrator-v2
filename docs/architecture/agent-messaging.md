@@ -36,8 +36,8 @@ MCP token.
 | Sent status | Read placement and both receipt states for mail this tab sent (`get_message_status`) |
 | Idle inject | When policy allows, the store drains pending mail into a new user turn as a tagged carrier |
 | Presence gate | Inject only when the recipient is idle (or an unprompted “cold” native tab) |
-| User inbox | Global compose/read UI, per-tab banner, mute and inject-policy overrides |
-| Routed wake | Coordinator ↔ the workers it created, and peer ↔ peer, wake the recipient even when the default inject policy is off (see [Routes](#routes)) |
+| User inbox | Messages panel (conversations, compose), per-tab banner, mute and inject-policy overrides |
+| Routed wake | Coordinator ↔ the workers it created, and peer ↔ peer while **Wake peers** is on, wake the recipient even when the default inject policy is off (see [Routes](#routes)) |
 
 A carrier the recipient cannot acknowledge is not a usable delivery channel:
 it never becomes retention-eligible and eventually wedges the mailbox
@@ -75,7 +75,7 @@ are never mailboxes.
 | `coordinator` | A project coordinator conversation | Control MCP with a coordinator credential |
 | `user` | The human in the Orkestrator UI | `send_agent_mail` |
 | `system` | A backend workflow | Completion notices with a stable outbox id |
-| `external` | Control MCP operator token | `send_external_agent_mail` — inbox only |
+| `external` | A Control MCP operator credential, or `orkestrator mail send` | `send_external_agent_mail` (public action `mail.send`) — inbox only |
 
 **Trust.** Derived at send time from sender and recipient project/environment:
 
@@ -155,8 +155,8 @@ Every same-project message from a tab, a coordinator, or a workflow is given a
 
 | Route | Between | Wakes the recipient? |
 | --- | --- | --- |
-| `coordinator` | The main coordinator and a worker it (or a former main) launched; a coordinator and a tab no coordinator created; main ↔ side agent; workflow (`system`) notices | Yes |
-| `peer` | Two tabs, neither in an environment a coordinator created (including sibling tabs in one environment) | Yes, while **Wake peers** is on (default) |
+| `coordinator` | The main coordinator and a worker it (or a former main) launched; a coordinator and a tab no coordinator created; main ↔ side agent; workflow (`system`) notices; [node mail](#node-mail) | Yes |
+| `peer` | Two tabs, neither in an environment a coordinator created (including sibling tabs in one environment) | Yes, while **Wake peers** is on (off by default) |
 | `isolated` | A tab in a coordinator-created environment and anyone other than its own coordinator: sibling workers, a worker and a peer, a worker and another conversation | Only if the recipient's policy is `idle` and inject depth is 0, like unrouted mail |
 
 User, external and cross-project mail has no route.
@@ -181,6 +181,22 @@ the address the sender wrote, so a retry still matches after a redirect.
 
 **Side agents** send only to their main coordinator and receive only from it
 (and the user); anything else is `policy-denied`.
+
+### Node mail
+
+Mail between a command node's coordinator and an agent on a node it
+controls ([command-nodes.md](command-nodes.md#coordinators)) crosses the node
+link: the command node delivers coordinator mail with `deliver_node_mail`,
+and collects an agent's mail to `"coordinator"` (or a reply on such a
+thread) from that node's outbox. Each side stores it with a `node` sender
+(`NodeMailActor`): the node, the remote party's role (`coordinator` or
+`agent`) and its address on its own node, and the recipient's own project for
+the same repository. The node link authenticates it, so it is
+`same-project`, takes the `coordinator` route and wakes the recipient; it is
+budgeted as one remote sender (`nodeMailSenderKey`), and a new request
+starts a pair budget as a local delegation does. A leaf agent's report to a
+coordinator waiting on it is held for that remote delegation like a local
+worker's, and released when the delegation settles.
 
 A waking route ignores the default inject policy and inject depth. Only an
 explicit per-tab **Off**, a mute, or the pair hop budget stops it; per-tab
@@ -359,9 +375,10 @@ having a working mailbox.
 `apps/backend/src/core/control-mcp-server.ts`, documented in
 [`control-mcp.md`](./control-mcp.md).
 
-An operator token can `list_mailboxes` and `send_message`. Those sends are
-always `external` and **never injected**. The human reads them in the
-global inbox.
+An operator credential with the `mail` capability can `list_mailboxes` and
+`send_message` (the public actions `mail.mailboxes` and `mail.send`, which the
+CLI reaches as `orkestrator mail mailboxes/send`). Those sends are always
+`external` and **never injected**. The human reads them in the global inbox.
 
 ### Control MCP — coordinator credential
 
@@ -381,19 +398,31 @@ policy is. Mute, explicit Off, pause, hop budget, and `canInject` still apply.
 
 | Surface | Location | Notes |
 | --- | --- | --- |
-| Transcript | `MailTile` (`apps/web/src/components/chat/`) | Each injected message is a collapsed tile: an icon for its kind or notice tone, sender, subject and about three clamped lines of the body. The header is a button (`aria-expanded`); clicking it, or the clipped preview, expands the Markdown body, and the choice survives remounts and paging for the session. A batched prompt becomes one tile per message |
+| Transcript, delivered mail | `MailTile` (`apps/web/src/components/chat/`) | Each injected message is a collapsed tile: an icon for its kind or notice tone, sender, subject and about three clamped lines of the body. The header is a button (`aria-expanded`); clicking it, or the clipped preview, expands the Markdown body, and the choice survives remounts and paging for the session. A batched prompt becomes one tile per message |
+| Transcript, sent and read mail | `MailToolPart` (`apps/web/src/components/chat/`) | `send_message`, `reply_message`, `read_message` and a coordinator's `get_message` calls render as mail tiles, not tool rows, and stay out of the collapsed tool group (`agentMailToolCall`, `apps/web/src/lib/chat/agent-mail-tool-call.ts`). A sent tile shows the recipient and its live delivery state from the recipient's mailbox; a read tile is where pull-only mail enters the transcript. Every tile with both participants known opens their conversation |
+| Messages panel | `AgentMailPanel` (`apps/web/src/components/agent-mail/`) | A right-hand sheet. The list is one row per pair that has exchanged mail (`list_agent_mail_conversations`), those needing the person first; a conversation is both directions between two participants, oldest first (`get_agent_mail_conversation`), with retry, resume, deliver-now and discard on the messages that need them. The person composes only in their own conversation with a tab. Opening a conversation marks it seen (`mark_agent_mail_conversation_seen`) |
+| Title-bar button | `AgentMailButton` | Opens the panel. Its badge counts `attentionCount`: failed and budget-held deliveries and unseen external or cross-project mail (`agentMailNeedsAttention`), not the agents' own traffic |
+| Per-tab banner | `AgentMailBanner` | Pending, failed, pull-only, budget or hourly-limit held; retry / resume / deliver now / discard, and View opens the tab's conversations |
+| Tab menu, Agent info | `DraggableTab`, `AgentInfoButton` | One "Messages…" entry when `canPull`: the panel focused on the tab, with its delivery policy and mutes |
 | Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `wakePeers`, `autonomousWakeBudget`, `hourlyWakeLimit`, `coordinatorStatusWakes` (`off` / `settled` / `stages`), `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |
-| Global inbox | `AgentMailButton` | Compose, sent, seen; destinations filtered to `canPull` |
-| Per-tab banner | `AgentMailBanner` | Pending, failed, pull-only, budget or hourly-limit held; retry / resume / discard |
-| Tab menu | `DraggableTab` | “Message this tab” / inbox settings when `canPull` |
-| Agent info | `AgentInfoButton` | Mail section when `canPull` |
 | Per-mailbox policy | `mute_agent_mail` | `inject`: inherit / off / idle; inbound and outbound mute |
+
+**Conversations.** A participant is a mailbox id (`agentMailParticipantKey`), so
+history survives a tab's session being replaced, or a fixed key for the person
+(`user`), external clients (`external`) and a project's workflows
+(`system:<projectId>`). Mail is filed only in its recipient's mailbox, so a
+conversation is A's mail from B plus B's mail from A
+(`apps/backend/src/core/agent-mail-conversations.ts`). It is bounded by the
+same retention and per-mailbox limits as everything else; a closed tab keeps
+its name from the messages it sent.
 
 Default inject policy is **off**. Idle delivery can start a billable turn,
 including on a tab that has never been prompted, so it is opt-in per
 install or per mailbox for unrouted mail (from the user, and `isolated`
-mail). Routed mail wakes regardless; turn **Wake peers** off to make
-peer mail pull-only again.
+mail). Coordinator-route mail wakes regardless. Peer mail wakes only after
+**Wake peers** is turned on: it is off by default for the same reason, since
+two peers answering each other start billable turns nobody asked for, and a
+missing setting normalizes to off.
 
 The user sender bypasses the sender `canSend` check. The compose UI still
 only lists pull-capable destinations, so native Cursor and Grok tabs appear
@@ -513,7 +542,7 @@ Defaults (`DEFAULT_AGENT_MESSAGING_SETTINGS`):
 - `paused: false`
 - `allowCrossProject: false`
 - `defaultInjectPolicy: "off"`
-- `wakePeers: true`
+- `wakePeers: false`
 - `autonomousWakeBudget: 16`
 - `hourlyWakeLimit: 40`
 - `coordinatorStatusWakes: "settled"`
@@ -562,7 +591,7 @@ claim `tabId`.
 | Addressable mailbox | Y | Y | Y | N | — | — |
 | Agent pull / send | Y | Y | Y | N | N | — |
 | Idle inject | Y | Y | N | N | N (never) | via policy / retry |
-| Orkestrator-owned MCP attach | Y | Y | P | N | operator token | — |
+| Orkestrator-owned MCP attach | Y | Y | P | N | operator credential | — |
 | Coordinator delegation | Y | — | — | — | — | — |
 
 Terminal cursor/grok/pi are not in `TERMINAL_TYPES`, so they never enter
@@ -598,14 +627,15 @@ capability row says so.
 | Protocol, flags, carrier | `packages/protocol/src/agent-mail.ts` |
 | Persist, send, inject policy | `apps/backend/src/core/storage-agent-mail.ts` |
 | Drain, batch, presence cache | `apps/backend/src/core/agent-mail-service.ts` |
-| Native inject / presence | `apps/backend/src/core/native-agent-service-prompt.ts` |
+| Native inject / presence | `apps/backend/src/core/native-agent-service.ts` |
 | Tmux inject | `apps/backend/src/core/prompt-queue-drainer.ts` |
 | Agent Tools mail | `apps/backend/src/core/agent-tools-messaging.ts` |
 | Control MCP mail | `apps/backend/src/core/control-mcp-server.ts` |
 | Delegation = MCP ∧ inject | `apps/backend/src/core/coordinator-providers.ts` |
 | UI commands | `apps/backend/src/core/commands-registry-mail.ts` |
-| Settings / inbox / banner | `apps/web/src/components/settings/MessagingSettings.tsx`, `apps/web/src/components/agent-mail/` |
-| Transcript tiles | `apps/web/src/lib/chat/client-only-messages.ts` (carrier → rows), `apps/web/src/components/chat/MailTile.tsx` |
+| Conversations (pairs) | `apps/backend/src/core/agent-mail-conversations.ts` |
+| Settings / panel / banner | `apps/web/src/components/settings/MessagingSettings.tsx`, `apps/web/src/components/agent-mail/` |
+| Transcript tiles | `apps/web/src/lib/chat/client-only-messages.ts` (carrier → rows), `apps/web/src/lib/chat/agent-mail-tool-call.ts` (mail tool calls), `apps/web/src/components/chat/MailTile.tsx`, `MailToolPart.tsx` |
 | Main / side coordinator, respawn | `apps/backend/src/core/coordinator-service.ts`, `packages/protocol/src/coordinator.ts` |
 | Coordinator status wakes | `apps/backend/src/core/coordinator-status-wakes.ts` |
 | Multi-actor scenarios | `apps/backend/src/core/agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts` |

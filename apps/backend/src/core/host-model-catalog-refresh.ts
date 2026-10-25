@@ -18,7 +18,6 @@ import {
   resolveOpenCodeBinary,
 } from "./commands-agent-support.js";
 import {
-  assertLocalServerStartAllowed,
   allocateLocalPort,
   fetchAcpNormalizedModelsAt,
   getBridgePath,
@@ -30,18 +29,13 @@ import {
   claudeBridgeAuthHeaders,
   openCodeHealthHeaders,
 } from "./commands-server-health.js";
-import {
-  isLocalServerShutdownRequested,
-  localServerProcesses,
-  spawnLocalServerCommandImpl,
-  type LocalServerKind,
-} from "./commands-runtime-state.js";
-import { terminateLocalServerChild } from "./commands-local-server-lifecycle.js";
+import type { LocalServerKind, LocalServerRuntime } from "./local-server-runtime.js";
 import { fetchClaudeBridgeModelCatalog } from "./commands-containers.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
 import { runCommand } from "./shell.js";
+import { openCodeSdkFetch } from "./http-bridge-transport.js";
 import {
   applyClaudeHostCredentialEnvironment,
   resolveCursorHostCredentialMaterial,
@@ -71,6 +65,8 @@ export type BridgeProbe = {
   env: NodeJS.ProcessEnv;
   token: string;
   headers: Record<string, string>;
+  /** Names the server in its process key and messages. Defaults to a catalogue probe. */
+  purpose?: "catalog-refresh" | "provider-sign-in";
 };
 
 const OPENCODE_PROVIDER_LIST_TIMEOUT_MS = 45_000;
@@ -93,32 +89,60 @@ const defaultDependencies: HostRefreshDependencies = {
   runCommand,
 };
 
+/** A probe key is never an environment id, so only the shutdown gate applies. */
+function assertProbeStartAllowed(localServers: LocalServerRuntime): void {
+  if (localServers.isShuttingDown()) {
+    throw new Error("Backend is shutting down; local servers cannot be started");
+  }
+}
+
 export async function withShortLivedBridge<T>(
+  localServers: LocalServerRuntime,
   probe: BridgeProbe,
   read: (port: number, token: string) => Promise<T>,
 ): Promise<T> {
-  assertLocalServerStartAllowed(`catalog-refresh:${probe.kind}`);
+  const purpose = probe.purpose ?? "catalog-refresh";
+  assertProbeStartAllowed(localServers);
   const port = await allocateLocalPort();
-  const key = `${probe.kind}:catalog-refresh:${randomUUID()}`;
+  const key = `${probe.kind}:${purpose}:${randomUUID()}`;
   const args = typeof probe.args === "function" ? probe.args(port) : probe.args;
-  const child = spawnLocalServerCommandImpl(probe.command, args, {
-    cwd: probe.cwd,
-    env: { ...probe.env, PORT: String(port), HOSTNAME: "127.0.0.1" },
-    detached: process.platform !== "win32",
-  });
-  localServerProcesses.set(key, child);
+  // OpenCode servers share the host's database; see `opencode-host-start.ts`.
+  const releaseOpenCodeHostStart =
+    probe.kind === "opencode" ? await localServers.openCodeHostStart.acquire() : () => undefined;
+  let child: ReturnType<LocalServerRuntime["spawn"]>;
+  try {
+    // Shutdown may have begun while the probe waited behind an environment start.
+    assertProbeStartAllowed(localServers);
+    child = localServers.spawn(probe.command, args, {
+      cwd: probe.cwd,
+      env: { ...probe.env, PORT: String(port), HOSTNAME: "127.0.0.1" },
+      detached: process.platform !== "win32",
+    });
+  } catch (error) {
+    releaseOpenCodeHostStart();
+    throw error;
+  }
+  localServers.adoptProcess(key, child);
   child.stdout.resume();
   child.stderr.resume();
   try {
-    if (isLocalServerShutdownRequested()) {
-      throw new Error("Backend is shutting down; model catalogues cannot be refreshed");
+    try {
+      if (localServers.isShuttingDown()) {
+        throw new Error(
+          purpose === "catalog-refresh"
+            ? "Backend is shutting down; model catalogues cannot be refreshed"
+            : "Backend is shutting down; sign-in cannot start",
+        );
+      }
+      await waitForLocalServerStartup(child, port, probe.kind, probe.headers);
+    } finally {
+      releaseOpenCodeHostStart();
     }
-    await waitForLocalServerStartup(child, port, probe.kind, probe.headers);
     return await read(port, probe.token);
   } finally {
-    await terminateLocalServerChild(key, child).catch((error: unknown) => {
+    await localServers.terminate(key, child).catch((error: unknown) => {
       console.warn(
-        `[ElectronBackend] The ${probe.kind} catalogue probe did not exit cleanly:`,
+        `[ElectronBackend] The ${probe.kind} ${purpose === "catalog-refresh" ? "catalogue probe" : "sign-in server"} did not exit cleanly:`,
         error instanceof Error ? error.message : "unknown error",
       );
     });
@@ -161,6 +185,7 @@ async function refreshClaude(
   };
   await applyClaudeHostCredentialEnvironment(context, env);
   const catalog = await withShortLivedBridge(
+    context.runtime.localServers,
     {
       kind: "claude",
       command: resolveBunBinary(context),
@@ -184,6 +209,7 @@ async function refreshCodex(context: CommandContext): Promise<HostCatalog> {
   const token = randomBytes(32).toString("base64url");
   const config = await context.storage.loadConfig();
   const models = await withShortLivedBridge(
+    context.runtime.localServers,
     {
       kind: "codex",
       command: resolveBunBinary(context),
@@ -248,7 +274,6 @@ async function refreshAcp(
   if (useCursorSdk) {
     env.CURSOR_BRIDGE_TOKEN = token;
     env.CURSOR_BRIDGE_AUTH_FILE = cursorSdkCredentialPath(context);
-    env.CURSOR_BRIDGE_PROJECT_SETTINGS = "0";
     if (cursorApiKey) env.CURSOR_API_KEY = cursorApiKey;
     else delete env.CURSOR_API_KEY;
   } else {
@@ -273,9 +298,9 @@ async function refreshAcp(
       modelUpdateMethods: ["x.ai/models/update", "_x.ai/models/update"],
       sessionUpdateMethods: ["x.ai/session/update", "_x.ai/session/update"],
     });
-    env.ACP_APPROVE_PROJECT_MCPS = "0";
   }
   const models = await withShortLivedBridge(
+    context.runtime.localServers,
     {
       kind: agent,
       command: resolveBunBinary(context),
@@ -298,26 +323,36 @@ async function refreshAcp(
   return { agent, models };
 }
 
-async function refreshOpenCode(
+/** Where a private host OpenCode server listens, and how to authenticate to it. */
+export interface HostOpenCodeServer {
+  baseUrl: string;
+  directory: string;
+  headers: Record<string, string>;
+}
+
+/**
+ * Run `use` against a private OpenCode server started from the bundled binary
+ * in the probe directory, stopped once `use` settles. It shares the host's
+ * OpenCode configuration and login store with every local environment.
+ */
+export async function withHostOpenCodeServer<T>(
   context: CommandContext,
-  dependencies: HostRefreshDependencies,
-): Promise<HostCatalog> {
+  use: (server: HostOpenCodeServer) => Promise<T>,
+  purpose: BridgeProbe["purpose"] = "catalog-refresh",
+): Promise<T> {
   const cwd = await probeWorkingDirectory(context);
-  const binary = resolveOpenCodeBinary(context);
-  await dependencies.runCommand(binary, ["models", "--refresh"], { cwd, timeoutMs: 45_000 });
-  const allowedProviders = normalizeOpenCodeModelProviders(
-    (await context.storage.loadConfig()).global.openCodeModelProviders,
-  );
   const token = randomBytes(32).toString("base64url");
   const headers = openCodeHealthHeaders(token);
-  const models = await withShortLivedBridge(
+  return withShortLivedBridge(
+    context.runtime.localServers,
     {
       kind: "opencode",
-      command: binary,
+      command: resolveOpenCodeBinary(context),
       args: (port) => ["serve", "--port", String(port), "--hostname", "127.0.0.1"],
       cwd,
       token,
       headers,
+      purpose,
       env: {
         ...process.env,
         ...OPENCODE_PINNED_RUNTIME_ENV,
@@ -328,22 +363,38 @@ async function refreshOpenCode(
           (await context.storage.loadConfig()).global.debugLogging === true ? "1" : "0",
       },
     },
-    async (port) => {
-      const client = dependencies.createOpenCodeClient({
-        baseUrl: `http://127.0.0.1:${port}`,
-        directory: cwd,
-        headers,
-      });
-      const response = await client.provider.list(
-        {},
-        { signal: AbortSignal.timeout(dependencies.openCodeProviderListTimeoutMs) },
-      );
-      return normalizeOpenCodeComposerCatalog(response.data ?? {}, [], {
-        requireConnected: false,
-        priorityProviders: allowedProviders,
-      }).models;
-    },
+    (port) => use({ baseUrl: `http://127.0.0.1:${port}`, directory: cwd, headers }),
   );
+}
+
+async function refreshOpenCode(
+  context: CommandContext,
+  dependencies: HostRefreshDependencies,
+): Promise<HostCatalog> {
+  const cwd = await probeWorkingDirectory(context);
+  await dependencies.runCommand(resolveOpenCodeBinary(context), ["models", "--refresh"], {
+    cwd,
+    timeoutMs: 45_000,
+  });
+  const allowedProviders = normalizeOpenCodeModelProviders(
+    (await context.storage.loadConfig()).global.openCodeModelProviders,
+  );
+  const models = await withHostOpenCodeServer(context, async ({ baseUrl, directory, headers }) => {
+    const client = dependencies.createOpenCodeClient({
+      baseUrl,
+      directory,
+      headers,
+      fetch: openCodeSdkFetch,
+    });
+    const response = await client.provider.list(
+      {},
+      { signal: AbortSignal.timeout(dependencies.openCodeProviderListTimeoutMs) },
+    );
+    return normalizeOpenCodeComposerCatalog(response.data ?? {}, [], {
+      requireConnected: false,
+      priorityProviders: allowedProviders,
+    }).models;
+  });
   if (models.length === 0) throw new Error("OpenCode returned an empty model catalogue");
   return { agent: "opencode", models };
 }

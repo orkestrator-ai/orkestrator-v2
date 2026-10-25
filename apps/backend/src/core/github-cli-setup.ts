@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import type { CommandContext } from "./commands-context.js";
-import { getHostGitHubToken } from "./commands-files.js";
+import { getHostGitHubToken } from "./github-credentials.js";
 import {
   beginAgentAccountLogin,
   ensureBrowserShim,

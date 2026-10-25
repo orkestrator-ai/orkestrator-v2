@@ -2,18 +2,23 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { parseResourceLimits } from "@orkestrator/protocol/container-resources";
 import {
+  environmentResourcePolicy,
   parseAppliedLimits,
   parseDockerInfo,
   parseMemorySize,
   parseStatsLine,
   parseSystemDf,
+  refuseUnenforceableLimits,
   resetResourceCaches,
   resolveResourceLimits,
   resourceArguments,
   sampleContainerUsage,
   sharedMemoryMiB,
+  updateEnvironmentResources,
 } from "../src/core/container-resources";
+import { resetDockerTopologyCache } from "../src/core/docker-image";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
+import type { Environment } from "../src/core/models";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,
@@ -24,6 +29,7 @@ import {
 const cleanup: string[] = [];
 afterEach(async () => {
   resetResourceCaches();
+  resetDockerTopologyCache();
   await Promise.all(cleanup.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -234,6 +240,165 @@ esac
         containers: [],
         error: "docker-unavailable",
       });
+    });
+  });
+});
+
+/**
+ * `docker info` of a real rootless Engine 29.9.2 (docker:dind-rootless, no
+ * systemd, so cgroup driver `none`). That daemon accepted `--cpus`,
+ * `--memory` and `--pids-limit`, recorded them in HostConfig and enforced
+ * none of them (memory.max and pids.max stayed `max`).
+ */
+const ROOTLESS_NO_CGROUPS_INFO = {
+  ServerVersion: "29.9.2",
+  OperatingSystem: "Alpine Linux v3.24",
+  NCPU: 18,
+  MemTotal: 8_317_267_968,
+  SecurityOptions: ["name=seccomp,profile=builtin", "name=rootless", "name=cgroupns"],
+  CgroupVersion: "2",
+  CgroupDriver: "none",
+  CpuCfsQuota: false,
+  MemoryLimit: false,
+  PidsLimit: false,
+};
+
+function rootlessDocker(applied = "0\t0\t<nil>"): string {
+  return `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  info) printf '%s\\n' '${JSON.stringify(ROOTLESS_NO_CGROUPS_INFO)}' ;;
+  inspect) printf '${applied}\\n' ;;
+  update) exit 0 ;;
+esac
+exit 0
+`;
+}
+
+async function rootlessFixture(overrides: Partial<Environment> = {}) {
+  const dir = await tempDir("ork-rootless-");
+  cleanup.push(dir);
+  const built = memoryLifecycleContext([lifecycleEnvironment(overrides)], dir);
+  Object.assign(built.context.storage, {
+    loadConfig: async () => ({ version: "1.0.0", global: {}, repositories: {} }),
+  });
+  return built;
+}
+
+describe("rootless daemon without cgroup enforcement", () => {
+  test("a real rootless daemon's info reports rootless and no enforceable axis", () => {
+    expect(parseDockerInfo(JSON.stringify(ROOTLESS_NO_CGROUPS_INFO))).toMatchObject({
+      rootless: true,
+      cgroupVersion: "2",
+      support: { cpuQuota: false, memoryLimit: false, pidsLimit: false },
+    });
+  });
+
+  test("a budget the daemon cannot enforce is refused precisely, naming each axis", () => {
+    const capacity = parseDockerInfo(JSON.stringify(ROOTLESS_NO_CGROUPS_INFO));
+    expect(() =>
+      refuseUnenforceableLimits(
+        { cpus: 1, memoryMiB: 1024, pids: 512 },
+        capacity,
+        "Nothing was created.",
+      ),
+    ).toThrow(
+      "ContainerLifecycleError:unsupported-topology: This Docker engine (rootless) cannot enforce the CPU, memory, process (PID) limits in the environment's budget. Nothing was created.",
+    );
+    // No budget is not refused; neither is unknown support on a rootful
+    // daemon, whose read-back shows a dropped limit.
+    expect(() =>
+      refuseUnenforceableLimits({ cpus: null, memoryMiB: null, pids: null }, capacity, "x"),
+    ).not.toThrow();
+    const unknown = { cpuQuota: null, memoryLimit: null, pidsLimit: null };
+    expect(() =>
+      refuseUnenforceableLimits(
+        { cpus: 1, memoryMiB: 1024, pids: 512 },
+        { rootless: false, support: unknown },
+        "x",
+      ),
+    ).not.toThrow();
+    // A rootless daemon that did not say is refused: its read-back would lie.
+    expect(() =>
+      refuseUnenforceableLimits(
+        { cpus: null, memoryMiB: 1024, pids: null },
+        { rootless: true, support: unknown },
+        "Nothing was created.",
+      ),
+    ).toThrow(
+      "ContainerLifecycleError:daemon-unavailable: Docker runs rootless and did not report whether it can enforce the environment's budget. Nothing was created.",
+    );
+    // Partial delegation: only the missing controller is refused.
+    expect(() =>
+      refuseUnenforceableLimits(
+        { cpus: 1, memoryMiB: 1024, pids: 512 },
+        { rootless: true, support: { cpuQuota: false, memoryLimit: true, pidsLimit: true } },
+        "x",
+      ),
+    ).toThrow(/cannot enforce the CPU limit in/);
+  });
+
+  for (const applyNow of [true, false]) {
+    test(`an unenforceable update is refused before Docker or storage (applyNow=${applyNow})`, async () => {
+      const { context, writes } = await rootlessFixture({ containerId: "c1" });
+      await withDockerScript(rootlessDocker(), async (log) => {
+        await expect(
+          updateEnvironmentResources(
+            {
+              environmentId: "env-lifecycle",
+              limits: { cpus: 1, memoryMiB: null, pids: 512 },
+              applyNow,
+            },
+            context,
+          ),
+        ).rejects.toThrow(
+          "ContainerLifecycleError:unsupported-topology: This Docker engine (rootless) cannot enforce the CPU, process (PID) limits",
+        );
+        expect(await log.read()).not.toMatch(/^update /m);
+      });
+      expect(writes).toEqual([]);
+    });
+  }
+
+  for (const applyNow of [true, false]) {
+    test(`failed capacity probing preserves rootless update admission (applyNow=${applyNow})`, async () => {
+      const { context, writes } = await rootlessFixture({ containerId: "c1" });
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  info)
+    [ "$3" = "{{json .}}" ] && exit 1
+    printf '%s\\n' '{"SecurityOptions":["name=rootless"]}' ;;
+esac
+exit 0
+`,
+        async (log) => {
+          await expect(
+            updateEnvironmentResources(
+              {
+                environmentId: "env-lifecycle",
+                limits: { cpus: 1, memoryMiB: null, pids: null },
+                applyNow,
+              },
+              context,
+            ),
+          ).rejects.toThrow("ContainerLifecycleError:daemon-unavailable: Docker runs rootless");
+          expect(await log.read()).not.toMatch(/^update /m);
+          expect(writes).toEqual([]);
+        },
+      );
+    });
+  }
+
+  test("a runtime carrying limits the daemon records but does not enforce is flagged", async () => {
+    const { context } = await rootlessFixture({ containerId: "c1" });
+    await withDockerScript(rootlessDocker("1000000000\t536870912\t256"), async () => {
+      const policy = await environmentResourcePolicy("env-lifecycle", context);
+      expect(policy.requested).toEqual({ cpus: null, memoryMiB: null, pids: null });
+      expect(policy.applied).toEqual({ cpus: 1, memoryMiB: 512, pids: 256 });
+      expect(policy.unsupported).toEqual(["cpus", "memoryMiB", "pids"]);
+      expect(policy.daemonRootless).toBe(true);
     });
   });
 });

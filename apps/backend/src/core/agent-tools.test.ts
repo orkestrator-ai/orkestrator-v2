@@ -4,6 +4,7 @@ import {
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
@@ -15,7 +16,11 @@ import {
   WORKFLOW_RESULT_KINDS,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
-import { AgentToolsServer, consumeAgentMailRateLimit } from "./agent-tools.js";
+import {
+  AgentToolsServer,
+  consumeAgentMailRateLimit,
+  dropInheritedAgentToolConnection,
+} from "./agent-tools.js";
 import { StorageService } from "./storage.js";
 import { seedUnreadableStore } from "./storage-test-support.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
@@ -49,6 +54,19 @@ const ALL_AGENT_TOOL_NAMES = [
   "update_ticket",
   "add_ticket_comment",
 ];
+describe("dropInheritedAgentToolConnection", () => {
+  test("forgets only the inherited agent tool connection", () => {
+    const env: NodeJS.ProcessEnv = {
+      ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:1/mcp",
+      ORKESTRATOR_AGENT_MCP_TOKEN: "parent-token",
+      ORKESTRATOR_PARENT_PID: "1",
+      PATH: "/usr/bin",
+    };
+    dropInheritedAgentToolConnection(env);
+    expect(env).toEqual({ ORKESTRATOR_PARENT_PID: "1", PATH: "/usr/bin" });
+  });
+});
+
 describe("agent Kanban tools", () => {
   let dataDir: string;
   let storage: StorageService;
@@ -220,6 +238,39 @@ describe("agent Kanban tools", () => {
     ).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
   });
 
+  test("adds the transcript artifact tools to the general server only", async () => {
+    await addMessagingEnvironment("env-1", "project-1", ["agent-1"]);
+    await server.stop();
+    const workflowResults = workflowResultService();
+    server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
+    server.setTranscriptArtifactToolHost({
+      toolsEnabled: () => true,
+      handleTool: async () => ({ value: { schemaVersion: 1, ok: true }, isError: false }),
+    });
+    await server.start();
+    const connection = server.connection("env-1", "project-1", "host", "agent-1");
+    const listed = await rpc(connection.url, connection.token, "tools/list");
+    expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
+      ...ALL_AGENT_TOOL_NAMES,
+      ...ARTIFACT_TOOL_NAMES,
+    ]);
+    const resultKey = crypto.randomUUID();
+    await workflowResults.prepare({
+      resultKey,
+      kind: "feature-plan-state",
+      environmentId: "env-1",
+      projectId: "project-1",
+      provider: "codex",
+    });
+    const restricted = server.workflowResultConnection("env-1", "project-1", "host", resultKey);
+    const restrictedTools = await rpc(restricted.url, restricted.token, "tools/list");
+    expect(restrictedTools.body.result?.tools?.map((tool) => tool.name)).toEqual([
+      "validate_workflow_result",
+      "submit_feature_plan_state",
+      "get_workflow_result_status",
+    ]);
+  });
+
   test("exposes scoped workflow submission and status tools when configured", async () => {
     await server.stop();
     const workflowResults = workflowResultService();
@@ -320,13 +371,21 @@ describe("agent Kanban tools", () => {
       duplicate: true,
     });
 
-    const denied = await rpc(connection.url, connection.token, "tools/call", {
+    // The bearer serves one key, so another key is a slip to correct.
+    const mismatched = await rpc(connection.url, connection.token, "tools/call", {
       name: "get_workflow_result_status",
       arguments: { resultKey: crypto.randomUUID() },
     });
-    expect(denied.body.result).toMatchObject({
+    expect(mismatched.body.result).toMatchObject({
       isError: true,
-      structuredContent: { ok: false, error: { code: "capability_denied" } },
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message: expect.stringContaining(resultKey),
+        },
+      },
     });
   });
 
@@ -384,8 +443,16 @@ describe("agent Kanban tools", () => {
     });
     expect(crossed.body.result).toMatchObject({
       isError: true,
-      structuredContent: { ok: false, error: { code: "capability_denied" } },
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message: expect.stringContaining(secondKey),
+        },
+      },
     });
+    expect(JSON.stringify(crossed.body.result)).not.toContain(firstKey);
 
     const validation = await rpc(first.url, first.token, "tools/call", {
       name: "validate_workflow_result",
@@ -398,7 +465,7 @@ describe("agent Kanban tools", () => {
     expect(validation.body.result?.structuredContent).toMatchObject({ ok: true, valid: true });
     const validatedDigest = validation.body.result?.structuredContent?.validatedDigest;
     expect(validatedDigest).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
-    const digestDenied = await rpc(first.url, first.token, "tools/call", {
+    const digestKeyCorrection = await rpc(first.url, first.token, "tools/call", {
       name: "submit_feature_plan_state",
       arguments: {
         resultKey: firstKey,
@@ -406,10 +473,18 @@ describe("agent Kanban tools", () => {
         validatedDigest,
       },
     });
-    expect(digestDenied.body.result).toMatchObject({
+    expect(digestKeyCorrection.body.result).toMatchObject({
       isError: true,
-      structuredContent: { ok: false, error: { code: "capability_denied" } },
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message: expect.stringContaining(secondKey),
+        },
+      },
     });
+    expect(JSON.stringify(digestKeyCorrection.body.result)).not.toContain(firstKey);
 
     const accepted = await rpc(first.url, first.token, "tools/call", {
       name: "submit_feature_plan_state",
@@ -437,17 +512,25 @@ describe("agent Kanban tools", () => {
       duplicate: true,
     });
 
-    const statusDenied = await rpc(first.url, first.token, "tools/call", {
+    const statusKeyCorrection = await rpc(first.url, first.token, "tools/call", {
       name: "get_workflow_result_status",
       arguments: {
         resultKey: firstKey,
         capability: second.workflowResultCapability,
       },
     });
-    expect(statusDenied.body.result).toMatchObject({
+    expect(statusKeyCorrection.body.result).toMatchObject({
       isError: true,
-      structuredContent: { ok: false, error: { code: "capability_denied" } },
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message: expect.stringContaining(secondKey),
+        },
+      },
     });
+    expect(JSON.stringify(statusKeyCorrection.body.result)).not.toContain(firstKey);
 
     const kindMismatch = await rpc(first.url, first.token, "tools/call", {
       name: "submit_fix_result",

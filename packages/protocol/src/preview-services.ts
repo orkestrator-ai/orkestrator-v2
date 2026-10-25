@@ -21,8 +21,8 @@ export const PREVIEW_DEFINITION_SCHEMA_VERSION = 1;
 export const PREVIEW_SERVICES_CHANGED_EVENT = "preview-services-changed";
 
 /**
- * Conservative starting budgets from the implementation plan (step 02). They
- * are admission limits for the preview feature only; they do not change any
+ * Conservative starting budgets, not yet tuned against a two-machine baseline.
+ * They are admission limits for the preview feature only; they do not change any
  * unrelated gateway, command-body, or agent transport limit.
  */
 export const PREVIEW_LIMITS = {

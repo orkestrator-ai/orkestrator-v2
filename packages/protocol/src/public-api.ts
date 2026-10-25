@@ -115,7 +115,17 @@ export const PUBLIC_ACTIONS = {
     effects: ["metadata"],
     observation: "receipt",
     milestone: "B",
-    summary: "Remove an empty project registration; never deletes checkouts or remotes.",
+    summary:
+      "Remove a project registration (with cascade, after deleting its environments); never deletes checkouts or remotes.",
+  },
+  "project.init": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata", "filesystem"],
+    observation: "receipt",
+    milestone: "B",
+    summary:
+      "Initialize a local-only Git repository (initial commit, no remote) at a backend path and register it.",
   },
   "project.config.get": {
     version: 1,
@@ -281,7 +291,25 @@ export const PUBLIC_ACTIONS = {
     effects: ["provider-session"],
     observation: "run",
     milestone: "C",
-    summary: "Send a follow-up prompt to one explicit idle conversation.",
+    summary:
+      "Send a follow-up prompt to one explicit idle conversation, or queue it behind a busy one.",
+  },
+  "session.commands": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "C",
+    summary: "List the session's slash-command catalogue (IDs, availability, argument policy).",
+  },
+  "session.command": {
+    version: 1,
+    mutation: true,
+    effects: ["provider-session"],
+    observation: "run",
+    milestone: "C",
+    summary:
+      "Run one selected slash command; a stale or unavailable selection fails, never sends text.",
   },
   "session.stop": {
     version: 1,
@@ -363,6 +391,89 @@ export const PUBLIC_ACTIONS = {
     milestone: "C",
     summary: "Read one bounded, ordered transcript page with a continuation cursor.",
   },
+  "changes.view": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "Read the backend's change projection for an environment (scope, state, line counts and their quality) with one page of changed files.",
+  },
+  "changes.history": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary: "Read one page of a session's turns, each with the backend's change projection.",
+  },
+  "attention.list": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "What needs attention: pending questions and approvals, the caller's runs that settled and environments whose setup finished, since a cursor.",
+  },
+  "ticket.list": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary: "List a project's Kanban tickets.",
+  },
+  "ticket.get": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary: "Read one Kanban ticket with its description, criteria and latest comments.",
+  },
+  "ticket.create": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Create a Kanban ticket in a project.",
+  },
+  "ticket.update": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Change a Kanban ticket's title, description, criteria or column.",
+  },
+  "ticket.comment": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Append a comment to a Kanban ticket.",
+  },
+  "mail.mailboxes": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary: "List agent mailboxes a message can be sent to.",
+  },
+  "mail.send": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary:
+      "Place a message in one tab's inbox; external messages are never injected into a turn.",
+  },
   "run.get": {
     version: 1,
     mutation: false,
@@ -410,6 +521,14 @@ export const PUBLIC_ACTIONS = {
     observation: "immediate",
     milestone: "D",
     summary: "Read the host's Orkestrator version, its updater, the last check and the update job.",
+  },
+  "host.update.channel": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Choose the host update channel and request a fresh check.",
   },
   "host.update.check": {
     version: 1,
@@ -600,10 +719,17 @@ export const PUBLIC_API_LIMITS = Object.freeze({
   transcriptTextMaxChars: 20_000,
   interactionsMax: 32,
   historyMaxEntries: 100,
+  attentionDefaultItems: 20,
+  attentionMaxItems: 50,
   /** Largest decoded response the client accepts from the gateway. */
   responseMaxBytes: 8 * 1024 * 1024,
   /** Largest request body the client sends. */
   requestMaxBytes: 1024 * 1024,
+  /** Fits with the maximum prompt (including JSON escaping) in the 1 MiB request. */
+  promptAttachmentsMaxItems: 8,
+  promptAttachmentsMaxBytes: 256 * 1024,
+  promptAttachmentNameMaxChars: 128,
+  commandArgumentsMaxBytes: 64 * 1024,
   execArgvMaxItems: 256,
   execArgvMaxBytes: 256 * 1024,
   execEnvMaxEntries: 64,
@@ -768,6 +894,8 @@ export interface PublicExecutionState {
 }
 
 export interface PublicReceipt {
+  /** Bounded current/final action result, also available for partial outcomes. */
+  result?: Record<string, unknown>;
   operationId: string;
   namespace: string;
   requestId: string;
@@ -921,14 +1049,18 @@ export interface PublicCapabilities {
     retainedNamespaces: string[];
   };
   providers: Record<string, PublicProviderCapabilities>;
+  /**
+   * Optional features. Each was `false` in the first release, so a client
+   * must treat a missing or `false` entry as unavailable.
+   */
   features: {
     transcriptFollow: "poll" | "unavailable";
     exec: { local: boolean; container: boolean; reason?: string };
-    projectCascadeRemove: false;
-    localProjectInit: false;
-    promptAttachments: false;
-    selectedSlashCommands: false;
-    enqueue: false;
+    projectCascadeRemove: boolean;
+    localProjectInit: boolean;
+    promptAttachments: boolean;
+    selectedSlashCommands: boolean;
+    enqueue: boolean;
   };
 }
 
@@ -975,7 +1107,8 @@ export function isPublicReceipt(value: unknown): value is PublicReceipt {
     typeof value.updatedAt === "string" &&
     typeof value.retainedUntil === "string" &&
     (value.dispatch === undefined || isRecord(value.dispatch)) &&
-    (value.execution === undefined || isRecord(value.execution))
+    (value.execution === undefined || isRecord(value.execution)) &&
+    (value.result === undefined || isRecord(value.result))
   );
 }
 

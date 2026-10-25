@@ -10,7 +10,7 @@ import { runCommand } from "../src/core/shell";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { resetContainerOwnershipCache } from "../src/core/container-lifecycle-service";
 
-const { createCommandRegistry, shutdownPrMonitorTracking } = await import("../src/core/commands");
+const { createCommandRegistry } = await import("../src/core/commands");
 const { BackendRuntime } = await import("../src/core/backend-runtime");
 const runtimes: Array<InstanceType<typeof BackendRuntime>> = [];
 
@@ -211,7 +211,6 @@ beforeEach(async () => {
 
 afterEach(() => {
   for (const runtime of runtimes.splice(0)) runtime.shutdown();
-  shutdownPrMonitorTracking();
   mock.restore();
 });
 
@@ -404,6 +403,8 @@ describe("direct backend command registry coverage", () => {
       cacheAgentModelCatalog,
       // The cached-catalogue read filters by the configured OpenCode providers.
       loadConfig: mock(async () => ({ global: {} })),
+      // Container bridge locks are keyed by the persisted container ID.
+      loadEnvironments: mock(async () => []),
     });
 
     for (const bridge of ["opencode", "claude", "codex"]) {
@@ -885,12 +886,8 @@ describe("direct backend command registry coverage", () => {
       getPromptQueue: value("getPromptQueue", { queueKey: "queue-1" }),
       listPromptQueues: value("listPromptQueues", [{ queueKey: "queue-1" }]),
       enqueuePromptQueueMessage: value("enqueuePromptQueueMessage", { queueKey: "queue-1" }),
-      requeuePromptQueueMessage: value("requeuePromptQueueMessage", { queueKey: "queue-1" }),
       removePromptQueueMessage: value("removePromptQueueMessage", { removed: { id: "m1" } }),
       movePromptQueueMessage: value("movePromptQueueMessage", { queueKey: "queue-1" }),
-      claimPromptQueueHead: value("claimPromptQueueHead", { claimed: { id: "m1" } }),
-      acknowledgePromptQueueClaim: value("acknowledgePromptQueueClaim", { queueKey: "queue-1" }),
-      rejectPromptQueueClaim: value("rejectPromptQueueClaim", { queueKey: "queue-1" }),
       getComposeDraft: value("getComposeDraft", { draftKey: "compose-1" }),
       listComposeDrafts: value("listComposeDrafts", [{ draftKey: "compose-1" }]),
       deleteComposeDraft: value("deleteComposeDraft", undefined),
@@ -990,12 +987,6 @@ describe("direct backend command registry coverage", () => {
         call: { method: "enqueuePromptQueueMessage", args: ["queue-1", "env-1", { id: "m1" }] },
       },
       {
-        command: "requeue_prompt_queue_message",
-        args: { queueKey: "queue-1", environmentId: "env-1", message: { id: "m1" } },
-        expected: { queueKey: "queue-1" },
-        call: { method: "requeuePromptQueueMessage", args: ["queue-1", "env-1", { id: "m1" }] },
-      },
-      {
         command: "remove_prompt_queue_message",
         args: { queueKey: "queue-1", environmentId: "env-1", messageId: "m1" },
         expected: { removed: { id: "m1" } },
@@ -1006,24 +997,6 @@ describe("direct backend command registry coverage", () => {
         args: { queueKey: "queue-1", environmentId: "env-1", messageId: "m1", direction: "up" },
         expected: { queueKey: "queue-1" },
         call: { method: "movePromptQueueMessage", args: ["queue-1", "env-1", "m1", "up"] },
-      },
-      {
-        command: "claim_prompt_queue_head",
-        args: { queueKey: "queue-1", environmentId: "env-1", expectedMessageId: "m1" },
-        expected: { claimed: { id: "m1" } },
-        call: { method: "claimPromptQueueHead", args: ["queue-1", "env-1", "m1"] },
-      },
-      {
-        command: "acknowledge_prompt_queue_claim",
-        args: { queueKey: "queue-1", environmentId: "env-1", claimToken: "token-1" },
-        expected: { queueKey: "queue-1" },
-        call: { method: "acknowledgePromptQueueClaim", args: ["queue-1", "env-1", "token-1"] },
-      },
-      {
-        command: "reject_prompt_queue_claim",
-        args: { queueKey: "queue-1", environmentId: "env-1", claimToken: "token-1" },
-        expected: { queueKey: "queue-1" },
-        call: { method: "rejectPromptQueueClaim", args: ["queue-1", "env-1", "token-1"] },
       },
       {
         command: "get_compose_draft",

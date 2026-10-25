@@ -51,7 +51,7 @@ function collectionFingerprint(ids: string[]): string {
   return createHash("sha256").update(ids.join("\n")).digest("hex").slice(0, 16);
 }
 
-function paginate<T extends { id: string }>(
+export function paginate<T extends { id: string }>(
   items: T[],
   input: { limit?: number; cursor?: string },
 ): PublicPage<T> {
@@ -114,7 +114,7 @@ export async function requireEnvironment(
 }
 
 export function createCapabilitiesHandler(
-  availableActions: () => ReadonlySet<PublicActionName>,
+  availableActions: () => ReadonlyMap<PublicActionName, PublicActionHandler>,
   features: () => PublicCapabilities["features"],
 ): ReadActionHandler<Record<string, never>> {
   return {
@@ -129,13 +129,17 @@ export function createCapabilitiesHandler(
       const available = availableActions();
       const actions: PublicCapabilities["actions"] = {};
       for (const name of Object.keys(PUBLIC_ACTIONS) as PublicActionName[]) {
-        actions[name] = available.has(name)
-          ? { version: PUBLIC_ACTIONS[name].version, available: true }
-          : {
-              version: PUBLIC_ACTIONS[name].version,
-              available: false,
-              reason: "not supported by this backend",
-            };
+        const handler = available.get(name);
+        const unavailable =
+          handler?.kind === "read" ? (handler.unavailableReason?.(context) ?? null) : null;
+        actions[name] =
+          handler && !unavailable
+            ? { version: PUBLIC_ACTIONS[name].version, available: true }
+            : {
+                version: PUBLIC_ACTIONS[name].version,
+                available: false,
+                reason: unavailable ?? "not supported by this backend",
+              };
       }
       const result: PublicCapabilities = {
         schemaVersion: PUBLIC_API_SCHEMA_VERSION,

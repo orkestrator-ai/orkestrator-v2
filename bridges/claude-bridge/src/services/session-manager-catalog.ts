@@ -9,6 +9,8 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { claudePlanWindowFromLabel } from "@orkestrator/protocol/plan-usage";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
+import { mcpScope } from "./mcp-runtime-status.js";
 import {
   claudeExecutableOptions,
   generateMessageId,
@@ -25,7 +27,7 @@ import { claudePermissionMode, claudeTurnPolicy } from "./claude-query-config.js
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged } from "./transcript-revision.js";
 import { MAX_STEER_JOURNAL_ENTRIES, updateSessionPreferences } from "./session-preferences.js";
-import { recordPromptDispatch } from "./session-manager-lifecycle.js";
+import { idleSteerUserMessageId, recordPromptDispatch } from "./session-manager-lifecycle.js";
 import { ultracodeFlagSetting } from "./ultracode.js";
 import type {
   ClaudeSteerJournalEntry,
@@ -160,7 +162,10 @@ function idleSteerMessageIds(requestId?: string): { userId: string; assistantId:
   if (!requestId) {
     return { userId: generateMessageId(), assistantId: generateMessageId() };
   }
-  return { userId: `idle-steer:${requestId}`, assistantId: `idle-steer-reply:${requestId}` };
+  return {
+    userId: idleSteerUserMessageId(requestId),
+    assistantId: `idle-steer-reply:${requestId}`,
+  };
 }
 
 export async function answerIdleSteerPrompt(
@@ -222,19 +227,21 @@ function createProbe(): Query {
   });
 }
 
-function mcpScope(scope: string | undefined, name: string): NativeAgentMcpServer["scope"] {
-  if (name === "orkestrator") return "orkestrator";
-  if (scope?.includes("plugin")) return "plugin";
-  if (scope === "project" || scope === "local") return "project";
-  return "user";
-}
-
 function mcpTransport(status: McpServerStatus): NativeAgentMcpServer["transport"] | undefined {
   const type = (status.config as { type?: unknown } | undefined)?.type;
   if (type === "stdio" || type === "sse" || type === "http") return type;
   if ((status.config as { command?: unknown } | undefined)?.command) return "stdio";
   if ((status.config as { url?: unknown } | undefined)?.url) return "http";
   return undefined;
+}
+
+/**
+ * A server's error as served to the live panel: credential-shaped text (a
+ * token in a URL or header an MCP server echoed) redacted, then bounded.
+ * Redacted first so a cut never leaves part of a token behind.
+ */
+function mcpError(error: string): string {
+  return redactSecrets(error).slice(0, 2_000);
 }
 
 function normalizeMcp(status: McpServerStatus): NativeAgentMcpServer {
@@ -258,7 +265,7 @@ function normalizeMcp(status: McpServerStatus): NativeAgentMcpServer {
     ...(transport ? { transport } : {}),
     toolCount: tools.length,
     ...(tools.length ? { tools } : {}),
-    ...(status.error ? { error: status.error.slice(0, 2_000) } : {}),
+    ...(status.error ? { error: mcpError(status.error) } : {}),
     actions,
   };
 }
@@ -291,7 +298,7 @@ export async function readSessionMcpServers(sessionId: string): Promise<NativeAg
       ...(server.tools
         ? { tools: server.tools.slice(0, 256), toolCount: server.tools.length }
         : {}),
-      ...(server.error ? { error: server.error.slice(0, 2_000) } : {}),
+      ...(server.error ? { error: mcpError(server.error) } : {}),
     }));
   }
   return session.mcpInventory ?? [];
@@ -544,8 +551,11 @@ export async function configureClaudeSession(
 export async function gracefulInterruptClaudeSession(
   sessionId: string,
 ): Promise<{ interrupted: boolean; stillQueued: string[] }> {
-  const control = sessions.get(sessionId)?.queryControl;
-  if (!control?.interrupt) return { interrupted: false, stillQueued: [] };
+  const session = sessions.get(sessionId);
+  const control = session?.queryControl;
+  if (!session || !control?.interrupt) return { interrupted: false, stillQueued: [] };
+  // Before the request: the CLI can answer it with the turn's result first.
+  session.interruptRequestedGeneration = session.latestTurnGeneration;
   try {
     const receipt = await control.interrupt();
     return { interrupted: true, stillQueued: receipt?.still_queued ?? [] };

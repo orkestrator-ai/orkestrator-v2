@@ -1,10 +1,9 @@
-import { beginEnvironmentMutation } from "../environment-replacement-fence.js";
 import path from "node:path";
 import type { PublicExecutionState } from "@orkestrator/protocol/public-api";
 import type { CommandContext } from "../commands-context.js";
 import { quoteShell, resolveBunBinary } from "../commands-agent-support.js";
 import { runCommand } from "../shell.js";
-import { withContainerRuntimeCredential } from "../commands-runtime-state.js";
+import { withContainerRuntimeCredential } from "../container-scripts.js";
 import type { Environment } from "../models.js";
 import { boundedMessage, PublicActionError } from "./errors.js";
 import { EXEC_CONTROL, EXEC_WORKER } from "./exec-worker.js";
@@ -62,7 +61,10 @@ export async function control(
   context: CommandContext,
   payload: Record<string, unknown>,
 ): Promise<unknown> {
-  const release = payload.action === "start" ? beginEnvironmentMutation(environment.id) : undefined;
+  const release =
+    payload.action === "start"
+      ? context.runtime.environments.fence.beginMutation(environment.id)
+      : undefined;
   try {
     if (
       payload.action === "start" &&

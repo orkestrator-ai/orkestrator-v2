@@ -4,11 +4,18 @@ import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { ensureProjectHomeInStore, isProjectHomeDeletionInProgress } from "@/hooks/useFilesPanel";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 
+const CLEANUP_IN_PROGRESS_MESSAGE =
+  "Project home cleanup is in progress. Retry after cleanup finishes.";
+
 /** Keep toolbar targeting on Home while board panels can obscure its panes. */
 export function useProjectHomeActivation() {
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectionRevision = useUIStore((state) => state.projectSelectionRevision);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const projectPending = useProjectStore(
+    (state) =>
+      !state.hasLoaded && !state.projects.some((project) => project.id === selectedProjectId),
+  );
   const checkoutPath = useProjectStore(
     (state) =>
       state.projects.find((project) => project.id === selectedProjectId)?.localPath?.trim() || null,
@@ -42,15 +49,20 @@ export function useProjectHomeActivation() {
   }, []);
   const selectionKey = `${selectedProjectId}\0${selectionRevision}`;
   const key = `${selectionKey}\0${checkoutPath}\0${attempt}`;
+  const cleanupInProgress = Boolean(selectedProjectId) && (projectDeleting || homeDeleting);
+  // Recorded while rendering so the message stays for this key after the
+  // deletion signal goes away; the layout effect below suppresses the ensure.
+  if (
+    cleanupInProgress &&
+    (failure?.key !== key || failure.message !== CLEANUP_IN_PROGRESS_MESSAGE)
+  ) {
+    setFailure({ key, message: CLEANUP_IN_PROGRESS_MESSAGE });
+  }
 
   useLayoutEffect(() => {
     if (!selectedProjectId) return;
     if (projectDeleting || homeDeleting) {
       suppressedSelection.current = selectionKey;
-      setFailure({
-        key,
-        message: "Project home cleanup is in progress. Retry after cleanup finishes.",
-      });
       return;
     }
     // Deletion can remove its final signal along with the record. Do not turn
@@ -61,6 +73,9 @@ export function useProjectHomeActivation() {
       return;
     }
     if (!checkoutPath) {
+      // A realm selects its requested project before the first snapshot arrives.
+      // Only a known project (or a completed snapshot) can confirm no checkout.
+      if (projectPending) return;
       const ui = useUIStore.getState();
       if (selectedHomeId) ui.selectEnvironment(null);
       if (ui.projectBoardTab === "home") ui.setProjectBoardTab("coordinator");
@@ -107,6 +122,7 @@ export function useProjectHomeActivation() {
     };
   }, [
     selectedProjectId,
+    projectPending,
     selectionKey,
     selectedEnvironmentId,
     selectedHomeId,

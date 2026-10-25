@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, jest, test } from "bun:test";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import type { PublicExecOutputWindow } from "@orkestrator/protocol/public-api-resources";
@@ -18,12 +19,28 @@ jest.setTimeout(60_000);
 
 const harnesses: PublicApiHarness[] = [];
 
+const KILL_GRACE_ENV = "ORKESTRATOR_TEST_EXEC_KILL_GRACE_MS";
+const originalKillGrace = process.env[KILL_GRACE_ENV];
+
 afterEach(async () => {
+  if (originalKillGrace === undefined) delete process.env[KILL_GRACE_ENV];
+  else process.env[KILL_GRACE_ENV] = originalKillGrace;
   await Promise.all(harnesses.splice(0).map((harness) => harness.cleanup()));
 });
 
-async function setup(): Promise<{ harness: PublicApiHarness; worktree: string }> {
-  const harness = await createPublicApiHarness();
+/**
+ * The worker inherits the backend's environment, so this shortens its
+ * TERM-to-KILL grace (5s in production) for commands started afterwards. The
+ * command still has to ignore TERM and be killed by the grace timer.
+ */
+function shortenKillGrace(): void {
+  process.env[KILL_GRACE_ENV] = "500";
+}
+
+async function setup(
+  options: Parameters<typeof createPublicApiHarness>[0] = {},
+): Promise<{ harness: PublicApiHarness; worktree: string }> {
+  const harness = await createPublicApiHarness(options);
   harnesses.push(harness);
   const worktree = path.join(harness.root, "worktree");
   await fs.mkdir(path.join(worktree, "sub"), { recursive: true });
@@ -84,6 +101,84 @@ async function output(
 }
 
 describe("environment.exec", () => {
+  test.each([false, true])(
+    "a container transport failure (timeout=%s) permits a late remote claim",
+    async (timedOut) => {
+      const { harness } = await setup();
+      await harness.storage.updateEnvironment("env-exec", {
+        environmentType: "containerized",
+        containerId: "stub-container",
+      });
+      const shell = await import("../shell.js");
+      const original = shell.runCommand;
+      let starts = 0;
+      let claimProbes = 0;
+      let status: "error" | "missing" | "running" | "exited" = "error";
+      const controller = spyOn(shell, "runCommand").mockImplementation(
+        async (command, args, options) => {
+          if (command !== "docker") return original(command, args, options);
+          // A probe can see no claim while the remote controller is still starting.
+          if (args?.includes("sh")) {
+            claimProbes += 1;
+            return { stdout: "unclaimed\n", stderr: "" };
+          }
+          const payload = JSON.parse(String(options?.stdin));
+          if (payload.action === "start") {
+            starts += 1;
+            throw new shell.CommandFailedError("transport lost", { timedOut });
+          }
+          if (status === "error") throw new Error("status unavailable");
+          return {
+            stdout: JSON.stringify({ status, ...(status === "exited" ? { exitCode: 0 } : {}) }),
+            stderr: "",
+          };
+        },
+      );
+      try {
+        const started = await exec(harness, "late-remote", { argv: ["true"] });
+        expect(started.receipt?.state).toBe("running");
+        const operationId = started.receipt!.operationId;
+        expect((await harness.call("run.get", { operationId })).receipt?.state).toBe("running");
+        status = "missing";
+        expect((await harness.call("run.get", { operationId })).receipt?.state).toBe("running");
+        status = "running";
+        expect((await harness.call("run.get", { operationId })).receipt?.execution?.state).toBe(
+          "running",
+        );
+        status = "error";
+        expect((await harness.call("run.get", { operationId })).receipt?.state).toBe("running");
+        status = "exited";
+        expect((await harness.call("run.get", { operationId })).receipt?.state).toBe("succeeded");
+        expect(starts).toBe(1);
+        expect(claimProbes).toBe(0);
+      } finally {
+        controller.mockRestore();
+      }
+    },
+  );
+
+  test("an unreadable local claim cannot prove that the command never started", async () => {
+    const { harness } = await setup();
+    const shell = await import("../shell.js");
+    const controller = spyOn(shell, "runCommand").mockRejectedValue(
+      new Error("launcher unavailable"),
+    );
+    const claim = spyOn(fs, "lstat").mockRejectedValue(
+      Object.assign(new Error("denied"), { code: "EACCES" }),
+    );
+    try {
+      const started = await exec(harness, "unknown-claim", { argv: ["true"] });
+      expect(started.receipt?.state).toBe("running");
+      expect(
+        (await harness.call("run.get", { operationId: started.receipt!.operationId })).receipt
+          ?.state,
+      ).toBe("running");
+    } finally {
+      claim.mockRestore();
+      controller.mockRestore();
+    }
+  });
+
   test("container exec passes large stdin through docker exec", async () => {
     const image = process.env.ORKESTRATOR_TEST_DOCKER_EXEC_IMAGE;
     if (!image) return;
@@ -216,6 +311,7 @@ describe("environment.exec", () => {
 
   test("a command ignoring TERM is killed after the timeout grace period", async () => {
     const { harness } = await setup();
+    shortenKillGrace();
     const started = await exec(harness, "ignore-term", {
       argv: ["sh", "-c", "trap '' TERM; sleep 1000"],
       timeoutMs: 1_000,
@@ -247,6 +343,7 @@ describe("environment.exec", () => {
 
   test("cancel kills a command that ignores TERM", async () => {
     const { harness } = await setup();
+    shortenKillGrace();
     const started = await exec(harness, "cancel-ignore", {
       argv: ["sh", "-c", "trap '' TERM; sleep 1000"],
     });
@@ -301,6 +398,69 @@ describe("environment.exec", () => {
     expect((await fs.readFile(marker, "utf8")).trim().split("\n")).toHaveLength(1);
   });
 
+  test("a launcher that fails before claiming the command settles it as failed", async () => {
+    const toolchainBinDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-exec-bun-"));
+    try {
+      // Like the mise shim that could not resolve from `/`: the control's
+      // Bun exits before it reads its input.
+      await fs.writeFile(path.join(toolchainBinDir, "bun"), "#!/bin/sh\nexit 127\n", {
+        mode: 0o755,
+      });
+      const { harness, worktree } = await setup({ context: { toolchainBinDir } });
+      const marker = path.join(worktree, "ran");
+      const started = await exec(harness, "launcher-down", { argv: ["touch", marker] });
+      expect(started.ok).toBe(false);
+      expect(!started.ok && started.error.code).toBe("exec-failed");
+      const receipt = started.receipt!;
+      expect(receipt.state).toBe("failed");
+      expect(receipt.execution).toMatchObject({ state: "failed", evidence: "none" });
+      expect(receipt.execution?.reason).toContain("never started");
+      // Read again: the receipt stays settled; nothing was run or claimed.
+      const read = await harness.call("run.get", { operationId: receipt.operationId });
+      expect(read.receipt?.state).toBe("failed");
+      expect(await fs.stat(marker).catch(() => null)).toBeNull();
+      expect(
+        await fs
+          .stat(path.join(harness.dataDir, "exec-runs", receipt.operationId, "state.json"))
+          .catch(() => null),
+      ).toBeNull();
+    } finally {
+      await fs.rm(toolchainBinDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a launcher that fails after claiming the command waits for its worker", async () => {
+    const toolchainBinDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-exec-bun-"));
+    const fakeBun = path.join(toolchainBinDir, "bun");
+    try {
+      // The control claims and starts the worker, then its response is lost.
+      await fs.writeFile(
+        fakeBun,
+        `#!/bin/sh\n${JSON.stringify(process.execPath)} "$@" >/dev/null\nexit 1\n`,
+        { mode: 0o755 },
+      );
+      const { harness, worktree } = await setup({ context: { toolchainBinDir } });
+      const marker = path.join(worktree, "runs.log");
+      const started = await exec(harness, "launcher-lost", {
+        argv: ["sh", "-c", `echo run >> ${JSON.stringify(marker)}`],
+      });
+      const operationId = started.receipt!.operationId;
+      expect(started.receipt!.state).toBe("running");
+      expect(started.receipt!.execution?.state).toBe("pending");
+      // Status reads still fail, but the claim proves a worker may exist.
+      const pending = await harness.call("run.get", { operationId });
+      expect(pending.receipt?.state).toBe("running");
+      // Once the control works again, the worker's own result settles it.
+      await fs.rm(fakeBun);
+      await fs.symlink(process.execPath, fakeBun);
+      const final = await waitTerminal(harness, operationId);
+      expect(final.state).toBe("succeeded");
+      expect((await fs.readFile(marker, "utf8")).trim().split("\n")).toHaveLength(1);
+    } finally {
+      await fs.rm(toolchainBinDir, { recursive: true, force: true });
+    }
+  });
+
   test("stopping the environment cancels its running commands first", async () => {
     const { harness } = await setup();
     const started = await exec(harness, "x10", { argv: ["sleep", "30"] });
@@ -313,6 +473,7 @@ describe("environment.exec", () => {
 
   test("environment stop drains a command that ignores TERM", async () => {
     const { harness } = await setup();
+    shortenKillGrace();
     const started = await exec(harness, "stop-ignore", {
       argv: ["sh", "-c", "trap '' TERM; sleep 1000"],
     });
@@ -340,8 +501,12 @@ describe("environment.exec", () => {
     }
     const refused = await exec(harness, "c-over", { argv: ["sleep", "5"] });
     expect(!refused.ok && refused.error.code).toBe("busy");
-    for (const operationId of ids)
-      await harness.call("run.cancel", { operationId }, { requestId: `cc-${operationId}` });
+    // Each cancel waits for the worker's 1s cancel poll; cancel them together.
+    await Promise.all(
+      ids.map((operationId) =>
+        harness.call("run.cancel", { operationId }, { requestId: `cc-${operationId}` }),
+      ),
+    );
   });
 
   test("bounds concurrent admission under a race", async () => {
@@ -354,12 +519,14 @@ describe("environment.exec", () => {
     const admitted = results.filter((result) => result.ok);
     expect(admitted.length).toBeLessThanOrEqual(4);
     expect(results.filter((result) => !result.ok)).toHaveLength(8 - admitted.length);
-    for (const result of admitted) {
-      await harness.call(
-        "run.cancel",
-        { operationId: result.receipt!.operationId },
-        { requestId: `cancel-${result.receipt!.operationId}` },
-      );
-    }
+    await Promise.all(
+      admitted.map((result) =>
+        harness.call(
+          "run.cancel",
+          { operationId: result.receipt!.operationId },
+          { requestId: `cancel-${result.receipt!.operationId}` },
+        ),
+      ),
+    );
   });
 });

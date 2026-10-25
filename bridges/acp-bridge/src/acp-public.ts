@@ -22,6 +22,7 @@ export function publicSession(state: SessionState): JsonObject {
     provider,
     status: state.status,
     error: state.error,
+    ...(state.title ? { title: state.title } : {}),
     messages: state.messages,
     // Absolute index of `messages[0]`. Clients anchor their incremental reads
     // to this so evictions from the front of the transcript cannot silently
@@ -171,7 +172,8 @@ function publicDeadline({ requestedAt, deadline }: ParkedDeadline) {
 /**
  * Held permission requests in ACP's own shape: the agent's title and its
  * options (allow once, always allow, reject...), which the backend offers as
- * the choices (`mapAcpApproval`). The Codex envelope this route used to add
+ * the choices (`mapAcpApproval`), plus the approval kind and, for a command
+ * or a file change, what it runs (`permissionDetail`). The Codex envelope this route used to add
  * (`approvalId`, a file-system `permissions` grant) named no tool and offered
  * no option a client could select.
  */
@@ -179,6 +181,8 @@ export function publicApprovals(state: SessionState): unknown[] {
   return [...state.approvals.values()].map((approval) => ({
     id: approval.id,
     title: approval.title,
+    // `command` or `file-change` with what it runs; `permission` otherwise.
+    ...(approval.detail ?? { kind: "permission" }),
     options: approval.options,
     ...publicDeadline(approval),
   }));

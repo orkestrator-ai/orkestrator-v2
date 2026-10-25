@@ -71,6 +71,15 @@ import {
 } from "@orkestrator/protocol/node/bridge-transcript-routes";
 import { piTranscriptSource } from "./transcript-source.js";
 import {
+  CHANGE_EVIDENCE_ACK_ROUTE,
+  CHANGE_EVIDENCE_BODY_ROUTE,
+  CHANGE_EVIDENCE_ROUTE,
+  changeEvidenceAckRouteBody,
+  changeEvidenceBodyRouteBody,
+  changeEvidenceReadBody,
+} from "@orkestrator/protocol/node/change-tracking/evidence-routes";
+import { changeEvidence } from "./change-evidence.js";
+import {
   DISPATCH_OUTCOME_LOST_KIND,
   isNativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
@@ -87,6 +96,7 @@ import {
   resolveCommandSelection,
   type CommandSelection,
 } from "./commands.js";
+import { awaitCommandPreview, startCommandPreview } from "./command-preview.js";
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
 import { closeSessionRetaining } from "./session-close.js";
@@ -276,6 +286,31 @@ async function routeGlobal(
     json(response, 200, { ok: true });
     return true;
   }
+  // The change-evidence spool, pulled by the backend's activity sweep. Behind
+  // the same bridge token as the transcript routes; reads never touch a
+  // session, and only the ack releases anything.
+  if (url.pathname === CHANGE_EVIDENCE_ROUTE && request.method === "GET") {
+    json(
+      response,
+      200,
+      changeEvidenceReadBody(changeEvidence().spool, (name) => url.searchParams.get(name)),
+    );
+    return true;
+  }
+  if (url.pathname === CHANGE_EVIDENCE_BODY_ROUTE && request.method === "GET") {
+    json(
+      response,
+      200,
+      changeEvidenceBodyRouteBody(changeEvidence().spool, (name) => url.searchParams.get(name)),
+    );
+    return true;
+  }
+  if (url.pathname === CHANGE_EVIDENCE_ACK_ROUTE && request.method === "POST") {
+    const answer = changeEvidenceAckRouteBody(changeEvidence().spool, await readJson(request));
+    if (answer.ok) json(response, 200, { released: answer.released });
+    else json(response, 400, { error: answer.error });
+    return true;
+  }
   if (url.pathname === "/global/models" && request.method === "GET") {
     json(response, 200, { models: await listModels() });
     return true;
@@ -307,17 +342,6 @@ async function routeGlobal(
     );
     schedulePersist();
     json(response, 200, { ok: true });
-    return true;
-  }
-  // Pi's slash commands are prompt templates, skills and extension commands,
-  // all discovered per session because a workspace can contribute its own.
-  // There is no global list, so this answers empty rather than 404 — the
-  // backend reads a 404 as a bridge that predates the route. `/compact` used
-  // to be advertised here, but `session.prompt` does not implement Pi's
-  // interactive builtins; compaction is the backend's session action over
-  // `/session/:id/compact`.
-  if (url.pathname === "/plugins/commands" && request.method === "GET") {
-    json(response, 200, { commands: [] });
     return true;
   }
   if (url.pathname === "/global/auth" && request.method === "GET") {
@@ -379,6 +403,10 @@ async function routeGlobal(
       }
       await setSessionReadOnly(state, body.readOnly);
     }
+    // A new tab lists its templates and skills before the first turn. The
+    // read never attaches or runs extension code; the first catalogue read
+    // waits for it (bounded), so starting it here only warms that read.
+    startCommandPreview(state);
     // The backend stores this session id as soon as create returns. A bridge
     // restart before the first prompt used to lose it, so every later status
     // read 404'd and the tab stuck on "session is recovering".
@@ -591,7 +619,9 @@ async function routeSession(
     return json(response, 200, publicQueue(state));
   }
   if (action === "commands" && !subject && request.method === "GET") {
-    // Metadata only: never attaches, hydrates or reloads.
+    // Metadata only: never attaches, hydrates or reloads. A session that has
+    // not attached gets the resource-only read of its templates and skills.
+    await awaitCommandPreview(state);
     return json(response, 200, commandCatalogueResponse(state));
   }
   if (action === "commands" && subject === "refresh" && request.method === "POST") {

@@ -27,8 +27,7 @@ export async function buildDesktop(
   } = {},
 ): Promise<number> {
   const status = (
-    dependencies.typecheck ??
-    (() => run("bunx", ["tsc", "--noEmit", "-p", "tsconfig.electron.json"]))
+    dependencies.typecheck ?? (() => run("bun", ["check", "-p", "tsconfig.electron.json"]))
   )();
   if (status !== 0) return status;
   (dependencies.removeOutput ?? (() => rmSync(output, { recursive: true, force: true })))();

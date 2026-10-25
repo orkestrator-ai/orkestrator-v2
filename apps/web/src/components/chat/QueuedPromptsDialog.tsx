@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AlertCircle, ChevronDown, ChevronUp, MessageSquareText, RotateCcw, X } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  CornerDownRight,
+  MessageSquareText,
+  RotateCcw,
+  X,
+} from "lucide-react";
 import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
 import {
   Dialog,
@@ -31,6 +39,13 @@ interface QueuedPromptsDialogProps<TQueued extends { id: string; text: string }>
   onEdit: (message: TQueued) => void | Promise<void>;
   onMove: (fromIndex: number, toIndex: number) => void | Promise<void>;
   onRemove: (messageId: string) => void | Promise<void>;
+  /**
+   * Send the entry into the turn that is running now (the provider's steer)
+   * instead of after it. Absent when there is no live turn to steer.
+   */
+  onSteer?: (message: TQueued) => void | Promise<void>;
+  /** Whether an entry can be steered; steering carries text only. */
+  canSteer?: (message: TQueued) => boolean;
   dispatchError?: { message: string };
   onRetryDispatch?: () => Promise<void>;
   /**
@@ -55,6 +70,8 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
   onEdit,
   onMove,
   onRemove,
+  onSteer,
+  canSteer,
   dispatchError,
   onRetryDispatch,
   onOpenWebAnnotationRequest,
@@ -79,12 +96,15 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
   /** Annotation item whose removal (= cancellation) awaits confirmation. */
   const [confirmingRemoveId, setConfirmingRemoveId] = useState<string | null>(null);
 
-  useEffect(() => {
+  // Closing the dialog drops a stale error and any pending removal confirmation.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
     if (!open) {
       setActionError(null);
       setConfirmingRemoveId(null);
     }
-  }, [open]);
+  }
 
   const runAction = async (key: string, action: () => void | Promise<void>) => {
     if (pendingActionRef.current) return;
@@ -118,7 +138,9 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
         <DialogHeader>
           <DialogTitle>Queued Prompts</DialogTitle>
           <DialogDescription>
-            Review pending prompts. Click a message to edit it, or reorder and remove items.
+            {onSteer
+              ? "Review pending prompts. Click a message to edit it, reorder and remove items, or steer one into the running turn."
+              : "Review pending prompts. Click a message to edit it, or reorder and remove items."}
           </DialogDescription>
         </DialogHeader>
 
@@ -168,6 +190,12 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
                 const annotationOrigin = webAnnotationQueueOrigin(message);
                 const confirmingRemove =
                   annotationOrigin !== null && confirmingRemoveId === message.id;
+                // An annotation request is a frozen brief with its own
+                // lifecycle, so it is never folded into someone else's turn.
+                const steerable =
+                  onSteer !== undefined &&
+                  annotationOrigin === null &&
+                  (canSteer?.(message) ?? true);
                 return (
                   <div
                     key={message.id}
@@ -225,11 +253,26 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
                             {message.text}
                           </button>
                         )}
-                        {renderMeta && (
-                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                            {renderMeta(message)}
+                        {renderMeta || steerable ? (
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                            {renderMeta?.(message)}
+                            {steerable ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void runAction(`steer:${message.id}`, () => onSteer?.(message));
+                                }}
+                                disabled={pendingAction !== null}
+                                aria-busy={pendingAction === `steer:${message.id}`}
+                                title="Send this prompt into the running turn now"
+                                className="ml-auto inline-flex items-center gap-1 rounded border border-border bg-background px-2 py-0.5 font-medium text-foreground hover:bg-muted disabled:cursor-wait disabled:opacity-60"
+                              >
+                                <CornerDownRight className="h-3.5 w-3.5" aria-hidden="true" />
+                                {pendingAction === `steer:${message.id}` ? "Steering…" : "Steer"}
+                              </button>
+                            ) : null}
                           </div>
-                        )}
+                        ) : null}
                       </div>
 
                       <div className="flex shrink-0 flex-col gap-1">

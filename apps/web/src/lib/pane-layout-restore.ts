@@ -1,5 +1,7 @@
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { parseChangeResourceKey } from "@orkestrator/protocol/change-resources";
+import { isGitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
 import { boundBrowserHistory, sanitizeBrowserHistoryForPersistence } from "@/lib/browser-history";
 import {
   isGitFileStatus,
@@ -8,6 +10,7 @@ import {
   PANE_LAYOUT_VERSION,
   PROVIDER_NATIVE_PANE_LAYOUT_VERSION,
   sanitizeBrowserAnnotationPanelState,
+  type ChangeDiffTarget,
   type PaneLeaf,
   type PaneNode,
   type PaneSplit,
@@ -45,6 +48,48 @@ function optionalBoolean(value: unknown): boolean | undefined {
 
 function optionalPositiveInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(value) && (value as number) > 0 ? (value as number) : undefined;
+}
+
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : undefined;
+}
+
+/**
+ * A saved diff tab target. Only its own fields survive; a target that no
+ * longer names anything — or a live target of another environment — is
+ * dropped and the tab falls back to its legacy `isDiff` meaning (this
+ * environment's current file).
+ */
+function restoreChangeDiffTarget(
+  value: unknown,
+  environmentId: string,
+): ChangeDiffTarget | undefined {
+  if (!isRecord(value)) return undefined;
+  const title = optionalString(value.title) ?? "";
+  if (value.kind === "historical") {
+    const diffIdentityId = nonEmptyString(value.diffIdentityId);
+    return diffIdentityId ? { kind: "historical", diffIdentityId, title } : undefined;
+  }
+  if (value.kind !== "live") return undefined;
+  const resourceKey = nonEmptyString(value.resourceKey);
+  const pathId = nonEmptyString(value.pathId) ?? undefined;
+  const path = nonEmptyString(value.path) ?? undefined;
+  const rowId = nonEmptyString(value.rowId) ?? undefined;
+  const revision = optionalNonNegativeInteger(value.revision);
+  if (!resourceKey || (!pathId && !path && !rowId)) return undefined;
+  const owner = parseChangeResourceKey(resourceKey);
+  if (!owner || (owner.ownerKind === "environment" && owner.ownerId !== environmentId)) {
+    return undefined;
+  }
+  return {
+    kind: "live",
+    resourceKey,
+    ...(pathId ? { pathId } : {}),
+    ...(path ? { path } : {}),
+    ...(rowId ? { rowId } : {}),
+    ...(revision !== undefined ? { revision } : {}),
+    title,
+  };
 }
 
 function restoreNativeAgentData(
@@ -153,9 +198,27 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     return { id, type: "design-canvas", designCanvasData: { canvasId } };
   }
 
+  if (type === "pull-request") {
+    if (!isRecord(value.pullRequestData) || !isGitHubPullRequestRef(value.pullRequestData.ref)) {
+      return null;
+    }
+    const { ref, view, title } = value.pullRequestData;
+    return {
+      id,
+      type,
+      pullRequestData: {
+        ref: { owner: ref.owner, repo: ref.repo, number: ref.number },
+        ...(view === "summary" || view === "timeline" || view === "code" ? { view } : {}),
+        ...(typeof title === "string" && title ? { title: title.slice(0, 300) } : {}),
+      },
+    };
+  }
+
   if (type === "browser") {
     if (!isRecord(value.browserData)) return null;
     const url = optionalString(value.browserData.url) ?? "";
+    const requestId = nonEmptyString(value.browserData.navigationRequestId);
+    const navigationRequestId = requestId && requestId.length <= 128 ? requestId : undefined;
     const rawHistory =
       Array.isArray(value.browserData.history) &&
       value.browserData.history.every((entry) => typeof entry === "string")
@@ -176,6 +239,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
       type,
       browserData: {
         url,
+        ...(navigationRequestId ? { navigationRequestId } : {}),
         ...(history ? { history } : {}),
         ...(historyIndex !== undefined ? { historyIndex } : {}),
         ...(annotationPanel ? { annotationPanel } : {}),
@@ -187,6 +251,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     if (!isRecord(value.fileData)) return null;
     const filePath = nonEmptyString(value.fileData.filePath);
     if (!filePath) return null;
+    const changeDiff = restoreChangeDiffTarget(value.fileData.changeDiff, context.environmentId);
     return {
       ...common,
       type,
@@ -202,6 +267,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
         isDiff: optionalBoolean(value.fileData.isDiff),
         gitStatus: isGitFileStatus(value.fileData.gitStatus) ? value.fileData.gitStatus : undefined,
         baseBranch: optionalString(value.fileData.baseBranch),
+        ...(changeDiff ? { changeDiff } : {}),
       },
     };
   }

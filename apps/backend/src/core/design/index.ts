@@ -3,4 +3,5 @@
 export { registerDesignCommandHandlers } from "./commands.js";
 export { resolveDesignDestination } from "./exports.js";
 export { DesignService } from "./service.js";
+export { resolveDesignChromiumPath } from "./renderer.js";
 export { createDesignMcp } from "./tools.js";

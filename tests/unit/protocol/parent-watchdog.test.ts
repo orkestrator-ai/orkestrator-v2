@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   PARENT_PID_ENV,
+  PARENT_WATCH_INTERVAL_MS,
   parseParentPid,
   startParentWatchdog,
   startReparentWatchdog,
@@ -274,6 +275,61 @@ describe("startReparentWatchdog", () => {
     try {
       await tick(25);
       expect(fired).toBe(0);
+    } finally {
+      stop?.();
+    }
+  });
+});
+
+describe("shared watchdog defaults", () => {
+  test("PID watchers used by Claude and Codex poll after exactly one second", () => {
+    const timers = new FakeIntervals();
+    let exits = 0;
+    const stop = startParentWatchdog({
+      parentPid: 4213,
+      timers,
+      isAlive: () => false,
+      onParentExit: () => {
+        exits += 1;
+      },
+    });
+    try {
+      expect(PARENT_WATCH_INTERVAL_MS).toBe(1000);
+      expect(timers.periods()).toEqual([1000]);
+      timers.tick(999);
+      expect(exits).toBe(0);
+      timers.tick(1);
+      expect(exits).toBe(1);
+      expect(timers.armed.size).toBe(0);
+      timers.tick(2000);
+      expect(exits).toBe(1);
+    } finally {
+      stop();
+    }
+  });
+
+  test("reparent watchers default to one second and ignore callbacks due after stop", () => {
+    const timers = new FakeIntervals();
+    let parent = 500;
+    let exits = 0;
+    const stop = startReparentWatchdog({
+      timers,
+      readParentPid: () => parent,
+      onReparented: () => {
+        exits += 1;
+      },
+    });
+    try {
+      expect(timers.periods()).toEqual([1000]);
+      parent = 1;
+      timers.tick(999);
+      expect(exits).toBe(0);
+      const entry = [...timers.armed.values()][0]!;
+      timers.tick(1);
+      expect(exits).toBe(1);
+      entry.callback();
+      expect(exits).toBe(1);
+      expect(timers.armed.size).toBe(0);
     } finally {
       stop?.();
     }

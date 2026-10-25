@@ -110,7 +110,8 @@ verified. **partial** = present but weaker, different, or vendor-dependent.
 | Local settings / prompt suggestions | full | **none** | none | none | none | none |
 | Compact | full | **partial** (`/compact` typed) | full | none | none | full |
 | Rewind files | full | **none** | none | none | none | none |
-| Undo / redo / share | none | none | none | none | none | **full** |
+| Undo / redo | none | none | none | none | none | **full** |
+| Share | none | none | none | none | none | none (discontinued upstream in OpenCode 1.19.1) |
 | Steer | **full** | none | **full** | **full** | none | none |
 | Native “Review changes” | none | none | **full** | none | none | none |
 | Questions | full | full (own cards) | partial | partial | partial | full |
@@ -256,7 +257,7 @@ The capability table treats them as identical. Runtime is not.
 | Binary | `cursor-agent` (never `cursor`) | `grok` |
 | Subcommand | `acp` | `agent … stdio` |
 | Command auto-approve | `--force` | `--always-approve` |
-| MCP auto-approve | `--approve-mcps` only if `ACP_APPROVE_PROJECT_MCPS === "1"` | **no equivalent flag** |
+| Project MCP servers | `.cursor/mcp.json` only when the session policy turns `projectResources` on (`cursorMcpServers`) | loaded by Grok's own folder trust; `GROK_FOLDER_TRUST=0` only when `projectResources` is on |
 | Spawn `--model` | yes | yes |
 | Spawn `--reasoning-effort` | **no** | yes |
 | Composer wire | `session/set_config_option` (`model`, `thought_level`, fast) | `session/set_model` + `_meta.reasoningEffort` |
@@ -302,10 +303,10 @@ child that already exited.
   **Fixed:** `projectionComposer` ands the table into `fastModeAvailable`, which
   closes the latent leak at the surface the compose bar actually reads. The
   unassigned composer ands it into the catalogue's `supportsSpeed` too.
-- Agent Info still hardcodes `provider === "claude"|"opencode"|"codex"` for
-  rewind / undo / share / review / steer instead of `capabilities.actions.*`.
-  Compact and fork *do* read the capability flag, with a provider-string
-  fallback if projection is missing.
+- Agent Info still hardcodes `provider === "claude"|"codex"` for
+  rewind / review / steer instead of `capabilities.actions.*`. Fork, compact,
+  undo, redo and share read the capability flag, falling back to the shared
+  capability table (not a provider string) before projection arrives.
 - ~~`nativeComposerControls()` never reads the capability table.~~ **Fixed:** it
   now takes capabilities as a required argument and skips speed / mode /
   execution-profile / local-settings / prompt-suggestions when the flag is
@@ -336,7 +337,7 @@ Each native platform grew unique Agent Info verbs and never back-ported them:
 | --- | --- |
 | Claude Native | rewind files, background tasks, local settings, prompt suggestions |
 | Codex | steer (`turn/steer`), native review (`review/start`), `CodexPlanModeCard`, hermetic titles |
-| OpenCode | undo (`session.revert`), redo (`unrevert`), share / unshare |
+| OpenCode | undo (`session.revert`), redo (`unrevert`); share / unshare until upstream discontinued sharing in 1.19.1 |
 | Cursor | steer (`Run.steer`), rewind messages |
 | Grok | none (`actions: {}`) |
 | Claude Tmux | none of those APIs; compact/fast/model are TUI keystrokes |
@@ -401,11 +402,30 @@ restart: HTTP 410 with `kind: "dispatch-outcome-lost"` (Claude, Cursor, Pi and
 ACP). The bridge cannot tell whether the turn ran, and must never run it twice.
 The backend raises `PromptRejectedError` with `requestIdRetired`
 (`assertPromptOutcomeKnown`), clears the parked record even on a
-retry, and answers `rejected` with `requestIdRetired: true` and "… restarted
-before it confirmed this message, so it may not have run". The tab keeps the
-text but drops the id, so sending it again mints a new one. Claude used to
-answer such an id with `already-processed`, which cleared the card as if the
-command had run.
+retry, and answers `rejected` with `requestIdRetired: true` and "… could not
+confirm this message, so it may not have run" (`dispatchOutcomeLostMessage`).
+The tab keeps the text but drops the id, so sending it again mints a new one.
+Claude used to answer such an id with `already-processed`, which cleared the
+card as if the command had run.
+
+The same four bridges answer `/dispatch?requestId=` for such an id with
+`{ dispatch: "lost" }`, the read-only twin of that 410 (Claude from
+`restoredDispatchedRequestIds`, or from the durable journal of a session the
+process has not registered yet; ACP, Cursor and Pi from an `ambiguous` journal
+entry). `dispatched` still wins, and a local reply or Cursor's same-process
+`sendFailed` retry is not lost. The backend (`settleAmbiguousDispatch`) then
+retires the parked record without a click: it is cleared, never recorded as
+dispatched, and a content-free `retiredDispatch` (`requestId`, `retiredAt`) is
+kept on the native session until the next one, the next accepted dispatch, or
+24 hours. Projections and session state carry it as `retiredDispatch` with the
+message, plus a `warning` notice keyed `dispatch-outcome-lost:<requestId>` for
+renderers that predate the field. A tab whose draft still holds that id releases
+it, keeps the text and shows the message, also when it mounts later. A dispatch
+whose own acknowledgement was lost to the restart is answered `rejected` with
+`requestIdRetired` straight away. A queued prompt never parks a dispatch (the
+queue retries its own in-flight id, which the bridge then refuses), so it keeps
+the 410 path. OpenCode has no `lost`; older bridges answer `unknown` and keep
+the Retry card.
 
 ### 3.7 Product workflows
 
@@ -495,9 +515,9 @@ cheap to fix relative to vendor protocol work.
    control. Table `true` is no longer treated as “always show” anywhere: every
    speed path now requires the table *and* a live `fastModeAvailable` /
    `supportsSpeed`.
-5. Gate Agent Info rewind / undo / share / review / steer / localSettings on
+5. Gate Agent Info rewind / review / steer / localSettings on
    `capabilities.actions` / `composer.*`, and drop the `?? provider === …`
-   fallbacks.
+   fallbacks. Fork, compact, undo, redo and share are done.
 6. Stop generating `composerControls` the renderer ignores, or actually render
    that array in `NativeComposeBar` so table → generator → UI is one path.
 7. Gate `useSlashCommandMenu` on `capabilities.slashCommands` (plus injected

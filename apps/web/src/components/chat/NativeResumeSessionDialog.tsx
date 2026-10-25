@@ -80,12 +80,21 @@ export function NativeResumeSessionDialog({
     agentLabelRef.current = agentLabel;
   });
 
+  // Each open cycle starts loading from a clean slate, set while rendering so
+  // the effect below only issues the request.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) {
+      setIsLoading(true);
+      setError(null);
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
 
     const requestGeneration = ++requestGenerationRef.current;
-    setIsLoading(true);
-    setError(null);
 
     void (async () => {
       try {
@@ -163,7 +172,7 @@ export function NativeResumeSessionDialog({
                       <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1">
                         <p className="max-w-full text-sm font-medium break-words whitespace-normal">
-                          {session.title || `Session ${session.id.slice(0, 8)}`}
+                          {session.title || `Session ${shortResumeSessionId(session.id)}`}
                         </p>
                         <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
                           <Clock className="h-3 w-3" />
@@ -192,6 +201,44 @@ export function NativeResumeSessionDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+const ACP_RESUME_TOKEN_PREFIX = "acp-session:";
+
+/**
+ * A short form of the provider's own session id, for a row with no title.
+ *
+ * The resume id is not always the provider's id. The ACP bridge hands out a
+ * signed `acp-session:<base64url id>.<signature>` token, whose first eight
+ * characters read `acp-sess` on every row, and Pi's is the session file's path,
+ * `<dir>/<timestamp>_<uuid>.jsonl`. Both carry the provider's id, so show that.
+ * The detail beside the label (Pi's first message, a message count) is what
+ * tells two untitled rows apart; this only has to differ between them.
+ */
+export function shortResumeSessionId(id: string): string {
+  let ownId = id;
+  if (ownId.startsWith(ACP_RESUME_TOKEN_PREFIX)) {
+    const token = ownId.slice(ACP_RESUME_TOKEN_PREFIX.length);
+    const separator = token.lastIndexOf(".");
+    const decoded = decodeBase64Url(separator > 0 ? token.slice(0, separator) : token);
+    if (decoded) ownId = decoded;
+  }
+  const fileName = ownId.split(/[\\/]/).pop() || ownId;
+  const stem = fileName.replace(/\.jsonl?$/i, "");
+  const short = (stem.slice(stem.lastIndexOf("_") + 1) || stem).slice(0, 8);
+  return short || id.slice(0, 8);
+}
+
+/** Printable text, or null for anything that is not base64url-encoded text. */
+function decodeBase64Url(encoded: string): string | null {
+  if (!encoded || encoded.length > 1_024 || !/^[A-Za-z0-9_-]+$/.test(encoded)) return null;
+  try {
+    const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = atob(base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "="));
+    return /^[\x21-\x7e]+$/.test(decoded) ? decoded : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Sort key. Unknown timestamps sink to the bottom rather than to 1970. */

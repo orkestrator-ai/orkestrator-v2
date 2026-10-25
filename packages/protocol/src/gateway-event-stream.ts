@@ -42,6 +42,8 @@ export const MAX_GATEWAY_EVENT_FRAME_BYTES = 8 * 1024 * 1024;
 export interface SseFrame {
   data: string | null;
   id: string | null;
+  /** The frame's `event:` field, present only when the block names one. */
+  event?: string;
 }
 
 export type GatewayStreamMessage =
@@ -70,17 +72,23 @@ export function isGatewayTransportEvent(event: string): boolean {
   );
 }
 
-/** Parses one SSE block. The last `id:` line wins; `data:` lines join with `\n`. */
+/**
+ * Parses one SSE block. The last `id:` and `event:` lines win; `data:` lines
+ * join with `\n`.
+ */
 export function parseSseBlock(block: string): SseFrame {
   const lines = block.split(/\r?\n/);
   const idLine = lines.findLast((line) => line.startsWith("id:"));
+  const eventLine = lines.findLast((line) => line.startsWith("event:"));
   const data = lines
     .filter((line) => line.startsWith("data:"))
     .map((line) => line.slice(5).trimStart())
     .join("\n");
+  const event = eventLine?.slice(6).trimStart();
   return {
     data: data || null,
     id: idLine ? idLine.slice(3).trimStart() : null,
+    ...(event ? { event } : {}),
   };
 }
 
@@ -157,20 +165,27 @@ export class SseFrameDecoder {
 /**
  * Reads one SSE response body to its end, handing every complete frame to
  * `onFrame`. The reader is always cancelled, including after a throw from
- * `onFrame` or an oversized frame.
+ * `onFrame` or an oversized frame. Aborting `signal` also ends a read that is
+ * waiting on a silent connection, which the transport may never error.
+ * `onChunk` sees every chunk, keepalive comments included, for liveness.
  */
 export async function readSseStream(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
   onFrame: (frame: SseFrame) => void,
   maxFrameBytes = MAX_GATEWAY_EVENT_FRAME_BYTES,
+  onChunk?: () => void,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const frames = new SseFrameDecoder(maxFrameBytes);
+  const stop = () => void reader.cancel().catch(() => undefined);
+  signal.addEventListener("abort", stop, { once: true });
   try {
     while (!signal.aborted) {
       const { done, value } = await reader.read();
+      if (signal.aborted) return;
+      onChunk?.();
       const text = decoder.decode(value, { stream: !done });
       for (const frame of frames.push(text)) {
         if (signal.aborted) return;
@@ -179,6 +194,7 @@ export async function readSseStream(
       if (done) break;
     }
   } finally {
+    signal.removeEventListener("abort", stop);
     await reader.cancel().catch(() => undefined);
   }
 }

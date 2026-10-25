@@ -8,7 +8,7 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
-import { localServerStopCommandName } from "./commands-runtime-state.js";
+import { localServerStopCommandName } from "./local-server-runtime.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import { randomUUID } from "node:crypto";
@@ -87,6 +87,7 @@ async function assertWorkerDelegationAvailable(
       association.coordinatorId === scope.coordinatorId &&
       association.conversationId === scope.conversationId &&
       association.kind === "environment" &&
+      association.nodeId === undefined &&
       association.resourceId === workerEnvironmentId &&
       association.delegation?.workerTabId === workerTabId &&
       association.requestId !== idempotencyKey,
@@ -96,7 +97,7 @@ async function assertWorkerDelegationAvailable(
   }
 }
 
-async function assertContainerDelegationCommitPublished(
+export async function assertContainerDelegationCommitPublished(
   context: CommandContext,
   projectId: string,
   commit: string,
@@ -369,6 +370,7 @@ export function registerCoordinatorCommands(
           (association) =>
             association.coordinatorId === coordinator &&
             association.kind === "environment" &&
+            association.nodeId === undefined &&
             association.resourceId === destination.id &&
             (!requestedTabId || association.delegation?.workerTabId === requestedTabId) &&
             association.requestId !== `delegation:${stableRequestId}`,

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import {
   WEB_ANNOTATION_LIMITS,
@@ -7,6 +7,7 @@ import {
   type WebAnnotationCapture,
   type WebAnnotationRequestOperation,
   type WebAnnotationSummary,
+  type WebAnnotationSummaryAsset,
 } from "@orkestrator/protocol/web-annotations";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -41,10 +42,13 @@ export function evidenceState(
 
 /**
  * Remaining capacity of the batch, in stable order: the first item whose
- * images would exceed the attachment limit is named. Image bytes are known
- * only for assets already read (the tray never fetches images) and note text
- * is estimated from the latest intent and desired outcome; the backend checks
- * both exactly on preparation.
+ * images would exceed the attachment limit is named. Where the summary lists
+ * the current capture's images (`assets`, from current backends) they are
+ * counted exactly as preparation counts them: by digest, once per batch, with
+ * their stored byte sizes. Otherwise images are counted from the capture
+ * record and bytes are known only for assets already read (the tray never
+ * fetches images). Note text is estimated from the latest intent and desired
+ * outcome; the backend checks the brief exactly on preparation.
  */
 export function batchEvidenceBudget(
   items: Array<{
@@ -52,6 +56,8 @@ export function batchEvidenceBudget(
     capture: WebAnnotationCapture | undefined;
     /** UTF-8 bytes of this item's host text (latest intent + desired outcome). */
     textBytes?: number;
+    /** The current capture's stored images, from the annotation summary. */
+    assets?: readonly WebAnnotationSummaryAsset[];
   }>,
   assetBytes: (assetId: string) => number | undefined = () => undefined,
 ) {
@@ -61,8 +67,24 @@ export function batchEvidenceBudget(
   let unknownImageBytes = 0;
   let textBytes = 0;
   let overflowId: string | null = null;
+  const digests = new Set<string>();
   for (const item of items) {
     textBytes += item.textBytes ?? 0;
+    if (item.assets) {
+      const fresh = item.assets.filter(
+        (asset, index, all) =>
+          !digests.has(asset.digest) &&
+          all.findIndex((other) => other.digest === asset.digest) === index,
+      );
+      if (!overflowId && images + fresh.length > WEB_ANNOTATION_LIMITS.briefAttachments)
+        overflowId = item.id;
+      images += fresh.length;
+      for (const asset of fresh) {
+        digests.add(asset.digest);
+        imageBytes += asset.bytes;
+      }
+      continue;
+    }
     if (!item.capture) {
       unknown += 1;
       continue;
@@ -110,7 +132,9 @@ export function BatchReviewTray({
   const remaining = Math.max(0, limit - included.length);
   const captureKey = items.map((item) => item.currentCaptureId).join("|");
   const itemsRef = useRef(items);
-  itemsRef.current = items;
+  useLayoutEffect(() => {
+    itemsRef.current = items;
+  });
   useEffect(() => {
     // Small capture records only; images are never fetched for the tray.
     for (const item of itemsRef.current) {
@@ -124,6 +148,7 @@ export function BatchReviewTray({
       textBytes:
         webAnnotationUtf8Bytes(item.latestIntent ?? "") +
         webAnnotationUtf8Bytes(outcomes.get(item.id) ?? ""),
+      ...(item.currentCaptureAssets ? { assets: item.currentCaptureAssets } : {}),
     })),
     (assetId) => cache.assets.get(assetId)?.bytes,
   );

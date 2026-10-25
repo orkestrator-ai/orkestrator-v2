@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
+import { dismissSidebarTooltip } from "./sidebar-tooltip";
 
 /**
  * C11, approval half, with a real Claude turn against a profile started with
@@ -141,8 +142,7 @@ test("Docker fixture live Claude approval is never granted by an explicit stop (
     const entry = page.getByText(name, { exact: true }).first();
     await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
     if (await expand.isVisible()) await expand.click();
-    await page.mouse.move(0, 0);
-    await page.keyboard.press("Escape");
+    await dismissSidebarTooltip(page, fixture!.name);
     await entry.click();
     return entry;
   };

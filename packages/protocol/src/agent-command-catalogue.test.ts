@@ -164,6 +164,17 @@ describe("normalizeCommandCataloguePayload", () => {
     expect(result).toMatchObject({ status: "unsupported", revision: 4, freshness: "push" });
   });
 
+  test("reads attachPending only on an enhanced stale list", () => {
+    expect(enhanced([], { status: "stale", attachPending: true }).attachPending).toBe(true);
+    // A ready list is the whole inventory; nothing can be pending.
+    expect(enhanced([], { status: "ready", attachPending: true }).attachPending).toBeUndefined();
+    expect(enhanced([], { status: "stale", attachPending: "yes" }).attachPending).toBeUndefined();
+    expect(
+      normalizeCommandCataloguePayload({ status: "stale", attachPending: true, commands: [] })
+        .attachPending,
+    ).toBeUndefined();
+  });
+
   test("public descriptors never carry private binding fields", () => {
     const result = enhanced([
       {
@@ -177,6 +188,70 @@ describe("normalizeCommandCataloguePayload", () => {
     const serialized = JSON.stringify(result.commands);
     expect(serialized).not.toContain("SKILL.md");
     expect(serialized).not.toContain("secret body");
+  });
+});
+
+describe("mixed-version: catalogue values a newer bridge may send", () => {
+  test("an availability state this version does not know reads as unavailable", () => {
+    const result = enhanced([
+      {
+        name: "/a",
+        id: "a",
+        executionKind: "provider-prompt",
+        availability: { state: "requires-confirmation", reason: "made-up", message: "Confirm" },
+      },
+      // A record with no state at all says nothing, as before.
+      { name: "/b", id: "b", executionKind: "provider-prompt", availability: {} },
+    ]);
+    expect(result.commands[0]!.availability).toEqual({
+      state: "unavailable",
+      reason: "unsupported",
+      message: "Confirm",
+    });
+    expect(result.commands[1]!.availability).toBeUndefined();
+  });
+
+  test("unknown enum values never widen what a row may do", () => {
+    const result = enhanced([
+      // An execution kind this version cannot run drops the row.
+      { name: "/a", id: "a", executionKind: "workflow" },
+      {
+        name: "/b",
+        id: "b",
+        executionKind: "provider-prompt",
+        source: "marketplace",
+        origin: "marketplace",
+        inputPolicy: { arguments: "many", attachments: "video", busy: "always" },
+        futureField: { anything: true },
+      },
+    ]);
+    expect(result.commands).toEqual([
+      {
+        name: "/b",
+        source: "unknown",
+        id: "b",
+        executionKind: "provider-prompt",
+        bindingRevision: commandBindingRevision(["b"]),
+      },
+    ]);
+    expect(result).toMatchObject({ enhanced: true, truncated: true, rejected: 1 });
+  });
+
+  test("a catalogue version other than 1 is read as legacy display rows", () => {
+    const result = normalizeCommandCataloguePayload({
+      catalogueVersion: 2,
+      commands: [{ name: "/a", id: "a", executionKind: "structured-skill" }],
+    });
+    expect(result.enhanced).toBe(false);
+    expect(result.commands).toEqual([
+      {
+        name: "/a",
+        source: "unknown",
+        id: legacyCommandId("/a"),
+        executionKind: "provider-prompt",
+        bindingRevision: "legacy",
+      },
+    ]);
   });
 });
 

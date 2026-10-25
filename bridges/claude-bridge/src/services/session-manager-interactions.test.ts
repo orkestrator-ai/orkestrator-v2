@@ -1,5 +1,5 @@
 import { describe, expect, jest, spyOn, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
@@ -26,6 +26,7 @@ import {
   setClaudeHomeForTesting,
   track,
   waitFor,
+  blockClaudeConfigDir,
 } from "./session-manager-test-harness.js";
 
 // ---------------------------------------------------------------------------
@@ -33,7 +34,7 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("session system prompt", () => {
-  test("tells Claude about background command timeouts and local Markdown docs", async () => {
+  test("tells Claude about background command timeouts, local Markdown docs and image previews", async () => {
     const session = createSession("system-prompt");
     track(session.id);
     const promptPromise = sendPrompt(session.id, "hello");
@@ -43,6 +44,13 @@ describe("session system prompt", () => {
     expect(systemPrompt.append).toContain("Orkestrator terminal tab");
     expect(systemPrompt.append).toContain("Markdown file in a `docs/` folder");
     expect(systemPrompt.append).toContain("local skills, and the user's own request take priority");
+    expect(systemPrompt.append).toContain("save the file inside the working directory");
+    expect(systemPrompt.append).toContain("Orkestrator-managed workspace storage");
+    expect(systemPrompt.append).toContain("container's /workspace");
+    expect(systemPrompt.append).toContain(
+      "Project-home checkouts are excluded from host preview reads, even when they are the working directory",
+    );
+    expect(systemPrompt.append).toContain("cannot be previewed from a local Markdown path");
     call.push({ type: "result", subtype: "success", is_error: false, result: "" });
     call.finish();
     await promptPromise.catch(() => undefined);
@@ -824,7 +832,7 @@ describe("plan approval flow", () => {
           permissionMode: "default",
         });
         const call = await nextQueryCall();
-        await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+        await blockClaudeConfigDir(directory);
 
         const result = await call.options.canUseTool!("EnterPlanMode", { reason: "plan" });
         expect(result.behavior).toBe("deny");
@@ -860,7 +868,7 @@ describe("plan approval flow", () => {
           plan: "Persist the completed plan-mode exit",
         });
         await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
-        await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+        await blockClaudeConfigDir(directory);
         const approval = getPendingPlanApprovals(session.id)[0];
         expect(respondToPlanApproval(approval.id, true)).toBe(true);
 

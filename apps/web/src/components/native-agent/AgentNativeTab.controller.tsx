@@ -1,12 +1,22 @@
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { ChevronDown, Loader2, LogIn, X } from "lucide-react";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
+  dispatchOutcomeLostOccurrenceId,
   nativeAgentSteerRejectionMessage,
   normalizePendingSignIn,
   NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
   nativeAsyncQuestionRequestId,
+  nativeAsyncQuestionItemId,
   withResolvedNativeComposerModel,
   resolveReasoningId,
   withoutSuppressedComposerControls,
@@ -20,6 +30,7 @@ import {
   resolveSessionActionCommand,
 } from "@orkestrator/protocol/agent-slash-commands";
 import { Button } from "@/components/ui/button";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import {
@@ -32,7 +43,19 @@ import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
 import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { SelectionPricingBadge } from "@/components/chat/SelectionPricingBadge";
+import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
+import { useRichTranscriptScopeValue } from "@/hooks/useTranscriptArtifactCapabilities";
+import { useArtifactPublications } from "@/hooks/useArtifactPublications";
+import {
+  ArtifactPublicationPlacements,
+  mergeArtifactPublications,
+} from "@/lib/chat/artifact-publication-merge";
 import { BackgroundTaskChildrenContext } from "@/components/chat/NativeMessage.shared";
+import {
+  NativeChangeScopeContext,
+  type NativeChangeScope,
+} from "@/components/chat/NativeMessage.change-scope";
 import {
   NativeResumeSessionDialog,
   type ResumableSession,
@@ -61,9 +84,11 @@ import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
 } from "@/hooks/useVirtuosoScrollState";
+import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTranscriptPlace";
 import {
   adoptNativeAgentSession,
   beginNativeAgentSignIn,
+  cancelNativeAgentSignIn,
   getNativeAgentAuthStatus,
   openInBrowser,
   recoverMultiReviewFixSession,
@@ -106,6 +131,7 @@ import {
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
 import {
   composerOccupiedError,
+  PromptQueueActionError,
   webAnnotationQueueItemFrozenError,
 } from "@/lib/prompt-queue-errors";
 import { modelSupportsSpeed } from "@/lib/agent-launch";
@@ -115,6 +141,10 @@ import {
   retainSupportedAttachments,
 } from "@/lib/chat/workspace-attachments";
 import { createSessionKey } from "@/lib/utils";
+import {
+  conversationScrollTargetKey,
+  useConversationScrollTargetStore,
+} from "@/stores/conversationScrollTargetStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import {
@@ -161,7 +191,6 @@ import { useConversationScrollTarget } from "./useConversationScrollTarget";
 import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { nativeMessageHasPlanTool } from "@/lib/plan-tool";
-import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import {
   findLatestBackendTurnElapsedSeconds,
   findLatestBackendUserTurnStartedAt,
@@ -171,6 +200,7 @@ import { isSetupBlocked } from "@/lib/setup-commands";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { agentSettingsCanSignIn, agentTerminalSignInCommand } from "@/lib/agent-sign-in";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
+import { ThreadChangesHeader } from "@/components/changes/ThreadChangesHeader";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
 import { isClaudeNotLoggedInNotice } from "@/lib/claude-auth";
 
@@ -304,11 +334,12 @@ export function SharedNativeAgentController({
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const initialPromptSentRef = useRef(false);
-  const hasConnectedSessionRef = useRef(false);
   // The projection rewrites `data.sessionId` to whatever session the tab ends
   // up connected to, so the id the tab was *asked* to resume has to be captured
-  // before that can happen.
-  const requestedResumeSessionIdRef = useRef(data.sessionId);
+  // before that can happen. Render reads the state; the startup-prompt effect
+  // reads the ref. Neither is ever updated.
+  const [requestedResumeSessionId] = useState(data.sessionId);
+  const requestedResumeSessionIdRef = useRef(requestedResumeSessionId);
   const [optimisticPrompt, setOptimisticPrompt] = useState<{
     text: string;
     attachments: Array<{ path: string; previewUrl?: string; name: string }>;
@@ -340,6 +371,16 @@ export function SharedNativeAgentController({
   const [sendError, setSendError] = useState<string | null>(null);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(initialResumeOpen === true);
+  /**
+   * A tab opened only to resume creates no provider session of its own. The
+   * backend resumes into a tab with no mapping, so the session is created only
+   * if the picker is dismissed, as it would have been on mount. Creating it
+   * first and closing it after the resume left an empty conversation behind
+   * on OpenCode and Grok, and briefly a Grok agent process.
+   */
+  const [awaitingResumeChoice, setAwaitingResumeChoice] = useState(
+    initialResumeOpen === true && !data.sessionId,
+  );
   const [forkInFlight, setForkInFlight] = useState(false);
   const [planTransitionPending, setPlanTransitionPending] = useState(false);
   const [suggestionDismissPending, setSuggestionDismissPending] = useState(false);
@@ -418,6 +459,7 @@ export function SharedNativeAgentController({
     holdInteraction,
     enqueue,
     removeQueued,
+    steerQueued,
     moveQueued,
     retryQueue,
     retryRecoverableDispatch,
@@ -457,7 +499,7 @@ export function SharedNativeAgentController({
     defaultFastMode: configuredFastMode,
     defaultParameterValues: configuredParameterValues,
     isActive,
-    enabled: !setupPending && !draft.submissionPending,
+    enabled: !setupPending && !draft.submissionPending && !awaitingResumeChoice,
   });
   const isDispatching = runtimeIsDispatching || draft.submissionPending === true;
   const noticeSessionIdentity = `${platform}\u0000${data.environmentId}\u0000${projection?.sessionId ?? data.sessionId ?? sessionKey}`;
@@ -468,9 +510,19 @@ export function SharedNativeAgentController({
   );
   const dismissNotice = useNativeNoticeDismissalStore((state) => state.dismiss);
   const reconcileNoticeDismissals = useNativeNoticeDismissalStore((state) => state.reconcile);
+  const [releasedDispatchNotices, setReleasedDispatchNotices] = useState<
+    Array<{ sessionIdentity: string; noticeId: string }>
+  >([]);
   const activeNoticeIds = useMemo(
-    () => (projection?.notices ?? []).map(nativeNoticeDismissalId),
-    [projection?.notices],
+    () => [
+      ...(projection?.notices ?? []).map(nativeNoticeDismissalId),
+      // A response can arrive before its notice. Keep these dismissals through
+      // intervening projections so a delayed notice cannot toast the same error.
+      ...releasedDispatchNotices
+        .filter((notice) => notice.sessionIdentity === noticeSessionIdentity)
+        .map((notice) => notice.noticeId),
+    ],
+    [noticeSessionIdentity, projection?.notices, releasedDispatchNotices],
   );
   const noticeToastRecordsRef = useRef(new Map<string, string>());
   const programmaticNoticeDismissalsRef = useRef(new Set<string>());
@@ -565,14 +617,21 @@ export function SharedNativeAgentController({
     tabId === "startup-agent" &&
     (environment?.pendingAgentLaunch === true || environment?.startupAgentSession !== undefined);
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
+  // An "open full conversation" request parked for this tab outranks the
+  // activation policy, whichever effect happens to run first.
+  const explicitScrollTargetPending = useConversationScrollTargetStore((state) =>
+    state.targets.has(conversationScrollTargetKey(data.environmentId, tabId)),
+  );
   const { isAtBottom, scrollToBottom, scrollToIndex, virtuosoRef, scrollProps } =
     useVirtuosoScrollState({
-      // Every activation re-locks to the end, but a pane the mobile switcher
-      // hid is still laid out where the user left it.
+      // A pane the mobile switcher hid is still laid out where the user left it.
       isActive: isActive || hiddenByLayout,
       persistKey: sessionKey,
       environmentId: data.environmentId,
-      stickToBottomOnActivation: true,
+      // Returning respects intent: a follower catches up to the latest
+      // message, a reader who scrolled away comes back to their place.
+      activation: "respect-intent",
+      explicitTargetPending: explicitScrollTargetPending,
     });
 
   /*
@@ -804,11 +863,43 @@ export function SharedNativeAgentController({
   const fixReport = useMultiReviewStore((state) =>
     findMultiReviewFixReport(state.workflows.values(), tabId, data.environmentId),
   );
+  const richTranscriptScope = useRichTranscriptScopeValue(
+    data.environmentId,
+    sessionKey,
+    projection?.sessionId ?? data.sessionId ?? sessionKey,
+  );
+  // Lets transcript tool rows request their backend change presentations.
+  const providerSessionId = projection?.sessionId ?? data.sessionId;
+  const nativeChangeScope = useMemo<NativeChangeScope>(
+    () => ({
+      environmentId: data.environmentId,
+      provider: platform,
+      ...(providerSessionId ? { conversationId: providerSessionId } : {}),
+    }),
+    [data.environmentId, platform, providerSessionId],
+  );
+  const artifactPublications = useArtifactPublications(richTranscriptScope, transcriptMessages);
+  const artifactPlacements = useMemo(
+    () => new ArtifactPublicationPlacements(richTranscriptScope),
+    [richTranscriptScope],
+  );
+  const canLoadEarlierHistory = projection?.messageWindow?.canLoadEarlier === true;
   const messages = useMemo(() => {
     const pinned = pinNativeAgentParts(transcriptMessages, displayMessages);
-    if (!fixReport) return pinned;
-    return attachFixPromptEvidence(pinned, fixReport);
-  }, [displayMessages, fixReport, transcriptMessages]);
+    const withEvidence = fixReport ? attachFixPromptEvidence(pinned, fixReport) : pinned;
+    return artifactPlacements.stabilize(
+      mergeArtifactPublications(withEvidence, artifactPublications, {
+        canLoadEarlier: canLoadEarlierHistory,
+      }),
+    );
+  }, [
+    artifactPlacements,
+    artifactPublications,
+    canLoadEarlierHistory,
+    displayMessages,
+    fixReport,
+    transcriptMessages,
+  ]);
   // "Open full conversation" (web annotations) parks a scroll target for this
   // tab; it is consumed here once the message is rendered.
   const highlightedMessageId = useConversationScrollTarget({
@@ -822,6 +913,9 @@ export function SharedNativeAgentController({
       (transcriptAvailability === "current" || transcriptAvailability === "empty"),
     scrollToIndex,
   });
+  // Load earlier messages keeps the reader on the row they were reading.
+  const loadEarlierPlace = useHeldTranscriptPlace();
+  useRestoreHeldPlace(loadEarlierPlace, messages, scrollToIndex, loadingEarlier);
   const latestAssistantMessage = [...normalizedMessages]
     .reverse()
     .find((message) => message.role === "assistant");
@@ -843,8 +937,22 @@ export function SharedNativeAgentController({
   );
 
   const composer = projection?.composer;
+  const codexAuthNotice =
+    platform === "codex"
+      ? projection?.notices?.find(
+          (notice) =>
+            notice.kind === "auth" &&
+            (notice.state === "needs-auth" ||
+              notice.state === "expired" ||
+              notice.state === "signed-out"),
+        )
+      : undefined;
   const authenticationReadiness =
-    projection?.readiness?.state === "authentication-required" ? projection.readiness : null;
+    projection?.readiness?.state === "authentication-required"
+      ? projection.readiness
+      : codexAuthNotice
+        ? { message: codexAuthNotice.message, signIn: undefined }
+        : null;
   const authenticationRequired = authenticationReadiness !== null;
   // Read legacy sign-in routes on demand. Codex also exposes its live device
   // login here, so recover that snapshot even when readiness already names
@@ -942,7 +1050,11 @@ export function SharedNativeAgentController({
   // the environment's terminal is local for a local tab, inside the container
   // otherwise.
   const createTerminalTab = useOptionalTerminalContext()?.createTab ?? null;
-  const terminalSignInCommand = agentTerminalSignInCommand(platform);
+  // A local OpenCode tab signs in from Settings instead: the `opencode` on the
+  // user's PATH may be another major version that keeps its logins where the
+  // bundled server never looks.
+  const terminalSignInCommand =
+    platform === "opencode" && !data.containerId ? undefined : agentTerminalSignInCommand(platform);
   const openTerminalSignIn = useCallback(() => {
     if (!terminalSignInCommand) return;
     createTerminalTab?.("plain", {
@@ -974,19 +1086,29 @@ export function SharedNativeAgentController({
       ...(isRemoteGatewayConnection() ? { deviceCode: true } : {}),
     })
       .then((result) => {
+        // Keep cancellation available even when the provider returns a bad URL.
+        setSignInDetails(
+          result.code
+            ? { code: result.code, expiresAt: Date.now() + NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS }
+            : {},
+        );
         if (result.url) {
-          const url = new URL(result.url);
-          if (url.protocol !== "https:" && url.protocol !== "http:") {
+          let url: URL;
+          try {
+            url = new URL(result.url);
+            if (url.protocol !== "https:" && url.protocol !== "http:")
+              throw new Error("Invalid scheme");
+          } catch {
+            void cancelNativeAgentSignIn({
+              environmentId: data.environmentId,
+              agent: platform,
+              logicalSessionKey: sessionKey,
+            }).catch(() => undefined);
             throw new Error("The sign-in URL is invalid");
           }
+          setSignInDetails((previous) => ({ ...previous, url: url.href }));
           openSignInUrl(url.href);
         }
-        setSignInDetails({
-          ...(result.url ? { url: result.url } : {}),
-          ...(result.code
-            ? { code: result.code, expiresAt: Date.now() + NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS }
-            : {}),
-        });
         if (result.code) setAuthReadAttempt((attempt) => attempt + 1);
         if (result.code) toast.info(`Enter code ${result.code} to finish signing in to ${label}`);
         else if (result.url) toast.info(`Finish signing in to ${label} in your browser`);
@@ -998,6 +1120,23 @@ export function SharedNativeAgentController({
       })
       .finally(() => setSignInPending(false));
   }, [data.environmentId, label, openSignInUrl, platform, sessionKey, setAuthReadAttempt]);
+  // Abandoning the sign-in releases the provider's side of it too (Codex stops
+  // waiting on its loopback callback or device code). A device code lapses on
+  // the bridge by itself, so only an explicit abandon needs this.
+  const cancelSignIn = useCallback(() => {
+    setSignInDetails(null);
+    void cancelNativeAgentSignIn({
+      environmentId: data.environmentId,
+      agent: platform,
+      logicalSessionKey: sessionKey,
+    })
+      .catch((error: unknown) => {
+        toast.error(
+          `Could not cancel ${label} sign-in: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      })
+      .finally(() => setAuthReadAttempt((attempt) => attempt + 1));
+  }, [data.environmentId, label, platform, sessionKey, setAuthReadAttempt]);
   const resolvedComposer = useMemo(
     () =>
       withResolvedNativeComposerModel(composer?.models ?? [], composer?.selectedModelId, platform),
@@ -1044,7 +1183,9 @@ export function SharedNativeAgentController({
   const phase = projection?.turn.phase;
   const settingsLocked = isSubmitting || (phase !== "idle" && phase !== "error");
   const isRunning = phase === "running";
-  const isTurnActive = phase === "running" || phase === "recovering" || phase === "cancelling";
+  const isProviderTurnActive =
+    phase === "running" || phase === "recovering" || phase === "cancelling";
+  const isTurnActive = isDispatching || isProviderTurnActive;
   const turnActivity = phase === "running" ? projection?.turn.activity : undefined;
   /*
    * "Stopping" and "reconnecting" are still loading, but they mean something
@@ -1093,12 +1234,10 @@ export function SharedNativeAgentController({
           ) ?? null),
     [isTurnActive, normalizedMessages],
   );
-  const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
-    isTurnActive,
-    projection?.sessionId,
-    turnStartedAt,
-    completedElapsedSeconds,
-  );
+  // The running clock ticks inside the footer (`elapsedStartedAt`): holding
+  // the tick here would re-render this whole tab every second of a turn.
+  const elapsedStartedAt = isTurnActive ? turnStartedAt : undefined;
+  const finalElapsedSeconds = isTurnActive ? null : (completedElapsedSeconds ?? null);
   const canQueue = isRunning && (projection?.capabilities.queue ?? adapter.capabilities.queue);
   // Older mocked/legacy hook surfaces have no domain availability field; a
   // complete projection remains authoritative on that compatibility path.
@@ -1199,6 +1338,23 @@ export function SharedNativeAgentController({
 
   const releaseRetiredRequestId = useCallback(
     (requestId: string, error: string) => {
+      // A synchronous response can release ownership before its projection
+      // arrives. Dismiss now so the notice cannot repeat the inline error.
+      const noticeId = nativeNoticeDismissalId({
+        kind: "warning",
+        message: error,
+        occurrenceId: dispatchOutcomeLostOccurrenceId(requestId),
+      });
+      setReleasedDispatchNotices((current) => [
+        ...current
+          .filter(
+            (notice) =>
+              notice.sessionIdentity !== noticeSessionIdentity || notice.noticeId !== noticeId,
+          )
+          .slice(-19),
+        { sessionIdentity: noticeSessionIdentity, noticeId },
+      ]);
+      dismissNotice(noticeSessionIdentity, noticeId);
       const current = useNativeComposeStore.getState().drafts.get(sessionKey);
       if (current?.requestId !== requestId) return;
       updateDraft(sessionKey, {
@@ -1207,8 +1363,50 @@ export function SharedNativeAgentController({
         submissionError: error,
       });
     },
-    [sessionKey, updateDraft],
+    [dismissNotice, noticeSessionIdentity, sessionKey, updateDraft],
   );
+
+  /*
+   * The backend retires a parked dispatch on its own when the provider reports
+   * the outcome lost (a bridge restarted under it), which is the answer a
+   * Retry could only have reported. Do what that Retry does, from the
+   * authoritative projection so it also happens when the tab mounts later:
+   * keep the text under a new id and say what happened. Only for the draft
+   * that still owns the id, and only once — releasing the id ends ownership.
+   * A renderer that handles it this way dismisses the matching notice, which
+   * exists for renderers that predate the field.
+   */
+  const retiredDispatch = projection?.retiredDispatch;
+  const retiredDispatchOwnedByDraft =
+    retiredDispatch !== undefined && draft.requestId === retiredDispatch.requestId;
+  const retiredDispatchNoticeId = retiredDispatch
+    ? nativeNoticeDismissalId({
+        kind: "warning",
+        message: retiredDispatch.message,
+        occurrenceId: dispatchOutcomeLostOccurrenceId(retiredDispatch.requestId),
+      })
+    : undefined;
+  useEffect(() => {
+    if (!retiredDispatch || !retiredDispatchOwnedByDraft || !retiredDispatchNoticeId) return;
+    // A submission or recovery action in flight settles the draft itself;
+    // this runs again once it has.
+    if (submitInFlightRef.current || isSubmitting || isResolvingDispatch) return;
+    releaseRetiredRequestId(retiredDispatch.requestId, retiredDispatch.message);
+    setOptimisticPrompt((current) =>
+      current?.requestId === retiredDispatch.requestId ? null : current,
+    );
+    setSendError(retiredDispatch.message);
+    dismissNotice(noticeSessionIdentity, retiredDispatchNoticeId);
+  }, [
+    dismissNotice,
+    isResolvingDispatch,
+    isSubmitting,
+    noticeSessionIdentity,
+    releaseRetiredRequestId,
+    retiredDispatch,
+    retiredDispatchNoticeId,
+    retiredDispatchOwnedByDraft,
+  ]);
 
   const clearConfirmedDraft = useCallback(
     (requestId: string | undefined): boolean => {
@@ -1235,9 +1433,13 @@ export function SharedNativeAgentController({
     ],
   );
 
-  useEffect(() => {
+  // An authentication prompt supersedes a send error from before it appeared.
+  const [sawAuthenticationRequired, setSawAuthenticationRequired] =
+    useState(authenticationRequired);
+  if (sawAuthenticationRequired !== authenticationRequired) {
+    setSawAuthenticationRequired(authenticationRequired);
     if (authenticationRequired) setSendError(null);
-  }, [authenticationRequired]);
+  }
 
   useEffect(() => {
     const confirmation = draft.pendingTranscriptConfirmation;
@@ -1258,6 +1460,10 @@ export function SharedNativeAgentController({
     // The new authoritative transcript row is definitive confirmation, so the
     // matching submitted draft must not remain in the composer indefinitely.
     transcriptConfirmedRequestIdRef.current = confirmation.requestId;
+    // Clearing the error depends on the compose-store write just before it, and
+    // the confirmation that write needs is read from the optimistic prompt this
+    // effect then clears, so these updates cannot move into render.
+    // oxlint-disable-next-line react/set-state-in-effect
     if (clearConfirmedDraft(confirmation.requestId)) setSendError(null);
     setOptimisticPrompt(null);
   }, [
@@ -1275,17 +1481,14 @@ export function SharedNativeAgentController({
    * undefined/new pairing is a brand-new session this prompt created, not a
    * replacement of the one it was sent to.
    */
-  useEffect(() => {
-    const submittedSessionId = optimisticPrompt?.sessionId;
-    if (
-      submittedSessionId === undefined ||
-      projection?.sessionId === undefined ||
-      submittedSessionId === projection.sessionId
-    ) {
-      return;
-    }
+  const submittedSessionId = optimisticPrompt?.sessionId;
+  if (
+    submittedSessionId !== undefined &&
+    projection?.sessionId !== undefined &&
+    submittedSessionId !== projection.sessionId
+  ) {
     setOptimisticPrompt(null);
-  }, [optimisticPrompt?.sessionId, projection?.sessionId]);
+  }
 
   /**
    * OpenCode has no conversation-mode list; Plan/Build are primary agents.
@@ -1611,11 +1814,12 @@ export function SharedNativeAgentController({
         })),
         ...(commandIntent ? { command: commandIntent } : {}),
       };
+      const confirmationSessionId = projection?.sessionId;
       const transcriptConfirmation =
-        dispatchRequestId && projection?.sessionId
+        dispatchRequestId && confirmationSessionId
           ? {
               requestId: dispatchRequestId,
-              sessionId: projection.sessionId,
+              sessionId: confirmationSessionId,
               priorMessageIds: Array.from(visibleAuthoritativeMessageIds),
             }
           : undefined;
@@ -1665,6 +1869,9 @@ export function SharedNativeAgentController({
         }
         if (outcome.outcome === "rejected") setOptimisticPrompt(null);
         requestIdRetired = outcome.outcome === "rejected" && outcome.requestIdRetired === true;
+        if (outcome.outcome === "rejected" && requestIdRetired && dispatchRequestId) {
+          releaseRetiredRequestId(dispatchRequestId, outcome.error);
+        }
         keepTranscriptConfirmation = outcome.outcome === "unknown";
         /*
          * A backend-reported unknown is a parked dispatch: the
@@ -1744,6 +1951,7 @@ export function SharedNativeAgentController({
       projection?.slashCommands,
       recoverableDispatch,
       actionableDispatch,
+      releaseRetiredRequestId,
       selectedModel?.supportsImageInput,
       send,
       sendLocked,
@@ -1949,11 +2157,15 @@ export function SharedNativeAgentController({
     [handoff.displayMessages, isTurnActive, platform],
   );
   const forkPlanRef = useRef(forkPlan);
-  forkPlanRef.current = forkPlan;
+  useLayoutEffect(() => {
+    forkPlanRef.current = forkPlan;
+  }, [forkPlan]);
 
+  const forkSourceSessionId = projection?.sessionId;
+  const forkSourceTitle = projection?.title;
   const handleFork = useCallback(
     async (messageId: string, kind: MessageForkKind) => {
-      if (forkLatchRef.current || !projection?.sessionId) return;
+      if (forkLatchRef.current || !forkSourceSessionId) return;
       forkLatchRef.current = true;
       setForkInFlight(true);
       try {
@@ -1993,7 +2205,7 @@ export function SharedNativeAgentController({
           {
             id: forkTabId,
             type: "agent-native",
-            displayTitle: outcome?.title ?? `${projection.title ?? label} (fork)`,
+            displayTitle: outcome?.title ?? `${forkSourceTitle ?? label} (fork)`,
             nativeAgentData: {
               ...data,
               platform,
@@ -2011,7 +2223,7 @@ export function SharedNativeAgentController({
         setForkInFlight(false);
       }
     },
-    [data, fork, label, platform, projection?.sessionId, projection?.title, updateDraft],
+    [data, fork, forkSourceSessionId, forkSourceTitle, label, platform, updateDraft],
   );
   const handleForkAction = useCallback(
     (messageId: string, kind: MessageForkKind) => {
@@ -2046,19 +2258,23 @@ export function SharedNativeAgentController({
     latestIsPlanReview &&
     latestAssistantMessage !== undefined &&
     latestAssistantMessage.id !== dismissedPlanReviewId;
+  const latestAssistantMessageId = latestAssistantMessage?.id;
+  const composerModelId = composer?.selectedModelId;
+  const composerReasoningId = composer?.selectedReasoningId;
+  const composerFastModeEnabled = composer?.fastModeEnabled;
   const switchPlanToBuild = useCallback(
     async (implement: boolean) => {
       if (planTransitionPending) return;
       setPlanTransitionPending(true);
       try {
         await updateControls({ mode: "build" });
-        setDismissedPlanReviewId(latestAssistantMessage?.id ?? null);
+        setDismissedPlanReviewId(latestAssistantMessageId ?? null);
         if (implement) {
           const outcome = await send("The plan is approved. Exit plan mode and implement it.", {
-            model: composer?.selectedModelId,
-            reasoningEffort: composer?.selectedReasoningId,
+            model: composerModelId,
+            reasoningEffort: composerReasoningId,
             mode: "build",
-            fastMode: composer?.fastModeEnabled ?? undefined,
+            fastMode: composerFastModeEnabled ?? undefined,
           });
           if (outcome.outcome !== "accepted") {
             throw new Error(outcome.error ?? "Plan implementation dispatch was not confirmed");
@@ -2071,10 +2287,10 @@ export function SharedNativeAgentController({
       }
     },
     [
-      composer?.fastModeEnabled,
-      composer?.selectedModelId,
-      composer?.selectedReasoningId,
-      latestAssistantMessage?.id,
+      composerFastModeEnabled,
+      composerModelId,
+      composerReasoningId,
+      latestAssistantMessageId,
       planTransitionPending,
       send,
       updateControls,
@@ -2236,6 +2452,10 @@ export function SharedNativeAgentController({
     const notices = (isActive ? (projection?.notices ?? []) : []).filter(
       (notice) =>
         !dismissedNoticeIds.includes(nativeNoticeDismissalId(notice)) &&
+        // Shown in the composer instead, by the release above.
+        !(
+          retiredDispatchOwnedByDraft && nativeNoticeDismissalId(notice) === retiredDispatchNoticeId
+        ) &&
         // A recovered state is authoritative even if an older renderer cache
         // briefly carries the recovery notice into the same projection.
         !(notice.kind === "recovery" && connectionState === "connected"),
@@ -2281,6 +2501,8 @@ export function SharedNativeAgentController({
     isActive,
     noticeSessionIdentity,
     projection?.notices,
+    retiredDispatchNoticeId,
+    retiredDispatchOwnedByDraft,
   ]);
   useEffect(() => {
     const mounted = noticeToastsMountedRef;
@@ -2302,9 +2524,9 @@ export function SharedNativeAgentController({
       });
     };
   }, []);
-  useEffect(() => {
-    if (connectionState === "connected") hasConnectedSessionRef.current = true;
-  }, [connectionState]);
+  // Latched for the rest of the mount once the tab has connected.
+  const [hasConnectedSession, setHasConnectedSession] = useState(false);
+  if (!hasConnectedSession && connectionState === "connected") setHasConnectedSession(true);
   /**
    * Questions and plan reviews are conversational content, so they render as
    * the last transcript row. Command/file/permission approvals stay pinned
@@ -2321,7 +2543,7 @@ export function SharedNativeAgentController({
    * A tab has a session behind it once it was asked to resume one, or once it
    * has connected and actually produced something a user can act on or see:
    * conversation, a pending interaction, or an authentication-required banner.
-   * The created id lands in `data.sessionId` only after the fact, so the ref is
+   * The created id lands in `data.sessionId` only after the fact, so the latch is
    * what covers a tab for the rest of its mount — but a tab that connected and
    * is still completely empty has nothing to protect, and its next connect must
    * stay an establishment wait. A resumed tab is different: its transcript may
@@ -2335,8 +2557,8 @@ export function SharedNativeAgentController({
    * the only control the user can act on while it waits.
    */
   const hasEstablishedSession =
-    Boolean(requestedResumeSessionIdRef.current) ||
-    (hasConnectedSessionRef.current &&
+    Boolean(requestedResumeSessionId) ||
+    (hasConnectedSession &&
       (messages.length > 0 || authenticationRequired || allInteractions.length > 0));
   if (setupPending) {
     return (
@@ -2355,7 +2577,7 @@ export function SharedNativeAgentController({
     messages.length === 1 && messages[0]?.id === `optimistic-native:${sessionKey}`;
   const composerCentered =
     (messages.length === 0 || onlyOptimisticFirstPrompt) &&
-    !isTurnActive &&
+    !isProviderTurnActive &&
     transcriptInteractions.length === 0;
 
   /**
@@ -2469,6 +2691,11 @@ export function SharedNativeAgentController({
               <span>
                 Code <span className="select-all font-mono font-semibold">{signInCode}</span>
               </span>
+            ) : null}
+            {signInDetails ? (
+              <Button type="button" size="sm" variant="ghost" onClick={cancelSignIn}>
+                Cancel sign-in
+              </Button>
             ) : null}
           </div>
         ) : terminalSignInCommand && createTerminalTab ? (
@@ -2606,7 +2833,62 @@ export function SharedNativeAgentController({
   const showBytesNotice =
     messageWindow?.truncated === true && messageWindow.truncationReason === "bytes";
   const showLoadEarlier = messageWindow?.canLoadEarlier === true;
+  // The source itself lost its start (a bridge that kept only the newest
+  // messages of a transcript too large to save) and no page can bring it
+  // back. Showing the remainder as if it were the whole conversation would
+  // read as data loss.
+  const showOmittedNotice =
+    messageWindow?.truncated === true && !showBytesNotice && !showLoadEarlier;
 
+  const resumeDialog =
+    adapter.capabilities.resume && !isReadOnlyCoordinator ? (
+      <NativeResumeSessionDialog
+        open={resumeDialogOpen}
+        onOpenChange={(open) => {
+          setResumeDialogOpen(open);
+          // Dismissed without a choice: this tab starts its own session.
+          if (!open) setAwaitingResumeChoice(false);
+        }}
+        agentLabel={label}
+        currentSessionId={projection?.sessionId}
+        fetchSessions={fetchResumableSessions}
+        onResume={(providerSessionId) => {
+          setResumeDialogOpen(false);
+          const sourceSessionId = projection?.sessionId;
+          if (heldSubmit && providerSessionId !== heldSessionId) {
+            settleHeldSubmit(HELD_SUBMIT_CONVERSATION_CHANGED);
+          }
+          // A tab still waiting on its resume choice has no composer of its
+          // own; the resumed conversation keeps its settings.
+          void resume(
+            providerSessionId,
+            composer
+              ? {
+                  modelId: composer.selectedModelId,
+                  reasoningId: composer.selectedReasoningId,
+                  fastMode: composer.fastModeEnabled ?? undefined,
+                  mode: composer.selectedModeId,
+                  executionProfileId: effectiveComposeProfileId,
+                  includeLocalSettings: composer.includeLocalSettings,
+                  promptSuggestions: composer.promptSuggestionsEnabled,
+                }
+              : undefined,
+          )
+            .then(() => {
+              setAwaitingResumeChoice(false);
+              if (agentHandoffId && sourceSessionId && providerSessionId !== sourceSessionId) {
+                clearTabAgentHandoff(tabId, data.environmentId);
+              }
+              clearPersistedVirtuosoState(sessionKey);
+              scrollToBottom();
+            })
+            .catch((error) => {
+              setAwaitingResumeChoice(false);
+              toast.error(error instanceof Error ? error.message : `Failed to resume ${label}`);
+            });
+        }}
+      />
+    ) : null;
   const chatShell = (
     <NativeChatShell
       agentExpansionScope={data.environmentId}
@@ -2645,17 +2927,24 @@ export function SharedNativeAgentController({
       respondToAsyncQuestion={platform === "codex" ? respondToAsyncQuestion : undefined}
       isLoading={isTurnActive}
       statusLabel={phaseStatusLabel}
-      elapsedSeconds={elapsedSeconds}
+      elapsedSeconds={null}
+      elapsedStartedAt={elapsedStartedAt}
       finalElapsedSeconds={finalElapsedSeconds}
       centerCompose={composerCentered}
       emptyStateMessage={`Ask ${label} to work on this repository.`}
       transcriptHeader={
-        showBytesNotice || showLoadEarlier ? (
+        showBytesNotice || showLoadEarlier || showOmittedNotice ? (
           <div className="mx-auto flex max-w-3xl flex-col items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
             {showBytesNotice ? (
               <span>
                 Earlier messages or tool activity were omitted to stay within the 16 MiB transcript
                 limit.
+              </span>
+            ) : null}
+            {showOmittedNotice ? (
+              <span>
+                Earlier messages in this conversation are not available here. The conversation
+                itself is kept.
               </span>
             ) : null}
             {showLoadEarlier ? (
@@ -2664,7 +2953,11 @@ export function SharedNativeAgentController({
                 size="sm"
                 variant="outline"
                 disabled={loadingEarlier}
-                onClick={() => {
+                onClick={(event) => {
+                  loadEarlierPlace.hold(
+                    event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"),
+                    scrollProps.controller,
+                  );
                   setLoadingEarlier(true);
                   void loadEarlierMessages()
                     .catch((error) =>
@@ -2763,43 +3056,7 @@ export function SharedNativeAgentController({
           ? () => setResumeDialogOpen(true)
           : undefined
       }
-      resumeDialog={
-        adapter.capabilities.resume && !isReadOnlyCoordinator ? (
-          <NativeResumeSessionDialog
-            open={resumeDialogOpen}
-            onOpenChange={setResumeDialogOpen}
-            agentLabel={label}
-            currentSessionId={projection?.sessionId}
-            fetchSessions={fetchResumableSessions}
-            onResume={(providerSessionId) => {
-              setResumeDialogOpen(false);
-              const sourceSessionId = projection?.sessionId;
-              if (heldSubmit && providerSessionId !== heldSessionId) {
-                settleHeldSubmit(HELD_SUBMIT_CONVERSATION_CHANGED);
-              }
-              void resume(providerSessionId, {
-                modelId: composer?.selectedModelId,
-                reasoningId: composer?.selectedReasoningId,
-                fastMode: composer?.fastModeEnabled ?? undefined,
-                mode: composer?.selectedModeId,
-                executionProfileId: effectiveComposeProfileId,
-                includeLocalSettings: composer?.includeLocalSettings,
-                promptSuggestions: composer?.promptSuggestionsEnabled,
-              })
-                .then(() => {
-                  if (agentHandoffId && sourceSessionId && providerSessionId !== sourceSessionId) {
-                    clearTabAgentHandoff(tabId, data.environmentId);
-                  }
-                  clearPersistedVirtuosoState(sessionKey);
-                  scrollToBottom();
-                })
-                .catch((error) =>
-                  toast.error(error instanceof Error ? error.message : `Failed to resume ${label}`),
-                );
-            }}
-          />
-        ) : null
-      }
+      resumeDialog={resumeDialog}
       composer={
         <NativeComposeBar
           testId="shared-native-compose-bar"
@@ -3008,6 +3265,7 @@ export function SharedNativeAgentController({
                     </DropdownMenu>
                   );
                 })}
+                <SelectionPricingBadge pricing={composer.selectionPricing} />
                 {!isReadOnlyCoordinator && composer.modes.length > 0 ? (
                   <ComposerIconPicker
                     label="Mode"
@@ -3213,6 +3471,60 @@ export function SharedNativeAgentController({
                 onRemove={async (messageId) => {
                   await removeQueued(messageId);
                 }}
+                onSteer={
+                  // The same gate the composer applies to a typed `/steer`.
+                  isRunning && !recoverableDispatch && projection.capabilities?.actions?.steer
+                    ? async (message) => {
+                        let outcome;
+                        try {
+                          outcome = await steerQueued(message.id);
+                        } catch (error) {
+                          throw new PromptQueueActionError(
+                            `Could not steer the running turn: ${
+                              error instanceof Error ? error.message : String(error)
+                            }`,
+                            { cause: error },
+                          );
+                        }
+                        if (!outcome) {
+                          throw new PromptQueueActionError(
+                            "This prompt already left the queue, so it was not used to steer.",
+                          );
+                        }
+                        if (outcome.outcome === "applied") {
+                          toast.success(`Sent to the active ${label} turn`);
+                          return;
+                        }
+                        // Delivery is unconfirmed: the recovery card under the
+                        // transcript owns the prompt now, so show it.
+                        if (outcome.outcome === "unknown") {
+                          setQueueDialogOpen(false);
+                          return;
+                        }
+                        throw new PromptQueueActionError(
+                          outcome.outcome === "rejected"
+                            ? `${nativeAgentSteerRejectionMessage(outcome)} The prompt was returned to the queue.`
+                            : outcome.outcome === "mismatch"
+                              ? "The turn moved on before the steering text was delivered. The prompt was returned to the queue."
+                              : `${label} finished the turn before the prompt arrived, so the prompt is still queued.`,
+                        );
+                      }
+                    : undefined
+                }
+                canSteer={(message) => {
+                  // Steering carries text only, and a queued command must be
+                  // revalidated as a command, not typed into the turn.
+                  const queued = message as Record<string, unknown>;
+                  return (
+                    !(Array.isArray(queued.attachments) && queued.attachments.length > 0) &&
+                    queued.command === undefined &&
+                    !nativeAsyncQuestionItemId(message.id) &&
+                    !(
+                      typeof queued.requestId === "string" &&
+                      nativeAsyncQuestionItemId(queued.requestId)
+                    )
+                  );
+                }}
                 renderMeta={(message) => {
                   const queued = message as Record<string, unknown>;
                   const attachments = Array.isArray(queued.attachments)
@@ -3255,9 +3567,38 @@ export function SharedNativeAgentController({
       }
     />
   );
+  if (awaitingResumeChoice) {
+    return (
+      <div
+        role="status"
+        className="flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground"
+      >
+        <span aria-hidden="true">
+          <AgentPlatformIcon platform={platform} className="h-16 w-16" />
+        </span>
+        <p className="text-sm">
+          {resumeDialogOpen
+            ? `Choose a ${label} session to resume.`
+            : `Resuming the ${label} session...`}
+        </p>
+        {resumeDialog}
+      </div>
+    );
+  }
   return (
     <BackgroundTaskChildrenContext.Provider value={childBackgroundTasks}>
-      {chatShell}
+      <NativeChangeScopeContext.Provider value={nativeChangeScope}>
+        <RichTranscriptScopeContext.Provider value={richTranscriptScope}>
+          <div className="@container flex h-full min-h-0 flex-col">
+            <ThreadChangesHeader
+              environmentId={data.environmentId}
+              logicalSessionKey={sessionKey}
+              turnActive={isTurnActive}
+            />
+            <div className="min-h-0 flex-1">{chatShell}</div>
+          </div>
+        </RichTranscriptScopeContext.Provider>
+      </NativeChangeScopeContext.Provider>
     </BackgroundTaskChildrenContext.Provider>
   );
 }

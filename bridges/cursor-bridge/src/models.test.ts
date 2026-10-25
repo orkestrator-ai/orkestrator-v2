@@ -6,7 +6,11 @@ import {
   contextWindowForModelId,
   emptyComposer,
   listModels,
+  MAX_MODE_PRICING,
   modelSelection,
+  publishedComposer,
+  refreshModels,
+  selectionIsMaxMode,
   useCursorModelsForTests,
 } from "./models.js";
 
@@ -289,6 +293,135 @@ describe("model catalogue", () => {
       effort: "high",
       fast: false,
     });
+  });
+});
+
+describe("max mode", () => {
+  /**
+   * Shaped like 1.0.40's catalogue: `context=1m` only exists as Max mode, and
+   * `effort=high` exists both ways, so it alone does not force Max mode.
+   */
+  const maxModel: ModelListItem = {
+    id: "gpt-5",
+    displayName: "GPT-5",
+    aliases: ["gpt-5-latest"],
+    parameters: [
+      {
+        id: "effort",
+        values: [{ value: "low" }, { value: "high" }],
+      },
+      {
+        id: "context",
+        values: [{ value: "200k" }, { value: "1m" }],
+      },
+    ],
+    variants: [
+      {
+        displayName: "GPT-5",
+        isDefault: true,
+        params: [
+          { id: "effort", value: "low" },
+          { id: "context", value: "200k" },
+        ],
+      },
+      {
+        displayName: "GPT-5",
+        params: [
+          { id: "effort", value: "high" },
+          { id: "context", value: "200k" },
+        ],
+      },
+      {
+        displayName: "GPT-5",
+        isMaxMode: true,
+        params: [
+          { id: "effort", value: "high" },
+          { id: "context", value: "1m" },
+        ],
+      },
+    ],
+  };
+
+  async function withCatalogue(run: () => void | Promise<void>): Promise<void> {
+    const previousApiKey = process.env.CURSOR_API_KEY;
+    const restore = useCursorModelsForTests({
+      list: async () => [maxModel, { id: "default", displayName: "Auto" }],
+    } as typeof import("@cursor/sdk").Cursor.models);
+    try {
+      process.env.CURSOR_API_KEY = "test-key";
+      await listModels();
+      await run();
+    } finally {
+      restore();
+      if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previousApiKey;
+    }
+  }
+
+  test("applies the SDK's rule: every consistent variant is Max mode", async () => {
+    await withCatalogue(() => {
+      const params = (pairs: Array<[string, string]>) =>
+        pairs.map(([id, value]) => ({ id, value }));
+      expect(selectionIsMaxMode({ id: "gpt-5", params: params([["context", "1m"]]) })).toBe(true);
+      // Matched by alias and compared trimmed, as the SDK does.
+      expect(
+        selectionIsMaxMode({ id: "gpt-5-latest", params: params([["context", " 1m "]]) }),
+      ).toBe(true);
+      // `high` has a standard variant too, so the SDK does not force Max mode.
+      expect(selectionIsMaxMode({ id: "gpt-5", params: params([["effort", "high"]]) })).toBe(false);
+      // No params, no consistent variant, or no Max-mode variants at all.
+      expect(selectionIsMaxMode({ id: "gpt-5" })).toBe(false);
+      expect(selectionIsMaxMode({ id: "gpt-5", params: params([["context", "2m"]]) })).toBe(false);
+      expect(selectionIsMaxMode({ id: "default", params: params([["context", "1m"]]) })).toBe(
+        false,
+      );
+    });
+  });
+
+  test("publishes the premium indicator for the current selection only", async () => {
+    await withCatalogue(async () => {
+      const models = await listModels();
+      const base = { ...emptyComposer(), models, selectedModelId: "gpt-5" };
+      const premium = publishedComposer({ ...base, parameterValues: { context: "1m" } });
+      expect(premium.selectionPricing).toEqual(MAX_MODE_PRICING);
+      expect(publishedComposer({ ...base, selectedReasoningId: "high" })).not.toHaveProperty(
+        "selectionPricing",
+      );
+      // A stored indicator never outlives the selection it described.
+      expect(
+        publishedComposer({ ...premium, parameterValues: { context: "200k" } }),
+      ).not.toHaveProperty("selectionPricing");
+    });
+  });
+
+  test("withholds cached Max pricing after refresh until the catalogue reloads", async () => {
+    await withCatalogue(async () => {
+      const models = await listModels();
+      const premium = publishedComposer({
+        ...emptyComposer(),
+        models,
+        selectedModelId: "gpt-5",
+        parameterValues: { context: "1m" },
+      });
+      expect(premium.selectionPricing).toEqual(MAX_MODE_PRICING);
+      refreshModels();
+      expect(publishedComposer(premium)).not.toHaveProperty("selectionPricing");
+      await listModels();
+      expect(publishedComposer(premium).selectionPricing).toEqual(MAX_MODE_PRICING);
+    });
+  });
+
+  test("claims nothing before the catalogue has been read", () => {
+    const restore = useCursorModelsForTests({
+      list: async () => [maxModel],
+    } as typeof import("@cursor/sdk").Cursor.models);
+    try {
+      expect(selectionIsMaxMode({ id: "gpt-5", params: [{ id: "context", value: "1m" }] })).toBe(
+        false,
+      );
+    } finally {
+      restore();
+    }
   });
 });
 

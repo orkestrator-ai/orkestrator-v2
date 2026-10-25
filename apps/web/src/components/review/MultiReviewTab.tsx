@@ -5,6 +5,7 @@ import {
   AlertCircle,
   AlertTriangle,
   ExternalLink,
+  GitPullRequest,
   Loader2,
   Pause,
   Play,
@@ -22,9 +23,13 @@ import {
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
 import { ContextMenuItem } from "@/components/ui/context-menu";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StructuredReviewReportView } from "./StructuredReviewReportView";
 import { StackedEyes } from "./MultiReviewLaunchDialog";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useMultiReviewPrPhase } from "./useMultiReviewPrPhase";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
@@ -41,7 +46,7 @@ import {
   type MultiReviewFlowNodeModel,
 } from "./MultiReviewFlowGraph";
 import {
-  MultiReviewFindingsPane,
+  MultiReviewFindingsBadge,
   MultiReviewInspectorHeader,
   ReviewerTranscriptTail,
   StepTranscriptTail,
@@ -69,6 +74,8 @@ import {
   multiReviewStepError,
   multiReviewStepRuntimeParts,
   openFixSessionError,
+  pullRequestDetail,
+  pullRequestStep,
   reviewerColumnLabel,
   reviewerProgressSummary,
   reviewerPendingLabel,
@@ -133,6 +140,7 @@ interface MultiReviewTabProps {
   loadReviewerTranscript?: typeof backend.getMultiReviewReviewerTranscript;
   /** Reads the selected step's transcript tail for the inspector. */
   loadStepTranscript?: typeof backend.getMultiReviewStepTranscript;
+  loadPrSessionState?: typeof backend.getNativeAgentSessionStateUpdate;
 }
 
 function phaseCopy(workflow: MultiReviewWorkflow): string {
@@ -335,6 +343,53 @@ interface MultiReviewFlowNodeView {
   activityAt?: number;
 }
 
+type InspectorBodyTab = "transcript" | "report";
+
+/**
+ * The inspector's lower section: the node's transcript, and the report it
+ * filed once there is one. The transcript stays mounted behind the report so
+ * returning to it keeps its scroll position and follow state.
+ */
+function InspectorTranscriptTabs({
+  transcript,
+  report,
+  tab,
+  onTabChange,
+}: {
+  transcript: ReactNode;
+  report: ReactNode;
+  tab: InspectorBodyTab;
+  onTabChange: (tab: InspectorBodyTab) => void;
+}) {
+  if (!report) return transcript;
+  return (
+    <Tabs
+      value={tab}
+      onValueChange={(value) => onTabChange(value as InspectorBodyTab)}
+      className="flex min-h-0 min-w-0 flex-1 flex-col gap-2"
+    >
+      <TabsList aria-label="Inspector views" className="h-7 rounded-md p-0.5">
+        <TabsTrigger className="h-6 px-2 text-xs" value="transcript">
+          Transcript
+        </TabsTrigger>
+        <TabsTrigger className="h-6 px-2 text-xs" value="report">
+          Report
+        </TabsTrigger>
+      </TabsList>
+      <TabsContent
+        value="transcript"
+        forceMount
+        className="flex min-h-0 min-w-0 flex-col data-[state=inactive]:hidden"
+      >
+        {transcript}
+      </TabsContent>
+      <TabsContent value="report" className="min-w-0">
+        {report}
+      </TabsContent>
+    </Tabs>
+  );
+}
+
 function StepFacts({
   model,
   runtime,
@@ -368,6 +423,7 @@ function MultiReviewOverviewTab({
   openReviewer,
   loadReviewerTranscript,
   loadStepTranscript,
+  loadPrSessionState,
 }: MultiReviewTabProps) {
   const createTab = useOptionalTerminalContext()?.createTab;
   const workflow = useMultiReviewStore((state) => state.workflows.get(data.workflowId));
@@ -399,6 +455,8 @@ function MultiReviewOverviewTab({
   const [reviewPanelNow, setReviewPanelNow] = useState(() => Date.now());
   /** The node the user picked; null follows the running node. */
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // Each node remembers whether its transcript or its report was last shown.
+  const [inspectorTabs, setInspectorTabs] = useState<Record<string, InspectorBodyTab>>({});
   /** The tab's root, which the graph's fullscreen covers. */
   const [tabRoot, setTabRoot] = useState<HTMLDivElement | null>(null);
   const panelId = useId();
@@ -416,7 +474,7 @@ function MultiReviewOverviewTab({
       workflow.stepRuntimes.fix.completedAt === undefined);
   const hasRunningValidation =
     workflow?.validationRun?.status === "planned" || workflow?.validationRun?.status === "running";
-  // The header's workflow clock counts while any stage is at work.
+  // The header measures review, validation and Fix; PR work has no workflow timing record.
   const hasLiveClock = Boolean(
     hasRunningReviewer ||
     hasRunningFixSession ||
@@ -426,6 +484,10 @@ function MultiReviewOverviewTab({
 
   useEffect(() => {
     if (!isActive || !hasLiveClock) return;
+    // The clock is the external system this effect subscribes to. Resuming it
+    // reads the time at once, so the header never shows the time it paused at
+    // for a second; reading it while rendering would be impure.
+    // oxlint-disable-next-line react/set-state-in-effect
     setReviewPanelNow(Date.now());
     const interval = window.setInterval(() => setReviewPanelNow(Date.now()), 1_000);
     return () => window.clearInterval(interval);
@@ -440,24 +502,46 @@ function MultiReviewOverviewTab({
 
   useEffect(() => {
     isActiveRef.current = isActive;
-    // The user navigated away after requesting the handoff. Delivery continues
-    // in the backend, but a hidden review tab must never change pane focus.
-    if (!isActive) setOpenAfterDelivery(false);
   }, [isActive]);
 
-  const hydrate = useCallback(async () => {
+  // The user navigated away after requesting the handoff. Delivery continues
+  // in the backend, but a hidden review tab must never change pane focus.
+  const [wasActive, setWasActive] = useState(isActive);
+  if (wasActive !== isActive) {
+    setWasActive(isActive);
+    if (!isActive) setOpenAfterDelivery(false);
+  }
+
+  /** Reads the workflow without clearing the last error; `hydrate` does both. */
+  const fetchWorkflow = useCallback(
+    () =>
+      // The executor turns a synchronous throw into a rejection, as `await` did.
+      new Promise<Awaited<ReturnType<typeof hydrateWorkflow>>>((resolve) =>
+        resolve(hydrateWorkflow(data.workflowId)),
+      ).then(
+        (result) => {
+          if (!result) setError("The authoritative Multi Review workflow could not be found.");
+        },
+        (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)),
+      ),
+    [data.workflowId, hydrateWorkflow],
+  );
+
+  const hydrate = () => {
     setError(null);
-    try {
-      const result = await hydrateWorkflow(data.workflowId);
-      if (!result) setError("The authoritative Multi Review workflow could not be found.");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  }, [data.workflowId, hydrateWorkflow]);
+    void fetchWorkflow();
+  };
+
+  // Every (re)activation reads the workflow again, starting without an error.
+  const [hydratedFor, setHydratedFor] = useState({ fetchWorkflow, isActive });
+  if (hydratedFor.fetchWorkflow !== fetchWorkflow || hydratedFor.isActive !== isActive) {
+    setHydratedFor({ fetchWorkflow, isActive });
+    setError(null);
+  }
 
   useEffect(() => {
-    void hydrate();
-  }, [hydrate, isActive]);
+    void fetchWorkflow();
+  }, [fetchWorkflow, isActive]);
 
   const openFixSession = useCallback(
     (target: MultiReviewWorkflow | undefined): FixSessionOpenOutcome => {
@@ -520,6 +604,10 @@ function MultiReviewOverviewTab({
 
   useEffect(() => {
     if (!openAfterDelivery || !workflow || workflow.addressPromptPending === true) return;
+    // Consumes the one-shot request in the step that acts on it: opening the
+    // Fix tab (`createTab`) is a side effect that cannot run while rendering,
+    // and the request must not survive to open a second tab.
+    // oxlint-disable-next-line react/set-state-in-effect
     setOpenAfterDelivery(false);
     if (isActive && workflow.phase === "interactive") presentFixSession(workflow, "automatic");
   }, [isActive, openAfterDelivery, presentFixSession, workflow]);
@@ -701,6 +789,60 @@ function MultiReviewOverviewTab({
     }
   };
 
+  // The PR node reads the environment's pull request and the launched PR tab.
+  const prUrl = useEnvironmentStore(
+    (state) => state.getEnvironmentById(data.environmentId)?.prUrl ?? null,
+  );
+  const prState = useEnvironmentStore(
+    (state) => state.getEnvironmentById(data.environmentId)?.prState ?? null,
+  );
+  // Tool rows in the inspector's transcript tails open files in this container.
+  const containerId =
+    useEnvironmentStore((state) => state.getEnvironmentById(data.environmentId)?.containerId) ??
+    undefined;
+  const cleanReviewPr =
+    workflow?.phase === "ready" &&
+    workflow.consolidatedReport?.issues.length === 0 &&
+    workflow.consolidatedReport.testCoverageGaps.length === 0;
+  // A delivered launch survives restarts as history, not as the rerun's outcome.
+  const currentPrLaunch =
+    workflow?.autoPrLaunch?.basis === "clean-review" && !cleanReviewPr
+      ? undefined
+      : workflow?.autoPrLaunch;
+  const prTabId = workflow?.autoPrLaunch?.tabId;
+  const prTabAgent = usePaneLayoutStore((state) =>
+    prTabId
+      ? state.findPaneWithTab(prTabId, data.environmentId)?.tabs.find((tab) => tab.id === prTabId)
+          ?.nativeAgentData?.platform
+      : undefined,
+  );
+  const prTabOpen = usePaneLayoutStore((state) =>
+    prTabId ? state.findPaneWithTab(prTabId, data.environmentId) !== null : false,
+  );
+  const prAgentPhase = useMultiReviewPrPhase({
+    environmentId: data.environmentId,
+    tabId: prTabId,
+    agent: prTabAgent,
+    active: isActive && currentPrLaunch?.state === "launched" && !prUrl,
+    loadSessionState: loadPrSessionState,
+  });
+  const openPrTab = useCallback(() => {
+    if (!prTabId) return;
+    const layout = usePaneLayoutStore.getState();
+    const pane = layout.findPaneWithTab(prTabId, data.environmentId);
+    if (!pane) return;
+    layout.setActivePane(pane.id, data.environmentId);
+    layout.setActiveTab(pane.id, prTabId, data.environmentId);
+  }, [data.environmentId, prTabId]);
+  const viewPullRequest = useCallback(async () => {
+    if (!prUrl) return;
+    try {
+      await backend.openInBrowser(prUrl);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [prUrl]);
+
   if (!workflow) {
     return (
       <div className="grid h-full place-items-center p-6 text-center">
@@ -712,7 +854,7 @@ function MultiReviewOverviewTab({
           )}
           <p className="text-sm text-muted-foreground">{error ?? "Restoring Multi Review…"}</p>
           {error && (
-            <Button className="mt-4" variant="outline" size="sm" onClick={() => void hydrate()}>
+            <Button className="mt-4" variant="outline" size="sm" onClick={hydrate}>
               <RefreshCw className="mr-2 size-3.5" />
               Retry
             </Button>
@@ -748,6 +890,15 @@ function MultiReviewOverviewTab({
     workflow.phase !== "interactive";
   const lifecyclePending = stepLifecycleAction !== null;
 
+  const inspectorTranscriptTabs = (nodeId: string, transcript: ReactNode, report: ReactNode) => (
+    <InspectorTranscriptTabs
+      transcript={transcript}
+      report={report}
+      tab={inspectorTabs[nodeId] ?? "transcript"}
+      onTabChange={(tab) => setInspectorTabs((previous) => ({ ...previous, [nodeId]: tab }))}
+    />
+  );
+
   const stepView = ({
     key,
     kind,
@@ -766,6 +917,7 @@ function MultiReviewOverviewTab({
     showPauseAction = true,
     activityAt,
     details,
+    report,
   }: {
     key: MultiReviewStepKey;
     kind: MultiReviewStepKind;
@@ -784,6 +936,7 @@ function MultiReviewOverviewTab({
     showPauseAction?: boolean;
     activityAt?: number;
     details?: ReactNode;
+    report?: ReactNode;
   }): MultiReviewFlowNodeView => {
     const runtime = multiReviewStepRuntimeParts(
       workflow,
@@ -914,21 +1067,27 @@ function MultiReviewOverviewTab({
         </>
       ),
       body: (
-        <div className="space-y-4">
+        <div className="flex flex-1 flex-col space-y-4">
           <StepFacts model={model} runtime={runtime} status={status} />
           {details}
-          <StepTranscriptTail
-            key={kind}
-            workflowId={workflow.id}
-            step={kind}
-            access={{
-              kind: access.kind,
-              step: access.kind === "other-step" ? access.step : undefined,
-            }}
-            live={status.state === "running"}
-            isActive={isActive}
-            loadTranscript={loadStepTranscript}
-          />
+          {inspectorTranscriptTabs(
+            key,
+            <StepTranscriptTail
+              key={kind}
+              workflowId={workflow.id}
+              step={kind}
+              access={{
+                kind: access.kind,
+                step: access.kind === "other-step" ? access.step : undefined,
+              }}
+              live={status.state === "running"}
+              isActive={isActive}
+              assistantLabel={title}
+              containerId={containerId}
+              loadTranscript={loadStepTranscript}
+            />,
+            report,
+          )}
         </div>
       ),
       activityAt,
@@ -1011,8 +1170,15 @@ function MultiReviewOverviewTab({
       <p className="text-xs text-foreground/85">
         {findingCountLabel(workflow.consolidatedReport.issues.length, "issue")} ·{" "}
         {findingCountLabel(workflow.consolidatedReport.testCoverageGaps.length, "coverage gap")}.
-        The consolidated report is below.
       </p>
+    ) : null,
+    report: workflow.consolidatedReport ? (
+      <StructuredReviewReportView
+        report={workflow.consolidatedReport}
+        heading="Consolidated Multi Review"
+        collapsibleSections
+        sectionExpansionKey={`multi-review/${workflow.id}/consolidated-report-section`}
+      />
     ) : null,
   });
 
@@ -1042,6 +1208,98 @@ function MultiReviewOverviewTab({
       <p className="text-xs text-foreground/85">{workflow.fixResult.summary}</p>
     ) : null,
   });
+
+  const prStatus = pullRequestStep({
+    autoPr: workflow.autoPr === true,
+    launch: currentPrLaunch,
+    prUrl: prUrl,
+    prState: prState,
+    agentPhase: prAgentPhase,
+    upstreamComplete: cleanReviewPr
+      ? consolidationStatus.state === "complete"
+      : fixStatus.state === "complete",
+  });
+  const canOpenPrTab = workflow.autoPrLaunch?.state === "launched" && prTabOpen;
+  const prLaunchNotice = currentPrLaunch ? autoPrLaunchNotice(currentPrLaunch).text : null;
+  const prView: MultiReviewFlowNodeView = {
+    node: {
+      id: "pr",
+      kind: "pr",
+      title: "Pull request",
+      state: prStatus.state,
+      stalled: false,
+      statusLabel: prStatus.label,
+      detail: pullRequestDetail(prUrl, workflow.targetBranch),
+      runtime: null,
+      runtimeLabel: "Pull request",
+      pendingLabel: prStatus.pendingLabel,
+      statusWord: prStatus.statusWord,
+      error: prStatus.error,
+      canOpen: canOpenPrTab,
+      onOpen: openPrTab,
+      contextMenu: (
+        <>
+          <ContextMenuItem disabled={!canOpenPrTab} onSelect={openPrTab}>
+            <ExternalLink />
+            Open PR session
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!prUrl} onSelect={() => void viewPullRequest()}>
+            <GitPullRequest />
+            View pull request
+          </ContextMenuItem>
+        </>
+      ),
+    },
+    actions: (
+      <>
+        <SessionOpenButton
+          label="Open PR session"
+          title={
+            canOpenPrTab
+              ? "Show the PR agent's tab"
+              : workflow.autoPrLaunch?.state === "launched"
+                ? "The PR agent's tab is no longer open"
+                : "The PR agent has not been launched"
+          }
+          enabled={canOpenPrTab}
+          onOpen={openPrTab}
+        />
+        {prUrl ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className={INSPECTOR_BUTTON_CLASS}
+            title={prUrl}
+            onClick={() => void viewPullRequest()}
+          >
+            <GitPullRequest className="size-3.5" />
+            View pull request
+          </Button>
+        ) : null}
+      </>
+    ),
+    body: (
+      <div className="space-y-3">
+        <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-xs">
+          <dt className="text-muted-foreground">Target</dt>
+          <dd className="truncate font-mono">{workflow.targetBranch}</dd>
+          <dt className="text-muted-foreground">Pull request</dt>
+          <dd className="truncate">
+            {prUrl ? <span className="font-mono">{prUrl}</span> : "None detected yet"}
+          </dd>
+          <dt className="text-muted-foreground">Automatic</dt>
+          <dd>{workflow.autoPr === true ? "On" : "Off"}</dd>
+        </dl>
+        <p className="text-xs text-foreground/85">{prLaunchNotice ?? prStatus.label}</p>
+        {workflow.autoPrLaunch && !currentPrLaunch ? (
+          <p className="text-xs text-muted-foreground">
+            The previous automatic PR launch ({workflow.autoPrLaunch.state}) belongs to an earlier
+            review.
+          </p>
+        ) : null}
+      </div>
+    ),
+  };
 
   const reviewerRestartable =
     (workflow.phase === "reviewing" ||
@@ -1202,7 +1460,7 @@ function MultiReviewOverviewTab({
         </>
       ),
       body: (
-        <div className="space-y-3">
+        <div className="flex flex-1 flex-col space-y-3">
           <p className="truncate text-xs text-muted-foreground">
             {modelDetail(reviewer, true)} · Read only
             {runtime ? ` · ${formatRuntimeParts(runtime)}` : ""}
@@ -1221,15 +1479,29 @@ function MultiReviewOverviewTab({
               {note.text}
             </p>
           ) : null}
-          <ReviewerTranscriptTail
-            key={reviewer.id}
-            workflowId={workflow.id}
-            reviewerId={reviewer.id}
-            hasSession={Boolean(reviewer.providerSessionId)}
-            live={reviewer.status === "running" || reviewer.status === "pending"}
-            isActive={isActive}
-            loadTranscript={loadReviewerTranscript}
-          />
+          {inspectorTranscriptTabs(
+            `reviewer:${reviewer.id}`,
+            <ReviewerTranscriptTail
+              key={reviewer.id}
+              workflowId={workflow.id}
+              reviewerId={reviewer.id}
+              hasSession={Boolean(reviewer.providerSessionId)}
+              live={reviewer.status === "running" || reviewer.status === "pending"}
+              isActive={isActive}
+              assistantLabel={name}
+              containerId={containerId}
+              loadTranscript={loadReviewerTranscript}
+            />,
+            reviewer.report ? (
+              <StructuredReviewReportView
+                report={reviewer.report}
+                heading="Reviewer report"
+                collapsibleSections
+                showRawJson={false}
+                sectionExpansionKey={`multi-review/${workflow.id}/reviewer/${reviewer.id}/report-section`}
+              />
+            ) : null,
+          )}
           {findings ? <p className="text-xs text-muted-foreground">{findings}</p> : null}
           {provisional ? (
             <p
@@ -1245,8 +1517,8 @@ function MultiReviewOverviewTab({
     };
   });
 
-  const views = [packageView, ...reviewerViews, consolidationView, fixView];
-  const stage = { package: 0, reviewer: 1, consolidation: 2, fix: 3 } as const;
+  const views = [packageView, ...reviewerViews, consolidationView, fixView, prView];
+  const stage = { package: 0, reviewer: 1, consolidation: 2, fix: 3, pr: 4 } as const;
   const defaultSelectionId = defaultFlowSelection(
     views.map((view) => ({
       id: view.node.id,
@@ -1265,13 +1537,11 @@ function MultiReviewOverviewTab({
     reviewers: reviewerViews.map((view) => view.node.state),
     consolidation: consolidationView.node.state,
     fix: fixView.node.state,
+    pr: prView.node.state,
+    prFromConsolidation: cleanReviewPr,
   });
   const { findings, reviewerCount, provisionalCount } = mergeReviewerFindings(workflow.reviewers);
-  const elapsedSeconds = multiReviewElapsedSeconds(
-    workflow,
-    busy || views.some((view) => view.node.state === "running"),
-    reviewPanelNow,
-  );
+  const elapsedSeconds = multiReviewElapsedSeconds(workflow, hasLiveClock, reviewPanelNow);
   const totalTokens = multiReviewTotalTokens(workflow);
   const headerStalled = reviewSessionStalled || fixSessionStalled;
 
@@ -1425,7 +1695,10 @@ function MultiReviewOverviewTab({
 
       {/* A stable gutter keeps the graph's width, and so its zoom, from
           changing when the inspector grows enough to need a scrollbar. */}
-      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+      <div
+        data-testid="multi-review-overview-scroll"
+        className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+      >
         <div className="@container flex min-h-full flex-col">
           {notices.length > 0 ? (
             <div className="space-y-2 border-b border-divider px-4 py-3 sm:px-6">{notices}</div>
@@ -1435,6 +1708,7 @@ function MultiReviewOverviewTab({
             reviewerNodes={reviewerViews.map((view) => view.node)}
             consolidationNode={consolidationView.node}
             fixNode={fixView.node}
+            prNode={prView.node}
             edges={edges}
             reviewLabel={reviewerColumnLabel(workflow.reviewers)}
             reviewTitle={reviewerProgressSummary(workflow.reviewers)}
@@ -1445,43 +1719,32 @@ function MultiReviewOverviewTab({
             fullscreenContainer={tabRoot}
             isActive={isActive}
           />
-          <div className="grid min-h-80 flex-1 grid-cols-1 @min-[900px]:grid-cols-[1.3fr_1fr]">
+          {/* The body's row takes the rest of the window, so a transcript can
+              fill it down to the footer. */}
+          <div className="grid min-h-80 flex-1 grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_1fr] px-4 py-4 sm:px-6">
+            {/* Sits beside the inspector header, and stays in view while the
+                inspector scrolls. */}
+            <MultiReviewFindingsBadge
+              isActive={isActive}
+              findings={findings}
+              reviewerCount={reviewerCount}
+              provisionalCount={provisionalCount}
+              className="sticky top-3 z-20 col-start-2 row-span-2 row-start-1 ml-3 self-start"
+            />
             <section
               role="tabpanel"
               id={panelId}
               aria-labelledby={flowNodeElementId(panelId, selected.node.id)}
               data-testid="multi-review-inspector"
-              className="min-w-0 px-4 py-4 sm:px-6"
+              className="col-span-full row-span-2 row-start-1 grid min-w-0 grid-cols-subgrid grid-rows-subgrid"
             >
-              <MultiReviewInspectorHeader node={selected.node} actions={selected.actions} />
-              {selected.body}
+              <div className="col-start-1 row-start-1 min-w-0">
+                <MultiReviewInspectorHeader node={selected.node} actions={selected.actions} />
+              </div>
+              {/* Full width: the badge only overlaps it once stuck. */}
+              <div className="col-span-full row-start-2 flex min-w-0 flex-col">{selected.body}</div>
             </section>
-            <div className="min-w-0 border-t border-divider px-4 py-4 sm:px-6 @min-[900px]:border-t-0 @min-[900px]:border-l">
-              <MultiReviewFindingsPane
-                findings={findings}
-                reviewerCount={reviewerCount}
-                provisionalCount={provisionalCount}
-              />
-            </div>
           </div>
-          {workflow.consolidatedReport || workflow.fixResult ? (
-            <div className="space-y-4 border-t border-divider px-4 py-4 sm:px-6">
-              {workflow.consolidatedReport && (
-                <StructuredReviewReportView
-                  report={workflow.consolidatedReport}
-                  heading="Consolidated Multi Review"
-                  collapsibleSections
-                  sectionExpansionKey={`multi-review/${workflow.id}/consolidated-report-section`}
-                />
-              )}
-              {workflow.fixResult && (
-                <section className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4">
-                  <h2 className="text-sm font-semibold">Fix result</h2>
-                  <p className="mt-2 text-sm text-foreground/85">{workflow.fixResult.summary}</p>
-                </section>
-              )}
-            </div>
-          ) : null}
         </div>
       </div>
 

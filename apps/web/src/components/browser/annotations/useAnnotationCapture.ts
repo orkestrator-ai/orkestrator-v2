@@ -1,5 +1,6 @@
 /**
- * Capture transfer coordinator (plan step 04, renderer side).
+ * Capture transfer coordinator, renderer side ("Pending spool and
+ * acknowledged transfer" in docs/architecture/web-page-annotations.md).
  *
  * The desktop main process owns selection and a bounded pending spool that
  * survives renderer unmounts. This hook starts/cancels selection, follows the
@@ -14,7 +15,7 @@
  * operation ids. A save that failed for a domain reason (conflict, capacity,
  * validation) waits for the user instead of retrying.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   BROWSER_PREVIEW_CAPTURE_EVENT,
   type BrowserPreviewCaptureApi,
@@ -150,7 +151,9 @@ export function useAnnotationCapture({
 }) {
   const api: BrowserPreviewCaptureApi | null = enabled ? getBrowserPreviewCaptureApi() : null;
   const apiRef = useRef(api);
-  apiRef.current = api;
+  useLayoutEffect(() => {
+    apiRef.current = api;
+  }, [api]);
   const [selection, setSelection] = useState<BrowserPreviewSelectionStatus>({ status: "inactive" });
   const [pending, setPending] = useState<BrowserPreviewPendingCaptureDescriptor[]>([]);
   /** Committed records whose spool acknowledgement has not cleared yet. */
@@ -184,11 +187,11 @@ export function useAnnotationCapture({
     };
   }, []);
 
+  // Without a capture API there are no desktop capabilities. Cleared while
+  // rendering; the effect below only fetches them.
+  if (!api && desktopCapabilities !== null) setDesktopCapabilities(null);
   useEffect(() => {
-    if (!api) {
-      setDesktopCapabilities(null);
-      return;
-    }
+    if (!api) return;
     let cancelled = false;
     void getBrowserPreviewCaptureCapabilities()
       .then((capabilities) => {
@@ -395,7 +398,9 @@ export function useAnnotationCapture({
     [environmentId, finishCommitted, refreshExpired, refreshPending, runSave],
   );
   const resumeRef = useRef(resume);
-  resumeRef.current = resume;
+  useLayoutEffect(() => {
+    resumeRef.current = resume;
+  }, [resume]);
 
   const applyStatus = useCallback(
     (status: BrowserPreviewSelectionStatus) => {
@@ -499,6 +504,9 @@ export function useAnnotationCapture({
   // it. Pending captures, drafts, and committed threads are untouched.
   useEffect(() => {
     if (isActive || !selecting) return;
+    // Ends the native selection overlay (outside React); the inactive status
+    // it sets locally is that cancellation's own optimistic update.
+    // oxlint-disable-next-line react/set-state-in-effect
     void cancel();
   }, [cancel, isActive, selecting]);
   useEffect(

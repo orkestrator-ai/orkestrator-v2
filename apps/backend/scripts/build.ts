@@ -51,3 +51,76 @@ await copyResolvedPackage(
   path.join(packageRoot, "node_modules/playwright-core"),
   path.join(output, "node_modules/playwright-core"),
 );
+
+// Transcript-artifact preview runtime: the out-of-process preview worker and
+// the pinned browser bundles it (and the interactive preparer) load. Every
+// bundle is verified against its pinned SHA-256 here, so a packaged backend
+// can never ship bytes its manifest does not name.
+const { ALL_PINNED_BUNDLES, pinnedBundleCandidates, sha256Hex, writePinnedBundleLicenses } =
+  await import("../src/core/transcript-artifacts/dependency-manifest.ts");
+const artifactRuntime = path.join(output, "artifact-runtime");
+await mkdir(artifactRuntime, { recursive: true });
+for (const bundle of ALL_PINNED_BUNDLES) {
+  const source = pinnedBundleCandidates(
+    bundle,
+    path.join(packageRoot, "src/core/transcript-artifacts"),
+  ).at(-1)!;
+  const bytes = new Uint8Array(await Bun.file(await realpath(source)).arrayBuffer());
+  if (sha256Hex(bytes) !== bundle.sha256) {
+    console.error(`Pinned bundle ${bundle.id} does not match its manifest SHA-256`);
+    process.exit(1);
+  }
+  await Bun.write(path.join(artifactRuntime, bundle.distName), bytes);
+}
+const worker = await Bun.build({
+  entrypoints: [path.join(packageRoot, "src/core/transcript-artifacts/preview-worker-entry.ts")],
+  outdir: artifactRuntime,
+  naming: "preview-worker.js",
+  target: "bun",
+  external: ["playwright-core"],
+});
+if (!worker.success) {
+  for (const log of worker.logs) console.error(log);
+  process.exit(1);
+}
+await cp(
+  path.join(packageRoot, "../../docker/artifact-preview-worker/seccomp_profile.json"),
+  path.join(artifactRuntime, "seccomp_profile.json"),
+);
+// License texts ship beside the bundles: artifact-runtime/licenses/<id>/ and
+// artifact-runtime/THIRD_PARTY_NOTICES.txt.
+await writePinnedBundleLicenses(
+  artifactRuntime,
+  path.join(packageRoot, "src/core/transcript-artifacts"),
+);
+
+// Container preview worker build context, so a packaged backend can build the
+// worker image on demand (`transcript_artifact_prepare_worker`) with no
+// repository checkout: exactly what docker/artifact-preview-worker/build.sh
+// stages (Dockerfile, npm manifest and lockfile, Node worker bundle,
+// hash-verified pinned bundles, licenses), plus the seccomp profile the
+// supervisor passes to `docker run`, and the published-image digest pin.
+const workerDocker = path.join(packageRoot, "../../docker/artifact-preview-worker");
+const workerContext = path.join(artifactRuntime, "worker-context");
+const staged = Bun.spawnSync(
+  [process.execPath, path.join(workerDocker, "stage-context.ts"), workerContext],
+  { stdout: "ignore", stderr: "inherit" },
+);
+if (staged.exitCode !== 0) {
+  console.error("Staging the preview worker build context failed");
+  process.exit(1);
+}
+for (const file of ["Dockerfile", "package.json", "package-lock.json", "preview-worker.mjs"]) {
+  if (!(await Bun.file(path.join(workerContext, file)).exists())) {
+    console.error(`Preview worker build context is missing ${file}`);
+    process.exit(1);
+  }
+}
+await cp(
+  path.join(workerDocker, "seccomp_profile.json"),
+  path.join(workerContext, "seccomp_profile.json"),
+);
+await cp(
+  path.join(workerDocker, "published-image.json"),
+  path.join(artifactRuntime, "published-image.json"),
+);

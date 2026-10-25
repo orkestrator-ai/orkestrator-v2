@@ -41,6 +41,7 @@ import { BuildPipelineLifecycle } from "./build-pipeline-service-lifecycle.js";
 import { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
 import type { StorageService } from "./storage.js";
+import { WorkflowTranscriptArtifacts } from "./workflow-transcript-artifacts.js";
 import type {
   KeyedWorkflowOwner,
   WorkflowReconcileReport,
@@ -57,6 +58,7 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
   private readonly interactions: BuildPipelineInteractions;
   private readonly stageSupervisor: BuildPipelineSupervisor;
   private readonly lifecycle: BuildPipelineLifecycle;
+  private readonly transcriptArtifacts: WorkflowTranscriptArtifacts;
 
   constructor(
     storage: StorageService,
@@ -64,6 +66,7 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
     options: BuildPipelineServiceOptions = {},
   ) {
     this.context = new BuildPipelineContext(storage, invoke, options);
+    this.transcriptArtifacts = new WorkflowTranscriptArtifacts(options.artifactLedger);
     this.agents = new BuildPipelineAgents(this.context);
     // Completing a stage opens the next one, so recovery calls back into the
     // supervisor that calls it. Bound late: the supervisor is built below.
@@ -72,6 +75,7 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
       dispatchPending: (...args) => this.stageSupervisor.dispatchPending(...args),
       assertValidationWorktreeUnchanged: (...args) =>
         this.stageSupervisor.assertValidationWorktreeUnchanged(...args),
+      remindMissingStageResult: (...args) => this.stageSupervisor.remindMissingStageResult(...args),
     });
     this.interactions = new BuildPipelineInteractions(this.context, this.agents, this.recovery);
     this.stageSupervisor = new BuildPipelineSupervisor(
@@ -179,6 +183,18 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
 
   retryCompletionComment(pipelineId: string): Promise<BuildPipeline> {
     return this.lifecycle.retryCompletionComment(pipelineId);
+  }
+
+  // -------------------------------------------------------------------------
+  // Transcript reads
+
+  /**
+   * A stage transcript's rows with each publication of that stage session's
+   * conversation placed beside the call that published it
+   * (`workflow-transcript-artifacts.ts`). The session key is the conversation.
+   */
+  placeStageArtifacts(environmentId: string, sessionKey: string, rows: unknown[]): unknown[] {
+    return this.transcriptArtifacts.place(environmentId, sessionKey, rows);
   }
 
   // -------------------------------------------------------------------------

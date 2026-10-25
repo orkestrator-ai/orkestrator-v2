@@ -30,6 +30,7 @@ import type {
 import {
   agentDirectory,
   CATALOG_TIMEOUT_MS,
+  fallbackDefaultModelId,
   MAX_RESUME_ENTRIES,
   sessionDirectory,
   workingDirectory,
@@ -63,6 +64,7 @@ import {
 } from "./pi-sdk.js";
 import {
   catalogReadFailed,
+  composeModelId,
   hydrateComposer,
   reconcileComposerSelection,
   resolveModel,
@@ -71,7 +73,7 @@ import {
 } from "./models.js";
 import { modelRuntime } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
-import { applySessionEvent } from "./translate.js";
+import { applySessionEvent, providerDuration, replayNestedToolCalls } from "./translate.js";
 import { boundTranscript, chargeTranscript, forgetRevisedRows } from "./transcript.js";
 import { renderToolCall } from "./tool-rendering.js";
 import { newSessionState } from "./session-factory.js";
@@ -161,13 +163,54 @@ export function expireComposerHydrationRetryForTests(state: SessionState): void 
 
 function hydrateComposerForSession(
   composer: SessionState["composer"],
-  defaults?: ThinkingLevelDefaults,
+  defaults: ThinkingLevelDefaults | undefined,
+  preferredModelIds: readonly string[],
 ): ReturnType<typeof hydrateComposer> {
-  return (agentSessionTestHooks.hydrateComposer ?? hydrateComposer)(composer, defaults);
+  return (agentSessionTestHooks.hydrateComposer ?? hydrateComposer)(
+    composer,
+    defaults,
+    preferredModelIds,
+  );
 }
 
-function resolveModelForSession(modelId: string | undefined): ReturnType<typeof resolveModel> {
-  return (agentSessionTestHooks.resolveModel ?? resolveModel)(modelId);
+function resolveModelForSession(
+  modelId: string | undefined,
+  preferredModelIds: readonly string[],
+): ReturnType<typeof resolveModel> {
+  return (agentSessionTestHooks.resolveModel ?? resolveModel)(modelId, preferredModelIds);
+}
+
+/**
+ * Where a session with no explicit model starts, best first, as
+ * `provider/modelId`.
+ *
+ * Pi's saved default comes first: it is what `/model` writes in a Pi terminal
+ * tab and what `pi` itself starts on, so a native tab and a terminal agree.
+ * Without it the bridge started on the catalogue's first model, which a login
+ * may not be allowed to use. The backend's fallback follows, which only an
+ * agent-test profile sharing the host's login receives. Project settings count
+ * only when the session trusts the project, the same rule its resources follow.
+ * The callers fall back to the catalogue's first model after these.
+ */
+export function defaultModelIds(
+  state: Pick<SessionState, "policy" | "readOnly">,
+  cwd: string = workingDirectory,
+  agentDir: string = agentDirectory() ?? getAgentDir(),
+): string[] {
+  const ids: string[] = [];
+  try {
+    const settings = SettingsManager.create(cwd, agentDir, {
+      projectTrusted: piResourceLoaderPolicy(state).projectTrusted,
+    });
+    const provider = settings.getDefaultProvider()?.trim();
+    const model = settings.getDefaultModel()?.trim();
+    if (provider && model) ids.push(composeModelId(provider, model));
+  } catch {
+    // Unreadable settings name no default; the fallbacks still apply.
+  }
+  const fallback = fallbackDefaultModelId();
+  if (fallback && !ids.includes(fallback)) ids.push(fallback);
+  return ids;
 }
 
 /**
@@ -226,7 +269,11 @@ export async function hydrateSessionComposer(
 
   const operation = (async () => {
     if (settled) await settled;
-    const hydrated = await hydrateComposerForSession(state.composer);
+    const hydrated = await hydrateComposerForSession(
+      state.composer,
+      undefined,
+      defaultModelIds(state),
+    );
     if (hydrated.models.length === 0) {
       composerHydrationRetryAfter.set(state, Date.now() + CATALOG_TIMEOUT_MS);
       // An empty list from a read that *failed* is not evidence that the
@@ -310,7 +357,11 @@ export async function createSession(
     // path does not send.
     if (resolved.id === "coordinator-read-only") state.readOnly = true;
     applyComposerPatch(state, patch);
-    state.composer = await hydrateComposerForSession(state.composer);
+    state.composer = await hydrateComposerForSession(
+      state.composer,
+      undefined,
+      defaultModelIds(state),
+    );
     sessions.set(state.id, state);
     if (clientSessionKey) clientSessionKeys.set(clientSessionKey, state.id);
     return state;
@@ -463,10 +514,12 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
       settingsManager,
       modelRuntime: runtime,
     });
-    const model = await resolveModelForSession(state.composer.selectedModelId);
+    const preferredModelIds = defaultModelIds(state, cwd, runtimeAgentDir);
+    const model = await resolveModelForSession(state.composer.selectedModelId, preferredModelIds);
     state.composer = await hydrateComposerForSession(
       state.composer,
       thinkingDefaults(settingsManager),
+      preferredModelIds,
     );
     const created = await createAgentSessionFromServices({
       services,
@@ -593,11 +646,16 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
     applySessionEvent(state, event);
     // Every call that ran was already measured in the `tool_result` hook,
     // which precedes this frame. What is left open here never ran.
-    if (event.type === "tool_execution_end") discardToolCall(state, event.toolCallId);
+    if (event.type === "tool_execution_end") {
+      discardToolCall(state, event.toolCallId, event.result);
+    }
   });
   // A fresh runtime loaded its resources from scratch, so this read is also
   // the reload any refresh deferred while the session was detached or busy.
   state.commandReloadPending = false;
+  // The attached list replaces any resource-only preview, and a preview still
+  // reading must not publish over it.
+  state.commandPreview = undefined;
   readSessionCommandCatalogue(state, session);
   // The catalogue read at create time may have preceded a provider signing in.
   // Re-selecting from the live session is what makes the picker agree with what
@@ -797,8 +855,6 @@ function applyPiToolPolicy(
   session.setActiveToolsByName(active);
 }
 
-let warnedLegacyPolicy = false;
-
 /** Provider-neutral process authority, matching the other bridges. */
 export const BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";
 
@@ -824,35 +880,19 @@ export function resolvePiExecutionPolicy(
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy {
   // Process authority first: a coordinator bridge serves exactly one
-  // conversation, so nothing a caller sends may widen what it runs under, and
-  // the legacy env overrides below must not loosen it either.
+  // conversation, so nothing a caller sends may widen what it runs under.
   if (process.env[BRIDGE_EXECUTION_POLICY_ENV] === "coordinator-read-only") {
     return coordinatorProcessPolicy();
   }
-  const fallback =
-    policy ??
-    ({
+  return (
+    policy ?? {
       id: "interactive-host",
       sandbox: "provider",
       approvals: "auto-approve",
       projectResources: false,
       networkAccess: "full",
-    } as const);
-  const approvalOverride = process.env.PI_BRIDGE_REQUIRE_APPROVAL;
-  const resourcesOverride = process.env.PI_BRIDGE_PROJECT_RESOURCES;
-  if ((approvalOverride !== undefined || resourcesOverride !== undefined) && !warnedLegacyPolicy) {
-    warnedLegacyPolicy = true;
-    console.warn(
-      "[pi-bridge] PI_BRIDGE_REQUIRE_APPROVAL/PI_BRIDGE_PROJECT_RESOURCES are deprecated; configure the session execution policy instead.",
-    );
-  }
-  return {
-    ...fallback,
-    ...(approvalOverride !== undefined
-      ? { approvals: approvalOverride === "1" ? "ask" : "auto-approve" }
-      : {}),
-    ...(resourcesOverride !== undefined ? { projectResources: resourcesOverride === "1" } : {}),
-  };
+    }
+  );
 }
 
 /**
@@ -1040,7 +1080,10 @@ export function applyComposerPatch(state: SessionState, patch: ComposerPatch | u
 export async function applyComposerToSession(state: SessionState): Promise<void> {
   const session = state.session;
   if (!session) return;
-  const model = await resolveModelForSession(state.composer.selectedModelId);
+  const model = await resolveModelForSession(
+    state.composer.selectedModelId,
+    defaultModelIds(state),
+  );
   const persist = state.persistComposerDefaults === true;
   state.persistComposerDefaults = false;
   if (
@@ -1211,7 +1254,11 @@ export async function resumeSession(
     const state = newSessionState(undefined, resolvePiExecutionPolicy(policy));
     state.sessionFile = resolved;
     applyComposerPatch(state, patch);
-    state.composer = await hydrateComposerForSession(state.composer);
+    state.composer = await hydrateComposerForSession(
+      state.composer,
+      undefined,
+      defaultModelIds(state),
+    );
     hydrateHistory(state);
     await overlayCommandChanges(state);
     sessions.set(state.id, state);
@@ -1568,6 +1615,9 @@ function applyHistoricToolResult(state: SessionState, message: ToolResultMessage
       if (rendered.toolOutput !== undefined) part.toolOutput = rendered.toolOutput;
       if (rendered.toolError !== undefined) part.toolError = rendered.toolError;
       part.toolState = rendered.toolError === undefined ? "success" : "failure";
+      const durationMs = providerDuration(message.durationMs);
+      if (durationMs !== undefined) part.toolDurationMs = durationMs;
+      replayNestedToolCalls(state.messages[index]!, toolCallId, message.nestedCalls);
       return;
     }
   }

@@ -23,13 +23,13 @@
   "rules": {
     "no-unused-vars": "warn",
     "no-control-regex": "off",
-    "react/refs": "warn",
-    "react/set-state-in-effect": "warn",
-    "react/immutability": "warn",
-    "react/preserve-manual-memoization": "warn",
-    "react/globals": "warn",
-    "react/purity": "warn",
-    "react/use-memo": "warn",
+    "react/refs": "error",
+    "react/set-state-in-effect": "error",
+    "react/immutability": "error",
+    "react/preserve-manual-memoization": "error",
+    "react/globals": "error",
+    "react/purity": "error",
+    "react/use-memo": "error",
     "import/no-cycle": "error",
     "import/no-mutable-exports": "error",
     "no-restricted-imports": [
@@ -83,6 +83,53 @@
               }
             ],
             "patterns": [
+              {
+                "group": ["node:*", "bun:*"],
+                "message": "The renderer runs in a browser; keep Node and Bun APIs out of its bundle."
+              },
+              {
+                "group": ["@orkestrator/protocol/node/*"],
+                "allowTypeImports": true,
+                "message": "Node-only protocol module; the renderer may import its types only."
+              },
+              {
+                "group": ["@orkestrator/protocol/testing/*"],
+                "message": "Test fixtures and fakes are for tests only."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/web/src/lib/federation/**", "apps/web/src/components/federation/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@/lib/native/backend",
+                "message": "Multi-machine views reach other nodes only through the portal (lib/portal), which the command node routes; never call commands directly from here."
+              },
+              {
+                "name": "@/lib/backend",
+                "message": "Multi-machine views reach other nodes only through the portal (lib/portal), which the command node routes."
+              },
+              {
+                "name": "@/lib/native/events",
+                "message": "The window's events come from its workspace, which may be a leaf; multi-machine views listen through the portal channel (lib/portal/portal-transport)."
+              },
+              {
+                "name": "@/lib/native/authoritative-events",
+                "message": "The window's events come from its workspace, which may be a leaf; multi-machine views listen through the portal channel (lib/portal/portal-transport)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@/lib/backend/*"],
+                "message": "Multi-machine views reach other nodes only through the portal (lib/portal)."
+              },
               {
                 "group": ["node:*", "bun:*"],
                 "message": "The renderer runs in a browser; keep Node and Bun APIs out of its bundle."
@@ -184,12 +231,6 @@
     {
       "files": [
         "apps/backend/src/core/bridge-session-close.ts",
-        "apps/backend/src/core/commands-agent-support.ts",
-        "apps/backend/src/core/commands-container-exec.ts",
-        "apps/backend/src/core/commands-files.ts",
-        "apps/backend/src/core/commands-pr-monitor.ts",
-        "apps/backend/src/core/commands-runtime-state.ts",
-        "apps/backend/src/core/commands-servers.ts",
         "apps/backend/src/core/control-mcp-server.ts",
         "apps/backend/src/core/coordinator-service.ts",
         "apps/backend/src/core/extension-discovery.ts",

@@ -7,6 +7,7 @@
  * expensive paths it no longer takes: legacy full-transcript reads, joined
  * projection refreshes and interactive snapshots.
  */
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { describe, expect, mock, test } from "bun:test";
 import {
   bridgeTranscriptPage,
@@ -21,6 +22,7 @@ import type {
 import { applyNativeAgentTranscriptDelta } from "@orkestrator/protocol/native-agent";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import { collaborators, projectionInternals } from "./native-agent-service-test-collaborators.js";
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 
@@ -249,6 +251,8 @@ describe("summary transcripts", () => {
         if (update.status !== "snapshot") throw new Error("expected a snapshot");
         expect(update.value.historyPaging).toBe("direct");
         expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
+        const before =
+          compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0;
         let cursor = update.value.historyCursor;
         const seen: string[] = [];
         let pages = 0;
@@ -266,6 +270,9 @@ describe("summary transcripts", () => {
           if (!cursor) expect(page.complete).toBe(true);
         }
         expect(pages).toBe(3);
+        expect(compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0).toBe(
+          before,
+        );
         expect(seen).toEqual(history.messages.slice(0, 150).map((entry) => entry.id));
         // Give any stray background hydration a chance to have run.
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -536,15 +543,12 @@ describe("remote detail reads", () => {
         });
         release!();
         await expect(pending).rejects.toThrow("no longer available");
-        const cache = service as unknown as {
-          toolDetailCache: Map<string, { bytes: number }>;
-          toolDetailCacheBytes: number;
-        };
+        const cache = projectionInternals(service);
         const counted = Array.from(cache.toolDetailCache.values()).reduce(
           (total, entry) => total + entry.bytes,
           0,
         );
-        expect(cache.toolDetailCacheBytes).toBe(counted);
+        expect(cache.toolDetailCacheBytes()).toBe(counted);
         // The row was re-registered by the newer read; the stale read's
         // failure must not remove that fresh reference.
         expect(cache.toolDetailCache.has(detailRef)).toBe(true);
@@ -606,7 +610,7 @@ describe("direct history page cache", () => {
         expect(stub.transcriptPage).toHaveBeenCalledTimes(1);
         // Even with every detail reference evicted, the cached page is served
         // and re-registers the provider-held references it carries.
-        (service as unknown as { toolDetailCache: Map<string, unknown> }).toolDetailCache.clear();
+        projectionInternals(service).toolDetailCache.clear();
         const second = await service.getMessagePage({ ...identity, syncVersion: 1, before });
         expect(stub.transcriptPage).toHaveBeenCalledTimes(1);
         expect(JSON.stringify(second)).toBe(JSON.stringify(first));
@@ -632,9 +636,7 @@ describe("direct history page cache", () => {
         const before = await firstCursor(service);
         await service.getMessagePage({ ...identity, syncVersion: 1, before });
         // A rewind (session action) invalidates the session's pages.
-        (service as unknown as { invalidateProjection(key: string): void }).invalidateProjection(
-          sessionKeyOf(),
-        );
+        collaborators(service).projections.invalidateProjection(sessionKeyOf());
         await service.getMessagePage({ ...identity, syncVersion: 1, before });
         expect(stub.transcriptPage).toHaveBeenCalledTimes(2);
 
@@ -791,9 +793,7 @@ describe("direct history page cache", () => {
         expect(stub.transcriptPage).toHaveBeenCalledTimes(2);
         await service.getMessagePage({ ...identity, syncVersion: 1, before, limit: 60 });
         expect(stub.transcriptPage).toHaveBeenCalledTimes(3);
-        const cache = (
-          service as unknown as { directHistoryPages: { bytes: number; size: number } }
-        ).directHistoryPages;
+        const cache = projectionInternals(service).directHistoryPages;
         expect(cache.size).toBe(1);
         expect(cache.bytes).toBeLessThanOrEqual(40 * 1024);
       },

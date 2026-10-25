@@ -1,0 +1,78 @@
+/**
+ * The `orkestrator` command that runs each public action, for callers that
+ * cannot import the CLI (Control MCP's `describe_action`).
+ *
+ * The CLI's command table is the source: each `CommandSpec` names its action,
+ * and `packages/cli/tests/command-actions.test.ts` fails unless this
+ * table equals the first command, in table order, that names each action.
+ * `capabilities` has no command of its own (`connection check` reads it).
+ */
+
+import type { PublicActionName } from "./public-api.js";
+
+export const PUBLIC_ACTION_CLI_COMMANDS: Readonly<Record<PublicActionName, string | null>> =
+  Object.freeze({
+    capabilities: null,
+    "project.list": "orkestrator project list",
+    "project.get": "orkestrator project get",
+    "project.add": "orkestrator project add",
+    "project.create": "orkestrator project create",
+    "project.update": "orkestrator project update",
+    "project.remove": "orkestrator project remove",
+    "project.init": "orkestrator project init",
+    "project.config.get": "orkestrator project config get",
+    "project.config.set": "orkestrator project config set",
+    "environment.list": "orkestrator environment list",
+    "environment.get": "orkestrator environment get",
+    "environment.create": "orkestrator environment create",
+    "environment.start": "orkestrator environment start",
+    "environment.stop": "orkestrator environment stop",
+    "environment.recreate": "orkestrator environment recreate",
+    "environment.delete": "orkestrator environment delete",
+    "environment.fork": "orkestrator environment fork",
+    "environment.rename": "orkestrator environment rename",
+    "environment.config.get": "orkestrator environment config get",
+    "environment.config.set": "orkestrator environment config set",
+    "environment.launch": "orkestrator environment launch",
+    "environment.exec": "orkestrator environment exec",
+    "agent.options": "orkestrator agent options",
+    "session.list": "orkestrator session list",
+    "session.get": "orkestrator session get",
+    "session.start": "orkestrator session start",
+    "session.prompt": "orkestrator session prompt",
+    "session.commands": "orkestrator session commands",
+    "session.command": "orkestrator session command",
+    "session.stop": "orkestrator session stop",
+    "session.steer": "orkestrator session steer",
+    "session.config.get": "orkestrator session config get",
+    "session.config.set": "orkestrator session config set",
+    "session.history": "orkestrator session history",
+    "session.resume": "orkestrator session resume",
+    "session.fork": "orkestrator session fork",
+    "session.interactions": "orkestrator session interactions list",
+    "session.interaction.resolve": "orkestrator session interactions resolve",
+    "session.transcript": "orkestrator session transcript",
+    "changes.view": "orkestrator changes view",
+    "changes.history": "orkestrator changes history",
+    "attention.list": "orkestrator attention",
+    "ticket.list": "orkestrator ticket list",
+    "ticket.get": "orkestrator ticket get",
+    "ticket.create": "orkestrator ticket create",
+    "ticket.update": "orkestrator ticket update",
+    "ticket.comment": "orkestrator ticket comment",
+    "mail.mailboxes": "orkestrator mail mailboxes",
+    "mail.send": "orkestrator mail send",
+    "run.get": "orkestrator run get",
+    "run.retry": "orkestrator run retry",
+    "run.discard": "orkestrator run discard",
+    "run.cancel": "orkestrator run cancel",
+    "run.output": "orkestrator run output",
+    "host.status": "orkestrator host status",
+    "host.update.channel": "orkestrator host update channel",
+    "host.update.check": "orkestrator host update check",
+    "host.update.apply": "orkestrator host update apply",
+    "host.update.cancel": "orkestrator host update cancel",
+    "host.toolchain.repair": "orkestrator host toolchain repair",
+    "host.image.update": "orkestrator host image update",
+    "host.gh.update": "orkestrator host gh latest",
+  });

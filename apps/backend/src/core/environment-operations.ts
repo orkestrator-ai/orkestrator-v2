@@ -1,0 +1,214 @@
+import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import type { ClientEnvironment, Environment } from "./models.js";
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+
+export type EnvironmentSetupSession = {
+  environmentId: string;
+  sessionId: string;
+  running: boolean;
+  startedAt: string;
+  completedAt?: string;
+  success?: boolean;
+  error?: string;
+  /** Whether the retained setup session has any transcript to replay. */
+  hasOutput?: boolean;
+};
+
+export type EnvironmentSetupStartResult = {
+  setupStarted: boolean;
+  setupSessionId?: string;
+  environment: Environment;
+};
+
+export type ClientEnvironmentSetupStartResult = Omit<EnvironmentSetupStartResult, "environment"> & {
+  environment: ClientEnvironment;
+};
+
+/**
+ * In-flight environment work of one backend instance: setup sessions, the
+ * start/setup/baseline dedupe tasks, the per-environment lifecycle queue and
+ * the delete and merge guards, and the replacement and move fence (`fence`).
+ * Owned by `BackendRuntime` and reached through `context.runtime.environments`
+ * at call time.
+ *
+ * `EnvironmentLifecycleTaskTracker` stays separate: it decides whether work
+ * may be admitted at all and drains it on shutdown, while this class decides
+ * how admitted work for one environment is ordered and deduplicated.
+ */
+export class EnvironmentOperations {
+  /** Replacement, move and mutation admission (`environment-replacement-fence.ts`). */
+  readonly fence = new EnvironmentMutationFence();
+
+  private readonly setupSessions = new Map<string, EnvironmentSetupSession>();
+  private readonly setupTasks = new Map<string, Promise<Environment>>();
+  private readonly setupStartTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();
+  private readonly startTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();
+  private readonly lifecycleQueue = new Map<string, Promise<void>>();
+  private readonly baselineTasks = new Map<string, Promise<Environment>>();
+  private readonly deleting = new Set<string>();
+  private readonly merging = new Set<string>();
+  private readonly mergeCleanupRecoveries = new Map<string, Promise<void>>();
+
+  // Setup sessions and tasks
+
+  setupSession(environmentId: string): EnvironmentSetupSession | undefined {
+    return this.setupSessions.get(environmentId);
+  }
+
+  hasSetupSession(environmentId: string): boolean {
+    return this.setupSessions.has(environmentId);
+  }
+
+  recordSetupSession(session: EnvironmentSetupSession): void {
+    this.setupSessions.set(session.environmentId, session);
+  }
+
+  setupTask(environmentId: string): Promise<Environment> | undefined {
+    return this.setupTasks.get(environmentId);
+  }
+
+  /** Publishes the running setup; it removes itself once it settles. */
+  trackSetupTask(environmentId: string, task: Promise<Environment>): Promise<Environment> {
+    const tracked = task.finally(() => {
+      this.setupTasks.delete(environmentId);
+    });
+    this.setupTasks.set(environmentId, tracked);
+    return tracked;
+  }
+
+  /** Joins the environment's in-flight setup start, or begins one. */
+  joinSetupStart(
+    environmentId: string,
+    start: () => Promise<EnvironmentSetupStartResult>,
+  ): Promise<EnvironmentSetupStartResult> {
+    return dedupe(this.setupStartTasks, environmentId, start);
+  }
+
+  /** Joins the environment's in-flight baseline capture, or begins one. */
+  joinBaselineCapture(
+    environmentId: string,
+    capture: () => Promise<Environment>,
+  ): Promise<Environment> {
+    return dedupe(this.baselineTasks, environmentId, capture);
+  }
+
+  /** Drops setup bookkeeping when the owning environment is removed. */
+  forgetSetupState(environmentId: string): void {
+    this.setupSessions.delete(environmentId);
+    this.setupTasks.delete(environmentId);
+    this.setupStartTasks.delete(environmentId);
+    this.baselineTasks.delete(environmentId);
+  }
+
+  // Starts and the lifecycle queue
+
+  isStarting(environmentId: string): boolean {
+    return this.startTasks.has(environmentId);
+  }
+
+  /** Joins the environment's in-flight start, or begins one. */
+  joinStart(
+    environmentId: string,
+    start: () => Promise<EnvironmentSetupStartResult>,
+  ): Promise<EnvironmentSetupStartResult> {
+    return dedupe(this.startTasks, environmentId, start);
+  }
+
+  /**
+   * Once a conflicting operation has been admitted, a later start must queue
+   * behind it instead of joining an earlier start that will be stopped/deleted.
+   */
+  invalidateStartDedupe(environmentId: string): void {
+    this.startTasks.delete(environmentId);
+  }
+
+  /** A start or another lifecycle operation is queued or running. */
+  hasLifecycleWork(environmentId: string): boolean {
+    return this.lifecycleQueue.has(environmentId) || this.startTasks.has(environmentId);
+  }
+
+  /**
+   * Serializes all resource-changing lifecycle operations for one environment.
+   *
+   * The queue tail always settles successfully so one failed operation cannot
+   * poison retries. Callers still receive the original result/rejection.
+   */
+  enqueueLifecycleOperation<T>(
+    environmentId: string,
+    tasks: EnvironmentLifecycleTaskTracker,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.lifecycleQueue.get(environmentId) ?? Promise.resolve();
+    const result = tasks.admit(() => previous.then(operation, operation));
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.lifecycleQueue.set(environmentId, tail);
+    void tail.finally(() => {
+      if (this.lifecycleQueue.get(environmentId) === tail) {
+        this.lifecycleQueue.delete(environmentId);
+      }
+    });
+    return result;
+  }
+
+  // Delete and merge guards
+
+  isDeleting(environmentId: string): boolean {
+    return this.deleting.has(environmentId);
+  }
+
+  assertNotDeleting(environmentId: string | undefined): void {
+    if (environmentId && this.deleting.has(environmentId)) {
+      throw new Error(`Environment is being deleted: ${environmentId}`);
+    }
+  }
+
+  /** Reserves the delete tombstone; false when a delete already holds it. */
+  beginDelete(environmentId: string): boolean {
+    if (this.deleting.has(environmentId)) return false;
+    this.deleting.add(environmentId);
+    return true;
+  }
+
+  endDelete(environmentId: string): void {
+    this.deleting.delete(environmentId);
+  }
+
+  isMerging(environmentId: string): boolean {
+    return this.merging.has(environmentId);
+  }
+
+  /** Reserves the merge guard; false when a merge already holds it. */
+  beginMerge(environmentId: string): boolean {
+    if (this.merging.has(environmentId)) return false;
+    this.merging.add(environmentId);
+    return true;
+  }
+
+  endMerge(environmentId: string): void {
+    this.merging.delete(environmentId);
+  }
+
+  /** Runs one merge-cleanup recovery per environment at a time. */
+  scheduleMergeCleanupRecovery(environmentId: string, recover: () => Promise<void>): void {
+    if (this.mergeCleanupRecoveries.has(environmentId)) return;
+    const task = recover().finally(() => {
+      if (this.mergeCleanupRecoveries.get(environmentId) === task) {
+        this.mergeCleanupRecoveries.delete(environmentId);
+      }
+    });
+    this.mergeCleanupRecoveries.set(environmentId, task);
+  }
+}
+
+function dedupe<T>(tasks: Map<string, Promise<T>>, key: string, run: () => Promise<T>): Promise<T> {
+  const existing = tasks.get(key);
+  if (existing) return existing;
+  const task = run().finally(() => {
+    if (tasks.get(key) === task) tasks.delete(key);
+  });
+  tasks.set(key, task);
+  return task;
+}

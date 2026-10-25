@@ -11,6 +11,9 @@ import {
   type ResourceResyncRequest,
 } from "@/lib/resource-sync";
 import { listen, type UnlistenFn } from "@/lib/native/events";
+import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
+import { settingsOnCommandNode } from "@/lib/portal/command-node-config";
+import { portalListen } from "@/lib/portal/portal-transport";
 import { adoptPersistedPaneLayout, onPaneLayoutWriteSettled } from "@/lib/pane-layout-persistence";
 import {
   commitBuildPipelineSetupHandoff,
@@ -45,7 +48,7 @@ import {
   useProjectStore,
 } from "@/stores/projectStore";
 import { useSessionStore } from "@/stores/sessionStore";
-import { useAgentMailStore } from "@/stores/agentMailStore";
+import { refreshObservedAgentMailMailboxes, useAgentMailStore } from "@/stores/agentMailStore";
 import type { ResourceManifestKind } from "@orkestrator/protocol/resource-events";
 
 /**
@@ -122,15 +125,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     if (!disposed) {
       const store = useAgentMailStore.getState();
       store.setSummary(snapshot);
-      const addresses = Array.from(
-        new Map(
-          Array.from(store.sent.values()).map(({ environmentId, tabId }) => [
-            `${environmentId}\0${tabId}`,
-            { environmentId, tabId },
-          ]),
-        ).values(),
-      );
-      if (addresses.length > 0) await store.refreshMailboxes(addresses);
+      await refreshObservedAgentMailMailboxes();
     }
   };
 
@@ -518,6 +513,22 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
       return refreshConfig();
     }),
   );
+
+  // On a leaf window the settings are the command node's: follow its changes too.
+  if (settingsOnCommandNode()) {
+    let stopCommandNodeConfig: UnlistenFn | null = null;
+    void portalListen<{ resource?: unknown }>(RESOURCE_CHANGED_EVENT, (event) => {
+      if (!disposed && event.payload?.resource === "config") {
+        void refreshConfig().catch(() => undefined);
+      }
+    })
+      .then((stop) => {
+        if (disposed) stop();
+        else stopCommandNodeConfig = stop;
+      })
+      .catch(() => undefined);
+    unsubscribes.push(() => stopCommandNodeConfig?.());
+  }
 
   unsubscribes.push(
     onResourceChanged("kanban", ({ id: projectId }) => {

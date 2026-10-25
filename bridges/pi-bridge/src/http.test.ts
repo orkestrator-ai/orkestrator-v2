@@ -42,6 +42,7 @@ const { loadPersistedState, setPersistWriteGateForTests } = await import("./pers
 const { applySessionEvent } = await import("./translate.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 const { buildCommandCatalogue, publishCommandCatalogue } = await import("./commands.js");
+const { setCommandPreviewReaderForTests } = await import("./command-preview.js");
 const { NOT_AUTHENTICATED_MESSAGE } = await import("./credentials.js");
 const { requestToolApproval, resolveApproval } = await import("./interactions.js");
 const { approvalTimeoutMs } = await import("./config.js");
@@ -308,12 +309,10 @@ describe("authorized global routes", () => {
     }
   });
 
-  test("serves an empty global list: Pi's commands are per session", async () => {
-    // `/compact` is no longer advertised here: `session.prompt` does not run
-    // Pi's interactive builtins, and compaction is the backend's session action.
+  test("serves no legacy global command list: Pi's commands are per session", async () => {
+    // Retired with the backend's global fallback. It answered an empty list.
     const response = await call("/plugins/commands");
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ commands: [] });
+    expect(response.status).toBe(404);
   });
 });
 
@@ -2622,18 +2621,27 @@ describe("at-most-once dispatch", () => {
     expect(await response.json()).toEqual({ dispatch: "dispatched" });
   });
 
-  test("reports a record that predates a restart as unknown, never dispatched", async () => {
+  test("reports a record that predates a restart as lost, never dispatched", async () => {
     const state = seedSession();
     state.promptJournal.set("req-1", {
       requestId: "req-1",
       state: "ambiguous",
       acceptedAt: Date.now(),
     });
+    state.promptJournal.set("local-1", {
+      requestId: "local-1",
+      state: "ambiguous",
+      acceptedAt: Date.now(),
+      local: true,
+    });
 
     const response = await call(`/session/${state.id}/dispatch?requestId=req-1`);
     // Reporting a lost record as dispatched would clear the parked dispatch and
-    // let the same turn run twice.
-    expect(await response.json()).toEqual({ dispatch: "unknown" });
+    // let the same turn run twice. `lost` is the 410 the prompt route answers.
+    expect(await response.json()).toEqual({ dispatch: "lost" });
+    // A local reply is answered as processed by the prompt route, so not lost.
+    const local = await call(`/session/${state.id}/dispatch?requestId=local-1`);
+    expect(await local.json()).toEqual({ dispatch: "unknown" });
   });
 
   test("refuses to reuse an ambiguous request id", async () => {
@@ -3112,38 +3120,35 @@ describe("request handling", () => {
  * approvals that can never arrive.
  */
 describe("interaction capability", () => {
-  const gate = "PI_BRIDGE_REQUIRE_APPROVAL";
-
-  test("reports nothing while the approval gate is off", () => {
-    const previous = process.env[gate];
-    delete process.env[gate];
-    try {
-      expect(publicInteractionKinds()).toEqual([]);
-    } finally {
-      if (previous === undefined) delete process.env[gate];
-      else process.env[gate] = previous;
-    }
+  const policy = (approvals: "ask" | "auto-approve" | "deny") => ({
+    id: "interactive-host" as const,
+    sandbox: "none" as const,
+    approvals,
+    projectResources: false,
+    networkAccess: "full" as const,
   });
 
-  test("reports the approval kinds once the gate is on", () => {
-    const previous = process.env[gate];
-    process.env[gate] = "1";
-    try {
-      expect(publicInteractionKinds()).toEqual(["command-approval", "file-approval"]);
-    } finally {
-      if (previous === undefined) delete process.env[gate];
-      else process.env[gate] = previous;
-    }
+  test("reports nothing without a policy that asks", () => {
+    expect(publicInteractionKinds()).toEqual([]);
+    expect(publicInteractionKinds(newSessionState())).toEqual([]);
+    expect(publicInteractionKinds(newSessionState(undefined, policy("auto-approve")))).toEqual([]);
+    expect(publicInteractionKinds(newSessionState(undefined, policy("deny")))).toEqual([]);
   });
 
-  test("only the exact opt-in value turns the gate on", () => {
-    const previous = process.env[gate];
-    process.env[gate] = "true";
+  test("reports the approval kinds for a session whose policy asks", () => {
+    expect(publicInteractionKinds(newSessionState(undefined, policy("ask")))).toEqual([
+      "command-approval",
+      "file-approval",
+    ]);
+  });
+
+  test("the retired approval env override no longer turns the gate on", () => {
+    process.env.PI_BRIDGE_REQUIRE_APPROVAL = "1";
     try {
       expect(publicInteractionKinds()).toEqual([]);
+      expect(publicInteractionKinds(newSessionState())).toEqual([]);
     } finally {
-      if (previous === undefined) delete process.env[gate];
-      else process.env[gate] = previous;
+      delete process.env.PI_BRIDGE_REQUIRE_APPROVAL;
     }
   });
 });
@@ -3249,6 +3254,63 @@ describe("command catalogue routes", () => {
     const refresh = await call("/session/does-not-exist/commands/refresh", { method: "POST" });
     expect(refresh.status).toBe(200);
     expect((await refresh.json()).outcome).toBe("failed");
+  });
+
+  test("a new tab lists its templates and skills before the first turn, without attaching", async () => {
+    let attaches = 0;
+    let reads = 0;
+    setAgentSessionTestHooks({
+      createAgentSession: async () => {
+        attaches += 1;
+        throw new Error("a catalogue read must never attach");
+      },
+    });
+    setCommandPreviewReaderForTests(async () => {
+      reads += 1;
+      return buildCommandCatalogue({ promptTemplates: [template("review")] as never });
+    });
+    try {
+      const created = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({
+          clientSessionKey: "preview-before-first-turn",
+          policy: {
+            id: "interactive-host",
+            sandbox: "provider",
+            approvals: "auto-approve",
+            projectResources: true,
+            networkAccess: "full",
+          },
+        }),
+      });
+      expect(created.status).toBe(201);
+      const sessionId = (await created.json()).sessionId as string;
+      const state = sessions.get(sessionId)!;
+      state.lastAccessed = 1;
+
+      const body = await (await call(`/session/${sessionId}/commands`)).json();
+      expect(body).toMatchObject({
+        catalogueVersion: 1,
+        status: "stale",
+        attachPending: true,
+        commands: [{ name: "/review", id: "pi:template:review", source: "template" }],
+      });
+      // Still metadata: the read that started the preview kept no session warm.
+      expect(state.lastAccessed).toBe(1);
+      // Pushed on the status the backend already polls, so a late read is seen.
+      expect((await (await call(`/session/${sessionId}/status`)).json()).commandRevision).toBe(
+        body.revision,
+      );
+      await call(`/session/${sessionId}/commands`);
+      expect(reads).toBe(1);
+      expect(attaches).toBe(0);
+      expect(state.session).toBeNull();
+    } finally {
+      setCommandPreviewReaderForTests(undefined);
+      setAgentSessionTestHooks(undefined);
+      sessions.clear();
+      clientSessionKeys.clear();
+    }
   });
 
   test("publishes the inventory revision on status and session reads", async () => {
@@ -3373,6 +3435,207 @@ describe("command catalogue routes", () => {
     } finally {
       sessions.clear();
       clientSessionKeys.clear();
+      resetTestDependencies();
+    }
+  });
+});
+
+/**
+ * A row as the pre-catalogue backend saw it: `HttpBridgeCatalogAdapter.slashCommands`
+ * at `ff4026b4e^` (the parent of #827, `apps/backend/src/core/http-bridge-catalog.ts`).
+ */
+interface LegacySlashCommand {
+  name: string;
+  source: string;
+  description?: string;
+  argumentHint?: string;
+  aliases?: string[];
+  scope?: "global" | "session";
+}
+
+const LEGACY_SOURCES = new Set([
+  "builtin",
+  "project",
+  "user",
+  "plugin",
+  "skill",
+  "template",
+  "extension",
+  "orkestrator",
+]);
+
+/** That reader's row parsing, minus its byte caps: only `payload.commands`, unknown fields ignored. */
+function readAsOldBackend(payload: unknown): LegacySlashCommand[] {
+  const record = payload as { commands?: unknown } | null;
+  if (!record || !Array.isArray(record.commands)) return [];
+  const commands = new Map<string, LegacySlashCommand>();
+  for (const candidate of record.commands) {
+    const command = (typeof candidate === "string" ? { name: candidate } : candidate) as Record<
+      string,
+      unknown
+    > | null;
+    const rawName = typeof command?.name === "string" ? command.name : "";
+    if (!rawName) continue;
+    const name = rawName.startsWith("/") ? rawName : `/${rawName}`;
+    commands.set(name, {
+      name,
+      source:
+        typeof command?.source === "string" && LEGACY_SOURCES.has(command.source)
+          ? command.source
+          : "unknown",
+      ...(typeof command?.description === "string" ? { description: command.description } : {}),
+      ...(typeof command?.argumentHint === "string" ? { argumentHint: command.argumentHint } : {}),
+      ...(Array.isArray(command?.aliases)
+        ? {
+            aliases: command.aliases.filter((alias): alias is string => typeof alias === "string"),
+          }
+        : {}),
+      ...(command?.scope === "global" || command?.scope === "session"
+        ? { scope: command.scope }
+        : {}),
+    });
+  }
+  return [...commands.values()];
+}
+
+/** That reader's routing: the session route first, the global list only on a 404. */
+async function oldBackendSlashCommands(sessionId: string) {
+  let response = await call(`/session/${encodeURIComponent(sessionId)}/commands`);
+  const fellBack = response.status === 404;
+  if (fellBack) response = await call("/plugins/commands");
+  // `assertOk`: anything else failed the whole list.
+  expect(response.ok).toBe(true);
+  return { fellBack, commands: readAsOldBackend(await response.json()) };
+}
+
+describe("mixed-version: old backend, current bridge", () => {
+  test("the pre-session list is gone and an unknown session reads as empty, with no fallback", async () => {
+    // Without a session the old backend went straight to `/plugins/commands`.
+    // The pre-#827 Pi answered `[/compact]` there and a 2.21-2.28 one `[]`;
+    // the route is retired, so that read now fails, which the old backend
+    // shows as "no commands" until the session exists.
+    expect((await call("/plugins/commands")).status).toBe(404);
+
+    // The pre-#827 Pi 404'd an unknown session's `/commands`, so the old
+    // backend fell back to the global list and showed `/compact`. Now the
+    // bridge answers in band, so it never falls back and shows nothing.
+    const unknown = await call("/session/does-not-exist/commands");
+    expect(unknown.status).toBe(200);
+    const body = await unknown.json();
+    expect(body).toMatchObject({ status: "missing", commands: [] });
+    expect(readAsOldBackend(body)).toEqual([]);
+    expect(await oldBackendSlashCommands("does-not-exist")).toEqual({
+      fellBack: false,
+      commands: [],
+    });
+  });
+
+  test("a held session's enhanced rows keep the legacy row shape", async () => {
+    const { state } = commandSeed({
+      templates: [{ ...template("review"), argumentHint: "<path>" }],
+      skills: [
+        {
+          name: "lint",
+          description: "Lint",
+          filePath: "/w/.pi/skills/lint/SKILL.md",
+          sourceInfo: { path: "/w/.pi/skills/lint/SKILL.md", scope: "project" },
+        },
+      ],
+      extensions: [{ name: "deploy", description: "Deploy it", sourceInfo: { scope: "user" } }],
+    });
+    try {
+      const response = await call(`/session/${state.id}/commands`);
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      // The envelope is additive: top-level keys the old reader never read.
+      expect(body).toMatchObject({ catalogueVersion: 1, status: "ready", revision: 1 });
+      expect(Array.isArray(body.commands)).toBe(true);
+      expect(body.commands).toHaveLength(3);
+      for (const row of body.commands as Array<Record<string, unknown>>) {
+        expect(typeof row.name).toBe("string");
+        expect((row.name as string).startsWith("/")).toBe(true);
+        expect(LEGACY_SOURCES.has(row.source as string)).toBe(true);
+        if ("description" in row) expect(typeof row.description).toBe("string");
+        if ("argumentHint" in row) expect(typeof row.argumentHint).toBe("string");
+        if ("aliases" in row) expect(Array.isArray(row.aliases)).toBe(true);
+        if ("scope" in row) expect(["global", "session"]).toContain(row.scope);
+      }
+      // What the old picker displays: the pre-#827 rows (`readSlashCommands`,
+      // `ff4026b4e^:bridges/pi-bridge/src/agent-session.ts`), with one
+      // additive difference — template rows now carry `scope` too.
+      expect(readAsOldBackend(body)).toEqual([
+        {
+          name: "/review",
+          source: "template",
+          description: "review template",
+          argumentHint: "<path>",
+          scope: "global",
+        },
+        { name: "/skill:lint", source: "skill", description: "Lint", scope: "session" },
+        { name: "/deploy", source: "extension", description: "Deploy it", scope: "global" },
+      ]);
+    } finally {
+      sessions.clear();
+    }
+  });
+
+  test("the status snapshot adds commandRevision beside unchanged legacy keys", async () => {
+    // The old snapshot reader (`ff4026b4e^:apps/backend/src/core/http-bridge-progressive.ts`)
+    // read `status`, then `messageRevision` or else top-level `revision` as the
+    // provider revision. `commandRevision` itself is pinned under "command
+    // catalogue routes"; this checks only what the old reader relied on.
+    const templates = [template("review")];
+    const { state } = commandSeed({
+      templates,
+      overrides: {
+        reload: async () => {
+          templates.push(template("deploy"));
+        },
+      },
+    });
+    try {
+      const before = await (await call(`/session/${state.id}/status`)).json();
+      expect(before.status).toBe("idle");
+      expect(Number.isSafeInteger(before.revision)).toBe(true);
+      expect("messageRevision" in before).toBe(false);
+      expect(typeof before.composer).toBe("object");
+      expect(typeof before.runtime).toBe("object");
+      expect(Number.isSafeInteger(before.commandRevision)).toBe(true);
+
+      await call(`/session/${state.id}/commands/refresh`, { method: "POST" });
+
+      const after = await (await call(`/session/${state.id}/status`)).json();
+      expect(after.commandRevision).toBeGreaterThan(before.commandRevision);
+      // An inventory change also advances the session `revision`
+      // (`publishCommandCatalogue`), which the old reader takes as the provider
+      // revision: it may re-read once, but the revision never moves backwards.
+      expect(Number.isSafeInteger(after.revision)).toBe(true);
+      expect(after.revision).toBeGreaterThanOrEqual(before.revision);
+      expect(after.status).toBe("idle");
+    } finally {
+      sessions.clear();
+    }
+  });
+
+  test("a prompt without the command fields is interpreted, as Pi always did", async () => {
+    // The old backend sent neither `allowProviderCommands` nor `command` to an
+    // HTTP bridge, and the pre-#827 Pi always prompted with
+    // `expandPromptTemplates: true` (`ff4026b4e^:bridges/pi-bridge/src/prompt.ts`).
+    installRuntime();
+    try {
+      for (const [index, prompt] of ["/review src/a.ts", "/skill:lint now"].entries()) {
+        const { state, prompts } = commandSeed({
+          templates: [template("review")],
+          skills: [
+            { name: "lint", description: "Lint", filePath: "/s/lint/SKILL.md", sourceInfo: {} },
+          ],
+        });
+        const response = await postPrompt(state, { prompt, requestId: `req-old-${index}` });
+        expect(response.status).toBe(202);
+        expect(prompts).toEqual([{ text: prompt, expandPromptTemplates: true }]);
+      }
+    } finally {
+      sessions.clear();
       resetTestDependencies();
     }
   });

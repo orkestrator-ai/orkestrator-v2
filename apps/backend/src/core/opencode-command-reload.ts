@@ -18,6 +18,8 @@ export type OpenCodeInstanceReloadResult = "reloaded" | "deferred";
 export interface OpenCodeInstanceReloadDependencies {
   /** True when no session in the directory is busy or retrying. */
   idle(): Promise<boolean>;
+  /** Revoke instance-scoped authority before disposal, including an ambiguous failure. */
+  disposing?(): void;
   /** `instance.dispose` for the directory. Throws when OpenCode refuses it. */
   dispose(): Promise<void>;
   /** Runs before dispatch reopens, so nothing reaches the old instance's state. */
@@ -93,6 +95,11 @@ export class OpenCodeInstanceReload {
     return (await this.attempt()) === "reloaded" ? "reloaded" : "deferred";
   }
 
+  /** MCP apply owns retries and cancellation; a busy attempt must leave no idle callback. */
+  async requestOnce(): Promise<"reloaded" | "busy"> {
+    return this.attempt();
+  }
+
   /**
    * Every stream event, owned session or not: a deferred reload waits for the
    * whole directory, so any session's idle edge re-checks it.
@@ -140,6 +147,7 @@ export class OpenCodeInstanceReload {
 
   private async reload(): Promise<"reloaded" | "busy"> {
     if (!(await this.dependencies.idle())) return "busy";
+    this.dependencies.disposing?.();
     await this.dependencies.dispose();
     this.pendingReload = false;
     this.dependencies.reloaded();
@@ -153,6 +161,7 @@ export function openCodeInstanceReload(
   directory: string | undefined,
   requestOptions: () => { signal: AbortSignal },
   reloaded: () => void,
+  disposing?: () => void,
 ): OpenCodeInstanceReload {
   return new OpenCodeInstanceReload({
     async idle() {
@@ -167,5 +176,6 @@ export function openCodeInstanceReload(
       assertSdkResponse(response, "OpenCode instance reload");
     },
     reloaded,
+    disposing,
   });
 }

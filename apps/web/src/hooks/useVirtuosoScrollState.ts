@@ -1,53 +1,61 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { VirtuosoHandle, StateSnapshot } from "react-virtuoso";
-import { useUIStore } from "@/stores/uiStore";
+import type { NavigationOwner } from "@/lib/transcript-scroll/scroll-intent";
+import {
+  TranscriptScrollController,
+  type InnerAnchor,
+  type FoldedGroupAnchor,
+  type SemanticAnchor,
+  type ScrollDiagnostics,
+} from "@/lib/transcript-scroll/transcript-scroll-controller";
 
-/** Pixels from bottom to consider "at bottom" */
+/** Virtuoso's reporting band; UI and follow intent use true-bottom geometry. */
 const AT_BOTTOM_THRESHOLD = 50;
-
-/**
- * Upward movement a raw scroll event must exceed before it counts as the user
- * pulling away from the bottom. Sub-pixel scroll positions and elastic
- * overscroll both produce tiny negative deltas that are not intent.
- */
-const USER_SCROLL_UP_TOLERANCE_PX = 2;
 
 /** Maximum persisted scroll states to retain (LRU eviction) */
 const MAX_PERSISTED_STATES = 200;
 
-/**
- * Large value used with scrollTo({ top }) to scroll past the last data item
- * into the footer. The browser clamps this to scrollHeight - clientHeight.
- */
-const SCROLL_TO_ABSOLUTE_BOTTOM = 10_000_000;
-
-/** Maximum scrollToIndex retries when correcting estimated virtual heights */
-const SCROLL_TO_BOTTOM_MAX_ATTEMPTS = 10;
-
-/** Delay between retry attempts; ~one frame, gives Virtuoso time to fire atBottomStateChange */
-const SCROLL_TO_BOTTOM_RETRY_INTERVAL_MS = 16;
-
-/** Readiness retries for activation scrolls after the scroller has mounted */
+/** Readiness retries for activation positioning after the scroller has mounted */
 const ACTIVATION_SCROLL_READY_MAX_ATTEMPTS = 30;
 
 /**
- * After landing at the bottom we keep watching scrollHeight for a short window
- * to catch late-rendering footer content (async-measured cards, images) and
- * re-issue the smooth scroll so it stays in view.
+ * Bumped when the meaning of a persisted entry changes, so an entry written by
+ * another build is dropped rather than misread.
  */
-const POST_SCROLL_WATCH_MS = 400;
-
-/**
- * Re-issues of a jump to one row. Virtuoso positions an unmeasured row from
- * estimated heights, so the first jump to a distant message can land short;
- * each correction runs after the rows around it have measured.
- */
-const SCROLL_TO_INDEX_CORRECTIONS = 3;
-const SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS = 120;
+const PERSISTED_LAYOUT_VERSION = 3;
 
 interface PersistedEntry {
+  version: number;
   snapshot: StateSnapshot;
   wantsStick: boolean;
+  /**
+   * The reader's semantic place. Pixel snapshots are presentation state that
+   * a reflow (another width, font or projection) invalidates; this identity
+   * is what a detached reader is returned to.
+   */
+  anchor: SemanticAnchor | null;
+  /** Scroller width the snapshot was measured at. */
+  widthPx: number;
+  /**
+   * Window width and root font size at capture. Pixel sizes measured under
+   * another layout are stale after a reflow; the semantic anchor restores the
+   * place instead.
+   */
+  layout: string;
+}
+
+/** Layout the pixel snapshot depends on (window width, text scale). */
+function currentLayoutKey(): string {
+  if (typeof window === "undefined") return "";
+  const font = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  return `${Math.round(window.innerWidth)}:${font}`;
 }
 
 const persistedStates = new Map<string, PersistedEntry>();
@@ -109,24 +117,49 @@ export function clearPersistedVirtuosoState(persistKey: string) {
   persistedStates.delete(persistKey);
 }
 
+/**
+ * What activating the view does with the viewport.
+ *
+ * - `respect-intent` (default): a reader who was following catches up to the
+ *   latest message; a detached reader is returned to their semantic place; an
+ *   explicit message target pending for this view wins over both.
+ * - `latest`: every activation jumps to the latest message and follows it.
+ *   For views whose documented policy is "show what is happening now".
+ */
+export type ActivationPolicy = "respect-intent" | "latest";
+
 interface UseVirtuosoScrollStateOptions {
   /** Whether the host view is currently active/visible */
   isActive?: boolean;
   /** Optional persistence key for retaining scroll state across tab switches */
   persistKey?: string;
-  /**
-   * Force every activation to jump to the current bottom and re-enable
-   * stick intent, even if the user had previously scrolled up in this view.
-   */
+  activation?: ActivationPolicy;
+  /** Legacy spelling of `activation: "latest"`. */
   stickToBottomOnActivation?: boolean;
   /**
-   * Environment this view belongs to. When provided, the hook watches the
-   * globally selected environment while the view is inactive; if it changed
-   * (i.e. the user switched environments), the next activation jumps to the
-   * absolute bottom regardless of prior scroll position. Within-environment
-   * tab switches are unaffected and keep the user's scroll position.
+   * An explicit navigation (a "scroll to message" request) is waiting for
+   * this view. Activation positioning defers to it; if the request is dropped
+   * without navigating, activation applies its own policy then.
+   */
+  explicitTargetPending?: boolean;
+  /**
+   * Environment this view belongs to. Retained for callers; activation no
+   * longer forces the bottom after an environment switch — returning readers
+   * keep their place and followers catch up either way.
    */
   environmentId?: string;
+}
+
+/** A source tool (or row start) held at its previous viewport offset. */
+export interface TranscriptScrollAnchor {
+  partId?: string;
+  /** The display row's item key, when known; resolves before the index. */
+  rowKey?: string;
+  /** Hold the target this far below the viewport top; centred when absent. */
+  offset?: number;
+  /** A member an inner viewport holds, inside the group frame `partId` names. */
+  inner?: InnerAnchor;
+  foldedGroup?: FoldedGroupAnchor;
 }
 
 interface UseVirtuosoScrollStateReturn {
@@ -134,58 +167,77 @@ interface UseVirtuosoScrollStateReturn {
   isAtBottom: boolean;
   /** Ref that tracks at-bottom state without triggering re-renders (for use in effects) */
   isAtBottomRef: React.RefObject<boolean>;
-  /** Scroll to bottom and re-enable stick mode */
+  /** Return to the latest message (smooth) and follow it. */
   scrollToBottom: () => void;
   /**
-   * Bring one row into the middle of the view and release stick intent, so
-   * neither a pending activation jump nor streaming follow snaps the reader
-   * back to the bottom. False when the list has not mounted yet.
+   * Bring one row (and optionally a source part at a viewport offset) into
+   * view and read there: following stops, neither activation nor streaming
+   * pulls the reader back. False when the list has not mounted yet.
    */
-  scrollToIndex: (index: number) => boolean;
+  scrollToIndex: (
+    index: number,
+    anchor?: TranscriptScrollAnchor,
+    owner?: NavigationOwner,
+  ) => boolean;
   /** Ref to attach to the Virtuoso component */
   virtuosoRef: React.RefObject<VirtuosoHandle | null>;
+  /** Bounded, content-free counters for diagnostics and tests. */
+  getScrollDiagnostics: () => ScrollDiagnostics;
   /** Props to spread onto the Virtuoso component */
   scrollProps: {
     followOutput: (isAtBottom: boolean) => "auto" | false;
+    /**
+     * Whether automatic following may run now. When false the list passes the
+     * literal `false` to Virtuoso: a function prop is truthy to its
+     * size-change paths even when it would return false.
+     */
+    followEnabled: boolean;
     atBottomStateChange: (atBottom: boolean) => void;
     atBottomThreshold: number;
     totalListHeightChanged: (height: number) => void;
     restoreStateFrom: StateSnapshot | undefined;
     scrollerRef: (el: HTMLElement | Window | null) => void;
+    /**
+     * Hold or release one reason to pause auto-follow (a text selection in
+     * the transcript, an open find bar, an expanded artifact). Taking one
+     * retires an in-flight automatic journey; while any is held, new content
+     * does not move the viewport; a still-following reader is brought to the
+     * growth that arrived meanwhile when the last is released.
+     */
+    setFollowPaused: (reason: string, paused: boolean) => void;
+    /** The viewport's single positioning owner; find and targets navigate through it. */
+    controller: TranscriptScrollController;
   };
 }
 
 /**
- * Hook to manage scroll state for a react-virtuoso Virtuoso component.
+ * Scroll state for a react-virtuoso transcript, owned by one
+ * `TranscriptScrollController` per mounted view.
  *
- * Provides:
- * - Auto-follow when user is sticky to bottom (via followOutput + ResizeObserver)
- * - Intent-based "stick" that survives transient content growth (new footer
- *   content pushing the viewport off-bottom doesn't disengage stick — only
- *   a user-initiated scroll up does)
- * - "At bottom" state tracking for UI affordances (via atBottomStateChange)
- * - Scroll position persistence across tab switches; if the user was sticky
- *   when leaving, returning snaps them to the new bottom instead of the old
- *   scroll position
- * - Environment-switch handling (when environmentId is provided): returning
- *   to a view after the selected environment changed always jumps to the
- *   absolute bottom, even if the user had scrolled up before leaving
- * - Jitter-free streaming follow: content growth pins the viewport to the
- *   bottom synchronously (pre-paint), so the tail of the transcript and the
- *   thinking indicator hold a fixed position while tokens arrive
- * - Smooth animated scroll-to-bottom for the *user-initiated* jump (the
- *   scroll-down button), which keeps pace with late-rendering footer content
+ * - Follow is intent: growth that leaves the viewport short of the end does
+ *   not stop following; only the reader's own movement away from the end does,
+ *   and only their own arrival there (or asking for the latest) resumes it.
+ * - Every navigation — latest, a row, find, history restoration — is one
+ *   bounded operation that converges on measured geometry, and any reader
+ *   input that moves the transcript retires it, in either direction.
+ * - Streaming follow pins synchronously after layout and before paint, so the
+ *   tail holds still while tokens arrive.
+ * - Scroll state persists across tab switches: a pixel snapshot for the
+ *   virtualizer plus the reader's semantic place and intent.
  */
 export function useVirtuosoScrollState(
   options: UseVirtuosoScrollStateOptions = {},
 ): UseVirtuosoScrollStateReturn {
-  const { isActive = true, persistKey, environmentId, stickToBottomOnActivation = false } = options;
+  const {
+    isActive = true,
+    persistKey,
+    stickToBottomOnActivation = false,
+    explicitTargetPending = false,
+  } = options;
+  const activation: ActivationPolicy =
+    options.activation ?? (stickToBottomOnActivation ? "latest" : "respect-intent");
 
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-  const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
-  const scrollerElRef = useRef<HTMLElement | null>(null);
-  const [isAtBottom, setIsAtBottom] = useState(true);
-  const isAtBottomRef = useRef(true);
   // Resolve persisted state once on mount. A snapshot that fails validation is
   // dropped from the map as well: it would fail identically on every future
   // mount, and retaining it keeps a crash-then-retry cycle deterministic.
@@ -193,662 +245,251 @@ export function useVirtuosoScrollState(
     if (!persistKey) return undefined;
     const entry = persistedStates.get(persistKey);
     if (!entry) return undefined;
-    if (!isRestorableStateSnapshot(entry.snapshot)) {
+    if (entry.version !== PERSISTED_LAYOUT_VERSION || !isRestorableStateSnapshot(entry.snapshot)) {
       persistedStates.delete(persistKey);
       return undefined;
     }
     return entry;
   });
+  const [controller] = useState(
+    () =>
+      new TranscriptScrollController(virtuosoRef, {
+        initialWantsFollow: persisted?.wantsStick ?? true,
+        initialActive: isActive,
+      }),
+  );
+  const view = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
 
-  /**
-   * Intent: the user wants new content to auto-scroll into view. Only
-   * flipped false by a user-initiated scroll up (wheel/touch/keyboard);
-   * content growth that pushes the viewport off-bottom leaves it true.
-   *
-   * Lazy-init from persisted state so we seed exactly once. A render-time
-   * conditional write would re-clear the ref on every rerender after the
-   * user reaches bottom (atBottomStateChange sets true → rerender → render
-   * sees persisted.wantsStick=false → clears again).
-   */
-  const wantsStickRef = useRef<boolean>(persisted?.wantsStick ?? true);
-  const lastScrollTopRef = useRef(0);
-  /**
-   * Scroll position as of the last `scroll` event, used to derive direction.
-   * Kept separate from lastScrollTopRef, which the touch handlers own and
-   * sample only between touchstart/touchmove.
-   */
-  const lastObservedScrollTopRef = useRef(0);
-  const mountedRef = useRef(true);
-  const scrollInFlightRef = useRef(false);
-  const scrollOperationRef = useRef(0);
-  const hasBeenActiveRef = useRef(false);
-  const envChangedWhileInactiveRef = useRef(false);
-  const pendingActivationScrollRef = useRef(false);
-  const activationScrollRafRef = useRef<number | null>(null);
-  const activationScrollReadyAttemptsRef = useRef(0);
-
-  // While inactive, watch the globally selected environment. If it ever
-  // differs from this view's environment, the user switched environments —
-  // flag it so the next activation jumps to the absolute bottom. A
-  // within-environment tab switch never trips this (the selected environment
-  // stays equal to ours for the whole inactive period).
-  useEffect(() => {
-    if (isActive || !environmentId) return;
-    const check = (selectedId: string | null) => {
-      if (selectedId !== environmentId) {
-        envChangedWhileInactiveRef.current = true;
-      }
-    };
-    // The deactivation itself may have been caused by an environment switch
-    // that already happened — check the current value, then watch for more.
-    check(useUIStore.getState().selectedEnvironmentId);
-    return useUIStore.subscribe((state) => check(state.selectedEnvironmentId));
-  }, [isActive, environmentId]);
-
-  // Always restore the snapshot when one exists. For sticky users this lands
-  // them at their previous bottom (avoiding a flash from the top), then the
-  // activation effect nudges to the *new* bottom if content grew while away.
-  const restoreStateFrom = persisted?.snapshot;
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  // Persist state when tab becomes inactive.
-  useEffect(() => {
-    if (isActive || !persistKey) return;
-
-    virtuosoRef.current?.getState((snapshot) => {
-      setPersistedState(persistKey, {
-        snapshot,
-        wantsStick: wantsStickRef.current,
-      });
-    });
-  }, [isActive, persistKey]);
-
-  const atBottomStateChange = useCallback((atBottom: boolean) => {
-    setIsAtBottom(atBottom);
-    isAtBottomRef.current = atBottom;
-    // Reaching bottom re-engages stick intent. We intentionally do NOT flip
-    // intent false when atBottom becomes false — that transition is usually
-    // caused by content growing below the viewport, not by user action.
-    if (atBottom) {
-      const el = scrollerElRef.current;
-      const distanceFromBottom = el ? el.scrollHeight - el.clientHeight - el.scrollTop : 0;
-      // Virtuoso can briefly report at-bottom while reconciling an appended
-      // item's measured height. Do not let that transient callback undo an
-      // explicit user release while the browser geometry is still away from
-      // the tail.
-      if (distanceFromBottom <= AT_BOTTOM_THRESHOLD) {
-        wantsStickRef.current = true;
-      }
-    }
-  }, []);
-
-  // User intent is authoritative here. Virtuoso 4.18 invokes a functional
-  // followOutput with `isAtBottom || scrollingInProgress`, so its argument can
-  // be true while the user is actively scrolling upward and our down button is
-  // visible. Letting that value override released stick intent snaps the reader
-  // straight back to the tail when a message arrives mid-scroll.
-  //
-  // Always return "auto", never "smooth", while sticky. Virtuoso re-invokes
-  // followOutput on every item change, and a native smooth scroll restarts its
-  // easing from scratch each time it is re-issued. Instant follow keeps the
-  // viewport pinned without the streaming tail bobbing.
-  const followOutput = useCallback((_atBottom: boolean): "auto" | false => {
-    return wantsStickRef.current ? "auto" : false;
-  }, []);
-
+  const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
   const scrollerRef = useCallback((el: HTMLElement | Window | null) => {
-    const next = el instanceof HTMLElement ? el : null;
-    scrollerElRef.current = next;
-    setScrollerEl(next);
+    setScrollerEl(el instanceof HTMLElement ? el : null);
   }, []);
-
-  // Core retry loop, shared by the public scrollToBottom (smooth), the
-  // activation jump (instant — animating on every env/tab switch reads as
-  // jank) and followContentGrowth's pre-mount fallback (instant).
-  // `behavior` only affects the final footer scroll; the scrollToIndex
-  // retries are always instant since they correct virtual-height estimates.
-  const performScrollToBottom = useCallback((behavior: "smooth" | "auto"): boolean => {
-    const handle = virtuosoRef.current;
-    if (!handle) return false;
-    if (typeof handle.scrollToIndex !== "function" || typeof handle.scrollTo !== "function") {
-      return false;
-    }
-    // Clicking the scroll-down button (or any programmatic call) is an
-    // explicit stick signal.
-    wantsStickRef.current = true;
-    // Guard against overlapping invocations — a second call while the
-    // retry loop is still mid-flight would fire a duplicate footer scroll.
-    if (scrollInFlightRef.current) return false;
-    scrollInFlightRef.current = true;
-    const operation = ++scrollOperationRef.current;
-
-    let attempts = 0;
-    const operationIsCurrent = () => mountedRef.current && scrollOperationRef.current === operation;
-    const finishOperation = () => {
-      if (scrollOperationRef.current === operation) {
-        scrollInFlightRef.current = false;
-      }
-    };
-
-    const watchScrollHeight = () => {
-      const el = scrollerElRef.current;
-      if (!el || !operationIsCurrent()) {
-        finishOperation();
-        return;
-      }
-      const start = performance.now();
-      let lastScrollHeight = el.scrollHeight;
-      const tick = () => {
-        if (!operationIsCurrent()) {
-          finishOperation();
-          return;
-        }
-        const currentHeight = el.scrollHeight;
-        if (currentHeight !== lastScrollHeight) {
-          lastScrollHeight = currentHeight;
-          // Footer grew after we landed — re-issue the scroll so the
-          // new content (thinking indicator, cards) stays in view.
-          handle.scrollTo({
-            top: SCROLL_TO_ABSOLUTE_BOTTOM,
-            behavior,
-          });
-        }
-        if (performance.now() - start < POST_SCROLL_WATCH_MS) {
-          requestAnimationFrame(tick);
-        } else {
-          finishOperation();
-        }
-      };
-      requestAnimationFrame(tick);
-    };
-
-    const finish = () => {
-      if (!operationIsCurrent()) {
-        finishOperation();
-        return;
-      }
-      // Scroll past the last data item to reveal footer content.
-      // The browser clamps to scrollHeight - clientHeight.
-      handle.scrollTo({
-        top: SCROLL_TO_ABSOLUTE_BOTTOM,
-        behavior,
-      });
-      watchScrollHeight();
-    };
-
-    const attempt = () => {
-      if (!operationIsCurrent()) {
-        finishOperation();
-        return;
-      }
-      attempts += 1;
-
-      // Instant (not smooth) on retries — we're correcting virtual-height
-      // estimates; smoothing each retry would look jittery. The final
-      // scrollTo in finish() moves into the footer with `behavior`.
-      handle.scrollToIndex({
-        index: "LAST",
-        align: "end",
-      });
-
-      // setTimeout (rather than rAF) gives Virtuoso time to fire
-      // atBottomStateChange after rendering/measuring the tail items.
-      setTimeout(() => {
-        if (!operationIsCurrent()) {
-          finishOperation();
-          return;
-        }
-        if (!isAtBottomRef.current && attempts < SCROLL_TO_BOTTOM_MAX_ATTEMPTS) {
-          attempt();
-          return;
-        }
-        finish();
-      }, SCROLL_TO_BOTTOM_RETRY_INTERVAL_MS);
-    };
-
-    attempt();
-    return true;
-    // Deps intentionally empty: reads only refs (virtuosoRef, scrollerElRef,
-    // mountedRef, scrollInFlightRef, scrollOperationRef, isAtBottomRef,
-    // wantsStickRef). Adding
-    // scrollerEl here would recreate the callback whenever the scroller
-    // mounts, which in turn would retrigger the ResizeObserver effect and
-    // reobserve from scratch on each mount.
-  }, []);
-
-  const scrollToBottom = useCallback(() => {
-    performScrollToBottom("smooth");
-  }, [performScrollToBottom]);
-
-  /**
-   * Pin the scroller to the bottom in one synchronous write.
-   *
-   * Called from the Resize/Mutation observers, which run after layout but
-   * *before paint*, so growing content never gets a frame at the displaced
-   * position — the previous rAF hop always cost one visible frame of drift.
-   *
-   * Returns false only when there is no scroller yet, so callers can fall back
-   * to the handle-driven retry loop.
-   */
-  const pinToBottom = useCallback((): boolean => {
-    const el = scrollerElRef.current;
-    if (!el) return false;
-    // Only ever move down. Content shrinking is clamped by the browser, and
-    // pulling the viewport *up* here would fight a user mid-scroll.
-    const target = el.scrollHeight - el.clientHeight;
-    if (target > el.scrollTop) {
-      el.scrollTop = target;
-    }
-    return true;
-  }, []);
-
-  const isActiveRef = useRef(isActive);
   useEffect(() => {
-    isActiveRef.current = isActive;
-  }, [isActive]);
+    controller.attachScroller(scrollerEl);
+    return () => controller.attachScroller(null);
+  }, [controller, scrollerEl]);
 
-  /**
-   * Follow content that grew on its own (streaming tokens, the thinking
-   * indicator, a late-measuring question card).
-   *
-   * Deliberately does *not* go through performScrollToBottom: that loop holds
-   * scrollInFlightRef for the length of its retries plus a 400ms watch window,
-   * which swallowed every growth event in between and left the tail to drift
-   * until the flag cleared. A direct pin is both cheaper and exact.
-   */
-  const followContentGrowth = useCallback(() => {
-    if (!isActiveRef.current) return;
-    if (!wantsStickRef.current) return;
-    if (scrollInFlightRef.current) return;
-    if (pinToBottom()) return;
-    // No scroller mounted yet — fall back to the handle. "auto", not "smooth":
-    // this is content catching up, not a user-requested journey.
-    performScrollToBottom("auto");
-  }, [pinToBottom, performScrollToBottom]);
-
-  const totalListHeightChanged = useCallback(
-    (_height: number) => {
-      followContentGrowth();
-    },
-    [followContentGrowth],
+  // Restore the snapshot when its layout still holds: it lands the reader near
+  // their place with no flash from the top; activation then catches a
+  // follower up, or settles a detached reader on their semantic anchor. After
+  // a reflow (another window width or text scale) its pixel sizes are stale,
+  // so only the semantic anchor is used.
+  const [restoreStateFrom] = useState(() =>
+    persisted && persisted.layout === currentLayoutKey() ? persisted.snapshot : undefined,
   );
 
-  const growthPinRafRef = useRef<number | null>(null);
+  /** The place captured as this view last deactivated (for a same-mount return). */
+  const lastDeactivationAnchor = useRef<SemanticAnchor | null>(null);
 
-  const cancelScheduledGrowthPin = useCallback(() => {
-    if (growthPinRafRef.current !== null) {
-      cancelAnimationFrame(growthPinRafRef.current);
-      growthPinRafRef.current = null;
+  // Deactivation retires every pending write and persists intent and place.
+  useEffect(() => {
+    controller.setActive(isActive);
+    if (isActive) return;
+    // A hidden pane has no geometry; the controller keeps the reader's place
+    // current while they read, so fall back to that.
+    const anchor = controller.wantsFollow
+      ? null
+      : (controller.captureAnchor() ?? controller.readingAnchor);
+    lastDeactivationAnchor.current = anchor;
+    if (!persistKey) return;
+    const widthPx = scrollerEl?.clientWidth ?? 0;
+    const handle = virtuosoRef.current;
+    if (!handle || typeof handle.getState !== "function") return;
+    handle.getState((snapshot) => {
+      setPersistedState(persistKey, {
+        version: PERSISTED_LAYOUT_VERSION,
+        snapshot,
+        wantsStick: controller.wantsFollow,
+        anchor,
+        widthPx,
+        layout: currentLayoutKey(),
+      });
+    });
+  }, [controller, isActive, persistKey, scrollerEl]);
+
+  useEffect(() => () => controller.setActive(false), [controller]);
+
+  // ------------------------------------------------------------ activation
+
+  /** The anchor a detached reader returns to on the next activation. */
+  const returnAnchorRef = useRef<SemanticAnchor | null>(
+    persisted && !persisted.wantsStick ? persisted.anchor : null,
+  );
+  const deactivatedSinceMountRef = useRef(false);
+  /** Activation positioning still to run: what, and the generation it was decided at. */
+  const pendingActivationRef = useRef<{
+    kind: "latest" | "restore";
+    generation: number;
+    attempts: number;
+  } | null>(null);
+  const activationFrameRef = useRef<number | null>(null);
+
+  const cancelActivationFrame = useCallback(() => {
+    if (activationFrameRef.current !== null) {
+      cancelAnimationFrame(activationFrameRef.current);
+      activationFrameRef.current = null;
     }
   }, []);
 
-  /**
-   * Pin now, and drop any pin a MutationObserver had queued for this frame.
-   *
-   * This is the ResizeObserver's callback. The browser delivers it after
-   * layout is computed and before paint, so reading scrollHeight here is free
-   * and the correction is still invisible.
-   */
-  const pinForResize = useCallback(() => {
-    cancelScheduledGrowthPin();
-    followContentGrowth();
-  }, [cancelScheduledGrowthPin, followContentGrowth]);
-
-  /**
-   * Defer a mutation-driven pin to the ResizeObserver delivery for this frame.
-   *
-   * Both observers see the same growth, but a MutationObserver callback runs
-   * at a microtask checkpoint while layout is still dirty from the commit that
-   * just mutated the DOM — so measuring there forces a synchronous reflow, once
-   * per checkpoint. Anything that grows scrollHeight also resizes an observed
-   * element, so the ResizeObserver will pin within the same frame anyway.
-   *
-   * The rAF is only a backstop for growth that produces no resize notification
-   * (margin-only growth, which ResizeObserver does not report). It costs the
-   * one frame of drift the synchronous pin exists to avoid, which is why
-   * pinForResize cancels it the moment a real resize lands.
-   */
-  const scheduleGrowthPin = useCallback(() => {
-    if (growthPinRafRef.current !== null) return;
-    if (typeof requestAnimationFrame === "undefined") {
-      followContentGrowth();
-      return;
-    }
-    growthPinRafRef.current = requestAnimationFrame(() => {
-      growthPinRafRef.current = null;
-      followContentGrowth();
-    });
-  }, [followContentGrowth]);
-
-  // User-scroll-up detection: only a user action can release stick intent.
-  // Virtuoso's own programmatic scrolls (followOutput, scrollToIndex) do not
-  // fire wheel/touch/keydown events, so this cleanly separates the two.
-  //
-  // Dragging the scrollbar is the gap those three leave: it fires no wheel,
-  // touch or key event, so without the drag listener below the user stays
-  // flagged sticky and is pinned straight back to the bottom on the next token.
-  //
-  // The drag is detected as "scrolled up while a pointer is held down" rather
-  // than from the scroll event alone. A bare scroll listener cannot tell a
-  // drag from Virtuoso correcting an over-estimated height after restoring a
-  // snapshot, and mistaking that for intent would silently stop auto-follow
-  // on mount — a worse failure than the one being fixed.
-  //
-  // The trade-off is that this only sees drags for which the engine dispatches
-  // pointer events on the scroller. Where it does not, we simply fall back to
-  // the previous behaviour (stick stays engaged) rather than guessing.
-  useEffect(() => {
-    if (!scrollerEl) return;
-
-    lastObservedScrollTopRef.current = scrollerEl.scrollTop;
-    let pointerHeld = false;
-    let userScrollUpPending = false;
-    let userScrollUpTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    const releaseStickIntent = () => {
-      wantsStickRef.current = false;
-      // A retry or post-scroll watcher started before this gesture must not
-      // yank the reader back to the bottom after their intent is known.
-      scrollOperationRef.current += 1;
-      scrollInFlightRef.current = false;
-    };
-
-    const armUserScrollUp = () => {
-      userScrollUpPending = true;
-      if (userScrollUpTimeout !== null) clearTimeout(userScrollUpTimeout);
-      // Wheel and keyboard events fire before the browser updates scrollTop.
-      // Keep the signal alive long enough for the resulting scroll event (and
-      // a short native keyboard-scroll animation), then discard it so a later
-      // programmatic correction cannot be mistaken for user intent.
-      userScrollUpTimeout = setTimeout(() => {
-        userScrollUpPending = false;
-        userScrollUpTimeout = null;
-      }, 150);
-    };
-
-    const handleWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) armUserScrollUp();
-    };
-    const handlePointerDown = () => {
-      pointerHeld = true;
-    };
-    const handlePointerRelease = () => {
-      pointerHeld = false;
-    };
-    const handleScroll = () => {
-      const st = scrollerEl.scrollTop;
-      const previous = lastObservedScrollTopRef.current;
-      lastObservedScrollTopRef.current = st;
-
-      if (!pointerHeld && !userScrollUpPending) return;
-      if (st >= previous - USER_SCROLL_UP_TOLERANCE_PX) return;
-      // A shrinking scrollHeight or a growing viewport also lowers scrollTop
-      // while leaving the user at the bottom. Only a move that actually ends
-      // away from the bottom is intent to stop following.
-      const distanceFromBottom = scrollerEl.scrollHeight - scrollerEl.clientHeight - st;
-      if (distanceFromBottom > AT_BOTTOM_THRESHOLD) {
-        releaseStickIntent();
-      }
-    };
-    const handleTouchStart = () => {
-      lastScrollTopRef.current = scrollerEl.scrollTop;
-    };
-    const handleTouchMove = () => {
-      const st = scrollerEl.scrollTop;
-      const distanceFromBottom = scrollerEl.scrollHeight - scrollerEl.clientHeight - st;
-      if (
-        st < lastScrollTopRef.current - USER_SCROLL_UP_TOLERANCE_PX &&
-        distanceFromBottom > AT_BOTTOM_THRESHOLD
-      ) {
-        releaseStickIntent();
-      }
-      lastScrollTopRef.current = st;
-    };
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "ArrowUp" || e.key === "PageUp" || e.key === "Home") {
-        armUserScrollUp();
-      }
-    };
-
-    scrollerEl.addEventListener("wheel", handleWheel, { passive: true });
-    scrollerEl.addEventListener("scroll", handleScroll, { passive: true });
-    scrollerEl.addEventListener("pointerdown", handlePointerDown, {
-      passive: true,
-    });
-    // The pointer is often released outside the scroller (or over the
-    // scrollbar gutter), so the release has to be watched globally.
-    window.addEventListener("pointerup", handlePointerRelease, {
-      passive: true,
-    });
-    window.addEventListener("pointercancel", handlePointerRelease, {
-      passive: true,
-    });
-    scrollerEl.addEventListener("touchstart", handleTouchStart, {
-      passive: true,
-    });
-    scrollerEl.addEventListener("touchmove", handleTouchMove, {
-      passive: true,
-    });
-    scrollerEl.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      if (userScrollUpTimeout !== null) clearTimeout(userScrollUpTimeout);
-      scrollerEl.removeEventListener("wheel", handleWheel);
-      scrollerEl.removeEventListener("scroll", handleScroll);
-      scrollerEl.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("pointerup", handlePointerRelease);
-      window.removeEventListener("pointercancel", handlePointerRelease);
-      scrollerEl.removeEventListener("touchstart", handleTouchStart);
-      scrollerEl.removeEventListener("touchmove", handleTouchMove);
-      scrollerEl.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [scrollerEl]);
-
-  // ResizeObserver fallback: when content grows (e.g. footer gains a thinking
-  // indicator or question card) and the user still wants stick, pin to the new
-  // bottom. followOutput only fires on data-item changes.
-  //
-  // Note: we deliberately do NOT skip when isAtBottomRef.current is true.
-  // followOutput only fires on data-item changes, so footer-only growth
-  // (thinking indicator, late-rendering cards) leaves Virtuoso reporting
-  // atBottom=true while the new content sits below the viewport.
-  //
-  // The pin runs synchronously inside the ResizeObserver callback rather than
-  // on a scheduled rAF: it fires within the frame that produced the growth,
-  // before it is painted, so the correction is invisible instead of one frame
-  // late. Mutation-driven growth is folded into that same delivery — see
-  // scheduleGrowthPin for why it does not measure inline.
-  useEffect(() => {
-    if (!scrollerEl || typeof ResizeObserver === "undefined") return;
-
-    const resizeObserver = new ResizeObserver(pinForResize);
-    const observed = new WeakSet<Element>();
-    const observeChildren = () => {
-      for (const child of Array.from(scrollerEl.children)) {
-        if (!observed.has(child)) {
-          resizeObserver.observe(child);
-          observed.add(child);
+  const runPendingActivation = useCallback(
+    function runPendingActivation() {
+      if (activationFrameRef.current !== null) return;
+      activationFrameRef.current = requestAnimationFrame(() => {
+        activationFrameRef.current = null;
+        const pending = pendingActivationRef.current;
+        if (!pending || !controller.active) return;
+        // Anything that moved the viewport since (the reader, an explicit
+        // target) supersedes the activation decision.
+        if (controller.generation !== pending.generation) {
+          pendingActivationRef.current = null;
+          return;
         }
-      }
-    };
-    observeChildren();
-
-    // Watch the subtree because footer content is nested inside Virtuoso's
-    // internal viewport/list wrappers, not always added as a direct child of
-    // the scroller. Only re-walk direct children when a direct child was
-    // actually added — deep-subtree mutations can't change the direct-child
-    // set, so `observeChildren()` would be wasted work in that case.
-    const mutationObserver =
-      typeof MutationObserver !== "undefined"
-        ? new MutationObserver((records) => {
-            const directChildAdded = records.some(
-              (r) => r.target === scrollerEl && r.addedNodes.length > 0,
-            );
-            if (directChildAdded) observeChildren();
-            scheduleGrowthPin();
-          })
-        : null;
-    mutationObserver?.observe(scrollerEl, {
-      childList: true,
-      subtree: true,
-    });
-
-    return () => {
-      cancelScheduledGrowthPin();
-      resizeObserver.disconnect();
-      mutationObserver?.disconnect();
-    };
-  }, [scrollerEl, pinForResize, scheduleGrowthPin, cancelScheduledGrowthPin]);
-
-  const cancelActivationScrollFrame = useCallback(() => {
-    if (activationScrollRafRef.current !== null) {
-      cancelAnimationFrame(activationScrollRafRef.current);
-      activationScrollRafRef.current = null;
-    }
-  }, []);
-
-  const schedulePendingActivationScroll = useCallback(() => {
-    if (activationScrollRafRef.current !== null) return;
-    activationScrollRafRef.current = requestAnimationFrame(() => {
-      activationScrollRafRef.current = null;
-      if (!mountedRef.current || !isActiveRef.current || !pendingActivationScrollRef.current) {
-        return;
-      }
-
-      const started = performScrollToBottom("auto");
-      if (started) {
-        pendingActivationScrollRef.current = false;
-        activationScrollReadyAttemptsRef.current = 0;
-        return;
-      }
-
-      // If the scroller exists but the Virtuoso handle is not ready yet,
-      // retry briefly. If the scroller is absent (e.g. the native tab is
-      // still connecting), keep the pending flag and wait for scrollerRef to
-      // fire, which triggers the effect below.
-      if (scrollerElRef.current) {
-        if (activationScrollReadyAttemptsRef.current < ACTIVATION_SCROLL_READY_MAX_ATTEMPTS) {
-          activationScrollReadyAttemptsRef.current += 1;
-          schedulePendingActivationScroll();
+        let started = false;
+        if (pending.kind === "latest") {
+          started = controller.navigateToLatest("instant");
         } else {
-          // The scroller mounted but the handle never became ready within the
-          // retry budget. Give up and clear the pending flag so a later
-          // scroller remount can't re-fire this stale activation scroll and
-          // yank a user who has since scrolled up back to the bottom.
-          pendingActivationScrollRef.current = false;
-          activationScrollReadyAttemptsRef.current = 0;
+          const anchor = returnAnchorRef.current;
+          started =
+            !anchor ||
+            controller.navigateTo(
+              {
+                kind: "row",
+                index: anchor.index ?? 0,
+                key: anchor.rowKey,
+                partId: anchor.partId,
+                offsetPx: anchor.offsetPx,
+                inner: anchor.inner,
+                foldedGroup: anchor.foldedGroup,
+              },
+              "restore",
+            );
         }
-      }
-    });
-  }, [performScrollToBottom]);
+        if (started) {
+          pendingActivationRef.current = null;
+          returnAnchorRef.current = null;
+          return;
+        }
+        // The scroller exists but the list is not ready: retry briefly. With
+        // no scroller (the tab is still connecting) wait for it to mount.
+        if (controller.hasScroller) {
+          if (pending.attempts < ACTIVATION_SCROLL_READY_MAX_ATTEMPTS) {
+            pending.attempts += 1;
+            runPendingActivation();
+          } else {
+            // Give up so a later scroller remount cannot replay a stale
+            // activation over a reader who has since moved.
+            pendingActivationRef.current = null;
+          }
+        }
+      });
+    },
+    [controller],
+  );
 
-  // Tab re-activation: jump to the new bottom on return when the user was
-  // sticky when they left, when the selected environment changed while the
-  // view was away, or when the caller explicitly wants every activation to
-  // re-lock to the bottom. The jump uses the instant retry loop — animating
-  // on every env/tab switch reads as jank, and a one-shot scrollToIndex can
-  // land short while Virtuoso re-measures items that were outside the
-  // rendered window. Reset scrollInFlightRef first so a stale flag from a
-  // prior activation cycle (e.g. a smooth scroll interrupted by switching
-  // away) can't deadlock subsequent scroll attempts.
-  //
-  // By default, skip on the very first activation: Virtuoso handles initial
-  // position via restoreStateFrom. If the persisted snapshot is stale
-  // (content grew while the tab was inactive), the user lands at the *old*
-  // bottom on mount; totalListHeightChanged and the ResizeObserver fallback
-  // then catch up to the new bottom as items measure. Callers using
-  // stickToBottomOnActivation opt out of that preservation and intentionally
-  // force the bottom lock even on first activation.
-  useEffect(() => {
-    if (!isActive) return;
-    const isFirstActivation = !hasBeenActiveRef.current;
-    hasBeenActiveRef.current = true;
-    const envChanged = envChangedWhileInactiveRef.current;
-    envChangedWhileInactiveRef.current = false;
-    if (stickToBottomOnActivation) {
-      wantsStickRef.current = true;
-    }
-    if (isFirstActivation && !stickToBottomOnActivation) return;
-    scrollOperationRef.current += 1;
-    scrollInFlightRef.current = false;
-    if (!stickToBottomOnActivation && !envChanged && !wantsStickRef.current) {
-      return;
-    }
-    pendingActivationScrollRef.current = true;
-    activationScrollReadyAttemptsRef.current = 0;
-    schedulePendingActivationScroll();
-    return cancelActivationScrollFrame;
-  }, [
-    isActive,
-    stickToBottomOnActivation,
-    schedulePendingActivationScroll,
-    cancelActivationScrollFrame,
-  ]);
+  const explicitTargetPendingRef = useRef(explicitTargetPending);
+  const runPendingActivationRef = useRef(runPendingActivation);
+  useLayoutEffect(() => {
+    explicitTargetPendingRef.current = explicitTargetPending;
+    runPendingActivationRef.current = runPendingActivation;
+  });
 
   useEffect(() => {
     if (!isActive) {
-      pendingActivationScrollRef.current = false;
-      activationScrollReadyAttemptsRef.current = 0;
-      cancelActivationScrollFrame();
+      // Counted here rather than on activation so StrictMode's replayed
+      // mount effect still reads as the first activation.
+      deactivatedSinceMountRef.current = true;
+      pendingActivationRef.current = null;
+      cancelActivationFrame();
       return;
     }
-
-    if (pendingActivationScrollRef.current) {
-      activationScrollReadyAttemptsRef.current = 0;
-      schedulePendingActivationScroll();
+    const isFirstActivation = !deactivatedSinceMountRef.current;
+    let kind: "latest" | "restore" | null;
+    if (activation === "latest") {
+      kind = "latest";
+    } else if (controller.wantsFollow) {
+      // First mount: the snapshot and growth pins already land a follower at
+      // the end. On return, catch them up in one bounded journey.
+      kind = isFirstActivation ? null : "latest";
+    } else {
+      // A detached reader: on return, settle their semantic place if one was
+      // captured (a hidden pane keeps its pixels; a remount may not).
+      if (!isFirstActivation) returnAnchorRef.current ??= lastDeactivationAnchor.current;
+      kind = returnAnchorRef.current ? "restore" : null;
     }
-  }, [isActive, scrollerEl, schedulePendingActivationScroll, cancelActivationScrollFrame]);
+    if (kind === null) return;
+    pendingActivationRef.current = { kind, generation: controller.generation, attempts: 0 };
+    // Decided once per activation; a target dropped later re-enters below.
+    if (!explicitTargetPendingRef.current) runPendingActivationRef.current();
+    return cancelActivationFrame;
+  }, [isActive, activation, cancelActivationFrame, controller]);
+
+  // An explicit target waiting for this view holds activation back. Once it
+  // is gone, run what remains unless its navigation (or anything else)
+  // already moved the viewport — `runPendingActivation` checks the generation.
+  useEffect(() => {
+    if (!isActive || explicitTargetPending) return;
+    if (pendingActivationRef.current) runPendingActivation();
+  }, [isActive, explicitTargetPending, scrollerEl, runPendingActivation]);
+
+  // -------------------------------------------------------------- commands
+
+  const scrollToBottom = useCallback(() => {
+    controller.navigateToLatest("smooth");
+  }, [controller]);
 
   const scrollToIndex = useCallback(
-    (index: number): boolean => {
-      const handle = virtuosoRef.current;
-      if (!handle || typeof handle.scrollToIndex !== "function") return false;
+    (index: number, anchor?: TranscriptScrollAnchor, owner: NavigationOwner = "row"): boolean => {
       if (!Number.isInteger(index) || index < 0) return false;
-      // An explicit jump to one row is a statement that the reader wants to be
-      // there, not at the tail: drop stick intent and any activation jump
-      // still queued, and retire an in-flight bottom scroll.
-      wantsStickRef.current = false;
-      pendingActivationScrollRef.current = false;
-      activationScrollReadyAttemptsRef.current = 0;
-      cancelActivationScrollFrame();
-      const operation = ++scrollOperationRef.current;
-      scrollInFlightRef.current = false;
-      handle.scrollToIndex({ index, align: "center", behavior: "auto" });
-      let corrections = 0;
-      const correct = () => {
-        // A user scroll bumps the operation, so a correction never fights them.
-        if (!mountedRef.current || scrollOperationRef.current !== operation) return;
-        virtuosoRef.current?.scrollToIndex({ index, align: "center", behavior: "auto" });
-        corrections += 1;
-        if (corrections < SCROLL_TO_INDEX_CORRECTIONS) {
-          setTimeout(correct, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);
-        }
-      };
-      setTimeout(correct, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);
-      return true;
+      pendingActivationRef.current = null;
+      cancelActivationFrame();
+      return controller.navigateTo(
+        {
+          kind: "row",
+          index,
+          key: anchor?.rowKey,
+          partId: anchor?.partId,
+          offsetPx: anchor?.offset,
+          align: anchor?.offset !== undefined ? "start" : "center",
+          inner: anchor?.inner,
+          foldedGroup: anchor?.foldedGroup,
+        },
+        owner,
+      );
     },
-    [cancelActivationScrollFrame],
+    [cancelActivationFrame, controller],
   );
 
+  const setFollowPaused = useCallback(
+    (reason: string, paused: boolean) => controller.setFollowPause(reason, paused),
+    [controller],
+  );
+  const atBottomStateChange = useCallback(
+    (atBottom: boolean) => controller.reportAtBottom(atBottom),
+    [controller],
+  );
+  const totalListHeightChanged = useCallback(
+    (_height: number) => controller.notifyLayout("list-height"),
+    [controller],
+  );
+  const getScrollDiagnostics = useCallback(() => controller.diagnostics(), [controller]);
+
   return {
-    isAtBottom,
-    isAtBottomRef,
+    isAtBottom: view.isAtBottom,
+    isAtBottomRef: controller.isAtBottomRef,
     scrollToBottom,
     scrollToIndex,
     virtuosoRef,
+    getScrollDiagnostics,
     scrollProps: {
-      followOutput,
+      followOutput: controller.followOutput,
+      followEnabled: view.followAllowed,
       atBottomStateChange,
       atBottomThreshold: AT_BOTTOM_THRESHOLD,
       totalListHeightChanged,
       restoreStateFrom,
       scrollerRef,
+      setFollowPaused,
+      controller,
     },
   };
 }

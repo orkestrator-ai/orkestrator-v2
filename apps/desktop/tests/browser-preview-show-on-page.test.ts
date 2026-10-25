@@ -172,6 +172,9 @@ describe("Show on page", () => {
       pins: [pin("annotation-2", "/app#/settings")],
     });
     expect(result).toMatchObject({ outcome: "shown", navigated: true });
+    expect((await harness.manager.getCaptureDiagnostics()).anchorResolutions).toEqual({
+      "matched|stable-id": 1,
+    });
     expect(result.resolution).toMatchObject({ state: "matched", rect: { x: 1, y: 2 } });
     expect(contents.loadURL.mock.calls.at(-1)![0]).toBe(`${gateway}/app#/settings`);
     expect(contents.pinsConfig).toMatchObject({
@@ -197,6 +200,9 @@ describe("Show on page", () => {
     });
     expect(result).toMatchObject({ outcome: "shown", navigated: false });
     expect(calls).toBe(3);
+    expect((await harness.manager.getCaptureDiagnostics()).anchorResolutions).toEqual({
+      "matched|stable-id": 1,
+    });
     expect(contents.loadURL.mock.calls.length).toBe(loads);
   });
 
@@ -228,6 +234,54 @@ describe("Show on page", () => {
     });
     expect(result).toMatchObject({ outcome: "not-found", resolution: { state: "missing" } });
   });
+
+  test("a matched target that renders no box (a closed dialog) is hidden, not shown", async () => {
+    const harness = createHarness();
+    const contents = await harness.attach("http://localhost:5173/settings");
+    contents.pinsResponse = (queries) =>
+      JSON.stringify([
+        {
+          annotationId: queries[0]!.annotationId,
+          state: "matched",
+          rule: "stable-id",
+          candidateCount: 1,
+          rect: { x: 0, y: 0, width: 0, height: 0 },
+        },
+      ]);
+    const result = await harness.manager.showOnPage({
+      tabId: "browser-1",
+      pin: pin("annotation-1", "/settings"),
+    });
+    expect(result).toMatchObject({
+      outcome: "hidden",
+      navigated: false,
+      resolution: { state: "matched", rule: "stable-id" },
+    });
+  });
+
+  for (const rect of [null, undefined]) {
+    test(`a matched target with ${rect} geometry is hidden`, async () => {
+      const harness = createHarness();
+      const contents = await harness.attach("http://localhost:5173/settings");
+      contents.pinsResponse = () =>
+        JSON.stringify([
+          {
+            annotationId: "annotation-1",
+            state: "matched",
+            rule: "stable-id",
+            candidateCount: 1,
+            rect,
+          },
+        ]);
+      expect(
+        await harness.manager.showOnPage({
+          tabId: "browser-1",
+          pin: pin("annotation-1", "/settings"),
+        }),
+      ).toMatchObject({ outcome: "hidden", resolution: { state: "matched", rect: null } });
+      harness.manager.destroyAll();
+    });
+  }
 
   test("a redirect away from the route (expired login) asks the user to navigate", async () => {
     const harness = createHarness();

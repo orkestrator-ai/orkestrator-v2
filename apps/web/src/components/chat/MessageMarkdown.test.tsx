@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
+import remarkBreaks from "remark-breaks";
+import type { PluggableList } from "unified";
 import { TerminalProvider, useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import { invoke } from "@/lib/native/backend";
+import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
+import { useEnvironmentStore, useFilesPanelStore, useUIStore } from "@/stores";
+import type { Environment } from "@/types";
 import { mockToastInfo } from "../../../../../tests/mocks/sonner";
 
 import {
@@ -123,6 +128,69 @@ describe("InlineMessageMarkdown", () => {
 
     expect(wrapper?.className).toContain("truncate");
     expect(wrapper?.className).toContain("[&_strong]:font-semibold");
+  });
+});
+
+const OVERRIDE_PLUGINS: PluggableList = [remarkBreaks];
+const NO_PLUGINS: PluggableList = [];
+
+describe("MessageMarkdown remarkPlugins override", () => {
+  afterEach(cleanup);
+
+  test.each([
+    { live: false, richPartId: undefined },
+    { live: true, richPartId: undefined },
+    { live: false, richPartId: "rich-part" },
+    { live: true, richPartId: "rich-part" },
+  ])("replaces default plugins in mode %j, including on updates", (mode) => {
+    const content = "~~literal~~\nnext\n\n> [!NOTE]\n> body\n\n| a | b |\n| - | - |\n| c | d |";
+    const { container, rerender } = render(
+      <MessageMarkdown
+        content={content}
+        enableBreaks={false}
+        remarkPlugins={OVERRIDE_PLUGINS}
+        {...mode}
+      />,
+    );
+    const assertOverride = () => {
+      expect(container.querySelector("br")).not.toBeNull();
+      expect(container.textContent).toContain("~~literal~~");
+      expect(container.textContent).toContain("[!NOTE]");
+      expect(container.querySelector("del, table, rich-callout") === null).toBe(true);
+    };
+    assertOverride();
+    rerender(
+      <MessageMarkdown
+        content={`${content}\n\nappended\nline`}
+        enableBreaks={false}
+        remarkPlugins={OVERRIDE_PLUGINS}
+        {...mode}
+      />,
+    );
+    assertOverride();
+    expect(container.textContent).toContain("appended");
+    rerender(
+      <MessageMarkdown
+        content={`${content}\n\nfinished`}
+        remarkPlugins={OVERRIDE_PLUGINS}
+        {...mode}
+        live={false}
+      />,
+    );
+    assertOverride();
+    expect(container.textContent).toContain("finished");
+  });
+
+  test("accepts an empty override and restores defaults when it is removed", () => {
+    const content = "~~literal~~\nnext";
+    const { container, rerender } = render(
+      <MessageMarkdown content={content} remarkPlugins={NO_PLUGINS} />,
+    );
+    expect(container.querySelector("br, del") === null).toBe(true);
+    expect(container.textContent).toBe(content);
+    rerender(<MessageMarkdown content={content} />);
+    expect(container.querySelector("br")).not.toBeNull();
+    expect(container.querySelector("del")?.textContent).toBe("literal");
   });
 });
 
@@ -309,6 +377,80 @@ describe("MessageMarkdown links", () => {
     expect(openFile).not.toHaveBeenCalled();
     expect(invokeMock).toHaveBeenCalledWith("open_in_browser", {
       url: "https://example.com/docs",
+    });
+  });
+});
+
+describe("MessageMarkdown pull request links", () => {
+  afterEach(() => {
+    cleanup();
+    useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: null });
+    useEnvironmentStore.setState({ environments: [] });
+    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+  });
+
+  test("opens a pull request link with the surrounding opener on its matching view", () => {
+    invokeMock.mockClear();
+    const open = mock((_ref: unknown, _view?: unknown) => undefined);
+    render(
+      <PullRequestOpenerProvider open={open}>
+        <MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42/files)" />
+      </PullRequestOpenerProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "PR" }));
+
+    expect(open).toHaveBeenCalledWith(
+      { owner: "acme", repo: "widgets", number: 42, view: "code" },
+      "code",
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  test("Cmd-click keeps a pull request link on the browser action", () => {
+    invokeMock.mockClear();
+    const open = mock((_ref: unknown, _view?: unknown) => undefined);
+    render(
+      <PullRequestOpenerProvider open={open}>
+        <MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />
+      </PullRequestOpenerProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "PR" }), { metaKey: true });
+
+    expect(open).not.toHaveBeenCalled();
+    expect(invokeMock).toHaveBeenCalledWith("open_in_browser", {
+      url: "https://github.com/acme/widgets/pull/42",
+    });
+  });
+
+  test("opens a pull request link in the selected environment's files panel", () => {
+    invokeMock.mockClear();
+    useEnvironmentStore.setState({
+      environments: [{ id: "env-1", projectId: "project-1" } as Environment],
+    });
+    useUIStore.setState({ selectedEnvironmentId: "env-1", selectedProjectId: "project-1" });
+    render(<MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />);
+
+    fireEvent.click(screen.getByRole("link", { name: "PR" }));
+
+    const panel = useFilesPanelStore.getState();
+    expect(panel.isOpen).toBe(true);
+    expect(panel.activeTab).toBe("pull-request:acme/widgets#42");
+    expect(panel.pullRequestTabs["env-1"]?.map((tab) => tab.ref)).toEqual([
+      { owner: "acme", repo: "widgets", number: 42 },
+    ]);
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  test("falls back to the browser when nothing is selected to show the pull request", () => {
+    invokeMock.mockClear();
+    render(<MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />);
+
+    fireEvent.click(screen.getByRole("link", { name: "PR" }));
+
+    expect(invokeMock).toHaveBeenCalledWith("open_in_browser", {
+      url: "https://github.com/acme/widgets/pull/42",
     });
   });
 });

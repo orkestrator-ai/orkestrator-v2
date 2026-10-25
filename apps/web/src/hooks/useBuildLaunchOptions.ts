@@ -190,10 +190,17 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
   }, [config.global.openCodeModelProviders, defaults.pipelineDefaults, projectCatalog]);
   const [openCodeModelPreferences, setOpenCodeModelPreferences] =
     useState<OpenCodeModelPreferences>(EMPTY_OPENCODE_MODEL_PREFERENCES);
+  // Another project's (or a disabled launcher's) preferences never carry over;
+  // the effect below loads this scope's.
+  const preferencesScope = JSON.stringify([enabled, projectId]);
+  const [renderedPreferencesScope, setRenderedPreferencesScope] = useState(preferencesScope);
+  if (renderedPreferencesScope !== preferencesScope) {
+    setRenderedPreferencesScope(preferencesScope);
+    setOpenCodeModelPreferences(EMPTY_OPENCODE_MODEL_PREFERENCES);
+  }
 
   useEffect(() => {
     let cancelled = false;
-    setOpenCodeModelPreferences(EMPTY_OPENCODE_MODEL_PREFERENCES);
     if (!enabled)
       return () => {
         cancelled = true;

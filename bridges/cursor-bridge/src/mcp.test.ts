@@ -3,22 +3,34 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
+import { InteractionUpdateSchema } from "@cursor/sdk";
 import { Client as McpClient } from "@modelcontextprotocol/client";
+import {
+  RECORDED_ARTIFACT_ERROR_CODE,
+  RECORDED_PUBLICATION_ID,
+  RECORDED_PUBLISH_ARTIFACT_ARGS,
+  RECORDED_PUBLISH_ARTIFACT_RESULT_TEXT,
+  SUCCESSFUL_PUBLISH_CONTRACT,
+  publishArtifactCallContract,
+  recordedArtifactCallToolResult,
+} from "@orkestrator/protocol/testing/artifact-tool-fixtures";
 import { newSessionState } from "./agent-session.js";
 import { MAX_MESSAGES, workingDirectory } from "./config.js";
 import {
   cursorMcpServers,
   formatMcpContent,
   hostOrkestratorCustomTools,
+  hostResearchCustomTools,
   MAX_MCP_RESULT_BYTES,
   mcpConnectionKey,
   parseAgentMcpConnection,
   publicCursorMcpServers,
+  retireMcpObservations,
   seedObservedMcpTools,
   setCursorMcpTimeoutsForTests,
   setCursorMcpTransportForTests,
 } from "./mcp.js";
-import type { SessionState } from "./state.js";
+import type { BridgeToolPart, SessionState } from "./state.js";
 import { boundTranscript } from "./transcript.js";
 import { applyInteractionUpdate } from "./translate.js";
 
@@ -60,7 +72,6 @@ function callMcpTool(state: SessionState, args: Record<string, unknown>, callId:
 
 const previousUrl = process.env.ORKESTRATOR_AGENT_MCP_URL;
 const previousToken = process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
-const previousProjectSettings = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
 
 afterEach(() => {
   setCursorMcpTransportForTests();
@@ -69,8 +80,6 @@ afterEach(() => {
   else process.env.ORKESTRATOR_AGENT_MCP_URL = previousUrl;
   if (previousToken === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
   else process.env.ORKESTRATOR_AGENT_MCP_TOKEN = previousToken;
-  if (previousProjectSettings === undefined) delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
-  else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previousProjectSettings;
 });
 
 describe("Cursor MCP inventory", () => {
@@ -103,7 +112,6 @@ describe("Cursor MCP inventory", () => {
   });
 
   test("a read-only policy returns only the Orkestrator entry when project MCP is present", async () => {
-    process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
     const mcpPath = join(workingDirectory, ".cursor", "mcp.json");
     await mkdir(join(workingDirectory, ".cursor"), { recursive: true });
     await writeFile(
@@ -118,6 +126,19 @@ describe("Cursor MCP inventory", () => {
     try {
       const allowed = await cursorMcpServers(connection, { projectResources: true });
       expect(Object.keys(allowed).sort()).toEqual(["orkestrator", "review-untrusted"]);
+
+      // Only the session's policy opens the project layer: no policy, a
+      // policy that turns it off, and the retired env override all keep it
+      // closed.
+      process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
+      try {
+        expect(Object.keys(await cursorMcpServers(connection))).toEqual(["orkestrator"]);
+        expect(
+          Object.keys(await cursorMcpServers(connection, { projectResources: false })),
+        ).toEqual(["orkestrator"]);
+      } finally {
+        delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+      }
 
       const denied = await cursorMcpServers(connection, {
         readOnly: true,
@@ -145,6 +166,35 @@ describe("Cursor MCP inventory", () => {
       url: "http://127.0.0.1:4567/mcp",
       headers: { Authorization: "Bearer tab-token" },
     });
+  });
+
+  test("a workflow turn's artifact grant adds its own artifact-only server, read-only too", async () => {
+    const parsed = parseAgentMcpConnection({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "attempt-token",
+      artifacts: { token: "oag1.turn-grant" },
+    });
+    expect(parsed).toEqual({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "attempt-token",
+      artifacts: { token: "oag1.turn-grant" },
+    });
+    const configured = await cursorMcpServers(parsed, { readOnly: true });
+    expect(Object.keys(configured).sort()).toEqual(["orkestrator", "orkestrator-artifacts"]);
+    expect(configured["orkestrator-artifacts"]).toEqual({
+      type: "http",
+      url: "http://127.0.0.1:4567/artifact-mcp",
+      headers: { Authorization: "Bearer oag1.turn-grant" },
+    });
+    expect(configured.orkestrator).toMatchObject({
+      headers: { Authorization: "Bearer attempt-token" },
+    });
+    // A new grant is a new connection: the agent re-attaches with it.
+    expect(mcpConnectionKey(parsed)).not.toBe(
+      mcpConnectionKey({ ...parsed!, artifacts: { token: "oag1.next-grant" } }),
+    );
+    const plain = await cursorMcpServers({ url: "http://127.0.0.1:4567/mcp", token: "tab" });
+    expect(plain["orkestrator-artifacts"]).toBeUndefined();
   });
 
   test("ignores a malformed agentMcp override", () => {
@@ -306,6 +356,126 @@ describe("Cursor MCP inventory", () => {
         scope: "orkestrator",
         actions: [],
       },
+    ]);
+  });
+});
+
+describe("hosted coordinator research tools", () => {
+  const coordinatorEnv = {
+    ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+    ORKESTRATOR_COORDINATOR_WEB_RESEARCH: "search-and-mcp",
+    ORKESTRATOR_COORDINATOR_RESEARCH_MCP: JSON.stringify([
+      { name: "context7", url: "https://mcp.context7.com/mcp" },
+      { name: "offline", url: "https://offline.example/mcp" },
+    ]),
+  };
+
+  test("hosts each launcher-named server's tools as <server>__<tool>, without a credential", async () => {
+    const connects: { url: string; token: string | undefined }[] = [];
+    setCursorMcpTransportForTests({
+      async connect(url, token) {
+        connects.push({ url, token });
+        if (url.includes("offline")) throw new Error("unreachable");
+        return {
+          tools: [{ name: "query-docs", description: "Query docs" }],
+          async call(name, args) {
+            return { content: [{ type: "text", text: `${name}:${JSON.stringify(args)}` }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    const state = newSessionState();
+    const hosted = await hostResearchCustomTools(state.health, coordinatorEnv);
+    expect(connects).toEqual([
+      { url: "https://mcp.context7.com/mcp", token: undefined },
+      { url: "https://offline.example/mcp", token: undefined },
+    ]);
+    // The unreachable server is a notice, and the reachable one is still hosted.
+    expect(hosted?.serverNames).toEqual(["context7"]);
+    expect(hosted?.toolNames).toEqual(["context7__query-docs"]);
+    expect(hosted?.customTools["context7__query-docs"]?.description).toBe("Query docs");
+    await expect(
+      hosted?.customTools["context7__query-docs"]?.execute({ q: "zod" }, {}),
+    ).resolves.toEqual({ content: [{ type: "text", text: 'query-docs:{"q":"zod"}' }] });
+    expect(JSON.stringify(state.health.snapshot())).toContain(
+      "Research MCP server offline failed to connect",
+    );
+    await hosted?.close();
+  });
+
+  test("nothing is hosted outside a coordinator process or with research servers off", async () => {
+    let connects = 0;
+    setCursorMcpTransportForTests({
+      async connect() {
+        connects += 1;
+        throw new Error("must not connect");
+      },
+    });
+    const { ORKESTRATOR_BRIDGE_EXECUTION_POLICY: _policy, ...workerEnv } = coordinatorEnv;
+    await expect(hostResearchCustomTools(undefined, workerEnv)).resolves.toBeUndefined();
+    await expect(
+      hostResearchCustomTools(undefined, {
+        ...coordinatorEnv,
+        ORKESTRATOR_COORDINATOR_WEB_RESEARCH: "search",
+      }),
+    ).resolves.toBeUndefined();
+    expect(connects).toBe(0);
+  });
+
+  test("a research server named custom-user-tools is unwrapped exactly once", () => {
+    const state = newSessionState();
+    state.mcpServerNames = ["custom-user-tools"];
+    state.researchMcpServerNames = ["custom-user-tools"];
+    callMcpTool(
+      state,
+      {
+        providerIdentifier: "custom-user-tools",
+        toolName: "custom-user-tools__query-docs",
+        args: {},
+      },
+      "research",
+    );
+    expect(state.observedMcpTools.has("mcp__custom-user-tools__query-docs")).toBe(true);
+    expect(JSON.stringify(state.messages)).toContain("mcp__custom-user-tools__query-docs");
+    expect(publicCursorMcpServers(state)).toEqual([
+      {
+        id: "custom-user-tools",
+        name: "custom-user-tools",
+        status: "connected",
+        scope: "orkestrator",
+        actions: [],
+      },
+    ]);
+    state.runTools = ["mcp__custom-user-tools__custom-user-tools__query-docs"];
+    expect(publicCursorMcpServers(state)[0]).toMatchObject({ toolCount: 1, tools: ["query-docs"] });
+    retireMcpObservations(state);
+    expect(publicCursorMcpServers(state).map((server) => server.id)).toEqual(["custom-user-tools"]);
+  });
+
+  test("a hosted research call is published under its own server, as Orkestrator-configured", () => {
+    const state = newSessionState();
+    state.mcpServerNames = ["orkestrator", "context7"];
+    state.researchMcpServerNames = ["context7"];
+    callMcpTool(
+      state,
+      { providerIdentifier: "custom-user-tools", toolName: "context7__query-docs", args: {} },
+      "research",
+    );
+    callMcpTool(
+      state,
+      { providerIdentifier: "custom-user-tools", toolName: "launch_environment", args: {} },
+      "control",
+    );
+    expect(publicCursorMcpServers(state)).toEqual([
+      {
+        id: "orkestrator",
+        name: "orkestrator",
+        status: "connected",
+        scope: "orkestrator",
+        actions: [],
+      },
+      { id: "context7", name: "context7", status: "connected", scope: "orkestrator", actions: [] },
     ]);
   });
 });
@@ -888,3 +1058,121 @@ async function handleControlLikeRequest(
     error: { code: -32601, message: "Method not found" },
   });
 }
+
+describe("transcript artifact tool calls", () => {
+  /*
+   * The web client anchors a published artifact on the successful
+   * `publish_artifact` call naming it, by the call's name and arguments.
+   * Each case runs the hosted tool (or takes the HTTP MCP result as the SDK
+   * reports it), re-encodes its result the way the SDK does
+   * (`{ text: { text } }` items), validates the update against the SDK's own
+   * schema, and translates it.
+   */
+  function sdkMcpValue(result: { content?: unknown; isError?: boolean }) {
+    const content = Array.isArray(result.content) ? result.content : [];
+    return {
+      content: content.map((item) => ({ text: { text: (item as { text: string }).text } })),
+      isError: result.isError === true,
+    };
+  }
+
+  function translatePublish(
+    providerIdentifier: string,
+    value: ReturnType<typeof sdkMcpValue>,
+  ): BridgeToolPart {
+    const state = newSessionState();
+    state.status = "running";
+    const toolCall = {
+      type: "mcp" as const,
+      args: {
+        providerIdentifier,
+        toolName: "publish_artifact",
+        args: { ...RECORDED_PUBLISH_ARTIFACT_ARGS },
+      },
+    };
+    applyInteractionUpdate(
+      state,
+      InteractionUpdateSchema.parse({
+        type: "tool-call-started",
+        callId: "publish-1",
+        modelCallId: "m1",
+        toolCall,
+      }),
+    );
+    applyInteractionUpdate(
+      state,
+      InteractionUpdateSchema.parse({
+        type: "tool-call-completed",
+        callId: "publish-1",
+        modelCallId: "m1",
+        toolCall: { ...toolCall, result: { status: "success", value } },
+      }),
+    );
+    const part = state.messages
+      .flatMap((message) => message.parts)
+      .find(
+        (candidate): candidate is BridgeToolPart =>
+          candidate.type === "tool-invocation" && candidate.toolUseId === "publish-1",
+      );
+    if (!part) throw new Error("missing publish_artifact card");
+    return part;
+  }
+
+  async function hostedPublishValue(isError: boolean) {
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    setCursorMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [{ name: "publish_artifact" }],
+          async call(name, args) {
+            calls.push({ name, args });
+            return recordedArtifactCallToolResult(isError);
+          },
+          async close() {},
+        };
+      },
+    });
+    const hosted = await hostOrkestratorCustomTools({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "coord-token",
+    });
+    const tool = hosted?.customTools.publish_artifact;
+    if (!tool) throw new Error("missing hosted publish_artifact");
+    const result = (await tool.execute({ ...RECORDED_PUBLISH_ARTIFACT_ARGS }, {})) as {
+      content?: unknown;
+      isError?: boolean;
+    };
+    await hosted?.close();
+    expect(calls).toEqual([
+      { name: "publish_artifact", args: { ...RECORDED_PUBLISH_ARTIFACT_ARGS } },
+    ]);
+    return sdkMcpValue(result);
+  }
+
+  for (const path of ["hosted custom tool", "HTTP MCP"] as const) {
+    const provider = path === "hosted custom tool" ? "custom-user-tools" : "orkestrator";
+    const value = (isError: boolean) =>
+      path === "hosted custom tool"
+        ? hostedPublishValue(isError)
+        : Promise.resolve(sdkMcpValue(recordedArtifactCallToolResult(isError)));
+
+    test(`${path}: a successful publish keeps a recognisable call and its ids`, async () => {
+      const part = translatePublish(provider, await value(false));
+
+      expect(publishArtifactCallContract(part)).toEqual({ ...SUCCESSFUL_PUBLISH_CONTRACT });
+      expect(part.toolName).toBe("mcp__orkestrator__publish_artifact");
+      // The tool's own text, not the SDK's item wrapper around it.
+      expect(part.toolOutput).toBe(RECORDED_PUBLISH_ARTIFACT_RESULT_TEXT);
+      expect(part.toolOutput).toContain(RECORDED_PUBLICATION_ID);
+    });
+
+    test(`${path}: a refused publish is not a success and keeps its error code`, async () => {
+      const part = translatePublish(provider, await value(true));
+      const contract = publishArtifactCallContract(part);
+
+      expect(contract.tool).toBe("publish_artifact");
+      expect(contract.toolState).not.toBe("success");
+      expect(part.toolError).toContain(RECORDED_ARTIFACT_ERROR_CODE);
+    });
+  }
+});

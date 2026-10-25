@@ -18,7 +18,7 @@ export async function runWithContinuation<T>(
     runningStage: string;
     onSuccess: (value: T) => Promise<ExecuteOutcome> | ExecuteOutcome;
     onFailure?: (error: unknown) => Promise<ExecuteOutcome> | ExecuteOutcome;
-    runningResult?: Record<string, unknown>;
+    runningResult?: Record<string, unknown> | (() => Record<string, unknown>);
   },
 ): Promise<ExecuteOutcome> {
   const settle = async (value: { ok: true; value: T } | { ok: false; error: unknown }) => {
@@ -70,6 +70,9 @@ export async function runWithContinuation<T>(
   return {
     state: "running",
     stage: options.runningStage,
-    result: options.runningResult ?? {},
+    result:
+      typeof options.runningResult === "function"
+        ? options.runningResult()
+        : (options.runningResult ?? {}),
   };
 }

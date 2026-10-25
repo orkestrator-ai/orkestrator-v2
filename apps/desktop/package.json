@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/desktop",
-  "version": "2.22.3",
+  "version": "2.30.0-beta",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,7 +14,7 @@
     "docker:build:dev": "bun scripts/dev-build-image.ts",
     "test": "bun test --preload ../../tests/setup-node.ts ./electron/agent-platform-selection.test.ts ./electron/application-logging.test.ts ./electron/auto-update.test.ts ./electron/host-update-executor.test.ts ./electron/macos-permissions.test.ts ./electron/runtime-profile.test.ts ./scripts/electron-bundle.test.ts ./scripts/dev ./tests --parallel",
     "test:workspace": "bun test --preload ../../tests/setup-node.ts ./electron/agent-platform-selection.test.ts ./electron/application-logging.test.ts ./electron/auto-update.test.ts ./electron/host-update-executor.test.ts ./electron/macos-permissions.test.ts ./electron/runtime-profile.test.ts ./scripts/electron-bundle.test.ts ./scripts/dev ./tests --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/desktop.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
-    "typecheck": "bunx tsc --noEmit -p tsconfig.electron.json && bunx tsc --noEmit -p tsconfig.scripts.json && bunx tsc --noEmit -p tsconfig.test.json"
+    "typecheck": "bun check -p tsconfig.electron.json && bun check -p tsconfig.scripts.json && bun check -p tsconfig.test.json"
   },
   "dependencies": {
     "@orkestrator/backend": "workspace:*",
@@ -25,8 +25,9 @@
   "devDependencies": {
     "@types/node": "^24.19.2",
     "@types/ws": "8.18.2",
-    "electron": "^44.7.0",
-    "electron-updater": "6.8.10",
+    "builder-util-runtime": "9.7.0",
+    "electron": "^45.0.0",
+    "electron-updater": "6.8.11",
     "happy-dom": "^21.0.1",
     "typescript": "~7.0.2",
     "ws": "8.22.0"

@@ -7,7 +7,10 @@
  * outcome a previous bridge process could not record.
  */
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
-import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentPricingTier,
+  NativeAgentTurnUsage,
+} from "@orkestrator/protocol/native-agent";
 import type { ModelSelection, SDKAgent, SDKImage, TokenUsage } from "@cursor/sdk";
 import {
   CANCEL_ACK_TIMEOUT_MS,
@@ -19,6 +22,8 @@ import {
   PROMPT_TIMEOUT_MS,
   PROVIDER,
 } from "./config.js";
+import { randomUUID } from "node:crypto";
+import { trackTurnEvidence, type TurnEvidence } from "./change-evidence.js";
 import { trackCommandChanges } from "./command-changes.js";
 import { modelSelection } from "./models.js";
 import { schedulePersist } from "./persistence.js";
@@ -95,9 +100,16 @@ export async function dispatchPrompt(
 
   const promptSequence = state.promptSequence;
   const diagnostics = createRunDiagnostics(state);
+  // The backend's dispatch request id is the turn id it knows this turn by.
+  const evidence = trackTurnEvidence(state.id, {
+    turnId: input.requestId ?? `cursor-turn:${randomUUID()}`,
+    mode: "live",
+  });
   // Primes the worktree baseline now, before the run can execute anything.
-  const commandChanges = trackCommandChanges(state);
+  const commandChanges = trackCommandChanges(state, evidence);
   await commandChanges.ready;
+  turnEvidence.set(state, evidence);
+  evidence.start();
   const send = () =>
     agent.send(
       { text, ...(images.length > 0 ? { images } : {}) },
@@ -116,6 +128,7 @@ export async function dispatchPrompt(
           diagnostics?.delta(update);
           // Detached and total over any payload, so it can neither stall the
           // run nor stop the frame from reaching the transcript.
+          evidence.observe(update);
           commandChanges.observe(update);
           try {
             applyInteractionUpdate(state, update);
@@ -142,6 +155,8 @@ export async function dispatchPrompt(
   const run = await (diagnostics ? diagnostics.follow(send) : send()).catch((error) => {
     diagnostics?.close("send-failed");
     commandChanges.close();
+    // Whether the SDK started the run is unknown (the journal says the same).
+    endTurnEvidence(state, evidence, { phase: "unknown", terminal: false });
     throw error;
   });
   diagnostics?.sent(run.id);
@@ -201,10 +216,25 @@ export async function dispatchPrompt(
     ).finally(() => {
       diagnostics?.close();
       commandChanges.close();
+      // A turn that lost ownership (a close, a newer turn) settled no outcome.
+      endTurnEvidence(state, evidence, { phase: "unknown", terminal: false });
       unsubscribeStatus();
       if (state.activeRun === run) state.activeRun = undefined;
     }),
   };
+}
+
+/** The evidence of the turn each session is running, for its terminal path. */
+const turnEvidence = new WeakMap<SessionState, TurnEvidence>();
+
+function endTurnEvidence(
+  state: SessionState,
+  evidence: TurnEvidence | undefined,
+  outcome: Parameters<TurnEvidence["end"]>[0],
+): void {
+  if (!evidence) return;
+  evidence.end(outcome);
+  if (turnEvidence.get(state) === evidence) turnEvidence.delete(state);
 }
 
 export interface FollowableRun {
@@ -389,6 +419,15 @@ function finishTurn(
     return;
   }
 
+  endTurnEvidence(state, turnEvidence.get(state), {
+    phase:
+      result.status === "cancelled"
+        ? "cancelled"
+        : result.status === "finished"
+          ? "succeeded"
+          : "unknown",
+    terminal: true,
+  });
   // A cancelled turn is not an error: the user asked for it, and the partial
   // transcript is the honest record of what ran.
   state.status = "idle";
@@ -411,6 +450,11 @@ function failTurn(
 ): void {
   settleBackgroundChildren(state);
   settleAbandonedToolParts(state);
+  // Only a terminal result from the SDK says the run itself stopped.
+  endTurnEvidence(state, turnEvidence.get(state), {
+    phase: "failed",
+    terminal: result !== undefined,
+  });
   state.cancelTurn = undefined;
   state.activeRun = undefined;
   state.pendingCancelPromptSequence = undefined;
@@ -461,6 +505,14 @@ function recordUsage(
   const elapsed =
     result?.durationMs ?? (state.turnStartedAt ? Date.now() - state.turnStartedAt : undefined);
   const modelId = result?.model?.id ?? state.composer.selectedModelId;
+  // `RunResult.model` is the selection the SDK actually sent, with `maxMode`
+  // set when its catalogue forced Max mode (1.0.40+). No model means no
+  // evidence either way, so the tier stays unreported rather than "standard".
+  const pricingTier: NativeAgentPricingTier | undefined = result?.model
+    ? result.model.maxMode === true
+      ? "premium"
+      : "standard"
+    : undefined;
   const previous = state.usage;
   const measured = turn !== undefined && Object.keys(turn).length > 0;
   const previousFloor = Math.max(previous?.sessionTokenFloor ?? 0, previous?.sessionTokens ?? 0);
@@ -482,6 +534,7 @@ function recordUsage(
           ? { requestId: result?.requestId ?? input.requestId }
           : {}),
         ...(modelId ? { modelId } : {}),
+        ...(pricingTier ? { pricingTier } : {}),
       },
     ].slice(-20);
     state.usage = {
@@ -687,6 +740,10 @@ function normalizeAgentUsageRuns(
     return [
       {
         turnId: candidate.runId,
+        // Carried forward, never refreshed: this builder rebuilds every entry
+        // the agent republishes, so taking the clock here would re-date a
+        // turn that ran days ago.
+        at: prior?.at ?? new Date().toISOString(),
         ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
         ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
         ...(usage.cacheReadTokens !== undefined ? { cacheReadTokens: usage.cacheReadTokens } : {}),
@@ -700,6 +757,7 @@ function normalizeAgentUsageRuns(
         ...(prior?.durationMs === undefined ? {} : { durationMs: prior.durationMs }),
         ...(prior?.requestId === undefined ? {} : { requestId: prior.requestId }),
         ...(prior?.modelId === undefined ? {} : { modelId: prior.modelId }),
+        ...(prior?.pricingTier === undefined ? {} : { pricingTier: prior.pricingTier }),
       },
     ];
   });

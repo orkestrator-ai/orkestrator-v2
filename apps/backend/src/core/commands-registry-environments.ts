@@ -31,10 +31,6 @@ import { discoverAgentExtensions } from "./extension-discovery.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import type { Environment } from "./models.js";
 import {
-  terminalProcesses,
-  mergingEnvironments,
-  environmentSetupSessions,
-  syncPrMonitorTracking,
   asString,
   assertOnlyKeys,
   asOptionalString,
@@ -52,9 +48,7 @@ import {
   parsePrState,
   toClientEnvironment,
   toClientEnvironmentSetupStartResult,
-  terminalOutputBufferLength,
   logSetupTerminal,
-  environmentStartTasks,
   inspectDockerContainerIdentity,
   isMissingDockerObjectError,
   getOrkestratorContainerStates,
@@ -129,7 +123,7 @@ export function registerEnvironmentCommands(
       environments.map((environment) =>
         syncStoredEnvironmentStatus(
           environment,
-          storage,
+          context,
           knownContainerStates,
           context.strictDockerOwner,
         ),
@@ -139,7 +133,7 @@ export function registerEnvironmentCommands(
       const environment = synced[index]!;
       if (
         environment.lifecycleOperation === "merging" &&
-        !mergingEnvironments.has(environment.id)
+        !context.runtime.environments.isMerging(environment.id)
       ) {
         synced[index] = await storage.updateEnvironment(environment.id, {
           lifecycleOperation: null,
@@ -158,7 +152,7 @@ export function registerEnvironmentCommands(
     // Cleanup-after-merge intent also makes exact-URL PR monitoring authoritative
     // after a restart. The monitor never resubmits the merge; it only confirms a
     // terminal state so the persisted deletion follow-up can resume safely.
-    void syncPrMonitorTracking(context).catch(() => undefined);
+    void context.runtime.prMonitor.sync(context).catch(() => undefined);
     return synced.map(toClientEnvironment);
   });
   register("get_environment_snapshots", (args, { storage }) =>
@@ -354,7 +348,7 @@ export function registerEnvironmentCommands(
     // The home is a tracked worktree like any other: its watcher is what
     // announces a dropped or edited file as a change.
     await context.runtime.diffStats.sync(context);
-    await syncPrMonitorTracking(context);
+    await context.runtime.prMonitor.sync(context);
     return toClientEnvironment(environment);
   });
   register("fork_environment", async ({ environmentId, environmentType }, context) => {
@@ -382,13 +376,13 @@ export function registerEnvironmentCommands(
     const environment = await storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
     const updated = await renameEnvironmentToName(environment, newName, context);
-    await syncPrMonitorTracking(context);
+    await context.runtime.prMonitor.sync(context);
     return toClientEnvironment(updated);
   });
   register("rename_environment_from_prompt", async ({ environmentId, prompt }, context) => {
     const envId = asString(environmentId, "environmentId");
     await renameEnvironmentFromPrompt(envId, asString(prompt, "prompt"), context);
-    await syncPrMonitorTracking(context);
+    await context.runtime.prMonitor.sync(context);
   });
   register("prepare_environment_first_prompt", async ({ environmentId, prompt }, context) => {
     await prepareEnvironmentFirstPrompt(
@@ -412,7 +406,7 @@ export function registerEnvironmentCommands(
     return (
       await syncStoredEnvironmentStatus(
         environment,
-        storage,
+        context,
         knownContainerStates,
         context.strictDockerOwner,
       )
@@ -429,7 +423,7 @@ export function registerEnvironmentCommands(
     return toClientEnvironment(
       await syncStoredEnvironmentStatus(
         environment,
-        storage,
+        context,
         knownContainerStates,
         context.strictDockerOwner,
       ),
@@ -449,7 +443,7 @@ export function registerEnvironmentCommands(
     for (const environment of environments) {
       if (knownContainerStates?.has(environment.containerId!)) continue;
       // An admitted start or replacement owns the reference right now.
-      if (environmentStartTasks.has(environment.id)) continue;
+      if (context.runtime.environments.isStarting(environment.id)) continue;
       // Only a definite answer clears a reference. An unreachable daemon, a
       // timeout or a permission failure says nothing about whether the
       // container — possibly the only copy of the workspace — still exists.
@@ -708,7 +702,7 @@ export function registerEnvironmentCommands(
     });
     // A PR recorded outside the monitor (e.g. right after a merge command) must
     // enter the monitored set without waiting for a client to rehydrate.
-    void syncPrMonitorTracking(context).catch(() => undefined);
+    void context.runtime.prMonitor.sync(context).catch(() => undefined);
     return toClientEnvironment(updated);
   });
   register("clear_environment_pr", async ({ environmentId }, context) => {
@@ -718,7 +712,7 @@ export function registerEnvironmentCommands(
       hasMergeConflicts: null,
       prRecheckAfterAgentCompletionArmedAt: undefined,
     });
-    void syncPrMonitorTracking(context).catch(() => undefined);
+    void context.runtime.prMonitor.sync(context).catch(() => undefined);
   });
   register(
     "get_environment_pr_url",
@@ -775,7 +769,8 @@ export function registerEnvironmentCommands(
     context: CommandContext,
   ) => {
     const id = environmentId;
-    const session = environmentSetupSessions.get(id);
+    const session = context.runtime.environments.setupSession(id);
+    const terminals = context.runtime.terminals;
     if (!session) {
       const environment = await context.storage.getEnvironment(id);
       if (environment?.setupSessionId && environment.setupStartedAt) {
@@ -791,8 +786,8 @@ export function registerEnvironmentCommands(
               : environment.setupPhase === "failed"
                 ? false
                 : undefined,
-          terminalRunning: terminalProcesses.has(environment.setupSessionId),
-          hasOutput: terminalOutputBufferLength(environment.setupSessionId) > 0,
+          terminalRunning: terminals.hasProcess(environment.setupSessionId),
+          hasOutput: terminals.outputLength(environment.setupSessionId) > 0,
         };
       }
       logSetupTerminal("renderer requested setup session: none", {
@@ -802,8 +797,8 @@ export function registerEnvironmentCommands(
     }
     const payload = {
       ...session,
-      terminalRunning: terminalProcesses.has(session.sessionId),
-      hasOutput: terminalOutputBufferLength(session.sessionId) > 0,
+      terminalRunning: terminals.hasProcess(session.sessionId),
+      hasOutput: terminals.outputLength(session.sessionId) > 0,
     };
     logSetupTerminal("renderer requested setup session", {
       environmentId: id,
@@ -812,7 +807,7 @@ export function registerEnvironmentCommands(
       terminalRunning: payload.terminalRunning,
       hasOutput: payload.hasOutput,
       success: session.success ?? null,
-      bufferChars: terminalOutputBufferLength(session.sessionId),
+      bufferChars: terminals.outputLength(session.sessionId),
     });
     return payload;
   };

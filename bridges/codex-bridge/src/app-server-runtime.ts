@@ -277,6 +277,12 @@ export class AppServerRuntime {
     return this.sessions.logoutAuth(...args);
   }
 
+  cancelAuthLogin(
+    ...args: Parameters<CodexRuntimeSessions["cancelAuthLogin"]>
+  ): ReturnType<CodexRuntimeSessions["cancelAuthLogin"]> {
+    return this.sessions.cancelAuthLogin(...args);
+  }
+
   rewindMessages(
     ...args: Parameters<CodexRuntimeSessions["rewindMessages"]>
   ): ReturnType<CodexRuntimeSessions["rewindMessages"]> {
@@ -376,12 +382,6 @@ export class AppServerRuntime {
     return this.prompts.refreshCommandCatalogue(...args);
   }
 
-  listGlobalCommandRows(
-    ...args: Parameters<CodexRuntimePrompt["listGlobalCommandRows"]>
-  ): ReturnType<CodexRuntimePrompt["listGlobalCommandRows"]> {
-    return this.prompts.listGlobalCommandRows(...args);
-  }
-
   // -------------------------------------------------------------------------
   // Cancellation, close, models, history and health
 
@@ -392,6 +392,12 @@ export class AppServerRuntime {
 
   set closeStopBudgetMs(value: number) {
     this.tail.closeStopBudgetMs = value;
+  }
+
+  interruptForParentExit(
+    ...args: Parameters<CodexRuntimeTail["interruptForParentExit"]>
+  ): ReturnType<CodexRuntimeTail["interruptForParentExit"]> {
+    return this.tail.interruptForParentExit(...args);
   }
 
   abort(...args: Parameters<CodexRuntimeTail["abort"]>): ReturnType<CodexRuntimeTail["abort"]> {

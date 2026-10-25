@@ -1,6 +1,6 @@
 /**
  * Moves backend modules and rewrites every reference to them, for the
- * `core/` domain-folder slices in docs/todo/backend-core-domain-folders.md.
+ * `core/` domain-folder slices in docs/todo/backend-structure/0012-backend-core-domain-folders.md.
  *
  *   bun scripts/move-backend-modules.ts --prefix design- --into design [--dry-run]
  *   bun scripts/move-backend-modules.ts --map moves.json [--dry-run]
@@ -223,13 +223,16 @@ async function main() {
     const formatTargets = changed.map((file) =>
       path.relative(root, moves.get(path.join(root, file)) ?? path.join(root, file)),
     );
-    // With no paths oxfmt formats the entire working directory in place.
+    // With no paths `bun fmt` formats the entire working directory in place.
     if (formatTargets.length > 0) {
-      const format = Bun.spawnSync(["bunx", "oxfmt", ...formatTargets], {
-        cwd: root,
-        stderr: "pipe",
-      });
-      if (format.exitCode !== 0) throw new Error(`oxfmt failed: ${format.stderr.toString()}`);
+      const format = Bun.spawnSync(
+        [process.execPath, "fmt", "--no-script", "--ignore-unknown", ...formatTargets],
+        {
+          cwd: root,
+          stderr: "pipe",
+        },
+      );
+      if (format.exitCode !== 0) throw new Error(`bun fmt failed: ${format.stderr.toString()}`);
     }
     await stageMoves(moves);
   }

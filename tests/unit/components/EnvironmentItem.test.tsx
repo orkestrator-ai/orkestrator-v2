@@ -178,6 +178,22 @@ function renderItem(env: Environment, options: RenderOptions = {}) {
   return render(itemElement(env, options));
 }
 
+function getRowMarker(container: HTMLElement) {
+  const marker = getRowButton(container).querySelector<HTMLElement>(
+    '[data-testid="environment-status-marker"]',
+  );
+  if (!marker) throw new Error("Row status marker missing");
+  return marker;
+}
+
+function getRowRing(container: HTMLElement) {
+  const ring = getRowMarker(container).querySelector<HTMLElement>(
+    '[data-testid="environment-status-ring"]',
+  );
+  if (!ring) throw new Error("Row status ring missing");
+  return ring;
+}
+
 function findMenuItem(container: HTMLElement, label: string) {
   const menuItems = container.querySelectorAll('[role="menuitem"]');
   return Array.from(menuItems).find((item) => item.textContent?.includes(label));
@@ -224,16 +240,17 @@ afterEach(() => {
   cleanup();
 });
 
-test("memoizes stable row props", () => {
+test("does no hover-card formatting while the card is closed", () => {
   const environment = makeEnvironment();
   const originalToLocaleDateString = Date.prototype.toLocaleDateString;
   const formatDate = mock(() => "formatted date");
   Date.prototype.toLocaleDateString = formatDate;
   try {
+    // The created date belongs to the hover card, which renders only when open.
     const view = renderItem(environment);
-    expect(formatDate).toHaveBeenCalledTimes(1);
+    expect(formatDate).toHaveBeenCalledTimes(0);
     view.rerender(itemElement(environment));
-    expect(formatDate).toHaveBeenCalledTimes(1);
+    expect(formatDate).toHaveBeenCalledTimes(0);
   } finally {
     Date.prototype.toLocaleDateString = originalToLocaleDateString;
   }
@@ -398,8 +415,8 @@ function contextMenuLabels(container: HTMLElement) {
   );
 }
 
-describe("EnvironmentItem activity icon", () => {
-  test("shows a pulsing blue container icon while tmux activity is working", () => {
+describe("EnvironmentItem activity marker", () => {
+  test("shows a pulsing blue container ring while tmux activity is working", () => {
     useAgentActivityStore.getState().replaceActivitySnapshot([
       {
         id: "env-1",
@@ -410,8 +427,9 @@ describe("EnvironmentItem activity icon", () => {
 
     const { container } = renderItem(makeEnvironment());
 
-    const icon = container.querySelector('div[role="button"] svg');
-    expect(icon?.getAttribute("class")).toContain("text-blue-500");
+    const icon = getRowRing(container);
+    expect(getRowMarker(container).getAttribute("data-shape")).toBe("square");
+    expect(icon.getAttribute("class")).toContain("bg-red-500/50");
     expect(icon?.getAttribute("class")).toContain("animate-pulse");
   });
 
@@ -423,8 +441,9 @@ describe("EnvironmentItem activity icon", () => {
       }),
     );
 
-    const icon = container.querySelector('div[role="button"] svg');
-    expect(icon?.getAttribute("class")).toContain("text-blue-500");
+    const icon = getRowRing(container);
+    expect(getRowMarker(container).getAttribute("data-shape")).toBe("square");
+    expect(icon.getAttribute("class")).toContain("bg-red-500/50");
   });
 
   test("keeps a newer runtime observation over an older backend snapshot", () => {
@@ -442,8 +461,8 @@ describe("EnvironmentItem activity icon", () => {
       }),
     );
 
-    const icon = container.querySelector('div[role="button"] svg');
-    expect(icon?.getAttribute("class")).toContain("text-amber-500");
+    const icon = getRowRing(container);
+    expect(icon.getAttribute("class")).toContain("bg-yellow-400/50");
   });
 
   test("prefers a persisted observation when it is newer or equally recent", () => {
@@ -619,12 +638,13 @@ describe("EnvironmentItem activity icon", () => {
       }),
     );
 
-    const icon = container.querySelector('div[role="button"] svg');
-    expect(icon?.getAttribute("class")).toContain("text-success");
+    const icon = getRowRing(container);
+    expect(getRowMarker(container).getAttribute("data-state")).toBe("idle");
+    expect(icon.getAttribute("class")).toContain("opacity-0");
     expect(icon?.getAttribute("class")).not.toContain("animate-pulse");
   });
 
-  test("shows no activity colour at all while the environment is not running", () => {
+  test("shows a stopped outline without activity colour while the environment is not running", () => {
     const { container } = renderItem(
       makeEnvironment({
         status: "stopped",
@@ -633,9 +653,12 @@ describe("EnvironmentItem activity icon", () => {
       }),
     );
 
-    const icon = container.querySelector('div[role="button"] svg');
-    expect(icon?.getAttribute("class")).toContain("text-muted-foreground");
-    expect(icon?.getAttribute("class")).not.toContain("text-blue-500");
+    const icon = getRowRing(container);
+    expect(icon.getAttribute("class")).toContain("border-muted-foreground/40");
+    expect(icon.getAttribute("class")).not.toContain("opacity-0");
+    expect(icon.getAttribute("class")).not.toContain("animate-pulse");
+    expect(icon.getAttribute("class")).not.toContain("bg-red-500/50");
+    expect(getRowMarker(container).getAttribute("data-state")).toBe("inactive");
   });
 });
 
@@ -931,8 +954,8 @@ describe("EnvironmentItem menu actions and selection", () => {
     });
     const { container } = renderItem(localEnvironment);
 
-    expect(container.querySelector("svg.animate-spin.text-amber-500") === null).toBe(true);
-    expect(container.querySelector("svg.lucide-laptop")).not.toBeNull();
+    expect(getRowButton(container).querySelector("svg.animate-spin") === null).toBe(true);
+    expect(getRowMarker(container).getAttribute("data-shape")).toBe("circle");
   });
 
   test("context menu Stop calls onStop for a running container environment", () => {
@@ -1431,8 +1454,10 @@ describe("EnvironmentItem multi-select", () => {
     expect((container.querySelector('input[type="checkbox"]') as HTMLInputElement).checked).toBe(
       true,
     );
-    // The checkbox replaces the status icon rather than sitting beside it.
-    expect(container.querySelector('div[role="button"] svg') === null).toBe(true);
+    // The checkbox replaces the status marker rather than sitting beside it.
+    expect(
+      getRowButton(container).querySelector('[data-testid="environment-status-marker"]') === null,
+    ).toBe(true);
   });
 
   test("a deleting environment shows the delete spinner instead of the checkbox", () => {
@@ -1461,9 +1486,8 @@ describe("EnvironmentItem transitioning state", () => {
       makeEnvironment({ environmentType: "local", containerId: null, status: "creating" }),
     );
 
-    const icon = container.querySelector('div[role="button"] svg');
-    expect(icon?.getAttribute("class")).toContain("lucide-laptop");
-    expect(icon?.getAttribute("class")).not.toContain("animate-spin");
+    expect(getRowMarker(container).getAttribute("data-shape")).toBe("circle");
+    expect(getRowButton(container).querySelector("svg.animate-spin") === null).toBe(true);
   });
 
   test("clears the spinner once its environment settles", () => {
@@ -1476,9 +1500,10 @@ describe("EnvironmentItem transitioning state", () => {
 
     rerender(itemElement(makeEnvironment({ status: "running" })));
 
-    const icon = container.querySelector('div[role="button"] svg');
-    expect(icon?.getAttribute("class")).toContain("lucide-container");
-    expect(icon?.getAttribute("class")).not.toContain("animate-spin");
+    expect(getRowMarker(container).getAttribute("data-shape")).toBe("square");
+    expect(getRowMarker(container).getAttribute("data-state")).toBe("idle");
+    expect(getRowRing(container).classList).toContain("opacity-0");
+    expect(getRowButton(container).querySelector("svg.animate-spin") === null).toBe(true);
   });
 });
 

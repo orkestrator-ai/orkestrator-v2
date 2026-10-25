@@ -6,32 +6,19 @@
  * `app-server/item-adapter.ts`) precisely so this file — and its tests — stay
  * engine-neutral. Two engines rendering the same conversation identically is the
  * parity requirement that makes rollback safe.
- *
- * `index.ts` re-exports `itemToParts` and `stringifyUnknown`, so existing
- * importers are unaffected.
  */
-import { execFile as execFileCallback } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { isAbsolute, join, relative } from "node:path";
-import { promisify } from "node:util";
-import type { ThreadItem } from "../codex-item-types.js";
+import { readFile } from "node:fs/promises";
+import type { FileUpdateChange, McpToolCallItem, PatchApplyStatus } from "../codex-item-types.js";
 import { normalizeTranscriptToolArgs } from "../subagent-transcript.js";
 import { mapTodoArgs, summarizeTodoList } from "../todo-helpers.js";
 import type { EngineItem } from "../engine/types.js";
 import { DEFAULT_MAX_COMMAND_OUTPUT_CHARS } from "../sessions/turn-accumulator.js";
-import {
-  applyDiffBudget,
-  isBaselineWorthKeeping,
-  pruneBaselines,
-  pruneDiffCache,
-  touchBaseline,
-} from "./diff-budget.js";
+import { applyDiffBudget, pruneDiffCache } from "./diff-budget.js";
 import { rawApplyPatchParts } from "./apply-patch.js";
 import { agentMessageDisplayText } from "./agent-message.js";
+import { legacyUnifiedDiff, resolvedChangePath, suppliedFileChange } from "./file-change-diff.js";
 import type { FileChangeDiffContext, NormalizedPart, ToolDiffMetadata } from "./types.js";
 
-const execFile = promisify(execFileCallback);
 const COMMAND_OUTPUT_TRUNCATION_NOTICE = "\n… output truncated";
 const INVISIBLE_TEXT_ONLY = /^(?:\p{White_Space}|\uFEFF|\p{Default_Ignorable_Code_Point})*$/u;
 
@@ -113,116 +100,6 @@ export async function readTextFileIfPresent(path: string): Promise<string | unde
   }
 }
 
-export async function readGitHeadTextFile(
-  cwd: string,
-  relativePath: string,
-): Promise<string | undefined> {
-  try {
-    const { stdout } = await execFile("git", ["show", `HEAD:${relativePath}`], {
-      cwd,
-      maxBuffer: 2 * 1024 * 1024,
-    });
-    return stdout;
-  } catch {
-    return undefined;
-  }
-}
-
-interface GitDiffIo {
-  makeTempDir(prefix: string): Promise<string>;
-  writeTextFile(path: string, content: string): Promise<void>;
-  removeTempDir(path: string): Promise<void>;
-  execute(cwd: string, args: string[]): Promise<{ stdout: string }>;
-}
-
-const defaultGitDiffIo: GitDiffIo = {
-  makeTempDir: (prefix) => mkdtemp(prefix),
-  writeTextFile: (path, content) => writeFile(path, content, "utf8"),
-  removeTempDir: (path) => rm(path, { recursive: true, force: true }),
-  execute: async (cwd, args) => {
-    const { stdout } = await execFile("git", args, {
-      cwd,
-      maxBuffer: 2 * 1024 * 1024,
-    });
-    return { stdout };
-  },
-};
-
-async function runGitDiffNoIndexWithIo(
-  cwd: string,
-  relativePath: string,
-  before: string | undefined,
-  after: string | undefined,
-  io: GitDiffIo,
-): Promise<string | undefined> {
-  if ((before ?? "") === (after ?? "")) {
-    return undefined;
-  }
-
-  const tempDir = await io.makeTempDir(join(tmpdir(), "orkestrator-codex-diff-"));
-  const beforePath = join(tempDir, "before");
-  const afterPath = join(tempDir, "after");
-  const normalizeOutput = (output: string) =>
-    output
-      .split(`a${beforePath}`)
-      .join(`a/${relativePath}`)
-      .split(`b${afterPath}`)
-      .join(`b/${relativePath}`)
-      .split(beforePath)
-      .join(`a/${relativePath}`)
-      .split(afterPath)
-      .join(`b/${relativePath}`);
-
-  try {
-    await io.writeTextFile(beforePath, before ?? "");
-    await io.writeTextFile(afterPath, after ?? "");
-
-    const args = [
-      "diff",
-      "--no-index",
-      "--no-ext-diff",
-      "--no-color",
-      "--unified=3",
-      beforePath,
-      afterPath,
-    ];
-
-    try {
-      const { stdout } = await io.execute(cwd, args);
-      const output = stdout.trimEnd();
-      return output.length > 0 ? normalizeOutput(output) : undefined;
-    } catch (error) {
-      // `git diff --no-index` uses exit code 1 for an ordinary difference.
-      // Every other failure is fatal. In particular, maxBuffer failures may
-      // carry truncated stdout, which must never be presented as a complete
-      // patch.
-      if ((error as { code?: unknown }).code !== 1) {
-        return undefined;
-      }
-      const stdout =
-        typeof (error as { stdout?: unknown }).stdout === "string"
-          ? (error as { stdout: string }).stdout.trimEnd()
-          : "";
-      return stdout.length > 0 ? normalizeOutput(stdout) : undefined;
-    }
-  } finally {
-    await io.removeTempDir(tempDir);
-  }
-}
-
-export async function runGitDiffNoIndex(
-  cwd: string,
-  relativePath: string,
-  before: string | undefined,
-  after: string | undefined,
-): Promise<string | undefined> {
-  return runGitDiffNoIndexWithIo(cwd, relativePath, before, after, defaultGitDiffIo);
-}
-
-export const __testing = {
-  runGitDiffNoIndexWithIo,
-};
-
 export function countDiffLines(diff: string): { additions: number; deletions: number } {
   let additions = 0;
   let deletions = 0;
@@ -254,58 +131,96 @@ export function countDiffLines(diff: string): { additions: number; deletions: nu
   return { additions, deletions };
 }
 
-export async function getFileChangeDiffMetadata(
+/**
+ * The legacy `toolDiff` for one file change, from app-server's own payload.
+ *
+ * Built only from what the item carries (`messages/file-change-diff.ts`),
+ * never from the worktree or `git show HEAD:`: re-reading the disk shows the
+ * file as it is *now*, so a row rendered again after later edits would claim
+ * them, and a patch still in progress would be diffed before it applied. A
+ * change with no supplied payload (older history) is shown by path alone and
+ * its counts stay unknown.
+ *
+ * Only a settled change is cached: an in-progress one is re-sent as the model
+ * writes the patch, under the same key.
+ */
+export function fileChangeDiffMetadata(
   cwd: string,
-  change: Extract<ThreadItem, { type: "file_change" }>["changes"][number],
+  change: FileUpdateChange,
+  status: PatchApplyStatus,
   context?: FileChangeDiffContext,
   cacheKey?: string,
-): Promise<ToolDiffMetadata> {
-  const resolvedPath = isAbsolute(change.path) ? change.path : join(cwd, change.path);
-  const relativePath = isAbsolute(change.path) ? relative(cwd, change.path) : change.path;
+): ToolDiffMetadata {
   const cached = cacheKey ? context?.cache.get(cacheKey) : undefined;
-  if (cached) {
-    return cached;
+  if (cached) return cached;
+
+  const filePath = resolvedChangePath(cwd, change.path);
+  const supplied = suppliedFileChange(change);
+  let metadata: ToolDiffMetadata;
+  if (!supplied) {
+    metadata = { filePath };
+  } else {
+    const diff = legacyUnifiedDiff(cwd, change, supplied);
+    // No diff text is still a known zero for an empty file or a pure rename;
+    // a payload that is not a diff leaves the counts unknown.
+    const counts = diff
+      ? countDiffLines(diff)
+      : supplied.kind !== "update" || supplied.unified
+        ? { additions: 0, deletions: 0 }
+        : {};
+    // Oversized before/after are dropped here rather than stored and truncated
+    // later. See messages/diff-budget.ts.
+    metadata = applyDiffBudget({
+      filePath,
+      ...(supplied.kind === "delete" ? { before: supplied.content } : {}),
+      ...(supplied.kind === "add" ? { after: supplied.content } : {}),
+      diff,
+      ...counts,
+    });
   }
 
-  const hasBaseline = context?.baselines.has(relativePath) ?? false;
-  const before = hasBaseline
-    ? context?.baselines.get(relativePath)
-    : change.kind === "add"
-      ? undefined
-      : await readGitHeadTextFile(cwd, relativePath);
-  const after = change.kind === "delete" ? undefined : await readTextFileIfPresent(resolvedPath);
-  const diff = await runGitDiffNoIndex(cwd, relativePath, before, after);
-  const { additions, deletions } = diff ? countDiffLines(diff) : { additions: 0, deletions: 0 };
-
-  // Oversized before/after are dropped here rather than stored and truncated
-  // later: they are entire file contents, and this is the bridge's largest
-  // in-memory consumer. See messages/diff-budget.ts.
-  const metadata = applyDiffBudget({
-    filePath: resolvedPath,
-    before,
-    after,
-    diff,
-    additions,
-    deletions,
-  });
-
-  if (context) {
-    // Only keep a baseline we can afford; a missing one simply means the next
-    // diff for this file is taken against git HEAD, which is still correct.
-    if (isBaselineWorthKeeping(after)) {
-      context.baselines.set(relativePath, after);
-      touchBaseline(context.baselines, relativePath);
-    } else {
-      context.baselines.delete(relativePath);
-    }
-    pruneBaselines(context.baselines);
-  }
-  if (cacheKey && context) {
+  if (cacheKey && context && status !== "in_progress") {
     context.cache.set(cacheKey, metadata);
     pruneDiffCache(context.cache);
   }
-
   return metadata;
+}
+
+/** Async alias kept for existing callers; nothing here awaits. */
+export async function getFileChangeDiffMetadata(
+  cwd: string,
+  change: FileUpdateChange,
+  context?: FileChangeDiffContext,
+  cacheKey?: string,
+  status: PatchApplyStatus = "completed",
+): Promise<ToolDiffMetadata> {
+  return fileChangeDiffMetadata(cwd, change, status, context, cacheKey);
+}
+
+function fileChangeToolState(status: PatchApplyStatus): "success" | "failure" | "pending" {
+  return status === "completed" ? "success" : status === "in_progress" ? "pending" : "failure";
+}
+
+/**
+ * An MCP tool call's part. Synchronous and exported so a history reload renders
+ * a rollout's recorded call through exactly this code (`history/rollout.ts`).
+ */
+export function mcpToolCallParts(item: McpToolCallItem): NormalizedPart[] {
+  return [
+    {
+      type: "tool-invocation",
+      toolUseId: item.id,
+      content: item.tool,
+      toolName: item.tool,
+      toolArgs: (item.arguments ?? {}) as Record<string, unknown>,
+      toolState:
+        item.status === "failed" ? "failure" : item.status === "completed" ? "success" : "pending",
+      toolTitle: `${item.server}:${item.tool}`,
+      toolOutput: stringifyUnknown(item.result),
+      toolError: item.error?.message,
+      ...finishedDuration(item),
+    },
+  ];
 }
 
 export async function itemToParts(
@@ -361,43 +276,24 @@ export async function itemToParts(
       ];
     }
     case "file_change":
-      return Promise.all(
-        item.changes.map(async (change, index) => ({
-          type: "tool-invocation" as const,
-          toolUseId: item.id,
-          content: change.path,
-          toolName: "apply_patch",
-          toolState: item.status === "failed" ? "failure" : "success",
-          toolTitle: `${change.kind}: ${change.path}`,
-          toolOutput: `${change.kind}: ${change.path}`,
-          toolDiff: await getFileChangeDiffMetadata(
-            cwd,
-            change,
-            fileChangeContext,
-            `${item.id}:${index}:${change.kind}:${change.path}`,
-          ),
-        })),
-      );
+      return item.changes.map((change, index) => ({
+        type: "tool-invocation" as const,
+        toolUseId: item.id,
+        content: change.path,
+        toolName: "apply_patch",
+        toolState: fileChangeToolState(item.status),
+        toolTitle: `${change.kind}: ${change.path}`,
+        toolOutput: `${change.kind}: ${change.path}`,
+        toolDiff: fileChangeDiffMetadata(
+          cwd,
+          change,
+          item.status,
+          fileChangeContext,
+          `${item.id}:${index}:${change.kind}:${change.path}`,
+        ),
+      }));
     case "mcp_tool_call":
-      return [
-        {
-          type: "tool-invocation",
-          toolUseId: item.id,
-          content: item.tool,
-          toolName: item.tool,
-          toolArgs: (item.arguments ?? {}) as Record<string, unknown>,
-          toolState:
-            item.status === "failed"
-              ? "failure"
-              : item.status === "completed"
-                ? "success"
-                : "pending",
-          toolTitle: `${item.server}:${item.tool}`,
-          toolOutput: stringifyUnknown(item.result),
-          toolError: item.error?.message,
-          ...finishedDuration(item),
-        },
-      ];
+      return mcpToolCallParts(item);
     case "dynamic_tool_call": {
       const output =
         capCommandOutput(stringifyDynamicToolContent(item.content_items) ?? "") || undefined;
@@ -499,6 +395,15 @@ export async function itemToParts(
       return [];
     case "image":
       return [
+        // A generation's inputs are images Codex read for it, so each shows
+        // as a read image before the result, through the same path reference.
+        ...(item.input_paths ?? []).map((path): NormalizedPart => ({
+          type: "image",
+          content: path.split(/[\\/]/).pop() || "Image",
+          fileUrl: `file://${path}`,
+          filename: path,
+          imageSource: "viewed",
+        })),
         {
           type: "image",
           content: item.text,

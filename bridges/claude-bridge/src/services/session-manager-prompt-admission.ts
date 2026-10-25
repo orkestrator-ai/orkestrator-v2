@@ -208,6 +208,7 @@ export async function applyPromptPlanMode(
       session.status = beforeStartup.status;
       session.turnStartedAt = beforeStartup.turnStartedAt;
       session.error = beforeStartup.error;
+      session.interruption = beforeStartup.interruption;
       session.lastActivity = beforeStartup.lastActivity;
       session.persistedMessagesLoaded = beforeStartup.persistedMessagesLoaded;
       if (needsTranscriptHydration) resetTranscriptEpoch(session);
@@ -228,6 +229,8 @@ export async function applyPromptPlanMode(
 export function beginPromptActivity(admission: PromptAdmission): void {
   const { session, sessionId } = admission;
   session.error = undefined;
+  // This turn is the continuation of one a restart cut short, if there was one.
+  session.interruption = undefined;
   session.lastActivity = new Date();
   // A suggestion belongs to the turn that produced it. Nothing else clears it,
   // and `GET /session/:id` replays it on every mount, restore and reconnect, so

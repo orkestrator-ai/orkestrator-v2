@@ -1,10 +1,10 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { CommandContext } from "../src/core/commands-context";
-import type { Environment } from "../src/core/models";
-import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
-import { BackendRuntime } from "../src/core/backend-runtime";
+import type { CommandContext } from "../src/core/commands-context.js";
+import type { Environment } from "../src/core/models.js";
+import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks.js";
+import { BackendRuntime } from "../src/core/backend-runtime.js";
 
 /**
  * Small, dependency-free fixtures for container lifecycle suites. They avoid

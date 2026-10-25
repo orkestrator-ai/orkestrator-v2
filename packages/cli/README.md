@@ -1,11 +1,33 @@
 # Orkestrator backend and client
 
-The `orkestrator` executable has two modes:
+The `orkestrator` executable has three modes:
 
 - **Service** — `orkestrator`, `orkestrator serve …`, or the historical
   `orkestrator --host … --port …` forms run the backend in the foreground.
 - **Client** — `orkestrator <group> <command> …` talks to a backend that is
   already running. Client commands never start a backend.
+- **Problem report** — `orkestrator --fix AGENT` opens a coding agent to
+  collect diagnostics and draft a GitHub issue.
+
+## Reporting a problem
+
+Something wrong with Orkestrator? Let a coding agent help you report it:
+
+```bash
+bunx orkestrator --fix claude    # or codex, opencode
+```
+
+Instead of starting Orkestrator, this opens that agent's interactive session
+with instructions to ask what went wrong, read Orkestrator's logs and version
+details on this machine, and draft a GitHub issue for
+`orkestrator-ai/orkestrator-v2`. The agent is told to stay read-only, redact
+credentials and personal details, and file only after you approve the draft
+(through `gh`, or by giving you the new-issue link). It works in a new
+temporary directory and saves the draft there as `issue.md`.
+
+The agent on `PATH` is used; otherwise the copy Orkestrator installed. Pass
+`--data-dir DIR` when the backend uses a non-default data directory. Run
+`orkestrator --fix --help` for details.
 
 Run the Orkestrator backend service without installing the desktop application:
 
@@ -105,6 +127,7 @@ RUN_ID=$(jq -er '.result.runId' launch.json)
 SESSION=$(jq -er '.result.sessionId' launch.json)
 orkestrator run wait "$RUN_ID" --timeout 30m --json
 orkestrator session transcript "$SESSION" --limit 20 --json > transcript.json
+orkestrator changes view "$ENV" --json > changes.json
 orkestrator environment exec "$ENV" --wait -- bun test
 ```
 
@@ -113,10 +136,16 @@ orkestrator environment exec "$ENV" --wait -- bun test
   found/ambiguous/expired, 4 connection/auth, 5 observer deadline,
   6 interaction required, 7 unknown dispatch/outcome, 8 conflict/unsupported,
   130/143 observation interrupted.
-- Paths given to `project` commands are on the backend host; prompt, patch and
-  credential files are read locally.
+- Paths given to `project` commands are on the backend host; prompt, patch,
+  attachment (`--attach`) and credential files are read locally.
 - `project create` creates a **private GitHub repository** and pushes to it;
-  it requires `--github-private`.
+  it requires `--github-private`. `project init` makes a local-only repository
+  with no remote.
+- A prompt whose first word names a provider command (`/review …`) runs it;
+  pass `--literal` to send plain text. `session commands` and `session
+  command` list and run slash commands by ID. `--enqueue` queues a prompt
+  behind a busy session instead of refusing it.
+- `orkestrator completion bash|zsh|fish` prints a shell completion script.
 - A timeout or Ctrl+C only stops observing. Resume with `orkestrator run wait
   OP`; recover a lost response with `orkestrator run get --request-id KEY
   --action ACTION`. The client never resubmits under a new key.
@@ -145,6 +174,11 @@ runs client help/version/errors with no backend, starts the backend, drives a
 fixture project/environment lifecycle through the installed client, confirms
 only one backend ran, and stops it. It needs network access, which is why it is
 a publish gate rather than part of `mise run test`.
+
+The npm dist-tag follows the version's update channel: `2.23.0` publishes as
+`latest`, `2.23.0-beta` as `beta` and `2.23.0-alpha` as `alpha`, so
+`bunx orkestrator` only ever gets a stable release. Try a prerelease with
+`bunx orkestrator@beta` or `bunx orkestrator@alpha`.
 
 `dist/client.js` is the client bundle the launcher imports first; it must stay
 free of backend imports so client commands never initialize a service.

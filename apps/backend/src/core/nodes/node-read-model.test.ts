@@ -1,0 +1,126 @@
+import { expect, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
+import { NodeReadModel } from "./node-read-model.js";
+
+function harness() {
+  let now = 0;
+  let failed = false;
+  let name = "before";
+  const events: string[] = [];
+  const model = new NodeReadModel({
+    now: () => now,
+    nodes: {
+      selfIdentity: async () => "bk_command" as BackendId,
+      selfProfile: async () => ({ displayName: "Command" }),
+      listNodes: async () => ({ nodes: [] }) as never,
+      link: () => null,
+      subscribe: () => () => undefined,
+      recordProfile: async () => undefined,
+    },
+    emit: (event) => {
+      events.push(event);
+    },
+    local: {
+      invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+        if (command === "get_projects")
+          return [
+            { id: "p1", name: "One" },
+            { id: "p2", name: "Two" },
+          ] as T;
+        if (failed && args?.projectId === "p2") throw new Error("snapshot temporarily unreadable");
+        return [
+          { id: `${args?.projectId}-env`, projectId: args?.projectId, name, status: "running" },
+        ] as T;
+      },
+    },
+  });
+  return {
+    model,
+    events,
+    advance: () => {
+      now += 11 * 60_000;
+      name = "after sleep";
+    },
+    fail: (value: boolean) => {
+      failed = value;
+    },
+  };
+}
+
+test("self-summary invalidations survive ten minutes idle and reconcile after sleep", async () => {
+  const h = harness();
+  try {
+    await h.model.summaries(undefined, { includeSelf: true });
+    h.advance();
+    h.model.noteLocalEvent("resource-changed", { resource: "environment" });
+    await Bun.sleep(80);
+    expect(h.events).toContain("node-summary-changed");
+    const self = (await h.model.summaries(undefined, { includeSelf: true })).self!;
+    expect(self.environments.map((row) => row.name)).toEqual(["after sleep", "after sleep"]);
+  } finally {
+    h.model.stop();
+  }
+});
+
+test("partial self snapshot failure retains last known environments, marks truncation and retries", async () => {
+  const h = harness();
+  try {
+    await h.model.summaries(undefined, { includeSelf: true });
+    h.advance();
+    h.fail(true);
+    h.model.noteLocalEvent("resource-changed", { resource: "environment" });
+    const partial = (await h.model.summaries(undefined, { includeSelf: true })).self!;
+    expect(partial.environments.map((row) => row.name)).toEqual(["after sleep", "before"]);
+    expect(partial.truncated).toBe(true);
+    h.fail(false);
+    const recovered = (await h.model.summaries(undefined, { includeSelf: true })).self!;
+    expect(recovered.environments.map((row) => row.name)).toEqual(["after sleep", "after sleep"]);
+    expect(recovered.truncated).toBe(false);
+  } finally {
+    h.model.stop();
+  }
+});
+
+test("named summary due job reconciles missed events and stops with the model", async () => {
+  const { TestNodeNetwork, settle } = await import("./node-network-test-support.js");
+  const network = new TestNodeNetwork();
+  const command = await network.add("command", { forceRegistration: true });
+  const leaf = await network.add("leaf");
+  let name = "before";
+  leaf.commands.set("get_projects", () => [{ id: "p1", name }]);
+  leaf.commands.set("get_environments", () => []);
+  await command.service.addNode({
+    routes: [{ id: "primary" as never, kind: "https", enabled: true, origin: leaf.origin }],
+    token: leaf.token,
+  });
+  const model = new NodeReadModel({
+    nodes: command.service,
+    emit: () => undefined,
+    fetchImpl: network.fetch,
+    reconcileMs: 20,
+  });
+  const summarySchedulers = () =>
+    recurringDiagnosticsRegistry
+      .snapshot()
+      .schedulers.filter((scheduler) => scheduler.byKind["node-summary-reconcile"]?.keys === 1)
+      .length;
+  const before = summarySchedulers();
+  try {
+    await model.start();
+    expect(summarySchedulers()).toBe(before + 1);
+    await settle(40);
+    expect((await model.summaries()).nodes[0]!.projects[0]!.name).toBe("before");
+    name = "missed-event";
+    await settle(80);
+    expect((await model.summaries()).nodes[0]!.projects[0]!.name).toBe("missed-event");
+    model.stop();
+    expect(summarySchedulers()).toBe(before);
+    await settle(40);
+    const reads = leaf.received.filter((call) => call.command === "get_projects").length;
+    await settle(60);
+    expect(leaf.received.filter((call) => call.command === "get_projects")).toHaveLength(reads);
+  } finally {
+    model.stop();
+  }
+});

@@ -47,6 +47,40 @@ describe("normalizeProviderContextUsage", () => {
       { window: "invalid" },
     ]);
   });
+
+  test("keeps a shared context-category id and drops one outside the vocabulary", () => {
+    expect(
+      normalizeProviderContextUsage({
+        usedTokens: 1,
+        contextCategories: [
+          { id: "system-prompt", name: "System prompt", tokens: 10 },
+          { id: "system_prompt", name: "Raw provider id", tokens: 5 },
+          { name: "Messages", tokens: 20 },
+        ],
+      })?.contextCategories,
+    ).toEqual([
+      { id: "system-prompt", name: "System prompt", tokens: 10 },
+      { name: "Raw provider id", tokens: 5 },
+      { name: "Messages", tokens: 20 },
+    ]);
+  });
+
+  test("keeps a turn's shared pricing tier and drops one outside the vocabulary", () => {
+    expect(
+      normalizeProviderContextUsage({
+        usedTokens: 1,
+        turns: [
+          { turnId: "a", pricingTier: "premium" },
+          { turnId: "b", pricingTier: "standard" },
+          { turnId: "c", pricingTier: "max" },
+        ],
+      })?.turns,
+    ).toEqual([
+      { turnId: "a", pricingTier: "premium" },
+      { turnId: "b", pricingTier: "standard" },
+      { turnId: "c" },
+    ]);
+  });
 });
 
 describe("normalizeProviderDrift", () => {
@@ -353,5 +387,28 @@ describe("providerAdvisoryNotices", () => {
         { message: "reported", severity: "warning" },
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("normalizeProviderContextUsage turn timestamps", () => {
+  test("keeps a turn's own time, re-serialized, and drops one it cannot read", () => {
+    const usage = normalizeProviderContextUsage({
+      usedTokens: 1,
+      turns: [
+        { turnId: "dated", at: "2026-08-03T22:30:00Z", inputTokens: 5 },
+        { turnId: "junk", at: "yesterday afternoon", inputTokens: 5 },
+        { turnId: "numeric", at: 1_760_000_000_000, inputTokens: 5 },
+        { turnId: "absent", inputTokens: 5 },
+      ],
+    });
+    // This is the gate every bridge's turns pass through, and it drops any
+    // field it does not name. `at` is what dates recorded usage, so a value it
+    // cannot parse is dropped here rather than reaching the store.
+    expect(usage?.turns).toEqual([
+      { turnId: "dated", at: "2026-08-03T22:30:00.000Z", inputTokens: 5 },
+      { turnId: "junk", inputTokens: 5 },
+      { turnId: "numeric", inputTokens: 5 },
+      { turnId: "absent", inputTokens: 5 },
+    ]);
   });
 });

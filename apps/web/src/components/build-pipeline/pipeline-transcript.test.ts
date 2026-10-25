@@ -136,6 +136,56 @@ quoted context
     });
   });
 
+  test("keeps a backend-placed artifact part beside its publish call for every harness", () => {
+    const artifact = {
+      schemaVersion: 1,
+      artifactId: "art_stage0001",
+      revision: 1,
+      publicationId: "pub_stage0001",
+      kind: "chart",
+      title: "Coverage",
+      summary: "Coverage by package",
+      provenance: { backendId: "backend-1", origin: "agent" },
+    };
+    for (const agent of ["claude", "codex", "cursor", "pi"] as const) {
+      const rows = toPipelineTranscript(
+        [
+          {
+            id: `${agent}-1`,
+            role: "assistant",
+            content: "",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "publish_artifact",
+                toolName: "mcp__orkestrator-artifacts__publish_artifact",
+                toolUseId: "toolu_1",
+                toolState: "success",
+                toolArgs: { artifactId: "art_stage0001", expectedRevision: 1 },
+              },
+              {
+                type: "artifact",
+                content: "[Artifact: Coverage]",
+                artifact,
+                publishedAt: FALLBACK,
+                conversationSequence: 1,
+                sourcePartId: "artifact:pub_stage0001",
+              },
+            ],
+          },
+        ],
+        agent,
+        FALLBACK,
+      );
+      // The display adapters close the tool group before a text-section part,
+      // so the card is the row right after its call, as in a native tab.
+      expect(flattenedParts(rows).map((part) => part.type)).toEqual([
+        "tool-invocation",
+        "artifact",
+      ]);
+    }
+  });
+
   test("groups Claude child tools under the Task that spawned them", () => {
     const transcript = toPipelineTranscript(
       [
@@ -1431,47 +1481,12 @@ quoted context
   });
 });
 
-/** A raw OpenCode message, as a backend older than 2.19.17 serves it. */
-function rawOpenCodeEnvelope(id: string, text: string) {
-  return {
-    info: { id, role: "assistant", time: { created: 1_800_000_000_000 }, modelID: "model" },
-    parts: [
-      { id: `${id}-reasoning`, type: "reasoning", text: "Thinking it over" },
-      { id: `${id}-text`, type: "text", text },
-      {
-        id: `${id}-tool`,
-        type: "tool",
-        tool: "bash",
-        state: { status: "completed", input: { command: "bun test" }, output: "ok" },
-      },
-    ],
-  };
+/** An entry in a shape this renderer does not read, keeping its own id. */
+function unreadableEntry(id: string, text: string) {
+  return { id, kind: "display-row-v3", row: { text } };
 }
 
 describe("toPipelineTranscript across backend versions", () => {
-  test("replaces raw OpenCode envelopes from an older backend with one notice", () => {
-    const transcript = toPipelineTranscript(
-      [rawOpenCodeEnvelope("m1", "First answer"), rawOpenCodeEnvelope("m2", "Second answer")],
-      "opencode",
-      FALLBACK,
-    );
-
-    // Without the guard both vanished without a trace (an envelope with a file
-    // part became an empty row instead), so the stage read as silent.
-    expect(transcript).toEqual([
-      {
-        id: "transcript-skew:opencode-envelope:m1",
-        role: "system",
-        content: expect.stringContaining("2 OpenCode messages not shown"),
-        parts: [{ type: "text", content: expect.stringContaining("older than 2.19.17") }],
-        createdAt: FALLBACK,
-      },
-    ]);
-    expect(transcript[0]!.content).toContain(
-      "Update Orkestrator on the computer running the backend",
-    );
-  });
-
   test("renders display rows from a current backend without a notice", () => {
     const transcript = toPipelineTranscript(
       [
@@ -1518,11 +1533,11 @@ describe("toPipelineTranscript across backend versions", () => {
     const transcript = toPipelineTranscript(
       [
         { id: "a", role: "assistant", content: "Before" },
-        rawOpenCodeEnvelope("raw-1", "lost"),
-        rawOpenCodeEnvelope("raw-2", "lost"),
+        unreadableEntry("raw-1", "lost"),
+        unreadableEntry("raw-2", "lost"),
         { id: "b", role: "assistant", content: "Between" },
         { future: true },
-        rawOpenCodeEnvelope("raw-3", "lost"),
+        unreadableEntry("raw-3", "lost"),
       ],
       "opencode",
       FALLBACK,
@@ -1532,25 +1547,24 @@ describe("toPipelineTranscript across backend versions", () => {
       transcript.map((message) => [message.id, message.content.split(" not shown")[0]]),
     ).toEqual([
       ["a", "Before"],
-      ["transcript-skew:opencode-envelope:raw-1", "2 OpenCode messages"],
+      ["transcript-skew:unrecognized:raw-1", "2 transcript entries"],
       ["b", "Between"],
-      ["transcript-skew:unrecognized:4", "1 transcript entry"],
-      ["transcript-skew:opencode-envelope:raw-3", "1 OpenCode message"],
+      ["transcript-skew:unrecognized:4", "2 transcript entries"],
     ]);
     expect(JSON.stringify(transcript)).not.toContain("lost");
   });
 
   test("keeps the notice's identity while its run grows", () => {
-    const first = toPipelineTranscript([rawOpenCodeEnvelope("m1", "a")], "opencode", FALLBACK);
+    const first = toPipelineTranscript([unreadableEntry("m1", "a")], "opencode", FALLBACK);
     const grown = toPipelineTranscript(
-      [rawOpenCodeEnvelope("m1", "a"), rawOpenCodeEnvelope("m2", "b")],
+      [unreadableEntry("m1", "a"), unreadableEntry("m2", "b")],
       "opencode",
       FALLBACK,
     );
 
     expect(first.map((message) => message.id)).toEqual(grown.map((message) => message.id));
-    expect(first[0]!.content).toStartWith("1 OpenCode message not shown. ");
-    expect(grown[0]!.content).toStartWith("2 OpenCode messages not shown. ");
+    expect(first[0]!.content).toStartWith("1 transcript entry not shown: ");
+    expect(grown[0]!.content).toStartWith("2 transcript entries not shown: ");
   });
 
   test("keeps the notice in place when interactions are merged by time", () => {
@@ -1562,7 +1576,7 @@ describe("toPipelineTranscript across backend versions", () => {
           content: "Started",
           createdAt: "2026-07-29T00:01:00.000Z",
         },
-        rawOpenCodeEnvelope("raw", "lost"),
+        unreadableEntry("raw", "lost"),
         {
           id: "after",
           role: "assistant",
@@ -1589,7 +1603,7 @@ describe("toPipelineTranscript across backend versions", () => {
 
     expect(transcript.map((message) => message.id)).toEqual([
       "before",
-      "transcript-skew:opencode-envelope:raw",
+      "transcript-skew:unrecognized:raw",
       "pipeline-interaction:mid-stage",
       "after",
     ]);

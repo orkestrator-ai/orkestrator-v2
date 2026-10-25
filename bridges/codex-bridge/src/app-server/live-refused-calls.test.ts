@@ -12,12 +12,17 @@
  *   RUN_LIVE_CODEX_APP_SERVER=1 \
  *     bun test bridges/codex-bridge/src/app-server/live-refused-calls.test.ts
  *
- * Codex 0.162.1 refuses both mutations and tells the model so, but emits no
+ * Codex 0.164.0 refuses both mutations and tells the model so, but emits no
  * item for either: only the control becomes a `commandExecution`. The model's
  * call survives only in the rollout, with the refusal in the cell's output.
  * The bridge reads it there (`RefusedCellTail`) and shows the cell as a failed
  * `exec` row; the second test runs that path through the runtime with the
  * real file watch. If the refusals ever arrive as items, the tail can go.
+ *
+ * The third pins the exception: with `code_mode_interrupt` on (the 0.164.0
+ * default), an interrupt stops a running cell and records "aborted by user
+ * after …" as its output, also with no item. That is not a refusal, so the
+ * bridge shows no row for it.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
@@ -70,10 +75,9 @@ const SINGLE_CELLS = [
  * {@link SINGLE_CELLS}, and the last with a closing message. It records each
  * cell's output, which is what Codex told the model.
  */
-function startScriptedResponses() {
+function startScriptedResponses(cells: readonly string[] = [CELL, ...SINGLE_CELLS]) {
   let sampled = 0;
   const cellOutputs = new Map<string, unknown>();
-  const cells = [CELL, ...SINGLE_CELLS];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -143,6 +147,7 @@ function startScriptedResponses() {
   return {
     baseUrl: `http://127.0.0.1:${server.port}/v1`,
     cellOutput: (index = 1) => JSON.stringify(cellOutputs.get(`call_probe_${index}`) ?? null),
+    sampled: () => sampled,
     stop: () => server.stop(true),
   };
 }
@@ -292,7 +297,11 @@ describeLive("live refused calls", () => {
       cwd: workspace,
       codexHome,
       clientInfo: CLIENT_INFO,
-      configOverrides: { openai_base_url: JSON.stringify(responses.baseUrl) },
+      // The bridge's own process overrides, as `index.ts` launches it.
+      configOverrides: {
+        ...codexAppServerConfigOverrides({}),
+        openai_base_url: JSON.stringify(responses.baseUrl),
+      },
       supervisorOverrides: { pidFileEnabled: false },
     });
     let idle!: () => void;
@@ -347,6 +356,92 @@ describeLive("live refused calls", () => {
       expect(
         parts.some((part) => part.toolName === "bash" && part.content?.includes("false")),
       ).toBe(true);
+    } finally {
+      await runtime.stop();
+      await engine.stop();
+      await responses.stop();
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
+  }, 120_000);
+  test("a cell an interrupt stops is not shown as a refused cell", async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), "ork-interrupted-cell-home-"));
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), "ork-interrupted-cell-ws-")));
+    await mkdir(join(workspace, ".git"), { recursive: true });
+    await writeFile(join(workspace, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+    await writeFile(
+      join(codexHome, "auth.json"),
+      JSON.stringify({ OPENAI_API_KEY: "sk-orkestrator-loopback-probe" }),
+      { mode: 0o600 },
+    );
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    // A cell that calls nothing and never ends: only an interrupt stops it,
+    // and no item ever starts while it runs.
+    const responses = startScriptedResponses(['text("probe"); while (true) {}']);
+    const engine = new AppServerEngine({
+      codexPath: await resolveCodexBinary(),
+      cwd: workspace,
+      codexHome,
+      clientInfo: CLIENT_INFO,
+      // The bridge's own process overrides, as `index.ts` launches it.
+      configOverrides: {
+        ...codexAppServerConfigOverrides({}),
+        openai_base_url: JSON.stringify(responses.baseUrl),
+      },
+      supervisorOverrides: { pidFileEnabled: false },
+    });
+    let started!: (turn: { threadId: string; turnId: string }) => void;
+    const turnStarted = new Promise<{ threadId: string; turnId: string }>((resolve) => {
+      started = resolve;
+    });
+    engine.subscribe((event: EngineEvent) => {
+      if (event.kind === "turn.started" && event.threadId) {
+        started({ threadId: event.threadId, turnId: event.turnId });
+      }
+    });
+    let idle!: () => void;
+    const turnIdle = new Promise<void>((resolve) => {
+      idle = resolve;
+    });
+    const runtime = new AppServerRuntime({
+      engine,
+      codexHome,
+      cwd: workspace,
+      emit: (event: RuntimeSseEvent) => {
+        if (event.type === "session.idle") idle();
+      },
+      loadCachedModels: async () => ({ models: [], source: "fallback" }),
+      generateTitle: async () => "interrupted cell probe",
+      sweepIntervalMs: 0,
+    });
+    try {
+      await runtime.start();
+      const { sessionId } = runtime.createSession({ mode: "build" });
+      await runtime.prompt(sessionId, {
+        prompt: "Run the probe.",
+        requestId: "interrupted-cell-probe",
+        attachments: [],
+      });
+      const turn = await withTimeout(turnStarted, 30_000, "the turn to start");
+      const deadline = Date.now() + 30_000;
+      while (responses.sampled() < 1 && Date.now() < deadline) await Bun.sleep(50);
+      // Let the cell run, and the tail read it, before the stop.
+      await Bun.sleep(1_000);
+      // Straight to the engine, as another client or a closing tab would: the
+      // runtime's own stop closes the tail first and would prove nothing.
+      await engine.interruptTurn(turn.threadId, turn.turnId);
+      await withTimeout(turnIdle, 60_000, "the turn to finish");
+      await runtime.drainPendingWork();
+
+      // Codex recorded the stop as the cell's output...
+      const rollout = await rolloutText(codexHome);
+      expect(rollout).toMatch(/"output":"aborted by user after [\d.]+s"/);
+      // ...and the bridge shows no row for it, live or reloaded.
+      const parts = (await runtime.getMessages(sessionId))!
+        .filter((message) => message.role === "assistant")
+        .flatMap((message) => message.parts);
+      expect(parts.filter((part) => part.toolName === "exec")).toEqual([]);
     } finally {
       await runtime.stop();
       await engine.stop();

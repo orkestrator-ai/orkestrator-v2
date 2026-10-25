@@ -84,6 +84,7 @@ const mockGetAgentAccountUsage = mock(
     platform: "claude" | "codex",
     _accountId: string,
     _options?: { force?: boolean },
+    _machine?: string | null,
   ): Promise<PlanUsageSnapshot> => ({
     platform,
     status: "ok",
@@ -91,6 +92,27 @@ const mockGetAgentAccountUsage = mock(
     fetchedAt: "2026-09-30T10:00:00.000Z",
   }),
 );
+const mockGetAgentSignInStatus = mock(
+  async (
+    _platform: string,
+  ): Promise<import("@orkestrator/protocol/native-agent").NativeAgentAuthStatus> => ({
+    state: "signed-in",
+  }),
+);
+const mockSetActiveAgentAccount = mock(
+  async (_platform: string, _id: string): Promise<AgentAccountsSnapshot> => mockListAgentAccounts(),
+);
+const mockRenameAgentAccount = mock(
+  async (_platform: string, _id: string, _label: string): Promise<AgentAccountsSnapshot> =>
+    mockListAgentAccounts(),
+);
+const mockRemoveAgentAccount = mock(
+  async (_platform: string, _id: string): Promise<AgentAccountsSnapshot> => mockListAgentAccounts(),
+);
+const mockCursorSdkLoginStatus = mock(async () => ({
+  state: "idle" as const,
+  auth: { authenticated: false, source: "none" as const },
+}));
 const mockGetAgentAccountLogin = mock(async () => ({ state: "idle" as const }));
 const mockGetLogDirectory = mock(async (): Promise<string | null> => null);
 const mockGetLogStorageStats = mock(async () => ({ totalBytes: 1536, fileCount: 2 }));
@@ -155,6 +177,11 @@ mock.module("@/lib/backend", () => ({
   setOpenCodeZenApiKey: mockSetOpenCodeZenApiKey,
   getPlanUsage: mockGetPlanUsage,
   listAgentAccounts: mockListAgentAccounts,
+  getAgentSignInStatus: mockGetAgentSignInStatus,
+  setActiveAgentAccount: mockSetActiveAgentAccount,
+  renameAgentAccount: mockRenameAgentAccount,
+  removeAgentAccount: mockRemoveAgentAccount,
+  cursorSdkLoginStatus: mockCursorSdkLoginStatus,
   getAgentAccountUsage: mockGetAgentAccountUsage,
   getAgentAccountLogin: mockGetAgentAccountLogin,
   getLogDirectory: mockGetLogDirectory,
@@ -220,7 +247,25 @@ describe("GlobalSettings", () => {
     mockSetAnthropicApiKey.mockClear();
     mockSetOpenCodeZenApiKey.mockClear();
     mockGetPlanUsage.mockClear();
-    mockListAgentAccounts.mockClear();
+    mockListAgentAccounts.mockReset();
+    mockListAgentAccounts.mockImplementation(async () => ({
+      active: { claude: "default", codex: "default" },
+      accounts: (["claude", "codex"] as const).map((platform) => ({
+        id: "default",
+        platform,
+        label: "Host login",
+        isDefault: true,
+        isActive: true,
+        signedIn: true,
+        identity: {},
+      })),
+    }));
+    mockGetAgentSignInStatus.mockReset();
+    mockGetAgentSignInStatus.mockResolvedValue({ state: "signed-in" });
+    mockSetActiveAgentAccount.mockReset();
+    mockRenameAgentAccount.mockReset();
+    mockRemoveAgentAccount.mockReset();
+    mockCursorSdkLoginStatus.mockClear();
     mockGetAgentAccountUsage.mockClear();
     mockGetAgentAccountUsage.mockImplementation(async (platform) => ({
       platform,
@@ -336,6 +381,64 @@ describe("GlobalSettings", () => {
     window.orkestratorGateway = undefined;
   });
 
+  test("Cursor sign-in controls remain available when Cursor is disabled", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, enabledAgentPlatforms: ["claude"] },
+      },
+    }));
+    render(<GlobalSettings activeSection="cursor" />);
+    expect(await screen.findByRole("button", { name: "Sign in with Cursor" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Cursor Agent sign-in" }) === null).toBe(true);
+  });
+
+  test("switching to a signed-out Claude account refreshes the adjacent sign-in card", async () => {
+    let snapshot: AgentAccountsSnapshot = {
+      active: { claude: "default", codex: "default" },
+      accounts: [
+        {
+          id: "default",
+          platform: "claude",
+          label: "Host login",
+          isDefault: true,
+          isActive: true,
+          signedIn: true,
+          identity: {},
+        },
+        {
+          id: "11111111-2222-4333-8444-555555555555",
+          platform: "claude",
+          label: "Work account",
+          isDefault: false,
+          isActive: false,
+          signedIn: false,
+          identity: {},
+        },
+      ],
+    };
+    mockListAgentAccounts.mockImplementation(async () => snapshot);
+    mockGetAgentSignInStatus.mockImplementation(async () => ({
+      state: snapshot.active.claude === "default" ? "signed-in" : "signed-out",
+      signIn: { kind: "terminal" },
+    }));
+    mockSetActiveAgentAccount.mockImplementation(async (_platform, id) => {
+      snapshot = {
+        ...snapshot,
+        active: { ...snapshot.active, claude: id },
+        accounts: snapshot.accounts.map((a) => ({ ...a, isActive: a.id === id })),
+      };
+      return snapshot;
+    });
+    render(<GlobalSettings activeSection="claude" />);
+    const card = screen.getByRole("region", { name: "Claude Code sign-in" });
+    expect(await within(card).findByText("Signed in")).toBeTruthy();
+    const added = await screen.findByRole("listitem", { name: "Work account" });
+    fireEvent.click(within(added).getByRole("button", { name: "Use" }));
+    expect(await within(card).findByText("Signed out")).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Sign in to Claude" })).toBeTruthy();
+  });
+
   test("saves codexMode changes", async () => {
     render(<GlobalSettings activeSection="codex" />);
 
@@ -354,6 +457,7 @@ describe("GlobalSettings", () => {
             }),
           }),
         }),
+        undefined,
       );
     });
   });
@@ -368,11 +472,13 @@ describe("GlobalSettings", () => {
     });
     fireEvent.blur(zenKey);
 
-    await waitFor(() => expect(mockSetOpenCodeZenApiKey).toHaveBeenCalledWith("zen-key"));
+    await waitFor(() =>
+      expect(mockSetOpenCodeZenApiKey).toHaveBeenCalledWith("zen-key", undefined),
+    );
     // The card must remount and re-read rather than keep the pre-save snapshot
     // for the rest of the backend's cache TTL.
     await waitFor(() => expect(mockGetPlanUsage).toHaveBeenCalledTimes(2));
-    expect(mockGetPlanUsage).toHaveBeenLastCalledWith("opencode", { force: true });
+    expect(mockGetPlanUsage).toHaveBeenLastCalledWith("opencode", { force: true }, undefined);
   });
 
   test.each(["claude", "codex"] as const)(
@@ -387,7 +493,13 @@ describe("GlobalSettings", () => {
       ).toBeTruthy();
       expect(screen.queryByRole("region", { name: "Plan usage" }) === null).toBe(true);
       expect(mockGetPlanUsage).not.toHaveBeenCalled();
-      expect(mockGetAgentAccountUsage).toHaveBeenCalledWith(platform, "default", { force: false });
+      expect(mockGetAgentAccountUsage).toHaveBeenCalledWith(
+        platform,
+        "default",
+        { force: false },
+        // This window's own accounts: rendered outside Settings' machine picker.
+        undefined,
+      );
     },
   );
 
@@ -397,7 +509,7 @@ describe("GlobalSettings", () => {
       render(<GlobalSettings activeSection={platform} />);
       const card = screen.getByRole("region", { name: "Plan usage" });
       await waitFor(() =>
-        expect(mockGetPlanUsage).toHaveBeenCalledWith(platform, { force: false }),
+        expect(mockGetPlanUsage).toHaveBeenCalledWith(platform, { force: false }, undefined),
       );
       await waitFor(() =>
         expect(
@@ -406,7 +518,7 @@ describe("GlobalSettings", () => {
       );
       fireEvent.click(within(card).getByRole("button", { name: "Refresh plan usage" }));
       await waitFor(() =>
-        expect(mockGetPlanUsage).toHaveBeenLastCalledWith(platform, { force: true }),
+        expect(mockGetPlanUsage).toHaveBeenLastCalledWith(platform, { force: true }, undefined),
       );
       expect(mockGetAgentAccountUsage).not.toHaveBeenCalled();
     },
@@ -428,11 +540,17 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ useHostClaudeCredentials: false }),
+        undefined,
       ),
     );
     view.rerender(<GlobalSettings activeSection="claude" />);
     await screen.findByText("Host Claude credentials are disabled.");
-    expect(mockGetAgentAccountUsage).toHaveBeenLastCalledWith("claude", "default", { force: true });
+    expect(mockGetAgentAccountUsage).toHaveBeenLastCalledWith(
+      "claude",
+      "default",
+      { force: true },
+      undefined,
+    );
     expect(screen.queryByText("5-hour limit") === null).toBe(true);
   });
 
@@ -442,11 +560,16 @@ describe("GlobalSettings", () => {
     const key = screen.getByPlaceholderText("sk-ant-...");
     fireEvent.change(key, { target: { value: "test-anthropic-key" } });
     fireEvent.blur(key);
-    await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith("test-anthropic-key"));
     await waitFor(() =>
-      expect(mockGetAgentAccountUsage).toHaveBeenLastCalledWith("claude", "default", {
-        force: true,
-      }),
+      expect(mockSetAnthropicApiKey).toHaveBeenCalledWith("test-anthropic-key", undefined),
+    );
+    await waitFor(() =>
+      expect(mockGetAgentAccountUsage).toHaveBeenLastCalledWith(
+        "claude",
+        "default",
+        { force: true },
+        undefined,
+      ),
     );
   });
 
@@ -464,6 +587,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           codexMaxConcurrentThreads: 8,
         }),
+        undefined,
       );
     });
   });
@@ -542,6 +666,7 @@ describe("GlobalSettings", () => {
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(2));
     expect(mockUpdateGlobalConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({ codexMaxConcurrentThreads: 11 }),
+      undefined,
     );
   });
 
@@ -569,6 +694,7 @@ describe("GlobalSettings", () => {
     await waitFor(() => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ webClientEnabled: false }),
+        undefined,
       );
       expect(mockSetWebClientEnabled).toHaveBeenCalledWith(false);
     });
@@ -1087,6 +1213,7 @@ describe("GlobalSettings", () => {
           expect.objectContaining({
             openCodeModelProviders: ["opencode", "opencode-go", "openrouter"],
           }),
+          undefined,
         );
       });
     });
@@ -1101,6 +1228,7 @@ describe("GlobalSettings", () => {
       await waitFor(() => {
         expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
           expect.objectContaining({ openCodeModelProviders: ["opencode"] }),
+          undefined,
         );
       });
     });
@@ -1138,6 +1266,7 @@ describe("GlobalSettings", () => {
       await waitFor(() => {
         expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
           expect.objectContaining({ openCodeModelProviders: [] }),
+          undefined,
         );
       });
     });
@@ -1234,6 +1363,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           reviewInstruction: "Review origin/{{targetBranch}}...HEAD for regressions.",
         }),
+        undefined,
       );
     });
   });
@@ -1359,6 +1489,7 @@ describe("GlobalSettings", () => {
       expect.objectContaining({
         reviewInstruction: "x".repeat(REVIEW_INSTRUCTION_RECOMMENDED_LENGTH + 1),
       }),
+      undefined,
     );
 
     fireEvent.change(instruction, { target: { value: "Short review instruction." } });
@@ -1394,6 +1525,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ preferredEditor: "cursor" }),
+        undefined,
       ),
     );
   });
@@ -1418,6 +1550,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           agentSettings: expect.objectContaining({ defaultAgent: "codex" }),
         }),
+        undefined,
       ),
     );
   });
@@ -1449,6 +1582,7 @@ describe("GlobalSettings", () => {
           // is still enabled, rather than leaving a launch surface that is gone.
           agentSettings: expect.objectContaining({ defaultAgent: "codex" }),
         }),
+        undefined,
       ),
     );
   });
@@ -1493,6 +1627,7 @@ describe("GlobalSettings", () => {
             { name: "guides", url: "https://guides.example/mcp" },
           ],
         }),
+        undefined,
       ),
     );
     fireEvent.click(within(choices).getByRole("radio", { name: /Off/ }));
@@ -1506,6 +1641,7 @@ describe("GlobalSettings", () => {
             { name: "guides", url: "https://guides.example/mcp" },
           ],
         }),
+        undefined,
       ),
     );
   });
@@ -1528,6 +1664,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ coordinatorProviderTiers: "enforced" }),
+        undefined,
       ),
     );
   });
@@ -1570,6 +1707,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ coordinatorProviderTiers: "advisory" }),
+        undefined,
       ),
     );
   });
@@ -1666,6 +1804,7 @@ describe("GlobalSettings", () => {
             fontSize: 15,
           }),
         }),
+        undefined,
       ),
     );
   });
@@ -1678,7 +1817,9 @@ describe("GlobalSettings", () => {
     expect(anthropicInput.type).toBe("text");
     fireEvent.change(anthropicInput, { target: { value: "test-anthropic-key" } });
     fireEvent.blur(anthropicInput);
-    await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith("test-anthropic-key"));
+    await waitFor(() =>
+      expect(mockSetAnthropicApiKey).toHaveBeenCalledWith("test-anthropic-key", undefined),
+    );
 
     rerender(<GlobalSettings activeSection="cursor" />);
     const cursorInput = screen.getByLabelText("Cursor API key") as HTMLInputElement;
@@ -1687,7 +1828,9 @@ describe("GlobalSettings", () => {
     expect(cursorInput.type).toBe("text");
     fireEvent.change(cursorInput, { target: { value: "test-cursor-key" } });
     fireEvent.blur(cursorInput);
-    await waitFor(() => expect(mockSetCursorApiKey).toHaveBeenCalledWith("test-cursor-key"));
+    await waitFor(() =>
+      expect(mockSetCursorApiKey).toHaveBeenCalledWith("test-cursor-key", undefined),
+    );
 
     rerender(<GlobalSettings activeSection="general" />);
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
@@ -1699,7 +1842,7 @@ describe("GlobalSettings", () => {
     fireEvent.blur(githubInput);
 
     await waitFor(() => {
-      expect(mockSetGitHubToken).toHaveBeenCalledWith("test-github-token");
+      expect(mockSetGitHubToken).toHaveBeenCalledWith("test-github-token", undefined);
     });
 
     // Credentials travel through their own write commands, never the shared
@@ -1730,7 +1873,7 @@ describe("GlobalSettings", () => {
     expect(mockSetCursorApiKey).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
 
-    await waitFor(() => expect(mockSetCursorApiKey).toHaveBeenCalledWith(null));
+    await waitFor(() => expect(mockSetCursorApiKey).toHaveBeenCalledWith(null, undefined));
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 
@@ -1756,7 +1899,7 @@ describe("GlobalSettings", () => {
     expect(mockSetAnthropicApiKey).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
 
-    await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith(null));
+    await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith(null, undefined));
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 
@@ -1824,11 +1967,11 @@ describe("GlobalSettings", () => {
     fireEvent.blur(githubInput);
 
     await waitFor(() => {
-      expect(mockSetGitHubToken).toHaveBeenCalledWith("replacement-token");
+      expect(mockSetGitHubToken).toHaveBeenCalledWith("replacement-token", undefined);
     });
     await flushAutoSave();
     expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty("githubToken");
-    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
+    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined);
   });
 
   test("clears a configured GitHub token through the write-only command", async () => {
@@ -1849,9 +1992,9 @@ describe("GlobalSettings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
 
     await waitFor(() => {
-      expect(mockSetGitHubToken).toHaveBeenCalledWith(null);
+      expect(mockSetGitHubToken).toHaveBeenCalledWith(null, undefined);
     });
-    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
+    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined);
   });
 
   test("switches from host credentials to PAT mode without writing an empty token", async () => {
@@ -1870,10 +2013,11 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ useHostGitHubCredentials: false }),
+        undefined,
       ),
     );
     expect(mockSetGitHubToken).not.toHaveBeenCalled();
-    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
+    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined);
   });
 
   test("keeps persisted settings and the PAT edit retryable when token storage fails", async () => {
@@ -1933,10 +2077,11 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ useHostGitHubCredentials: true }),
+        undefined,
       ),
     );
     expect(mockSetGitHubToken).not.toHaveBeenCalled();
-    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
+    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined);
   });
 
   test("shows the client and backend versions on the debug tab", async () => {
@@ -2033,6 +2178,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ debugLogging: true, debugLogRetentionDays: 30 }),
+        undefined,
       ),
     );
 
@@ -2154,6 +2300,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ debugLogRetentionDays: 30 }),
+        undefined,
       ),
     );
   });
@@ -2206,6 +2353,7 @@ describe("GlobalSettings", () => {
           terminalAppearance: expect.objectContaining({ fontFamily: "JetBrains Mono" }),
           terminalScrollback: 5100,
         }),
+        undefined,
       ),
     );
   });
@@ -2264,6 +2412,7 @@ describe("GlobalSettings", () => {
             }),
           }),
         }),
+        undefined,
       ),
     );
   });
@@ -2287,6 +2436,7 @@ describe("GlobalSettings", () => {
             }),
           }),
         }),
+        undefined,
       ),
     );
   });
@@ -2311,6 +2461,7 @@ describe("GlobalSettings", () => {
           // First spelling typed wins, in first-occurrence order.
           allowedDomains: ["Example.com", "api.example.com"],
         }),
+        undefined,
       ),
     );
   });
@@ -2342,6 +2493,7 @@ describe("GlobalSettings", () => {
             platforms: { claude: { model: "default" }, codex: { mode: "terminal" } },
           },
         }),
+        undefined,
       );
     });
   });
@@ -2378,6 +2530,7 @@ describe("GlobalSettings", () => {
               }),
             }),
           }),
+          undefined,
         );
       });
       unmount();
@@ -2402,7 +2555,9 @@ describe("GlobalSettings", () => {
 
     fireEvent.change(domains, { target: { value: "example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Test DNS" }));
-    await waitFor(() => expect(mockTestDomainResolution).toHaveBeenCalledWith(["example.com"]));
+    await waitFor(() =>
+      expect(mockTestDomainResolution).toHaveBeenCalledWith(["example.com"], undefined),
+    );
 
     fireEvent.change(domains, { target: { value: "" } });
     expect(domains.value).toBe("");
@@ -2461,7 +2616,9 @@ describe("GlobalSettings", () => {
     fireEvent.change(token, { target: { value: "new-token" } });
     fireEvent.blur(token);
 
-    await waitFor(() => expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith());
+    await waitFor(() =>
+      expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined),
+    );
     await waitFor(() =>
       expect(mockToastSuccess).toHaveBeenCalledWith("Updated GitHub credentials in 1 container(s)"),
     );
@@ -2594,6 +2751,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           experimentalCodexRawEventLogging: false,
         }),
+        undefined,
       );
     });
   });
@@ -2737,50 +2895,39 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ envFilePatterns: [".env"] }),
+        undefined,
       ),
     );
   });
 
-  test.skip(
-    "stops retrying a persistently failing GitHub credential propagation",
-    async () => {
-      mockPropagateGithubCredentialsToContainers.mockResolvedValue({
-        updated: [],
-        failed: [["environment-1", "container unavailable"]],
-      });
-      render(<GlobalSettings activeSection="general" />);
-      fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+  test("stops retrying a persistently failing GitHub credential propagation", async () => {
+    mockPropagateGithubCredentialsToContainers.mockResolvedValue({
+      updated: [],
+      failed: [["environment-1", "container unavailable"]],
+    });
+    render(<GlobalSettings activeSection="general" />);
+    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
 
-      // First save: propagation fails (count=1)
+    // The source change propagates once; each failure keeps the form dirty and
+    // re-arms the debounce until the bounded retries are spent.
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await waitFor(() => expect(autoSaveClock.pendingCount()).toBe(1));
       await flushAutoSave();
-      // Second save: propagation fails (count=2)
-      await flushAutoSave();
-      // Additional flushes to allow the bounded retry to complete
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      // Final wait to ensure any late timers fire
-      await new Promise((r) => setTimeout(r, 3000));
-
-      // One initial attempt plus the bounded retries, then the form gives up.
-      expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledTimes(3);
-      expect(mockUpdateGlobalConfig.mock.calls.length).toBeLessThanOrEqual(3);
-      const failureToasts = mockToastError.mock.calls.filter(([message]) =>
-        String(message).includes("containers were not updated"),
+      await waitFor(() =>
+        expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledTimes(attempt),
       );
-      expect(failureToasts).toHaveLength(1);
-    },
-    { timeout: 15000 },
-  );
+      await screen.findByText(attempt < 3 ? "Unsaved changes" : "All changes saved");
+    }
+
+    // The final save left nothing to retry: no debounce is armed, so no later
+    // save can run without a new edit.
+    expect(autoSaveClock.pendingCount()).toBe(0);
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(3);
+    const failureToasts = mockToastError.mock.calls.filter(([message]) =>
+      String(message).includes("containers were not updated"),
+    );
+    expect(failureToasts).toHaveLength(1);
+  });
 
   test("keeps a rejected credential edit across an unrelated store write", async () => {
     const originalConsoleError = console.error;

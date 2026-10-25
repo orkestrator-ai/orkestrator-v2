@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import type {
   DesignLibraryQuery,
@@ -134,7 +134,8 @@ export function DesignLibrary({
   }>({ scope: scopeKey, entries: [], page: null });
   const entries = list.scope === scopeKey ? list.entries : [];
   const page = list.scope === scopeKey ? list.page : null;
-  const [loading, setLoading] = useState<"idle" | "list" | "more">("idle");
+  // The first page starts loading as soon as the library mounts.
+  const [loading, setLoading] = useState<"idle" | "list" | "more">("list");
   const [listError, setListError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -147,33 +148,34 @@ export function DesignLibrary({
 
   // A new environment or backend never shows the previous scope's entries,
   // and any response still in flight for the old scope is ignored.
-  if (scopeRef.current !== scopeKey) {
-    scopeRef.current = scopeKey;
-    epochRef.current++;
-  }
-  useEffect(() => {
+  const [renderedScope, setRenderedScope] = useState(scopeKey);
+  if (renderedScope !== scopeKey) {
+    setRenderedScope(scopeKey);
     setList({ scope: scopeKey, entries: [], page: null });
     setListError(null);
     setSelectedId(null);
     setActionError(null);
     setRenaming(null);
     setConfirm(null);
+  }
+  useLayoutEffect(() => {
+    if (scopeRef.current === scopeKey) return;
+    scopeRef.current = scopeKey;
+    epochRef.current++;
   }, [scopeKey]);
 
+  // Without a debounce the search box sets the query directly (see onChange).
   useEffect(() => {
-    if (searchDebounceMs <= 0) {
-      setQuery(search);
-      return;
-    }
+    if (searchDebounceMs <= 0) return;
     const timer = setTimeout(() => setQuery(search), searchDebounceMs);
     return () => clearTimeout(timer);
   }, [search, searchDebounceMs]);
 
-  const load = useCallback(
+  // Sets no state before its first await, so the load effect can call it.
+  const fetchPage = useCallback(
     async (offset: number, select?: string) => {
       const epoch = ++epochRef.current;
       const scope = scopeRef.current;
-      setLoading(offset > 0 ? "more" : "list");
       try {
         const result = await api.list(environmentId, {
           search: query.trim() || undefined,
@@ -206,9 +208,22 @@ export function DesignLibrary({
     [api, environmentId, filter, legacy, query, sort],
   );
 
+  const load = (offset: number, select?: string) => {
+    setLoading(offset > 0 ? "more" : "list");
+    return fetchPage(offset, select);
+  };
+
+  // A changed query, scope or refresh reloads the first page; its loading
+  // state is set here, while rendering, rather than by the effect below.
+  const trigger = [api, environmentId, filter, legacy, query, sort, scopeKey, refreshToken];
+  const [loadTrigger, setLoadTrigger] = useState(trigger);
+  if (trigger.some((value, index) => !Object.is(value, loadTrigger[index]))) {
+    setLoadTrigger(trigger);
+    setLoading("list");
+  }
   useEffect(() => {
-    void load(0);
-  }, [load, scopeKey, refreshToken]);
+    void fetchPage(0);
+  }, [fetchPage, scopeKey, refreshToken]);
 
   const selected = entries.find((entry) => entry.id === selectedId) ?? null;
 
@@ -481,7 +496,10 @@ export function DesignLibrary({
           className="h-8 min-w-40 flex-1"
           maxLength={120}
           value={search}
-          onChange={(event) => setSearch(event.target.value)}
+          onChange={(event) => {
+            setSearch(event.target.value);
+            if (searchDebounceMs <= 0) setQuery(event.target.value);
+          }}
         />
         <Select value={sort} onValueChange={(value) => setSort(value as Sort)}>
           <SelectTrigger aria-label="Sort designs" size="sm" className="w-36">

@@ -1,3 +1,4 @@
+import { containerBridgeOperationId } from "./container-bridge-operations.js";
 import type { CommandContext } from "./commands-context.js";
 import {
   boundedBackgroundLaunch,
@@ -8,6 +9,7 @@ import { persistentStateExports } from "./container-state-layout.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { promises as fs } from "node:fs";
 import { randomBytes } from "node:crypto";
+import path from "node:path";
 import {
   APP_SLUG,
   APP_VERSION,
@@ -53,9 +55,6 @@ import {
   openCodeHealthHeaders,
   claudeBridgeAuthHeaders,
   agentToolConnectionFingerprint,
-  openCodeAgentToolsState,
-  scheduleOpenCodeAgentToolsConfiguration,
-  cancelOpenCodeAgentToolsConfiguration,
   syncContainerCursorApiKey,
   startContainerServer,
   startContainerOpenCodeServer,
@@ -66,6 +65,8 @@ import {
 } from "./commands-helpers.js";
 import {
   reconcileContainerAgentAccount,
+  syncContainerClaudeLoginUnlocked,
+  syncContainerLoginUnlocked,
   type ContainerBridgeControl,
 } from "./agent-accounts-containers.js";
 
@@ -91,18 +92,37 @@ function containerBridgeControl(
   };
 }
 
+/** Whether the environment that owns `containerId` has a turn of `agent` in flight. */
+async function containerAgentHasLiveWork(
+  context: CommandContext,
+  containerId: string,
+  agent: "cursor",
+): Promise<boolean> {
+  if (!context.nativeAgents) return false;
+  const id = containerId.trim();
+  const environment = (await context.storage.loadEnvironments()).find((candidate) => {
+    const known = candidate.containerId?.trim();
+    return Boolean(known && id && (known === id || known.startsWith(id) || id.startsWith(known)));
+  });
+  return environment
+    ? (await context.nativeAgents.hasObservedLiveWork(environment.id, agent)) === true
+    : false;
+}
+
 export function registerServerCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
   const { claudeModelCatalogRefreshes, validatedClaudeModelCatalogs, commands } = dependencies;
-  register("start_opencode_server", ({ containerId }, context) => {
+  register("start_opencode_server", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("opencode", id, async () => {
+    const operationId = await containerBridgeOperationId(context, id);
+    return enqueueContainerBridgeOperation(context, "opencode", operationId, async () => {
+      await syncContainerLoginUnlocked(context, "opencode", id);
       const started = await startContainerOpenCodeServer(id);
       const connection = await resolveContainerAgentToolConnection(context, id);
       if (connection) {
-        scheduleOpenCodeAgentToolsConfiguration(
+        context.runtime.localServers.openCodeAgentTools.schedule(
           `container:${id}`,
           started.hostPort,
           started.authToken,
@@ -113,10 +133,11 @@ export function registerServerCommands(
       return started;
     });
   });
-  register("stop_opencode_server", ({ containerId }) => {
+  register("stop_opencode_server", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("opencode", id, () => {
-      cancelOpenCodeAgentToolsConfiguration(`container:${id}`);
+    const operationId = await containerBridgeOperationId(context, id);
+    return enqueueContainerBridgeOperation(context, "opencode", operationId, () => {
+      context.runtime.localServers.openCodeAgentTools.cancel(`container:${id}`);
       // Bracketing avoids matching the `bash -lc` shell carrying this command.
       return dockerExec(
         id,
@@ -137,7 +158,7 @@ export function registerServerCommands(
     if (running && context.agentTools) {
       const connection = await resolveContainerAgentToolConnection(context, id);
       if (connection && hostPort) {
-        scheduleOpenCodeAgentToolsConfiguration(
+        context.runtime.localServers.openCodeAgentTools.schedule(
           `container:${id}`,
           hostPort,
           authToken,
@@ -151,7 +172,7 @@ export function registerServerCommands(
       hostPort,
       ...(running ? { authToken } : {}),
       ...(running && context.agentTools
-        ? { agentTools: openCodeAgentToolsState(`container:${id}`) }
+        ? { agentTools: context.runtime.localServers.openCodeAgentTools.state(`container:${id}`) }
         : {}),
     };
   });
@@ -165,7 +186,11 @@ export function registerServerCommands(
     if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("opencode")) {
       return { recent: [], favorite: [], variant: {} };
     }
-    const modelPath = homePath(".local", "state", "opencode", "model.json");
+    const modelPath = path.join(
+      process.env.XDG_STATE_HOME?.trim() || homePath(".local", "state"),
+      "opencode",
+      "model.json",
+    );
     if (!(await pathExists(modelPath))) return { recent: [], favorite: [], variant: {} };
     return JSON.parse(await fs.readFile(modelPath, "utf8"));
   });
@@ -200,15 +225,17 @@ export function registerServerCommands(
       asOpenCodeModelCatalog(args.models),
     );
   });
-  register("start_claude_server", ({ containerId }, context) => {
-    const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("claude", id, async () => {
+  register("start_claude_server", async ({ containerId }, context) => {
+    const id = await containerBridgeOperationId(context, asString(containerId, "containerId"));
+    return enqueueContainerBridgeOperation(context, "claude", id, async () => {
       await reconcileContainerAgentAccount(
         context,
         id,
         "claude",
         containerBridgeControl(id, CLAUDE_BRIDGE_PORT, "[c]laude-bridge/dist/index.js"),
       );
+      // The container's copy cannot refresh: hand it the host's current token.
+      await syncContainerClaudeLoginUnlocked(context, id, { restrictWhenUnusable: true });
       const connection = await resolveContainerAgentToolConnection(context, id);
       const { global } = await context.storage.loadConfig();
       return startContainerClaudeServer(
@@ -219,9 +246,9 @@ export function registerServerCommands(
       );
     });
   });
-  register("stop_claude_server", ({ containerId }) => {
+  register("stop_claude_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("claude", id, () =>
+    return enqueueContainerBridgeOperation(context, "claude", id, () =>
       // The bracketed pattern keeps pkill from matching the `bash -lc` shell that
       // carries it, which would kill the shell before `rm -f` runs.
       dockerExec(
@@ -318,7 +345,7 @@ export function registerServerCommands(
   });
   register("start_codex_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("codex", id, async () => {
+    return enqueueContainerBridgeOperation(context, "codex", id, async () => {
       await reconcileContainerAgentAccount(
         context,
         id,
@@ -420,9 +447,9 @@ export function registerServerCommands(
       return startWithFreshToken();
     });
   });
-  register("stop_codex_server", ({ containerId }) => {
+  register("stop_codex_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("codex", id, () =>
+    return enqueueContainerBridgeOperation(context, "codex", id, () =>
       // The bracketed pattern keeps pkill from matching the `bash -lc` shell that
       // carries it, which would kill the shell before `rm -f` runs.
       dockerExec(
@@ -473,10 +500,11 @@ export function registerServerCommands(
       provider === "cursor"
         ? "[c]ursor-bridge/dist/index.js"
         : "[a]cp-bridge/dist/index.js --provider=grok";
-    register(`start_${provider}_server`, ({ containerId }, context) => {
+    register(`start_${provider}_server`, async ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
       probeContainerAgentTools(context, id);
-      return enqueueContainerBridgeOperation(provider, id, async () => {
+      const operationId = provider === "grok" ? await containerBridgeOperationId(context, id) : id;
+      return enqueueContainerBridgeOperation(context, provider, operationId, async () => {
         const bridgeConfig = await context.storage.loadConfig();
         const cursorApiKey =
           provider === "cursor" ? resolveCursorApiKey(bridgeConfig.global).apiKey : undefined;
@@ -487,6 +515,7 @@ export function registerServerCommands(
           await syncContainerCursorApiKey(id, cursorApiKey);
           await syncContainerCursorSdkCredentials(id, await cursorSdkStoredApiKey(context));
         }
+        if (provider === "grok") await syncContainerLoginUnlocked(context, "grok", id);
         const hostPort = await getHostPort(id, containerPort);
         if (hostPort && (await checkHttpHealth(hostPort))) {
           const credentialFingerprint =
@@ -503,7 +532,13 @@ export function registerServerCommands(
           ).trim();
           if (
             BRIDGE_TOKEN_PATTERN.test(existingToken) &&
-            (provider !== "cursor" || credentialFingerprint === expectedCredentialFingerprint)
+            (provider !== "cursor" ||
+              credentialFingerprint === expectedCredentialFingerprint ||
+              // A changed key restarts the bridge, which would end a running
+              // turn. A busy bridge keeps the key it started with, as a busy
+              // Claude or Codex bridge keeps its account; the first start
+              // after it goes idle applies the new one.
+              (await containerAgentHasLiveWork(context, id, "cursor")))
           ) {
             return { hostPort, wasRunning: true, authToken: existingToken };
           }
@@ -531,7 +566,8 @@ export function registerServerCommands(
               ? `export CURSOR_BRIDGE_TOKEN=${quoteShell(token)}
           export CURSOR_BRIDGE_STATE_DIR=/tmp/orkestrator-cursor-sdk-state
           export CURSOR_BRIDGE_AUTH_FILE=${CONTAINER_CURSOR_SDK_AUTH_FILE}`
-              : `export ACP_PROVIDER=grok
+              : `if [ -s "$HOME/.grok/xai-api-key" ]; then export XAI_API_KEY="$(cat "$HOME/.grok/xai-api-key")"; else unset XAI_API_KEY; fi
+          export ACP_PROVIDER=grok
           export ACP_STATE_DIR=/tmp/orkestrator-acp-state/grok
           export ACP_AGENT_PATH="$(command -v grok 2>/dev/null || echo grok)"
           export ACP_PROVIDER_CONFIG='{"id":"grok","name":"Grok","executable":"grok","argv":["--always-approve","agent","{{model}}","{{effort}}","stdio"],"env":{},"requiresAuthenticate":true,"authMethodEnv":"GROK_AUTH_METHOD_ID","modeMap":{"agent":"build","build":"build","plan":"plan","ask":"plan"},"extensionPrefixes":["x.ai/","_x.ai/"],"acknowledgedExtensionMethods":[],"modelUpdateMethods":["x.ai/models/update","_x.ai/models/update"],"sessionUpdateMethods":["x.ai/session/update","_x.ai/session/update"]}'
@@ -558,9 +594,10 @@ export function registerServerCommands(
         return { ...started, authToken: token };
       });
     });
-    register(`stop_${provider}_server`, ({ containerId }) => {
+    register(`stop_${provider}_server`, async ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
-      return enqueueContainerBridgeOperation(provider, id, () =>
+      const operationId = provider === "grok" ? await containerBridgeOperationId(context, id) : id;
+      return enqueueContainerBridgeOperation(context, provider, operationId, () =>
         dockerExec(
           id,
           `pkill -f '${bridgePattern}' || true; rm -f ${tokenFile}` +
@@ -616,19 +653,21 @@ function probeContainerAgentTools(context: CommandContext, containerId: string):
  * Structurally the same as the ACP bridges above — one prebuilt bridge under
  * `/opt`, a token file the backend reads back, a log file — but it is not part
  * of that loop because nothing about it is per-provider: Pi is one platform
- * with one executable and no vendor credential for the backend to sync. Its
- * credentials are the user's own provider keys, which reach the container as a
- * bind-mounted `~/.pi` (see `commands-containers.ts`).
+ * with one executable. Its credentials are the user's own provider logins in
+ * `~/.pi/agent/auth.json`, staged with the rest of `~/.pi` and pushed again,
+ * access-only, before every start (`syncContainerLoginUnlocked`).
  */
 function registerPiServerCommands(register: CommandRegistrar): void {
   const tokenFile = "/tmp/pi-bridge-token";
   const logFile = "/tmp/pi-bridge.log";
   const processPattern = "[p]i-bridge/dist/index.js";
 
-  register("start_pi_server", ({ containerId }, context) => {
+  register("start_pi_server", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     probeContainerAgentTools(context, id);
-    return enqueueContainerBridgeOperation("pi", id, async () => {
+    const operationId = await containerBridgeOperationId(context, id);
+    return enqueueContainerBridgeOperation(context, "pi", operationId, async () => {
+      await syncContainerLoginUnlocked(context, "pi", id);
       const config = await context.storage.loadConfig();
       const hostPort = await getHostPort(id, PI_BRIDGE_PORT);
       if (hostPort && (await checkHttpHealth(hostPort))) {
@@ -667,9 +706,10 @@ function registerPiServerCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("stop_pi_server", ({ containerId }) => {
+  register("stop_pi_server", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("pi", id, () =>
+    const operationId = await containerBridgeOperationId(context, id);
+    return enqueueContainerBridgeOperation(context, "pi", operationId, () =>
       dockerExec(id, `pkill -f '${processPattern}' || true; rm -f ${tokenFile}`).then(
         () => undefined,
       ),

@@ -238,6 +238,11 @@ describe("published MCP tool schemas are provider-portable", () => {
     await agentTools.start();
     // Registration never calls the host; only tools/list is exercised here.
     agentTools.setWebAnnotationToolHost({} as WebAnnotationToolHost);
+    // Registration only: tools/list never calls the artifact host.
+    agentTools.setTranscriptArtifactToolHost({
+      toolsEnabled: () => true,
+      handleTool: async () => ({ value: {}, isError: false }),
+    });
 
     const invoke: ControlMcpInvoker = async <T>(command: string) => {
       switch (command) {
@@ -270,11 +275,17 @@ describe("published MCP tool schemas are provider-portable", () => {
     await rm(worktree, { recursive: true, force: true });
   });
 
-  test("agent tools: Kanban, messaging, and web annotations", async () => {
+  test("agent tools: Kanban, messaging, web annotations, and artifacts", async () => {
     const connection = agentTools.connection(environmentId, projectId, "host", tabId);
     const tools = await listTools(connection.url, connection.token);
     expect(tools.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["list_tickets", "send_message", "get_annotation_request"]),
+      expect.arrayContaining([
+        "list_tickets",
+        "send_message",
+        "get_annotation_request",
+        "create_artifact",
+        "publish_artifact",
+      ]),
     );
     expectPortable("orkestrator", tools);
   });
@@ -381,11 +392,30 @@ describe("published MCP tool schemas are provider-portable", () => {
     },
   );
 
-  test("control tools", async () => {
+  test("control tools: the default full-profile credential", async () => {
     const descriptor = await readControlMcpDescriptor(control.getInfo()!.descriptorFile);
     const tools = await listTools(descriptor.url, descriptor.token);
+    // The original tools, the voice core, the gateway and one tool per action.
+    expect(tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["list_projects", "overview", "run_action", "session_prompt"]),
+    );
+    expectPortable("orkestrator-control/full", tools);
+  });
+
+  test.each([
+    ["voice", undefined],
+    ["read-only", undefined],
+    ["custom", ["sessions.read", "interactions"]],
+  ] as const)("control tools: the %s profile", async (profile, capabilities) => {
+    const settings = await control.createCredential({
+      label: `portable ${profile}`,
+      profile,
+      ...(capabilities ? { capabilities: [...capabilities] } : {}),
+    });
+    const credential = settings.credentials.at(-1)!;
+    const tools = await listTools(control.getInfo()!.url, credential.token);
     expect(tools.length).toBeGreaterThan(0);
-    expectPortable("orkestrator-control", tools);
+    expectPortable(`orkestrator-control/${profile}`, tools);
   });
 
   test("coordinator control tools", async () => {

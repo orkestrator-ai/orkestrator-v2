@@ -359,6 +359,7 @@ describe("RepositorySettings", () => {
 
       fireEvent.pointerDown(screen.getByRole("combobox", { name: "Claude Code default model" }));
       fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() => {
@@ -385,6 +386,7 @@ describe("RepositorySettings", () => {
 
       fireEvent.pointerDown(screen.getByRole("combobox", { name: "Default model and reasoning" }));
       fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() => {

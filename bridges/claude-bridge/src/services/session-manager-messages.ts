@@ -134,8 +134,9 @@ export interface OrderedPartEntry {
 }
 
 /**
- * Check if a tool name is from an MCP server and extract server name
- * MCP tool names have format: mcp_servername_toolname
+ * Check if a tool name is from an MCP server and extract server name.
+ * Claude Code names MCP tools `mcp__<server>__<tool>`; older transcripts used
+ * `mcp_<server>_<tool>`, which is still parsed.
  *
  * @param toolName - The tool name to parse
  * @param knownServerNames - Set of known MCP server names for accurate matching
@@ -147,6 +148,13 @@ export function parseMcpToolName(
 ): McpToolMetadata {
   if (!toolName.startsWith("mcp_")) {
     return { isMcpTool: false };
+  }
+
+  if (toolName.startsWith("mcp__")) {
+    // `mcp__<server>__<tool>`: a server name never contains a double underscore.
+    const separator = toolName.indexOf("__", 5);
+    const server = separator > 5 ? toolName.slice(5, separator) : "";
+    return server ? { isMcpTool: true, mcpServerName: server } : { isMcpTool: true };
   }
 
   // Remove the "mcp_" prefix

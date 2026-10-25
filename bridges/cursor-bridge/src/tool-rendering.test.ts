@@ -94,6 +94,20 @@ describe("renderToolCall", () => {
     expect(rendered.toolOutput).toBe("created");
   });
 
+  test("names an in-process research call after its own server", () => {
+    const rendered = renderToolCall({
+      type: "mcp",
+      args: {
+        providerIdentifier: "custom-user-tools",
+        toolName: "context7__query-docs",
+        args: { q: "zod" },
+      },
+      result: { status: "success", value: { content: [{ text: "docs" }], isError: false } },
+    });
+    expect(rendered.toolName).toBe("mcp__context7__query-docs");
+    expect(rendered.toolTitle).toBe("context7: query-docs");
+  });
+
   test("names an MCP card after its tool so servers stay distinguishable", () => {
     const rendered = renderToolCall({
       type: "mcp",
@@ -104,6 +118,24 @@ describe("renderToolCall", () => {
     expect(rendered.toolTitle).toBe("context7: query-docs");
     expect(rendered.toolArgs).toEqual({ q: "zod" });
     expect(rendered.toolOutput).toBe("docs");
+  });
+
+  test("reads the SDK's wrapped MCP text items and names image items", () => {
+    const rendered = renderToolCall({
+      type: "mcp",
+      args: { providerIdentifier: "orkestrator", toolName: "get_artifact_operation" },
+      result: {
+        status: "success",
+        value: {
+          content: [
+            { text: { text: '{"ok":true}' } },
+            { image: { data: "iVBORw0KGgo".repeat(1_000), mimeType: "image/png" } },
+          ],
+          isError: false,
+        },
+      },
+    });
+    expect(rendered.toolOutput).toBe('{"ok":true}\n[image]');
   });
 
   test("an MCP isError payload lands as an error rather than as output", () => {

@@ -1,9 +1,5 @@
-import { useCallback, useMemo } from "react";
-import {
-  countTextLines,
-  splitTextLines,
-  type MeasuredWorkspaceChange,
-} from "@orkestrator/protocol/tool-diff";
+import { useMemo } from "react";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import {
   Brain,
   ChevronRight,
@@ -11,11 +7,25 @@ import {
   AlertCircle,
   Pencil,
   ExternalLink as ExternalLinkIcon,
+  FileClock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
-import { useOptionalTerminalContext, useTerminalContext } from "@/contexts/TerminalContext";
+import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
+import { ChangeCountBadge } from "@/components/changes/ChangeCountBadge";
+import {
+  ChangeRoleSection,
+  LegacyPayloadBadge,
+  LegacyPayloadBody,
+  liveFileTarget,
+  projectionFirstPath,
+  projectionHasContent,
+  useLegacyPayloadMeasurement,
+  useToolChangeRow,
+  type LegacyPayloadInput,
+} from "./NativeMessage.change-parts";
+import { useNativeChangeScope } from "./NativeMessage.change-scope";
 import type { NativeToolDiffMetadata as ToolDiffMetadata } from "@/lib/chat/native-message-types";
 import { getToolDisplayName, getToolTitleDisplayName } from "@/lib/tool-names";
 import {
@@ -32,6 +42,13 @@ import {
   resolveQuestionToolAnswers,
 } from "@/lib/question-tool";
 import { QuestionToolDetails } from "./QuestionToolDetails";
+import {
+  parseScheduleWakeupArgs,
+  parseScheduleWakeupResult,
+  scheduleWakeupPreview,
+} from "@/lib/schedule-wakeup-tool";
+import { ScheduleWakeupToolDetails } from "./ScheduleWakeupToolDetails";
+import { ArtifactDraftInspectorAction, draftInspectorTool } from "./rich/ArtifactDraftInspector";
 import {
   markdownComponents,
   TASK_LIST_SYNTAX_PATTERN,
@@ -120,6 +137,207 @@ function taskCommandFromOutput(output?: string): string | undefined {
   return messageMatch?.[1]?.trim() || undefined;
 }
 
+/**
+ * The collapsed row is a single truncating line, so anything shown there is
+ * flattened and capped rather than relying on CSS alone — the accessible name
+ * and the DOM string are otherwise unbounded.
+ */
+function toSingleLinePreview(value: string): string {
+  const preview = value.trim().replace(/\s+/g, " ");
+  return preview.length > 180 ? `${preview.slice(0, 179)}…` : preview;
+}
+
+export interface ToolRowPreview {
+  text: string;
+  /**
+   * A fallback preview of raw input, which is not specific enough to justify
+   * hiding a descriptive tool title the way a real command or path does.
+   */
+  generic: boolean;
+  monospace: boolean;
+}
+
+/**
+ * The one-line summary a collapsed tool row shows beside the tool's name: the
+ * command, file, pattern or query that identifies the call. Shared by the row
+ * itself and by a folded tool group, which previews its latest call.
+ */
+export function toolRowPreview(
+  {
+    toolName,
+    toolArgs,
+    toolOutput,
+    toolState,
+    toolDenied,
+    toolError,
+    backgroundTask,
+  }: {
+    toolName?: string;
+    toolArgs?: Record<string, unknown>;
+    toolOutput?: string;
+    toolState?: "success" | "failure" | "pending";
+    toolDenied?: { reason?: string; source?: string };
+    toolError?: string;
+    backgroundTask?: NativeBackgroundTask;
+  },
+  questions = parseQuestionToolArgs(toolArgs),
+): ToolRowPreview | null {
+  const isTaskAction = isBackgroundTaskActionTool(toolName);
+  const isBackgroundLaunch = toolArgs?.run_in_background === true;
+  const taskId = backgroundTask?.id ?? stringToolArg(toolArgs, "task_id", "taskId");
+  const taskDescription =
+    backgroundTask?.description ??
+    (isBackgroundLaunch ? stringToolArg(toolArgs, "description") : undefined);
+
+  if (!toolArgs) return null;
+
+  // Background task actions are meaningful only in relation to their task.
+  // Prefer the human-authored launch description, then a command recovered
+  // from TaskStop output, and leave the opaque id as the final fallback.
+  if (isTaskAction) {
+    if (taskDescription) {
+      return {
+        text: toSingleLinePreview(taskDescription),
+        generic: false,
+        monospace: false,
+      };
+    }
+    const resultCommand = taskCommandFromOutput(toolOutput);
+    if (resultCommand) {
+      return {
+        text: toSingleLinePreview(resultCommand),
+        generic: false,
+        monospace: true,
+      };
+    }
+    if (taskId) {
+      return {
+        text: toSingleLinePreview(taskId),
+        generic: false,
+        monospace: true,
+      };
+    }
+  }
+
+  if (isBackgroundLaunch && taskDescription) {
+    return {
+      text: toSingleLinePreview(taskDescription),
+      generic: false,
+      monospace: false,
+    };
+  }
+
+  // For shell commands, show the command in the collapsed row.
+  const command = toolArgs.command as string | undefined;
+  if (command) {
+    return {
+      text: toSingleLinePreview(command),
+      generic: false,
+      monospace: true,
+    };
+  }
+
+  // For Read tool - show filename
+  const filePath = toolArgs.file_path as string | undefined;
+  if (filePath) {
+    const name = filePath.split("/").pop();
+    return name ? { text: name, generic: false, monospace: true } : null;
+  }
+
+  // For Glob tool - show pattern
+  const pattern = toolArgs.pattern as string | undefined;
+  if (pattern) {
+    return {
+      text: toSingleLinePreview(pattern),
+      generic: false,
+      monospace: true,
+    };
+  }
+
+  // For Grep tool - show search pattern
+  const grepPattern = toolArgs.regex as string | undefined;
+  if (grepPattern) {
+    return {
+      text: toSingleLinePreview(grepPattern),
+      generic: false,
+      monospace: true,
+    };
+  }
+
+  // Cursor child JSONL names its read argument `path` where Claude-style
+  // tools use `file_path`. It ranks below `pattern`/`regex` on purpose:
+  // Glob and Grep carry `path` as the *search root* alongside the pattern
+  // that actually identifies the call, so reading it first would label them
+  // with a directory instead.
+  const genericPath = toolArgs.path;
+  if (typeof genericPath === "string" && genericPath) {
+    const name = genericPath.split("/").pop();
+    return name ? { text: name, generic: false, monospace: true } : null;
+  }
+
+  // For WebFetch tool - show hostname from URL
+  const url = toolArgs.url as string | undefined;
+  if (url) {
+    try {
+      return {
+        text: new URL(url).hostname,
+        generic: false,
+        monospace: true,
+      };
+    } catch {
+      return {
+        text: toSingleLinePreview(url),
+        generic: false,
+        monospace: true,
+      };
+    }
+  }
+
+  // For WebSearch tool - show search query
+  const query = toolArgs.query as string | undefined;
+  if (query) {
+    return {
+      text: toSingleLinePreview(query),
+      generic: false,
+      monospace: true,
+    };
+  }
+
+  if (questions) {
+    return {
+      text: toSingleLinePreview(questionToolPreview(questions)),
+      generic: false,
+      monospace: false,
+    };
+  }
+
+  const wakeup = parseScheduleWakeupArgs(toolName, toolArgs);
+  const wakeupPreview = wakeup
+    ? scheduleWakeupPreview(wakeup, toolState === "success" && !toolDenied && !toolError)
+    : "";
+  if (wakeupPreview) {
+    return {
+      text: toSingleLinePreview(wakeupPreview),
+      generic: false,
+      monospace: false,
+    };
+  }
+
+  // Custom tools such as Codex's `exec` carry raw input rather than a
+  // provider-standard argument shape. Keep the collapsed row informative
+  // even when the bridge cannot safely derive a more specific command.
+  const input = toolArgs.input;
+  if (typeof input === "string" && input.trim()) {
+    return {
+      text: toSingleLinePreview(input),
+      generic: true,
+      monospace: true,
+    };
+  }
+
+  return null;
+}
+
 function backgroundTaskState(
   task: NativeBackgroundTask | undefined,
 ): { label: string; className: string } | undefined {
@@ -180,6 +398,8 @@ export function ToolDurationLabel({ label }: { label?: string }) {
 
 export function ToolPart({
   expansionKey,
+  callId,
+  occurrenceId,
   toolName,
   toolState,
   toolTitle,
@@ -192,8 +412,12 @@ export function ToolPart({
   commandChanges,
   durationMs,
   deferredDetails = false,
+  mcpServerName,
 }: {
   expansionKey: string;
+  /** Provider call id; keys the backend's change presentation for this row. */
+  callId?: string;
+  occurrenceId?: string;
   toolName?: string;
   toolState?: "success" | "failure" | "pending";
   toolTitle?: string;
@@ -215,28 +439,43 @@ export function ToolPart({
    * not a retry.
    */
   denied?: { reason?: string; source?: string };
-  /** Files this shell call changed, measured by the bridge. */
+  /**
+   * Legacy bridge measurement of the files this shell call changed. Shown only
+   * when the backend has no change presentation for the call.
+   */
   commandChanges?: MeasuredWorkspaceChange;
   /** Provider-reported runtime of the settled call (`toolDurationMs`). */
   durationMs?: number;
   /** Output exists but is fetched on expand, so the row must stay expandable. */
   deferredDetails?: boolean;
+  /** Reported MCP server, so a same-named tool of another server is not taken for Orkestrator's. */
+  mcpServerName?: string;
 }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
+  const changeScope = useNativeChangeScope();
+  // The backend's effect/observation projections for this call. They replace
+  // the legacy bridge measurement whenever a presentation exists.
+  const { presentation, roles } = useToolChangeRow(callId, toolState, occurrenceId);
+  const changeRoles = roles.filter((entry) => projectionHasContent(entry.projection));
+  const primaryChange = roles[0]?.projection;
+  const legacyChanges = presentation ? undefined : commandChanges;
+  // Canonical artifact authoring rows get a host-owned "Inspect draft" action.
+  const inspectsArtifactDraft = draftInspectorTool(toolName, { toolTitle, mcpServerName }) !== null;
   const displayToolName = getToolDisplayName(toolName);
   const displayToolTitle = getToolTitleDisplayName(toolTitle, toolName);
   const isTaskStop = isBackgroundTaskStopTool(toolName);
   const isTaskAction = isBackgroundTaskActionTool(toolName);
-  const isBackgroundLaunch = toolArgs?.run_in_background === true;
   const taskId = backgroundTask?.id ?? stringToolArg(toolArgs, "task_id", "taskId");
-  const taskDescription =
-    backgroundTask?.description ??
-    (isBackgroundLaunch ? stringToolArg(toolArgs, "description") : undefined);
 
   const questions = useMemo(() => parseQuestionToolArgs(toolArgs), [toolArgs]);
   const answeredQuestions = useMemo(
     () => (questions ? resolveQuestionToolAnswers(questions, toolArgs, toolOutput) : null),
     [questions, toolArgs, toolOutput],
+  );
+  const wakeup = useMemo(() => parseScheduleWakeupArgs(toolName, toolArgs), [toolName, toolArgs]);
+  const wakeupResult = useMemo(
+    () => (wakeup ? parseScheduleWakeupResult(toolOutput) : null),
+    [wakeup, toolOutput],
   );
   // Answer recovery is lossy: results may also contain notes, previews, or
   // provider-specific context. Keep the original result below the questions.
@@ -255,163 +494,14 @@ export function ToolPart({
     toolOutput ||
     toolError ||
     deferredDetails ||
-    (commandChanges && commandChanges.files.length > 0) ||
+    changeRoles.length > 0 ||
+    (legacyChanges && legacyChanges.files.length > 0) ||
     (toolArgs && Object.keys(toolArgs).length > 0);
 
-  // The collapsed row is a single truncating line, so anything shown there is
-  // flattened and capped rather than relying on CSS alone — the accessible name
-  // and the DOM string are otherwise unbounded.
-  const toSingleLinePreview = (value: string): string => {
-    const preview = value.trim().replace(/\s+/g, " ");
-    return preview.length > 180 ? `${preview.slice(0, 179)}…` : preview;
-  };
-
-  // Extract display info from toolArgs based on tool type. `generic` marks a
-  // fallback preview of raw input, which is not specific enough to justify
-  // hiding a descriptive tool title the way a real command or path does.
-  const getDisplayInfo = (): {
-    text: string;
-    generic: boolean;
-    monospace: boolean;
-  } | null => {
-    if (!toolArgs) return null;
-
-    // Background task actions are meaningful only in relation to their task.
-    // Prefer the human-authored launch description, then a command recovered
-    // from TaskStop output, and leave the opaque id as the final fallback.
-    if (isTaskAction) {
-      if (taskDescription) {
-        return {
-          text: toSingleLinePreview(taskDescription),
-          generic: false,
-          monospace: false,
-        };
-      }
-      const resultCommand = taskCommandFromOutput(toolOutput);
-      if (resultCommand) {
-        return {
-          text: toSingleLinePreview(resultCommand),
-          generic: false,
-          monospace: true,
-        };
-      }
-      if (taskId) {
-        return {
-          text: toSingleLinePreview(taskId),
-          generic: false,
-          monospace: true,
-        };
-      }
-    }
-
-    if (isBackgroundLaunch && taskDescription) {
-      return {
-        text: toSingleLinePreview(taskDescription),
-        generic: false,
-        monospace: false,
-      };
-    }
-
-    // For shell commands, show the command in the collapsed row.
-    const command = toolArgs.command as string | undefined;
-    if (command) {
-      return {
-        text: toSingleLinePreview(command),
-        generic: false,
-        monospace: true,
-      };
-    }
-
-    // For Read tool - show filename
-    const filePath = toolArgs.file_path as string | undefined;
-    if (filePath) {
-      const name = filePath.split("/").pop();
-      return name ? { text: name, generic: false, monospace: true } : null;
-    }
-
-    // For Glob tool - show pattern
-    const pattern = toolArgs.pattern as string | undefined;
-    if (pattern) {
-      return {
-        text: toSingleLinePreview(pattern),
-        generic: false,
-        monospace: true,
-      };
-    }
-
-    // For Grep tool - show search pattern
-    const grepPattern = toolArgs.regex as string | undefined;
-    if (grepPattern) {
-      return {
-        text: toSingleLinePreview(grepPattern),
-        generic: false,
-        monospace: true,
-      };
-    }
-
-    // Cursor child JSONL names its read argument `path` where Claude-style
-    // tools use `file_path`. It ranks below `pattern`/`regex` on purpose:
-    // Glob and Grep carry `path` as the *search root* alongside the pattern
-    // that actually identifies the call, so reading it first would label them
-    // with a directory instead.
-    const genericPath = toolArgs.path;
-    if (typeof genericPath === "string" && genericPath) {
-      const name = genericPath.split("/").pop();
-      return name ? { text: name, generic: false, monospace: true } : null;
-    }
-
-    // For WebFetch tool - show hostname from URL
-    const url = toolArgs.url as string | undefined;
-    if (url) {
-      try {
-        return {
-          text: new URL(url).hostname,
-          generic: false,
-          monospace: true,
-        };
-      } catch {
-        return {
-          text: toSingleLinePreview(url),
-          generic: false,
-          monospace: true,
-        };
-      }
-    }
-
-    // For WebSearch tool - show search query
-    const query = toolArgs.query as string | undefined;
-    if (query) {
-      return {
-        text: toSingleLinePreview(query),
-        generic: false,
-        monospace: true,
-      };
-    }
-
-    if (questions) {
-      return {
-        text: toSingleLinePreview(questionToolPreview(questions)),
-        generic: false,
-        monospace: false,
-      };
-    }
-
-    // Custom tools such as Codex's `exec` carry raw input rather than a
-    // provider-standard argument shape. Keep the collapsed row informative
-    // even when the bridge cannot safely derive a more specific command.
-    const input = toolArgs.input;
-    if (typeof input === "string" && input.trim()) {
-      return {
-        text: toSingleLinePreview(input),
-        generic: true,
-        monospace: true,
-      };
-    }
-
-    return null;
-  };
-
-  const displayInfo = getDisplayInfo();
+  const displayInfo = toolRowPreview(
+    { toolName, toolArgs, toolOutput, toolState, toolDenied: denied, toolError, backgroundTask },
+    questions,
+  );
   const shouldShowToolTitle =
     Boolean(displayToolTitle) &&
     (!displayInfo || displayInfo.generic) &&
@@ -475,56 +565,78 @@ export function ToolPart({
   // line would report work that has already stopped.
   const livingProgress = toolState === "pending" ? progress : undefined;
 
+  const trigger = (
+    <CollapsibleTrigger
+      className={cn(
+        "flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground",
+        hasExpandableContent && "cursor-pointer",
+        !hasExpandableContent && "cursor-default",
+      )}
+      disabled={!hasExpandableContent}
+    >
+      <ChevronRight
+        className={cn(
+          "w-3 h-3 transition-transform shrink-0",
+          isOpen && "rotate-90",
+          !hasExpandableContent && "opacity-0",
+        )}
+      />
+      <Wrench className="w-3.5 h-3.5 shrink-0" />
+      <span className="font-medium">{displayToolName}</span>
+      {displayInfo && (
+        <span
+          className={cn(
+            "text-muted-foreground/80 truncate flex-1 text-left",
+            displayInfo.monospace && "font-mono",
+          )}
+        >
+          {displayInfo.text}
+        </span>
+      )}
+      {isTaskAction && taskId && displayInfo?.text !== taskId && (
+        <span
+          className="max-w-28 shrink-0 truncate font-mono text-[10px] text-muted-foreground/50"
+          title={taskId}
+        >
+          {taskId}
+        </span>
+      )}
+      {shouldShowToolTitle && (
+        <span className="text-muted-foreground/70 truncate flex-1 text-left">
+          {displayToolTitle}
+        </span>
+      )}
+      {presentation ? (
+        <ChangeCountBadge projection={primaryChange} />
+      ) : (
+        legacyChanges && <CommandChangeStats change={legacyChanges} />
+      )}
+      {displayedState && (
+        <span className={cn("ml-auto shrink-0", displayedState.className)}>
+          {displayedState.label}
+        </span>
+      )}
+      <ToolDurationLabel label={durationLabel} />
+    </CollapsibleTrigger>
+  );
+
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
-      <CollapsibleTrigger
-        className={cn(
-          "flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground",
-          hasExpandableContent && "cursor-pointer",
-          !hasExpandableContent && "cursor-default",
-        )}
-        disabled={!hasExpandableContent}
-      >
-        <ChevronRight
-          className={cn(
-            "w-3 h-3 transition-transform shrink-0",
-            isOpen && "rotate-90",
-            !hasExpandableContent && "opacity-0",
-          )}
-        />
-        <Wrench className="w-3.5 h-3.5 shrink-0" />
-        <span className="font-medium">{displayToolName}</span>
-        {displayInfo && (
-          <span
-            className={cn(
-              "text-muted-foreground/80 truncate flex-1 text-left",
-              displayInfo.monospace && "font-mono",
-            )}
-          >
-            {displayInfo.text}
-          </span>
-        )}
-        {isTaskAction && taskId && displayInfo?.text !== taskId && (
-          <span
-            className="max-w-28 shrink-0 truncate font-mono text-[10px] text-muted-foreground/50"
-            title={taskId}
-          >
-            {taskId}
-          </span>
-        )}
-        {shouldShowToolTitle && (
-          <span className="text-muted-foreground/70 truncate flex-1 text-left">
-            {displayToolTitle}
-          </span>
-        )}
-        {commandChanges && <CommandChangeStats change={commandChanges} />}
-        {displayedState && (
-          <span className={cn("ml-auto shrink-0", displayedState.className)}>
-            {displayedState.label}
-          </span>
-        )}
-        <ToolDurationLabel label={durationLabel} />
-      </CollapsibleTrigger>
+      {inspectsArtifactDraft ? (
+        // Beside the trigger, never inside it: no nested buttons.
+        <div className="flex min-w-0 items-center gap-1">
+          <div className="min-w-0 flex-1">{trigger}</div>
+          <ArtifactDraftInspectorAction
+            toolName={toolName}
+            toolTitle={toolTitle}
+            mcpServerName={mcpServerName}
+            toolArgs={toolArgs}
+            toolOutput={toolOutput}
+          />
+        </div>
+      ) : (
+        trigger
+      )}
 
       {deniedLine ? (
         <div
@@ -550,6 +662,12 @@ export function ToolPart({
             {/* Input/Command section */}
             {answeredQuestions ? (
               <QuestionToolDetails questions={answeredQuestions} />
+            ) : wakeup ? (
+              <ScheduleWakeupToolDetails
+                call={wakeup}
+                result={wakeupResult}
+                succeeded={toolState === "success" && !denied && !toolError}
+              />
             ) : (
               formattedInput && (
                 <div className="px-3 py-2 border-b border-border/30">
@@ -560,8 +678,21 @@ export function ToolPart({
               )
             )}
 
-            {commandChanges && commandChanges.files.length > 0 && (
-              <CommandChangedFiles change={commandChanges} />
+            {changeRoles.map((entry) => (
+              <ChangeRoleSection
+                key={entry.role}
+                role={entry.role}
+                projection={entry.projection}
+                environmentId={changeScope?.environmentId}
+                body={false}
+              />
+            ))}
+
+            {legacyChanges && legacyChanges.files.length > 0 && (
+              <CommandChangedFiles
+                change={legacyChanges}
+                environmentId={changeScope?.environmentId}
+              />
             )}
 
             {/* Output section */}
@@ -595,9 +726,10 @@ const APPROXIMATE_CHANGES_TITLE =
   "Approximate: other changes were made in this worktree while the command ran";
 
 /**
- * The +N −M a shell row shows for the files the command changed, matching the
- * edit card's badge. A measured no-op shows nothing; a change git cannot count
- * in lines (a binary file, a pure rename) shows its file count instead.
+ * The +N −M a legacy shell row shows for the files the command changed, as
+ * the bridge measured them (rows recorded before backend change tracking). A
+ * measured no-op shows nothing; a change git cannot count in lines (a binary
+ * file, a pure rename) shows its file count instead.
  */
 export function CommandChangeStats({ change }: { change: MeasuredWorkspaceChange }) {
   const { additions, deletions, files, approximate } = change;
@@ -622,11 +754,22 @@ export function CommandChangeStats({ change }: { change: MeasuredWorkspaceChange
   );
 }
 
-/** Expanded list of the files a shell call changed, each opening its diff. */
-function CommandChangedFiles({ change }: { change: MeasuredWorkspaceChange }) {
+/**
+ * Expanded list of the files a legacy shell call changed. The bridge kept no
+ * contents for these, so a file opens as it is now — labelled as such — and
+ * only when the environment is known.
+ */
+function CommandChangedFiles({
+  change,
+  environmentId,
+}: {
+  change: MeasuredWorkspaceChange;
+  environmentId: string | undefined;
+}) {
   // Optional: shell rows also render outside a terminal (pipeline transcripts),
   // where the paths are shown but cannot be opened.
   const createFileTab = useOptionalTerminalContext()?.createFileTab;
+  const canOpen = Boolean(createFileTab && environmentId);
   return (
     <div className="px-3 py-2 border-b border-border/30 text-xs">
       <div className="mb-1 text-muted-foreground">
@@ -635,13 +778,20 @@ function CommandChangedFiles({ change }: { change: MeasuredWorkspaceChange }) {
       <ul className="space-y-0.5">
         {change.files.map((file) => (
           <li key={file.path} className="flex items-center gap-2 font-mono">
-            {createFileTab ? (
+            {canOpen && createFileTab && environmentId ? (
               <button
                 type="button"
                 className="truncate text-left text-foreground/80 hover:text-foreground hover:underline"
                 title={file.previousPath ? `${file.previousPath} → ${file.path}` : file.path}
                 onClick={() =>
-                  createFileTab(file.path, { isDiff: true, gitStatus: file.status ?? "M" })
+                  createFileTab(file.path, {
+                    isDiff: true,
+                    changeDiff: liveFileTarget(
+                      environmentId,
+                      { path: file.path },
+                      `${file.path} (current)`,
+                    ),
+                  })
                 }
               >
                 {file.path}
@@ -664,17 +814,21 @@ function CommandChangedFiles({ change }: { change: MeasuredWorkspaceChange }) {
           More files changed; totals include them all.
         </div>
       )}
+      {canOpen && (
+        <div className="mt-1 text-muted-foreground">
+          Contents were not kept; files open in their current state.
+        </div>
+      )}
     </div>
   );
 }
 
 /**
- * True when `toolDiff` carries diff content worth rendering with the edit
- * treatment.
+ * True when `toolDiff` structurally carries a diff payload worth the edit
+ * treatment. Routing on payload shape, not on provider tool names.
  *
  * A present-but-empty `diff` string carries no information — a provider that
- * surfaces an unfilled patch field emits one — so it must not count, and must
- * not suppress the before/after fallback the way a real diff does.
+ * surfaces an unfilled patch field emits one — so it must not count.
  */
 export function hasRenderableDiff(toolDiff?: ToolDiffMetadata): boolean {
   return (
@@ -688,111 +842,27 @@ export function hasRenderableDiff(toolDiff?: ToolDiffMetadata): boolean {
   );
 }
 
-/** Parse unified diff output into lines with +/- indicators */
-function parseDiffLines(
-  output: string,
-): Array<{ type: "add" | "remove" | "context" | "header"; content: string }> {
-  if (!output) return [];
-  const lines = output.split("\n");
-  return lines.map((line) => {
-    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@")) {
-      return { type: "header" as const, content: line };
-    } else if (line.startsWith("+")) {
-      return { type: "add" as const, content: line };
-    } else if (line.startsWith("-")) {
-      return { type: "remove" as const, content: line };
-    } else {
-      return { type: "context" as const, content: line };
-    }
-  });
-}
+const EDIT_STATE_COLORS = {
+  success: "text-success",
+  failure: "text-failure",
+  pending: "text-yellow-600 animate-pulse",
+};
 
-/** Generate diff lines from before/after content */
-function generateDiffFromBeforeAfter(
-  before?: string,
-  after?: string,
-): Array<{ type: "add" | "remove" | "context" | "header"; content: string }> {
-  const result: Array<{
-    type: "add" | "remove" | "context" | "header";
-    content: string;
-  }> = [];
-
-  // Logical lines, not String#split: a trailing newline terminates the last
-  // line rather than creating an empty `+`/`-` row that disagrees with the
-  // collapsed badge. An empty file is zero lines, not one empty line.
-  const contentLines = (content: string): string[] => splitTextLines(content);
-
-  // If we have both before and after, show the diff
-  if (before !== undefined && after !== undefined) {
-    // Add removed lines
-    const beforeLines = contentLines(before);
-    for (const line of beforeLines) {
-      result.push({ type: "remove", content: `-${line}` });
-    }
-    // Add added lines
-    const afterLines = contentLines(after);
-    for (const line of afterLines) {
-      result.push({ type: "add", content: `+${line}` });
-    }
-  } else if (after !== undefined) {
-    // Only additions (write/new content)
-    const afterLines = contentLines(after);
-    for (const line of afterLines) {
-      result.push({ type: "add", content: `+${line}` });
-    }
-  } else if (before !== undefined) {
-    // Only deletions
-    const beforeLines = contentLines(before);
-    for (const line of beforeLines) {
-      result.push({ type: "remove", content: `-${line}` });
-    }
-  }
-
-  return result;
-}
-
-/** Count additions and deletions from diff output or metadata */
-function countDiffStats(
-  output?: string,
-  metadata?: ToolDiffMetadata,
-): { additions: number; deletions: number } {
-  // First try to use pre-calculated metadata if available
-  if (metadata?.additions !== undefined || metadata?.deletions !== undefined) {
-    return {
-      additions: metadata.additions ?? 0,
-      deletions: metadata.deletions ?? 0,
-    };
-  }
-
-  // Try to calculate from before/after content
-  if (metadata?.before !== undefined || metadata?.after !== undefined) {
-    const beforeLines = countTextLines(metadata.before);
-    const afterLines = countTextLines(metadata.after);
-    return {
-      additions: afterLines,
-      deletions: beforeLines,
-    };
-  }
-
-  // Otherwise parse from diff-formatted output
-  if (!output) return { additions: 0, deletions: 0 };
-
-  let additions = 0;
-  let deletions = 0;
-  const lines = output.split("\n");
-  for (const line of lines) {
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      additions++;
-    } else if (line.startsWith("-") && !line.startsWith("---")) {
-      deletions++;
-    }
-  }
-  return { additions, deletions };
-}
-
-/** Render an edit tool invocation with diff view */
+/**
+ * A file tool's change card.
+ *
+ * With a backend presentation, the collapsed badge is the primary role's
+ * projection and the expanded body shows every role (payload, effect,
+ * observation) with its own label, badge and backend hunks. Without one
+ * (history recorded before change tracking, or a transcript outside a native
+ * agent tab) the recorded payload is measured by the backend once and shown
+ * with that provenance; if that fails, the row shows its path and raw output
+ * only.
+ */
 export function EditToolPart({
   expansionKey,
+  callId,
+  occurrenceId,
   toolName,
   toolState,
   toolTitle,
@@ -803,6 +873,9 @@ export function EditToolPart({
   deferredDetails = false,
 }: {
   expansionKey: string;
+  /** Provider call id; keys the backend's change presentation for this row. */
+  callId?: string;
+  occurrenceId?: string;
   toolName?: string;
   toolState?: "success" | "failure" | "pending";
   toolTitle?: string;
@@ -815,90 +888,101 @@ export function EditToolPart({
   deferredDetails?: boolean;
 }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
-  const { createFileTab } = useTerminalContext();
+  const createFileTab = useOptionalTerminalContext()?.createFileTab ?? null;
+  const changeScope = useNativeChangeScope();
+  const environmentId = changeScope?.environmentId;
   const displayToolName = getToolDisplayName(toolName, "Edit");
   const displayToolTitle = getToolTitleDisplayName(toolTitle, toolName);
 
-  const stateColors = {
-    success: "text-success",
-    failure: "text-failure",
-    pending: "text-yellow-600 animate-pulse",
-  };
+  const { presentation, roles, legacy } = useToolChangeRow(callId, toolState, occurrenceId);
+  const primary = roles[0]?.projection;
 
-  // Get file path from diff metadata
-  const filePath = toolDiff?.filePath;
+  const filePath = toolDiff?.filePath || projectionFirstPath(primary);
   const fileName = filePath ? filePath.split("/").pop() : null;
   const shouldShowToolTitle =
     Boolean(displayToolTitle) && !fileName && displayToolTitle !== displayToolName;
 
-  // Diff work is keyed on the *values* it reads, not on `toolDiff`'s identity.
-  // Normalization rebuilds every part object on each streaming frame, so an
-  // identity dependency would re-derive a completed edit's diff ten times a
-  // second for the rest of the turn — and generating a diff from before/after
-  // is whole-file work.
-  const diffSource = toolDiff?.diff;
-  const diffBefore = toolDiff?.before;
-  const diffAfter = toolDiff?.after;
-  const diffAdditions = toolDiff?.additions;
-  const diffDeletions = toolDiff?.deletions;
+  // Legacy rows send their recorded payload to the backend once it is in hand
+  // (a deferred row's body arrives when it is expanded).
+  const legacyDiff = toolDiff?.diff || undefined;
+  const legacyBefore = toolDiff?.before;
+  const legacyAfter = toolDiff?.after;
+  const legacyPath = toolDiff?.filePath;
+  // Counts an old row recorded without a body are passed through untouched;
+  // the backend labels them provider-reported and never infers a missing side.
+  // A deferred row's counts are the old bridge's whole-side totals; wait for
+  // its body instead of presenting them.
+  const legacyAdditions = toolDiff?.deferred ? undefined : toolDiff?.additions;
+  const legacyDeletions = toolDiff?.deferred ? undefined : toolDiff?.deletions;
+  const legacyInput = useMemo<LegacyPayloadInput | null>(
+    () =>
+      legacy &&
+      (legacyDiff !== undefined ||
+        legacyBefore !== undefined ||
+        legacyAfter !== undefined ||
+        legacyAdditions !== undefined ||
+        legacyDeletions !== undefined)
+        ? {
+            toolName,
+            filePath: legacyPath,
+            before: legacyBefore,
+            after: legacyAfter,
+            diff: legacyDiff,
+            additions: legacyAdditions,
+            deletions: legacyDeletions,
+          }
+        : null,
+    [
+      legacy,
+      toolName,
+      legacyPath,
+      legacyBefore,
+      legacyAfter,
+      legacyDiff,
+      legacyAdditions,
+      legacyDeletions,
+    ],
+  );
+  const legacyMeasurement = useLegacyPayloadMeasurement(expansionKey, legacyInput);
+  const legacySummary =
+    legacyMeasurement.status === "ready" ? legacyMeasurement.summary : undefined;
 
-  // Calculate diff stats
-  const { additions, deletions } = useMemo(
-    () => countDiffStats(toolOutput, toolDiff),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- value deps, see above
-    [toolOutput, diffSource, diffBefore, diffAfter, diffAdditions, diffDeletions],
+  const historicalId = primary?.detail?.diffIdentityId;
+  const showsBody = presentation
+    ? Boolean(primary?.detail)
+    : Boolean(legacySummary && legacySummary.files.length > 0);
+
+  // A deferred part counts: its diff only loads *because* the row was
+  // expanded, so gating the trigger on present content would make it
+  // permanently unreachable.
+  const hasExpandableContent = Boolean(
+    toolOutput || toolError || deferredDetails || legacyInput || roles.length > 0,
   );
 
-  // Parse diff lines for display - try unified diff first, then output, then generate from before/after
-  const diffLines = useMemo(() => {
-    // A provider-supplied diff is authoritative even when it contains no
-    // additions or removals. Falling through to before/after in that case would
-    // turn an unchanged whole-file state into a synthetic full replacement. An
-    // empty diff string is not such a case — it says nothing at all.
-    if (diffSource) {
-      return parseDiffLines(diffSource);
-    }
-
-    // Then try parsing from output (if it's in diff format)
-    const outputLines = parseDiffLines(toolOutput || "");
-    const hasActualDiffContent = outputLines.some(
-      (line) => line.type === "add" || line.type === "remove",
-    );
-    if (hasActualDiffContent) {
-      return outputLines;
-    }
-
-    // Finally generate from before/after content
-    if (toolDiff?.before !== undefined || toolDiff?.after !== undefined) {
-      return generateDiffFromBeforeAfter(toolDiff.before, toolDiff.after);
-    }
-
-    return [];
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- value deps, see above
-  }, [toolOutput, diffSource, diffBefore, diffAfter]);
-
-  // Determine if there's content to show when expanded. A deferred part counts:
-  // its diff only loads *because* the row was expanded, so gating the trigger
-  // on already-present content would make it permanently unreachable.
-  const hasExpandableContent =
-    toolOutput ||
-    toolError ||
-    diffLines.length > 0 ||
-    toolDiff?.diff ||
-    toolDiff?.before ||
-    toolDiff?.after ||
-    deferredDetails;
-
-  // Handle pop-out to open diff in new tab
-  const handlePopOut = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (createFileTab && filePath) {
-        createFileTab(filePath, { isDiff: true, gitStatus: "M" });
-      }
-    },
-    [createFileTab, filePath],
-  );
+  const openHistorical = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (!createFileTab || !historicalId) return;
+    createFileTab(filePath ?? fileName ?? displayToolName, {
+      isDiff: true,
+      changeDiff: {
+        kind: "historical",
+        diffIdentityId: historicalId,
+        title: fileName ?? displayToolName,
+      },
+    });
+  };
+  const openCurrent = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (!createFileTab || !environmentId || !filePath) return;
+    createFileTab(filePath, {
+      isDiff: true,
+      changeDiff: liveFileTarget(
+        environmentId,
+        { path: filePath },
+        `${fileName ?? filePath} (current)`,
+      ),
+    });
+  };
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
@@ -929,15 +1013,13 @@ export function EditToolPart({
             {displayToolTitle}
           </span>
         )}
-        {/* Line count stats - shown after filename */}
-        {(additions > 0 || deletions > 0) && (
-          <span className="flex items-center gap-1 shrink-0">
-            {additions > 0 && <span className="text-success font-mono">+{additions}</span>}
-            {deletions > 0 && <span className="text-failure font-mono">-{deletions}</span>}
-          </span>
+        {presentation ? (
+          <ChangeCountBadge projection={primary} />
+        ) : (
+          legacySummary && <LegacyPayloadBadge summary={legacySummary} />
         )}
         {toolState && (
-          <span className={cn("ml-auto shrink-0", stateColors[toolState] || "")}>
+          <span className={cn("ml-auto shrink-0", EDIT_STATE_COLORS[toolState] || "")}>
             {toolState === "pending" ? "running..." : toolState}
           </span>
         )}
@@ -947,48 +1029,56 @@ export function EditToolPart({
       {hasExpandableContent && (
         <CollapsibleContent className="mt-1">
           <div className="overflow-hidden border-l border-border/40 pl-3">
-            {/* Header with file path and pop-out button */}
-            <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/30">
+            {/* Header with the file path, the historical pop-out and the explicit current-file action */}
+            <div className="flex items-center justify-between gap-1 px-3 py-1.5 border-b border-border/30">
               <span className="text-xs font-mono text-muted-foreground truncate">
                 {filePath || "Unknown file"}
               </span>
-              {createFileTab && filePath && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 w-6 p-0 hover:bg-muted"
-                  onClick={handlePopOut}
-                  title="Open diff in new tab"
-                >
-                  <ExternalLinkIcon className="w-3 h-3" />
-                </Button>
-              )}
+              <span className="flex shrink-0 items-center gap-1">
+                {createFileTab && historicalId && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0 hover:bg-muted"
+                    onClick={openHistorical}
+                    title="Open diff in new tab"
+                  >
+                    <ExternalLinkIcon className="w-3 h-3" />
+                  </Button>
+                )}
+                {createFileTab && environmentId && filePath && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0 hover:bg-muted"
+                    onClick={openCurrent}
+                    title="Open current file diff"
+                  >
+                    <FileClock className="w-3 h-3" />
+                  </Button>
+                )}
+              </span>
             </div>
 
-            {/* Unified diff view */}
-            {diffLines.length > 0 && (
-              <div className="max-h-64 overflow-auto">
-                <pre className="text-xs font-mono">
-                  {diffLines.map((line, i) => (
-                    <div
-                      key={i}
-                      className={cn(
-                        "px-3 py-0.5",
-                        line.type === "add" && "bg-success/20 text-success",
-                        line.type === "remove" && "bg-failure/20 text-failure",
-                        line.type === "header" && "bg-blue-500/10 text-blue-400",
-                        line.type === "context" && "text-foreground/60",
-                      )}
-                    >
-                      {line.content}
-                    </div>
-                  ))}
-                </pre>
-              </div>
-            )}
+            {/* Backend presentation: each role separately, primary first */}
+            {roles.map((entry) => (
+              <ChangeRoleSection
+                key={entry.role}
+                role={entry.role}
+                projection={entry.projection}
+                environmentId={environmentId}
+                body
+              />
+            ))}
 
-            {/* Fallback to raw output if no diff lines parsed */}
-            {diffLines.length === 0 && toolOutput && (
+            {/* Legacy payload measured by the backend */}
+            {!presentation && legacyMeasurement.status === "loading" && (
+              <div className="px-3 py-1.5 text-xs text-muted-foreground">Measuring change…</div>
+            )}
+            {!presentation && legacySummary && <LegacyPayloadBody summary={legacySummary} />}
+
+            {/* Raw tool output, as plain text, when no change body is shown */}
+            {!showsBody && toolOutput && (
               <div className="px-3 py-2 max-h-64 overflow-auto">
                 <pre className="text-xs font-mono text-foreground/80 whitespace-pre-wrap break-all">
                   {toolOutput}

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dir, "../..");
@@ -16,6 +17,56 @@ const BRIDGE_MANIFESTS = [
 ];
 
 describe("monorepo orchestration scripts", () => {
+  test("Bun check rejects a type error and accepts the repaired project", () => {
+    const fixture = mkdtempSync(path.join(os.tmpdir(), "orkestrator-typecheck-"));
+    try {
+      writeFileSync(
+        path.join(fixture, "tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: { strict: true, noEmit: true, types: [] },
+          files: ["index.ts"],
+        }),
+      );
+      writeFileSync(path.join(fixture, "index.ts"), 'export const value: number = "wrong";\n');
+      const check = () =>
+        Bun.spawnSync([process.execPath, "check", "-p", "tsconfig.json"], {
+          cwd: fixture,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+      const failed = check();
+      expect(failed.exitCode).not.toBe(0);
+      expect(failed.stdout.toString() + failed.stderr.toString()).toContain("TS2322");
+      writeFileSync(path.join(fixture, "index.ts"), "export const value: number = 1;\n");
+      expect(check().exitCode).toBe(0);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  test("Bun fmt check rejects an unformatted file without modifying it", () => {
+    const fixture = mkdtempSync(path.join(os.tmpdir(), "orkestrator-format-"));
+    try {
+      writeFileSync(path.join(fixture, ".oxfmtrc.json"), read(".oxfmtrc.json"));
+      const file = path.join(fixture, "index.ts");
+      const unformatted = "export const value={messy:true}\n";
+      writeFileSync(file, unformatted);
+      const format = (...args: string[]) =>
+        Bun.spawnSync([process.execPath, "fmt", ...args, "index.ts"], {
+          cwd: fixture,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+      expect(format("--check").exitCode).toBe(1);
+      expect(readFileSync(file, "utf8")).toBe(unformatted);
+      expect(format().exitCode).toBe(0);
+      expect(readFileSync(file, "utf8")).toBe("export const value = { messy: true };\n");
+      expect(format("--check").exitCode).toBe(0);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   test("backend build externalizes Sharp and vendors its complete runtime closure", () => {
     const source = read("apps/backend/scripts/build.ts");
     const runtimeWorkflow = read(".github/workflows/validate-bun-runtime.yml");
@@ -51,7 +102,7 @@ describe("monorepo orchestration scripts", () => {
     const dev = read("apps/desktop/scripts/dev.ts");
     const lifecycle = read("apps/desktop/scripts/dev/lifecycle.ts");
     expect(build).toContain("result.status ?? 1");
-    expect(build).toContain('run("bunx", ["tsc", "--noEmit"');
+    expect(build).toContain('run("bun", ["check", "-p"');
     expect(build).toContain("dependencies.bundle ?? bundleElectron");
     expect(build).toContain("if (!result.success)");
     expect(bundle).toContain("Bun.build(");
@@ -62,7 +113,7 @@ describe("monorepo orchestration scripts", () => {
     expect(build).toContain("rmSync(output");
     // Development must bundle like production: a `tsc` emit leaves workspace
     // imports pointing at raw `.ts` sources that Electron's Node cannot run.
-    expect(lifecycle).toContain('spawnSync("bunx", ["tsc", "--noEmit"');
+    expect(lifecycle).toContain('spawnSync("bun", ["check", "-p"');
     expect(lifecycle).toContain(
       "await compileElectronForDevelopment(profile.logDir, dependencies)",
     );
@@ -168,7 +219,8 @@ describe("monorepo orchestration scripts", () => {
 
     expect(tasks["smoke:cli"]?.run).toBe("bun run --cwd packages/cli smoke:pack");
     expect(tasks["publish:cli"]?.run).toContain("mise run smoke:cli");
-    expect(tasks["publish:cli"]?.run).toContain("bun publish --cwd packages/cli --access public");
+    // The publish script picks the dist-tag from the version's update channel.
+    expect(tasks["publish:cli"]?.run).toContain("bun scripts/publish-cli.ts");
     // The smoke script must verify the runtime dependencies actually resolve
     // from the installed layout, not just that the backend boots.
     expect(read("packages/cli/scripts/smoke-packed.ts")).toContain(
@@ -242,7 +294,7 @@ describe("monorepo orchestration scripts", () => {
   test("aggregate test tasks never replay a cached pass", () => {
     // A cache hit would let a group report success having executed nothing,
     // which is worth far less than the seconds it saves on a suite that still
-    // tracks live flakes in docs/tests/flaky-tests/0000-index.md.
+    // tracks live flakes in docs/tests/flaky-tests/.
     const turbo = JSON.parse(read("turbo.json")) as {
       tasks?: Record<string, { cache?: boolean }>;
     };
@@ -317,7 +369,9 @@ describe("monorepo orchestration scripts", () => {
     // stack through their own configs and whose tests need Bun types the shared
     // project deliberately does not load.
     const playwright = read("e2e/playwright.config.ts");
-    expect(playwright).toContain('testIgnore: ["agent-testing/**", "preview/**"]');
+    expect(playwright).toContain(
+      'testIgnore: ["agent-testing/**", "preview/**", "public-site/**"]',
+    );
 
     const shared = JSON.parse(read("e2e/tsconfig.json")) as { exclude?: string[] };
     expect(shared.exclude).toContain("agent-testing");
@@ -345,14 +399,19 @@ describe("monorepo orchestration scripts", () => {
     ]) {
       const scripts = (JSON.parse(read(pkg)) as { scripts?: Record<string, string> }).scripts ?? {};
       expect(scripts.test).toContain("--parallel");
-      expect(scripts["test:workspace"]).toContain("--parallel=${ORKESTRATOR_TEST_WORKERS:-2}");
+      // The backend takes its own larger pool first (see planWorkers).
+      expect(scripts["test:workspace"]).toContain(
+        pkg === "apps/backend/package.json"
+          ? "--parallel=${ORKESTRATOR_BACKEND_TEST_WORKERS:-${ORKESTRATOR_TEST_WORKERS:-2}}"
+          : "--parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
+      );
     }
   });
 
   test("the workspace worker count is never passed through Turbo's `--` separator", () => {
     // Turbo hashes passthrough arguments into the requested task *and its
     // dependencies*, so `-- --parallel=N` gave `bun run build` and `bun run test`
-    // different `#build` hashes and re-ran `tsc && vite build` on every
+    // different `#build` hashes and re-ran `bun check && vite build` on every
     // alternation between the two commands.
     const source = read("scripts/test-all.ts");
     expect(source).not.toContain('"--",');

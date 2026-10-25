@@ -18,6 +18,7 @@ import type {
   PreferredEditor,
   ClaudeModelCatalogSnapshot,
 } from "@/types";
+import { machineInvoke, type AccountMachine } from "./agent-accounts";
 /** PR detection result containing URL, state, and merge conflict status */
 
 export async function checkDocker(): Promise<DockerAvailability> {
@@ -223,8 +224,10 @@ export interface PropagateTokenResult {
 }
 
 /** Apply the selected GitHub credential source to all running containers. */
-export async function propagateGithubCredentialsToContainers(): Promise<PropagateTokenResult> {
-  return invoke<PropagateTokenResult>("propagate_github_token_to_containers");
+export async function propagateGithubCredentialsToContainers(
+  machine?: AccountMachine,
+): Promise<PropagateTokenResult> {
+  return machineInvoke<PropagateTokenResult>(machine, "propagate_github_token_to_containers");
 }
 
 // --- OpenCode Server Commands ---
@@ -276,10 +279,15 @@ export async function getOpencodeModelPreferences(): Promise<OpenCodeModelPrefer
 /** Load the durable project-scoped catalogue before an OpenCode server is ready. */
 export async function getCachedOpenCodeModelCatalog(
   projectId: string,
+  machine?: AccountMachine,
 ): Promise<OpenCodeModelCatalogSnapshot | null> {
-  return invoke<OpenCodeModelCatalogSnapshot | null>("get_opencode_model_catalog_cache", {
-    projectId,
-  });
+  return machineInvoke<OpenCodeModelCatalogSnapshot | null>(
+    machine,
+    "get_opencode_model_catalog_cache",
+    {
+      projectId,
+    },
+  );
 }
 
 const finiteNumber = (value: unknown): number | undefined =>
@@ -446,16 +454,20 @@ export interface AgentSkillFile {
 }
 
 /** List every skill the given agent can load from its user-level skill roots */
-export async function listAgentSkills(provider: AgentSkillProvider): Promise<AgentSkillScan> {
-  return invoke<AgentSkillScan>("list_agent_skills", { provider });
+export async function listAgentSkills(
+  provider: AgentSkillProvider,
+  machine?: AccountMachine,
+): Promise<AgentSkillScan> {
+  return machineInvoke<AgentSkillScan>(machine, "list_agent_skills", { provider });
 }
 
 /** Read one SKILL.md; the backend rejects paths outside the agent's skill roots */
 export async function readAgentSkill(
   provider: AgentSkillProvider,
   filePath: string,
+  machine?: AccountMachine,
 ): Promise<AgentSkillFile> {
-  return invoke<AgentSkillFile>("read_agent_skill", { provider, filePath });
+  return machineInvoke<AgentSkillFile>(machine, "read_agent_skill", { provider, filePath });
 }
 
 /** List the skills the selected agent can load inside one environment. */
@@ -507,23 +519,33 @@ export interface GitHubCliLoginProgress {
   error?: string;
 }
 
-/** Whether the backend host's GitHub CLI is available and signed in. */
-export async function getGitHubCliStatus(): Promise<GitHubCliStatus> {
-  return invoke<GitHubCliStatus>("get_github_cli_status", {});
+/**
+ * Whether the backend host's GitHub CLI is available and signed in. Each
+ * machine has its own `gh`; `machine` names another node, through the command
+ * node.
+ */
+export async function getGitHubCliStatus(machine?: AccountMachine): Promise<GitHubCliStatus> {
+  return machineInvoke<GitHubCliStatus>(machine, "get_github_cli_status");
 }
 
 /** Start `gh auth login` with GitHub's device flow; poll with `getGitHubCliLogin`. */
-export async function startGitHubCliLogin(): Promise<GitHubCliLoginProgress> {
-  return invoke<GitHubCliLoginProgress>("start_github_cli_login", {});
+export async function startGitHubCliLogin(
+  machine?: AccountMachine,
+): Promise<GitHubCliLoginProgress> {
+  return machineInvoke<GitHubCliLoginProgress>(machine, "start_github_cli_login");
 }
 
-export async function getGitHubCliLogin(): Promise<GitHubCliLoginProgress> {
-  return invoke<GitHubCliLoginProgress>("get_github_cli_login", {});
+export async function getGitHubCliLogin(machine?: AccountMachine): Promise<GitHubCliLoginProgress> {
+  return machineInvoke<GitHubCliLoginProgress>(machine, "get_github_cli_login");
 }
 
 /** Cancel a pending GitHub sign-in, or dismiss a finished one. */
-export async function cancelGitHubCliLogin(operationId?: string): Promise<GitHubCliLoginProgress> {
-  return invoke<GitHubCliLoginProgress>(
+export async function cancelGitHubCliLogin(
+  operationId?: string,
+  machine?: AccountMachine,
+): Promise<GitHubCliLoginProgress> {
+  return machineInvoke<GitHubCliLoginProgress>(
+    machine,
     "cancel_github_cli_login",
     operationId ? { operationId } : {},
   );
@@ -555,8 +577,11 @@ export async function getGitRemoteUrl(path: string): Promise<string | null> {
 
 // --- Network Commands ---
 
-export async function testDomainResolution(domains: string[]): Promise<DomainTestResult[]> {
-  return invoke<DomainTestResult[]>("test_domain_resolution", { domains });
+export async function testDomainResolution(
+  domains: string[],
+  machine?: AccountMachine,
+): Promise<DomainTestResult[]> {
+  return machineInvoke<DomainTestResult[]>(machine, "test_domain_resolution", { domains });
 }
 
 export async function validateDomains(domains: string[]): Promise<DomainTestResult[]> {
@@ -629,8 +654,11 @@ export async function executeDockerCleanup(selection: {
 }
 
 /** The Docker daemon's capacity (on Docker Desktop, its VM) and disk use. */
-export async function getDockerCapacity(refresh = false): Promise<DockerCapacity> {
-  return invoke<DockerCapacity>("get_docker_capacity", { refresh });
+export async function getDockerCapacity(
+  refresh = false,
+  machine?: AccountMachine,
+): Promise<DockerCapacity> {
+  return machineInvoke<DockerCapacity>(machine, "get_docker_capacity", { refresh });
 }
 
 /** One shared, bounded usage sample of this installation's containers. */
@@ -641,6 +669,7 @@ export async function getContainerUsage(): Promise<ContainerUsageSnapshot> {
 /** Default budget for new containers; `null` means unrestricted. */
 export async function setContainerResourceLimits(
   limits: ContainerResourceLimits | null,
+  machine?: AccountMachine,
 ): Promise<{ limits: ContainerResourceLimits | null }> {
-  return invoke("set_container_resource_limits", { limits });
+  return machineInvoke(machine, "set_container_resource_limits", { limits });
 }

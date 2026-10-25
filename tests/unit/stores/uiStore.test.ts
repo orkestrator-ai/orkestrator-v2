@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { useUIStore } from "../../../apps/web/src/stores/uiStore";
+import { createUIStore, useUIStore } from "../../../apps/web/src/stores/uiStore";
 
 describe("uiStore", () => {
   beforeEach(() => {
@@ -14,9 +14,11 @@ describe("uiStore", () => {
       projectBoardNotesOpen: false,
       sidebarWidth: 280,
       collapsedProjects: [],
+      projectCollapseChoices: [],
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
       environmentSortMode: "project",
+      activitySortOrder: "priority",
       zoomLevel: 100,
     });
   });
@@ -33,6 +35,7 @@ describe("uiStore", () => {
     expect(state.selectedEnvironmentIds).toEqual([]);
     expect(state.expandedSessionsEnvironments).toEqual([]);
     expect(state.environmentSortMode).toBe("project");
+    expect(state.activitySortOrder).toBe("priority");
     expect(state.zoomLevel).toBe(100);
     expect(state.sidebarOpen).toBe(true);
   });
@@ -202,6 +205,41 @@ describe("uiStore", () => {
     expect(persisted.state?.environmentSortMode).toBe("activity");
   });
 
+  test("sets and persists the activity sort order", () => {
+    useUIStore.getState().setActivitySortOrder("oldest");
+
+    expect(useUIStore.getState().activitySortOrder).toBe("oldest");
+    const persisted = JSON.parse(localStorage.getItem("ui-storage") ?? "{}") as {
+      state?: Record<string, unknown>;
+    };
+    expect(persisted.state?.activitySortOrder).toBe("oldest");
+  });
+
+  for (const order of ["priority", "newest", "oldest"] as const) {
+    test(`rehydrates ${order} activity order in a new store`, () => {
+      useUIStore.getState().setEnvironmentSortMode("activity");
+      useUIStore.getState().setActivitySortOrder(order);
+      const persisted = localStorage.getItem("ui-storage")!;
+
+      // Restore the serialized settings as a fresh renderer would read them.
+      localStorage.clear();
+      localStorage.setItem("ui-storage", persisted);
+      const reloaded = createUIStore();
+
+      expect(reloaded.getState().environmentSortMode).toBe("activity");
+      expect(reloaded.getState().activitySortOrder).toBe(order);
+    });
+  }
+
+  test("rehydrates older settings without an activity order using priority", () => {
+    localStorage.setItem(
+      "ui-storage",
+      JSON.stringify({ state: { environmentSortMode: "activity" }, version: 0 }),
+    );
+    const reloaded = createUIStore();
+    expect(reloaded.getState().activitySortOrder).toBe("priority");
+  });
+
   test("no longer persists unread activity, which the environment record owns", () => {
     useUIStore.getState().selectEnvironment("env-1");
 
@@ -277,14 +315,16 @@ describe("uiStore", () => {
     useUIStore.getState().selectProject("project-2");
     useUIStore.getState().setEnvironmentSortMode("activity");
 
-    const persistedRaw = localStorage.getItem("ui-storage") ?? "{}";
+    const persistedRaw = localStorage.getItem("ui-project-storage") ?? "{}";
+    const presentationRaw = localStorage.getItem("ui-storage") ?? "{}";
     const persisted = JSON.parse(persistedRaw) as {
       state?: Record<string, unknown>;
     };
     expect(persisted.state).toMatchObject({
       recentProjectIds: ["project-2", "project-1"],
-      environmentSortMode: "activity",
     });
+    expect(JSON.parse(presentationRaw).state.environmentSortMode).toBe("activity");
+    expect(JSON.parse(presentationRaw).state).not.toHaveProperty("recentProjectIds");
     expect(persisted.state).not.toHaveProperty("selectedProjectId");
 
     useUIStore.setState({
@@ -293,7 +333,8 @@ describe("uiStore", () => {
       recentProjectIds: [],
       environmentSortMode: "project",
     });
-    localStorage.setItem("ui-storage", persistedRaw);
+    localStorage.setItem("ui-project-storage", persistedRaw);
+    localStorage.setItem("ui-storage", presentationRaw);
     await useUIStore.persist.rehydrate();
 
     expect(useUIStore.getState().recentProjectIds).toEqual(["project-2", "project-1"]);
@@ -336,13 +377,13 @@ describe("uiStore", () => {
   test("persists collapsed folders so a reload reopens the same tree", async () => {
     useUIStore.getState().setProjectFolderCollapsed("Work", true);
 
-    const persistedRaw = localStorage.getItem("ui-storage") ?? "{}";
+    const persistedRaw = localStorage.getItem("ui-project-storage") ?? "{}";
     expect((JSON.parse(persistedRaw) as { state?: Record<string, unknown> }).state).toMatchObject({
       collapsedProjectFolders: ["Work"],
     });
 
     useUIStore.setState({ collapsedProjectFolders: [] });
-    localStorage.setItem("ui-storage", persistedRaw);
+    localStorage.setItem("ui-project-storage", persistedRaw);
     await useUIStore.persist.rehydrate();
 
     expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);

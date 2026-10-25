@@ -106,6 +106,12 @@ export async function conditionalBuildPipelineRead(
     prioritySessionKey?: unknown;
   },
   budgetBytes = BUILD_PIPELINE_PATCH_BUDGET_BYTES,
+  /**
+   * Places published transcript artifacts beside their calls in a patch's
+   * rows (`BuildPipelineService.placeStageArtifacts`). Rows are never added or
+   * removed, so `startIndex`/`baseCount` still address the client's copy.
+   */
+  placeArtifacts?: (sessionKey: string, rows: unknown[]) => unknown[],
 ): Promise<
   | { unchanged: true; revision: number }
   | {
@@ -293,6 +299,7 @@ export async function conditionalBuildPipelineRead(
       continue;
     }
     remaining = allowance;
+    if (placeArtifacts) patch.messages = placeArtifacts(session.sessionKey, patch.messages);
     messagePatches.push(patch);
   }
   return {

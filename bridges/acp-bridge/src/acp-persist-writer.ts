@@ -206,6 +206,7 @@ export function persistedSnapshot(): PersistedState {
         : { availableCommands: state.availableCommands }),
       ...(state.commandsRevision === undefined ? {} : { commandsRevision: state.commandsRevision }),
       ...(state.commandsTruncated ? { commandsTruncated: true } : {}),
+      ...(state.title ? { title: state.title } : {}),
       ...(state.subagentLimitExceeded ? { subagentLimitExceeded: true } : {}),
       ...(state.settledCursorAgentIds.size > 0
         ? {

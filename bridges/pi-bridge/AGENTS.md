@@ -29,6 +29,19 @@ rather than a name, and "signed in" is one answer per provider.
   model picker and a Pi terminal tab. `thinking_level_changed` is echoed back
   into the composer so the picker shows the level actually in force after Pi
   clamps it.
+- A session with no explicit model starts on Pi's saved default
+  (`defaultProvider`/`defaultModel`, what `/model` writes) when a signed-in
+  provider serves it, then on `PI_BRIDGE_DEFAULT_MODEL`, then on the
+  catalogue's first model (`defaultModelIds` in `agent-session.ts`). Never fall
+  straight to the first model: a login can refuse models its provider lists,
+  and a ChatGPT login refuses the first one (under `openai` since Pi 1.2.0,
+  and under the legacy `openai-codex`). Project
+  settings count only when the session trusts the project.
+- Tests run with `src/testing/test-isolation.ts` preloaded (`test:bridge`). It points
+  `PI_CODING_AGENT_DIR` at a temporary directory, so no test reads the
+  developer's saved default or writes `auth.json`/`models-store.json` into
+  their `~/.pi/agent`. A focused `bun test` outside `test:bridge` should add
+  `--preload ./src/testing/test-isolation.ts` or isolate its own directory.
 - `credentials.ts` reports per-provider status and deliberately implements no
   sign-in. Pi's login is an interactive multi-step prompt flow with no
   counterpart in Orkestrator's session surface, and the credential it writes is
@@ -86,8 +99,9 @@ entry, so live and resumed transcripts have the same shape.
   Losing the bridge's state costs a rendered transcript; it never costs the
   conversation. That is why `detachSession` keeps `sessionFile` and why a
   restart re-attaches to the same session rather than starting a new one.
-- Approvals are off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, matching the
-  permissive default every other bridge here uses. When on, every timeout,
+- Approvals follow the session's execution policy: `ask` parks a call, `deny`
+  refuses it, and a session with no policy runs as the host default,
+  `auto-approve`. When the gate asks, every timeout,
   disconnect, closing session and unparseable answer **denies**. A turn that
   ends with a call still parked denies it too — leaving it unanswered wedges the
   turn and, with it, the environment's activity state.
@@ -104,7 +118,7 @@ entry, so live and resumed transcripts have the same shape.
   abort that hangs or rejects (the next request retries it). The prompt route
   checks for it after every preparation await and settles without calling Pi.
   In Pi's preflight the cancel calls `session.abort()` at once (pinned SDK
-  1.2 aborts an auto-compaction and pre-empts a run `_startRun` is preparing;
+  1.4 aborts an auto-compaction and pre-empts a run `_startRun` is preparing;
   that abort waits for the run to settle, so it is never awaited) and again
   when Pi accepts, because `_startRun` resets the abort flag when it begins.
   A run Pi reports settled with `aborted: true` — whoever aborted it,
@@ -119,11 +133,18 @@ entry, so live and resumed transcripts have the same shape.
   await: new prompts get 409, one still preparing settles as cancelled, and
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).
-- Project-local `.pi/` resources are opt-in through
-  `PI_BRIDGE_PROJECT_RESOURCES`, and only the container launcher opts in. A Pi
-  extension is arbitrary TypeScript this process would execute, so cloning a
-  repository must not be enough to run its code — the same boundary
-  `ACP_APPROVE_PROJECT_MCPS` draws for the ACP bridge.
+- Before a session attaches, `command-preview.ts` lists its templates and
+  skills from a resource-only `DefaultResourceLoader`: never an extension
+  (`noExtensions`, no inline factories, no `resolveProjectTrust` pass), never
+  a package install (the loader's private `packageManager.resolve` gets a
+  `skip` handler; `command-preview.test.ts` pins it against the real SDK),
+  and never an attach or a `lastAccessed` touch. The list is `stale` +
+  `attachPending` when the policy loads extensions, else `ready`, and it never
+  replaces rows an attach read.
+- Project-local `.pi/` resources load only when the session's execution
+  policy turns `projectResources` on, on both host and container runs. Host
+  project resources are off by default. Enabling them permits repository MCP processes and Pi extensions
+  (arbitrary TypeScript) to run on the host.
 - Pi's SDK sessions load no MCP client (only its CLI loads the built-in `mcp`
   extension) and have no plan/build mode. The bridge owns an MCP client (`src/mcp.ts`) and registers tools through the inline
   `orkestrator-mcp` extension: Orkestrator from env / per-tab `agentMcp`,
@@ -132,14 +153,15 @@ entry, so live and resumed transcripts have the same shape.
   a fingerprint of the MCP files it was built from and rebuilds at the next
   turn start when they change (never mid-turn), which is how saved edits from
   the MCP servers settings reach a live session. `mcp-config.ts` reads that
-  file as Pi's own format (`enabled: false`, `$NAME`/`${NAME}` values, `~/`,
-  `cwd`) and never runs a `!command` value — an entry needing one is skipped,
+  file as Pi's own format (one leading UTF-8 BOM stripped, `enabled: false`,
+  `$NAME`/`${NAME}` values, `~/`, `cwd`) and never runs a `!command` value — an entry needing one is skipped,
   and the bridge's own secret variables cannot be named by a `${…}` reference.
   It merges the files with Pi 1.x's rules (project overrides, `-`/`_` name
   clashes, `auth` refused in a project file); an entry Pi's validator rejects
   hides nothing. `src/mcp-config-upstream.test.ts` runs it against the pinned
   Pi's own loader, and the backend's MCP catalogue mirrors it under
-  `pi-mcp-parity.test.ts`, both over `src/testing/mcp-config-fixtures.ts`.
+  `pi-mcp-parity.test.ts`, both over `src/testing/mcp-config-fixtures.ts` (a `RawMcpConfigText` fixture
+  is written verbatim, for bytes `JSON.stringify` cannot produce).
   Settings-pane
   discovery still reports an empty MCP list (pre-session fallback). The
   composer reports `mode: false` because plan/build is still something an

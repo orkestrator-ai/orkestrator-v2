@@ -105,6 +105,32 @@ describe("idle MCP catalogue", () => {
   });
 });
 
+describe("MCP server errors", () => {
+  test("redacts credentials an MCP server echoes in its error", async () => {
+    queryControlOverrides.mcpServerStatus = async () => [
+      {
+        name: "deploy",
+        status: "failed",
+        error:
+          "HTTP 401 from https://user:hunter2@mcp.example.test/sse?api_key=sk-live0123456789abcdef: Authorization: Bearer ghp_0123456789abcdefghij",
+      },
+    ];
+    const session = createSession();
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "inspect MCP state");
+    const call = await nextQueryCall();
+    const [server] = await readSessionMcpServers(session.id);
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    expect(server?.error).toContain("HTTP 401");
+    for (const secret of ["hunter2", "sk-live0123456789abcdef", "ghp_0123456789abcdefghij"]) {
+      expect(server?.error).not.toContain(secret);
+    }
+  });
+});
+
 describe("session titles", () => {
   test("leaves first-turn title generation to the backend", async () => {
     const session = createSession();

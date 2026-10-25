@@ -21,7 +21,7 @@ import {
   hashCwd,
 } from "./sessions/persistence.js";
 import { phaseToExternalStatus } from "./sessions/thread-registry.js";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -32,6 +32,7 @@ import {
   harness,
   threadPayload,
   waitUntil,
+  writeRolloutWithTurns,
 } from "./app-server-runtime-test-harness.js";
 import type { Harness } from "./app-server-runtime-test-harness.js";
 
@@ -676,6 +677,143 @@ describe("session lifecycle", () => {
       terminalStatus: "failed",
     });
   });
+
+  for (const rowKind of ["text", "tool-only"] as const) {
+    for (const outcome of ["interrupted", "inProgress", "completed", "failed", "absent"] as const) {
+      test(`bridge-process ${outcome} recovery preserves a replayed ${rowKind} row`, async () => {
+        const replayText = "I reached stop 20; reading stop 21 next.";
+        writeRolloutWithTurns("thread-replayed", [
+          {
+            turnId: "turn-replayed",
+            user: "Follow the trail",
+            assistant: rowKind === "text" ? replayText : "",
+          },
+        ]);
+        if (rowKind === "tool-only") {
+          appendFileSync(
+            join(codexHome, "sessions", "thread-replayed.jsonl"),
+            `${[
+              {
+                type: "response_item",
+                payload: {
+                  type: "function_call",
+                  name: "exec_command",
+                  call_id: "persisted-tool",
+                  arguments: JSON.stringify({ cmd: "cat stop21.txt" }),
+                },
+              },
+              {
+                type: "response_item",
+                payload: {
+                  type: "function_call_output",
+                  call_id: "persisted-tool",
+                  output: "Next stop: stop22.txt",
+                },
+              },
+            ]
+              .map((record) => JSON.stringify(record))
+              .join("\n")}\n`,
+          );
+        }
+        const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+        await store.upsert(
+          store.toRecord({
+            bridgeSessionId: "session-replayed",
+            threadId: "thread-replayed",
+            cwd: "/tmp/ws",
+            config: { mode: "build", sandbox: "danger-full-access" },
+            lastAcceptedRequestId: "req-replayed",
+          }),
+        );
+        const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+        await journal.load();
+        await journal.markPrepared({
+          requestId: "req-replayed",
+          bridgeSessionId: "session-replayed",
+          threadId: "thread-replayed",
+        });
+        await journal.markAccepted("req-replayed", {
+          threadId: "thread-replayed",
+          turnId: "turn-replayed",
+        });
+
+        const h = await harness({
+          "thread/resume": () => ({ thread: threadPayload("thread-replayed") }),
+          "thread/read": () => ({
+            thread: threadPayload("thread-replayed", {
+              turns:
+                outcome === "absent"
+                  ? []
+                  : [
+                      {
+                        id: "turn-replayed",
+                        status: outcome,
+                        items: [{ type: "userMessage", clientId: "req-replayed" }],
+                      },
+                    ],
+            }),
+          }),
+        });
+        await h.drain();
+        const context = h.runtime.getRegistry().getThread("thread-replayed")!;
+        const replayed = context.messages.find((message) =>
+          rowKind === "text"
+            ? message.content.includes(replayText)
+            : message.parts.some((part) => part.toolUseId === "persisted-tool"),
+        );
+        expect(replayed, "recovery erased the replayed row").toBeDefined();
+        expect(replayed!.role).toBe("assistant");
+        if (rowKind === "tool-only") {
+          expect(replayed!.content).toBe("");
+          expect(replayed!.parts).toContainEqual(
+            expect.objectContaining({
+              type: "tool-invocation",
+              toolUseId: "persisted-tool",
+              toolOutput: "Next stop: stop22.txt",
+            }),
+          );
+        }
+        const preserved = structuredClone(replayed!);
+        const recoveryRow = context.messages.at(-1)!;
+        expect(recoveryRow.id).not.toBe(replayed!.id);
+        expect(new Set(context.messages.map((message) => message.id)).size).toBe(
+          context.messages.length,
+        );
+
+        if (outcome === "inProgress") {
+          expect(context.phase).toBe("running");
+          expect(context.activeTurn?.assistantMessageId).toBe(recoveryRow.id);
+          h.child().notify("item/agentMessage/delta", {
+            threadId: "thread-replayed",
+            turnId: "turn-replayed",
+            itemId: "resumed-text",
+            delta: "New live response",
+          });
+          await h.drain();
+          expect(context.messages.find((message) => message.id === recoveryRow.id)?.content).toBe(
+            "New live response",
+          );
+          h.child().notify("turn/completed", {
+            threadId: "thread-replayed",
+            turn: { id: "turn-replayed", status: "completed" },
+          });
+          await h.drain();
+        } else {
+          expect(context.activeTurn).toBeNull();
+          expect(context.phase).toBe(outcome === "completed" ? "idle" : "failed");
+          if (outcome === "interrupted")
+            expect(context.error).toBe(CODEX_RESTARTED_MID_TURN_MESSAGE);
+        }
+        // Read through the tab-facing path too: it must not overwrite the replayed
+        // tool-only row while attaching or finalizing the recovery accumulator.
+        expect(
+          (await h.runtime.getMessages("session-replayed"))?.find(
+            (message) => message.id === preserved.id,
+          ),
+        ).toEqual(preserved);
+      });
+    }
+  }
 
   test("a restored dispatch announces its assistant row before patching it", async () => {
     // Updates to a streaming row are sparse patches keyed by message id. A row
@@ -2765,7 +2903,10 @@ describe("session lifecycle", () => {
     try {
       const h = await harness({
         "config/read": () => ({
-          config: { web_search: "disabled", features: { standalone_web_search: false } },
+          config: {
+            web_search: "disabled",
+            features: { standalone_web_search: false, incremental_tools: false },
+          },
           origins: {},
           layers: null,
         }),
@@ -2869,6 +3010,82 @@ describe("interrupt lifecycle", () => {
       state: "terminal",
       terminalStatus: "interrupted",
     });
+  });
+
+  test("a dead backend's running turn stops as a restart mid-turn, never a cancel", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+    await h.drain();
+
+    const stopping = h.runtime.interruptForParentExit(1_000);
+    await h.drain();
+    expect(h.child().requests.some((r) => r.method === "turn/interrupt")).toBe(true);
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "interrupted" },
+    });
+    expect(await stopping).toBe(1);
+    await h.drain();
+
+    // A build stage continues a turn its restart stopped; it would stop on a cancel.
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      phase: "failed",
+      interruption: "restart",
+    });
+    expect(h.runtime.getJournal().get("req-1")).toMatchObject({
+      state: "terminal",
+      terminalStatus: "failed",
+    });
+  });
+
+  test.each(["failed", "completed"] as const)(
+    "a shutdown-marked turn completing as %s keeps its real outcome",
+    async (status) => {
+      const h = await harness();
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+      const stopping = h.runtime.interruptForParentExit(1000);
+      await h.child().waitForRequest("turn/interrupt");
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status,
+          ...(status === "failed"
+            ? {
+                error: { message: "model failed during shutdown", codexErrorInfo: "other" },
+              }
+            : {}),
+        },
+      });
+      expect(await stopping).toBe(1);
+      await h.drain();
+      expect(h.runtime.getJournal().get("req-1")).toMatchObject({
+        state: "terminal",
+        terminalStatus: status,
+      });
+      expect(h.runtime.getRegistry().getThreadForSession(sessionId)?.activeTurn).toBeNull();
+      expect(h.runtime.getStatus(sessionId)).toMatchObject({
+        phase: status === "failed" ? "failed" : "idle",
+      });
+      expect(h.runtime.getStatus(sessionId)?.interruption).toBeUndefined();
+      if (status === "failed") {
+        expect(h.runtime.getStatus(sessionId)?.error).toBe("model failed during shutdown");
+        expect(h.events).toContainEqual({
+          type: "session.error",
+          sessionId,
+          data: { error: "model failed during shutdown" },
+        });
+      }
+    },
+  );
+
+  test("a dead backend with nothing running asks app-server for nothing", async () => {
+    const h = await harness();
+    h.runtime.createSession({ mode: "build" });
+    expect(await h.runtime.interruptForParentExit(1_000)).toBe(0);
+    expect(h.child().requests.some((r) => r.method === "turn/interrupt")).toBe(false);
   });
 
   test("aborting an idle session is harmless", async () => {
@@ -3468,7 +3685,7 @@ describe("crash recovery", () => {
     await h.drain();
 
     expect(h.runtime.getRegistry().getThread("thread-1")).toBeUndefined();
-    // The render state holds the diff baselines and the coalescer holds a timer;
+    // The render state holds the rendered diffs and the coalescer holds a timer;
     // dropping the map entry alone leaks both.
     expect(runtime.threadState.has("thread-1")).toBe(false);
   });
@@ -4245,8 +4462,8 @@ describe("idle detach and transparent re-attach", () => {
 
     expect(await h.runtime.getMessages(sessionId)).toEqual([]);
     expect(h.runtime.getRegistry().getSession(sessionId)!.threadId).toBeNull();
-    // The diff baselines are the largest per-thread allocation, and the coalescer
-    // owns a live timer; neither can be reclaimed by a thread that never returns.
+    // The render state holds the rendered diffs, and the coalescer owns a live
+    // timer; neither can be reclaimed by a thread that never returns.
     expect(runtime.threadState.has("thread-1")).toBe(false);
   });
 
@@ -4326,6 +4543,7 @@ describe("activity polling", () => {
   test("activity snapshots expose only bounded async-question item ids", async () => {
     const { h, sessionId } = await workingSession();
     const context = h.runtime.getRegistry().getThread("thread-1")!;
+    const before = h.runtime.getActivitySnapshot(sessionId).contentRevision;
     context.messages.push({
       id: "assistant-question",
       role: "assistant",
@@ -4347,8 +4565,23 @@ describe("activity polling", () => {
     expect(h.runtime.getActivitySnapshot(sessionId)).toEqual({
       activity: "working",
       asyncQuestionItemIds: ["question-1"],
+      contentRevision: expect.any(String),
     });
+    // The question changed the view without changing the activity.
+    expect(h.runtime.getActivitySnapshot(sessionId).contentRevision).not.toBe(before);
     expect(JSON.stringify(h.runtime.getActivitySnapshot(sessionId))).not.toContain("Which target?");
+  });
+
+  test("an activity snapshot's content revision moves with the transcript revision only", async () => {
+    const { h, sessionId } = await workingSession();
+    const session = h.runtime.getRegistry().getSession(sessionId)!;
+    const first = h.runtime.getActivitySnapshot(sessionId).contentRevision;
+    expect(h.runtime.getActivitySnapshot(sessionId).contentRevision).toBe(first);
+    session.messageRevision += 1;
+    const afterRow = h.runtime.getActivitySnapshot(sessionId).contentRevision;
+    expect(afterRow).not.toBe(first);
+    session.contentEpoch += 1;
+    expect(h.runtime.getActivitySnapshot(sessionId).contentRevision).not.toBe(afterRow);
   });
 
   test("activity snapshots do not inspect the transcript", async () => {
@@ -4360,7 +4593,10 @@ describe("activity polling", () => {
       },
     });
 
-    expect(h.runtime.getActivitySnapshot(sessionId)).toEqual({ activity: "working" });
+    expect(h.runtime.getActivitySnapshot(sessionId)).toEqual({
+      activity: "working",
+      contentRevision: expect.any(String),
+    });
   });
 
   test("a parked approval is waiting rather than working", async () => {

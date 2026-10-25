@@ -1,4 +1,7 @@
-import type { HostMaintenanceSnapshot } from "@orkestrator/protocol/host-maintenance";
+import {
+  isHostUpdateChannel,
+  type HostMaintenanceSnapshot,
+} from "@orkestrator/protocol/host-maintenance";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import { CliError } from "../errors.js";
 import type { ClientSession } from "../session.js";
@@ -31,7 +34,7 @@ const WAIT_OPTION: OptionSpec = {
 
 function hostLines(host: HostMaintenanceSnapshot): string[] {
   const updater = host.updater;
-  const lines = [`Version: ${host.version}`];
+  const lines = [`Version: ${host.version}`, `Update channel: ${host.updateChannel}`];
   lines.push(
     updater.available
       ? `Updater: ${updater.kind}`
@@ -183,6 +186,7 @@ function taskCommand(spec: {
 }): CommandSpec {
   return {
     path: spec.path,
+    action: spec.action,
     summary: spec.summary,
     ...(spec.description ? { description: spec.description } : {}),
     positionals: [],
@@ -223,6 +227,7 @@ function taskCommand(spec: {
 export const hostCommands: CommandSpec[] = [
   {
     path: ["host", "status"],
+    action: "host.status",
     summary: "Show the Orkestrator version on the backend's computer, its updater and any update.",
     positionals: [],
     options: [],
@@ -238,7 +243,31 @@ export const hostCommands: CommandSpec[] = [
     },
   },
   {
+    path: ["host", "update", "channel"],
+    action: "host.update.channel",
+    summary: "Choose the host's update channel: stable, beta or unstable.",
+    positionals: [{ name: "channel", required: true, description: "stable, beta or unstable" }],
+    options: [REQUEST_ID_OPTION],
+    async run(context, parsed) {
+      const channel = parsed.positionals.channel;
+      if (!isHostUpdateChannel(channel))
+        throw new CliError("invalid-input", "channel must be stable, beta or unstable");
+      const { session, result, receipt, warnings } = await submit<{
+        host: HostMaintenanceSnapshot;
+      }>(context, "host.update.channel", { channel }, parsed.options);
+      return {
+        action: "host.update.channel",
+        result,
+        receipt,
+        warnings,
+        connection: session.identity,
+        human: hostLines(result.host),
+      };
+    },
+  },
+  {
     path: ["host", "update", "check"],
+    action: "host.update.check",
     summary: "Ask the backend's computer to check for an Orkestrator update.",
     positionals: [],
     options: [WAIT_OPTION, TIMEOUT_OPTION, REQUEST_ID_OPTION],
@@ -281,6 +310,13 @@ export const hostCommands: CommandSpec[] = [
   },
   {
     path: ["host", "update", "apply"],
+    action: "host.update.apply",
+    inputFields: {
+      release: "version",
+      yes: "confirm",
+      "when-idle": "drain",
+      "max-wait": "maxWaitSeconds",
+    },
     summary:
       "Install an Orkestrator update on the backend's computer. It restarts there after a 60 s countdown.",
     description:
@@ -370,6 +406,7 @@ export const hostCommands: CommandSpec[] = [
   },
   {
     path: ["host", "update", "cancel"],
+    action: "host.update.cancel",
     summary: "Cancel the host's update before it restarts.",
     positionals: [],
     options: [REQUEST_ID_OPTION],

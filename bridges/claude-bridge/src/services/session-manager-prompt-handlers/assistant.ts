@@ -11,7 +11,9 @@ import {
   noteClaudeAuthenticationFailure,
   noteClaudeAuthenticationWorked,
 } from "../claude-sign-in.js";
+import { claudeEvidenceTurnId, claudeToolUses, recordClaudeToolUse } from "../change-evidence.js";
 import { eventEmitter } from "../event-emitter.js";
+import { noteSessionLoginRefused, setSessionAuthNotice } from "../session-auth-notice.js";
 import { debugLog } from "../logger.js";
 import {
   recordBackgroundTaskLaunch,
@@ -114,8 +116,19 @@ export function handleAssistantMessage(turn: TurnState, message: SDKMessage): vo
   // code ("Not logged in · Please run /login"). Re-read the account so a
   // missing login locks the composer; any real answer proves one works.
   const assistantError = (message as SDKAssistantMessage).error;
-  if (assistantError === "authentication_failed") noteClaudeAuthenticationFailure();
-  else if (!assistantError) noteClaudeAuthenticationWorked();
+  if (assistantError === "authentication_failed") {
+    noteClaudeAuthenticationFailure();
+    noteSessionLoginRefused(
+      session,
+      sessionId,
+      typeof (message as { uuid?: unknown }).uuid === "string"
+        ? (message as { uuid: string }).uuid
+        : crypto.randomUUID(),
+    );
+  } else if (!assistantError) {
+    noteClaudeAuthenticationWorked();
+    setSessionAuthNotice(session, sessionId, undefined);
+  }
   const usageReport = (message as SDKAssistantMessage).usage_report;
   if (usageReport) {
     const usage = applyClaudeUsageReport(session, usageReport);
@@ -140,11 +153,11 @@ export function handleAssistantMessage(turn: TurnState, message: SDKMessage): vo
   // If we receive a new assistant message after a plan denial, it means
   // the SDK continued the agent loop and Claude did see the feedback.
   // Clear the pending feedback so we don't re-prompt unnecessarily.
-  if (stream.pendingPlanRejectionFeedback) {
+  if (turn.pendingPlanRejectionFeedback) {
     debugLog("[session-manager] Claude responded after plan denial, clearing re-prompt feedback", {
       sessionId,
     });
-    stream.pendingPlanRejectionFeedback = null;
+    turn.pendingPlanRejectionFeedback = null;
   }
 
   // Assistant message - parse content and register tools with tracker
@@ -157,6 +170,20 @@ export function handleAssistantMessage(turn: TurnState, message: SDKMessage): vo
     receivedAt,
     recordUnknownContentBlock,
   );
+
+  // Each call this response makes starts its change-evidence lifecycle with
+  // the proposal its input states. A subagent's calls name the call that
+  // started the subagent.
+  const evidenceParent = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
+  for (const use of claudeToolUses(message)) {
+    recordClaudeToolUse(sessionId, {
+      ...use,
+      turnId: claudeEvidenceTurnId(turn),
+      ...(typeof evidenceParent === "string" && evidenceParent
+        ? { parentCallId: evidenceParent }
+        : {}),
+    });
+  }
 
   // Frames a subagent sends name the call that started it. Remember that
   // this turn's row holds the call, so they reach it after a newer turn

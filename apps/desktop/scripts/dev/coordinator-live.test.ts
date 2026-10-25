@@ -6,9 +6,11 @@ import path from "node:path";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import {
   COORDINATOR_LIVE_PLATFORMS,
+  COORDINATOR_LIVE_SCENARIOS,
   READ_ONLY_MUTATIONS,
   READ_ONLY_REPORT_MARKER,
   coordinatorLivePlatformsFromEnv,
+  coordinatorLiveScenariosFromEnv,
   coordinatorLiveSummaryFile,
   coordinatorLiveVerdict,
   createTurnWatch,
@@ -34,6 +36,7 @@ import {
   type CoordinatorLivePlatformRun,
   type CoordinatorTurnProjection,
   type CoordinatorLivePlatformSummary,
+  type CoordinatorLiveScenario,
   type FixtureTreeDigest,
   type ReadOnlyProbe,
   type ReadOnlyToolCall,
@@ -162,6 +165,29 @@ describe("live coordinator platforms", () => {
     ).toEqual(["codex", "grok"]);
     expect(() => coordinatorLivePlatformsFromEnv("codex,unknown")).toThrow("not on the live");
   });
+
+  test("--scenario narrows the scenarios, in run order; the spec reads them from the environment", () => {
+    expect(parseCoordinatorLiveArguments([]).scenarios).toEqual([...COORDINATOR_LIVE_SCENARIOS]);
+    expect(
+      parseCoordinatorLiveArguments([
+        "--scenario",
+        "family",
+        "--credential-source",
+        "codex",
+        "--scenario",
+        "read-only",
+      ]),
+    ).toMatchObject({ scenarios: ["read-only", "family"] });
+    expect(parseCoordinatorLiveArguments(["--scenario", "peer"]).scenarios).toEqual(["peer"]);
+    expect(() => parseCoordinatorLiveArguments(["--scenario", "status"])).toThrow(
+      "Unknown live coordinator scenario",
+    );
+    expect(() => parseCoordinatorLiveArguments(["--scenario"])).toThrow("Missing value");
+    expect(coordinatorLiveScenariosFromEnv(undefined)).toEqual([...COORDINATOR_LIVE_SCENARIOS]);
+    expect(coordinatorLiveScenariosFromEnv(" family , async ")).toEqual(["async", "family"]);
+    expect(coordinatorLiveScenariosFromEnv("peer,async")).toEqual(["async", "peer"]);
+    expect(() => coordinatorLiveScenariosFromEnv("async,status")).toThrow("Unknown");
+  });
 });
 
 describe("read-only scenario", () => {
@@ -174,6 +200,9 @@ describe("read-only scenario", () => {
     expect(prompt).toContain(probe.canaryFile);
     expect(prompt).toContain("list_tickets");
     expect(prompt).toContain("git commit");
+    // A step with no tool is unavailable, not denied (Cursor mislabelled its
+    // hidden fetch and removed write tools `denied` with no call).
+    expect(prompt).toContain("A step you made no call for is never denied");
     // The answers are planted outside the prompt; quoting them would prove nothing.
     expect(prompt).not.toContain(probe.canaryLine);
     expect(prompt).not.toContain(probe.ticketTitle);
@@ -921,7 +950,29 @@ describe("transcript and turn", () => {
 
     expect(isSignInError("401 Unauthorized")).toBe(true);
     expect(isSignInError("Invalid API key provided")).toBe(true);
+    // Grok 1.0.52's wording for a signed-out CLI.
+    expect(
+      isSignInError(
+        "grok session creation failed (HTTP 401): Grok Build isn't signed in. Run grok login in a terminal to keep working.",
+      ),
+    ).toBe(true);
     expect(isSignInError("model overloaded")).toBe(false);
+    // The bridges' own signed-out messages (claude-sign-in.ts, acp-credentials.ts,
+    // and the cursor-bridge and pi-bridge credentials.ts).
+    expect(isSignInError("Claude isn't signed in. Sign in to Claude to keep working.")).toBe(true);
+    expect(
+      isSignInError("Grok Build isn't signed in. Run grok login in a terminal to keep working."),
+    ).toBe(true);
+    expect(
+      isSignInError(
+        "Cursor is not signed in. Sign in from Settings › Cursor, or set a Cursor API key.",
+      ),
+    ).toBe(true);
+    expect(
+      isSignInError(
+        "Pi has no signed-in model provider. Sign in with /login in a Pi terminal tab, or set the provider's API key.",
+      ),
+    ).toBe(true);
     expect([isSignedOut("needs-auth"), isSignedOut("signed-in"), isSignedOut(undefined)]).toEqual([
       true,
       false,
@@ -1032,50 +1083,123 @@ describe("suite verdict", () => {
   const summary = (
     verdict: CoordinatorLivePlatformSummary["verdict"],
     reason?: string,
+    scenario: CoordinatorLiveScenario = "read-only",
   ): CoordinatorLivePlatformSummary => ({
     version: 1,
     platform: "codex",
+    scenario,
     verdict,
     startedAt: "2026-10-16T00:00:00.000Z",
     ...(reason ? { reason } : {}),
   });
-  const run = (overrides: Partial<CoordinatorLivePlatformRun>): CoordinatorLivePlatformRun => ({
-    profile: "qa-coordinator-codex-1",
-    exitCode: 0,
-    summary: summary("passed"),
-    ...overrides,
-  });
+  const run = (
+    overrides: Partial<Omit<CoordinatorLivePlatformRun, "summaries">> & {
+      summary?: CoordinatorLivePlatformSummary | null;
+      summaries?: CoordinatorLivePlatformRun["summaries"];
+    },
+  ): CoordinatorLivePlatformRun => {
+    const { summary: one, summaries, ...rest } = overrides;
+    return {
+      profile: "qa-coordinator-codex-1",
+      exitCode: 0,
+      summaries: summaries ?? { "read-only": one === undefined ? summary("passed") : one },
+      ...rest,
+    };
+  };
+  const readOnly = ["read-only"] as const;
 
   test("a skip needs the spec's own word and a clean exit", () => {
-    expect(coordinatorLiveVerdict("codex", run({}))).toEqual({
+    expect(coordinatorLiveVerdict("codex", readOnly, run({}))).toEqual({
       platform: "codex",
       profile: "qa-coordinator-codex-1",
       verdict: "passed",
+      scenarios: [{ scenario: "read-only", verdict: "passed" }],
     });
     expect(
-      coordinatorLiveVerdict("codex", run({ summary: summary("skipped", "no credential") })),
+      coordinatorLiveVerdict(
+        "codex",
+        readOnly,
+        run({ summary: summary("skipped", "no credential") }),
+      ),
     ).toMatchObject({ verdict: "skipped", reason: "no credential" });
-    expect(coordinatorLiveVerdict("codex", run({ summary: null }))).toMatchObject({
+    expect(coordinatorLiveVerdict("codex", readOnly, run({ summary: null }))).toMatchObject({
       verdict: "failed",
-      reason: "the spec wrote no summary (Playwright exited 0)",
+      reason: "the spec wrote no read-only summary (Playwright exited 0)",
     });
-    expect(coordinatorLiveVerdict("codex", run({ exitCode: 1 }))).toMatchObject({
+    expect(coordinatorLiveVerdict("codex", readOnly, run({ exitCode: 1 }))).toMatchObject({
       verdict: "failed",
       reason: "Playwright exited 1",
     });
     expect(
-      coordinatorLiveVerdict("codex", run({ exitCode: 1, summary: summary("failed", "tree") })),
+      coordinatorLiveVerdict(
+        "codex",
+        readOnly,
+        run({ exitCode: 1, summary: summary("failed", "tree") }),
+      ),
     ).toMatchObject({ verdict: "failed", reason: "tree" });
-    expect(coordinatorLiveVerdict("claude", run({}))).toMatchObject({
+    expect(coordinatorLiveVerdict("claude", readOnly, run({}))).toMatchObject({
       verdict: "failed",
       reason: "the summary is for codex",
     });
     expect(
       coordinatorLiveVerdict(
         "codex",
+        readOnly,
         run({ exitCode: null, summary: summary("skipped", "no credential"), error: "cleanup" }),
       ),
     ).toMatchObject({ verdict: "failed", reason: "no credential; cleanup" });
+  });
+
+  test("a platform's scenarios combine: any failure fails it, every pass passes it", () => {
+    const all = COORDINATOR_LIVE_SCENARIOS;
+    const passed = {
+      "read-only": summary("passed"),
+      async: summary("passed", undefined, "async"),
+      family: summary("passed", undefined, "family"),
+      peer: summary("passed", undefined, "peer"),
+    };
+    expect(coordinatorLiveVerdict("codex", all, run({ summaries: passed }))).toMatchObject({
+      verdict: "passed",
+    });
+    expect(
+      coordinatorLiveVerdict(
+        "codex",
+        all,
+        run({
+          exitCode: 1,
+          summaries: { ...passed, async: summary("failed", "no carrier", "async") },
+        }),
+      ),
+    ).toMatchObject({ verdict: "failed", reason: "async: no carrier" });
+    // A scenario the spec never wrote is a failure, not a pass.
+    expect(
+      coordinatorLiveVerdict("codex", all, run({ summaries: { ...passed, family: null } })),
+    ).toMatchObject({
+      verdict: "failed",
+      reason: "family: the spec wrote no family summary (Playwright exited 0)",
+    });
+    // A summary filed under the wrong scenario is not that scenario's verdict.
+    expect(
+      coordinatorLiveVerdict(
+        "codex",
+        all,
+        run({ summaries: { ...passed, family: summary("passed") } }),
+      ),
+    ).toMatchObject({
+      verdict: "failed",
+      reason: "family: the summary is for the read-only scenario",
+    });
+    const skipped = {
+      "read-only": summary("skipped", "no credential"),
+      async: summary("skipped", "no credential", "async"),
+      family: summary("skipped", "no credential", "family"),
+      peer: summary("skipped", "no credential", "peer"),
+    };
+    expect(coordinatorLiveVerdict("codex", all, run({ summaries: skipped }))).toMatchObject({
+      verdict: "skipped",
+      reason:
+        "read-only: no credential; async: no credential; family: no credential; peer: no credential",
+    });
   });
 
   test("every platform runs after a failure, and only failures set the exit status", async () => {
@@ -1083,6 +1207,7 @@ describe("suite verdict", () => {
     const seen: string[] = [];
     const outcome = await runCoordinatorLiveSuite({
       platforms: COORDINATOR_LIVE_PLATFORMS.slice(0, 3),
+      scenarios: readOnly,
       log: (line) => lines.push(line),
       async runPlatform(entry) {
         seen.push(entry.platform);
@@ -1107,6 +1232,7 @@ describe("suite verdict", () => {
 
     const skipped = await runCoordinatorLiveSuite({
       platforms: COORDINATOR_LIVE_PLATFORMS.slice(1, 2),
+      scenarios: readOnly,
       async runPlatform() {
         return run({ summary: summary("skipped", "no usable codex credential") });
       },
@@ -1118,6 +1244,7 @@ describe("suite verdict", () => {
     const controller = new AbortController();
     const outcome = await runCoordinatorLiveSuite({
       platforms: COORDINATOR_LIVE_PLATFORMS.slice(0, 2),
+      scenarios: readOnly,
       signal: controller.signal,
       async runPlatform(entry) {
         controller.abort();
@@ -1132,24 +1259,27 @@ describe("suite verdict", () => {
     });
   });
 
-  test("summaries are found by run and platform, and malformed ones are rejected", () => {
-    expect(coordinatorLiveSummaryFile("/repo", "qa-coordinator-codex-1", "codex")).toBe(
+  test("summaries are found by run, platform and scenario, and malformed ones are rejected", () => {
+    expect(coordinatorLiveSummaryFile("/repo", "qa-coordinator-codex-1", "codex", "async")).toBe(
       path.join(
         "/repo",
         "output",
         "agent-testing",
         "qa-coordinator-codex-1",
         "coordinator",
-        "codex.json",
+        "codex-async.json",
       ),
     );
     expect(parseCoordinatorLivePlatformSummary(summary("passed"))).toEqual(summary("passed"));
+    const { scenario: _scenario, ...older } = summary("passed");
+    expect(parseCoordinatorLivePlatformSummary(older)).toEqual(older);
     for (const value of [
       null,
       [],
       { ...summary("passed"), version: 2 },
       { ...summary("passed"), platform: "other" },
       { ...summary("passed"), verdict: "flaky" },
+      { ...summary("passed"), scenario: "status" },
     ]) {
       expect(parseCoordinatorLivePlatformSummary(value)).toBeNull();
     }

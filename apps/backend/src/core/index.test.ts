@@ -4,13 +4,17 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { __testing as commandTesting } from "./commands.js";
+import { BackendRuntime } from "./backend-runtime.js";
 import { OrkestratorBackend } from "./index.js";
+import { RECURRING_JOB_CATALOGUE } from "@orkestrator/protocol/recurring-work";
+import type { BackendActivityJob } from "./backend-activity-jobs.js";
 import { ManualTime } from "./recurring-test-support.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { createEnvironment, StorageService } from "./storage.js";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import { interactionInternals } from "./native-agent-service-test-collaborators.js";
+import type { NativeAgentService } from "./native-agent-service.js";
 
 function fakeAgentTools(
   overrides: {
@@ -216,20 +220,16 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
     },
   };
   const monitorOptions = (backend: OrkestratorBackend) => {
-    const nativeAgents = (
-      backend as unknown as {
-        nativeAgents: {
-          options: {
-            interactionMonitorMode?: "disabled" | "observe-only";
-            interactionMonitorAdoptionEnabled?: boolean;
-          };
-          interactionMonitorAdoptionEnabled: boolean;
-        };
-      }
-    ).nativeAgents;
+    const nativeAgents = (backend as unknown as { nativeAgents: NativeAgentService }).nativeAgents;
+    const { options } = nativeAgents as unknown as {
+      options: {
+        interactionMonitorMode?: "disabled" | "observe-only";
+        interactionMonitorAdoptionEnabled?: boolean;
+      };
+    };
     return {
-      ...nativeAgents.options,
-      effectiveAdoption: nativeAgents.interactionMonitorAdoptionEnabled,
+      ...options,
+      effectiveAdoption: interactionInternals(nativeAgents).interactionMonitorAdoptionEnabled(),
     };
   };
 
@@ -745,8 +745,18 @@ test("does not publish the persistent control MCP until backend recovery complet
       url: "http://127.0.0.1:34122/mcp",
       token: "",
       error: null,
+      credentials: [],
     })),
     rotateToken: mock(async () => {
+      throw new Error("not used");
+    }),
+    createCredential: mock(async () => {
+      throw new Error("not used");
+    }),
+    rotateCredential: mock(async () => {
+      throw new Error("not used");
+    }),
+    revokeCredential: mock(async () => {
       throw new Error("not used");
     }),
     issueCoordinatorCredential: mock(() => {
@@ -1366,6 +1376,14 @@ describe("native-agent activity reconciliation lifecycle", () => {
     try {
       await backend.init();
       await backend.init();
+      const jobs = (backend as unknown as { activityJobs: { jobs: BackendActivityJob[] } })
+        .activityJobs.jobs;
+      for (const name of ["coordinator-repair", "claude-state", "pending-renames"]) {
+        const job = jobs.find((entry) => entry.name === name);
+        expect(job).toBeDefined();
+        expect(job!.priority).toBe("recovery");
+        expect(RECURRING_JOB_CATALOGUE[job!.kind].priority).toBe(job!.priority);
+      }
       // No 2 s bundle and no 60 s tab timer: the jobs own those cadences.
       expect(intervals.filter((interval) => interval.delay === 2_000)).toHaveLength(0);
       expect(intervals.filter((interval) => interval.delay === 60_000)).toHaveLength(0);
@@ -1684,7 +1702,6 @@ test("startup re-admits interrupted deletion while its tombstone continues block
   const terminationStarted = deferred<void>();
   const environmentId = "interrupted-delete";
   const originalWarn = console.warn;
-  commandTesting.resetLocalServerLifecycle();
   await storage.init();
   await storage.addEnvironment({
     id: environmentId,
@@ -1705,18 +1722,24 @@ test("startup re-admits interrupted deletion while its tombstone continues block
     lifecycleOperation: "deleting",
     lifecycleOperationStartedAt: new Date(1).toISOString(),
   });
-  commandTesting.setLocalServerProcess(`codex:${environmentId}`, createFakeChild(96001));
-  commandTesting.setTerminateProcessTree(async () => {
-    terminationStarted.resolve();
-    await releaseTermination.promise;
-    return true;
+  const runtime = new BackendRuntime({
+    emit: () => undefined,
+    localServers: {
+      terminateProcessTree: async () => {
+        terminationStarted.resolve();
+        await releaseTermination.promise;
+        return true;
+      },
+    },
   });
+  runtime.localServers.adoptProcess(`codex:${environmentId}`, createFakeChild(96001));
   const backend = new OrkestratorBackend({
     dataDir,
     toolchainBinDir: "",
     appRoot: "",
     resourceRoot: "",
     emit: () => undefined,
+    runtime,
     startupReapers: {
       localServers: async () => [],
       claudeTmuxRuntimes: async () => [],
@@ -1743,12 +1766,11 @@ test("startup re-admits interrupted deletion while its tombstone continues block
       async () => (await storage.getEnvironment(environmentId)) === null,
       "re-admitted deletion to remove the environment",
     );
-    expect(commandTesting.getLocalServerProcess(`codex:${environmentId}`)).toBeUndefined();
+    expect(runtime.localServers.process(`codex:${environmentId}`)).toBeUndefined();
   } finally {
     console.warn = originalWarn;
     releaseTermination.resolve();
     await backend.shutdown().catch(() => undefined);
-    commandTesting.resetLocalServerLifecycle();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
@@ -1761,7 +1783,6 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
   const environmentId = "blocked-delete";
   let terminationAttempts = 0;
   const originalWarn = console.warn;
-  commandTesting.resetLocalServerLifecycle();
   await storage.init();
   await storage.addEnvironment({
     id: environmentId,
@@ -1779,21 +1800,27 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
     environmentType: "local",
     worktreePath: path.join(dataDir, "blocked-delete-worktree"),
   });
-  commandTesting.setLocalServerProcess(`codex:${environmentId}`, createFakeChild(96002));
-  commandTesting.setTerminateProcessTree(async () => {
-    terminationAttempts += 1;
-    if (terminationAttempts === 1) {
-      firstTerminationStarted.resolve();
-      await releaseFirstTermination.promise;
-    }
-    return true;
+  const runtime = new BackendRuntime({
+    emit: () => undefined,
+    localServers: {
+      terminateProcessTree: async () => {
+        terminationAttempts += 1;
+        if (terminationAttempts === 1) {
+          firstTerminationStarted.resolve();
+          await releaseFirstTermination.promise;
+        }
+        return true;
+      },
+    },
   });
+  runtime.localServers.adoptProcess(`codex:${environmentId}`, createFakeChild(96002));
   const backend = new OrkestratorBackend({
     dataDir,
     toolchainBinDir: "",
     appRoot: "",
     resourceRoot: "",
     emit: () => undefined,
+    runtime,
     environmentLifecycleDrainTimeoutMs: 20,
     startupReapers: {
       localServers: async () => [],
@@ -1816,7 +1843,7 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
     const shutdown = backend.shutdown();
     await expect(resolvesWithin(shutdown, 1_000)).resolves.toBe("resolved");
     expect(terminationAttempts).toBe(2);
-    expect(commandTesting.getLocalServerProcess(`codex:${environmentId}`)).toBeUndefined();
+    expect(runtime.localServers.process(`codex:${environmentId}`)).toBeUndefined();
     expect(closeDesign).not.toHaveBeenCalled();
 
     releaseFirstTermination.resolve();
@@ -1832,7 +1859,6 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
     await deletion?.catch(() => undefined);
     await backend.shutdown().catch(() => undefined);
     closeDesign.mockRestore();
-    commandTesting.resetLocalServerLifecycle();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
@@ -1889,6 +1915,64 @@ test("startup fails closed when reconciliation cannot persist its result", async
   } finally {
     storage.updateEnvironment = realUpdate;
     await backend.shutdown().catch(() => undefined);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("turn-end observation finishes before the same-edge prompt queue drain", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-turn-end-order-"));
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    agentTools: fakeAgentTools(),
+  });
+  const internal = backend as unknown as {
+    context: { webAnnotations: { noteTurnEnded: (input: unknown) => Promise<void> } };
+    nativeAgents: {
+      options: { onActivityTransition: (event: Record<string, unknown>) => void };
+      drainPromptQueueForSession: (input: unknown) => Promise<void>;
+    };
+  };
+  let resume!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  const order: string[] = [];
+  const note = spyOn(internal.context.webAnnotations, "noteTurnEnded").mockImplementation(
+    async () => {
+      order.push("observe");
+      await paused;
+      order.push("outcome-recorded");
+    },
+  );
+  const drain = spyOn(internal.nativeAgents, "drainPromptQueueForSession").mockImplementation(
+    async () => {
+      order.push("next-prompt");
+    },
+  );
+  try {
+    internal.nativeAgents.options.onActivityTransition({
+      environmentId: "env-1",
+      logicalSessionKey: "env-env-1:tab-1",
+      agent: "codex",
+      owner: "environment",
+      previousState: "working",
+      state: "idle",
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(drain).not.toHaveBeenCalled();
+    resume();
+    await waitForCondition(() => drain.mock.calls.length === 1, "same-edge prompt drain");
+    expect(order).toEqual(["observe", "outcome-recorded", "next-prompt"]);
+  } finally {
+    resume();
+    note.mockRestore();
+    drain.mockRestore();
+    await backend.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });

@@ -624,6 +624,7 @@ describe("process and platform command behavior", () => {
     expect(log).not.toContain(`${originPath}:/orkestrator-agent-test-origin.git:ro`);
     expect(log).toContain("GIT_URL=/orkestrator-agent-test-origin.git");
     expect(log).not.toContain(`GIT_URL=${originPath}`);
+    expect(log).toContain("ORKESTRATOR_AGENT_TEST_GIT_REMOTE=/orkestrator-agent-test-origin.git");
   });
 
   test("does not mount arbitrary absolute Git paths in agent-test mode", async () => {
@@ -639,6 +640,7 @@ describe("process and platform command behavior", () => {
     const log = await readCommandLog();
     expect(log).not.toContain("/orkestrator-agent-test-origin.git");
     expect(log).toContain(`GIT_URL=${unrelatedRemote}`);
+    expect(log).not.toContain("ORKESTRATOR_AGENT_TEST_GIT_REMOTE");
   });
 
   test("adds ACP vendor hosts only for the platforms that are enabled", async () => {
@@ -926,7 +928,9 @@ describe("process and platform command behavior", () => {
 
       // Once the POST lands, the same observer reports usable ticket tools.
       await waitFor(
-        () => __testing.openCodeAgentToolsState("container:container-existing") === "connected",
+        () =>
+          context.runtime.localServers.openCodeAgentTools.state("container:container-existing") ===
+          "connected",
         "the recorded connected outcome",
       );
       await expect(
@@ -944,7 +948,7 @@ describe("process and platform command behavior", () => {
     } finally {
       // Retire the memo so a later test against this container reconciles
       // rather than inheriting this generation's recorded outcome.
-      __testing.cancelOpenCodeAgentToolsConfiguration("container:container-existing");
+      context.runtime.localServers.openCodeAgentTools.cancel("container:container-existing");
       await openCode.close();
     }
   });

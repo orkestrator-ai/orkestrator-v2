@@ -6,6 +6,7 @@ import type {
   BrowserPreviewCaptureAck,
   BrowserPreviewCaptureCapabilities,
   BrowserPreviewExpiredCaptureNotice,
+  BrowserPreviewCaptureDiagnostics,
   BrowserPreviewPinSnapshot,
   BrowserPreviewReplaceImageInput,
   BrowserPreviewResponsiveSetInput,
@@ -27,7 +28,12 @@ import {
   isMacOsPrivacySettingsPane,
   type MacOsPermissionsStatus,
 } from "@orkestrator/protocol/macos-permissions";
+import type {
+  CommandHandoverPreviewResult,
+  CommandHandoverResult,
+} from "@orkestrator/protocol/command-nodes";
 import { isTrustedRendererUrl } from "./window.js";
+import { parseCommandHandoverInput, type CommandHandoverInput } from "./command-handover.js";
 import { macOsPrivacySettingsUrl } from "./macos-permissions.js";
 import {
   readClipboardImage,
@@ -47,6 +53,7 @@ import {
   showOnPageInput,
   startCaptureInput,
 } from "./browser-preview-capture-validation.js";
+import { registerArtifactHostIpc, type ArtifactHostController } from "./artifact-host-ipc.js";
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
@@ -105,6 +112,7 @@ export type BrowserPreviewController = {
   listExpiredCaptureNotices?(): Promise<BrowserPreviewExpiredCaptureNotice[]>;
   dismissExpiredCaptureNotices?(captureIds?: string[]): Promise<void>;
   getPinResults?(tabId: string): Promise<BrowserPreviewPinSnapshot | null>;
+  getCaptureDiagnostics?(): Promise<BrowserPreviewCaptureDiagnostics>;
   showOnPage?(input: BrowserPreviewShowOnPageInput): Promise<BrowserPreviewShowOnPageResult>;
   captureResponsiveSet?(
     input: BrowserPreviewResponsiveSetInput,
@@ -147,10 +155,20 @@ export type MainIpcDependencies = {
     event?: IpcEventLike,
   ) => Promise<ConnectionList>;
   useConnection: (connectionId: string, event?: IpcEventLike) => Promise<ConnectionList>;
+  previewCommandHandover: (
+    targetConnectionId: string,
+    event?: IpcEventLike,
+  ) => Promise<CommandHandoverPreviewResult>;
+  handOverCommandNode: (
+    input: CommandHandoverInput,
+    event?: IpcEventLike,
+  ) => Promise<CommandHandoverResult | null>;
   forgetConnection: (connectionId: string, event?: IpcEventLike) => Promise<ConnectionList>;
   openConnectionWindow: (connectionId: string, event?: IpcEventLike) => Promise<void>;
   browserPreviews?: BrowserPreviewController;
   getBrowserPreviews?: (event: IpcEventLike) => BrowserPreviewController | null;
+  /** The sending window's live interactive-artifact host; absent means unavailable. */
+  getArtifactHosts?: (event: IpcEventLike) => ArtifactHostController | null;
   trustedRendererUrl: string;
 };
 
@@ -234,10 +252,13 @@ export function registerMainIpc({
   updateConnectionToken,
   renameConnection,
   useConnection,
+  previewCommandHandover,
+  handOverCommandNode,
   forgetConnection,
   openConnectionWindow,
   browserPreviews,
   getBrowserPreviews,
+  getArtifactHosts,
   trustedRendererUrl,
 }: MainIpcDependencies): void {
   const isTrustedSender = (event: IpcEventLike): boolean =>
@@ -324,11 +345,16 @@ export function registerMainIpc({
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       throw new Error("Expected connection details");
     }
-    const { address, token, nickname } = input as {
+    const { address, token, nickname, select, connectionId } = input as {
       address?: unknown;
       token?: unknown;
       nickname?: unknown;
+      select?: unknown;
+      connectionId?: unknown;
     };
+    if (connectionId !== undefined && (typeof connectionId !== "string" || !connectionId)) {
+      throw new Error("Expected a connection ID");
+    }
     if (typeof address !== "string" || typeof token !== "string") {
       throw new Error("Expected an address and gateway token");
     }
@@ -336,7 +362,13 @@ export function registerMainIpc({
       throw new Error("Expected the nickname to be a string");
     }
     return connectToRemote(
-      { address, token, ...(nickname === undefined ? {} : { nickname }) },
+      {
+        address,
+        token,
+        ...(nickname === undefined ? {} : { nickname }),
+        ...(select === false ? { select: false } : {}),
+        ...(typeof connectionId === "string" ? { connectionId, select: false } : {}),
+      },
       event,
     );
   });
@@ -344,6 +376,13 @@ export function registerMainIpc({
     if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
     return useConnection(connectionId, event);
   });
+  handle("orkestrator:connections:preview-command-handover", (event, connectionId: unknown) => {
+    if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
+    return previewCommandHandover(connectionId, event);
+  });
+  handle("orkestrator:connections:hand-over-command", (event, input: unknown) =>
+    handOverCommandNode(parseCommandHandoverInput(input), event),
+  );
   handle("orkestrator:connections:update-token", (event, connectionId: unknown, token: unknown) => {
     if (typeof connectionId !== "string" || typeof token !== "string") {
       throw new Error("Expected a connection ID and gateway token");
@@ -394,7 +433,10 @@ export function registerMainIpc({
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("Expected browser preview attachment details");
     }
-    const { tabId, url, service, bounds, visible } = value as Record<string, unknown>;
+    const { tabId, url, service, navigationBasis, bounds, visible } = value as Record<
+      string,
+      unknown
+    >;
     if (typeof visible !== "boolean") {
       throw new Error("Expected a browser preview URL and visibility");
     }
@@ -402,6 +444,10 @@ export function registerMainIpc({
       return previews(event).attach({
         tabId: browserPreviewTabId(tabId),
         service: browserPreviewServiceTarget(service),
+        // A malformed basis is dropped, which keeps the older-renderer rule.
+        ...(Number.isSafeInteger(navigationBasis) && (navigationBasis as number) >= 0
+          ? { navigationBasis: navigationBasis as number }
+          : {}),
         bounds: browserPreviewBounds(bounds),
         visible,
       });
@@ -506,6 +552,11 @@ export function registerMainIpc({
     if (!controller.getPinResults) throw unavailable();
     return controller.getPinResults(captureTabId(tabId));
   });
+  handle("orkestrator:browser-preview:capture-diagnostics", (event) => {
+    const controller = previews(event);
+    if (!controller.getCaptureDiagnostics) throw unavailable();
+    return controller.getCaptureDiagnostics();
+  });
   handle("orkestrator:browser-preview:capture-show-on-page", (event, input: unknown) => {
     const controller = previews(event);
     if (!controller.showOnPage) throw unavailable();
@@ -519,4 +570,11 @@ export function registerMainIpc({
   handle("orkestrator:browser-preview:destroy", (event, tabId: unknown) =>
     previews(event).destroy(browserPreviewTabId(tabId)),
   );
+
+  // Live interactive artifacts: positioning and presentation messages only.
+  registerArtifactHostIpc({
+    handle,
+    getController: (event) => getArtifactHosts?.(event) ?? null,
+    trustedRendererUrl,
+  });
 }

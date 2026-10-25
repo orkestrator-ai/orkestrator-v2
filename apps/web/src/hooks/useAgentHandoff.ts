@@ -36,6 +36,22 @@ const EMPTY_STATE: StoredAgentHandoffState = {
   errorAt: null,
 };
 
+/** What a request shows before its load settles; no request is the empty state. */
+function pendingHandoffState(
+  requestKey: string | null,
+  handoffId: string | undefined,
+): StoredAgentHandoffState {
+  if (requestKey === null) return EMPTY_STATE;
+  return {
+    requestKey,
+    handoffId: handoffId ?? null,
+    handoff: null,
+    loading: true,
+    error: null,
+    errorAt: null,
+  };
+}
+
 export function useAgentHandoff(
   handoffId: string | undefined,
   destinationProvider: AgentProvider,
@@ -54,25 +70,26 @@ export function useAgentHandoff(
   pendingHistory?: string;
   displayMessages: NativeMessage[];
 } {
-  const [state, setState] = useState<StoredAgentHandoffState>(EMPTY_STATE);
   const requestKey = handoffId
     ? JSON.stringify([handoffId, destinationProvider, environmentId])
     : null;
+  const [state, setState] = useState<StoredAgentHandoffState>(() =>
+    pendingHandoffState(requestKey, handoffId),
+  );
+
+  /*
+   * Effects run after paint, so the state from a previous/no handoff would
+   * otherwise make the first render of a restored tab look ready. Reset to the
+   * pending state while rendering whenever a request dimension changes, so the
+   * composer and queue are closed before any asynchronous load starts.
+   */
+  if (state.requestKey !== requestKey) {
+    setState(pendingHandoffState(requestKey, handoffId));
+  }
 
   useEffect(() => {
-    if (!handoffId) {
-      setState(EMPTY_STATE);
-      return;
-    }
+    if (!handoffId) return;
     let cancelled = false;
-    setState({
-      requestKey,
-      handoffId,
-      handoff: null,
-      loading: true,
-      error: null,
-      errorAt: null,
-    });
     const fail = (message: string) => {
       setState({
         requestKey,
@@ -120,28 +137,7 @@ export function useAgentHandoff(
     };
   }, [destinationProvider, environmentId, handoffId, requestKey]);
 
-  /*
-   * Effects run after paint, so the state from a previous/no handoff would
-   * otherwise make the first render of a restored tab look ready. Derive the
-   * pending state synchronously from every request dimension so the composer
-   * and queue are closed before any asynchronous load starts.
-   */
-  const currentState: StoredAgentHandoffState =
-    requestKey === null
-      ? state.requestKey === null
-        ? state
-        : EMPTY_STATE
-      : state.requestKey !== requestKey
-        ? {
-            requestKey,
-            handoffId: handoffId ?? null,
-            handoff: null,
-            loading: true,
-            error: null,
-            errorAt: null,
-          }
-        : state;
-  const ready = !handoffId || !currentState.loading;
+  const ready = !handoffId || !state.loading;
 
   /*
    * Keyed on the snapshot alone. `providerMessages` is a fresh array on every
@@ -149,12 +145,12 @@ export function useAgentHandoff(
    * objects each time, re-rendering the entire imported transcript per token.
    */
   const importedMessages = useMemo(
-    () => (currentState.handoff ? buildAgentHandoffImportedMessages(currentState.handoff) : null),
-    [currentState.handoff],
+    () => (state.handoff ? buildAgentHandoffImportedMessages(state.handoff) : null),
+    [state.handoff],
   );
   const carrierIds = useMemo(
-    () => [currentState.handoff?.id, consumedHandoffId].filter((id): id is string => Boolean(id)),
-    [currentState.handoff, consumedHandoffId],
+    () => [state.handoff?.id, consumedHandoffId].filter((id): id is string => Boolean(id)),
+    [state.handoff, consumedHandoffId],
   );
 
   const displayMessages = useMemo(() => {
@@ -162,27 +158,20 @@ export function useAgentHandoff(
       carrierIds.length > 0
         ? stripAgentHandoffCarriers(carrierIds, providerMessages)
         : providerMessages;
-    if (currentState.error && handoffId) {
+    if (state.error && handoffId) {
       return [
         {
           id: `handoff:${handoffId}:error`,
           role: "system" as const,
-          content: currentState.error,
-          parts: [{ type: "text" as const, content: currentState.error }],
-          createdAt: currentState.errorAt ?? new Date(0).toISOString(),
+          content: state.error,
+          parts: [{ type: "text" as const, content: state.error }],
+          createdAt: state.errorAt ?? new Date(0).toISOString(),
         },
         ...visible,
       ];
     }
     return importedMessages ? [...importedMessages, ...visible] : visible;
-  }, [
-    carrierIds,
-    currentState.error,
-    currentState.errorAt,
-    handoffId,
-    importedMessages,
-    providerMessages,
-  ]);
+  }, [carrierIds, state.error, state.errorAt, handoffId, importedMessages, providerMessages]);
   const destinationTranscriptStarted = providerMessages.some((message) => {
     /*
      * Optimistic sends and locally generated error/system rows are retained in
@@ -192,21 +181,21 @@ export function useAgentHandoff(
      * in the transcript it represents the dispatched handoff even if it still
      * has an optimistic id while waiting for its authoritative echo.
      */
-    if (currentState.handoff && isAgentHandoffBootstrapMessage(message, currentState.handoff.id)) {
+    if (state.handoff && isAgentHandoffBootstrapMessage(message, state.handoff.id)) {
       return true;
     }
     return !isClientOnlyNativeMessage(message);
   });
 
   return {
-    handoffId: currentState.handoffId,
-    handoff: currentState.handoff,
-    loading: currentState.loading,
-    error: currentState.error,
+    handoffId: state.handoffId,
+    handoff: state.handoff,
+    loading: state.loading,
+    error: state.error,
     ready,
     pendingHistory:
       ready && !destinationTranscriptStarted && !consumedHandoffId
-        ? currentState.handoff?.bootstrapPrompt
+        ? state.handoff?.bootstrapPrompt
         : undefined,
     displayMessages,
   };

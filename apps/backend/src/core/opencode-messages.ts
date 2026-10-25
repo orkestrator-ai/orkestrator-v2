@@ -1,5 +1,6 @@
 import type { Part as OpenCodePart } from "@opencode-ai/sdk/v2/types";
 import { providerInlineErrorMessageId } from "@orkestrator/protocol/native-agent";
+import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
 import {
   tryParseStructuredOutputText,
   type JsonSchema,
@@ -469,7 +470,14 @@ export function normalizeOpenCodeInteractiveMessage(
       type: isSubagent ? "subagent" : "tool-invocation",
       content: typeof state?.title === "string" ? state.title : toolName,
       toolName,
-      ...(input ? { toolArgs: input } : {}),
+      // A shared registration's artifact grant never leaves the provider
+      // record: every consumer of this normalization sees it redacted.
+      ...(input
+        ? {
+            toolArgs:
+              redactArtifactGrantArgs(toolName, input, { toolTitle: state?.title }) ?? input,
+          }
+        : {}),
       ...(normalizedToolState ? { toolState: normalizedToolState } : {}),
       ...(toolDurationMs === undefined ? {} : { toolDurationMs }),
       ...(typeof state?.title === "string" ? { toolTitle: state.title } : {}),
@@ -570,6 +578,8 @@ export function normalizeOpenCodeInlineError(value: unknown): Record<string, unk
       .filter((candidate): candidate is number => typeof candidate === "number")
       .map(openCodeIsoTimestamp)
       .find((candidate) => candidate !== undefined) ?? OPEN_CODE_UNKNOWN_CREATED_AT;
+  const providerId = nonEmptyString(info.providerID);
+  const modelId = nonEmptyString(info.modelID);
   return {
     // `error-opencode-<id>`: rendered as an error alert, not an assistant reply.
     id: providerInlineErrorMessageId("opencode", messageId),
@@ -577,6 +587,8 @@ export function normalizeOpenCodeInlineError(value: unknown): Record<string, unk
     content,
     parts: [{ type: "text", content }],
     createdAt,
+    // Names the provider a credential failure came from, for the sign-in card.
+    ...(modelId ? { modelId: providerId ? `${providerId}/${modelId}` : modelId } : {}),
   };
 }
 

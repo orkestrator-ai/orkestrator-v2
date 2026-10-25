@@ -15,6 +15,7 @@ import type {
   ProviderCommandCatalogue,
   ProviderCommandRefreshResult,
 } from "./agent-provider-contract.js";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 import {
   assertOk,
@@ -22,39 +23,78 @@ import {
   boundedJson,
   bridgeFetch,
 } from "./http-bridge-transport.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 export type HttpBridgeAgent = "claude" | "codex" | "cursor" | "grok" | "pi";
 
+/**
+ * Session catalogue reads answered 404 by a bridge older than the contract,
+ * per agent, since this backend started. Content-free: no command names,
+ * sessions or environments. The legacy-route support window rests on it.
+ */
+const outdatedBridgeCatalogueReads = new Map<HttpBridgeAgent, number>();
+
+export function outdatedBridgeCatalogueReadCounts(): Partial<Record<HttpBridgeAgent, number>> {
+  return Object.fromEntries(outdatedBridgeCatalogueReads);
+}
+
+export function resetOutdatedBridgeCatalogueReadCounts(): void {
+  outdatedBridgeCatalogueReads.clear();
+}
+
 /** Optional discovery and account surfaces shared by the HTTP-backed agents. */
 export class HttpBridgeCatalogAdapter {
+  private warnedOutdatedBridge = false;
+
   constructor(
     private readonly agent: HttpBridgeAgent,
     private readonly connection: BridgeConnection,
     private readonly fetchImpl: typeof fetch,
   ) {}
 
+  /** Count every 404 from the session route; warn once per provider instance. */
+  private noteOutdatedBridge(): void {
+    const count = (outdatedBridgeCatalogueReads.get(this.agent) ?? 0) + 1;
+    outdatedBridgeCatalogueReads.set(this.agent, count);
+    compatibilityPathUsage.record("slash-catalogue.outdated-bridge");
+    if (this.warnedOutdatedBridge) return;
+    this.warnedOutdatedBridge = true;
+    console.warn(
+      `[native-agent] ${this.agent} bridge is older than the command catalogue (session route 404); ` +
+        `its commands stay unavailable until the environment runs a current bridge ` +
+        `(outdated-bridge reads for ${this.agent} so far: ${count})`,
+    );
+  }
+
   /**
-   * Read the command catalogue, preferring the session route.
+   * Read one session's command catalogue from `GET /session/:id/commands`.
    *
-   * An enhanced bridge answers an unknown session in band (`status:
-   * "missing"`), so a 404 here can only mean the session route predates the
-   * contract; only then does this fall back to the legacy global list. Rows
-   * are normalized and bounded by the shared protocol normalizer; nothing is
-   * seeded — a successful empty list stays empty.
+   * A current bridge answers an unknown session in band (`status:
+   * "missing"`), so a 404 comes only from a bridge older than the version 1
+   * contract (2.21.0): one from before the route (#599), or a pre-2.21 Pi,
+   * Cursor or Grok bridge that does not hold the session. Either way the
+   * answer is `outdated-bridge`, counted, and never a fallback to a global
+   * list: those legacy routes were retired, and their rows were not this
+   * session's. Without a session there is nothing to read: the answer is
+   * `missing`, with no request. An old bridge's 200 answer (rows without
+   * `catalogueVersion`) is still accepted as non-enhanced rows that run as
+   * typed text. Rows are normalized and bounded by the shared protocol
+   * normalizer; nothing is seeded — a successful empty list stays empty.
    */
   async commandCatalogue(sessionId?: string): Promise<ProviderCommandCatalogue> {
-    const globalRoute =
-      this.agent === "codex" || this.agent === "cursor"
-        ? "/global/slash-commands"
-        : "/plugins/commands";
-    let response = await bridgeFetch(
+    if (!sessionId) return { enhanced: true, status: "missing", commands: [] };
+    const response = await bridgeFetch(
       this.connection,
-      sessionId ? `/session/${encodeURIComponent(sessionId)}/commands` : globalRoute,
+      `/session/${encodeURIComponent(sessionId)}/commands`,
       {},
       this.fetchImpl,
     );
-    if (sessionId && response.status === 404) {
-      response = await bridgeFetch(this.connection, globalRoute, {}, this.fetchImpl);
+    if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
+      this.noteOutdatedBridge();
+      throw Object.assign(new Error(`${this.agent} bridge is older than the command catalogue`), {
+        catalogueErrorCode: "outdated-bridge",
+      });
     }
     assertOk(response, `${this.agent} slash command list`);
     const payload = asRecord(
@@ -76,6 +116,7 @@ export class HttpBridgeCatalogAdapter {
       ...(normalized.revision !== undefined ? { revision: normalized.revision } : {}),
       ...(normalized.generation ? { generation: normalized.generation } : {}),
       ...(normalized.freshness ? { freshness: normalized.freshness } : {}),
+      ...(normalized.attachPending ? { attachPending: true } : {}),
     };
   }
 
@@ -95,7 +136,10 @@ export class HttpBridgeCatalogAdapter {
       { method: "POST" },
       this.fetchImpl,
     );
-    if (response.status === 404) return { outcome: "reread" };
+    if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
+      return { outcome: "reread" };
+    }
     await assertOkWithErrorDetail(response, `${this.agent} command refresh`);
     const body = asRecord(
       await boundedJson(response, `${this.agent} command refresh`, { remaining: 64 * 1024 }),
@@ -151,6 +195,7 @@ export class HttpBridgeCatalogAdapter {
           actions,
           ...(server?.scope === "user" ||
           server?.scope === "project" ||
+          server?.scope === "local" ||
           server?.scope === "orkestrator" ||
           server?.scope === "plugin"
             ? { scope: server.scope }
@@ -171,7 +216,11 @@ export class HttpBridgeCatalogAdapter {
                   .map((tool) => tool.slice(0, 256)),
               }
             : {}),
-          ...(typeof server?.error === "string" ? { error: server.error.slice(0, 2_000) } : {}),
+          // Redacted here as well as in the bridge: an older or third bridge
+          // may relay a server's error text verbatim.
+          ...(typeof server?.error === "string"
+            ? { error: redactSecrets(server.error).slice(0, 2_000) }
+            : {}),
         },
       ];
     });
@@ -310,6 +359,27 @@ export class HttpBridgeCatalogAdapter {
       ...(nonEmptyString(body?.url) ? { url: nonEmptyString(body?.url)!.slice(0, 4096) } : {}),
       ...(nonEmptyString(body?.code) ? { code: nonEmptyString(body?.code)!.slice(0, 512) } : {}),
     };
+  }
+
+  /**
+   * Abandon the in-tab sign-in the bridge started. Only Codex can cancel one
+   * (`account/login/cancel`); a bridge without the route answers 404, which
+   * is a no-op here because there is nothing on its side to release.
+   */
+  async cancelSignIn(): Promise<{ cancelled: boolean }> {
+    const response = await bridgeFetch(
+      this.connection,
+      "/global/auth/login/cancel",
+      { method: "POST" },
+      this.fetchImpl,
+    );
+    if (response.status === 404 || response.status === 405) {
+      await response.body?.cancel().catch(() => undefined);
+      return { cancelled: false };
+    }
+    await assertOkWithErrorDetail(response, `${this.agent} sign-in cancel`);
+    const body = asRecord(await boundedJson(response, `${this.agent} sign-in cancel`));
+    return { cancelled: body?.cancelled === true };
   }
 
   async signOut(): Promise<void> {

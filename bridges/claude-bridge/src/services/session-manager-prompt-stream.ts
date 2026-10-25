@@ -38,9 +38,6 @@ export interface PromptStreamState {
   toolTracker: ToolTracker;
   taskRegistry: TaskRegistry;
   activeTaskIds: Set<string>;
-  pendingPlanRejectionFeedback: string | null;
-  planApprovedThisTurn: boolean;
-  pendingPlanApprovalContinuation: string | null;
   /**
    * The transcript message holding an unsettled `retry` row.
    *
@@ -159,92 +156,155 @@ const sessionStreamRows = new WeakMap<
   { messages: NormalizedMessage[]; rows: Map<string, StreamRow> }
 >();
 
+/**
+ * Where a streamed block event lands: its row, its message's blocks, and the
+ * block's index there. Each stream fills one object for every block event
+ * rather than allocating a new one per token.
+ */
+interface StreamBlockTarget {
+  row: StreamRow;
+  blocks: Map<number, OrderedPartEntry>;
+  blockIndex: number;
+  messageKey: string;
+  parentTaskUseId: string | undefined;
+}
+
+export interface PromptStreamOptions {
+  flushIntervalMs: number;
+  maxBlockIndex: number;
+  /**
+   * The tracker of the CLI this turn runs on, when it is already running.
+   * Every turn on one process shares it, so a report for a tool an earlier
+   * turn started still finds that tool's row.
+   */
+  toolTracker?: ToolTracker;
+  activeTaskIds?: Set<string>;
+}
+
 export function createPromptStreamState(
   session: SessionState,
   sessionId: string,
-  options: {
-    flushIntervalMs: number;
-    maxBlockIndex: number;
-    /**
-     * The tracker of the CLI this turn runs on, when it is already running.
-     * Every turn on one process shares it, so a report for a tool an earlier
-     * turn started still finds that tool's row.
-     */
-    toolTracker?: ToolTracker;
-    activeTaskIds?: Set<string>;
-  },
+  options: PromptStreamOptions,
 ): PromptStreamState {
-  let streamEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
-  const { flushIntervalMs, maxBlockIndex } = options;
+  return new PromptStream(session, sessionId, options);
+}
 
+/** The parent call a streamed frame names, when it names one. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function explicitParentTaskUseId(partialMessage: any): string | undefined {
+  return typeof partialMessage.parent_tool_use_id === "string" &&
+    partialMessage.parent_tool_use_id.length > 0
+    ? partialMessage.parent_tool_use_id
+    : undefined;
+}
+
+/** Fold any buffered streamed deltas into the entry's `value`. */
+function materializeEntryValue(entry: OrderedPartEntry): void {
+  if (entry.pendingChunks) {
+    entry.value += entry.pendingChunks.join("");
+    entry.pendingChunks = undefined;
+  }
+}
+
+class PromptStream implements PromptStreamState {
   // Tool tracker persists across all messages in this turn, and across every
   // turn written into the same CLI.
-  const toolTracker = options.toolTracker ?? new ToolTracker();
-
+  readonly toolTracker: ToolTracker;
   // The task list, unlike the tool tracker, persists across turns — Claude's
   // tasks survive from one prompt to the next, so the registry hangs off the
   // session and is created once.
-  const taskRegistry = (session.taskRegistry ??= new TaskRegistry());
+  readonly taskRegistry: TaskRegistry;
+  // Track active (pending) Task tool IDs for parent tracking
+  // This allows us to associate child tools with their parent Task
+  readonly activeTaskIds: Set<string>;
+  pendingApiRetryMessageId?: string;
 
+  private readonly flushIntervalMs: number;
+  private readonly maxBlockIndex: number;
+  private streamEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
   // Rows in creation order, the API messages each one holds, and the calls
   // each one holds — a subagent's output renders inside the row holding the
   // call that started it, however many rows later it arrives.
-  const rows: StreamRow[] = [];
-  let sharedState = sessionStreamRows.get(session);
-  if (!sharedState || sharedState.messages !== session.messages) {
-    sharedState = { messages: session.messages, rows: new Map() };
-    sessionStreamRows.set(session, sharedState);
-  }
-  const sharedRows = sharedState.rows;
-  const rowByApiMessage = new Map<string, StreamRow>();
-  const rowByToolUseId = new Map<string, StreamRow>();
-  let currentRow: StreamRow | null = null;
-  let rowSequence = 0;
+  private readonly rows: StreamRow[] = [];
+  private readonly sharedRows: Map<string, StreamRow>;
+  private readonly rowByApiMessage = new Map<string, StreamRow>();
+  private readonly rowByToolUseId = new Map<string, StreamRow>();
+  private currentRow: StreamRow | null = null;
+  private rowSequence = 0;
   // Streaming deltas do not consistently repeat their parent relationship.
   // Remember it from whichever frame supplies it so subagent thinking/text
   // does not briefly render as parent-agent output before the final block
   // replaces the stream.
-  const parentTaskByApiMessage = new Map<string, string>();
-  // Blocks of each API message already reconciled from non-streaming `assistant`
-  // messages. Those messages don't carry the stream's block index, but they
-  // arrive in block order, so the running count is the index of the next block.
+  private readonly parentTaskByApiMessage = new Map<string, string>();
   // API message id of the stream currently being received (set by `message_start`).
-  let currentStreamApiMessageId: string | null = null;
+  private currentStreamApiMessageId: string | null = null;
   // Fallback keys for messages that carry neither an API message id nor a uuid.
-  let syntheticMessageKeyCounter = 0;
+  private syntheticMessageKeyCounter = 0;
   // Rows holding streamed deltas not yet published.
-  const dirtyRows = new Set<StreamRow>();
+  private readonly dirtyRows = new Set<StreamRow>();
   // The tracked row each published message belongs to.
-  const rowOfMessage = new Map<NormalizedMessage, StreamRow>();
+  private readonly rowOfMessage = new Map<NormalizedMessage, StreamRow>();
   // Whether any row of this turn has produced content, whichever row is current.
-  let assistantOutputSeen = false;
-
-  /** Stop tracking a row: its message stays in the transcript as published. */
-  const forgetRow = (row: StreamRow) => {
-    if (dirtyRows.delete(row)) materializeRow(row, true);
-    // Every API message routed to a row has a block map on it.
-    for (const apiMessageId of row.blocksByApiMessage.keys()) {
-      if (rowByApiMessage.get(apiMessageId) !== row) continue;
-      rowByApiMessage.delete(apiMessageId);
-      parentTaskByApiMessage.delete(apiMessageId);
-    }
-    for (const toolUseId of row.toolUseIds) {
-      if (rowByToolUseId.get(toolUseId) === row) rowByToolUseId.delete(toolUseId);
-    }
-    if (row.message) rowOfMessage.delete(row.message);
+  private outputSeen = false;
+  private blockTarget: StreamBlockTarget | null = null;
+  private readonly flushOnTimer = () => {
+    this.streamEventFlushTimer = null;
+    this.flushStreamedAssistantMessage();
   };
 
-  const createRow = (key: string, modelId?: string): StreamRow => {
+  constructor(
+    private readonly session: SessionState,
+    private readonly sessionId: string,
+    options: PromptStreamOptions,
+  ) {
+    this.flushIntervalMs = options.flushIntervalMs;
+    this.maxBlockIndex = options.maxBlockIndex;
+    this.toolTracker = options.toolTracker ?? new ToolTracker();
+    this.taskRegistry = session.taskRegistry ??= new TaskRegistry();
+    this.activeTaskIds = options.activeTaskIds ?? new Set<string>();
+    let sharedState = sessionStreamRows.get(session);
+    if (!sharedState || sharedState.messages !== session.messages) {
+      sharedState = { messages: session.messages, rows: new Map() };
+      sessionStreamRows.set(session, sharedState);
+    }
+    this.sharedRows = sharedState.rows;
+  }
+
+  get currentAssistantMessage(): NormalizedMessage | null {
+    return this.currentRow?.message ?? null;
+  }
+
+  get assistantOutputSeen(): boolean {
+    return this.outputSeen;
+  }
+
+  /** Stop tracking a row: its message stays in the transcript as published. */
+  private forgetRow(row: StreamRow): void {
+    if (this.dirtyRows.delete(row)) this.materializeRow(row, true);
+    // Every API message routed to a row has a block map on it.
+    for (const apiMessageId of row.blocksByApiMessage.keys()) {
+      if (this.rowByApiMessage.get(apiMessageId) !== row) continue;
+      this.rowByApiMessage.delete(apiMessageId);
+      this.parentTaskByApiMessage.delete(apiMessageId);
+    }
+    for (const toolUseId of row.toolUseIds) {
+      if (this.rowByToolUseId.get(toolUseId) === row) this.rowByToolUseId.delete(toolUseId);
+    }
+    if (row.message) this.rowOfMessage.delete(row.message);
+  }
+
+  private createRow(key: string, modelId?: string): StreamRow {
+    const { rows, sharedRows, session } = this;
     const shared = sharedRows.get(key);
     if (shared && (!shared.message || session.messages.includes(shared.message))) {
       rows.push(shared);
-      if (shared.message) rowOfMessage.set(shared.message, shared);
-      while (rows.length > MAX_TRACKED_STREAM_ROWS) forgetRow(rows.shift()!);
-      for (const id of shared.toolUseIds) rowByToolUseId.set(id, shared);
+      if (shared.message) this.rowOfMessage.set(shared.message, shared);
+      while (rows.length > MAX_TRACKED_STREAM_ROWS) this.forgetRow(rows.shift()!);
+      for (const id of shared.toolUseIds) this.rowByToolUseId.set(id, shared);
       return shared;
     }
     const row: StreamRow = {
-      sequence: (rowSequence += 1),
+      sequence: (this.rowSequence += 1),
       key,
       message: null,
       blocksByApiMessage: new Map(),
@@ -265,10 +325,10 @@ export function createPromptStreamState(
     rows.push(row);
     while (rows.length > MAX_TRACKED_STREAM_ROWS) {
       const oldest = rows.shift()!;
-      forgetRow(oldest);
+      this.forgetRow(oldest);
     }
     return row;
-  };
+  }
 
   /**
    * The row an API message's blocks belong to, opening one if needed.
@@ -278,50 +338,42 @@ export function createPromptStreamState(
    * row holding its parent call, else the current row, as a whole turn did
    * before rows were split.
    */
-  const rowForApiMessage = (
+  private rowForApiMessage(
     messageKey: string,
     opensRow: boolean,
     parentToolUseId: string | undefined,
     modelId?: string,
-  ): StreamRow => {
-    const known = rowByApiMessage.get(messageKey);
+  ): StreamRow {
+    const known = this.rowByApiMessage.get(messageKey);
     if (known) return known;
     let row: StreamRow | undefined;
     if (!opensRow) {
       row =
-        (parentToolUseId ? rowByToolUseId.get(parentToolUseId) : undefined) ??
-        currentRow ??
+        (parentToolUseId ? this.rowByToolUseId.get(parentToolUseId) : undefined) ??
+        this.currentRow ??
         undefined;
     }
     if (!row) {
       // Publish what the previous response streamed first, so its row
       // precedes this one in the transcript.
-      flushStreamedAssistantMessage();
-      row = createRow(messageKey, modelId);
-      currentRow = row;
+      this.flushStreamedAssistantMessage();
+      row = this.createRow(messageKey, modelId);
+      this.currentRow = row;
     }
-    rowByApiMessage.set(messageKey, row);
+    this.rowByApiMessage.set(messageKey, row);
     return row;
-  };
+  }
 
-  const getBlocks = (row: StreamRow, messageKey: string): Map<number, OrderedPartEntry> => {
+  private getBlocks(row: StreamRow, messageKey: string): Map<number, OrderedPartEntry> {
     let blocks = row.blocksByApiMessage.get(messageKey);
     if (!blocks) {
       blocks = new Map();
       row.blocksByApiMessage.set(messageKey, blocks);
     }
     return blocks;
-  };
+  }
 
-  /** Fold any buffered streamed deltas into the entry's `value`. */
-  const materializeEntryValue = (entry: OrderedPartEntry): void => {
-    if (entry.pendingChunks) {
-      entry.value += entry.pendingChunks.join("");
-      entry.pendingChunks = undefined;
-    }
-  };
-
-  const rebuildOrderedParts = (row: StreamRow) => {
+  private rebuildOrderedParts(row: StreamRow): void {
     const located: Array<{
       entry: OrderedPartEntry;
       blocks: Map<number, OrderedPartEntry>;
@@ -357,53 +409,14 @@ export function createPromptStreamState(
       blocks.delete(blockIndex);
       if (entry.type === "tool-ref") {
         row.toolUseIds.delete(entry.value);
-        if (rowByToolUseId.get(entry.value) === row) rowByToolUseId.delete(entry.value);
+        if (this.rowByToolUseId.get(entry.value) === row) this.rowByToolUseId.delete(entry.value);
       }
     }
     row.orderedParts =
       shed.size === 0
         ? located.map(({ entry }) => entry)
         : located.filter(({ entry }) => !shed.has(entry)).map(({ entry }) => entry);
-  };
-
-  // Track active (pending) Task tool IDs for parent tracking
-  // This allows us to associate child tools with their parent Task
-  const activeTaskIds = options.activeTaskIds ?? new Set<string>();
-
-  // Track plan rejection feedback so we can re-prompt Claude after the turn ends.
-  // When ExitPlanMode is denied, the SDK may end the turn without Claude seeing
-  // the feedback. We capture it here and re-send as a follow-up prompt.
-  let pendingPlanRejectionFeedback: string | null = null;
-
-  // ---------------------------------------------------------------------
-  // Defensive fallback for the ExitPlanMode "approved but failed" case.
-  //
-  // Primary fix lives at the permissionMode site above: we now forward
-  // `permissionMode: "plan"` to the SDK, so the SDK is genuinely in plan
-  // mode and its native ExitPlanMode tool runs to success.
-  //
-  // The fallback below covers the case where the SDK's plan-mode handling
-  // misbehaves (older SDK builds, future regressions, or unforeseen edge
-  // cases): if the user explicitly approved the plan but the SDK still
-  // marked the ExitPlanMode tool as `is_error`, we don't want to surface a
-  // red "failure" to the user, and we don't want Claude to abandon the
-  // turn. So we:
-  //   1) Remember that the user approved this turn (`planApprovedThisTurn`).
-  //   2) After every tool_result is parsed, scan the tool tracker for any
-  //      ExitPlanMode tool that landed in "failure" state and rewrite it
-  //      to "success" with an explanatory output. The UI then renders the
-  //      tool the way the user expects.
-  //   3) Set `pendingPlanApprovalContinuation` so that when the SDK ends
-  //      the turn (which it usually does after a failed ExitPlanMode), we
-  //      re-prompt Claude with a non-plan-mode follow-up telling them to
-  //      continue with implementation.
-  //
-  // If the SDK behaves correctly (the expected case post-fix), the
-  // ExitPlanMode tool is already in "success" state and none of the
-  // override / re-prompt logic fires. The fallback is silent and free.
-  // ---------------------------------------------------------------------
-  let planApprovedThisTurn = false;
-  let pendingPlanApprovalContinuation: string | null = null;
+  }
 
   /**
    * Publish a row's current parts.
@@ -412,7 +425,8 @@ export function createPromptStreamState(
    * when its result lands, and text/thinking parts are rebuilt from scratch
    * each time, so snapshotting the published array is enough to diff against.
    */
-  const emitRow = (row: StreamRow) => {
+  private emitRow(row: StreamRow): void {
+    const { session, sessionId } = this;
     const message = row.message;
     if (!message) return;
     const parts = message.parts;
@@ -464,15 +478,15 @@ export function createPromptStreamState(
         revision: message.revision,
       } satisfies MessagePatchEventData,
     });
-  };
+  }
 
-  const newestRowMessage = (): NormalizedMessage | null => {
-    for (let index = rows.length - 1; index >= 0; index -= 1) {
-      const message = rows[index]!.message;
+  private newestRowMessage(): NormalizedMessage | null {
+    for (let index = this.rows.length - 1; index >= 0; index -= 1) {
+      const message = this.rows[index]!.message;
       if (message) return message;
     }
     return null;
-  };
+  }
 
   /**
    * Place a row's new message where its response started: after its anchor,
@@ -481,25 +495,27 @@ export function createPromptStreamState(
    * after this response started. With the anchor gone (a rewind removed it),
    * or nothing after it, the row goes last.
    */
-  const insertAfterAnchor = (row: StreamRow, message: NormalizedMessage) => {
-    const anchorIndex = row.anchor ? session.messages.lastIndexOf(row.anchor) : -1;
+  private insertAfterAnchor(row: StreamRow, message: NormalizedMessage): void {
+    const messages = this.session.messages;
+    const anchorIndex = row.anchor ? messages.lastIndexOf(row.anchor) : -1;
     if (anchorIndex < 0) {
-      session.messages.push(message);
+      messages.push(message);
       return;
     }
     let index = anchorIndex + 1;
-    while (index < session.messages.length) {
-      const owner = rowOfMessage.get(session.messages[index]!);
+    while (index < messages.length) {
+      const owner = this.rowOfMessage.get(messages[index]!);
       if (!owner || owner.sequence > row.sequence) break;
       index += 1;
     }
-    session.messages.splice(index, 0, message);
-  };
+    messages.splice(index, 0, message);
+  }
 
   /** Rebuild a row's parts from its blocks, creating its message on first content. */
-  const materializeRow = (row: StreamRow, rebuildBlocks: boolean) => {
-    if (rebuildBlocks) rebuildOrderedParts(row);
-    const parts = buildMessageParts(row.orderedParts, toolTracker);
+  private materializeRow(row: StreamRow, rebuildBlocks: boolean): void {
+    const { session } = this;
+    if (rebuildBlocks) this.rebuildOrderedParts(row);
+    const parts = buildMessageParts(row.orderedParts, this.toolTracker);
     const content = getMessageTextFromParts(parts);
     if (!row.message) {
       if (parts.length === 0 && !content) return;
@@ -512,9 +528,9 @@ export function createPromptStreamState(
         ...(row.modelId ? { modelId: row.modelId } : {}),
         ...(row.sdkUuid ? { sdkUuid: row.sdkUuid } : {}),
       };
-      rowOfMessage.set(row.message, row);
-      insertAfterAnchor(row, row.message);
-      assistantOutputSeen = true;
+      this.rowOfMessage.set(row.message, row);
+      this.insertAfterAnchor(row, row.message);
+      this.outputSeen = true;
     } else {
       row.message.content = content;
       row.message.parts = parts;
@@ -525,45 +541,39 @@ export function createPromptStreamState(
       (session.revisedRows ??= new RecentlyRevisedRows()).note(row.message.id);
     }
     markTranscriptChanged(session);
-    emitRow(row);
-  };
+    this.emitRow(row);
+  }
 
   // Streamed-delta coalescing. Deltas land in their row's blocks immediately;
   // the expensive snapshot (ordered-part rebuild, part build, emit) happens at
   // most once per flushIntervalMs.
-  function flushStreamedAssistantMessage() {
-    if (streamEventFlushTimer) {
-      clearTimeout(streamEventFlushTimer);
-      streamEventFlushTimer = null;
-    }
-    if (dirtyRows.size === 0) return;
-    const pending = [...dirtyRows].sort((a, b) => a.sequence - b.sequence);
-    dirtyRows.clear();
-    for (const row of pending) materializeRow(row, true);
+  flushStreamedAssistantMessage(): void {
+    this.clearFlushTimer();
+    if (this.dirtyRows.size === 0) return;
+    const pending = [...this.dirtyRows].sort((a, b) => a.sequence - b.sequence);
+    this.dirtyRows.clear();
+    for (const row of pending) this.materializeRow(row, true);
   }
 
-  const scheduleStreamedAssistantMessageFlush = (row: StreamRow) => {
-    dirtyRows.add(row);
-    streamEventFlushTimer ??= setTimeout(() => {
-      streamEventFlushTimer = null;
-      flushStreamedAssistantMessage();
-    }, flushIntervalMs);
-  };
+  private scheduleStreamedAssistantMessageFlush(row: StreamRow): void {
+    this.dirtyRows.add(row);
+    this.streamEventFlushTimer ??= setTimeout(this.flushOnTimer, this.flushIntervalMs);
+  }
 
-  const applyAssistantRecord = (record: AssistantRecordInput) => {
+  applyAssistantRecord(record: AssistantRecordInput): void {
     // Only a root response with an API message id opens a row of its own. A
     // root record naming no API message cannot be told apart from the blocks
     // around it, so it stays on the current row as before.
     const messageKey =
-      record.apiMessageId ?? record.uuid ?? `assistant-${(syntheticMessageKeyCounter += 1)}`;
+      record.apiMessageId ?? record.uuid ?? `assistant-${(this.syntheticMessageKeyCounter += 1)}`;
     const opensRow = record.isRoot && record.apiMessageId !== undefined;
-    const row = rowForApiMessage(messageKey, opensRow, record.parentToolUseId, record.modelId);
+    const row = this.rowForApiMessage(messageKey, opensRow, record.parentToolUseId, record.modelId);
 
     // Group by API message id so these blocks land on top of the partial
     // events that streamed them. The SDK sends one assistant message per
     // content block, all sharing `message.id`, so the running finalized-block
     // count gives each block its stream index.
-    const blocks = getBlocks(row, messageKey);
+    const blocks = this.getBlocks(row, messageKey);
     const blockIndexBase = row.finalizedBlockCounts.get(messageKey) ?? 0;
     for (const part of record.orderedParts) {
       const blockIndex = blockIndexBase + (part.blockOffset ?? 0);
@@ -575,21 +585,21 @@ export function createPromptStreamState(
       });
       if (part.type === "tool-ref") {
         row.toolUseIds.add(part.value);
-        rowByToolUseId.set(part.value, row);
+        this.rowByToolUseId.set(part.value, row);
       }
     }
     row.finalizedBlockCounts.set(messageKey, blockIndexBase + record.contentBlockCount);
     if (record.isRoot && record.modelId) row.modelId = record.modelId;
     if (record.isRoot && record.uuid) row.sdkUuid = record.uuid;
-    dirtyRows.delete(row);
-    materializeRow(row, true);
-  };
+    this.dirtyRows.delete(row);
+    this.materializeRow(row, true);
+  }
 
-  const refreshToolRows = (toolUseIds: Iterable<string>): ReadonlySet<NormalizedMessage> => {
+  refreshToolRows(toolUseIds: Iterable<string>): ReadonlySet<NormalizedMessage> {
     const affected = new Set<StreamRow>();
-    if (currentRow) affected.add(currentRow);
+    if (this.currentRow) affected.add(this.currentRow);
     for (const toolUseId of toolUseIds) {
-      const row = rowByToolUseId.get(toolUseId);
+      const row = this.rowByToolUseId.get(toolUseId);
       if (row) affected.add(row);
     }
     const published = new Set<NormalizedMessage>();
@@ -597,196 +607,206 @@ export function createPromptStreamState(
       if (!row.message) continue;
       // Streamed deltas still buffered for this row are folded in now rather
       // than left to the flush that would otherwise republish it a moment later.
-      const rebuildBlocks = dirtyRows.delete(row);
-      materializeRow(row, rebuildBlocks);
+      const rebuildBlocks = this.dirtyRows.delete(row);
+      this.materializeRow(row, rebuildBlocks);
       published.add(row.message);
     }
     return published;
-  };
+  }
 
+  rowHoldingTool(toolUseId: string): NormalizedMessage | null {
+    return (
+      this.rowByToolUseId.get(toolUseId)?.message ??
+      this.currentRow?.message ??
+      this.newestRowMessage()
+    );
+  }
+
+  publishRow(message: NormalizedMessage): void {
+    const row = this.rowOfMessage.get(message);
+    if (row) this.emitRow(row);
+  }
+
+  /**
+   * Fold one `stream_event` frame into its row. Runs once per streamed token,
+   * so neither it nor the handlers below may allocate beyond the entry a
+   * block needs.
+   */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const applyPartialAssistantMessage = (partialMessage: any): boolean => {
+  applyPartialAssistantMessage(partialMessage: any): boolean {
     const streamEvent = partialMessage.event;
-    const eventType = streamEvent?.type;
-    const explicitParentTaskUseId =
-      typeof partialMessage.parent_tool_use_id === "string" &&
-      partialMessage.parent_tool_use_id.length > 0
-        ? partialMessage.parent_tool_use_id
-        : undefined;
-
-    // `message_start` is the only stream event carrying the API message id;
-    // every later event for the same message must inherit it.
-    if (eventType === "message_start") {
-      const apiMessageId =
-        typeof streamEvent.message?.id === "string" ? streamEvent.message.id : undefined;
-      currentStreamApiMessageId = apiMessageId ?? null;
-      const isRootAssistant = isRootAssistantRecord(
-        partialMessage.parent_tool_use_id,
-        partialMessage.isSidechain,
-      );
-      const modelId = isRootAssistant
-        ? normalizeBackendModelId(streamEvent.message?.model)
-        : undefined;
-      if (apiMessageId) {
-        if (explicitParentTaskUseId) {
-          parentTaskByApiMessage.set(apiMessageId, explicitParentTaskUseId);
-        }
-        const row = rowForApiMessage(
-          apiMessageId,
-          isRootAssistant,
-          explicitParentTaskUseId,
-          modelId,
-        );
-        if (modelId) row.modelId = modelId;
-        getBlocks(row, apiMessageId);
+    switch (streamEvent?.type) {
+      case "message_start":
+        return this.applyMessageStart(partialMessage, streamEvent);
+      case "message_stop":
+        return this.applyMessageStop();
+      case "content_block_start": {
+        const target = this.locateStreamBlock(partialMessage, streamEvent);
+        return target ? this.applyContentBlockStart(target, streamEvent.content_block) : false;
       }
-      return false;
+      case "content_block_delta": {
+        const target = this.locateStreamBlock(partialMessage, streamEvent);
+        return target ? this.applyContentBlockDelta(target, streamEvent.delta) : false;
+      }
+      default:
+        // Nothing to render (`content_block_stop`, say), but the frame still
+        // routes its message to a row, exactly as the block events above do.
+        this.locateStreamBlock(partialMessage, streamEvent);
+        return false;
     }
+  }
 
-    if (eventType === "message_stop") {
-      currentStreamApiMessageId = null;
-      return false;
+  // `message_start` is the only stream event carrying the API message id;
+  // every later event for the same message must inherit it.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private applyMessageStart(partialMessage: any, streamEvent: any): false {
+    const apiMessageId =
+      typeof streamEvent.message?.id === "string" ? streamEvent.message.id : undefined;
+    this.currentStreamApiMessageId = apiMessageId ?? null;
+    const isRootAssistant = isRootAssistantRecord(
+      partialMessage.parent_tool_use_id,
+      partialMessage.isSidechain,
+    );
+    const modelId = isRootAssistant
+      ? normalizeBackendModelId(streamEvent.message?.model)
+      : undefined;
+    if (apiMessageId) {
+      const parentTaskUseId = explicitParentTaskUseId(partialMessage);
+      if (parentTaskUseId) this.parentTaskByApiMessage.set(apiMessageId, parentTaskUseId);
+      const row = this.rowForApiMessage(apiMessageId, isRootAssistant, parentTaskUseId, modelId);
+      if (modelId) row.modelId = modelId;
+      this.getBlocks(row, apiMessageId);
     }
+    return false;
+  }
 
-    const blockIndex =
+  private applyMessageStop(): false {
+    this.currentStreamApiMessageId = null;
+    return false;
+  }
+
+  /**
+   * The row and block a block event addresses: its index, the message it
+   * belongs to and the parent call it runs under. Null for an index outside
+   * `0..maxBlockIndex` or a frame naming no message.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private locateStreamBlock(partialMessage: any, streamEvent: any): StreamBlockTarget | null {
+    const blockIndex: number | undefined =
       Number.isInteger(streamEvent?.index) &&
       streamEvent.index >= 0 &&
-      streamEvent.index <= maxBlockIndex
+      streamEvent.index <= this.maxBlockIndex
         ? streamEvent.index
         : undefined;
-    if (blockIndex === undefined) {
-      return false;
-    }
+    if (blockIndex === undefined) return null;
 
     // Only fall back to the event uuid when no `message_start` was seen, which
     // real SDK streams always send before any block event.
     const messageKey =
-      currentStreamApiMessageId ??
+      this.currentStreamApiMessageId ??
       (typeof partialMessage.uuid === "string" ? partialMessage.uuid : undefined);
-    if (!messageKey) {
-      return false;
-    }
-    const parentTaskUseId = explicitParentTaskUseId ?? parentTaskByApiMessage.get(messageKey);
-    if (explicitParentTaskUseId) {
-      parentTaskByApiMessage.set(messageKey, explicitParentTaskUseId);
-    }
+    if (!messageKey) return null;
+    const explicitParent = explicitParentTaskUseId(partialMessage);
+    const parentTaskUseId = explicitParent ?? this.parentTaskByApiMessage.get(messageKey);
+    if (explicitParent) this.parentTaskByApiMessage.set(messageKey, explicitParent);
 
     // A block whose message never started (no `message_start`) joins the
     // current row rather than opening one per delta.
-    const row = rowForApiMessage(messageKey, false, parentTaskUseId);
-    const entriesForMessage = getBlocks(row, messageKey);
-    let entry = entriesForMessage.get(blockIndex);
+    const row = this.rowForApiMessage(messageKey, false, parentTaskUseId);
+    const blocks = this.getBlocks(row, messageKey);
+    const target = (this.blockTarget ??= { row, blocks, blockIndex, messageKey, parentTaskUseId });
+    target.row = row;
+    target.blocks = blocks;
+    target.blockIndex = blockIndex;
+    target.messageKey = messageKey;
+    target.parentTaskUseId = parentTaskUseId;
+    return target;
+  }
 
-    // Append a streamed delta without rebuilding the block's string: chunks
-    // are buffered on the entry and joined once per flush. A delta whose
-    // type disagrees with the existing entry starts a fresh entry seeded
-    // with the old (materialized) value, preserving the previous behavior.
-    const appendStreamedDelta = (type: "text" | "thinking", chunk: string): OrderedPartEntry => {
-      if (entry?.type === type) {
-        entry.parentTaskUseId ??= parentTaskUseId;
-        (entry.pendingChunks ??= []).push(chunk);
-        return entry;
-      }
-      if (entry) materializeEntryValue(entry);
-      return {
-        type,
-        value: `${entry?.value ?? ""}${chunk}`,
-        timestamp: entry?.timestamp ?? new Date().toISOString(),
-        messageUuid: messageKey,
-        parentTaskUseId: entry?.parentTaskUseId ?? parentTaskUseId,
-      };
-    };
-
-    if (eventType === "content_block_start") {
-      const contentBlock = streamEvent.content_block;
-      if (contentBlock?.type === "text") {
-        entry = {
-          type: "text",
-          value: typeof contentBlock.text === "string" ? contentBlock.text : "",
-          timestamp: entry?.timestamp ?? new Date().toISOString(),
-          messageUuid: messageKey,
-          parentTaskUseId,
-        };
-      } else if (contentBlock?.type === "thinking") {
-        entry = {
-          type: "thinking",
-          value: typeof contentBlock.thinking === "string" ? contentBlock.thinking : "",
-          timestamp: entry?.timestamp ?? new Date().toISOString(),
-          messageUuid: messageKey,
-          parentTaskUseId,
-        };
-      } else {
-        return false;
-      }
-    } else if (eventType === "content_block_delta") {
-      const delta = streamEvent.delta;
-      if (delta?.type === "text_delta") {
-        entry = appendStreamedDelta("text", typeof delta.text === "string" ? delta.text : "");
-      } else if (delta?.type === "thinking_delta") {
-        entry = appendStreamedDelta(
-          "thinking",
-          typeof delta.thinking === "string" ? delta.thinking : "",
-        );
-      } else {
-        return false;
-      }
+  /** A text or thinking block opens; any other block type is not rendered here. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private applyContentBlockStart(target: StreamBlockTarget, contentBlock: any): boolean {
+    let type: "text" | "thinking";
+    let value: string;
+    if (contentBlock?.type === "text") {
+      type = "text";
+      value = typeof contentBlock.text === "string" ? contentBlock.text : "";
+    } else if (contentBlock?.type === "thinking") {
+      type = "thinking";
+      value = typeof contentBlock.thinking === "string" ? contentBlock.thinking : "";
     } else {
       return false;
     }
-
-    entriesForMessage.set(blockIndex, entry);
-    scheduleStreamedAssistantMessageFlush(row);
+    const existing = target.blocks.get(target.blockIndex);
+    this.storeStreamedEntry(target, {
+      type,
+      value,
+      timestamp: existing?.timestamp ?? new Date().toISOString(),
+      messageUuid: target.messageKey,
+      parentTaskUseId: target.parentTaskUseId,
+    });
     return true;
-  };
+  }
 
-  return {
-    get currentAssistantMessage() {
-      return currentRow?.message ?? null;
-    },
-    get assistantOutputSeen() {
-      return assistantOutputSeen;
-    },
-    toolTracker,
-    taskRegistry,
-    activeTaskIds,
-    get pendingPlanRejectionFeedback() {
-      return pendingPlanRejectionFeedback;
-    },
-    set pendingPlanRejectionFeedback(value) {
-      pendingPlanRejectionFeedback = value;
-    },
-    get planApprovedThisTurn() {
-      return planApprovedThisTurn;
-    },
-    set planApprovedThisTurn(value) {
-      planApprovedThisTurn = value;
-    },
-    get pendingPlanApprovalContinuation() {
-      return pendingPlanApprovalContinuation;
-    },
-    set pendingPlanApprovalContinuation(value) {
-      pendingPlanApprovalContinuation = value;
-    },
-    applyAssistantRecord,
-    refreshToolRows,
-    rowHoldingTool: (toolUseId) =>
-      rowByToolUseId.get(toolUseId)?.message ?? currentRow?.message ?? newestRowMessage(),
-    publishRow: (message) => {
-      const row = rowOfMessage.get(message);
-      if (row) emitRow(row);
-    },
-    flushStreamedAssistantMessage,
-    applyPartialAssistantMessage,
-    // Publish what streamed so far, so the row holding it precedes the steer's
-    // user row. The steer's response is a new model response, so it opens a
-    // row of its own; records of a response the steer interrupted still name
-    // that response's API message and stay on its row.
-    beginPostSteerScope: flushStreamedAssistantMessage,
-    clearFlushTimer: () => {
-      if (streamEventFlushTimer) {
-        clearTimeout(streamEventFlushTimer);
-        streamEventFlushTimer = null;
-      }
-    },
-  };
+  /** A text or thinking delta extends its block; any other delta is not rendered here. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private applyContentBlockDelta(target: StreamBlockTarget, delta: any): boolean {
+    if (delta?.type === "text_delta") {
+      const chunk = typeof delta.text === "string" ? delta.text : "";
+      this.storeStreamedEntry(target, this.appendStreamedDelta(target, "text", chunk));
+    } else if (delta?.type === "thinking_delta") {
+      const chunk = typeof delta.thinking === "string" ? delta.thinking : "";
+      this.storeStreamedEntry(target, this.appendStreamedDelta(target, "thinking", chunk));
+    } else {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Append a streamed delta without rebuilding the block's string: chunks are
+   * buffered on the entry and joined once per flush. A delta whose type
+   * disagrees with the existing entry starts a fresh entry seeded with the old
+   * (materialized) value, preserving the previous behavior.
+   */
+  private appendStreamedDelta(
+    target: StreamBlockTarget,
+    type: "text" | "thinking",
+    chunk: string,
+  ): OrderedPartEntry {
+    const entry = target.blocks.get(target.blockIndex);
+    if (entry?.type === type) {
+      entry.parentTaskUseId ??= target.parentTaskUseId;
+      (entry.pendingChunks ??= []).push(chunk);
+      return entry;
+    }
+    if (entry) materializeEntryValue(entry);
+    return {
+      type,
+      value: `${entry?.value ?? ""}${chunk}`,
+      timestamp: entry?.timestamp ?? new Date().toISOString(),
+      messageUuid: target.messageKey,
+      parentTaskUseId: entry?.parentTaskUseId ?? target.parentTaskUseId,
+    };
+  }
+
+  private storeStreamedEntry(target: StreamBlockTarget, entry: OrderedPartEntry): void {
+    target.blocks.set(target.blockIndex, entry);
+    this.scheduleStreamedAssistantMessageFlush(target.row);
+  }
+
+  // Publish what streamed so far, so the row holding it precedes the steer's
+  // user row. The steer's response is a new model response, so it opens a
+  // row of its own; records of a response the steer interrupted still name
+  // that response's API message and stay on its row.
+  beginPostSteerScope(): void {
+    this.flushStreamedAssistantMessage();
+  }
+
+  clearFlushTimer(): void {
+    if (this.streamEventFlushTimer) {
+      clearTimeout(this.streamEventFlushTimer);
+      this.streamEventFlushTimer = null;
+    }
+  }
 }

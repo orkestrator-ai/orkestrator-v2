@@ -5,11 +5,12 @@ import { promises as fs } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { __testing as commandTesting } from "./commands.js";
+import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
-import { __testing as refreshTesting } from "./host-model-catalog-refresh.js";
-import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
+import { withShortLivedBridge, __testing as refreshTesting } from "./host-model-catalog-refresh.js";
 import { HOST_ACP_MODEL_FETCH_TIMEOUT_MS } from "./commands-servers.js";
+import { openCodeSdkFetch } from "./http-bridge-transport.js";
+import { spawnCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
 
 type ProbeSpawn = {
@@ -28,6 +29,9 @@ let spawns: ProbeSpawn[] = [];
 let servers: Server[] = [];
 let children: FakeChild[] = [];
 let nextPid = 510_000;
+/** The backend under test; its spawn delegates to `spawnImpl`. */
+let runtime: BackendRuntime;
+let spawnImpl: typeof spawnCommand = spawnCommand;
 
 function createFakeChild(): FakeChild {
   const emitter = new EventEmitter() as unknown as FakeChild;
@@ -63,7 +67,7 @@ async function listenAsBridge(
 }
 
 function stubBridgeSpawn(respond: (spawned: ProbeSpawn, child: FakeChild) => unknown): void {
-  commandTesting.setSpawnLocalServerCommand(((
+  spawnImpl = ((
     command: string,
     args: string[] = [],
     options: { cwd?: string; env?: NodeJS.ProcessEnv; detached?: boolean } = {},
@@ -80,7 +84,7 @@ function stubBridgeSpawn(respond: (spawned: ProbeSpawn, child: FakeChild) => unk
     children.push(child);
     void Promise.resolve(respond(spawned, child));
     return child;
-  }) as never);
+  }) as never;
 }
 
 function context(overrides: Partial<CommandContext> = {}): CommandContext {
@@ -90,6 +94,7 @@ function context(overrides: Partial<CommandContext> = {}): CommandContext {
     toolchainBinDir: path.join(appRoot, "bin"),
     storage,
     emit: () => undefined,
+    runtime,
     ...overrides,
   } as CommandContext;
 }
@@ -109,13 +114,18 @@ beforeEach(async () => {
   spawns = [];
   servers = [];
   children = [];
-  commandTesting.setTerminateProcessTree(
-    mock(async (child: { pid?: number }) => {
-      const target = children.find((candidate) => candidate.pid === child.pid);
-      if (target) target.exited = true;
-      return true;
-    }) as never,
-  );
+  spawnImpl = spawnCommand;
+  runtime = new BackendRuntime({
+    emit: () => undefined,
+    localServers: {
+      spawn: (...args) => spawnImpl(...args),
+      terminateProcessTree: mock(async (child: { pid?: number }) => {
+        const target = children.find((candidate) => candidate.pid === child.pid);
+        if (target) target.exited = true;
+        return true;
+      }) as never,
+    },
+  });
 });
 
 afterEach(async () => {
@@ -123,8 +133,8 @@ afterEach(async () => {
   delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
   delete process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
   for (const server of servers) await new Promise((resolve) => server.close(resolve));
-  commandTesting.resetLocalServerLifecycle();
-  setLocalServerShutdownRequested(false);
+  expect(runtime.localServers.hasEnvironmentOperations()).toBe(false);
+  runtime.shutdown();
   await fs.rm(appRoot, { recursive: true, force: true });
 });
 
@@ -195,7 +205,7 @@ describe("host model catalogue refresh", () => {
     expect(second).toEqual(first);
     expect(spawns).toHaveLength(1);
     expect(children[0]?.exited).toBe(true);
-    expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+    expect(runtime.localServers.processCount()).toBe(0);
   });
 
   test("rejects a non-live Codex catalogue without leaking the probe", async () => {
@@ -212,7 +222,7 @@ describe("host model catalogue refresh", () => {
       refreshTesting.createHostModelCatalogRefresher()(context(), "codex"),
     ).rejects.toThrow(/live app-server catalogue/);
     expect(children[0]?.exited).toBe(true);
-    expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+    expect(runtime.localServers.processCount()).toBe(0);
   });
 
   test("tears down a child that exits during startup", async () => {
@@ -224,12 +234,12 @@ describe("host model catalogue refresh", () => {
       refreshTesting.createHostModelCatalogRefresher()(context(), "codex"),
     ).rejects.toThrow(/exited before becoming healthy/);
     expect(children[0]?.exited).toBe(true);
-    expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+    expect(runtime.localServers.processCount()).toBe(0);
   });
 
   test("rechecks shutdown admission after registering the probe", async () => {
     stubBridgeSpawn(() => {
-      setLocalServerShutdownRequested(true);
+      runtime.localServers.closeAdmission();
     });
 
     await expect(
@@ -237,7 +247,7 @@ describe("host model catalogue refresh", () => {
     ).rejects.toThrow(/shutting down/);
     expect(spawns).toHaveLength(1);
     expect(children[0]?.exited).toBe(true);
-    expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+    expect(runtime.localServers.processCount()).toBe(0);
   });
 
   test("rejects Claude fallback data and applies agent-test host credentials", async () => {
@@ -250,18 +260,27 @@ describe("host model catalogue refresh", () => {
     );
     process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
     process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = configDir;
+    const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    const profileConfigDir = path.join(appRoot, "profile-claude");
+    process.env.CLAUDE_CONFIG_DIR = profileConfigDir;
     stubBridgeSpawn((spawned) => listenAsBridge(Number(spawned.env.PORT)));
     const refresh = refreshTesting.createHostModelCatalogRefresher({
       fetchClaudeCatalog: mock(async () => ({ source: "fallback", models: [] })) as never,
     });
 
-    await expect(
-      refresh(
-        context({ runtimeFlavor: "agent-test", credentialSources: new Set(["claude"]) }),
-        "claude",
-      ),
-    ).rejects.toThrow(/bundled catalogue/);
-    expect(spawns[0]?.env.CLAUDE_CONFIG_DIR).toBe(configDir);
+    try {
+      await expect(
+        refresh(
+          context({ runtimeFlavor: "agent-test", credentialSources: new Set(["claude"]) }),
+          "claude",
+        ),
+      ).rejects.toThrow(/bundled catalogue/);
+    } finally {
+      if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+    }
+    // Read for the login only: the probe keeps the profile's own config dir.
+    expect(spawns[0]?.env.CLAUDE_CONFIG_DIR).toBe(profileConfigDir);
     expect(spawns[0]?.env.ANTHROPIC_AUTH_TOKEN).toBe("host-oauth-token");
     expect(children[0]?.exited).toBe(true);
   });
@@ -291,7 +310,6 @@ describe("host model catalogue refresh", () => {
     expect(spawns[0]?.env.CURSOR_BRIDGE_AUTH_FILE).toBe(
       path.join(storage.getDataDir(), "cursor-sdk", "auth.json"),
     );
-    expect(spawns[0]?.env.CURSOR_BRIDGE_PROJECT_SETTINGS).toBe("0");
     expect(spawns[0]?.env.CURSOR_API_KEY).toBe("cursor-test-key");
     expect(spawns[0]?.env.ACP_PROVIDER).toBeUndefined();
   });
@@ -308,8 +326,9 @@ describe("host model catalogue refresh", () => {
     });
     const run = mock(async () => ({ stdout: "", stderr: "" }));
     stubBridgeSpawn((spawned) => listenAsBridge(Number(spawned.env.PORT)));
+    const createClient = mock(() => ({ provider: { list: providerList } }));
     const refresh = refreshTesting.createHostModelCatalogRefresher({
-      createOpenCodeClient: mock(() => ({ provider: { list: providerList } })) as never,
+      createOpenCodeClient: createClient as never,
       runCommand: run as never,
     });
 
@@ -319,6 +338,7 @@ describe("host model catalogue refresh", () => {
     if (result.agent !== "opencode") throw new Error("Expected an OpenCode catalogue");
     expect(result.models.map((model) => model.id)).toContain("openai/gpt-5");
     expect(providerList).toHaveBeenCalledTimes(1);
+    expect(createClient).toHaveBeenCalledWith(expect.objectContaining({ fetch: openCodeSdkFetch }));
     expect(run).toHaveBeenCalledWith(
       "opencode",
       ["models", "--refresh"],
@@ -338,6 +358,112 @@ describe("host model catalogue refresh", () => {
 
     await expect(refresh(context(), "opencode")).rejects.toThrow();
     expect(children[0]?.exited).toBe(true);
-    expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+    expect(runtime.localServers.processCount()).toBe(0);
   });
+});
+
+describe("OpenCode probe host-start ownership", () => {
+  test.each(["catalog-refresh", "provider-sign-in"] as const)(
+    "%s releases its turn when spawn throws",
+    async (purpose) => {
+      spawnImpl = () => {
+        throw new Error("spawn refused");
+      };
+      await expect(
+        withShortLivedBridge(
+          runtime.localServers,
+          {
+            kind: "opencode",
+            purpose,
+            command: "opencode",
+            args: [],
+            cwd: appRoot,
+            env: {},
+            token: "fixture-token",
+            headers: {},
+          },
+          async () => undefined,
+        ),
+      ).rejects.toThrow("spawn refused");
+      const release = await runtime.localServers.openCodeHostStart.acquire();
+      release();
+      expect(runtime.localServers.processCount()).toBe(0);
+    },
+  );
+
+  test.each(["catalog-refresh", "provider-sign-in"] as const)(
+    "%s releases its turn and child when shutdown begins during spawn",
+    async (purpose) => {
+      stubBridgeSpawn(() => runtime.localServers.closeAdmission());
+      const read = mock(async () => undefined);
+      await expect(
+        withShortLivedBridge(
+          runtime.localServers,
+          {
+            kind: "opencode",
+            purpose,
+            command: "opencode",
+            args: [],
+            cwd: appRoot,
+            env: {},
+            token: "fixture-token",
+            headers: {},
+          },
+          read,
+        ),
+      ).rejects.toThrow("shutting down");
+      expect(spawns).toHaveLength(1);
+      expect(children[0]?.exited).toBe(true);
+      expect(read).not.toHaveBeenCalled();
+      expect(runtime.localServers.processCount()).toBe(0);
+      const release = await runtime.localServers.openCodeHostStart.acquire();
+      release();
+    },
+  );
+
+  test.each(["catalog-refresh", "provider-sign-in"] as const)(
+    "%s refuses a spawn and releases its queued turn after shutdown",
+    async (purpose) => {
+      const release = await runtime.localServers.openCodeHostStart.acquire();
+      let queued = false;
+      const spawn = mock(() => {
+        throw new Error("must not spawn");
+      });
+      spawnImpl = spawn;
+      const read = mock(async () => undefined);
+      const probe = withShortLivedBridge(
+        runtime.localServers,
+        {
+          kind: "opencode",
+          purpose,
+          command: "opencode",
+          args: () => {
+            queued = true;
+            return [];
+          },
+          cwd: appRoot,
+          env: {},
+          token: "fixture-token",
+          headers: {},
+        },
+        read,
+      );
+      const outcome = probe.catch((error: unknown) => error);
+      try {
+        for (let attempt = 0; !queued; attempt += 1) {
+          if (attempt === 100) throw new Error("Probe did not reach the host queue");
+          await Bun.sleep(5);
+        }
+        runtime.localServers.closeAdmission();
+      } finally {
+        release();
+      }
+      expect(((await outcome) as Error).message).toContain("shutting down");
+      expect(spawn).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
+      const releaseNext = await runtime.localServers.openCodeHostStart.acquire();
+      releaseNext();
+      expect(runtime.localServers.processCount()).toBe(0);
+    },
+  );
 });

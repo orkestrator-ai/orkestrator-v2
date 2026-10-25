@@ -59,8 +59,14 @@ import {
 import type { AppConfig, Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 import type { AgentToolConnection } from "./agent-tools.js";
+import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
+import {
+  WorkflowTranscriptArtifacts,
+  type ArtifactLedgerSource,
+} from "./workflow-transcript-artifacts.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
+import { ProviderUnreachableError } from "./agent-provider-contract.js";
 import {
   AmbiguousPromptDispatchError,
   ProviderDispatchPreparationError,
@@ -106,7 +112,11 @@ import {
   stalledMinutes,
 } from "./multi-review-progress.js";
 import { readTranscriptProgressSample } from "./transcript-progress.js";
-import { readMultiReviewStepTranscript } from "./multi-review-step-transcript.js";
+import {
+  readMultiReviewStepTranscript,
+  readMultiReviewStepToolDetails,
+  type StepTranscriptHost,
+} from "./multi-review-step-transcript.js";
 import {
   clearReviewerAdmission,
   compactReviewerAdmissionQueue,
@@ -130,6 +140,7 @@ import {
 } from "./review-evidence-permits.js";
 import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
 import { WorkflowDueScheduler, stableJitterMs } from "./multi-review-scheduler.js";
+import { systemRecurringTimers } from "./recurring-scheduler.js";
 import {
   isSupervisedPhase,
   multiReviewDiscovery,
@@ -168,6 +179,7 @@ import {
   captureReviewWorktreeSnapshot,
   commitProgressObservation,
   consolidationReports,
+  consolidationOverlap,
   deriveConsolidatedProvenance,
   consolidationResultContext,
   parseStructuredReportResult,
@@ -189,6 +201,7 @@ import {
   type AutoPrLaunchOutcome,
   type InteractiveFixTurnOutcome,
 } from "./multi-review-auto-pr.js";
+import type { ReviewPackageVerification } from "./commands-review.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 /** Structured reports need a mutation boundary without provider planning behavior. */
@@ -419,6 +432,7 @@ function resetReviewerForRestart(
   delete reviewer.progressDigest;
   delete reviewer.stalledSince;
   delete reviewer.tokenCount;
+  delete reviewer.cacheReadTokens;
   delete reviewer.usageFinalizationPolls;
   delete reviewer.report;
   delete reviewer.error;
@@ -476,11 +490,6 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
   observationIntervalMs?: number;
   /** Period of the authoritative storage scan that rediscovers workflows. */
   reconcileIntervalMs?: number;
-  /**
-   * False restores the fixed interval scan with catch-up passes. Kept as a
-   * rollback gate while the due-time scheduler soaks.
-   */
-  adaptiveScheduling?: boolean;
   addressDispatchRetryMs?: number;
   maxAddressDispatchAttempts?: number;
   provider?: (
@@ -503,6 +512,10 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
    * so the stage fails now instead of idling until its result poll gives up.
    */
   assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
+  /** Reviewer turns' transcript-artifact grants (`workflow-artifact-turns.ts`). */
+  artifactDispatch?: ArtifactTurnDispatch;
+  /** Publication ledger; reviewer transcripts place each publication beside its call. */
+  artifactLedger?: ArtifactLedgerSource;
   /**
    * Delivers the durable interactive handoff after {@link address} records it.
    * The supervisor, not a mounted renderer, retries this callback until it
@@ -537,16 +550,8 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
     workflow: MultiReviewWorkflow,
     session: MultiReviewFixSession,
   ) => Promise<void>;
-  /**
-   * Reviewer fan-out concurrency. Clamped by the shared runner; set every limit
-   * to `1` to restore strictly serial admission and observation.
-   */
+  /** Reviewer fan-out concurrency; clamped by the shared fan-out runner. */
   reviewFanoutConcurrency?: Partial<ReviewFanoutConcurrency>;
-  /**
-   * When false, every reviewer admission re-verifies the review package, as
-   * before evidence permits existed. Kept as a rollback gate for one release.
-   */
-  evidencePermits?: boolean;
   /** Content-free efficiency measurements (tests and benchmarks). */
   efficiency?: MultiReviewEfficiencyObserver;
 }
@@ -580,14 +585,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * across retries and backend restarts.
    */
   private readonly foregroundAddressDispatches = new Set<string>();
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private renewTimer: ReturnType<typeof setInterval> | null = null;
-  private tickRun: { pending: boolean; promise: Promise<void> } | null = null;
+  /** The due scheduler's lease renewal; the keyed driver runs its own. */
+  private renewTimer: unknown = null;
   private readonly scheduler: WorkflowDueScheduler;
   private stopped = false;
   /**
    * Selected once (step 08): the keyed driver, else the adaptive due
-   * scheduler (its rollback), else the legacy tick. Never more than one.
+   * scheduler (its rollback). Never both.
    */
   private readonly keyed: boolean;
   private supervisor: KeyedWorkflowSupervisor<MultiReviewObligation> | null = null;
@@ -599,11 +603,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   /** Findings live reviewers reported through `report_finding`, until a pass collects them. */
   private readonly provisionalFindings: ProvisionalFindingInbox;
 
+  private readonly transcriptArtifacts: WorkflowTranscriptArtifacts;
+
   constructor(
     private readonly storage: StorageService,
     private readonly invoke: CommandInvoker,
     private readonly options: MultiReviewServiceOptions = {},
   ) {
+    this.transcriptArtifacts = new WorkflowTranscriptArtifacts(options.artifactLedger);
     this.progress = new MultiReviewProgressTracker(
       options.progressProbeIntervalMs ?? DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
     );
@@ -614,22 +621,27 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       // Collected by the workflow's next pass, like an accepted result is.
       wake: (environmentId) => this.wakeEnvironment(environmentId, "result-accepted"),
     });
-    this.keyed =
-      options.keyedScheduling ??
-      (options.adaptiveScheduling !== false && keyedSchedulingEnabled("multi-review"));
+    this.keyed = options.keyedScheduling ?? keyedSchedulingEnabled("multi-review");
     // The spacing is the slowest cadence these counts were designed for (the
     // 3 s observation interval), so the elapsed bound never shortens a grace.
     this.pollGate = new ElapsedPollGate(
       options.observationIntervalMs ?? options.pollIntervalMs ?? DEFAULT_OBSERVATION_MS,
       options.schedulerClock ? { now: options.schedulerClock.now } : {},
     );
+    const schedulerNow = options.schedulerClock?.now ?? Date.now;
     this.scheduler = new WorkflowDueScheduler({
       run: (workflowId) => this.runScheduled(workflowId),
-      nextDueAt: (workflowId) => this.nextDueAt(workflowId),
+      nextDueAt: async (workflowId) => {
+        const delayMs = await this.nextDelayMs(workflowId);
+        return delayMs === undefined ? undefined : schedulerNow() + delayMs;
+      },
       discover: () => this.discoverSupervisedWorkflows(),
       reconcileIntervalMs:
         this.options.reconcileIntervalMs ?? this.options.pollIntervalMs ?? DEFAULT_RECONCILE_MS,
       maxConcurrent: MAX_CONCURRENT_WORKFLOW_PASSES,
+      ...(options.schedulerClock
+        ? { now: options.schedulerClock.now, timers: options.schedulerClock.timers }
+        : {}),
       onPass: ({ queueDelayMs, durationMs }) =>
         recordEfficiency(this.options.efficiency, {
           owner: "multi-review",
@@ -642,10 +654,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   async init(): Promise<void> {
     this.stopped = false;
-    if (this.timer) clearInterval(this.timer);
-    if (this.renewTimer) clearInterval(this.renewTimer);
-    this.timer = null;
-    this.renewTimer = null;
+    this.stopLeaseRenewal();
     // The workflow store is authoritative across backend restarts. Restore the
     // environment projection before the renderer can mistake an active review
     // for completed work, and retire a stale working source left by a workflow
@@ -673,32 +682,35 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       return;
     }
     if (this.options.autoAdvance !== false) {
-      if (this.options.adaptiveScheduling === false) {
-        this.timer = setInterval(
-          () => void this.requestTick(),
-          this.options.pollIntervalMs ?? DEFAULT_POLL_MS,
-        );
-        this.timer.unref?.();
-        void this.requestTick();
-      } else {
-        // The first reconciliation scan runs immediately and rebuilds every
-        // due time from storage; nothing about scheduling survives a restart.
-        this.scheduler.start();
-      }
-      this.renewTimer = setInterval(
-        () => void this.renewLeases(),
-        this.options.controllerRenewMs ?? CONTROLLER_RENEW_MS,
-      );
-      this.renewTimer.unref?.();
+      // The first reconciliation scan runs immediately and rebuilds every
+      // due time from storage; nothing about scheduling survives a restart.
+      this.scheduler.start();
+      this.armLeaseRenewal();
     }
+  }
+
+  /** A fixed-period renewal on the scheduler's clock, re-armed after each run. */
+  private armLeaseRenewal(): void {
+    const timers = this.options.schedulerClock?.timers ?? systemRecurringTimers;
+    const handle = timers.set(() => {
+      if (this.renewTimer !== handle) return;
+      void this.renewLeases().finally(() => {
+        if (this.renewTimer === handle && !this.stopped) this.armLeaseRenewal();
+      });
+    }, this.options.controllerRenewMs ?? CONTROLLER_RENEW_MS);
+    this.renewTimer = handle;
+  }
+
+  private stopLeaseRenewal(): void {
+    if (this.renewTimer !== null) {
+      (this.options.schedulerClock?.timers ?? systemRecurringTimers).clear(this.renewTimer);
+    }
+    this.renewTimer = null;
   }
 
   async shutdown(): Promise<void> {
     this.stopped = true;
-    if (this.timer) clearInterval(this.timer);
-    if (this.renewTimer) clearInterval(this.renewTimer);
-    this.timer = null;
-    this.renewTimer = null;
+    this.stopLeaseRenewal();
     this.supervisor?.stop();
     this.supervisor = null;
     this.unsubscribeStorage?.();
@@ -707,7 +719,6 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     await Promise.allSettled([
       ...this.locks.values(),
       ...[...this.scheduledRuns.values()].map((entry) => entry.promise),
-      ...(this.tickRun ? [this.tickRun.promise] : []),
     ]);
     await Promise.allSettled([...this.providers.values()].map((provider) => provider.dispose?.()));
     this.providers.clear();
@@ -758,6 +769,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
     let transcript: ReviewerTranscriptRead | undefined;
     const readSessionId = reviewer.providerSessionId;
+    // The reviewer session's own conversation owns its artifact publications.
+    const conversationKey = reviewer.sessionKey ?? reviewerSessionKey(workflow.id, reviewer.id);
+    const ledgerRevision = this.transcriptArtifacts.revision(
+      workflow.environmentId,
+      conversationKey,
+    );
     if (readSessionId) {
       const key = this.providerKey(workflow, reviewer);
       this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
@@ -774,20 +791,21 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         const started = Date.now();
         const release = retainProvider(provider);
         try {
-          transcript = await readReviewerTranscript(provider, readSessionId, knownSourceToken, {
-            key: reviewerHistoryKey(workflow.id, reviewer.id),
-          });
+          transcript = await readReviewerTranscript(
+            provider,
+            readSessionId,
+            knownSourceToken,
+            { key: reviewerHistoryKey(workflow.id, reviewer.id) },
+            undefined,
+            ledgerRevision > 0 ? `artifacts-${ledgerRevision}` : undefined,
+          );
         } finally {
           release();
         }
         recordEfficiency(this.options.efficiency, {
           owner: "multi-review",
           operation:
-            transcript.kind === "unchanged"
-              ? "transcript.ui_unchanged"
-              : transcript.fallback
-                ? "transcript.ui_fallback"
-                : "transcript.ui_read",
+            transcript.kind === "unchanged" ? "transcript.ui_unchanged" : "transcript.ui_read",
           phase: "ui",
           bytes: transcript.kind === "snapshot" ? transcript.bytes : 0,
           elapsedMs: Date.now() - started,
@@ -801,6 +819,17 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       // the next poll reads the new session.
       ({ workflow, reviewer } = await loadReviewer());
       if (reviewer.providerSessionId !== readSessionId) transcript = undefined;
+    }
+    if (transcript?.kind === "snapshot") {
+      const place = (rows: unknown[]) =>
+        this.transcriptArtifacts.place(workflow.environmentId, conversationKey, rows);
+      transcript = {
+        ...transcript,
+        messages: place(transcript.messages),
+        ...(transcript.revisedMessages
+          ? { revisedMessages: place(transcript.revisedMessages) }
+          : {}),
+      };
     }
 
     return {
@@ -848,49 +877,56 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     knownSourceToken?: string,
   ): Promise<MultiReviewStepTranscript> {
     return readMultiReviewStepTranscript(
-      {
-        loadWorkflow: async (id) => {
-          const record = await this.storage.getMultiReviewWorkflow(id);
-          if (!record || !isMultiReviewWorkflow(record.snapshot)) {
-            throw new Error(`Multi review workflow not found: ${id}`);
-          }
-          return record.snapshot;
-        },
-        // A read holds the provider like a reviewer read does, and never
-        // registers the session: an interactive Fix belongs to its native tab.
-        withProvider: async (workflow, session, read) => {
-          const key = this.providerKey(workflow, session);
-          this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
-          try {
-            const provider = await this.providerInstance(workflow, session);
-            const release = retainProvider(provider);
-            try {
-              return await read(provider);
-            } finally {
-              release();
-            }
-          } finally {
-            await this.releaseProviderReaderByKey(key);
-          }
-        },
-        recordRead: (read, elapsedMs) =>
-          recordEfficiency(this.options.efficiency, {
-            owner: "multi-review",
-            operation:
-              read.kind === "unchanged"
-                ? "transcript.ui_unchanged"
-                : read.fallback
-                  ? "transcript.ui_fallback"
-                  : "transcript.ui_read",
-            phase: "ui",
-            bytes: read.kind === "snapshot" ? read.bytes : 0,
-            elapsedMs,
-          }),
-      },
+      this.stepTranscriptHost(),
       workflowId,
       step,
       knownSourceToken,
     );
+  }
+
+  async stepToolDetails(
+    workflowId: string,
+    step: MultiReviewStepKind,
+    detailRef: string,
+  ): Promise<NativeAgentToolDetails> {
+    return readMultiReviewStepToolDetails(this.stepTranscriptHost(), workflowId, step, detailRef);
+  }
+
+  private stepTranscriptHost(): StepTranscriptHost {
+    return {
+      loadWorkflow: async (id) => {
+        const record = await this.storage.getMultiReviewWorkflow(id);
+        if (!record || !isMultiReviewWorkflow(record.snapshot)) {
+          throw new Error(`Multi review workflow not found: ${id}`);
+        }
+        return record.snapshot;
+      },
+      // A read holds the provider like a reviewer read does, and never
+      // registers the session: an interactive Fix belongs to its native tab.
+      withProvider: async (workflow, session, read) => {
+        const key = this.providerKey(workflow, session);
+        this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
+        try {
+          const provider = await this.providerInstance(workflow, session);
+          const release = retainProvider(provider);
+          try {
+            return await read(provider);
+          } finally {
+            release();
+          }
+        } finally {
+          await this.releaseProviderReaderByKey(key);
+        }
+      },
+      recordRead: (read, elapsedMs) =>
+        recordEfficiency(this.options.efficiency, {
+          owner: "multi-review",
+          operation: read.kind === "unchanged" ? "transcript.ui_unchanged" : "transcript.ui_read",
+          phase: "ui",
+          bytes: read.kind === "snapshot" ? read.bytes : 0,
+          elapsedMs,
+        }),
+    };
   }
 
   /**
@@ -1000,7 +1036,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     if (page.kind === "expired") return { status: "expired", reason: page.reason };
     return {
       status: "page",
-      messages: page.messages,
+      messages: this.transcriptArtifacts.place(
+        workflow.environmentId,
+        reviewer.sessionKey ?? reviewerSessionKey(workflow.id, reviewer.id),
+        page.messages,
+      ),
       historyEpoch: page.historyEpoch,
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
       complete: page.complete,
@@ -1281,6 +1321,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           delete reviewer.progressDigest;
           delete reviewer.stalledSince;
           delete reviewer.tokenCount;
+          delete reviewer.cacheReadTokens;
           delete reviewer.usageFinalizationPolls;
           delete reviewer.startedAt;
           delete reviewer.completedAt;
@@ -1311,6 +1352,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         clearReviewSession(workflow);
         delete workflow.activeRequest;
         delete workflow.consolidatedReport;
+        delete workflow.consolidationOverlap;
         delete workflow.fixResult;
         delete workflow.addressPromptPending;
         delete workflow.addressPromptAttempts;
@@ -1381,6 +1423,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             delete reviewer.progressDigest;
             delete reviewer.stalledSince;
             delete reviewer.tokenCount;
+            delete reviewer.cacheReadTokens;
             delete reviewer.usageFinalizationPolls;
             delete reviewer.completedAt;
           }
@@ -1580,6 +1623,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         clearReviewSession(workflow);
         delete workflow.activeRequest;
         delete workflow.consolidatedReport;
+        delete workflow.consolidationOverlap;
         delete workflow.fixResult;
         delete workflow.stepRuntimes?.consolidate;
         delete workflow.stepRuntimes?.fix;
@@ -1772,6 +1816,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           }
           workflow.restartFixAfterConsolidation = shouldReplayFix || undefined;
           delete workflow.consolidatedReport;
+          delete workflow.consolidationOverlap;
         } else {
           delete workflow.restartFixAfterConsolidation;
         }
@@ -2147,10 +2192,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           this.passTriggers.delete(pass.key);
         }
       },
-      nextDelayMs: async (key) => {
-        const dueAt = await this.nextDueAt(key);
-        return dueAt === undefined ? null : Math.max(0, dueAt - Date.now());
-      },
+      nextDelayMs: async (key) => (await this.nextDelayMs(key)) ?? null,
       admission: this.options.workflowAdmission ?? null,
       ...(this.options.schedulerClock
         ? { now: this.options.schedulerClock.now, timers: this.options.schedulerClock.timers }
@@ -2209,11 +2251,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * A timer-driven pass. Unlike {@link advanceNow} it joins a pass already in
    * progress instead of requesting another: a timer that fires during a slow
    * pass is not evidence that anything changed.
-   */
-  /**
+   *
    * Under the adaptive scheduler one `multi-review-tick` attempt is either a
    * reconciliation scan or one workflow's due pass; both are observed so the
-   * cost stays comparable with the legacy whole-service tick.
+   * cost stays comparable with the keyed driver's.
    */
   private runScheduled(workflowId: string): Promise<void> {
     recurringWorkMetrics.requested("multi-review-tick");
@@ -2245,8 +2286,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     });
   }
 
-  /** Next pass for one workflow, computed from the state its last pass left. */
-  private async nextDueAt(workflowId: string): Promise<number | undefined> {
+  /**
+   * Delay until the next pass for one workflow, computed from the state its
+   * last pass left. Relative, so each driver adds it to its own clock; the
+   * retry stamps it compares against are wall-clock.
+   */
+  private async nextDelayMs(workflowId: string): Promise<number | undefined> {
     if (this.stopped) return undefined;
     const record = await this.storage.getMultiReviewWorkflow(workflowId);
     if (!record || !isMultiReviewWorkflow(record.snapshot)) return undefined;
@@ -2259,58 +2304,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       const retryAt = needsAutoPrLaunch(workflow)
         ? this.autoPrRetryAt.get(workflowId)
         : this.addressDispatchRetryAt.get(workflowId);
-      return retryAt !== undefined && retryAt > now ? retryAt : now + fastMs;
+      return retryAt !== undefined && retryAt > now ? retryAt - now : fastMs;
     }
     const observeMs =
       this.options.observationIntervalMs ?? this.options.pollIntervalMs ?? DEFAULT_OBSERVATION_MS;
     // Spread workflows restored together across a third of the interval.
-    return now + observeMs + stableJitterMs(workflowId, observeMs >= 1_000 ? observeMs / 3 : 0);
-  }
-
-  private requestTick(): Promise<void> {
-    recurringWorkMetrics.requested("multi-review-tick");
-    if (this.tickRun) {
-      recurringWorkMetrics.coalesced("multi-review-tick");
-      this.tickRun.pending = true;
-      return this.tickRun.promise;
-    }
-    const run = { pending: false, promise: Promise.resolve() };
-    run.promise = (async () => {
-      do {
-        run.pending = false;
-        await recurringWorkMetrics.observe("multi-review-tick", () => this.tick());
-      } while (run.pending && !this.stopped);
-    })().finally(() => {
-      if (this.tickRun === run) this.tickRun = null;
-    });
-    this.tickRun = run;
-    return run.promise;
-  }
-
-  private async tick(): Promise<void> {
-    if (this.stopped) return;
-    const records = await this.storage.listAllMultiReviewWorkflows();
-    recurringWorkMetrics.work("record-scanned", records.length);
-    await Promise.all(
-      records.flatMap((record) => {
-        if (!isMultiReviewWorkflow(record.snapshot)) return [];
-        const workflow = record.snapshot;
-        if (
-          !(
-            isSupervisedPhase(workflow.phase) ||
-            needsPausedStopReconciliation(workflow) ||
-            needsInteractiveFixObservation(workflow) ||
-            needsAutoPrLaunch(workflow) ||
-            (workflow.pendingResultConsumptions?.length ?? 0) > 0 ||
-            (workflow.addressPromptPending === true && this.options.dispatchAddressPrompt)
-          )
-        ) {
-          return [];
-        }
-        recurringWorkMetrics.work("record-selected");
-        return [this.runLocked(record.id)];
-      }),
-    );
+    return observeMs + stableJitterMs(workflowId, observeMs >= 1_000 ? observeMs / 3 : 0);
   }
 
   private runLocked(workflowId: string): Promise<void> {
@@ -3356,6 +3355,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       executionPolicy: () => this.executionPolicy(workflow),
       agentMcp: (selection, resultKey) =>
         this.workflowAgentMcp(workflow, resultKey, selection.agent, "Multi Review reviewer"),
+      ...(this.options.artifactDispatch
+        ? {
+            artifactTurns: {
+              dispatch: this.options.artifactDispatch,
+              environmentId: workflow.environmentId,
+              projectId: workflow.projectId,
+            },
+          }
+        : {}),
       ...(this.options.workflowResults
         ? {
             supportsToolResult: (selection: MultiReviewModelSelection) =>
@@ -3406,17 +3414,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       ...(workflow.reviewPackage
         ? {
             beforeAdmission: () => this.verifyReviewEvidence(workflow, token, "fanout"),
-            reviewerPrompt: async (index: number, count: number) => {
-              if (this.options.evidencePermits === false) {
-                await this.assertReviewPackageIntegrity(workflow, token);
-              }
-              return createPackagedMultiReviewerPrompt({
+            reviewerPrompt: async (index: number, count: number) =>
+              createPackagedMultiReviewerPrompt({
                 reviewPackage: workflow.reviewPackage!,
                 reviewInstruction: workflow.reviewInstruction,
                 reviewerNumber: index + 1,
                 reviewerCount: count,
-              });
-            },
+              }),
           }
         : {}),
       reviewSnapshot: async () =>
@@ -3692,7 +3696,34 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       : workflow.phase === "consolidating"
         ? consolidationModel(workflow)
         : workflow.fixModel;
-    const provider = await this.provider(workflow, selection);
+    let provider: BuildPipelineProvider;
+    try {
+      provider = await this.provider(workflow, selection);
+    } catch (error) {
+      const request = workflow.activeRequest;
+      const session = coordinating ? reviewSession(workflow) : workflow.fixSession;
+      if (
+        session &&
+        request &&
+        (request.state === "sent" || request.state === "dispatching") &&
+        (error instanceof ProviderUnreachableError ||
+          (typeof error === "object" &&
+            error !== null &&
+            "retryable" in error &&
+            error.retryable === true))
+      ) {
+        await this.recordUnavailableStep(
+          workflow,
+          token,
+          request,
+          stepModelLabel(request.kind),
+          selection.agent,
+          error,
+        );
+        return;
+      }
+      throw error;
+    }
     await this.assertFence(workflow.id, token);
     let session = coordinating ? reviewSession(workflow) : workflow.fixSession;
     // Consolidation only merges the reviewer reports, so it gains nothing from
@@ -3956,21 +3987,71 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.save(workflow, token);
     }
     if (request.state === "dispatching") {
+      // Only this request's acceptance can settle a recovered dispatch intent.
+      // An idle/error session may still describe its superseded request.
+      const acceptance = await provider
+        .dispatchStatus?.(session.providerSessionId, request.requestId)
+        .catch(() => "unknown" as const);
+      await this.assertFence(workflow.id, token);
+      if (acceptance !== "dispatched") {
+        const scope = `${request.requestId}\0idle`;
+        if (!this.countPoll(workflow.id, scope)) return;
+        request.idleResultPolls = Math.min(
+          (request.idleResultPolls ?? 0) + 1,
+          MAX_IDLE_RESULT_POLLS,
+        );
+        await this.save(workflow, token);
+        if (
+          request.idleResultPolls >= MAX_IDLE_RESULT_POLLS ||
+          this.pollsExhausted(workflow.id, scope, request.idleResultPolls, MAX_IDLE_RESULT_POLLS)
+        ) {
+          throw new Error(`The ${modelLabel} dispatch acceptance could not be confirmed`);
+        }
+        return;
+      }
+      delete request.idleResultPolls;
+      this.pollGate.clear(`${workflow.id}\0${request.requestId}\0idle`);
       request.state = "sent";
       delete request.continuationPrompt;
       await this.save(workflow, token);
     }
-    await this.resolveUnattendedInteractions(workflow, token, provider, session.providerSessionId);
     // Read as data so the terminal-failure branch below fires whether or not
     // the provider explained itself, and can report the explanation when it did.
-    const observation = await readProviderStatus(
-      provider,
-      session.providerSessionId,
-      request.requestId,
-    );
+    let observation: Awaited<ReturnType<typeof readProviderStatus>>;
+    try {
+      await this.resolveUnattendedInteractions(
+        workflow,
+        token,
+        provider,
+        session.providerSessionId,
+      );
+      observation = await readProviderStatus(
+        provider,
+        session.providerSessionId,
+        request.requestId,
+      );
+    } catch (error) {
+      if (!(error instanceof ProviderUnreachableError)) throw error;
+      // A bridge that cannot be reached is an observation fault, not the
+      // step's, exactly as for a reviewer: keep the request and drop the
+      // cached connection, so the next pass reconnects (which restarts a local
+      // bridge that died) and reads the turn's own outcome, a restart
+      // interruption included. The idle-poll bound still ends a bridge that
+      // never comes back.
+      await this.evictUnreachableProvider(workflow, selection, provider);
+      await this.recordUnavailableStep(
+        workflow,
+        token,
+        request,
+        modelLabel,
+        selection.agent,
+        error,
+      );
+      return;
+    }
     const { status, error: statusDetail } = observation;
     await this.assertFence(workflow.id, token);
-    if (status === "idle" && observation.turnSettled === false) return;
+    if ((status === "idle" || status === "error") && observation.turnSettled === false) return;
     if (status === "running") {
       if (request.idleResultPolls !== undefined || request.usageFinalizationPolls !== undefined) {
         delete request.idleResultPolls;
@@ -4242,6 +4323,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         return;
       }
       workflow.consolidatedReport = provenance.report;
+      workflow.consolidationOverlap = consolidationOverlap(parsed.data, workflow.reviewers);
       if (workflow.restartFixAfterConsolidation) {
         delete workflow.restartFixAfterConsolidation;
         queueRestartedFix(workflow);
@@ -4368,6 +4450,30 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.options.workflowResults?.close(previousRequestId, "superseded");
     }
     await this.save(workflow, token);
+  }
+
+  /** Startup backoff and failed status reads spend the same persisted budget. */
+  private async recordUnavailableStep(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    request: NonNullable<MultiReviewWorkflow["activeRequest"]>,
+    modelLabel: string,
+    agent: string,
+    error: unknown,
+  ): Promise<void> {
+    const scope = `${request.requestId}\0idle`;
+    if (!this.countPoll(workflow.id, scope)) return;
+    request.idleResultPolls = Math.min((request.idleResultPolls ?? 0) + 1, MAX_IDLE_RESULT_POLLS);
+    await this.save(workflow, token);
+    if (
+      request.idleResultPolls >= MAX_IDLE_RESULT_POLLS ||
+      this.pollsExhausted(workflow.id, scope, request.idleResultPolls, MAX_IDLE_RESULT_POLLS)
+    ) {
+      throw new Error(
+        `The ${modelLabel} model's ${agent} provider stayed unreachable: ${errorMessage(error)}`,
+        { cause: error },
+      );
+    }
   }
 
   /**
@@ -4693,12 +4799,6 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   ): Promise<void> {
     const reviewPackage = workflow.reviewPackage;
     if (!reviewPackage) return;
-    if (this.options.evidencePermits === false) {
-      // Rollback gate: the legacy path verifies inside every reviewer prompt,
-      // so fan-out admission itself has nothing to add.
-      if (phase === "consolidation") await this.assertReviewPackageIntegrity(workflow, token);
-      return;
-    }
     try {
       const outcome = await this.evidencePermits.ensure(
         workflow.id,
@@ -4731,7 +4831,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     token: string,
   ): Promise<void> {
     const verifyStarted = Date.now();
-    const verification = await this.invoke<{ valid: boolean; reason?: string }>(
+    const verification = await this.invoke<ReviewPackageVerification>(
       "verify_looped_review_package",
       {
         environmentId: workflow.environmentId,
@@ -4743,7 +4843,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       operation: "evidence.verify",
       phase: efficiencyPhase(workflow.phase),
       outcome: verification.valid ? "success" : "failed",
-      bytes: workflow.reviewPackage?.bytes,
+      // The package and every validation artifact it references were hashed.
+      bytes: (workflow.reviewPackage?.bytes ?? 0) + (verification.artifactBytes ?? 0),
+      count: verification.artifacts,
       elapsedMs: Date.now() - verifyStarted,
     });
     await this.assertFence(workflow.id, token);

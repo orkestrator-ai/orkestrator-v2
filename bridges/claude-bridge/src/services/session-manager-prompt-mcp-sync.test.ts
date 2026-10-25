@@ -2,8 +2,8 @@ import { describe, expect, mock, test } from "bun:test";
 import type { HookCallback, HookInput, McpServerStatus } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeQueryControl } from "../types/index.js";
 import type { SdkMcpServersConfig } from "./mcp-config.js";
+import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
 import {
-  claudeMcpToolPrefix,
   createClaudeRuntimeMcp,
   createStaleMcpServerHook,
   type McpSyncRuntime,
@@ -252,6 +252,7 @@ describe("refusing a stale server's tools", () => {
   test("the prefix follows the CLI's own tool naming", () => {
     expect(claudeMcpToolPrefix("my.server x")).toBe("mcp__my_server_x__");
     expect(claudeMcpToolPrefix("a-b_c")).toBe("mcp__a-b_c__");
+    expect(claudeMcpToolPrefix("claude.ai Google Drive")).toBe("mcp__claude_ai_Google_Drive__");
   });
 
   test("overlapping declared prefixes and normalization collisions cannot bypass refusal", () => {
@@ -320,9 +321,16 @@ describe("refusing a stale server's tools", () => {
     expect(await call("mcp__alpha__probe")).toEqual({});
     // The runtime's state is read at each call, not captured at launch.
     mcp.stale.add("alpha");
-    expect(await call("mcp__alpha__probe")).toMatchObject({
+    const denied = await call("mcp__alpha__probe");
+    expect(denied).toMatchObject({
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" },
     });
+    // A warm CLI holds the server between messages, not only background work.
+    const reason = (denied as { hookSpecificOutput?: { permissionDecisionReason?: string } })
+      .hookSpecificOutput?.permissionDecisionReason;
+    expect(reason).toContain('"alpha"');
+    expect(reason).toContain("idle period");
+    expect(reason).not.toContain("background work");
     expect(await call("mcp__keep__probe")).toEqual({});
   });
 });

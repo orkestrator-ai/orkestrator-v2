@@ -5,14 +5,23 @@
  */
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 
 import { requestGlobalSettings } from "./settings-navigation";
 
 export interface McpSettingsIntent {
   provider?: AgentPlatform;
   environmentId?: string;
-  /** Exact native server name, used only to highlight matching rows. */
+  /**
+   * Exact configuration key of the live server (its display name may differ).
+   * The section joins it to the saved row that session loads (`joinLiveMcpServer`) only within this
+   * intent's provider and environment.
+   */
   serverName?: string;
+  /** Layer the live session reports the server was loaded from. */
+  serverScope?: NativeAgentMcpServer["scope"];
+  /** The live session the link came from, to show its apply outcome. */
+  logicalSessionKey?: string;
 }
 
 export const MCP_SETTINGS_INTENT_EVENT = "orkestrator:mcp-settings-intent";
@@ -29,11 +38,19 @@ export function requestMcpServerSettings(intent: McpSettingsIntent = {}): void {
   requestGlobalSettings("mcp-servers");
 }
 
-/** Take the intent recorded before the section mounted, once. */
-export function consumeMcpSettingsIntent(): McpSettingsIntent | null {
-  const intent = pending;
-  pending = null;
-  return intent;
+/**
+ * The intent recorded before the section mounted, left in place. Reading it is
+ * safe during render: a render React discards and retries (the settings page
+ * is lazy, so its first mount can suspend) reads the same intent again. The
+ * section takes it with {@link settleMcpSettingsIntent} once it has mounted.
+ */
+export function peekMcpSettingsIntent(): McpSettingsIntent | null {
+  return pending;
+}
+
+/** Drop `intent` after a mounted section applied it; a newer request is kept. */
+export function settleMcpSettingsIntent(intent: McpSettingsIntent | null): void {
+  if (intent && pending === intent) pending = null;
 }
 
 export function onMcpSettingsIntent(listener: (intent: McpSettingsIntent) => void): () => void {

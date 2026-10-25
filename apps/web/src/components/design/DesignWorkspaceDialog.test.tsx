@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test, type Mock } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { DesignCapabilities } from "@orkestrator/protocol/design-operations";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
+import { toast } from "sonner";
+import { resetCapabilities } from "@/lib/design-client";
 import { invoke } from "@/lib/native/backend";
 import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import { createSessionKey } from "@/lib/utils";
@@ -44,6 +47,7 @@ const legacyReady: DesignReadinessView = {
 const originalConfig = useConfigStore.getState().config;
 
 beforeEach(() => {
+  resetCapabilities();
   useHostPathPickerStore.getState().settle(null);
   usePaneLayoutStore.setState({
     environments: new Map([
@@ -70,6 +74,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetCapabilities();
   // After unmount, so the reset does not re-render a mounted dialog outside act().
   useEnvironmentStore.setState({ environments: [] });
   invokeMock.mockImplementation(() => Promise.resolve());
@@ -621,6 +626,207 @@ describe("DesignWorkspaceDialog", () => {
     });
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
+
+  const capabilities: DesignCapabilities = {
+    protocolVersion: 2,
+    responseVersion: 2,
+    snapshot: true,
+    operations: true,
+    sync: true,
+    save: true,
+    history: true,
+    lifecycle: true,
+    rendererHealth: true,
+    library: true,
+    batch: true,
+    sessions: true,
+    validation: true,
+    hierarchyPaging: true,
+  };
+
+  function installLaunchCommands(capabilityRead: () => Promise<unknown>) {
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "design_capabilities") return capabilityRead();
+      if (command === "design_session_link")
+        return {
+          ok: true,
+          value: { id: "link-1", createdAt: "now", ...(args as { link: object }).link },
+        };
+      if ((args as { action?: string }).action === "create_canvas") return canvas;
+      throw new Error(`Unexpected command: ${command}`);
+    });
+  }
+
+  for (const outcome of ["delayed", "rejected", "ready-without-sessions"] as const) {
+    test(`capability fallback ${outcome} creates once with the intended session support`, async () => {
+      const pending = deferred<unknown>();
+      installLaunchCommands(() => pending.promise);
+      const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
+        usePaneLayoutStore
+          .getState()
+          .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
+        return true;
+      });
+      const onOpenChange = mock();
+      const ready: DesignReadinessView = {
+        ...legacyReady,
+        protocol: "v2",
+        capabilities: { ...capabilities, sessions: false },
+      };
+      render(
+        <DesignWorkspaceDialog
+          open
+          onOpenChange={onOpenChange}
+          environmentId="env-1"
+          createTab={createTab}
+          loadReadiness={
+            outcome === "ready-without-sessions" ? async () => ready : () => new Promise(() => {})
+          }
+        />,
+      );
+      await flush();
+      const submit = screen.getByRole("button", { name: "Create design workspace" });
+      fireEvent.click(submit);
+      await flush();
+      if (outcome !== "ready-without-sessions") {
+        expect(createTab).not.toHaveBeenCalled();
+        expect(invokeMock.mock.calls.map(([command]) => command)).toEqual(["design_capabilities"]);
+        expect((submit as HTMLButtonElement).disabled).toBe(true);
+        fireEvent.click(submit);
+        await act(async () => {
+          if (outcome === "rejected") pending.reject(new Error("Network disconnected"));
+          else pending.resolve({ ok: true, value: capabilities });
+        });
+        await flush();
+      }
+      expect(createTab.mock.calls.map(([type]) => type)).toEqual(["design-canvas", "claude"]);
+      expect(
+        invokeMock.mock.calls.filter(
+          ([command, args]) =>
+            command === "design_action" && (args as { action?: string }).action === "create_canvas",
+        ),
+      ).toHaveLength(1);
+      const links = invokeMock.mock.calls.filter(([command]) => command === "design_session_link");
+      expect(links).toHaveLength(outcome === "delayed" ? 1 : 0);
+      if (outcome === "ready-without-sessions")
+        expect(invokeMock.mock.calls.some(([command]) => command === "design_capabilities")).toBe(
+          false,
+        );
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+      expect(screen.queryByRole("alert") === null).toBe(true);
+    });
+  }
+
+  for (const scopeChange of ["environment", "backend"] as const) {
+    for (const outcome of ["resolve", "reject"] as const) {
+      test(`a capability ${outcome} after switching ${scopeChange} creates no stale canvas or tabs`, async () => {
+        const pending = deferred<unknown>();
+        installLaunchCommands(() => pending.promise);
+        const createTab = mock(() => true);
+        const onOpenChange = mock();
+        const props = {
+          open: true,
+          onOpenChange,
+          createTab,
+          loadReadiness: () => new Promise<DesignReadinessView>(() => {}),
+        };
+        const rendered = render(<DesignWorkspaceDialog {...props} environmentId="env-1" />);
+        await flush();
+        fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
+        await flush();
+        expect(invokeMock.mock.calls.map(([command]) => command)).toEqual(["design_capabilities"]);
+        const gateway = window.orkestratorGateway;
+        try {
+          if (scopeChange === "backend")
+            window.orkestratorGateway = { enabled: true, baseUrl: "https://other.invalid" };
+          rendered.rerender(
+            <DesignWorkspaceDialog
+              {...props}
+              environmentId={scopeChange === "environment" ? "env-2" : "env-1"}
+            />,
+          );
+          await flush();
+          await act(async () => {
+            if (outcome === "resolve") pending.resolve({ ok: true, value: capabilities });
+            else pending.reject(new Error("Network disconnected"));
+          });
+          await flush();
+          expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+            "design_capabilities",
+          ]);
+          expect(createTab).not.toHaveBeenCalled();
+          expect(onOpenChange).not.toHaveBeenCalled();
+          expect(useNativeComposeStore.getState().drafts.size).toBe(0);
+          expect(screen.queryByRole("alert") === null).toBe(true);
+          if (scopeChange === "backend")
+            expect(
+              (screen.getByRole("button", { name: "Create design workspace" }) as HTMLButtonElement)
+                .disabled,
+            ).toBe(false);
+        } finally {
+          window.orkestratorGateway = gateway;
+        }
+      });
+    }
+  }
+
+  // The readiness probe waits on the renderer, so Create can be pressed while it
+  // is still loading. Found by the live design cycle: the agent was never linked.
+  for (const backend of ["v2", "v1"] as const) {
+    test(`links the design agent on a ${backend} backend only, even before readiness loads`, async () => {
+      resetCapabilities();
+      const warning = spyOn(toast, "warning");
+      invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === "design_capabilities") {
+          if (backend === "v1") throw new Error("Unknown backend command: design_capabilities");
+          return { ok: true, value: { protocolVersion: 2, sessions: true } };
+        }
+        if (command === "design_session_link")
+          return {
+            ok: true,
+            value: { id: "link-1", createdAt: "now", ...(args as { link: object }).link },
+          };
+        if ((args as { action?: string }).action === "create_canvas") return canvas;
+        throw new Error(`Unexpected command: ${command}`);
+      });
+      const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
+        usePaneLayoutStore
+          .getState()
+          .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
+        return true;
+      });
+      try {
+        render(
+          <DesignWorkspaceDialog
+            open
+            onOpenChange={() => {}}
+            environmentId="env-1"
+            createTab={createTab}
+            loadReadiness={() => new Promise<DesignReadinessView>(() => {})}
+          />,
+        );
+        await flush();
+        fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
+        await flush();
+        const agentTab = createTab.mock.calls.find(([type]) => type === "claude")?.[1]?.tabId;
+        expect(agentTab).toBeTruthy();
+        const links = invokeMock.mock.calls.filter(
+          ([command]) => command === "design_session_link",
+        );
+        if (backend === "v2") {
+          expect(links.map(([, args]) => (args as { link: unknown }).link)).toEqual([
+            { tabId: agentTab, platform: "claude", role: "design" },
+          ]);
+        } else {
+          expect(links).toHaveLength(0);
+        }
+        expect(warning).not.toHaveBeenCalled();
+      } finally {
+        warning.mockRestore();
+        resetCapabilities();
+      }
+    });
+  }
 
   test("a blank name is rejected before anything is created", async () => {
     const createTab = mock(() => true);

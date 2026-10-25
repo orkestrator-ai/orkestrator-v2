@@ -18,9 +18,11 @@ import {
  * packaged launcher. Credential-free scenarios run by default; `--provider`
  * adds the live, credentialed scenario for that provider, and
  * `--environment-type container` runs the container variants against the
- * explicitly named `--docker-image` (never the shared `latest` tag).
+ * explicitly named `--docker-image` (never the shared `latest` tag). Pi,
+ * Cursor and Grok run their worktree-built bridge beside the packaged ones
+ * (see `scenarios/provider-runtime.ts`), so build it first.
  *
- *   bun scripts/run-scenarios.ts [--scenario NAME]... [--provider claude]
+ *   bun scripts/run-scenarios.ts [--scenario NAME]... [--provider NAME]
  *     [--environment-type local|container] [--docker-image TAG]
  *     [--keep-on-failure]
  *
@@ -109,10 +111,8 @@ async function runOne(
   try {
     const backend = await startIsolatedBackend({
       root,
-      extraArgs: [
-        ...(options.provider && definition.live ? ["--credential-source", options.provider] : []),
-        ...(options.dockerImage ? ["--docker-image", options.dockerImage] : []),
-      ],
+      ...(options.provider && definition.live ? { credentialSource: options.provider } : {}),
+      extraArgs: options.dockerImage ? ["--docker-image", options.dockerImage] : [],
     });
     context = {
       name: definition.name,

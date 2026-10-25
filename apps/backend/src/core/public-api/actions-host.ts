@@ -2,6 +2,8 @@ import {
   HOST_UPDATE_IDLE_WAIT,
   isActiveHostUpdateJob,
   isHostVersion,
+  isHostUpdateChannel,
+  type HostUpdateChannel,
   type HostTask,
   type HostUpdateDrain,
   type HostUpdateJob,
@@ -67,6 +69,30 @@ const hostStatus: ReadActionHandler<Record<string, never>> = {
   },
   async run(_input, context) {
     return { result: await maintenance(context).detailedSnapshot() };
+  },
+};
+
+const hostUpdateChannel: MutationActionHandler<{ channel: HostUpdateChannel }> = {
+  kind: "mutation",
+  action: "host.update.channel",
+  parse(input) {
+    onlyActionKeys(input, "host.update.channel");
+    if (!isHostUpdateChannel(input.channel))
+      throw invalid("channel must be stable, beta or unstable");
+    const value = { channel: input.channel };
+    return { value, scope: "host", intent: value };
+  },
+  async prepare(input, context) {
+    const service = maintenance(context);
+    return {
+      async execute() {
+        try {
+          return { state: "succeeded", result: { host: service.setUpdateChannel(input.channel) } };
+        } catch (error) {
+          throw publicError(error);
+        }
+      },
+    };
   },
 };
 
@@ -337,6 +363,7 @@ for (const action of ["host.toolchain.repair", "host.image.update", "host.gh.upd
 
 export const HOST_HANDLERS: PublicActionHandler[] = [
   hostStatus,
+  hostUpdateChannel,
   hostUpdateCheck,
   hostUpdateApply,
   hostUpdateCancel,

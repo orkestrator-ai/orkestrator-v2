@@ -32,6 +32,7 @@ export interface TurnStartupSnapshot {
   readonly turnStartedAt: SessionState["turnStartedAt"];
   readonly abortController: SessionState["abortController"];
   readonly error: SessionState["error"];
+  readonly interruption: SessionState["interruption"];
   readonly lastActivity: SessionState["lastActivity"];
   readonly persistedMessagesLoaded: SessionState["persistedMessagesLoaded"];
   readonly structuredOutput: SessionState["structuredOutput"];
@@ -48,6 +49,7 @@ export function captureTurnStartup(session: SessionState): TurnStartupSnapshot {
     turnStartedAt: session.turnStartedAt,
     abortController: session.abortController,
     error: session.error,
+    interruption: session.interruption,
     lastActivity: session.lastActivity,
     persistedMessagesLoaded: session.persistedMessagesLoaded,
     structuredOutput: session.structuredOutput,
@@ -172,6 +174,40 @@ export interface TurnState {
   localCommandOutputSeen: boolean;
   lastThinkingTokensEmitAt: number;
   compactedTokensBefore: number | undefined;
+  /**
+   * Feedback from a rejected plan, to re-send once the turn ends. When
+   * ExitPlanMode is denied the SDK may end the turn without Claude seeing the
+   * feedback, so `settleTurnEnd` re-prompts with it; an assistant response
+   * after the denial shows Claude saw it, and clears it.
+   */
+  pendingPlanRejectionFeedback: string | null;
+  /**
+   * Set when the user approved a plan this turn: the defensive fallback for
+   * the ExitPlanMode "approved but failed" case.
+   *
+   * The primary fix lives in `resolveQueryPlan`
+   * (`session-manager-prompt-query.ts`): it forwards `permissionMode: "plan"`
+   * to the SDK, so the SDK is genuinely in plan mode and its native
+   * ExitPlanMode tool runs to success.
+   *
+   * The fallback covers the SDK's plan-mode handling misbehaving (older SDK
+   * builds, future regressions, unforeseen edge cases): if the user approved
+   * the plan but the SDK still marked the ExitPlanMode tool as `is_error`, we
+   * neither surface a red "failure" nor let Claude abandon the turn. So:
+   *   1) `turnCanUseTool` sets this flag when the user approves.
+   *   2) After every tool_result is parsed, the `user` handler rewrites any
+   *      ExitPlanMode tool in "failure" state to "success" with an
+   *      explanatory output, so the UI renders it the way the user expects.
+   *   3) It also sets `pendingPlanApprovalContinuation`, so that when the SDK
+   *      ends the turn (as it usually does after a failed ExitPlanMode),
+   *      `settleTurnEnd` re-prompts Claude, outside plan mode, to implement.
+   *
+   * When the SDK behaves correctly the tool is already in "success" state and
+   * none of the override or re-prompt logic fires.
+   */
+  planApprovedThisTurn: boolean;
+  /** The continuation prompt the fallback on `planApprovedThisTurn` owes. */
+  pendingPlanApprovalContinuation: string | null;
 }
 
 export function createTurnState(
@@ -242,6 +278,9 @@ export function createTurnState(
     localCommandOutputSeen: false,
     lastThinkingTokensEmitAt: 0,
     compactedTokensBefore: undefined,
+    pendingPlanRejectionFeedback: null,
+    planApprovedThisTurn: false,
+    pendingPlanApprovalContinuation: null,
   };
   // Reports its first line from the constructor, so the metrics it reads must
   // already exist; they are read from the turn itself, never copied.

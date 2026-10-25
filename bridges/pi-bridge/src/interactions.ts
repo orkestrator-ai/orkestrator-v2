@@ -3,10 +3,9 @@
  *
  * Pi ships no permission system — "primitives, not features" is its stated
  * design, and a gate is something you build on the `tool_call` extension hook.
- * This is that gate, and it is off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`,
- * matching the permissive default every other bridge here uses: an Orkestrator
- * agent tab is an interactive session in an already-isolated worktree or
- * container, and the container boundary is what isolates an agent.
+ * This is that gate. It asks only when the session's execution policy says
+ * `ask` and refuses under `deny`; a session with no policy runs as the
+ * backend's host default, `auto-approve`.
  *
  * When it *is* on, the one rule that matters is that nothing approves by
  * default. A timeout, a disconnected renderer, a session closing and a
@@ -25,12 +24,17 @@ import {
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
 import {
   approvalTimeoutMs,
-  approvalsEnabled,
   MAX_PENDING_APPROVALS,
   MAX_TOOL_ARGUMENT_BYTES,
   workingDirectory,
 } from "./config.js";
-import { isOrkestratorMailTool, isOrkestratorMcpTool, isOwnWorkflowResultCall } from "./mcp.js";
+import {
+  isOrkestratorArtifactTool,
+  isOrkestratorMailTool,
+  isOrkestratorMcpTool,
+  isResearchMcpTool,
+  isOwnWorkflowResultCall,
+} from "./mcp.js";
 import { schedulePersist } from "./persistence.js";
 import {
   isObject,
@@ -61,9 +65,13 @@ export async function requestToolApproval(
   toolName: string,
   input: unknown,
 ): Promise<ToolCallDecision> {
+  // A coordinator's own mail and delegation tools, and its research servers'
+  // tools: the read-only gate admits these by exact registered name.
   const coordinatorMail =
-    state.policy?.id === "coordinator-read-only" && isOrkestratorMcpTool(state, toolName);
-  const ownAttempt = isOwnWorkflowResultCall(state, toolName, input);
+    state.policy?.id === "coordinator-read-only" &&
+    (isOrkestratorMcpTool(state, toolName) || isResearchMcpTool(state, toolName));
+  const ownAttempt =
+    isOwnWorkflowResultCall(state, toolName, input) || isOrkestratorArtifactTool(state, toolName);
   if (state.readOnly && !READ_ONLY_TOOLS.has(toolName) && !coordinatorMail && !ownAttempt) {
     return {
       block: true,
@@ -78,7 +86,7 @@ export async function requestToolApproval(
   if (turnCancellationRequested(state)) {
     return { block: true, reason: "The turn was cancelled before this tool call was approved." };
   }
-  const approvals = state.policy?.approvals ?? (approvalsEnabled() ? "ask" : "auto-approve");
+  const approvals = state.policy?.approvals ?? "auto-approve";
   if (approvals === "auto-approve") return { block: false };
   if (READ_ONLY_TOOLS.has(toolName) || coordinatorMail || ownAttempt) return { block: false };
   // A worker can always report back: its mail tools never wait on a person.

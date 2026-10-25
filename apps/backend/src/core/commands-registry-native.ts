@@ -446,6 +446,16 @@ export function registerNativeAgentCommands(
     });
   });
 
+  register("steer_native_agent_queued_prompt", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.steerQueuedPrompt({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      messageId: asNonBlankString(args.messageId, "messageId"),
+    });
+  });
+
   register("perform_native_agent_session_action", async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.performProjectionAction({
@@ -492,6 +502,15 @@ export function registerNativeAgentCommands(
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       ...(args.deviceCode === true ? { deviceCode: true } : {}),
+    });
+  });
+
+  register("cancel_native_agent_sign_in", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.cancelProjectionSignIn({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
     });
   });
 

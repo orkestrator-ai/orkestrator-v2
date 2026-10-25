@@ -1,3 +1,4 @@
+import { ensureProjectExpanded } from "./sidebar-project";
 import {
   newReviewValidationRun,
   type ReviewValidationRun,
@@ -7,7 +8,9 @@ import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { createServer } from "node:net";
+import { dismissSidebarTooltip } from "./sidebar-tooltip";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { environmentStateDirectories } from "../../apps/backend/src/core/environment-state-paths";
@@ -908,6 +911,170 @@ test("signed-out Codex recovery and account reads survive reload and environment
   }
 });
 
+test("queued native steering survives a lost gateway response, inactive environment and reload", async ({
+  page,
+}) => {
+  test.skip(process.env.ORKESTRATOR_AGENT_TEST_REVIEW !== "1", "opt-in isolated Codex turn");
+  test.setTimeout(240_000);
+  page.setDefaultTimeout(20_000);
+  const status = await profileStatus();
+  expect(status.flavor).toBe("agent-test");
+  const invoke = await authenticatedInvoke(page, status);
+  const fixture = (await invoke<Project[]>("get_projects")).find(
+    (project) => project.localPath === status.testProject,
+  )!;
+  const environments: Environment[] = [];
+  let sessionIdentity:
+    | { environmentId: string; agent: string; logicalSessionKey: string }
+    | undefined;
+  try {
+    for (const name of ["queued-steer", "queued-other"])
+      environments.push(
+        await invoke<Environment>("create_environment", {
+          projectId: fixture.id,
+          name: `${name}-${Date.now()}`,
+          environmentType: "local",
+        }),
+      );
+    const [target, other] = environments;
+    await invoke("start_environment", { environmentId: target!.id });
+    const hydrated = await invoke<Environment>("get_environment", { environmentId: target!.id });
+    const tabId = "queued-steer-tab";
+    sessionIdentity = {
+      environmentId: target!.id,
+      agent: "codex",
+      logicalSessionKey: `env-${target!.id}:${tabId}`,
+    };
+    const layout = await invoke<{ revision: number } | null>("get_pane_layout", {
+      environmentId: target!.id,
+    });
+    await invoke("save_pane_layout", {
+      environmentId: target!.id,
+      expectedRevision: layout?.revision ?? 0,
+      layout: {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "queue-pane",
+        root: {
+          kind: "leaf",
+          id: "queue-pane",
+          tabs: [
+            {
+              id: tabId,
+              type: "agent-native",
+              nativeAgentData: { environmentId: target!.id, platform: "codex" },
+            },
+          ],
+          activeTabId: tabId,
+        },
+      },
+    });
+    const readyFile = path.join(hydrated.worktreePath!, ".qa-queued-ready");
+    const receivedFile = path.join(hydrated.worktreePath!, ".qa-queued-received");
+    const marker = `queued-steer-${Date.now()}`;
+    const dispatch = await invoke<{ outcome: string }>("dispatch_native_agent_intent", {
+      ...sessionIdentity,
+      model: process.env.ORKESTRATOR_AGENT_TEST_MODEL ?? "gpt-6.1-sol",
+      reasoningEffort: "low",
+      mode: "build",
+      requestId: `ready-${marker}`,
+      prompt:
+        "This is a bounded QA task in a disposable fixture. Create .qa-queued-ready containing ready, then run sleep 45 repeatedly until steered or cancelled. Do not change other files, finish, or commit.",
+    });
+    expect(dispatch.outcome).toBe("accepted");
+    await expect
+      .poll(() => fs.readFile(readyFile, "utf8").catch(() => ""), { timeout: 120_000 })
+      .toContain("ready");
+    const queueKey = `codex\0${sessionIdentity.logicalSessionKey}`;
+    const queued = {
+      id: `source-${marker}`,
+      text: `Append exactly ${marker} once to .qa-queued-received. Then run sleep 120 and wait for cancellation. Do not change other files or finish.`,
+      model: "gpt-6.1-sol",
+      mode: "build",
+    };
+    const tail = { id: `tail-${marker}`, text: "Wait for further instructions." };
+    for (const message of [queued, tail])
+      await invoke("enqueue_prompt_queue_message", {
+        queueKey,
+        environmentId: target!.id,
+        message,
+      });
+    const openEnvironment = async (name: string) => {
+      const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
+      const entry = page.getByText(name, { exact: true }).first();
+      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+      for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+        const button = page.getByRole("button", { name: label, exact: true });
+        if (await button.isVisible()) await button.click();
+      }
+      if (await expand.isVisible()) await expand.click();
+      const versionNotice = page.getByText("Orkestrator has been updated", { exact: true });
+      if (await versionNotice.isVisible()) {
+        await versionNotice.click({ timeout: 2_000 }).catch(() => undefined);
+        await expect(versionNotice).toBeHidden();
+      }
+      await dismissSidebarTooltip(page, fixture.name);
+      await entry.click();
+    };
+    await page.goto(status.browserUrl!);
+    await openEnvironment(target!.name);
+    const versionNotice = page.getByText("Orkestrator has been updated", { exact: true });
+    if (await versionNotice.isVisible()) {
+      await versionNotice.click({ timeout: 2_000 }).catch(() => undefined);
+      await expect(versionNotice).toBeHidden();
+    }
+    await page.getByTitle("View queued prompts").click();
+    const dialog = page.getByRole("dialog", { name: "Queued Prompts" });
+    await expect(dialog.getByRole("button", { name: "Steer", exact: true })).toHaveCount(2);
+    let dropped = false;
+    await page.route("**/__orkestrator/invoke", async (route) => {
+      if (route.request().postDataJSON()?.command !== "steer_native_agent_queued_prompt")
+        return route.continue();
+      const response = await route.fetch();
+      expect(response.ok()).toBe(true);
+      dropped = true;
+      await route.abort("failed"); // execution succeeded; only the renderer's acknowledgement is lost
+    });
+    await dialog.getByRole("button", { name: "Steer", exact: true }).first().click();
+    await expect.poll(() => dropped).toBe(true);
+    await expect(dialog.getByRole("alert")).toBeVisible();
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await openEnvironment(other!.name);
+    await expect
+      .poll(
+        () =>
+          fs
+            .readFile(receivedFile, "utf8")
+            .then((text) => text.trim())
+            .catch(() => ""),
+        { timeout: 120_000 },
+      )
+      .toBe(marker);
+    const readQueue = () =>
+      invoke<{ messages: unknown[]; inFlight?: unknown }>("get_prompt_queue", { queueKey });
+    expect((await readQueue()).messages).toEqual([tail]);
+    expect((await readQueue()).inFlight).toBeUndefined();
+    await openEnvironment(target!.name);
+    await page.getByTitle("View queued prompts").click();
+    await expect(dialog.getByRole("button", { name: tail.text, exact: true })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: queued.text, exact: true })).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await page.reload();
+    await openEnvironment(target!.name);
+    await page.getByTitle("View queued prompts").click();
+    await expect(dialog.getByRole("button", { name: tail.text, exact: true })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: queued.text, exact: true })).toHaveCount(0);
+    expect((await readQueue()).messages).toEqual([tail]);
+  } finally {
+    if (sessionIdentity)
+      await invoke("stop_native_agent_session", sessionIdentity).catch(() => undefined);
+    for (const environment of environments) {
+      await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+      await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    }
+  }
+});
+
 test("build pipeline live steering persists while inactive and rehydrates after reload", async ({
   page,
 }) => {
@@ -1292,9 +1459,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     }
 
     await page.goto(status.browserUrl!);
-    const expandProject = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
-    await expect(expandProject).toBeVisible({ timeout: 30_000 });
-    await expandProject.click();
+    await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(sender.name, { exact: true }).first().click();
     await expect(page.getByText(sender.name, { exact: true }).first()).toBeVisible();
     await invoke("send_agent_mail", {
@@ -1309,24 +1474,73 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
       timeout: 15_000,
     });
-    await expect(
-      page.getByRole("button", { name: "Agent inbox, 1 unseen", exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agent messages", exact: true })).toBeVisible();
 
     await page.reload();
-    const expandAfterReload = page.getByRole("button", {
-      name: `Expand project ${fixture!.name}`,
-    });
-    await expect(expandAfterReload).toBeVisible({ timeout: 30_000 });
-    await expandAfterReload.click();
+    await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
     await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
       timeout: 15_000,
     });
-    await expect(
-      page.getByRole("button", { name: "Agent inbox, 1 unseen", exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agent messages", exact: true })).toBeVisible();
+    // A committed send whose response is lost must retain its draft and retry
+    // key across both list navigation and closing the panel.
+    const openConversation = async () => {
+      await page.getByRole("button", { name: "Agent messages", exact: true }).click();
+      await page.getByTestId("agent-mail-conversation-row").first().click();
+    };
+    await openConversation();
+    const panel = page.getByTestId("agent-mail-panel");
+    await panel.getByPlaceholder("Subject (optional)").fill("Retry receipt");
+    await panel.locator("textarea").fill("A draft retained across panel navigation.");
+    await panel.getByRole("button", { name: "Back to conversations" }).click();
+    await panel.getByRole("button", { name: "Close", exact: true }).click();
+    await openConversation();
+    await expect(panel.locator("textarea")).toHaveValue(
+      "A draft retained across panel navigation.",
+    );
+    await expect(panel.getByPlaceholder("Subject (optional)")).toHaveValue("Retry receipt");
+    let lost = false;
+    const requestIds: string[] = [];
+    await page.route("**/__orkestrator/invoke", async (route) => {
+      const request = route.request().postDataJSON() as {
+        command?: string;
+        args?: { requestId?: string };
+      };
+      if (request.command !== "send_agent_mail") return route.continue();
+      requestIds.push(request.args?.requestId ?? "");
+      if (lost) return route.continue();
+      lost = true;
+      await route.fetch();
+      await route.abort("failed");
+    });
+    await panel.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByText("Message was not sent", { exact: true })).toBeVisible();
+    await panel.getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByText(sender.name, { exact: true }).first().click();
+    await page.getByText(recipient.name, { exact: true }).first().click();
     await page.setViewportSize({ width: 390, height: 844 });
+    await openConversation();
+    await expect(panel.locator("textarea")).toHaveValue(
+      "A draft retained across panel navigation.",
+    );
+    await panel.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(panel.locator("textarea")).toHaveValue("");
+    expect(requestIds).toHaveLength(2);
+    expect(requestIds[0]).toBeTruthy();
+    expect(requestIds[1]).toBe(requestIds[0]);
+    const sentMailbox = await invoke<{ messages: Array<{ subject?: string }> }>(
+      "get_agent_mail_mailbox",
+      {
+        environmentId: recipient.id,
+        tabId: recipientTabId,
+      },
+    );
+    expect(sentMailbox.messages.filter(({ subject }) => subject === "Retry receipt")).toHaveLength(
+      1,
+    );
+    await page.unroute("**/__orkestrator/invoke");
+    await panel.getByRole("button", { name: "Close", exact: true }).click();
     const deliverNow = page.getByRole("button", { name: "Deliver now", exact: true });
     await expect(deliverNow).toBeVisible();
     const bounds = await deliverNow.boundingBox();
@@ -1404,9 +1618,7 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
     }
     const [target, other] = environments;
     await page.goto(status.browserUrl!);
-    const expand = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
-    await expect(expand).toBeVisible({ timeout: 30_000 });
-    await expand.click();
+    await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     const input = {
       requestId: `browser-review-${target!.id}`,
@@ -1479,9 +1691,7 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
     });
     await expect(page.getByText(/^Multi Review cancelled\b/).first()).toBeVisible();
     await page.reload();
-    const expandAgain = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
-    await expect(expandAgain).toBeVisible({ timeout: 30_000 });
-    await expandAgain.click();
+    await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
       timeout: 30_000,
@@ -1497,6 +1707,193 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
       await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
       await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
     }
+  }
+});
+
+test("Docker fixture boots and restarts with access-only Claude, Codex and Grok imports", async () => {
+  test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "requires a development image");
+  const runtime = resolveRuntimeProfile({
+    repositoryRoot,
+    requestedId: profile,
+    flavor: "agent-test",
+  });
+  const root = await fs.mkdtemp(path.join(tmpdir(), "ork-access-only-boot-"));
+  let containerId: string | undefined;
+  const docker = (args: string[]) => {
+    const result = spawnSync("docker", args, { encoding: "utf8", timeout: 30_000 });
+    expect(result.error, "Docker command did not complete").toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  try {
+    for (const provider of ["claude", "codex", "grok"]) await fs.mkdir(path.join(root, provider));
+    const claude = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "fixture-access",
+        refreshToken: "fixture-refresh",
+        expiresAt: Date.now() + 3600_000,
+      },
+      mcpOAuth: { fixture: { accessToken: "fixture-mcp", refreshToken: "fixture-mcp-refresh" } },
+    });
+    await fs.writeFile(path.join(root, "claude/.credentials.json"), claude, { mode: 0o600 });
+    const codex = JSON.stringify({ tokens: { access_token: "fixture-access", refresh_token: "" } });
+    const grok = JSON.stringify({
+      live: { key: "fixture-access", refresh_token: "", expires_at: "2099-01-01T00:00:00Z" },
+    });
+    await fs.writeFile(path.join(root, "codex/auth.json"), codex, { mode: 0o600 });
+    await fs.writeFile(path.join(root, "grok/auth.json"), grok, { mode: 0o600 });
+    containerId = docker([
+      "create",
+      "--network",
+      "none",
+      "--env",
+      "NETWORK_MODE=full",
+      "--label",
+      "app=orkestrator-v2",
+      "--label",
+      `orkestrator-owner=access-only-${profile}`,
+      "--mount",
+      `type=bind,source=${root}/codex,target=/codex-home,readonly`,
+      "--mount",
+      `type=bind,source=${root}/grok,target=/grok-home,readonly`,
+      "--mount",
+      `type=bind,source=${root}/claude,target=/claude-config,readonly`,
+      runtime.dockerImage,
+    ]);
+    for (let boot = 0; boot < 2; boot++) {
+      docker(["start", containerId]);
+      await expect
+        .poll(
+          () =>
+            docker([
+              "exec",
+              containerId!,
+              "sh",
+              "-c",
+              "jq -r .phase /run/orkestrator/boot-status.json 2>/dev/null || true",
+            ]),
+          { timeout: 60_000 },
+        )
+        .toBe("ready");
+      // Only content-free assertions leave the container; no login is printed.
+      docker([
+        "exec",
+        containerId,
+        "bash",
+        "-euc",
+        `
+        test "$(stat -c %a "$HOME/.claude/.credentials.json")" = 600
+        jq -e '.claudeAiOauth.accessToken == "fixture-access" and (.claudeAiOauth | has("refreshToken") | not) and .mcpOAuth.fixture.accessToken == "fixture-mcp" and (.mcpOAuth.fixture | has("refreshToken") | not)' "$HOME/.claude/.credentials.json" >/dev/null
+        test "$(stat -c %a "$HOME/.codex/auth.json")" = 600
+        test "$(stat -c %a "$HOME/.grok/auth.json")" = 600
+        jq -e '.tokens.access_token == "fixture-access" and .tokens.refresh_token == "" and (.last_refresh | type == "string")' "$HOME/.codex/auth.json" >/dev/null
+        jq -e '.live.key == "fixture-access" and .live.refresh_token == ""' "$HOME/.grok/auth.json" >/dev/null
+        test -f /tmp/.entrypoint-complete
+      `,
+      ]);
+      docker(["stop", "--time", "1", containerId]);
+    }
+    expect(await fs.readFile(path.join(root, "claude/.credentials.json"), "utf8")).toBe(claude);
+    expect(await fs.readFile(path.join(root, "codex/auth.json"), "utf8")).toBe(codex);
+    expect(await fs.readFile(path.join(root, "grok/auth.json"), "utf8")).toBe(grok);
+  } finally {
+    if (containerId) docker(["rm", "--force", containerId]);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Docker fixture prepare-only trusts a differently owned origin before cloning as node", () => {
+  test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "requires a development image");
+  const runtime = resolveRuntimeProfile({
+    repositoryRoot,
+    requestedId: profile,
+    flavor: "agent-test",
+  });
+  const created = spawnSync(
+    "docker",
+    [
+      "create",
+      "--network",
+      "none",
+      "--label",
+      "app=orkestrator-v2",
+      "--label",
+      `orkestrator-owner=prepare-only-${profile}`,
+      "--user",
+      "root",
+      "--mount",
+      `type=bind,source=${path.join(repositoryRoot, "docker")},target=/setup-under-test,readonly`,
+      "--entrypoint",
+      "bash",
+      runtime.dockerImage,
+      "-euc",
+      `
+# Build a committed root-owned origin and an empty workspace owned by node.
+mkdir -p /tmp/fixture-seed /tmp/prepare-home /workspace /run/orkestrator
+git -C /tmp/fixture-seed init --initial-branch=main
+printf 'fixture contents\\n' > /tmp/fixture-seed/tracked.txt
+printf '%s\\n' '{"setupContainer":"touch /workspace/setup-ran"}' > /tmp/fixture-seed/orkestrator-ai.json
+git -C /tmp/fixture-seed add .
+git -C /tmp/fixture-seed -c user.name=Fixture -c user.email=fixture@example.invalid commit -m fixture
+git clone --bare /tmp/fixture-seed /orkestrator-agent-test-origin.git
+chown -R node:node /workspace /tmp/prepare-home
+touch /tmp/prepare-home/.claude.json
+chown node:node /tmp/prepare-home/.claude.json
+jq -n --arg start "$(awk '{print $22}' /proc/1/stat)" '{pid1Start:$start,phase:"ready"}' > /run/orkestrator/boot-status.json
+
+as_node() {
+    /usr/sbin/runuser -u node -- env -i HOME=/tmp/prepare-home PATH=/usr/local/bin:/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 "$@"
+}
+test "$(stat -c %u /orkestrator-agent-test-origin.git)" != "$(id -u node)"
+# Prove ownership protection is active before exercising the real setup script.
+if as_node git clone /orkestrator-agent-test-origin.git /tmp/untrusted-clone > /tmp/clone-denied.log 2>&1; then
+    echo 'Expected the untrusted clone to be refused' >&2
+    exit 1
+fi
+grep -q 'dubious ownership' /tmp/clone-denied.log
+
+as_node env ORKESTRATOR_AGENT_TEST_GIT_REMOTE=/orkestrator-agent-test-origin.git GIT_URL=/orkestrator-agent-test-origin.git GIT_BRANCH=main bash /setup-under-test/workspace-setup.sh --prepare-only
+test "$(as_node git config --global --get-all safe.directory)" = /orkestrator-agent-test-origin.git
+test "$(as_node git -C /workspace rev-parse HEAD)" = "$(git -C /tmp/fixture-seed rev-parse HEAD)"
+test "$(cat /workspace/tracked.txt)" = 'fixture contents'
+test "$(stat -c %u /workspace/.git)" = "$(id -u node)"
+test ! -e /workspace/setup-ran
+test ! -e /tmp/.workspace-setup-complete
+`,
+    ],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+  expect(created.status, created.stderr).toBe(0);
+  const containerId = created.stdout.trim();
+  expect(containerId).toBeTruthy();
+  try {
+    const prepared = spawnSync("docker", ["start", "--attach", containerId], {
+      encoding: "utf8",
+      timeout: 60_000,
+      killSignal: "SIGKILL",
+    });
+    expect(prepared.error, prepared.stderr).toBeUndefined();
+    expect(prepared.status, `${prepared.stdout}\n${prepared.stderr}`).toBe(0);
+    const exited = spawnSync(
+      "docker",
+      ["inspect", "--format", "{{.State.ExitCode}}", containerId],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+      },
+    );
+    expect(exited.status, exited.stderr).toBe(0);
+    expect(exited.stdout.trim(), `${prepared.stdout}\n${prepared.stderr}`).toBe("0");
+    expect(prepared.stdout).toContain("Clone successful!");
+    expect(prepared.stderr).not.toContain("dubious ownership");
+    expect(prepared.stdout).toContain("ORKESTRATOR_PREPARE_OK");
+    expect(prepared.stdout).not.toContain("=== Running Container Setup ===");
+  } finally {
+    const removed = spawnSync("docker", ["rm", "--force", containerId], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(removed.status, removed.stderr).toBe(0);
   }
 });
 
@@ -1778,7 +2175,7 @@ test("review validation queues across worktrees and runs while its environment i
     }
     const [target, other] = environments;
     await page.goto(status.browserUrl!);
-    await page.getByRole("button", { name: `Expand project ${fixture.name}` }).click();
+    await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     const snapshot = await invoke<{ head: string; paths: string[] }>(
       "get_environment_uncommitted_paths",
@@ -1882,7 +2279,7 @@ test("review validation queues across worktrees and runs while its environment i
     expect(run.results[0]!.queueReason).toBeUndefined();
     const completed = run;
     await page.reload();
-    await page.getByRole("button", { name: `Expand project ${fixture.name}` }).click();
+    await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     const restored = await invoke<ReviewValidationRun>("status_review_validation", {
       environmentId: target!.id,
@@ -2055,17 +2452,24 @@ for (const width of [1280, 390]) {
       const section = settings.getByRole("combobox", { name: "Settings section", exact: true });
       if (await section.isVisible()) {
         await section.click();
-        await page.getByRole("option", { name: "Updates", exact: true }).click();
+        await page.getByRole("option", { name: "Machines", exact: true }).click();
       } else {
-        await settings.getByRole("button", { name: "Updates", exact: true }).click();
+        await settings.getByRole("button", { name: "Machines", exact: true }).click();
       }
+      const currentMachine = settings.getByTestId("machine-row").filter({ hasText: "This window" });
+      await currentMachine.getByRole("button", { name: /^Updates for / }).click();
+      const updates = page.getByRole("dialog", { name: /^Updates for / });
       await expect(
-        settings.getByRole("heading", { name: "Agent tools", exact: true }),
+        updates.getByRole("heading", { name: "Agent tools", exact: true }),
       ).toBeVisible();
-      return settings;
+      return updates;
     };
     let settings = await openUpdates();
-    await settings.getByRole("button", { name: "Close settings" }).click();
+    await settings.getByRole("button", { name: "Close", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "Settings", exact: true })
+      .getByRole("button", { name: "Close settings" })
+      .click();
     const task = await invoke<{ id: string }>("set_host_gh_channel", { channel: "pinned" });
     await expect
       .poll(async () => {
@@ -2080,7 +2484,11 @@ for (const width of [1280, 390]) {
       .toBe("succeeded");
     settings = await openUpdates();
     await expect(settings.getByRole("status").filter({ hasText: /^Done/ })).toBeVisible();
-    await settings.getByRole("button", { name: "Close settings" }).click();
+    await settings.getByRole("button", { name: "Close", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "Settings", exact: true })
+      .getByRole("button", { name: "Close settings" })
+      .click();
     await page.reload();
     settings = await openUpdates();
     await expect(settings.getByRole("status").filter({ hasText: /^Done/ })).toBeVisible();
@@ -2179,7 +2587,10 @@ test("persisted diff baselines keep Files, the badge and diff tabs aligned after
       .filter({ has: page.getByText(worker.name, { exact: true }) });
     await expect(row.getByText("+1", { exact: true })).toBeVisible();
     await own.click();
-    await expect(page.getByTitle(`vs ${tip}`, { exact: true })).toBeVisible();
+    await expect(page.getByTestId("diff-viewer-endpoints")).toHaveAttribute(
+      "title",
+      `${tip}@${tip} → Current workspace file`,
+    );
     await page.reload();
     await openWorker();
     await expect(own).toBeVisible();
@@ -2214,5 +2625,91 @@ test("persisted diff baselines keep Files, the badge and diff tabs aligned after
     git(fixture.localPath!, "worktree", "remove", "--force", target);
     git(fixture.localPath!, "branch", "-D", branch);
     await fs.rm(target, { recursive: true, force: true });
+  }
+});
+
+test("Docker fixture consumes command-only seed files and deletes secret staging", async ({
+  page,
+}) => {
+  test.skip(
+    process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1",
+    "requires a disposable container fixture",
+  );
+  test.setTimeout(300_000);
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  const invoke = await authenticatedInvoke(page, status);
+  const project = (await invoke<Project[]>("get_projects")).find(
+    (entry) => entry.localPath === status.testProject,
+  )!;
+  const environment = await invoke<Environment>("create_environment", {
+    projectId: project.id,
+    name: `seed-regression-${Date.now()}`,
+    environmentType: "containerized",
+  });
+  const runtime = resolveRuntimeProfile({
+    repositoryRoot,
+    requestedId: profile,
+    flavor: "agent-test",
+  });
+  const staging = path.join(runtime.dataDir, "node-seed", environment.id);
+  const relativePath = ".env.review-seed";
+  const content = "REVIEW_SEED=fixture-only\n";
+  try {
+    const upload = await invoke<{ uploadId: string }>("begin_node_file_write", {
+      scope: { seedEnvironmentId: environment.id },
+      path: relativePath,
+      size: Buffer.byteLength(content),
+      sha256: createHash("sha256").update(content).digest("hex"),
+      overwrite: false,
+    });
+    await invoke("append_node_file_write", {
+      uploadId: upload.uploadId,
+      contentBase64: Buffer.from(content).toString("base64"),
+    });
+    await invoke("commit_node_file_write", { uploadId: upload.uploadId });
+    await invoke("start_environment", { environmentId: environment.id });
+    // Start returns once setup is launched; the workspace consumes seeds later.
+    await expect
+      .poll(
+        async () => {
+          const current = await invoke<Environment & { setupScriptsComplete?: boolean }>(
+            "get_environment",
+            { environmentId: environment.id },
+          );
+          return current.setupScriptsComplete === true;
+        },
+        { timeout: 120_000 },
+      )
+      .toBe(true);
+    const active = await invoke<Environment>("get_environment", { environmentId: environment.id });
+    expect(active.containerId).toBeTruthy();
+    const copied = spawnSync(
+      "docker",
+      ["exec", "--user", "node", active.containerId!, "cat", `/workspace/${relativePath}`],
+      { encoding: "utf8" },
+    );
+    expect(copied.status).toBe(0);
+    expect(createHash("sha256").update(copied.stdout).digest("hex")).toBe(
+      createHash("sha256").update(content).digest("hex"),
+    );
+    expect(
+      await fs.stat(staging).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+    // Deletion also clears staging that was never consumed by setup.
+    await fs.mkdir(staging, { recursive: true, mode: 0o700 });
+    await fs.writeFile(path.join(staging, ".env"), content, { mode: 0o600 });
+    await invoke("delete_environment", { environmentId: environment.id });
+    expect(
+      await fs.stat(staging).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+  } finally {
+    await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
   }
 });

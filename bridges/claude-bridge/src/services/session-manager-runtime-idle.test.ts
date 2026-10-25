@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import {
@@ -12,6 +10,9 @@ import {
   getSession,
   getSessionActivity,
   nextQueryCall,
+  materializePersistedSession,
+  readSessionPreferences,
+  PERSISTED_SDK_ID,
   pendingCalls,
   queryControlOverrides,
   releaseWithBackgroundWork,
@@ -19,6 +20,7 @@ import {
   track,
   waitFor,
   withTemporaryClaudeHome,
+  blockClaudeConfigDir,
 } from "./session-manager-test-harness.js";
 import {
   CONTINUATION_SILENCE_MS,
@@ -335,7 +337,7 @@ describe("a warm Claude CLI between turns", () => {
     const admission = admitPrompt(older.session.id)!;
     const newer = await idleAfterOneTurn("fills cap during admission");
     await withTemporaryClaudeHome("claude-idle-admission-", async (directory) => {
-      await writeFile(join(directory, ".claude"), "not a directory");
+      await blockClaudeConfigDir(directory);
       await expect(applyPromptPlanMode(admission, true)).rejects.toBeTruthy();
     });
     expect(older.session.status).toBe("idle");
@@ -544,6 +546,48 @@ describe("a root turn the warm CLI starts on its own", () => {
       stop();
     }
     call.finish();
+  });
+
+  test("signal death after the prompt settled retains a restart interruption", async () => {
+    await withTemporaryClaudeHome("claude-orphaned-signal-", async () => {
+      controlIdleWindow();
+      const session = await materializePersistedSession();
+      const prompt = sendPrompt(session.id, "work", { requestId: "spontaneous-signal" });
+      const call = await nextQueryCall();
+      call.push({ type: "result", subtype: "success" });
+      await prompt;
+      expect(session.status).toBe("idle");
+      expect(session.abortController).toBeUndefined();
+      call.push({
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: {
+          id: "msg-resumed-signal",
+          model: "claude-sonnet-4-6",
+          content: [{ type: "text", text: "Continuing." }],
+        },
+      });
+      await waitFor(() => session.status === "running");
+      call.fail(
+        Object.assign(new Error("CLI killed"), {
+          errorClass: "process_killed_by_signal",
+          signal: "SIGKILL",
+        }),
+      );
+      await waitFor(() => session.claudeRuntime === undefined);
+      expect(session).toMatchObject({ status: "error", interruption: "restart" });
+      expect(session.error).toContain("SIGKILL");
+      expect(session.abortController).toBeUndefined();
+      // The async preference writes are serialized; wait until the resumed
+      // root's write has reached disk before checking retention.
+      for (
+        let pass = 0;
+        pass < 100 && !(await readSessionPreferences(PERSISTED_SDK_ID))?.turnInFlight;
+        pass++
+      )
+        await Bun.sleep(10);
+      expect((await readSessionPreferences(PERSISTED_SDK_ID))?.turnInFlight).toBeDefined();
+    });
   });
 
   test("ending the CLI under it hands the foreground back", async () => {

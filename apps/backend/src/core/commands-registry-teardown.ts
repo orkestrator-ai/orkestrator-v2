@@ -2,22 +2,17 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { registerTmuxBackendCommands } from "./tmux.js";
 import { claudeStateSignalInstaller } from "./claude-state-signal.js";
-import type { Environment } from "./models.js";
+import type { Environment, NativeAgentProvider } from "./models.js";
 import {
-  terminalSessionIdsByStableKey,
-  terminalStableKeysBySessionId,
-  orphanedTerminalMissingSince,
   assertOnlyKeys,
   asNonBlankString,
   stableTerminalKey,
-  explicitlyCloseTerminalSession,
   peekLocalAgentBridge,
   peekContainerAgentBridge,
   conciseError,
 } from "./commands-helpers.js";
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
-import { deleteTerminalHistories } from "./terminal-history.js";
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 import {
   fenceRetainingCloseSessionId,
@@ -26,6 +21,7 @@ import {
   isTabTeardownKind,
 } from "@orkestrator/protocol/tab-teardown";
 import {
+  isReplacedSessionCloseKey,
   providerSessionHeldElsewhere,
   withProviderSessionTeardownLock,
 } from "./provider-session-ownership.js";
@@ -153,6 +149,28 @@ export function registerTeardownCommands(
     if (outcome !== "closed") throw new Error("OpenCode tab close is unavailable");
   };
 
+  /** The non-destructive provider close every native teardown ends in. */
+  const closeProviderSession = async (
+    environment: Environment,
+    agent: LocalServerKind,
+    providerSessionId: string,
+    context: CommandContext,
+  ): Promise<void> => {
+    if (agent === "opencode") {
+      await closeOpenCodeTabSession(environment.id, providerSessionId, context);
+      return;
+    }
+    const bridge = await peekTabTeardownBridge(environment, agent, context);
+    if (!bridge) {
+      throw new Error("Tab teardown bridge is unavailable or unhealthy");
+    }
+    await closeBridgeSessionRetaining(agent, providerSessionId, (method, path) =>
+      requestProviderTabSession(new URL(`http://127.0.0.1:${bridge.port}${path}`), method, {
+        Authorization: `Bearer ${bridge.authToken}`,
+      }),
+    );
+  };
+
   const executeTabTeardown = async (
     environment: Environment,
     intent: TabTeardownIntent,
@@ -166,7 +184,7 @@ export function registerTeardownCommands(
             stableTerminalKey(kind as "container" | "local", environment.id, intent.tabId),
           ),
         );
-        const actualStableKey = terminalStableKeysBySessionId.get(intent.sessionId);
+        const actualStableKey = context.runtime.terminals.stableKeyForSession(intent.sessionId);
         if (actualStableKey && !expectedStableKeys.has(actualStableKey)) {
           throw new Error("Terminal session is not owned by the requested environment and tab");
         }
@@ -175,7 +193,7 @@ export function registerTeardownCommands(
         if (actualStableKey) sessionIds.add(intent.sessionId);
       }
       for (const kind of ["container", "local"] as const) {
-        const stableId = terminalSessionIdsByStableKey.get(
+        const stableId = context.runtime.terminals.sessionIdForStableKey(
           stableTerminalKey(kind, environment.id, intent.tabId) ?? "",
         );
         if (stableId) sessionIds.add(stableId);
@@ -190,8 +208,9 @@ export function registerTeardownCommands(
           }
         }
       }
-      for (const sessionId of sessionIds) explicitlyCloseTerminalSession(sessionId);
-      await deleteTerminalHistories({
+      for (const sessionId of sessionIds)
+        context.runtime.terminals.explicitlyCloseSession(sessionId);
+      await context.runtime.terminals.history.deleteHistories({
         dataDir: context.storage.getDataDir(),
         environmentId: environment.id,
         tabId: intent.tabId,
@@ -231,6 +250,31 @@ export function registerTeardownCommands(
     // Intents written by this release carry the downgrade fence; older ones do
     // not. Both are replayed with the same non-destructive close.
     const { sessionId: requestedSessionId } = unfenceTabTeardownSessionId(intent.sessionId);
+    if (isReplacedSessionCloseKey(intent.tabId)) {
+      // A session a resume replaced (`replacedSessionCloseIntent`). The backend
+      // wrote its id, and no tab maps it any more, so there is no mapping to
+      // check it against or retire: only the last-owner rules apply.
+      if (!requestedSessionId) return;
+      await withProviderSessionTeardownLock(
+        context.storage,
+        environment.id,
+        agent,
+        requestedSessionId,
+        async () => {
+          // A tab that resumed it again, or a Multi Review, owns it now and
+          // closes it itself.
+          const heldElsewhere = await providerSessionHeldElsewhere(context.storage, {
+            environmentId: environment.id,
+            agent,
+            providerSessionId: requestedSessionId,
+          });
+          if (heldElsewhere) return;
+          await closeProviderSession(environment, agent, requestedSessionId, context);
+          context.nativeAgents?.releaseProviderSession?.(environment.id, agent, requestedSessionId);
+        },
+      );
+      return;
+    }
     const logicalSessionKey = `env-${environment.id}:${intent.tabId}`;
     const storageKey = nativeAgentSessionStorageKey(environment.id, agent, logicalSessionKey);
     const persistedSession = await context.storage.getNativeAgentSession(storageKey);
@@ -261,7 +305,12 @@ export function registerTeardownCommands(
     // Legacy/unmapped sessions are left to orphan reconciliation rather than
     // risking closing another tab's conversation.
     const providerSessionId = persistedSession?.providerSessionId;
-    if (!providerSessionId) return;
+    let resumable = intent.resumableSessionId;
+    if (!providerSessionId) {
+      if (resumable)
+        await recordDesignLinkSession(context, environment.id, intent.tabId, agent, resumable);
+      return;
+    }
     await withProviderSessionTeardownLock(
       context.storage,
       environment.id,
@@ -281,20 +330,27 @@ export function registerTeardownCommands(
           providerSessionId,
           exceptLogicalSessionKey: logicalSessionKey,
         });
+        // Read before the close: Codex resumes its thread, which only the open
+        // session can name.
+        const latestIntent = (await context.storage.getEnvironment(environment.id))
+          ?.tabTeardownIntents?.[intent.tabId];
+        resumable =
+          latestIntent?.createdAt === intent.createdAt
+            ? latestIntent.resumableSessionId
+            : resumable;
+        resumable ??= await resumableSessionId(context, environment.id, agent, providerSessionId);
+        if (resumable) {
+          // Persist before close: the provider may remove the session and lose
+          // its response. Reconciliation must not need that live session again.
+          await context.storage.recordTabTeardownSessionId(
+            environment.id,
+            intent.tabId,
+            intent.createdAt,
+            resumable,
+          );
+        }
         if (!heldElsewhere) {
-          if (agent === "opencode") {
-            await closeOpenCodeTabSession(environment.id, providerSessionId, context);
-          } else {
-            const bridge = await peekTabTeardownBridge(environment, agent, context);
-            if (!bridge) {
-              throw new Error("Tab teardown bridge is unavailable or unhealthy");
-            }
-            await closeBridgeSessionRetaining(agent, providerSessionId, (method, path) =>
-              requestProviderTabSession(new URL(`http://127.0.0.1:${bridge.port}${path}`), method, {
-                Authorization: `Bearer ${bridge.authToken}`,
-              }),
-            );
-          }
+          await closeProviderSession(environment, agent, providerSessionId, context);
           context.nativeAgents?.releaseProviderSession?.(environment.id, agent, providerSessionId);
         }
         // The provider-side close is confirmed (or another owner keeps it), so the
@@ -303,6 +359,9 @@ export function registerTeardownCommands(
         await context.storage.invalidateNativeAgentSession(storageKey, providerSessionId);
       },
     );
+    // Canvas writes stay outside the provider teardown lock.
+    if (resumable)
+      await recordDesignLinkSession(context, environment.id, intent.tabId, agent, resumable);
   };
 
   const finishTabTeardown = async (
@@ -310,7 +369,10 @@ export function registerTeardownCommands(
     intent: TabTeardownIntent,
     context: CommandContext,
   ): Promise<void> => {
-    context.agentTools?.revokeTab?.(environmentId, intent.tabId);
+    // A replaced-session intent names no tab, so it has no credential to revoke.
+    if (!isReplacedSessionCloseKey(intent.tabId)) {
+      context.agentTools?.revokeTab?.(environmentId, intent.tabId);
+    }
     await context.storage.clearTabTeardownIntent(environmentId, intent.tabId, intent.createdAt);
   };
 
@@ -322,6 +384,9 @@ export function registerTeardownCommands(
     );
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
     const tabId = asNonBlankString(args.tabId, "tabId");
+    // Those keys carry a backend-written session id that replay trusts; a
+    // caller-supplied one is not close authority.
+    if (isReplacedSessionCloseKey(tabId)) throw new Error("tabId is reserved");
     const environment = await context.storage.getEnvironment(environmentId);
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     if (!isTabTeardownKind(args.kind)) throw new Error("kind is not a supported tab teardown kind");
@@ -467,25 +532,11 @@ export function registerTeardownCommands(
       referencedNativeTabs.set(environment.id, native);
     }
 
-    let terminals = 0;
-    for (const [sessionId, stableKey] of terminalStableKeysBySessionId) {
-      const [, environmentId, tabId] = stableKey.split("\0");
-      if (!environmentId || !tabId) continue;
-      if (referencedTerminalTabs.get(environmentId)?.has(tabId)) {
-        orphanedTerminalMissingSince.delete(sessionId);
-        continue;
-      }
-      const missingSince = orphanedTerminalMissingSince.get(sessionId);
-      if (missingSince === undefined) {
-        orphanedTerminalMissingSince.set(sessionId, now);
-        continue;
-      }
-      if (now - missingSince < graceMs) continue;
-      console.warn(`[backend] Reaping orphaned terminal ${environmentId}/${tabId}`);
-      explicitlyCloseTerminalSession(sessionId);
-      orphanedTerminalMissingSince.delete(sessionId);
-      terminals += 1;
-    }
+    const terminals = context.runtime.terminals.reapOrphanedSessions(
+      (environmentId, tabId) => referencedTerminalTabs.get(environmentId)?.has(tabId) === true,
+      now,
+      graceMs,
+    );
 
     const teardownTab = commands.get("teardown_tab");
     let nativeSessions = 0;
@@ -573,4 +624,40 @@ export function registerTeardownCommands(
       : undefined;
     return { terminals, nativeSessions, tmuxSessions: tmux?.reaped ?? 0 };
   });
+}
+
+/**
+ * The identity a later resume of a closing tab's conversation names: the
+ * provider's own (Codex's thread id) read from the still-open session, or the
+ * session id for providers that resume by it. `undefined` rather than a guess
+ * when a Codex thread cannot be read.
+ */
+async function resumableSessionId(
+  context: CommandContext,
+  environmentId: string,
+  agent: NativeAgentProvider,
+  providerSessionId: string,
+): Promise<string | undefined> {
+  if (!context.design) return undefined;
+  const read = await context.nativeAgents
+    ?.resumableSessionIdIfRunning?.(environmentId, agent, providerSessionId)
+    .catch(() => undefined);
+  return read ?? (agent === "codex" ? undefined : providerSessionId);
+}
+
+/**
+ * A design link names the closing tab. Once the tab's native-session mapping
+ * is retired the tab id no longer leads to the conversation, so the link
+ * keeps the identity a resume needs instead. Never fails the close.
+ */
+async function recordDesignLinkSession(
+  context: CommandContext,
+  environmentId: string,
+  tabId: string,
+  agent: NativeAgentProvider,
+  sessionId: string,
+): Promise<void> {
+  await context.design
+    ?.recordTabSession({ environmentId, tabId, platform: agent, providerSessionId: sessionId })
+    .catch(() => undefined);
 }

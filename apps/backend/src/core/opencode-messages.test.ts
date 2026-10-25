@@ -1,7 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import {
+  RECORDED_ARTIFACT_ERROR_CODE,
+  RECORDED_PUBLICATION_ID,
+  RECORDED_PUBLISH_ARTIFACT_ARGS,
+  RECORDED_PUBLISH_ARTIFACT_ERROR_TEXT,
+  RECORDED_PUBLISH_ARTIFACT_RESULT_TEXT,
+  SUCCESSFUL_PUBLISH_CONTRACT,
+  publishArtifactCallContract,
+} from "@orkestrator/protocol/testing/artifact-tool-fixtures";
+import {
   normalizeOpenCodeInlineError,
   normalizeOpenCodeInteractiveMessage,
+  normalizeOpenCodeTranscriptMessages,
   OPEN_CODE_TOOL_SCHEMA_REJECTION_HINT,
 } from "./opencode-messages.js";
 
@@ -152,6 +162,18 @@ describe("normalizeOpenCodeInlineError", () => {
     });
   });
 
+  test("names the failed message's provider and model, for the sign-in action", () => {
+    const message = failed({
+      name: "APIError",
+      data: { message: "This API key has expired.", statusCode: 401 },
+    });
+    Object.assign(message.info, { providerID: "opencode-go", modelID: "deepseek-v4-pro" });
+    expect(normalizeOpenCodeInlineError(message)).toMatchObject({
+      content: "Model request failed (HTTP 401): This API key has expired.",
+      modelId: "opencode-go/deepseek-v4-pro",
+    });
+  });
+
   test("explains a provider refusing a tool's JSON Schema", () => {
     expect(
       normalizeOpenCodeInlineError(
@@ -294,5 +316,98 @@ describe("normalizeOpenCodeInteractiveMessage reasoning and timestamps", () => {
       );
       expect(normalized?.createdAt).toBe("1970-01-01T00:00:00.000Z");
     }
+  });
+});
+
+describe("transcript artifact tool calls", () => {
+  /*
+   * The web client anchors a published artifact on the successful
+   * `publish_artifact` call naming it, by the call's name and arguments.
+   * Recorded OpenCode 1.19 tool parts: its MCP adapter joins the server and
+   * tool as `orkestrator_publish_artifact`, returns the result text as
+   * `output`, and throws an `isError` result's text, which the part keeps as
+   * `state.error`.
+   */
+  function publishMessage(state: Record<string, unknown>): unknown {
+    return {
+      info: {
+        id: "msg_artifact",
+        sessionID: "ses_artifact",
+        role: "assistant",
+        time: { created: 1_760_000_000_000, completed: 1_760_000_002_000 },
+        providerID: "anthropic",
+        modelID: "claude-sonnet",
+      },
+      parts: [
+        {
+          id: "prt_publish",
+          sessionID: "ses_artifact",
+          messageID: "msg_artifact",
+          type: "tool",
+          callID: "toolu_publish",
+          tool: "orkestrator_publish_artifact",
+          state: {
+            input: { ...RECORDED_PUBLISH_ARTIFACT_ARGS },
+            time: { start: 1_760_000_000_500, end: 1_760_000_001_500 },
+            ...state,
+          },
+        },
+      ],
+    };
+  }
+
+  function publishPart(state: Record<string, unknown>) {
+    const [message] = normalizeOpenCodeTranscriptMessages([publishMessage(state)], () => {});
+    const part = (message?.parts as Array<Record<string, unknown>> | undefined)?.find(
+      (candidate) => candidate.type === "tool-invocation",
+    );
+    if (!part) throw new Error("missing publish_artifact part");
+    return part as Record<string, unknown> & { toolOutput?: string; toolError?: string };
+  }
+
+  test("a successful publish projects a recognisable call with its arguments", () => {
+    const part = publishPart({
+      status: "completed",
+      output: RECORDED_PUBLISH_ARTIFACT_RESULT_TEXT,
+      title: "",
+      metadata: { truncated: false },
+    });
+
+    expect(publishArtifactCallContract(part)).toEqual({ ...SUCCESSFUL_PUBLISH_CONTRACT });
+    expect(part.toolName).toBe("orkestrator_publish_artifact");
+    expect(part.toolOutput).toContain(RECORDED_PUBLICATION_ID);
+  });
+
+  test("the shared registration's artifact grant is redacted from the normalized transcript", () => {
+    const grant = "oag1.AAAAAAAAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+    const message = publishMessage({
+      status: "completed",
+      input: { ...RECORDED_PUBLISH_ARTIFACT_ARGS, scopeCapability: grant },
+      output: RECORDED_PUBLISH_ARTIFACT_RESULT_TEXT,
+      title: "",
+      metadata: { truncated: false },
+    });
+    const normalized = normalizeOpenCodeTranscriptMessages([message], () => {});
+    const parts = (normalized[0]?.parts ?? []) as Array<Record<string, unknown>>;
+    const part = parts.find((candidate) => candidate.type === "tool-invocation")!;
+
+    expect(JSON.stringify(normalized)).not.toContain(grant);
+    expect((part.toolArgs as Record<string, unknown>).scopeCapability).toBe("[redacted]");
+    // Publication anchoring still reads the call's real arguments.
+    expect(publishArtifactCallContract(part)).toEqual({ ...SUCCESSFUL_PUBLISH_CONTRACT });
+    // The provider's record is untouched.
+    expect(JSON.stringify(message)).toContain(grant);
+  });
+
+  test("a refused publish is not a success and keeps its error code", () => {
+    const part = publishPart({
+      status: "error",
+      error: `Error: ${RECORDED_PUBLISH_ARTIFACT_ERROR_TEXT}`,
+    });
+    const contract = publishArtifactCallContract(part);
+
+    expect(contract.tool).toBe("publish_artifact");
+    expect(contract.toolState).not.toBe("success");
+    expect(part.toolError).toContain(RECORDED_ARTIFACT_ERROR_CODE);
   });
 });

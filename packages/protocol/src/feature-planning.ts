@@ -413,6 +413,19 @@ export function formatFeatureStoriesForBuild(feature: FeaturePlannerFeature): {
  * ------------------------------------------------------------------ */
 
 /**
+ * The transcript-artifact conversation a planning exchange's publications
+ * belong to: the feature's planning chat, or one story's refinement chat.
+ * Both run in the feature's one Codex session, but each chat is its own
+ * transcript, so each owns its own artifacts. Chosen by the backend from the
+ * planning record, never by the model.
+ */
+export function featurePlanningConversationKey(featureId: string, storyId?: string): string {
+  return storyId
+    ? `feature-planning:${featureId}:story:${storyId}`
+    : `feature-planning:${featureId}`;
+}
+
+/**
  * Version 1 is the first backend-owned planning record. Conversations driven by
  * the previous React controller carried no record at all; they are adopted from
  * their unanswered persisted message on startup (see the backend service).

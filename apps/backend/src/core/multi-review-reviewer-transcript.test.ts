@@ -120,7 +120,7 @@ describe("conditional reviewer transcript reads", () => {
   test("sends bounded arguments and answers unchanged without messages", async () => {
     const fake = snapshotProvider();
     const first = await readReviewerTranscript(fake.provider, "session-a", undefined);
-    expect(first).toMatchObject({ kind: "snapshot", messages: [{ revision: 1 }], fallback: false });
+    expect(first).toMatchObject({ kind: "snapshot", messages: [{ revision: 1 }] });
     expect(fake.calls[0]).toEqual({ limit: 500, targetBytes: 2 * 1024 * 1024 });
 
     const second = await readReviewerTranscript(
@@ -131,7 +131,6 @@ describe("conditional reviewer transcript reads", () => {
     expect(second).toEqual({
       kind: "unchanged",
       sourceToken: first.kind === "snapshot" ? first.sourceToken! : "",
-      fallback: false,
     });
     expect(fake.calls[1]?.knownSourceToken).toBe("rev-1");
 
@@ -159,33 +158,19 @@ describe("conditional reviewer transcript reads", () => {
     expect(fake.calls.every((call) => call.knownSourceToken === undefined)).toBe(true);
   });
 
-  test("providers without a snapshot surface use the bounded compatibility path", async () => {
-    const calls: Array<{ limit?: number } | undefined> = [];
+  test("a provider without a snapshot surface fails the read instead of reading unbounded", async () => {
+    let reads = 0;
     const provider = {
       agent: "claude",
-      async messages(_sessionId: string, options?: { limit?: number }) {
-        calls.push(options);
-        return Array.from({ length: 700 }, (_, index) => ({ index }));
+      async messages() {
+        reads += 1;
+        return [];
       },
     } as unknown as BuildPipelineProvider;
-    const read = await readReviewerTranscript(provider, "session", undefined);
-    expect(read).toMatchObject({ kind: "snapshot", fallback: true, truncated: true });
-    expect(read.kind === "snapshot" ? read.messages : []).toHaveLength(500);
-    expect(read.kind === "snapshot" ? read.sourceToken : "token").toBeUndefined();
-    // The provider itself is asked for no more than the tab can show.
-    expect(calls).toEqual([{ limit: MAX_REVIEWER_TRANSCRIPT_MESSAGES }]);
-  });
-
-  test("a compatibility read that honours the limit still reports possible older history", async () => {
-    const provider = {
-      agent: "claude",
-      async messages(_sessionId: string, options?: { limit?: number }) {
-        return Array.from({ length: options?.limit ?? 700 }, (_, index) => ({ index }));
-      },
-    } as unknown as BuildPipelineProvider;
-    const read = await readReviewerTranscript(provider, "session", undefined);
-    expect(read).toMatchObject({ kind: "snapshot", fallback: true, truncated: true });
-    expect(read.kind === "snapshot" ? read.messages : []).toHaveLength(500);
+    await expect(readReviewerTranscript(provider, "session", undefined)).rejects.toThrow(
+      "no bounded transcript snapshot surface",
+    );
+    expect(reads).toBe(0);
   });
 });
 
@@ -508,11 +493,19 @@ describe("reviewer history pages", () => {
           ? messages.slice(-options.limit)
           : messages;
       },
+      // A snapshot surface with no epoch and no page route.
+      async transcriptSnapshot(_id: string, options: { limit: number }) {
+        return {
+          messages: messages.slice(-options.limit),
+          complete: messages.length <= options.limit,
+          sourceToken: "t",
+        };
+      },
     } as unknown as BuildPipelineProvider;
     const owner = { sessionKey: key, providerSessionId: "session-1" };
     const read = await readReviewerTranscript(provider, "session-1", undefined, { key });
     if (read.kind !== "snapshot" || !read.historyCursor) throw new Error("expected a cursor");
-    expect(read).toMatchObject({ fallback: true, historyEpoch: LEGACY_HISTORY_EPOCH });
+    expect(read).toMatchObject({ historyEpoch: LEGACY_HISTORY_EPOCH });
     expect(ids(read.messages)[0]).toBe("m200");
 
     const first = await readReviewerHistoryPage(provider, owner, read.historyCursor, {
@@ -580,6 +573,14 @@ describe("reviewer history pages", () => {
       async messages(_id: string, options?: { limit?: number }) {
         return options?.limit ? messages.slice(-options.limit) : messages;
       },
+      // Raw envelopes, no epoch and no page route: pages join by identity.
+      async transcriptSnapshot(_id: string, options: { limit: number }) {
+        return {
+          messages: messages.slice(-options.limit),
+          complete: messages.length <= options.limit,
+          sourceToken: "t",
+        };
+      },
     } as unknown as BuildPipelineProvider;
     const read = await readReviewerTranscript(provider, "ses", undefined, { key });
     if (read.kind !== "snapshot" || !read.historyCursor) throw new Error("expected a cursor");
@@ -610,7 +611,7 @@ describe("reviewer history pages", () => {
     expect(next.complete).toBe(true);
   });
 
-  test("the compatibility tail normalizes OpenCode rows and keeps its cursor on the raw row", async () => {
+  test("a raw snapshot tail normalizes OpenCode rows and keeps its cursor on the raw row", async () => {
     // An id-less envelope gets a display id; the cursor must still name a row
     // the next page's raw window search can find, or none at all.
     const messages = [
@@ -629,10 +630,17 @@ describe("reviewer history pages", () => {
       async messages(_id: string, options?: { limit?: number }) {
         return options?.limit ? messages.slice(-options.limit) : messages;
       },
+      // Raw envelopes, no epoch and no page route: pages join by identity.
+      async transcriptSnapshot(_id: string, options: { limit: number }) {
+        return {
+          messages: messages.slice(-options.limit),
+          complete: messages.length <= options.limit,
+          sourceToken: "t",
+        };
+      },
     } as unknown as BuildPipelineProvider;
     const read = await readReviewerTranscript(provider, "ses", undefined, { key });
     if (read.kind !== "snapshot") throw new Error("expected a snapshot");
-    expect(read.fallback).toBe(true);
     expect(read.messages).toHaveLength(500);
     expect(read.messages.at(-2)).toMatchObject({ id: "error-opencode-failed", role: "assistant" });
     expect(read.messages.at(-1)).toBe(messages.at(-1));

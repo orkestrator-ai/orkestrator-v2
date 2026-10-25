@@ -4,6 +4,7 @@
 #
 #   bash docker/tests/final-image-smoke.sh <image>
 #
+# - the real entrypoint reaches ready for this boot as the node user;
 # - the manifest exists and every agent/runtime version it names is the one
 #   the installed CLI reports;
 # - every bridge the manifest lists starts from its built entry point and
@@ -11,8 +12,9 @@
 # - Codex's code-mode host is installed beside it;
 # - Chromium launches for the `node` user.
 #
-# The container has no network and runs `sleep` instead of the entrypoint;
-# it is labelled for this run and removed on exit. Nothing else is touched.
+# The container has no network, no host mounts or credentials, and uses full
+# network policy to avoid DNS/firewall prerequisites. It is labelled for this
+# run and removed on exit. Nothing else is touched.
 set -euo pipefail
 
 IMAGE="${1:?usage: final-image-smoke.sh <image>}"
@@ -29,7 +31,31 @@ fail() {
 }
 
 docker run -d --name "$RUN" --label "orkestrator-image-smoke=$RUN" --network none \
-    --entrypoint sleep "$IMAGE" infinity >/dev/null
+    --shm-size=1g -e NETWORK_MODE=full "$IMAGE" >/dev/null
+
+# Do not accept stale markers: readiness must name PID 1 from this boot.
+ready=0
+for _ in $(seq 1 120); do
+    if docker exec -i "$RUN" bash 2>/dev/null <<'READY'
+start=$(awk '{print $22}' /proc/1/stat)
+jq -e --arg start "$start" '
+    .version == 1 and .phase == "ready" and .pid1Start == $start
+' /run/orkestrator/boot-status.json >/dev/null 2>&1
+READY
+    then
+        ready=1
+        break
+    fi
+    [ "$(docker inspect -f '{{.State.Running}}' "$RUN")" = true ] || break
+    sleep 1
+done
+[ "$ready" = 1 ] || fail "entrypoint did not reach ready for the current boot"
+docker exec "$RUN" bash -c '
+    test "$(stat -c %U "/proc/$(cat /run/orkestrator/keepalive.pid)")" = node &&
+    test "$(cat /etc/orkestrator/network-mode)" = full &&
+    test -f /tmp/.entrypoint-complete
+' || fail "entrypoint did not drop privileges or complete setup"
+echo "ok   entrypoint ready (node)"
 
 in_container() {
     docker exec -u node "$RUN" bash -c "$1"
@@ -43,7 +69,9 @@ field() {
 # Versions: the manifest must name what is installed.
 for entry in claude codex opencode grok pi playwright; do
     expected="$(field ".agents.\"$entry\"")"
-    reported="$(in_container "$entry --version 2>&1 | head -n 1")" || fail "$entry is not runnable"
+    # Startup warnings belong on stderr; retain the CLI status and compare its
+    # version output rather than the first line of a merged diagnostic stream.
+    reported="$(in_container "$entry --version")" || fail "$entry is not runnable"
     case "$reported" in
         *"$expected"*) echo "ok   $entry $expected" ;;
         *) fail "$entry reports '$reported', the manifest says $expected" ;;

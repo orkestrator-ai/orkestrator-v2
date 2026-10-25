@@ -129,6 +129,8 @@ function createHarness(
   const updateConnectionToken = mock(async () => connectionList);
   const renameConnection = mock(async () => connectionList);
   const useConnection = mock(async () => connectionList);
+  const previewCommandHandover = mock(async () => ({ kind: "already-command-node" as const }));
+  const handOverCommandNode = mock(async () => null);
   const forgetConnection = mock(async () => connectionList);
   const openConnectionWindow = mock(async () => undefined);
   const browserPreviewState = {
@@ -185,6 +187,8 @@ function createHarness(
     updateConnectionToken,
     renameConnection,
     useConnection,
+    previewCommandHandover,
+    handOverCommandNode,
     forgetConnection,
     openConnectionWindow,
     browserPreviews: options.browserPreviews === false ? undefined : browserPreviews,
@@ -243,6 +247,8 @@ function createHarness(
     updateConnectionToken,
     renameConnection,
     useConnection,
+    previewCommandHandover,
+    handOverCommandNode,
     forgetConnection,
     openConnectionWindow,
     browserPreviews,
@@ -533,6 +539,46 @@ describe("main IPC registration", () => {
     ).rejects.toThrow("Expected a browser preview URL and visibility");
   });
 
+  test("passes a service attach's navigation basis through and drops a malformed one", async () => {
+    const harness = createHarness();
+    const bounds = { x: 0, y: 0, width: 640, height: 480 };
+    const service = {
+      backendInstanceId: "bk_backend_1",
+      environmentId: "env-1",
+      serviceId: "svc_aaaaaaaa",
+      path: "/next",
+    };
+    await harness.invoke("orkestrator:browser-preview:attach", {
+      tabId: "browser-1",
+      service,
+      navigationBasis: 4,
+      bounds,
+      visible: true,
+    });
+    expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
+      tabId: "browser-1",
+      service,
+      navigationBasis: 4,
+      bounds,
+      visible: true,
+    });
+    for (const navigationBasis of [-1, 1.5, "4", null]) {
+      await harness.invoke("orkestrator:browser-preview:attach", {
+        tabId: "browser-1",
+        service,
+        navigationBasis,
+        bounds,
+        visible: true,
+      });
+      expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
+        tabId: "browser-1",
+        service,
+        bounds,
+        visible: true,
+      });
+    }
+  });
+
   test("routes trusted capture channels and removes the legacy annotation channels", async () => {
     const harness = createHarness();
     for (const legacy of ["annotation-start", "annotation-status", "annotation-cancel"]) {
@@ -811,6 +857,25 @@ describe("main IPC registration", () => {
     expect(harness.openConnectionWindow).toHaveBeenCalledWith("remote-1", expect.anything());
     await harness.invoke("orkestrator:connections:forget", "remote-1");
     expect(harness.forgetConnection).toHaveBeenCalledWith("remote-1", expect.anything());
+    await harness.invoke("orkestrator:connections:preview-command-handover", "remote-1");
+    expect(harness.previewCommandHandover).toHaveBeenCalledWith("remote-1", expect.anything());
+    await harness.invoke("orkestrator:connections:hand-over-command", {
+      targetConnectionId: "remote-1",
+      nodeIds: ["bk_gram"],
+      connectionIds: ["remote-2"],
+    });
+    expect(harness.handOverCommandNode).toHaveBeenCalledWith(
+      {
+        targetConnectionId: "remote-1",
+        nodeIds: ["bk_gram"],
+        connectionIds: ["remote-2"],
+        includeSelf: true,
+      },
+      expect.anything(),
+    );
+    await expect(
+      harness.invoke("orkestrator:connections:hand-over-command", { targetConnectionId: 1 }),
+    ).rejects.toThrow("target connection ID");
   });
 
   test("validates connection IPC input", async () => {

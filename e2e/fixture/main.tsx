@@ -1,22 +1,32 @@
+import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
+import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
+import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
+import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
+import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
+import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
+import { StructuredReviewLayoutFixture } from "./StructuredReviewLayoutFixture";
+import { AnnotationDestinationLayoutFixture } from "./AnnotationDestinationLayoutFixture";
 import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
 import {
   AgentLaunchDialog,
   type AgentLaunchSelection,
 } from "../../apps/web/src/components/launch/AgentLaunchDialog";
 import { OpenCodePipelineTranscriptFixture } from "./OpenCodePipelineTranscriptFixture";
-import { TmuxComposeFocusFixture } from "./TmuxComposeFocusFixture";
+import { TmuxComposeFocusFixture, installTmuxComposeFocusFixture } from "./TmuxComposeFocusFixture";
 import { AgentUsageFixture } from "./AgentUsageFixture";
 import { AddProjectDialogFixture } from "./AddProjectDialogFixture";
 import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { CodexSubagentCardsFixture } from "./CodexSubagentCardsFixture";
-import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
-import { DesignCanvasFixture } from "./DesignCanvasFixture";
+import { MachinesSettingsFixture } from "./MachinesSettingsFixture";
+import { DesignCanvasFixture, installDesignCanvasFixture } from "./DesignCanvasFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
+import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
 import { FullscreenSettingsFixture } from "./FullscreenSettingsFixture";
+import { SettingsMachineFixture } from "./SettingsMachineFixture";
 import { GlobalSettingsFixture } from "./GlobalSettingsFixture";
 import { GitHubCliSetupFixture } from "./GitHubCliSetupFixture";
 import { MultiReviewFlowFixture } from "./MultiReviewFlowFixture";
@@ -45,6 +55,13 @@ import {
   COMPOSE_MIN_INPUT_HEIGHT,
 } from "../../apps/web/src/components/chat/compose-metrics";
 import { DiffViewerTab } from "../../apps/web/src/components/terminal/DiffViewerTab";
+import {
+  addedFileDiffBody,
+  diffFixtureObjectId,
+  diffFixtureResourceKey,
+  liveDiffFixtureBody,
+  type DiffFixtureStatus,
+} from "./diffViewerBackend";
 import { TiptapMarkdownEditor } from "../../apps/web/src/components/markdown/TiptapMarkdownEditor";
 import { MonacoFileEditor } from "../../apps/web/src/components/terminal/MonacoFileEditor";
 import { ChangedFileItem } from "../../apps/web/src/components/files-panel/ChangedFileItem";
@@ -91,6 +108,22 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 
+const SidebarDragFixture = lazy(async () => ({
+  default: (await import("../../apps/web/src/test/SidebarDragFixture")).SidebarDragFixture,
+}));
+
+const RichTranscriptPerfFixture = lazy(async () => ({
+  default: (await import("./RichTranscriptPerfFixture")).RichTranscriptPerfFixture,
+}));
+
+const DesignLibraryPerfFixture = lazy(async () => ({
+  default: (await import("./DesignLibraryPerfFixture")).DesignLibraryPerfFixture,
+}));
+
+const TranscriptPagingFixture = lazy(async () => ({
+  default: (await import("./TranscriptPagingFixture")).TranscriptPagingFixture,
+}));
+
 const NativeHeldSendFixture = lazy(async () => ({
   default: (await import("./NativeHeldSendFixture")).NativeHeldSendFixture,
 }));
@@ -117,6 +150,9 @@ const CloseRetentionFixture = lazy(async () => ({
 const PaneBreakpointFixture = lazy(async () => ({
   default: (await import("./PaneBreakpointFixture")).PaneBreakpointFixture,
 }));
+const SetupRecoveryFixture = lazy(async () => ({
+  default: (await import("./SetupRecoveryFixture")).SetupRecoveryFixture,
+}));
 
 const EnvironmentSettingsDrawerFixture = lazy(async () => ({
   default: (await import("./EnvironmentSettingsDrawerFixture")).EnvironmentSettingsDrawerFixture,
@@ -127,6 +163,12 @@ declare global {
     lastCreateEnvironmentOptions?: ClaudeOptions;
   }
 }
+
+const KeyboardShortcutsFixture = lazy(() =>
+  import("./KeyboardShortcutsFixture").then((module) => ({
+    default: module.KeyboardShortcutsFixture,
+  })),
+);
 
 function assertFixtureArgs(
   command: string,
@@ -165,24 +207,8 @@ function CreateEnvironmentFixture() {
   );
 }
 
-function DesignLaunchFixture() {
-  useEffect(() => {
-    useEnvironmentStore.setState({
-      environments: [
-        {
-          id: "design-fixture",
-          environmentType: "local",
-          status: "running",
-          containerId: null,
-          worktreePath: "/tmp/design-fixture",
-        } as import("../../apps/web/src/types").Environment,
-      ],
-    });
-    usePaneLayoutStore.setState((state) => ({
-      hydration: new Map(state.hydration).set("design-fixture", "done"),
-    }));
-  }, []);
-
+/** Installed before the fixture renders. */
+function installDesignLaunchFixture() {
   // A healthy protocol-v2 backend with an empty design library.
   const capabilities = {
     protocolVersion: 2,
@@ -238,6 +264,25 @@ function DesignLaunchFixture() {
       throw new Error(`Unknown backend command: ${command}`);
     },
   } as Window["orkestrator"];
+}
+
+function DesignLaunchFixture() {
+  useEffect(() => {
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "design-fixture",
+          environmentType: "local",
+          status: "running",
+          containerId: null,
+          worktreePath: "/tmp/design-fixture",
+        } as import("../../apps/web/src/types").Environment,
+      ],
+    });
+    usePaneLayoutStore.setState((state) => ({
+      hydration: new Map(state.hydration).set("design-fixture", "done"),
+    }));
+  }, []);
 
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
@@ -357,7 +402,19 @@ function NativeComposeFixture() {
     <main className="min-h-screen bg-background pt-4 text-foreground">
       <section data-testid="native-compose-fixture" className="w-full">
         <NativeComposeBar
-          attachments={[]}
+          attachments={
+            new URLSearchParams(window.location.search).has("images")
+              ? ["first", "second"].map((name) => ({
+                  id: name,
+                  type: "image" as const,
+                  name: `${name}.svg`,
+                  path: `/${name}.svg`,
+                  previewUrl: `data:image/svg+xml,${encodeURIComponent(
+                    `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="${name === "first" ? "blue" : "red"}"/></svg>`,
+                  )}`,
+                }))
+              : []
+          }
           onRemoveAttachment={() => {}}
           inputRef={inputRef}
           inputContainerRef={inputContainerRef}
@@ -890,6 +947,7 @@ function MonacoRuntimeFixture() {
 
   return (
     <main className="h-screen bg-background p-4 text-foreground">
+      <KeyboardShortcutsDialog platform="mac" />
       <section data-testid="monaco-runtime-editor" className="h-[32rem] border border-border">
         <MonacoFileEditor
           language="typescript"
@@ -909,12 +967,9 @@ function MonacoRuntimeFixture() {
 const mobileShellTitle =
   "A project and environment name that is far too long for a mobile title bar";
 
-function MobileAppShellFixture() {
-  const [dragStarts, setDragStarts] = useState(0);
-  const searchParams = new URLSearchParams(window.location.search);
-  const desktop = searchParams.has("desktop");
-  const withoutInbox = searchParams.has("withoutInbox");
-
+/** Installed before the fixture renders. */
+function installMobileAppShellFixture() {
+  const desktop = new URLSearchParams(window.location.search).has("desktop");
   if (desktop) {
     delete window.orkestrator;
     window.orkestratorGateway = { enabled: true, desktop: true };
@@ -922,6 +977,11 @@ function MobileAppShellFixture() {
     delete window.orkestrator;
     window.orkestratorGateway = { enabled: true };
   }
+}
+
+function MobileAppShellFixture() {
+  const [dragStarts, setDragStarts] = useState(0);
+  const withoutInbox = new URLSearchParams(window.location.search).has("withoutInbox");
 
   return (
     <main className="flex h-screen flex-col bg-background text-foreground">
@@ -979,21 +1039,31 @@ const changedFileFixtures = {
   },
 } satisfies Record<string, GitFileChange>;
 
-function PathTruncationFixture() {
+function pathPaneIdentityId(kind: string) {
+  return `path-truncation-${kind}`;
+}
+
+/** Installed before the fixture renders. */
+function installPathTruncationFixture() {
+  const bodies = new Map(
+    Object.entries(pathFixtures).map(([kind, filePath]) => {
+      const id = pathPaneIdentityId(kind);
+      return [id, addedFileDiffBody(id, filePath)] as const;
+    }),
+  );
   window.orkestrator = {
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
-      if (command !== "read_container_file") {
+      const body = bodies.get(String(args?.diffIdentityId));
+      if (command !== "changes_get_diff" || !body) {
         throw new Error(`Unexpected fixture command: ${command}`);
       }
-
-      return {
-        path: String(args?.filePath ?? ""),
-        content: "export {};",
-        language: "typescript",
-      } as T;
+      return body as T;
     },
-  } as Window["orkestrator"];
+    listen: () => () => undefined,
+  } as unknown as Window["orkestrator"];
+}
 
+function PathTruncationFixture() {
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
       {Object.entries(changedFileFixtures).map(([pane, change]) => (
@@ -1014,10 +1084,12 @@ function PathTruncationFixture() {
           style={{ width: "640px" }}
         >
           <DiffViewerTab
+            target={{
+              kind: "historical",
+              diffIdentityId: pathPaneIdentityId(kind),
+              title: filePath,
+            }}
             filePath={filePath}
-            containerId="fixture-container"
-            baseBranch="main"
-            gitStatus="A"
             isActive
           />
         </section>
@@ -1092,91 +1164,62 @@ function BuildPipelineHeaderFixture() {
   );
 }
 
-const diffFixtureOriginal = [
-  "# Frontend State Audit",
-  "",
-  "**Goal:** minimise renderer-owned state so that every client of the same backend",
-  "converges on a consistent view.",
-  "",
-  "## 1. Current architecture",
-  "",
-  "The backend already owns a lot. Storage persists projects, environments and review",
-  "workflows, plus kanban tasks and completion-comment markers.",
-  "",
-  "### The gap",
-  "",
-  "Two things are missing, and every finding below is downstream of them.",
-].join("\n");
-
-const diffFixtureModified = [
-  "# Frontend State Audit — What Should Move",
-  "",
-  "**Goal:** minimise renderer-owned state so that every client of the same backend",
-  "converges on a consistent view of the world.",
-  "",
-  "## 1. Current architecture",
-  "",
-  "The backend already owns a lot. `StorageService` persists projects, environments,",
-  "config, review workflows, kanban tasks and completion-comment markers.",
-  "",
-  "### The gap",
-  "",
-  "Two things are missing, and every finding below is downstream of them.",
-  "",
-  "**(a) There is no general change-notification broadcast** — only a fixed set of",
-  "event names is ever emitted across the whole surface:",
-  "",
-  "```",
-  "environment-renamed",
-  "environment-setup-started",
-  "claude-model-catalog-updated",
-  "```",
-].join("\n");
-
 /**
- * Renders the diff viewer at full height so the phone layout (inline mode, wrapped
- * lines, trimmed gutters) can be inspected at a real mobile viewport.
+ * Renders the diff viewer at full height so the phone layout (unified rows,
+ * wrapped lines, compact header) can be inspected at a real mobile viewport.
+ * `?status=` picks the modified/new/deleted body; `?branch=` names the baseline
+ * ref the backend reports as `ref@oid`.
  */
-function DiffViewerFixture() {
+const diffViewerFixturePath = "docs/audits/frontend-state-audit.md";
+
+/** Installed before the fixture renders. */
+function installDiffViewerFixture() {
   const params = new URLSearchParams(window.location.search);
-  const status = params.get("status");
-  const gitStatus = status === "new" ? "A" : status === "deleted" ? "D" : "M";
-  const filePath = "docs/audits/frontend-state-audit.md";
-  const containerId = "fixture-container";
-  const baseBranch = params.get("branch") ?? "63d12576e9198f24bc2271a6a8c3702dfb391eae";
-  const [viewFileCount, setViewFileCount] = useState(0);
+  const statusParam = params.get("status");
+  const status: DiffFixtureStatus =
+    statusParam === "new" ? "new" : statusParam === "deleted" ? "deleted" : "modified";
+  const filePath = diffViewerFixturePath;
+  const baselineVersion = `${params.get("branch") ?? "main"}@${diffFixtureObjectId}`;
+  const body = liveDiffFixtureBody({ path: filePath, status, baselineVersion });
 
   window.orkestrator = {
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
       switch (command) {
-        case "read_container_file":
-          assertFixtureArgs(command, args, { containerId, filePath });
+        case "changes_resolve_live_detail":
+          assertFixtureArgs(command, args, { resourceKey: diffFixtureResourceKey, path: filePath });
+          return { kind: "identity", identity: body.identity } as T;
+        case "changes_get_diff":
+          assertFixtureArgs(command, args, { diffIdentityId: body.identity.id });
+          return body as T;
+        case "changes_get_view":
+          // The shared projection subscription; the viewer does not depend on it.
           return {
-            path: filePath,
-            content: diffFixtureModified,
-            language: "markdown",
-          } as T;
-        case "read_file_at_branch":
-          assertFixtureArgs(command, args, { containerId, filePath, branch: baseBranch });
-          return {
-            path: filePath,
-            content: diffFixtureOriginal,
-            language: "markdown",
+            kind: "error",
+            error: { code: "unsupported-capability", reasonKey: "changes.error.unsupported" },
           } as T;
         default:
           throw new Error(`Unexpected fixture command: ${command}`);
       }
     },
-  } as Window["orkestrator"];
+    listen: () => () => undefined,
+  } as unknown as Window["orkestrator"];
+}
+
+function DiffViewerFixture() {
+  const filePath = diffViewerFixturePath;
+  const [viewFileCount, setViewFileCount] = useState(0);
 
   return (
     <main className="h-screen bg-background text-foreground">
       <section data-testid="diff-viewer-pane" className="relative h-full w-full">
         <DiffViewerTab
+          target={{
+            kind: "live",
+            resourceKey: diffFixtureResourceKey,
+            path: filePath,
+            title: "frontend-state-audit.md",
+          }}
           filePath={filePath}
-          containerId={containerId}
-          baseBranch={baseBranch}
-          gitStatus={gitStatus}
           isActive
           onSwitchToFileView={() => setViewFileCount((count) => count + 1)}
         />
@@ -1508,6 +1551,22 @@ function systemUsageProcessSnapshot() {
   };
 }
 
+/** Installed before the fixture renders. */
+function installSystemUsageFixture() {
+  window.orkestrator = {
+    invoke: async <T,>(command: string) => {
+      switch (command) {
+        case "get_system_usage":
+          return systemUsageFixtureSnapshot() as T;
+        case "get_environment_process_usage":
+          return systemUsageProcessSnapshot() as T;
+        default:
+          throw new Error(`Unexpected fixture command: ${command}`);
+      }
+    },
+  } as Window["orkestrator"];
+}
+
 /**
  * Title-bar meters plus the default Create PR button, so the process panel's
  * environment names and totals can be compared to the compiled primary fill.
@@ -1526,19 +1585,6 @@ function SystemUsageFixture() {
     ]);
     return () => useProjectStore.getState().setProjects([]);
   }, []);
-
-  window.orkestrator = {
-    invoke: async <T,>(command: string) => {
-      switch (command) {
-        case "get_system_usage":
-          return systemUsageFixtureSnapshot() as T;
-        case "get_environment_process_usage":
-          return systemUsageProcessSnapshot() as T;
-        default:
-          throw new Error(`Unexpected fixture command: ${command}`);
-      }
-    },
-  } as Window["orkestrator"];
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -1611,7 +1657,14 @@ function VirtuosoFollowFixture() {
         <output data-testid="virtuoso-follow-decision">{lastFollowDecision}</output>
       </div>
       <Virtuoso
-        {...scrollProps}
+        // Only Virtuoso's own props; following may run only while allowed
+        // (literal false otherwise), as the shared transcript list wires it.
+        followOutput={scrollProps.followEnabled ? scrollProps.followOutput : false}
+        atBottomStateChange={scrollProps.atBottomStateChange}
+        atBottomThreshold={scrollProps.atBottomThreshold}
+        totalListHeightChanged={scrollProps.totalListHeightChanged}
+        restoreStateFrom={scrollProps.restoreStateFrom}
+        scrollerRef={scrollProps.scrollerRef}
         ref={virtuosoRef}
         data={messages}
         fixedItemHeight={40}
@@ -1661,6 +1714,17 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/annotation-destination-layout")
+    return <AnnotationDestinationLayoutFixture />;
+  if (window.location.pathname === "/structured-review-layout")
+    return <StructuredReviewLayoutFixture />;
+  if (window.location.pathname === "/setup-recovery") {
+    return (
+      <Suspense fallback={null}>
+        <SetupRecoveryFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/coordinator-pane-tree") return <CoordinatorPaneTreeFixture />;
   if (window.location.pathname === "/add-project") return <AddProjectDialogFixture />;
   if (window.location.pathname === "/mail-tiles") {
@@ -1706,12 +1770,37 @@ function fixtureForPath() {
       </Suspense>
     );
   }
-  if (window.location.pathname === "/connections-settings") return <ConnectionsSettingsFixture />;
-  if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
+  if (window.location.pathname === "/sidebar-drag") {
+    return (
+      <Suspense fallback={null}>
+        <SidebarDragFixture />
+      </Suspense>
+    );
+  }
+  if (window.location.pathname === "/merged-project-list") return <MergedProjectListFixture />;
+  if (window.location.pathname === "/environment-status-marker")
+    return <EnvironmentStatusMarkerFixture />;
+  if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
+  if (window.location.pathname === "/agent-account-status") return <AgentAccountStatusFixture />;
+  if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
+  if (window.location.pathname === "/fullscreen-settings")
+    return (
+      <>
+        <KeyboardShortcutsDialog platform="mac" />
+        <FullscreenSettingsFixture />
+      </>
+    );
+  if (window.location.pathname === "/settings-machines") return <SettingsMachineFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
   if (window.location.pathname === "/github-cli-setup") return <GitHubCliSetupFixture />;
-  if (window.location.pathname === "/design-canvas") return <DesignCanvasFixture />;
-  if (window.location.pathname === "/design-launch") return <DesignLaunchFixture />;
+  if (window.location.pathname === "/design-canvas") {
+    installDesignCanvasFixture();
+    return <DesignCanvasFixture />;
+  }
+  if (window.location.pathname === "/design-launch") {
+    installDesignLaunchFixture();
+    return <DesignLaunchFixture />;
+  }
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/sortable-project-folder") {
     return <SortableProjectFolderFixture />;
@@ -1719,12 +1808,25 @@ function fixtureForPath() {
   if (window.location.pathname === "/build-pipeline-header") {
     return <BuildPipelineHeaderFixture />;
   }
-  if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
+  if (window.location.pathname === "/change-tracking") return <ChangeTrackingFixture />;
+  if (window.location.pathname === "/diff-viewer") {
+    installDiffViewerFixture();
+    return <DiffViewerFixture />;
+  }
   if (window.location.pathname === "/native-compose") return <NativeComposeFixture />;
   if (window.location.pathname === "/menu-placement") return <MenuPlacementFixture />;
+  if (window.location.pathname === "/keyboard-shortcuts")
+    return (
+      <Suspense fallback={null}>
+        <KeyboardShortcutsFixture />
+      </Suspense>
+    );
   if (window.location.pathname === "/composer-icon-pickers") return <ComposerIconPickersFixture />;
   if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;
-  if (window.location.pathname === "/mobile-shell") return <MobileAppShellFixture />;
+  if (window.location.pathname === "/mobile-shell") {
+    installMobileAppShellFixture();
+    return <MobileAppShellFixture />;
+  }
   if (window.location.pathname === "/environment-settings-drawer") {
     return (
       <Suspense fallback={null}>
@@ -1732,7 +1834,10 @@ function fixtureForPath() {
       </Suspense>
     );
   }
-  if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
+  if (window.location.pathname === "/path-truncation") {
+    installPathTruncationFixture();
+    return <PathTruncationFixture />;
+  }
   if (window.location.pathname === "/multi-review-launch") {
     return <MultiReviewLaunchDialogFixture />;
   }
@@ -1764,17 +1869,39 @@ function fixtureForPath() {
   if (window.location.pathname === "/native-hydrating-preview") {
     return <NativeHydratingPreviewFixture />;
   }
+  if (window.location.pathname === "/native-attachments") return <NativeAttachmentsFixture />;
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/markdown-editor") return <MarkdownEditorFixture />;
-  if (window.location.pathname === "/system-usage") return <SystemUsageFixture />;
+  if (window.location.pathname === "/system-usage") {
+    installSystemUsageFixture();
+    return <SystemUsageFixture />;
+  }
   if (window.location.pathname === "/pr-check-status") {
     return <PullRequestCheckStatusFixture />;
   }
   if (window.location.pathname === "/workspace-bar-height") {
     return <WorkspaceBarHeightFixture />;
   }
+  if (window.location.pathname === "/transcript-paging")
+    return (
+      <Suspense fallback={null}>
+        <TranscriptPagingFixture />
+      </Suspense>
+    );
+  if (window.location.pathname === "/rich-transcript-perf")
+    return (
+      <Suspense fallback={null}>
+        <RichTranscriptPerfFixture />
+      </Suspense>
+    );
+  if (window.location.pathname === "/design-library-perf")
+    return (
+      <Suspense fallback={null}>
+        <DesignLibraryPerfFixture />
+      </Suspense>
+    );
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;
   if (window.location.pathname === "/agent-usage") return <AgentUsageFixture />;
   if (window.location.pathname === "/background-task-outcome")
@@ -1783,9 +1910,13 @@ function fixtureForPath() {
   if (window.location.pathname === "/opencode-pipeline-transcript")
     return <OpenCodePipelineTranscriptFixture />;
   if (window.location.pathname === "/streaming-transcript") return <StreamingTranscriptFixture />;
-  if (window.location.pathname === "/tmux-compose-focus") return <TmuxComposeFocusFixture />;
+  if (window.location.pathname === "/tmux-compose-focus") {
+    installTmuxComposeFocusFixture();
+    return <TmuxComposeFocusFixture />;
+  }
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;
 }
 
+if (window.location.pathname === "/change-tracking") installChangeTrackingFixture();
 createRoot(document.getElementById("root")!).render(<StrictMode>{fixtureForPath()}</StrictMode>);

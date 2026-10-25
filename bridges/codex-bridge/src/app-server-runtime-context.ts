@@ -196,6 +196,8 @@ export class CodexRuntimeContext {
    * all three resolve names identically.
    */
   readonly commandCatalogue: CodexCommandCatalogue;
+  /** Invalidation only; refreshing exclusions runs outside the stdout loop. */
+  projectSkillsRevision = 0;
   accountRateLimits: EngineRateLimitWindow[] = [];
   accountCredits?: import("./engine/types.js").EngineCreditSnapshot;
 
@@ -230,6 +232,9 @@ export class CodexRuntimeContext {
         : {}),
       ...(options.skillRefreshDebounceMs !== undefined
         ? { skillRefreshDebounceMs: options.skillRefreshDebounceMs }
+        : {}),
+      ...(options.skillColdSettleMs !== undefined
+        ? { skillColdSettleMs: options.skillColdSettleMs }
         : {}),
     });
   }

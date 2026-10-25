@@ -35,7 +35,7 @@ import {
   piSavedEnabled,
 } from "./codecs.js";
 import { parseSource, type ParsedSource } from "./document.js";
-import type { McpSourceStore, SourceFileSnapshot } from "./source-store.js";
+import { contentDigest, type McpSourceStore, type SourceFileSnapshot } from "./source-store.js";
 import type { CanonicalDefinition, ContainerFileReader, NativeEntry, SourceSpec } from "./types.js";
 
 export interface LoadedSource {
@@ -154,6 +154,8 @@ async function loadContainerSource(
   }
   let text: string;
   try {
+    // Decoding drops one leading BOM (`ignoreBOM` is off), as Pi's own
+    // `mcp.json` loader does; a save then writes the file without it.
     text = new TextDecoder("utf-8", { fatal: true }).decode(result.bytes);
   } catch {
     return { spec, file: null, parsed: null, state: "invalid", error: "Not valid UTF-8." };
@@ -163,6 +165,8 @@ async function loadContainerSource(
     state: "ok" as const,
     text,
     revision: await store.revisionOf(result.bytes),
+    // A write into the container is compared against these exact bytes.
+    contentDigest: contentDigest(result.bytes),
   };
   try {
     const parsed = parseSource(spec, text);

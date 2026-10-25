@@ -76,17 +76,21 @@ function observeCodex(
           : sandbox === "readOnly"
             ? "deny"
             : "auto-approve";
-  const trustOverrides = [overrides, (thread.config ?? {}) as Record<string, unknown>].flatMap(
-    (source) =>
-      Object.entries(source).filter(
-        ([key, value]) => /^projects\..*\.trust_level$/.test(key) && value === '"untrusted"',
-      ),
+  const cwd = thread.cwd as string;
+  // A process `-c` override pins with a dotted key. Thread config pins only
+  // as a nested table: Codex ignores a dotted `projects."<path>"` key there.
+  const processPin = Object.entries(overrides).some(
+    ([key, value]) =>
+      key === `projects.${JSON.stringify(cwd)}.trust_level` && value === '"untrusted"',
   );
+  const threadProjects = ((thread.config ?? {}) as { projects?: Record<string, unknown> }).projects;
+  const threadPin =
+    (threadProjects?.[cwd] as { trust_level?: unknown } | undefined)?.trust_level === "untrusted";
   return {
     providerSandbox,
     approvals,
     // Without a pin, Codex loads the configuration of a project it trusts.
-    projectResources: trustOverrides.length === 0,
+    projectResources: !processPin && !threadPin,
     restrictsNetwork,
   };
 }
@@ -99,7 +103,10 @@ runExecutionPolicyConformance({
       const h = await harness({
         // Coordinators must read back the hosted-network lock before dispatch.
         "config/read": () => ({
-          config: { web_search: "disabled", features: { standalone_web_search: false } },
+          config: {
+            web_search: "disabled",
+            features: { standalone_web_search: false, incremental_tools: false },
+          },
           origins: {},
           layers: null,
         }),

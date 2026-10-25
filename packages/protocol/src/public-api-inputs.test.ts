@@ -163,13 +163,19 @@ describe("public action input contract", () => {
   test("every capability with actions groups reads and mutations deliberately", () => {
     for (const capability of PUBLIC_CAPABILITIES) {
       const actions = publicActionsForCapability(capability);
-      if (capability === "tickets" || capability === "mail") expect(actions).toEqual([]);
-      else
-        expect({ capability, count: actions.length > 0 }).toEqual({
-          capability,
-          count: true,
-        });
+      expect({ capability, count: actions.length > 0 }).toEqual({
+        capability,
+        count: true,
+      });
     }
+    expect(publicActionsForCapability("tickets")).toEqual([
+      "ticket.list",
+      "ticket.get",
+      "ticket.create",
+      "ticket.update",
+      "ticket.comment",
+    ]);
+    expect(publicActionsForCapability("mail")).toEqual(["mail.mailboxes", "mail.send"]);
     // Destructive and exec capabilities grant no reads a read-only credential needs.
     for (const capability of ["environments.destructive", "exec"] as const) {
       for (const action of publicActionsForCapability(capability)) {
@@ -179,6 +185,28 @@ describe("public action input contract", () => {
         });
       }
     }
+  });
+
+  test("change-tracking actions are immediate reads granted by read capabilities", () => {
+    expect(PUBLIC_ACTIONS["changes.view"]).toMatchObject({
+      version: 1,
+      mutation: false,
+      effects: [],
+      observation: "immediate",
+    });
+    expect(PUBLIC_ACTIONS["changes.history"]).toMatchObject({
+      version: 1,
+      mutation: false,
+      effects: [],
+      observation: "immediate",
+    });
+    expect(PUBLIC_ACTION_INPUTS["changes.view"].capability).toBe("discovery");
+    expect(PUBLIC_ACTION_INPUTS["changes.view"].input.required).toEqual(["environmentId"]);
+    expect(PUBLIC_ACTION_INPUTS["changes.view"].input.properties.scope?.enum).toEqual([
+      "environment",
+    ]);
+    expect(PUBLIC_ACTION_INPUTS["changes.history"].capability).toBe("sessions.read");
+    expect(PUBLIC_ACTION_INPUTS["changes.history"].input.required).toEqual(["sessionId"]);
   });
 
   test("confirmation classes match the agreed risk table", () => {

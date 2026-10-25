@@ -23,7 +23,7 @@ import {
   CURSOR_AUTHENTICATION_REQUIRED_MESSAGE,
   logout,
 } from "./credentials.js";
-import { listModels, refreshModels } from "./models.js";
+import { listModels, publishedComposer, refreshModels } from "./models.js";
 import { parseAgentMcpConnection, publicCursorMcpServers } from "./mcp.js";
 import {
   identityPublished,
@@ -76,6 +76,15 @@ import {
   isBridgeTranscriptSubRead,
 } from "@orkestrator/protocol/node/bridge-transcript-routes";
 import { cursorTranscriptSource } from "./transcript-source.js";
+import {
+  CHANGE_EVIDENCE_ACK_ROUTE,
+  CHANGE_EVIDENCE_BODY_ROUTE,
+  CHANGE_EVIDENCE_ROUTE,
+  changeEvidenceAckRouteBody,
+  changeEvidenceBodyRouteBody,
+  changeEvidenceReadBody,
+} from "@orkestrator/protocol/node/change-tracking/evidence-routes";
+import { changeEvidenceSpool } from "./change-evidence.js";
 import {
   DISPATCH_OUTCOME_LOST_KIND,
   isNativeAgentExecutionPolicy,
@@ -173,6 +182,7 @@ export async function route(
       });
       return json(response, answer.status, answer.body);
     }
+    if (await routeChangeEvidence(request, response, url)) return;
     const handled = await routeGlobal(request, response, url);
     if (handled) return;
     return await routeSession(request, response, url, clientSignal);
@@ -210,6 +220,33 @@ export async function route(
   }
 }
 
+/**
+ * The change-evidence spool (`change-evidence.ts`), behind the same bearer as
+ * the transcript routes. Pulling never touches a session: no liveness, no
+ * hydration, no re-attach. Only an acknowledgment releases anything.
+ */
+async function routeChangeEvidence(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+): Promise<boolean> {
+  const query = (name: string) => url.searchParams.get(name);
+  if (url.pathname === CHANGE_EVIDENCE_ROUTE && request.method === "GET") {
+    json(response, 200, changeEvidenceReadBody(changeEvidenceSpool(), query));
+    return true;
+  }
+  if (url.pathname === CHANGE_EVIDENCE_BODY_ROUTE && request.method === "GET") {
+    json(response, 200, changeEvidenceBodyRouteBody(changeEvidenceSpool(), query));
+    return true;
+  }
+  if (url.pathname === CHANGE_EVIDENCE_ACK_ROUTE && request.method === "POST") {
+    const answer = changeEvidenceAckRouteBody(changeEvidenceSpool(), await readJson(request));
+    json(response, answer.ok ? 200 : 400, answer);
+    return true;
+  }
+  return false;
+}
+
 async function routeGlobal(
   request: IncomingMessage,
   response: ServerResponse,
@@ -235,13 +272,6 @@ async function routeGlobal(
   if (url.pathname === "/global/refresh-catalog" && request.method === "POST") {
     refreshModels();
     json(response, 200, { ok: true });
-    return true;
-  }
-  // Cursor's slash commands are an editor feature with no SDK surface. Say so
-  // with an empty list rather than a 404, which the backend would read as a
-  // bridge that predates the route.
-  if (url.pathname === "/global/slash-commands" && request.method === "GET") {
-    json(response, 200, unsupportedCommandCatalogue());
     return true;
   }
   if (url.pathname === "/global/auth" && request.method === "GET") {
@@ -554,7 +584,7 @@ async function routeSession(
     return json(response, 200, { servers: publicCursorMcpServers(state) });
   }
   if (action === "config" && request.method === "GET") {
-    return json(response, 200, state.composer);
+    return json(response, 200, publishedComposer(state.composer));
   }
   if (action === "config" && request.method === "POST") {
     return await handleConfig(request, response, state);
@@ -863,7 +893,7 @@ async function handleConfig(
   }
   assertSessionOpen(state);
   const patch = parseComposerPatch(body);
-  if (!patch) return json(response, 200, state.composer);
+  if (!patch) return json(response, 200, publishedComposer(state.composer));
   state.dispatching = true;
   try {
     // Recorded on the composer only. Every turn sends its model and mode
@@ -889,7 +919,7 @@ async function handleConfig(
   // A close that won while the selection was being published: the session is
   // going away, so the change is not acknowledged as if it will apply.
   assertSessionOpen(state);
-  return json(response, 200, state.composer);
+  return json(response, 200, publishedComposer(state.composer));
 }
 
 async function handleCancel(response: ServerResponse, state: SessionState): Promise<void> {
@@ -915,8 +945,9 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
 }
 
 /**
- * Cursor's SDK (`@cursor/sdk` 1.0.31) has no command discovery or invocation
- * API: `SDKAgent` offers `send`, `reload`, artifacts and usage only. Editor
+ * Cursor's SDK (`@cursor/sdk` 1.0.37, re-checked live 2026-10-17; type surface
+ * re-checked on 1.0.40) has no command discovery or invocation API: `SDKAgent`
+ * offers `send`, `reload`, artifacts and usage only. Editor
  * commands under `.cursor/commands` are not read, so the enhanced catalogue
  * says `unsupported` — never an empty `ready`, which would claim the provider
  * has been asked and has none. `commands: []` keeps older backends working.

@@ -15,14 +15,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
-import {
-  ClaudeIcon,
-  CodexIcon,
-  CursorAgentIcon,
-  GrokBuildIcon,
-  OpenCodeIcon,
-  PiIcon,
-} from "@/components/icons/AgentIcons";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import * as backend from "@/lib/backend";
 import type {
   AgentSkill,
@@ -31,18 +24,15 @@ import type {
   AgentSkillScope,
 } from "@/lib/backend";
 import { cn } from "@/lib/utils";
+import { isWindowMachine, useAccountMachine } from "./account-machine";
 
-const PROVIDERS: Array<{ id: AgentSkillProvider; label: string; icon: React.ReactNode }> = [
-  { id: "claude", label: "Claude", icon: <ClaudeIcon className="h-3.5 w-3.5" /> },
-  { id: "codex", label: "Codex", icon: <CodexIcon className="h-3.5 w-3.5 text-emerald-400" /> },
-  {
-    id: "cursor",
-    label: "Cursor",
-    icon: <CursorAgentIcon className="h-3.5 w-3.5 text-violet-400" />,
-  },
-  { id: "grok", label: "Grok", icon: <GrokBuildIcon className="h-3.5 w-3.5 text-sky-400" /> },
-  { id: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-3.5 w-3.5" /> },
-  { id: "pi", label: "Pi", icon: <PiIcon className="h-3.5 w-3.5 text-amber-400" /> },
+const PROVIDERS: Array<{ id: AgentSkillProvider; label: string }> = [
+  { id: "claude", label: "Claude" },
+  { id: "codex", label: "Codex" },
+  { id: "cursor", label: "Cursor" },
+  { id: "grok", label: "Grok" },
+  { id: "opencode", label: "OpenCode" },
+  { id: "pi", label: "Pi" },
 ];
 
 const SCOPE_LABELS: Record<AgentSkillScope, string> = {
@@ -189,12 +179,29 @@ export function SkillsSettings({
   provider: controlledProvider,
   showProviderTabs = true,
   description,
-  listSkills = backend.listAgentSkills,
-  readSkill = backend.readAgentSkill,
-  canRevealInFileManager = true,
+  listSkills: listSkillsOverride,
+  readSkill: readSkillOverride,
+  canRevealInFileManager: canRevealOverride = true,
   embedded = false,
   reuseLoadedScans = false,
 }: SkillsSettingsProps = {}) {
+  // Without a loader, the skills are those of the machine Settings shows.
+  const { machine } = useAccountMachine();
+  const listSkills = useMemo(
+    () =>
+      listSkillsOverride ??
+      ((target: AgentSkillProvider) => backend.listAgentSkills(target, machine)),
+    [listSkillsOverride, machine],
+  );
+  const readSkill = useMemo(
+    () =>
+      readSkillOverride ??
+      ((target: AgentSkillProvider, filePath: string) =>
+        backend.readAgentSkill(target, filePath, machine)),
+    [readSkillOverride, machine],
+  );
+  // Another machine's skill files are not on this one, so there is nothing to reveal.
+  const canRevealInFileManager = canRevealOverride && isWindowMachine(machine);
   const [internalProvider, setInternalProvider] = useState<AgentSkillProvider>("claude");
   const provider = controlledProvider ?? internalProvider;
   const [states, setStates] = useState<Record<string, ProviderState>>({});
@@ -421,7 +428,7 @@ export function SkillsSettings({
             <TabsList className="h-auto min-h-8 flex-wrap bg-zinc-900/80">
               {PROVIDERS.map((entry) => (
                 <TabsTrigger key={entry.id} value={entry.id} className={TAB_TRIGGER_CLASSES}>
-                  {entry.icon}
+                  <AgentPlatformIcon platform={entry.id} accent className="h-3.5 w-3.5" />
                   {entry.label}
                 </TabsTrigger>
               ))}

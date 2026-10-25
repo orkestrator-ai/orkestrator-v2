@@ -330,3 +330,62 @@ test("family gate requires a held follow-up to a busy worker and waits for quiet
     expect(watch.observations.length).toBeGreaterThanOrEqual(4);
   });
 });
+
+test("a held worker's approval stays pending until it is released, then is denied once", async () => {
+  const resolved: Array<{ environmentId: unknown; interactionId: unknown; action: unknown }> = [];
+  let interactions = [
+    { id: "approval-1", kind: "command-approval", state: "pending", sessionId: "s" },
+  ];
+  const invoke: DelegationCoordinator["invoke"] = async <T>(
+    command: string,
+    args: Record<string, unknown> = {},
+  ) => {
+    let value: unknown = null;
+    if (command === "get_agent_mail_mailbox") value = { messages: [] };
+    else if (command === "get_project_coordinator")
+      value = {
+        workflows: ["held", "other"].map((resourceId) => ({
+          kind: "environment",
+          conversationId: "conversation",
+          resourceId,
+        })),
+      };
+    else if (command === "get_native_agent_projection")
+      value = {
+        ...projection(args.environmentId === "coordinator" ? "idle" : "waiting"),
+        interactions: args.environmentId === "coordinator" ? [] : interactions,
+      };
+    else if (command === "get_prompt_queue") value = { messages: [] };
+    else if (command === "get_environments") value = [];
+    else if (command === "resolve_native_agent_interaction") {
+      const resolution = args.resolution as { action: unknown };
+      resolved.push({
+        environmentId: args.environmentId,
+        interactionId: args.interactionId,
+        action: resolution.action,
+      });
+    } else throw new Error(`Unexpected command ${command}`);
+    return value as T;
+  };
+  const watch = createDelegationWatch(invoke, coordinator(invoke), summary(), 0, {
+    holdWorkerInteractions: (environmentId) => environmentId === "held",
+  });
+  await watch.observe();
+  await watch.observe();
+  // The other worker's approval is denied at once and recorded as escaped;
+  // the held worker's is only recorded.
+  expect(resolved).toEqual([
+    { environmentId: "other", interactionId: "approval-1", action: "deny" },
+  ]);
+  expect(watch.workerEscaped()).toEqual(["command-approval"]);
+  expect(watch.held("held")).toEqual([{ kind: "command-approval", seenAt: expect.any(Number) }]);
+  await watch.release("held");
+  await watch.release("held");
+  expect(resolved.slice(1)).toEqual([
+    { environmentId: "held", interactionId: "approval-1", action: "deny" },
+  ]);
+  expect(watch.held("held")[0]?.releasedAt).toEqual(expect.any(Number));
+  interactions = [];
+  await watch.observe();
+  expect(watch.held("held")).toHaveLength(1);
+});

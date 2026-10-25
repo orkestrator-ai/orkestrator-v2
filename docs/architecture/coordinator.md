@@ -863,15 +863,21 @@ guarantee, not by one end-to-end scenario replayed per platform:
   local MCP server: `opencode-coordinator-research-live.test.ts`
 
 - the same contracts against real providers: `mise run
-  test:agent:coordinator` runs four scenarios per platform in a disposable
+  test:agent:coordinator` runs five scenarios per platform in a disposable
   profile. `read-only` attempts every class of mutation and checks that the
   checkout digest is unchanged and that read and discovery tools still answer.
   `async` launches real workers and checks the async launch result, that a
   queued prompt runs before pending worker mail, one carrier per delegation, one
   notice for a silent worker and the poll guard. `family` runs a two-worker
   exchange of sixteen messages, including a follow-up to a busy worker, with
-  nobody answering anything. `peer` has two ordinary environments exchange
-  ten messages with Wake peers on and no coordinator involved. It is opt-in
+  nobody answering anything. `status` checks that a coordinator-launched
+  Multi Review wakes it once when ready and once when its Fix turn finishes
+  (with `address_multi_review` in between), and that a delegated worker held
+  on an approval wakes it once after the 20-second debounce. `peer` has two
+  ordinary environments exchange ten messages with Wake peers on and no
+  coordinator involved. Every scenario with mail also runs the renderer's
+  carrier parser over each echoed carrier row and requires one toned tile per
+  delivered message and no raw carrier text. It is opt-in
   and never runs in `mise run test` or CI. See "Live coordinator suite" in
   [`agent-testing.md`](../development/agent-testing.md).
 - an OpenCode coordinator keeps its scoped Control MCP credential on its server

@@ -162,7 +162,7 @@ test("every scenario runs by default, each in its own summary, combined per plat
   });
   expect(run.exitCode).toBe(0);
   const tests = (await f.events()).filter((event) => event.task === "playwright");
-  expect(tests.map((event) => event.scenarios)).toEqual(["read-only,async,family,peer"]);
+  expect(tests.map((event) => event.scenarios)).toEqual(["read-only,async,family,status,peer"]);
   expect(run.results[0]).toMatchObject({
     platform: "claude",
     verdict: "passed",
@@ -170,6 +170,7 @@ test("every scenario runs by default, each in its own summary, combined per plat
       { scenario: "read-only", verdict: "passed" },
       { scenario: "async", verdict: "passed" },
       { scenario: "family", verdict: "passed" },
+      { scenario: "status", verdict: "passed" },
       { scenario: "peer", verdict: "passed" },
     ],
   });
@@ -291,6 +292,7 @@ test("runner budgets cover selected Playwright timeouts, underlying waits and cl
     expect(budgets.waits.async).toBe(7 * budgets.step);
     expect(budgets.waits.family).toBe(2 * budgets.step + budgets.family);
     expect(budgets.waits.peer).toBe(2 * budgets.step + budgets.peer);
+    expect(budgets.waits.status).toBe(6 * budgets.step + budgets.review);
     const all = COORDINATOR_LIVE_SCENARIOS;
     for (const scenario of all) {
       expect(budgets.tests[scenario]).toBeGreaterThanOrEqual(

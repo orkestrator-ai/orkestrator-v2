@@ -1,8 +1,12 @@
-import { AGENT_INTERACTION_CONTRACT_VERSION } from "@orkestrator/protocol/agent-interactions";
+import {
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  type AgentInteractionKind,
+} from "@orkestrator/protocol/agent-interactions";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
 import {
   createTurnWatch,
+  isApprovalKind,
   type CoordinatorLivePlatformSummary,
   type CoordinatorTurnProjection,
   type CoordinatorTranscriptMessage,
@@ -88,12 +92,18 @@ type EnvironmentRow = { id: string; name?: string };
  * turns, the coordinator's delegations, every family mailbox and the
  * coordinator's prompt queue, denies (or cancels) any interaction that
  * reached the harness and records its kind, and appends the observation.
+ *
+ * `holdWorkerInteractions` names workers whose interactions the harness
+ * leaves pending instead: the status scenario needs a worker that stays
+ * waiting on an approval. They are recorded apart (`held`) and answered only
+ * by `release`.
  */
 export function createDelegationWatch(
   invoke: Invoke,
   coordinator: DelegationCoordinator,
   summary: CoordinatorLivePlatformSummary,
   pollIntervalMs = 2_000,
+  options: { holdWorkerInteractions?: (environmentId: string) => boolean } = {},
 ) {
   const { identity, conversation, projectId } = coordinator;
   const coordinatorMailbox = { environmentId: identity.environmentId, tabId: conversation.tabId };
@@ -105,6 +115,14 @@ export function createDelegationWatch(
   /** A worker turn that failed, by environment: the scenario cannot go on. */
   const workerErrors = new Map<string, string>();
   const names = new Map<string, string>();
+  /** Held interactions by worker, then by interaction id. */
+  const held = new Map<
+    string,
+    Map<
+      string,
+      { kind: AgentInteractionKind; sessionId: string; seenAt: number; releasedAt?: number }
+    >
+  >();
   let projection: Projection | null = null;
 
   const workerIdentity = (environmentId: string): SessionIdentity => ({
@@ -144,6 +162,29 @@ export function createDelegationWatch(
     workerPhase: (environmentId: string) => workerPhases.get(environmentId) ?? "unknown",
     escaped: () => coordinatorTurn.escapedInteractions(),
     workerEscaped: () => [...workerTurns.values()].flatMap((turn) => turn.escapedInteractions()),
+    /** Interactions held for a worker named by `holdWorkerInteractions`, in arrival order. */
+    held: (environmentId: string) =>
+      [...(held.get(environmentId)?.values() ?? [])].map(({ kind, seenAt, releasedAt }) => ({
+        kind,
+        seenAt,
+        ...(releasedAt === undefined ? {} : { releasedAt }),
+      })),
+    /** Deny (or cancel) every interaction still held for a worker. */
+    async release(environmentId: string): Promise<void> {
+      const pending = held.get(environmentId);
+      if (!pending) return;
+      const answers: TurnAnswer[] = [];
+      for (const [interactionId, request] of pending) {
+        if (request.releasedAt !== undefined) continue;
+        request.releasedAt = Date.now();
+        answers.push({
+          interactionId,
+          sessionId: request.sessionId,
+          action: isApprovalKind(request.kind) ? "deny" : "cancel",
+        });
+      }
+      await answer(workerIdentity(environmentId), answers);
+    },
     async observe(): Promise<DelegationObservation> {
       // Read coordinator mail before the confirming delegation snapshot. A
       // worker can finish and have mail injected between independent reads;
@@ -212,6 +253,19 @@ export function createDelegationWatch(
               (workerProjection.turn.error ?? "no error text").slice(0, 300),
             );
           }
+        }
+        if (options.holdWorkerInteractions?.(worker)) {
+          const pending = held.get(worker) ?? new Map();
+          held.set(worker, pending);
+          for (const request of workerProjection?.interactions ?? []) {
+            if (request.state !== "pending" || pending.has(request.id)) continue;
+            pending.set(request.id, {
+              kind: request.kind,
+              sessionId: request.sessionId,
+              seenAt: Date.now(),
+            });
+          }
+          continue;
         }
         const turn = workerTurns.get(worker) ?? createTurnWatch();
         workerTurns.set(worker, turn);

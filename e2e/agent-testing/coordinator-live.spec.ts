@@ -2,7 +2,10 @@
  * Live coordinator scenarios against a real `dev:test --fixture` profile, one
  * case per platform and scenario on the live suite's lists: `read-only` (the
  * boundary), `async` and `family` (real workers and their mail, see
- * `coordinator-live-delegation.ts`).
+ * `coordinator-live-delegation.ts`), `status` (a Multi Review's and a held
+ * worker's status wakes, see `coordinator-live-status.ts`) and `peer`. Every
+ * scenario with mail also judges each echoed carrier through the renderer's
+ * tile parser (`coordinator-mail-tiles.ts`).
  *
  * Opt-in only: each case runs a real coordinator turn on the host's
  * credentials, so every case is skipped unless
@@ -104,6 +107,23 @@ import {
   removeLaunchedEnvironments,
   runCoordinatorCleanup,
 } from "../../apps/desktop/scripts/dev/coordinator-live-observer";
+import {
+  STATUS_REVIEWEE_FILE,
+  STATUS_REVIEW_DONE_MARKER,
+  STATUS_WAITER_DONE_MARKER,
+  STATUS_WAITING_MARKER,
+  STATUS_WAITING_STATE,
+  approvalWaitApplies,
+  evaluateStatusReview,
+  evaluateStatusWaiting,
+  revieweeEnvironmentInput,
+  statusReviewAgentSettings,
+  statusReviewPrompt,
+  statusWaitingPrompt,
+  waiterEnvironmentInput,
+  type StatusProbe,
+} from "../../apps/desktop/scripts/dev/coordinator-live-status";
+import { evaluateMailTiles } from "./coordinator-mail-tiles";
 import {
   deliverAsyncReport,
   finishFamilyExchange,
@@ -593,6 +613,32 @@ function mailCountsObserved(
   };
 }
 
+/** The coordinator transcript's mail tiles, judged against what was injected into it. */
+function coordinatorTiles(
+  mail: readonly DelegationMailMessage[],
+  coordinatorEnvironmentId: string,
+  messages: readonly CoordinatorTranscriptMessage[],
+  requireBatched: boolean,
+) {
+  return evaluateMailTiles({
+    messages,
+    delivered: mail.filter(
+      (message) =>
+        message.toEnvironmentId === coordinatorEnvironmentId && message.placement === "injected",
+    ),
+    requireBatched,
+  });
+}
+
+function tileCounts(observed: ReturnType<typeof evaluateMailTiles>["observed"]) {
+  return {
+    carrierRows: observed.carrierRows,
+    tileRows: observed.tileRows,
+    batchedTileRows: observed.batchedRows,
+    tiles: observed.tiles,
+  };
+}
+
 /**
  * The async scenario. The coordinator launches a reporter and a silent
  * worker and ends its turn. The silent worker finishes without mail. The
@@ -715,11 +761,13 @@ async function asyncCase(input: {
     escapedInteractions: watch.escaped(),
     workerInteractions: watch.workerEscaped(),
   });
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, true);
   const calls = transcriptToolCalls(messages);
   summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
   summary.turn = { phase: projection?.turn.phase ?? "idle" };
-  const failures = recordChecks(summary, checks, {
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
     ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
     workers: watch.workers.length,
     observations: watch.observations.length,
   });
@@ -804,14 +852,284 @@ async function familyCase(input: {
       harnessPrompts: 1,
     }),
   ];
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, false);
   summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
   summary.turn = { phase: projection?.turn.phase ?? "idle" };
-  const failures = recordChecks(summary, checks, {
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
     ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
     workers: watch.workers.length,
     observations: watch.observations.length,
   });
   expect(failures, `${platform}: the worker-mail family scenario`).toEqual([]);
+}
+
+/**
+ * Waits for one of `identity`'s turns to settle (see {@link settleTurn}) and
+ * fails on a turn error: an ordinary environment's startup turn here.
+ */
+async function startupTurn(
+  invoke: Invoke,
+  identity: SessionIdentity,
+  summary: CoordinatorLivePlatformSummary,
+  label: string,
+): Promise<void> {
+  const { projection } = await settleTurn(invoke, identity, summary);
+  if (projection.turn.phase === "error") {
+    throw new Error(`${label} failed: ${projection.turn.error ?? "no error text"}`);
+  }
+}
+
+/** Whether the coordinator's assistant text after `fromRow` carries `line`. */
+function saidAfter(
+  watch: ReturnType<typeof createDelegationWatch>,
+  fromRow: number,
+  line: string,
+): boolean {
+  return transcriptAssistantText((watch.projection()?.messages ?? []).slice(fromRow)).includes(
+    line,
+  );
+}
+
+/**
+ * The status scenario, in two parts on one coordinator. Review: it launches a
+ * Multi Review on an environment the harness prepared, is woken when the
+ * review is ready, addresses it, and is woken when the Fix turn finishes.
+ * Approval (not on Cursor, which never asks): it delegates a task to an
+ * environment whose policy asks for approvals; the harness holds the
+ * worker's approval until the coordinator has been woken by the `waiting`
+ * notice, then denies it and waits for the worker's report.
+ */
+async function statusCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { coordinator, summary, cleanup } = input;
+  const { invoke, identity, projectId } = coordinator;
+  const platform = identity.agent;
+  const coordinatorEnvironmentId = identity.environmentId;
+  // Removes the two environments made here too: neither existed before.
+  await removeLaunchedEnvironments(invoke, projectId, cleanup);
+  const token = randomBytes(6).toString("hex");
+
+  // Saved Multi Review defaults on this platform, as the button would use.
+  const config = await invoke<{ global: Record<string, unknown> }>("get_config");
+  const previousAgentSettings = config.global.agentSettings;
+  await invoke("update_global_config", {
+    global: {
+      ...config.global,
+      agentSettings: statusReviewAgentSettings(previousAgentSettings, platform),
+    },
+  });
+  cleanup.push(async () => {
+    const current = await invoke<{ global: Record<string, unknown> }>("get_config");
+    await invoke("update_global_config", {
+      global: { ...current.global, agentSettings: previousAgentSettings },
+    });
+  });
+
+  // The environment under review: a change with one real defect.
+  const reviewee = await invoke<{ id: string }>(
+    "create_environment",
+    revieweeEnvironmentInput({ projectId, token }),
+  );
+  await invoke("start_environment", { environmentId: reviewee.id });
+  const revieweeWorktree = (
+    await invoke<{ worktreePath?: string | null }>("get_environment", {
+      environmentId: reviewee.id,
+    })
+  ).worktreePath;
+  expect(revieweeWorktree, "the reviewed environment has no worktree").toBeTruthy();
+  await writeFile(
+    path.join(revieweeWorktree!, STATUS_REVIEWEE_FILE.path),
+    STATUS_REVIEWEE_FILE.content,
+  );
+
+  // The worker held on an approval: started and idle before it is delegated to.
+  const holdsApproval = approvalWaitApplies(platform);
+  const outsideDirectory = await mkdtemp(path.join(tmpdir(), "coordinator-live-status-"));
+  cleanup.push(() => rm(outsideDirectory, { recursive: true, force: true }));
+  let waiterEnvironmentId = "";
+  if (holdsApproval) {
+    const waiter = await invoke<{ id: string }>(
+      "create_environment",
+      waiterEnvironmentInput({ projectId, token, platform }),
+    );
+    await invoke("start_environment", { environmentId: waiter.id });
+    waiterEnvironmentId = waiter.id;
+    await startupTurn(
+      invoke,
+      {
+        environmentId: waiter.id,
+        agent: platform,
+        logicalSessionKey: `env-${waiter.id}:startup-agent`,
+      },
+      summary,
+      "the waiting worker's startup turn",
+    );
+  }
+  const probe: StatusProbe = {
+    platform,
+    token,
+    revieweeEnvironmentId: reviewee.id,
+    waiterEnvironmentId,
+    waiterTabId: "startup-agent",
+    outsidePath: path.join(outsideDirectory, "approval-probe.txt"),
+  };
+  const watch = createDelegationWatch(invoke, coordinator, summary, undefined, {
+    holdWorkerInteractions: (environmentId) => environmentId === waiterEnvironmentId,
+  });
+  const toCoordinator = (message: DelegationMailMessage) =>
+    message.toEnvironmentId === coordinatorEnvironmentId && message.from.kind === "system";
+  const failOnCoordinatorError = (phase: string) => {
+    if (phase === "error") {
+      throw new Error(
+        `the ${platform} coordinator turn failed: ${watch.projection()?.turn.error ?? "no error text"}`,
+      );
+    }
+  };
+
+  // Review part.
+  let reviewFinished: string | undefined;
+  let reviewRowsBefore = watch.projection()?.messages.length ?? 0;
+  try {
+    reviewRowsBefore = (
+      await coordinatorTurn(watch, coordinator, "the review launch turn", statusReviewPrompt(probe))
+    ).rowsBefore;
+    let idleReads = 0;
+    await watch.until(
+      "the Multi Review's fix-done wake",
+      (observation) => {
+        failOnCoordinatorError(observation.coordinatorPhase);
+        const notices = observation.mail.filter(
+          (message) =>
+            toCoordinator(message) &&
+            message.notice?.resource?.kind === "multi-review" &&
+            message.notice.resource.environmentId === reviewee.id,
+        );
+        const ended = notices.find((message) =>
+          ["failed", "cancelled", "fix-failed"].includes(message.notice?.state ?? ""),
+        );
+        if (ended) throw new Error(`the Multi Review reported ${ended.notice?.state}`);
+        idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
+        const fixDone = notices.some(
+          (message) => message.notice?.state === "fix-done" && message.placement === "injected",
+        );
+        return (
+          fixDone &&
+          saidAfter(watch, reviewRowsBefore, `${STATUS_REVIEW_DONE_MARKER} ${token}`) &&
+          idleReads >= 2 &&
+          observation.queueLength === 0
+        );
+      },
+      budgets.review,
+    );
+  } catch (error) {
+    reviewFinished = error instanceof Error ? error.message.slice(0, 500) : String(error);
+  }
+  const reviewMessages = (watch.projection()?.messages ?? []).slice(reviewRowsBefore);
+  const reviewLaunches = await watch.toolOutputs("launch_multi_review", reviewMessages);
+  const reviewEscaped = watch.escaped();
+  const checks: CoordinatorLiveCheck[] = [
+    {
+      name: "review-finished",
+      passed: reviewFinished === undefined,
+      ...(reviewFinished ? { detail: reviewFinished } : {}),
+    },
+    ...evaluateStatusReview({
+      probe,
+      coordinatorEnvironmentId,
+      messages: reviewMessages,
+      launchResults: reviewLaunches,
+      mail: watch.observations.at(-1)?.mail ?? [],
+      escapedInteractions: reviewEscaped,
+    }),
+  ];
+
+  // Approval part.
+  if (holdsApproval) {
+    let waitingFinished: string | undefined;
+    let waitingRowsBefore = watch.projection()?.messages.length ?? 0;
+    try {
+      waitingRowsBefore = (
+        await coordinatorTurn(
+          watch,
+          coordinator,
+          "the approval delegation turn",
+          statusWaitingPrompt(probe),
+        )
+      ).rowsBefore;
+      await watch.until(
+        "the worker's approval to reach the harness",
+        () => watch.held(waiterEnvironmentId).length > 0,
+      );
+      let idleReads = 0;
+      await watch.until("the waiting wake", (observation) => {
+        failOnCoordinatorError(observation.coordinatorPhase);
+        idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
+        const waiting = observation.mail.some(
+          (message) =>
+            toCoordinator(message) &&
+            message.notice?.resource?.environmentId === waiterEnvironmentId &&
+            message.notice.state === STATUS_WAITING_STATE &&
+            message.placement === "injected",
+        );
+        return (
+          waiting &&
+          saidAfter(watch, waitingRowsBefore, `${STATUS_WAITING_MARKER} ${token}`) &&
+          idleReads >= 2 &&
+          observation.queueLength === 0
+        );
+      });
+      await watch.release(waiterEnvironmentId);
+      idleReads = 0;
+      await watch.until("the waiting worker's report", (observation) => {
+        failOnCoordinatorError(observation.coordinatorPhase);
+        idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
+        return (
+          saidAfter(watch, waitingRowsBefore, `${STATUS_WAITER_DONE_MARKER} ${token}`) &&
+          idleReads >= 2 &&
+          observation.queueLength === 0
+        );
+      });
+    } catch (error) {
+      waitingFinished = error instanceof Error ? error.message.slice(0, 500) : String(error);
+      await watch.release(waiterEnvironmentId).catch(() => undefined);
+    }
+    checks.push(
+      {
+        name: "waiting-finished",
+        passed: waitingFinished === undefined,
+        ...(waitingFinished ? { detail: waitingFinished } : {}),
+      },
+      ...evaluateStatusWaiting({
+        probe,
+        coordinatorEnvironmentId,
+        messages: (watch.projection()?.messages ?? []).slice(waitingRowsBefore),
+        mail: watch.observations.at(-1)?.mail ?? [],
+        held: watch.held(waiterEnvironmentId),
+        escapedInteractions: watch.escaped().slice(reviewEscaped.length),
+        workerInteractions: watch.workerEscaped(),
+      }),
+    );
+  }
+
+  const projection = watch.projection();
+  const messages = projection?.messages ?? [];
+  const mail = await watch.mailWithBodies();
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, false);
+  const calls = transcriptToolCalls(messages);
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
+    ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
+    approvalWaitApplies: holdsApproval ? 1 : 0,
+    heldInteractions: holdsApproval ? watch.held(waiterEnvironmentId).length : 0,
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the status-wake scenario`).toEqual([]);
 }
 
 /**
@@ -842,9 +1160,30 @@ async function peerCase(input: {
   const calls = Object.values(transcripts).flatMap((messages) => transcriptToolCalls(messages));
   summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
   if (escaped.length > 0) summary.escapedInteractions = escaped;
-  const failures = recordChecks(summary, checks, {
+  // Each peer's own transcript shows the mail it received.
+  const tiles = Object.entries(transcripts).map(([environmentId, messages], index) =>
+    evaluateMailTiles({
+      messages,
+      delivered: mail.filter(
+        (message) => message.toEnvironmentId === environmentId && message.placement === "injected",
+      ),
+      prefix: `peer-${index + 1}-tiles`,
+    }),
+  );
+  const failures = recordChecks(summary, [...checks, ...tiles.flatMap((item) => item.checks)], {
     peerMessages: mail.filter((message) => message.route === "peer").length,
     ...coordinatorWaitCounts(calls),
+    ...tileCounts(
+      tiles.reduce(
+        (total, item) => ({
+          carrierRows: total.carrierRows + item.observed.carrierRows,
+          tileRows: total.tileRows + item.observed.tileRows,
+          batchedRows: total.batchedRows + item.observed.batchedRows,
+          tiles: total.tiles + item.observed.tiles,
+        }),
+        { carrierRows: 0, tileRows: 0, batchedRows: 0, tiles: 0 },
+      ),
+    ),
     observations: observations.length,
   });
   expect(failures, `${platform}: the peer-mail scenario`).toEqual([]);
@@ -930,6 +1269,26 @@ test.describe("live coordinator", () => {
             cleanup,
           });
           await familyCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("status")) {
+      test(`status wakes on ${platform}: a coordinator-launched Multi Review wakes it when ready and when its fix finishes, and a delegated worker held on an approval wakes it once`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.status);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "status", async ({ summary, skip, cleanup }) => {
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: {},
+            skip,
+            cleanup,
+          });
+          await statusCase({ coordinator, summary, cleanup });
         });
       });
     }

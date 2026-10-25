@@ -1,6 +1,6 @@
 # Coordinator live conformance
 
-Checked against `main` at `b83ae534` (2026-10-22).
+Checked against `main` at `00a0cb82` (2026-10-25).
 
 The coordinator's contracts are asserted at the layer that owns each one, with
 fake providers. The opt-in live suite now shows, per real provider, that the
@@ -11,13 +11,17 @@ environments wakes each side with Wake peers on. Its first full runs passed on
 Claude, Codex, OpenCode and Cursor, and (2026-10-23) all four scenarios
 passed on Pi once the agent-test profile started on the host's Pi default
 model ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)).
-What is still unproven live is status wakes, mail tiles, Grok mail approvals
-and the Cursor/Grok identity checks below.
+Since 2026-10-25 the suite also has a `status` scenario (a coordinator-launched
+Multi Review's `ready` and `fix-done` wakes, and a delegated worker held on an
+approval) and judges every echoed mail carrier through the renderer's tile
+parser. What is still unproven live is those two checks on each platform,
+Grok on every scenario, Grok mail approvals and the remaining Cursor/Grok
+identity checks below.
 
 ## Current state
 
-- The live suite runs four scenarios per platform: `read-only`, `async`,
-  `family` and `peer` (`--scenario` narrows a run).
+- The live suite runs five scenarios per platform: `read-only`, `async`,
+  `family`, `status` and `peer` (`--scenario` narrows a run).
   `mise run test:agent:coordinator [--credential-source <platform>]… [--scenario <scenario>]…`
   (`apps/desktop/scripts/test-agent-coordinator-live.ts`) starts one disposable
   `dev:test --fixture` profile per platform and runs
@@ -29,7 +33,10 @@ and the Cursor/Grok identity checks below.
   the per-platform verdicts are in `apps/desktop/scripts/dev/coordinator-live.ts`;
   the delegation scenarios' prompts and checks are in
   `coordinator-live-delegation.ts`; the peer scenario's prompts, watch and
-  checks are in `coordinator-live-peer.ts`;
+  checks are in `coordinator-live-peer.ts`; the status scenario's are in
+  `coordinator-live-status.ts`; the mail-tile check, which imports the
+  renderer's carrier parser and so lives beside the spec, is
+  `e2e/agent-testing/coordinator-mail-tiles.ts`;
   and the per-platform profile loop is in `coordinator-live-runner.ts`, each
   with unit tests beside it. The runner runs in an IPC-owned supervisor
   (`owner-supervisor.ts`, shared with `test:agent:browser:isolated`), so an
@@ -168,9 +175,17 @@ and the Cursor/Grok identity checks below.
   otherwise. Accepting the noise and rerunning was rejected because it makes
   a Cursor verdict depend on luck. Live on 2026-10-22 the line fixed the
   create, edit, shell and commit labels in all four runs, but one run still
-  claimed `network: denied` with no call (three of four passed). Still open:
-  whether a stronger network-specific line is worth adding, or the remaining
-  rate is accepted as model noise. The suite keeps failing it either way.
+  claimed `network: denied` with no call (three of four passed). Decided
+  (2026-10-25): add the network-specific line. Step 6 now says that with no
+  tool that can reach the network the agent makes no call and reports
+  `unavailable`, "not denied, even though your instructions say network
+  access is refused" (`readOnlyScenarioPrompt`; test "the prompt names every
+  probe…"). The suite keeps failing a `denied` without a call. Still owed:
+  four Cursor read-only runs to see whether the line removes the last
+  mislabel (`mise run test:agent:coordinator --credential-source cursor
+  --scenario read-only`, four times on a quiet host). If one still fails,
+  accept the rate as model noise and record it here; the suite keeps failing
+  that run.
 
 - **Claude coordinator permission mode.** Resolved (2026-10-22): the code is
   intended and `coordinator.md` was wrong. A deny policy caps the turn's mode
@@ -302,9 +317,11 @@ for prerequisites and how to batch them with other provider runs.
 - **Worker-mail family scenario**: covered by the `family` columns above.
 - **Re-runs still owed** (medium): ~~Pi~~ (done 2026-10-23: all four
   passed, above);
-  Grok, all four scenarios, once the host Grok is signed in; Claude on Linux,
-  which has never run; and Cursor read-only until its `network` label is
-  steady (see Verify). One command each:
+  Grok, every scenario, once the host Grok is signed in; Claude on Linux,
+  which has never run; Cursor read-only until its `network` label is
+  steady (see Verify); and, on every platform, the new `status` scenario and
+  the mail-tile checks the 2026-10-25 suite adds to `async`, `family` and
+  `peer` (a full run per platform covers both). One command each:
   `mise run test:agent:coordinator --credential-source <platform>`.
 - **Peer scenario** between two ordinary environments with Wake peers turned
   on: done (2026-10-22) on Claude, Codex, OpenCode and Cursor (the `peer`
@@ -314,6 +331,19 @@ for prerequisites and how to batch them with other provider runs.
   option and never prompt, under both the `orkestrator__<tool>` name and the
   `_meta["x.ai/tool"]` form. A bare `send_message` from another server must
   still prompt.
+  - Code (2026-10-25): the `status` scenario's approval part is this check on
+    the real stack. Its worker runs under `approvals: "ask"` and must call
+    `send_message` after its held approval is denied; a mail tool that
+    prompted would be held too and never answered, so the worker's report
+    never arrives and `waiting-finished` fails. The name forms and the bare
+    `send_message` case stay with `acp-mail-permission.test.ts` ("a
+    server-qualified mail tool is allowed without a person", "a bare name,
+    another server, or another Orkestrator tool still asks", "Grok's use_tool
+    is matched by the tool it wraps").
+  - Still owed: the Grok `status` run once the host Grok is signed in
+    (`mise run test:agent:coordinator --credential-source grok --scenario
+    status`), and a note of which name form Grok 1.0.52 used, read from the
+    worker's transcript.
 - **Status wakes**, once per qualified platform with default settings: a
   coordinator-launched Multi Review reaching `ready`, then (after
   `address_multi_review`) its fix finishing, then `completed`, wakes the
@@ -321,15 +351,60 @@ for prerequisites and how to batch them with other provider runs.
   pipeline completing wakes it once; a delegated worker held on an approval for
   more than 20 seconds wakes it once; seven reviews finishing together are one
   wake. Expect zero wakes from a review the user started.
+  - Code done (2026-10-25): the `status` scenario
+    (`coordinator-live-status.ts`, the spec's `statusCase`). Review part:
+    `ready` once (attention, or success when clean), the coordinator's one
+    `address_multi_review` after it, `fix-done` once (success), no state
+    twice, no polling (`get_multi_review` included), nobody answering.
+    Approval part (not Cursor, which never asks): a worker on
+    `approvals: "ask"`, delegated by `send_prompt_to_tab`, has its approval
+    held by the harness; exactly one `waiting` notice (attention) must arrive
+    at least 18 s after the approval was first seen and before it is
+    answered, then the report. Both parts' carriers are also tile-checked.
+    Tests: `coordinator-live-status.test.ts`, and the observer's "a held
+    worker's approval stays pending until it is released, then is denied
+    once".
+  - Narrowed by decision (see "Assumptions and decisions"): `completed` is
+    not reachable after `address_multi_review` (an interactive Fix ends at
+    `fix-done`; only a structured Fix completes a review), and the build
+    pipeline, seven-reviews-one-wake and user-started-review cases involve no
+    provider. They stay owned by `coordinator-status-wakes.test.ts` ("each
+    later settled state wakes it once more: fix done, then completed", "a
+    build pipeline wakes on its end…", "seven reviews settling together
+    arrive as one wake", "work the user started never wakes a
+    coordinator").
+  - Still owed: a passing `status` run per qualified platform
+    (`mise run test:agent:coordinator --credential-source <platform>
+    --scenario status`). Live results so far are under "2026-10-25 runs"
+    below.
 - **Mail tiles per platform**: each platform echoes the injected carrier as its
   user row, single and batched, and the coordinator transcript shows one
   collapsed tile per message with no raw carrier text.
+  - Code done (2026-10-25): `evaluateMailTiles`
+    (`e2e/agent-testing/coordinator-mail-tiles.ts`) runs the renderer's own
+    `isPeerMailCarrierContent` and `createPeerMailNativeMessagesFromCarrier`
+    (the pair `AgentNativeTab.controller.tsx` uses) over every echoed carrier
+    row of `async`, `family`, `status` and both `peer` transcripts. It fails a
+    row the renderer would show raw (carrier only in the parts, or after other
+    text), a delivered message with no tile or two, a dropped carrier, text
+    outside the carriers, and a notice tile toned unlike its notice; `async`
+    must also have a batched row. Tests: `coordinator-mail-tiles.test.ts`
+    (in `mise run test`).
+  - Already shown live, before this check existed: every platform that passed
+    `async` (Claude, Codex, OpenCode, Cursor, Pi) echoed both reporter
+    messages in one carrier row containing both ids, and every `family` and
+    `peer` pass found each delivered message in an echoed carrier row. Those
+    runs did not run the renderer's parser, so the tile half is still owed.
+  - Still owed: the tile checks passing on each platform, which any full run
+    of `async`, `family` and `peer` now records.
 - **Cursor and Grok mailbox identity:**
   - two tabs in one environment each see themselves as `self` in
     `list_mailboxes`;
   - with policy `idle`, an injected user message starts a turn;
   - a Cursor or Grok coordinator can `launch_environment` and is woken by the
-    worker's reply;
+    worker's reply: done for Cursor (2026-10-18, `async` and `family` passed
+    twice each on Cursor; both launch workers and are woken by their mail).
+    Grok is owed with its re-runs;
   - a Cursor resume with a new `agentMcp` detaches and resumes the same SDK
     agent rather than creating a second one that orphans the conversation;
   - a rotated Grok tab token reloads only that session's CLI child and never
@@ -580,6 +655,82 @@ is the truth, and this file is the backlog.
   now waits and fails visibly (`retryable`) if it will not connect. Ordinary
   environments keep the unawaited entry, because their ticket tools are
   optional. Test: `commands-servers-coordinator-opencode.test.ts`.
+
+## Assumptions and decisions
+
+Made on 2026-10-25 while adding the `status` scenario and the tile checks.
+
+- **What "status wakes per platform" has to prove live.** Options: (a) drive
+  every listed resource and state live on every platform (Multi Review
+  ready, fix and completed; a build pipeline to completion; seven reviews at
+  once; a user-started review; the approval wait); (b) drive live only what
+  a provider can change, and leave provider-neutral rules to the layer test.
+  Chose (b). Which states notify, dedupe, coalescing, ownership and budgets
+  are decided in `coordinator-status-wakes.ts` before any provider is
+  involved, and `coordinator-status-wakes.test.ts` already asserts each one.
+  What differs by provider is whether a system-notice carrier starts a turn,
+  whether the agent acts on it with the named tool, and how the echo renders.
+  Pros: an hour less per platform, no PR remote or build agent needed for the
+  pipeline, no seven parallel reviews. Cons: the build pipeline notice and the
+  seven-reviews coalescing are not seen on a real provider; acceptable
+  because they reach the coordinator through the same notice and carrier the
+  Multi Review part exercises.
+- **`completed` after `address_multi_review`.** The item asked for `ready`,
+  fix finished, then `completed`. An interactive Fix (what
+  `address_multi_review` starts) ends at `fix-done`; only a structured Fix
+  sets `phase: "completed"` (`multi-review-service.ts`). Options: start a
+  structured Fix (auto-fix on), which skips `ready` entirely; or stop at
+  `fix-done`. Chose to stop at `fix-done`, which keeps the coordinator's
+  decision point (`ready` → `address_multi_review`) in the run. `completed`
+  stays with the layer test.
+- **How to hold a worker on an approval.** Options: (a) the coordinator
+  launches the worker with `launch_environment` and the harness flips its
+  approval setting afterwards (races the first turn, and `launch_environment`
+  has no approval field); (b) a harness-made environment with
+  `agentSettings.executionPolicy.approvals: "ask"`, started idle, which the
+  coordinator delegates to with `send_prompt_to_tab` (also a delegation, so
+  status wakes apply); (c) a question instead of an approval (not every
+  provider has a question tool). Chose (b). Codex asks only to leave its
+  sandbox, so its environment also keeps `sandbox: "provider"` and the task
+  writes outside the workspace with escalation. Cursor never asks, so the
+  part does not run there (`approvalWaitApplies`); its summary records
+  `approvalWaitApplies: 0` rather than a pass. Cons: Codex asking for
+  escalation is model-driven and unproven live.
+- **The harness holds, then denies.** The watch normally denies every worker
+  interaction at once and fails the case; `holdWorkerInteractions` leaves one
+  worker's pending and records it apart, and `release` denies it once the
+  coordinator has acknowledged the waiting notice. Denying rather than
+  approving keeps the worker's command from running at all.
+- **Waiting notice timing.** The check requires the notice at least 18 s
+  after the harness first saw the approval: the 20 s debounce less one
+  harness read (2 s), since the harness can see a request up to one read
+  late. It must also be created before the harness answered.
+- **Where the tile check lives.** Options: copy the carrier parser into the
+  scripts module, move the renderer's parser into `packages/protocol`, or
+  import the renderer module from beside the spec. Chose the last: the check
+  must run the parser the transcript actually uses, a copy could drift, and
+  moving the parser is a renderer refactor outside this file. The scripts
+  build (NodeNext) cannot resolve the renderer's extensionless imports, so
+  `coordinator-mail-tiles.ts` sits in `e2e/agent-testing/` and its test is
+  listed in `scripts/test-all.ts`.
+- **What a tile failure is.** The renderer reads a row's `content` alone, so a
+  carrier only in the parts, or after other text, is a raw row; text outside
+  the carriers is hidden by the tiles, so it fails too; a notice tile must
+  carry its notice's tone.
+- **Multi Review rows in the run.** The coordinator omits reviewer rows (as
+  the Multi Review button does) and the harness sets the saved defaults to
+  the platform with the fewest reviewers a panel allows, restoring them
+  afterwards. Naming a model in the prompt was rejected: the profile's
+  catalogue has no default flag, and the saved-defaults path is the one
+  coordinators use.
+- **Cursor's network label.** Options: accept the remaining rate as noise, or
+  add a network-specific line. Chose the line (cheap, and it keeps the
+  verdict independent of luck); four Cursor runs will show whether it is
+  enough.
+- **Mail-tile evidence already in hand.** Earlier passes of `async`,
+  `family` and `peer` already found each delivered message in an echoed
+  carrier row, including the batched one; they are recorded as the echo
+  half only. The tile half needs a run with the new check.
 
 ## Open questions
 

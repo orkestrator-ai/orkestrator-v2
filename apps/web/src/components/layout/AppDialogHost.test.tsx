@@ -259,7 +259,7 @@ test("repository settings waits for saved config, saves through the owner's proj
     act(() =>
       useAppDialogStore.getState().open({ kind: "repository-settings", projectId: project.id }),
     );
-    expect(screen.queryByLabelText("Name")).toBeNull();
+    expectDomAbsent(screen.queryByLabelText("Name"));
     act(() => useConfigStore.getState().setConfig(savedConfig));
     fireEvent.click(await screen.findByRole("button", { name: "Branches" }));
     const branch = (await screen.findByLabelText("Default Branch")) as HTMLInputElement;
@@ -296,7 +296,7 @@ test("repository settings waits for saved config, saves through the owner's proj
     await screen.findByLabelText("Name");
     act(() => useProjectStore.setState({ projects: [] }));
     expect(useAppDialogStore.getState().request).toBeNull();
-    expect(screen.queryByLabelText("Default Branch")).toBeNull();
+    expectDomAbsent(screen.queryByLabelText("Name"));
   } finally {
     useConfigStore.setState(initialConfig, true);
   }

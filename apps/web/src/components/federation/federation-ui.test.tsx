@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import type { ReactNode } from "react";
 import * as sortable from "@dnd-kit/sortable";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -1836,9 +1837,9 @@ for (const rejectWrite of [false, true]) {
     await act(async () => finish(rejectWrite ? new Error("write denied") : { ok: true }));
     if (rejectWrite) {
       await waitFor(() => expect(mockToastError).toHaveBeenCalled());
-      expect(
+      expectDomAbsent(
         screen.getByRole("button", { name: "App A" }).closest("[data-project-folder-content]"),
-      ).toBeNull();
+      );
     } else {
       fireEvent.contextMenu(screen.getByRole("button", { name: "App A" }));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Remove from Folder" }));
@@ -1847,9 +1848,9 @@ for (const rejectWrite of [false, true]) {
         projectIds: ["q", "p"],
         folders: { p: null },
       });
-      expect(
+      expectDomAbsent(
         screen.getByRole("button", { name: "App A" }).closest("[data-project-folder-content]"),
-      ).toBeNull();
+      );
     }
   });
 }

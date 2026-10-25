@@ -619,3 +619,28 @@ The merge parents are feature `3b5f889149d8c3603c869cd15b51d67af39c9aa6` and mai
 ## Environment-list UI main merge — 2026-10-24
 
 The aggregate recurrence passed in the complete unchanged owning-file rerun. Exact commands, durations, merge parents, aggregate results and evidence are retained in [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Federated dialog readiness validation (2026-10-25)
+
+The existing narrow picker failure reproduced while validating the federated
+readiness and lifecycle fixes (`fd22bccea`):
+
+- Original command: `mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`,
+  credential-free Codex fixture profile `qa-browser-6f2f1c0e-53e`, one worker.
+  The narrow case timed out after 15 seconds waiting to click
+  `getByRole('button', { name: 'Repository settings', exact: true })` at
+  `e2e/agent-testing/browser-gateway.spec.ts:241`.
+- Complete owning-file rerun on a fresh ready credential-free Codex fixture:
+  `ORKESTRATOR_AGENT_TEST_PROFILE=federation-review-9867 ORKESTRATOR_AGENT_TEST_REVIEW=0 ORKESTRATOR_AGENT_TEST_DOCKER=0 mise run test:logged -- --name gateway-owner-rerun -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1`.
+  Result: 13 passed, 10 skipped, one failed in 179.9 seconds, at the same click.
+  The button became hidden after opening tools. The existing selection/Home
+  timing hypothesis remains unconfirmed; this recurrence also fails alone.
+- Passing related checks: 139 focused federation/dialog/mobile unit tests,
+  the bounded-diagnostics guard, and the mobile shell component browser owner
+  (`ORKESTRATOR_E2E_PORT=15782 mise run test:logged -- --name mobile-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/MobileAppShellLayout.spec.ts --workers=1`).
+- Evidence: temporary artifacts `orkestrator-test-run.QEZhot/isolated-browser.log.gz`
+  and `orkestrator-test-run.I69NpQ/gateway-owner-rerun.log.gz`, plus
+  `output/agent-testing/federation-review-9867/browser/`.
+
+No test was skipped or weakened to hide this failure. The rerun profile was
+stopped and reset after validation.

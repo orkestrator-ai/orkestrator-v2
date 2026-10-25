@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { createPortal } from "react-dom";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -571,7 +572,7 @@ for (const action of [
         }),
       );
       await waitFor(() =>
-        expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull(),
+        expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
       );
       expect(useUIStore.getState().selectedProjectId).toBeNull();
       expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_remote");

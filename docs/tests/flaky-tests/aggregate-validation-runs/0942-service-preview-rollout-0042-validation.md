@@ -54,3 +54,74 @@ normalizes lines, CRLF, Unicode, and ANSI across transport chunks and pages`
 and the environment-move restart recovery case again (5043.62 ms, 0248).
 Both unchanged owners passed alone (7.7 s and 29.1 s). Evidence:
 `orkestrator-test-run.UFTXLR/` below the host temporary directory.
+
+
+## Review-fix follow-up — 2026-10-25
+
+The follow-up addresses handover retention admission/source selection, delayed
+legacy conversion, refresh confirmation, host-socket matching and compatibility
+navigation. Validation started from `4ffb776ba` with these changes uncommitted.
+
+- `mise run test:logged -- --name repository-final -- mise run test` used the
+  aggregate's workspace/root/bridge/protocol reservations of 4/1/2/1. The root
+  group caught a new DOM `toBeNull` assertion in the added conversion test; it
+  was corrected to the bounded boolean absence assertion. The complete root
+  and agent-support group then passed through `test:logged` (`root-final`,
+  `--parallel=4`, 37.8 s), and the owning diagnostic guard passed (2.7 s).
+- The same aggregate observed `local preview service discovery on this host >
+  two environments, a restart on the reused port, and an auto-incremented port`
+  in `apps/backend/src/core/preview-local-discovery.test.ts:572` failing after
+  421.57 ms. The synthetic child server hit `EADDRINUSE` on `127.0.0.1:60379`
+  and its terminal exited before reporting a bound port. The complete unchanged
+  owning file passed alone in 4.5 s with
+  `mise run test:logged -- --name discovery-recheck -- bun test --cwd apps/backend ./src/core/preview-local-discovery.test.ts --parallel=1 --only-failures`.
+  Reserving then releasing an ephemeral port, and assuming its adjacent port is
+  free, can race with other listeners on the shared host; this is an
+  evidence-backed hypothesis, not a demonstrated implementation failure. No
+  timeout, assertion or skip was changed in that file. The aggregate finished
+  after 672.7 s: all workspace packages except backend passed (web 9,816;
+  desktop 1,297; protocol 1,879; CLI 288; toolchain 91; public web 41). Backend
+  reported 11,586 passed, 89 skipped and this one failure. Bridges and the Codex
+  protocol lockfile passed; the original root diagnostics failure was corrected
+  and its complete group rerun passed as described above.
+- `mise run test:agent:browser:isolated` used disposable profile
+  `qa-browser-a2afe06b-8e2`: 35 passed, 65 skipped, one failed in 7.9 minutes.
+  `e2e/agent-testing/web-annotations-gateway.spec.ts:650` expects the old
+  `<requestId>-<digest>.png` evidence filename, while the existing
+  `materializedEvidencePath` hashes the complete request ID. Both the assertion
+  and the hashing implementation are unchanged from `4ffb776ba`. This is a
+  reproducible existing test-contract mismatch, **not a flake**.
+- The complete unchanged browser owner was rerun with one worker in fresh
+  disposable profile `qa-preview-review-1025-f64`:
+  `ORKESTRATOR_AGENT_TEST_PROFILE=qa-preview-review-1025-f64 ORKESTRATOR_AGENT_TEST_RUN_ID=qa-preview-review-1025-f64 mise run test:logged -- --name annotation-browser-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/web-annotations-gateway.spec.ts --workers=1`.
+  It reproduced the same mismatch: four passed, seven skipped, one failed in
+  27.5 s. Both profiles were stopped and reset using their exact names.
+- Focused preview component/store/matcher tests, desktop retention and real-node
+  handover tests, and `mise run check` passed. The full Electron suite passed
+  all 39 tests in 316.5 s. The review-fix code did not change annotation
+  materialization or the failing browser expectation.
+- Evidence: aggregate group logs under temporary directory
+  `orkestrator-test-run.X3AhZ1/`, outer aggregate log under
+  `orkestrator-test-run.XLKgRr/`, and browser-owner failure log under
+  `orkestrator-test-run.zx2Iex/`. Browser screenshots, error context and traces
+  are under `output/agent-testing/qa-browser-a2afe06b-8e2/browser/` and
+  `output/agent-testing/qa-preview-review-1025-f64/browser/`.
+
+- `mise run test:logged -- --name component-browser -- mise run test:browser`
+  completed its Chromium component portion with 741 passed, 102 skipped and
+  three failed in 7.5 minutes (nine workers). The BrowserTab toolbar spec still
+  expected a single row at 480 px although the existing contract wraps below
+  672 px. The spec now checks a wrapped 480 px row and an unwrapped 720 px row;
+  its complete owner passed (two passed, two project skips, 11.1 s logged):
+  `ORKESTRATOR_E2E_PORT=63101 mise run test:logged -- --name browser-toolbar-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/BrowserTab.spec.ts --workers=1 --output output/playwright/review-toolbar-owner`.
+- The other two component failures were the known native Chrome branch picker:
+  both projects of `e2e/AgentLaunchDialog.spec.ts:7` retained `rel` instead of
+  selecting `release/2.0`. The complete unchanged owner reproduced both
+  failures (two passed, two failed, 76.5 s logged) with
+  `ORKESTRATOR_E2E_PORT=63102 mise run test:logged -- --name branch-picker-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1 --output output/playwright/review-branch-owner`.
+  This matches the base-commit failures recorded in
+  [0825](0825-dependency-upgrades-0032-validation.md), rather than establishing a
+  new flake. Component evidence is in temporary
+  `orkestrator-test-run.hsPReK/`, native-picker owner evidence in
+  `orkestrator-test-run.ZFdFk7/`. The public-site browser command did not run
+  because the preceding component command failed.

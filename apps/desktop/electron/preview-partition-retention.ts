@@ -272,6 +272,40 @@ export class PreviewPartitionRetention {
   }
 
   /**
+   * Serialize admission and remote handover with reconciliation/forgetting.
+   * A pending list must finish before the remote registry can change. Target
+   * vouchers are durable before sending; retain them on an unknown RPC outcome
+   * until an authoritative target registry can establish removal.
+   */
+  handoverNodes<T>(
+    fromCommandKey: string,
+    toCommandKey: string,
+    nodeKeys: string[] | undefined,
+    handover: () => Promise<T>,
+  ): Promise<T> {
+    return this.serialize(async () => {
+      if (
+        ![fromCommandKey, toCommandKey, ...(nodeKeys ?? [])].every((key) => PARTITION_KEY.test(key))
+      )
+        throw new Error("Invalid partition key");
+      const nodes = await this.readNodes();
+      for (const entry of nodes) {
+        if (
+          (nodeKeys && !nodeKeys.includes(entry.key)) ||
+          !entry.commands.includes(fromCommandKey) ||
+          entry.commands.includes(toCommandKey)
+        )
+          continue;
+        if (entry.commands.length >= MAX_COMMANDS_PER_NODE) entry.commands.shift();
+        entry.commands.push(toCommandKey);
+      }
+      // Unlike best-effort bookkeeping, admission must succeed before the RPC.
+      await this.fs.writeFile(`${this.options.pendingFile}.nodes`, `${JSON.stringify(nodes)}\n`);
+      return handover();
+    });
+  }
+
+  /**
    * Node partitions whose node every command connection that listed it has
    * since removed from its registry. A command node that is unreachable,
    * suspended or answers with anything but its full registry vouches as

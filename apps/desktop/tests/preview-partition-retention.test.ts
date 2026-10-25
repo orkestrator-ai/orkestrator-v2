@@ -139,6 +139,79 @@ describe("liveServicePartitionSuffixes", () => {
 });
 
 describe("PreviewPartitionRetention", () => {
+  test("an unknown handover outcome keeps durable target vouchers while source reconciliation waits", async () => {
+    const { fs, cleared, retention } = setup();
+    const node = nodePartitionKey("bk_moved");
+    const from = connectionPartitionKey("source");
+    const to = connectionPartitionKey("target");
+    fs.directories.add(dirName(browserPreviewPartitionForWindow(1, "node:bk_moved")));
+    await retention.rememberNode(node, from);
+    let started!: () => void;
+    let reject!: (error: Error) => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const transfer = retention.handoverNodes(from, to, undefined, async () => {
+      started();
+      return new Promise<void>((_resolve, fail) => {
+        reject = fail;
+      });
+    });
+    const failed = transfer.catch((error: unknown) => error);
+    await entered;
+    expect(JSON.parse(fs.files.get(`${PENDING}.nodes`)!)[0].commands).toEqual([from, to]);
+    const listNodes = mock(async () => ({ revision: 2, suspended: false, nodes: [] }));
+    const reconcile = retention.reconcileNodes(from, { closed: false, listNodes });
+    expect(listNodes).not.toHaveBeenCalled();
+    reject(new Error("outcome unknown"));
+    expect(await failed).toMatchObject({ message: "outcome unknown" });
+    await reconcile;
+    await retention.forgetConnection(from, { includeShared: true });
+    expect(cleared).toEqual([]);
+    expect(JSON.parse(fs.files.get(`${PENDING}.nodes`)!)).toEqual([{ key: node, commands: [to] }]);
+  });
+
+  test("only selected node vouchers transfer, and target absence later removes its voucher", async () => {
+    const { fs, retention, cleared } = setup();
+    const moved = nodePartitionKey("bk_moved");
+    const kept = nodePartitionKey("bk_kept");
+    const from = connectionPartitionKey("source");
+    const to = connectionPartitionKey("target");
+    await retention.rememberNode(moved, from);
+    await retention.rememberNode(kept, from);
+    fs.directories.add(dirName(browserPreviewPartitionForWindow(1, "node:bk_moved")));
+    fs.directories.add(dirName(browserPreviewPartitionForWindow(1, "node:bk_kept")));
+    await retention.handoverNodes(from, to, [moved], async () => undefined);
+    await retention.forgetConnection(from, { includeShared: true });
+    expect(cleared).toEqual([browserPreviewPartitionForWindow(1, "node:bk_kept")]);
+    expect(JSON.parse(fs.files.get(`${PENDING}.nodes`)!)).toEqual([{ key: moved, commands: [to] }]);
+    await retention.reconcileNodes(to, {
+      closed: false,
+      listNodes: async () => ({ revision: 3, suspended: false, nodes: [] }),
+    });
+    expect(cleared).toContain(browserPreviewPartitionForWindow(1, "node:bk_moved"));
+    expect(JSON.parse(fs.files.get(`${PENDING}.nodes`)!)).toEqual([]);
+  });
+
+  test("failed voucher admission never sends the handover", async () => {
+    const { fs, retention } = setup();
+    const from = connectionPartitionKey("source");
+    await retention.rememberNode(nodePartitionKey("bk_moved"), from);
+    fs.writeFile = async () => {
+      throw new Error("disk full");
+    };
+    const handover = mock(async () => undefined);
+    await expect(
+      retention.handoverNodes(
+        from,
+        connectionPartitionKey("target"),
+        [nodePartitionKey("bk_moved")],
+        handover,
+      ),
+    ).rejects.toThrow("disk full");
+    expect(handover).not.toHaveBeenCalled();
+  });
+
   test("derives current holdings across windows and transports, including shared sessions", async () => {
     const first = new Set([servicePartition(1, "remote", "svc-a")]);
     const second = new Set([servicePartition(2, "local", "svc-b")]);

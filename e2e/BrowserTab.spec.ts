@@ -47,12 +47,19 @@ test("browser toolbar follows pane container breakpoints without horizontal over
   ]);
   expect(mediumBackBox).not.toBeNull();
   expect(mediumFormBox).not.toBeNull();
-  expect(Math.abs(mediumFormBox!.y - mediumBackBox!.y)).toBeLessThanOrEqual(1);
+  // The toolbar keeps the address on its own row below 672 px so native
+  // service controls fit in a narrow pane (including an 800 px app window).
+  expect(mediumFormBox!.y).toBeGreaterThanOrEqual(mediumBackBox!.y + mediumBackBox!.height);
   await expect(backendLabel).toBeHidden();
   await expectNoHorizontalOverflow(root);
 
   await setPaneWidth(pane, 560);
   await expect(backendLabel).toBeVisible();
+  await setPaneWidth(pane, 720);
+  const [wideBackBox, wideFormBox] = await Promise.all([back.boundingBox(), form.boundingBox()]);
+  expect(wideBackBox).not.toBeNull();
+  expect(wideFormBox).not.toBeNull();
+  expect(Math.abs(wideFormBox!.y - wideBackBox!.y)).toBeLessThanOrEqual(1);
   await expect(iframe).toHaveCSS("color-scheme", "dark");
   const [rootBox, iframeBox] = await Promise.all([root.boundingBox(), iframe.boundingBox()]);
   expect(rootBox).not.toBeNull();

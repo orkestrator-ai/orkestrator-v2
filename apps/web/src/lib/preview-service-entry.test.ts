@@ -16,7 +16,7 @@ import {
 } from "./preview-service-entry";
 
 // The fixture service is container port 3000 published on host port 49152.
-const LEGACY_URL = "http://localhost:49152/app/next?tab=2#top";
+const LEGACY_URL = "http://127.0.0.1:49152/app/next?tab=2#top";
 const capabilities = fixturePreviewCapabilities();
 
 function service(
@@ -47,7 +47,7 @@ describe("legacy URL tab to service matching", () => {
     });
     expect(match?.backendEpoch).toBe(FIXTURE_BACKEND_EPOCH);
     expect(match?.endpointGeneration).toBe(1);
-    // 127.0.0.1 and an implicit path are the same loopback address.
+    // Preserve an implicit root path.
     expect(
       legacyUrlServiceMatch(
         "http://127.0.0.1:49152",
@@ -56,6 +56,40 @@ describe("legacy URL tab to service matching", () => {
         snapshot,
       )?.ref.path,
     ).toBe("/");
+  });
+
+  test("relay internal ports never claim a host socket", () => {
+    const relay = service("svc_relay", 3000);
+    relay.endpoint.transportKind = "container-relay";
+    const host = service(FIXTURE_SERVICE_ID, 3000);
+    const match = (services: (typeof host)[]) =>
+      legacyUrlServiceMatch(
+        "http://127.0.0.1:3000/",
+        FIXTURE_ENVIRONMENT_ID,
+        capabilities,
+        fixturePreviewSnapshot(services),
+      );
+    expect(match([relay])).toBeNull();
+    expect(match([host, relay])?.ref.serviceId).toBe(FIXTURE_SERVICE_ID);
+  });
+
+  test("literal loopback addresses only match their socket family; localhost is unknown", () => {
+    const ipv4 = service(FIXTURE_SERVICE_ID, 3000);
+    const ipv6 = service("svc_ipv6", 3000);
+    ipv6.endpoint.addressFamily = "ipv6";
+    const match = (url: string, services = [ipv4, ipv6]) =>
+      legacyUrlServiceMatch(
+        url,
+        FIXTURE_ENVIRONMENT_ID,
+        capabilities,
+        fixturePreviewSnapshot(services),
+      );
+    expect(match("http://127.0.0.1:3000/")?.ref.serviceId).toBe(FIXTURE_SERVICE_ID);
+    expect(match("http://[::1]:3000/")?.ref.serviceId).toBe("svc_ipv6");
+    expect(match("http://127.0.0.1:3000/", [ipv6])).toBeNull();
+    expect(match("http://[::1]:3000/", [ipv4])).toBeNull();
+    expect(match("http://localhost:3000/")).toBeNull();
+    expect(match("http://localhost:3000/", [ipv4])).toBeNull();
   });
 
   test("two services claiming the port are ambiguous, even when only one is current", () => {

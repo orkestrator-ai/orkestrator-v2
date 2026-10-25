@@ -1072,14 +1072,7 @@ function registerIpc(): void {
       previewCommandHandover(commandHandoverDeps(event), targetConnectionId),
     handOverCommandNode: async (input, event) => {
       const deps = commandHandoverDeps(event);
-      const result = await handOverCommandNode(deps, input);
-      // Nodes that moved keep their preview site data under the new command node.
-      await previewRetention()
-        .transferNodes(
-          connectionPartitionKey(deps.currentConnectionId),
-          connectionPartitionKey(input.targetConnectionId),
-        )
-        .catch(() => console.warn("[Previews] Failed to record moved preview nodes."));
+      const result = await handOverCommandNode(deps, input, previewRetention());
       // The window follows the new command node.
       if (input.targetConnectionId !== deps.currentConnectionId) {
         const context = contextForEvent(event);

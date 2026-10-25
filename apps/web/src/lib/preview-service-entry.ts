@@ -108,8 +108,10 @@ export interface LegacyUrlServiceMatch {
  * snapshot from the current backend identity and epoch, exactly one service in
  * that environment whose last resolved host port is the URL's port (a second
  * claimant, even a stale one, makes it ambiguous), and that service enabled
- * with an available endpoint of the current epoch. Anything else keeps the
- * tab as it is.
+ * with an available endpoint of the current epoch and a host socket in the
+ * literal URL's address family. Relay-only endpoints never claim host ports;
+ * localhost stays manual until the legacy route's family is known. Anything
+ * else keeps the tab as it is.
  */
 export function legacyUrlServiceMatch(
   url: string,
@@ -126,13 +128,22 @@ export function legacyUrlServiceMatch(
   ) {
     return null;
   }
+  const hostname = new URL(url).hostname;
+  const family = hostname === "127.0.0.1" ? "ipv4" : hostname === "[::1]" ? "ipv6" : null;
   const claimants = snapshot.services.filter(
     (service) =>
-      service.definition.environmentId === environmentId && service.endpoint.hostPort === port,
+      service.definition.environmentId === environmentId &&
+      service.endpoint.hostPort === port &&
+      (service.endpoint.transportKind === "backend-loopback" ||
+        service.endpoint.transportKind === "published-port") &&
+      (family === null || service.endpoint.addressFamily === family),
   );
   if (claimants.length !== 1) return null;
   const service = claimants[0]!;
   const { endpoint } = service;
+  // localhost can resolve to a different socket family than this binding.
+  // The snapshot does not establish which family the legacy view used.
+  if (family === null) return null;
   if (
     !service.definition.enabled ||
     endpoint.state !== "available" ||
@@ -188,7 +199,7 @@ export async function confirmLegacyUrlServiceMatch(
 ): Promise<string | null> {
   ensurePreviewServiceSync();
   const store = usePreviewServiceStore.getState();
-  const snapshot = await store.refreshEnvironment(environmentId, { force: true });
+  const snapshot = await store.confirmEnvironment(environmentId);
   const current = legacyUrlServiceMatch(
     url,
     environmentId,

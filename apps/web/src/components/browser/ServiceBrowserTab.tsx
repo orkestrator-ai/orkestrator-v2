@@ -39,7 +39,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import * as backend from "@/lib/backend";
-import { resolveBrowserAddress } from "@/lib/browser-address";
+import { displayUrlFromNativePreview, resolveBrowserAddress } from "@/lib/browser-address";
 import { isWkWebViewClient } from "@/lib/client-platform";
 import {
   attachBrowserPreview,
@@ -337,14 +337,37 @@ function ServicePreview({
       if (state.service && !isCurrentService(state.service, serviceRef)) return;
       setNativeState(state);
       if (state.transport) setTransport(state.transport);
-      const navigation = state.service?.navigation;
+      const navigation = state.service?.navigation ?? state.navigation;
+      if (
+        navigation !== undefined &&
+        viewNavigation.current !== undefined &&
+        navigation < viewNavigation.current
+      )
+        return;
       if (navigation !== undefined) viewNavigation.current = navigation;
-      if (state.service && state.service.path !== routeRef.current.path) {
-        setRoute({ path: state.service.path, basis: navigation });
-        persistPath(state.service.path);
+      let nextPath = state.service?.path;
+      if (!state.service && mode === "compatibility" && service?.endpoint.hostPort) {
+        const display = `http://localhost:${service.endpoint.hostPort}${routeRef.current.path}`;
+        const current = displayUrlFromNativePreview(state.url, display);
+        if (current) {
+          const parsed = new URL(current);
+          // Only a route belonging to this service's compatibility socket.
+          if (parsed.port === String(service.endpoint.hostPort))
+            nextPath = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+        }
+      }
+      if (nextPath !== undefined && nextPath !== routeRef.current.path) {
+        setRoute({ path: nextPath, basis: navigation });
+        persistPath(nextPath);
+      } else if (
+        nextPath !== undefined &&
+        routeRef.current.basis === undefined &&
+        navigation !== undefined
+      ) {
+        setRoute({ path: nextPath, basis: navigation });
       }
     },
-    [persistPath, serviceRef, setRoute, tabId],
+    [mode, persistPath, service, serviceRef, setRoute, tabId],
   );
 
   useEffect(() => {
@@ -413,7 +436,13 @@ function ServicePreview({
                 bounds,
                 visible,
               })
-            : attachBrowserPreview({ tabId, url: compatibilityUrl!.iframeUrl, bounds, visible });
+            : attachBrowserPreview({
+                tabId,
+                url: compatibilityUrl!.iframeUrl,
+                ...(route.basis === undefined ? {} : { navigationBasis: route.basis }),
+                bounds,
+                visible,
+              });
         void attach
           .then((state) => {
             if (disposed) return;

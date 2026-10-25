@@ -33,6 +33,8 @@ interface PreviewServiceStoreState {
     environmentId: string,
     options?: { force?: boolean },
   ): Promise<PreviewRegistrySnapshot | null>;
+  /** An unconditional snapshot requested after any work already in progress. */
+  confirmEnvironment(environmentId: string): Promise<PreviewRegistrySnapshot>;
   handleChanged(event: PreviewServicesChangedEvent): void;
   service(environmentId: string, serviceId: string): PreviewServiceSnapshot | null;
   reset(): void;
@@ -193,6 +195,22 @@ export const usePreviewServiceStore = create<PreviewServiceStoreState>((set, get
       });
       inflight.set(environmentId, request);
       return request;
+    },
+
+    confirmEnvironment: async (environmentId) => {
+      const requestGeneration = generation;
+      // Drain coalesced work (including event-triggered follow-ups) before
+      // starting the unconditional request owned by this confirmation.
+      while (inflight.has(environmentId)) {
+        await inflight.get(environmentId);
+        if (generation !== requestGeneration) throw new Error("The preview backend changed.");
+      }
+      const snapshot = await get().refreshEnvironment(environmentId, { force: true });
+      if (generation !== requestGeneration || !snapshot || snapshot.notModified)
+        throw new Error(
+          get().environments[environmentId]?.error ?? "Could not check preview services.",
+        );
+      return snapshot;
     },
 
     handleChanged: (event) => {

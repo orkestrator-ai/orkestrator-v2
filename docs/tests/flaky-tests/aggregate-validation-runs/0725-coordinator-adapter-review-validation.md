@@ -48,3 +48,15 @@ was changed.
 | `apps/backend/src/core/commands-environment-worktree-location.test.ts` | `start uses and persists both explicit and configured roots; generic reads stay within the worktree` | 5039.82ms |
 | `apps/backend/src/core/commands-environment-worktree-location.test.ts` | `retargeting an accepted alias keeps creation and cleanup at the original physical root` | 5197.75ms |
 | `apps/backend/tests/tmux-commands-teardown.test.ts` | `Electron tmux environment teardown > an unlinked live socket retains session attribution, cleanup and startup retry state` | 5316.55ms |
+
+## Worktree alias recurrence during coordinator consistency validation — 2026-10-25
+
+`mise run test:logged -- --name committed-consistency-suite -- mise run test`
+repeated the unchanged alias-retargeting test timeout at 5027.50 ms against its
+five-second deadline. The complete owner then passed unchanged:
+`mise run test:logged -- --name worktree-alias-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-environment-worktree-location.test.ts --parallel=1 --only-failures`
+(exit 0, 7.9 seconds). This establishes an intermittent recurrence for that
+owner; it does not reclassify the other unresolved failures above. No worktree
+implementation, assertion, timeout or skip changed. Evidence is
+`orkestrator-test-run.iEyQ7i/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory after aggregate completion.

@@ -132,7 +132,11 @@ import { AgentRegistry } from "./agent-registry.js";
 import { tmuxManager } from "./tmux-session-manager.js";
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService } from "./coordinator-service.js";
-import { lastAssistantText } from "./coordinator-status-wakes.js";
+import {
+  lastAssistantText,
+  waitingBlocker,
+  type CoordinatorWaitingBlocker,
+} from "./coordinator-status-wakes.js";
 import { coordinatorProviderQualification } from "./coordinator-providers.js";
 import { ProjectGitService } from "./project-git-service.js";
 import {
@@ -499,6 +503,7 @@ export class OrkestratorBackend {
       {
         lastAssistantExcerpt: (environmentId, tabId) =>
           this.lastAssistantExcerpt(environmentId, tabId),
+        waitingBlocker: (environmentId, tabId) => this.waitingBlocker(environmentId, tabId),
       },
     );
     context.coordinators = this.coordinators;
@@ -1086,6 +1091,26 @@ export class OrkestratorBackend {
     environmentId: string,
     tabId: string,
   ): Promise<string | undefined> {
+    return lastAssistantText((await this.workerProjection(environmentId, tabId, 6))?.messages);
+  }
+
+  /**
+   * Whether a waiting worker tab is blocked on an approval or a question, from
+   * its pending interactions rather than its activity state, which cannot say.
+   */
+  private async waitingBlocker(
+    environmentId: string,
+    tabId: string,
+  ): Promise<CoordinatorWaitingBlocker | undefined> {
+    return waitingBlocker((await this.workerProjection(environmentId, tabId, 1))?.interactions);
+  }
+
+  /** A short projection read of one worker tab with a deadline; null when unavailable. */
+  private async workerProjection(
+    environmentId: string,
+    tabId: string,
+    messageLimit: number,
+  ): Promise<{ messages?: unknown; interactions?: unknown } | null | undefined> {
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
     const session = (await this.context.storage.listNativeAgentSessions()).find(
       (candidate) =>
@@ -1099,18 +1124,17 @@ export class OrkestratorBackend {
       timer.unref?.();
     });
     try {
-      const projection = await Promise.race([
+      return await Promise.race([
         this.nativeAgents
           .getProjection({
             environmentId,
             agent: session.agent,
             logicalSessionKey,
-            messageLimit: 6,
+            messageLimit,
           })
           .catch(() => null),
         deadline,
       ]);
-      return lastAssistantText(projection?.messages);
     } finally {
       if (timer) clearTimeout(timer);
     }

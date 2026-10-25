@@ -19,7 +19,11 @@ import {
   lastAssistantText,
   multiReviewStatus,
   renderCoordinatorStatusNotice,
+  waitingBlocker,
+  waitingStatus,
   type CoordinatorStatusWakeTimers,
+  type CoordinatorWaitingBlocker,
+  type CoordinatorStatusWakeOptions,
 } from "./coordinator-status-wakes.js";
 
 /** Timers the test advances by hand; the system clock moves with them. */
@@ -74,14 +78,19 @@ type WorldSetup = {
   timers: ManualTimers;
   activity: Map<string, AgentActivityState | "unknown">;
   excerpts: Map<string, string>;
+  blockers: Map<string, CoordinatorWaitingBlocker>;
 };
 
 let setup: WorldSetup | null = null;
 
-async function createWorld(settings: Partial<AgentMessagingSettings> = {}): Promise<WorldSetup> {
+async function createWorld(
+  settings: Partial<AgentMessagingSettings> = {},
+  overrides: CoordinatorStatusWakeOptions = {},
+): Promise<WorldSetup> {
   const timers = new ManualTimers();
   const activity = new Map<string, AgentActivityState | "unknown">();
   const excerpts = new Map<string, string>();
+  const blockers = new Map<string, CoordinatorWaitingBlocker>();
   const world = await MailWorld.create({
     statusWakes: {
       timers,
@@ -89,6 +98,8 @@ async function createWorld(settings: Partial<AgentMessagingSettings> = {}): Prom
         activity.get(`${environmentId}:${tabId}`) ?? "working",
       lastAssistantExcerpt: async (environmentId, tabId) =>
         excerpts.get(`${environmentId}:${tabId}`),
+      waitingBlocker: async (environmentId, tabId) => blockers.get(`${environmentId}:${tabId}`),
+      ...overrides,
     },
   });
   if (Object.keys(settings).length > 0) {
@@ -98,7 +109,7 @@ async function createWorld(settings: Partial<AgentMessagingSettings> = {}): Prom
       agentMessaging: { ...config.global.agentMessaging!, ...settings },
     });
   }
-  setup = { world, timers, activity, excerpts };
+  setup = { world, timers, activity, excerpts, blockers };
   return setup;
 }
 
@@ -226,6 +237,135 @@ describe("coordinator status wakes", () => {
       await world.storage.listCoordinatorWorkflowAssociations(world.projectId)
     ).find((item) => item.resourceId === "review-1");
     expect(association?.statusNotice?.key).toMatch(/^ready:/);
+  });
+
+  test("a notice still in its coalescing hold rides along with mail dispatched meanwhile", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const review = await world.addEnvironment("review-env");
+    const worker = await world.addEnvironment("worker");
+    await world.delegate(coordinator, worker, "Run the suite.");
+    await world.deliver();
+    await world.send(worker, "coordinator", "Done: the suite passes.");
+
+    await saveReview(world, review, "review-1", {
+      phase: "ready",
+      consolidatedReport: READY_REPORT,
+    });
+    await associate(world, "multi-review", "review-1");
+    await world.coordinator.reconcileWorkflowNotifications();
+    await world.deliver();
+    // Held: the window waits for other notices.
+    expect(world.wakes(coordinator)).toBe(0);
+
+    // The worker's report is released by its turn ending; the notice joins it.
+    await world.finishTurn(worker);
+    expect(world.wakes(coordinator)).toBe(1);
+    const carriers = world.carriers(coordinator)[0]!;
+    expect(carriers.map((carrier) => carrier.notice?.state ?? carrier.body)).toEqual([
+      "Done: the suite passes.",
+      "ready",
+    ]);
+
+    // The hold ending later finds nothing left to send.
+    await world.finishTurn(coordinator);
+    await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+    await world.deliver();
+    expect(world.wakes(coordinator)).toBe(1);
+    expect(await world.undelivered(coordinator)).toEqual([]);
+  });
+
+  test.each(["batch-full", "held"] as const)(
+    "a joined notice returned as %s retains its deadline and accepts later notices",
+    async (outcome) => {
+      const context = await createWorld();
+      const { world } = context;
+      const coordinator = await world.main();
+      // Control the drain explicitly so every pending sibling is present before claiming.
+      await world.mail.shutdown();
+      const send = (id: string, body: string, hold = false) =>
+        world.storage.sendAgentMail(
+          { kind: "system", projectId: world.projectId, source: "workflow", resourceId: id },
+          {
+            requestId: id,
+            toEnvironmentId: coordinator.environmentId,
+            toTabId: coordinator.tabId,
+            body,
+          },
+          hold ? { coalesceMs: COORDINATOR_STATUS_COALESCE_MS } : {},
+        );
+      const reports = outcome === "batch-full" ? 4 : 1;
+      for (let index = 0; index < reports; index += 1)
+        await send(`report-${index}`, "x".repeat(outcome === "batch-full" ? 31_000 : 10));
+      const notice = await send("held-notice", "n".repeat(16_000), true);
+      const deadline = new Date(
+        context.timers.now() + COORDINATOR_STATUS_COALESCE_MS,
+      ).toISOString();
+      const key = `${coordinator.environmentId}\0${coordinator.logicalSessionKey}`;
+      if (outcome === "held") world.holdNext.add(key);
+      await world.deliver();
+      const pending = () =>
+        world.storage.listPendingAgentMailInjects(100, {
+          includeCoalescing: true,
+          includeDeferred: true,
+        });
+      expect(
+        (await pending()).find((entry) => entry.message.id === notice.id)?.coalescingUntil,
+      ).toBe(deadline);
+      // Remove the immediate messages so only held notices could start a turn.
+      const mailbox = (await pending()).find((entry) => entry.message.id === notice.id)!.mailbox;
+      await world.storage.resetAgentMailInjectBackoff(mailbox.mailboxId);
+      for (const entry of await pending()) {
+        if (entry.message.id === notice.id) continue;
+        const claimed = await world.storage.beginAgentMailInject(
+          mailbox.mailboxId,
+          entry.message.id,
+          mailbox.incarnationId,
+        );
+        if (claimed)
+          await world.storage.finishAgentMailInject(mailbox.mailboxId, entry.message.id, {
+            outcome: "accepted",
+          });
+      }
+      await world.finishTurn(coordinator);
+      const wakes = world.wakes(coordinator);
+      await advance(context, 3_000);
+      const later = await send("later-notice", "later", true);
+      const held = await pending();
+      expect(held.find((entry) => entry.message.id === notice.id)?.coalescingUntil).toBe(deadline);
+      expect(held.find((entry) => entry.message.id === later.id)?.coalescingUntil).toBe(deadline);
+      await world.deliver();
+      expect(world.wakes(coordinator)).toBe(wakes);
+      await advance(context, COORDINATOR_STATUS_COALESCE_MS - 3_000 + 1);
+      await world.deliver();
+      expect(world.wakes(coordinator)).toBe(wakes + 1);
+      expect(
+        world
+          .carriers(coordinator)
+          .at(-1)!
+          .map((entry) => entry.messageId),
+      ).toEqual([notice.id, later.id]);
+    },
+  );
+
+  test("a held notice never starts a turn of its own before its window ends", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const review = await world.addEnvironment("review-env");
+    await saveReview(world, review, "review-1", {
+      phase: "ready",
+      consolidatedReport: READY_REPORT,
+    });
+    await associate(world, "multi-review", "review-1");
+    await world.coordinator.reconcileWorkflowNotifications();
+    await advance(context, COORDINATOR_STATUS_COALESCE_MS - 1_000);
+    await world.deliver();
+    expect(world.wakes(coordinator)).toBe(0);
+    await advance(context, 1_001);
+    await world.deliver();
+    expect(world.wakes(coordinator)).toBe(1);
   });
 
   test("each later settled state wakes it once more: fix done, then completed", async () => {
@@ -951,7 +1091,8 @@ describe("coordinator status wakes", () => {
       await world.deliver();
       expect(world.wakes(coordinator)).toBe(0);
 
-      // One that lasts is.
+      // One that lasts is, and names what it is blocked on.
+      context.blockers.set(key, "approval");
       activity.set(key, "waiting");
       await world.coordinator.noteWorkerActivity({ ...worker, state: "waiting" });
       await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS);
@@ -959,6 +1100,7 @@ describe("coordinator status wakes", () => {
       await world.deliver();
       expect(world.wakes(coordinator)).toBe(1);
       const [carrier] = world.carriers(coordinator)[0]!;
+      expect(carrier!.body).toContain("is waiting for an approval.");
       expect(carrier!.notice).toMatchObject({
         resource: {
           kind: "agent-tab",
@@ -991,6 +1133,82 @@ describe("coordinator status wakes", () => {
       await world.finishTurn(worker);
       expect(world.wakes(coordinator)).toBe(3);
       expect(world.received(coordinator)[2]).toContain("without sending a report");
+    });
+
+    test("waiting excerpt and blocker reads start together on the serialized wake queue", async () => {
+      const excerptStarted = Promise.withResolvers<void>();
+      const blockerStarted = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const context = await createWorld(
+        {},
+        {
+          lastAssistantExcerpt: async () => {
+            excerptStarted.resolve();
+            await release.promise;
+            return "Please decide";
+          },
+          waitingBlocker: async () => {
+            blockerStarted.resolve();
+            await release.promise;
+            return "approval-and-question";
+          },
+        },
+      );
+      const { world, activity } = context;
+      const worker = await world.addEnvironment("waiting-worker", { launched: true });
+      const coordinator = await world.main();
+      activity.set(`${worker.environmentId}:${worker.tabId}`, "waiting");
+      await world.coordinator.noteWorkerActivity({ ...worker, state: "waiting" });
+      await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS);
+      try {
+        await excerptStarted.promise;
+        // With sequential reads this cannot resolve until the excerpt is released.
+        await Promise.race([
+          blockerStarted.promise,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("blocker read did not start concurrently")), 500),
+          ),
+        ]);
+      } finally {
+        release.resolve();
+      }
+      await world.coordinator.statusWakes.settled();
+      await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+      await world.deliver();
+      expect(world.carriers(coordinator)[0]![0]!.body).toContain("cannot approve or answer");
+      expect(world.carriers(coordinator)[0]![0]!.body).toContain("Please decide");
+    });
+
+    test("a waiting episode starting or ending announces a coordinator change", async () => {
+      const context = await createWorld();
+      const { world, activity } = context;
+      await world.main();
+      const worker = await world.addEnvironment("worker", { launched: true });
+      const key = `${worker.environmentId}:${worker.tabId}`;
+      const announced: string[] = [];
+      const unsubscribe = world.storage.addResourceChangeListener((change) => {
+        if (change.resource === "coordinator") announced.push(change.id);
+      });
+      try {
+        activity.set(key, "waiting");
+        await world.coordinator.noteWorkerActivity({ ...worker, state: "waiting" });
+        expect(announced).toEqual([world.projectId]);
+        const open = await world.storage.listOpenCoordinatorDelegations();
+        expect(open[0]!.delegation!.waiting?.since).toBeString();
+
+        // The notice's own bookkeeping is not a change the panel shows.
+        await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS);
+        await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+        expect(announced).toEqual([world.projectId]);
+
+        activity.set(key, "working");
+        await world.coordinator.noteWorkerActivity({ ...worker, state: "working" });
+        expect(announced).toEqual([world.projectId, world.projectId]);
+        const after = await world.storage.listOpenCoordinatorDelegations();
+        expect(after[0]!.delegation!.waiting).toBeUndefined();
+      } finally {
+        unsubscribe();
+      }
     });
 
     test("two workers' waiting notices are budgeted apart, though both tabs are startup-agent", async () => {
@@ -1284,6 +1502,49 @@ describe("status classification and bounds", () => {
     expect(lastAssistantText(undefined)).toBeUndefined();
     expect(lastAssistantText([{ role: "assistant", content: "x".repeat(2_000) }])!.length).toBe(
       400,
+    );
+  });
+});
+
+describe("waiting blockers", () => {
+  test("pending interactions name an approval, a question or both", () => {
+    expect(waitingBlocker(undefined)).toBeUndefined();
+    expect(waitingBlocker([])).toBeUndefined();
+    expect(waitingBlocker([{ kind: "command-approval", state: "pending" }])).toBe("approval");
+    expect(waitingBlocker([{ kind: "plan-approval", state: "answering" }])).toBe("approval");
+    expect(waitingBlocker([{ kind: "question", state: "pending" }])).toBe("question");
+    expect(waitingBlocker([{ kind: "elicitation", state: "pending" }])).toBe("question");
+    expect(
+      waitingBlocker([
+        { kind: "file-approval", state: "pending" },
+        { kind: "question", state: "pending" },
+      ]),
+    ).toBe("approval-and-question");
+    // Settled or non-blocking requests are not why the turn waits.
+    expect(waitingBlocker([{ kind: "question", state: "resolved" }])).toBeUndefined();
+    expect(
+      waitingBlocker([{ kind: "permission", state: "pending", blocking: false }]),
+    ).toBeUndefined();
+    expect(waitingBlocker([null, "x", { kind: 3, state: "pending" }])).toBeUndefined();
+  });
+
+  test("the waiting headline follows the blocker and falls back when unknown", () => {
+    const delegation = { waiting: { since: "2026-10-25T00:00:00.000Z" } };
+    expect(waitingStatus(delegation, "e", "t")!.headline).toBe(
+      "is waiting for input or an approval",
+    );
+    expect(waitingStatus(delegation, "e", "t", undefined, "approval")!.headline).toBe(
+      "is waiting for an approval",
+    );
+    const question = waitingStatus(delegation, "e", "t", undefined, "question")!;
+    expect(question.headline).toBe("is waiting for an answer to a question");
+    expect(question.details[0]).toContain("cannot answer on its behalf");
+    const combined = waitingStatus(delegation, "e", "t", undefined, "approval-and-question")!;
+    expect(combined.headline).toBe("is waiting for an approval and an answer to a question");
+    expect(combined.details[0]).toContain("cannot approve or answer on its behalf");
+    // The key is the episode, never the blocker: a later read cannot resend it.
+    expect(waitingStatus(delegation, "e", "t", undefined, "question")!.key).toBe(
+      waitingStatus(delegation, "e", "t")!.key,
     );
   });
 });

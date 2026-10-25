@@ -52,3 +52,12 @@ Full failure names, counts, evidence paths and unresolved limitations are in [07
 - **Aggregate counts:** Backend 11,012 passed, 79 skipped and three failed across 660 files (642.56 s); root/support 3,405 passed and one failed across 162 files (403.31 s). All other workspace packages, bridges and protocol passed; aggregate exit 1 in 692.6 s logged.
 - **Evidence:** `orkestrator-test-run.sQR1xm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; the outer aggregate log is `orkestrator-test-run.k2y50g/aggregate-tests.log.gz`.
 - **Assessment:** Recurrence of the existing intermittent failure. No backend implementation, assertion, deadline or skip changed; the original aggregate remains non-green.
+
+## Coordinator consistency gaps (todo 0028) — 2026-10-25
+
+- **Change:** branch `todo-0028-coordinator-consistency-b1b98c1981f1`; no transcript-artifact code changed.
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test` on macOS arm64, Bun 1.4.4.
+- **Failure:** `executable document policy in chromium > (unnamed)` hook timed out after 5000.93 ms.
+- **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts src/core/transcript-artifacts/content-server.engines.test.ts` from `apps/backend` passed, 39 of 39.
+- **Aggregate counts:** backend 11,077 passed, 84 skipped, 2 failed across 658 files (698.8 s); the other failure was 0247.
+- **Assessment:** recurrence of the existing intermittent hook timeout; nothing changed.

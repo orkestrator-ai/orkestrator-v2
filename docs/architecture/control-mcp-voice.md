@@ -141,7 +141,8 @@ The relay listens on loopback only, forwards each request with the runtime's
 own header (it holds no token) and records, per call, only the tool, latency,
 outcome, the IDs it targeted and the IDs its result returned; prompts, answers
 and result text are not written. Scoring assumes the script's single
-environment and the session `start_work` started in it: a targeted ID that no
+environment and the latest session `start_work` started in it, so one
+recording can hold several repeats: a targeted ID that no
 earlier result returned (or a malformed `ses_` handle) is a copy error, and a
 returned ID that is not the script's environment, project or session is a
 misresolution. The scripted harness writes the same recording with `--record`

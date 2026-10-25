@@ -255,8 +255,8 @@ export interface ScoredCall {
 }
 
 export interface RecordingScore {
-  /** The session the script is about: the first one `start_work` returned in the environment. */
-  sessionId: string | null;
+  /** Each session `start_work` returned in the environment, in order; the last is current. */
+  sessionIds: string[];
   targetedCalls: number;
   misresolvedTargets: ScoredCall[];
   handleCopyErrors: ScoredCall[];
@@ -270,8 +270,10 @@ export interface RecordingScore {
  * Each targeted call is judged once per kind: an ID that is not a valid
  * handle, or that nothing before it returned, is a copy error; a returned ID
  * that differs from the script's environment, project or session is a
- * misresolution. Operation and interaction IDs have no single expected value,
- * so they are checked for copy errors only.
+ * misresolution. The expected session is the latest one `start_work` started
+ * in the environment, so one recording can hold several repeats of the
+ * script. Operation and interaction IDs have no single expected value, so
+ * they are checked for copy errors only.
  */
 export function scoreRecording(
   entries: readonly RecordingEntry[],
@@ -281,7 +283,7 @@ export function scoreRecording(
     expected.environmentId,
     ...(expected.projectId ? [expected.projectId] : []),
   ]);
-  let sessionId: string | null = null;
+  const sessionIds: string[] = [];
   let targetedCalls = 0;
   const misresolvedTargets: ScoredCall[] = [];
   const handleCopyErrors: ScoredCall[] = [];
@@ -302,7 +304,7 @@ export function scoreRecording(
           : kind === "project"
             ? expected.projectId
             : kind === "session"
-              ? sessionId
+              ? (sessionIds.at(-1) ?? null)
               : undefined;
       if (want !== undefined && value !== want) misresolved.push(kind);
     }
@@ -314,16 +316,17 @@ export function scoreRecording(
     if (copied.length > 0) handleCopyErrors.push({ ...scored, kinds: copied });
     if (misresolved.length > 0) misresolvedTargets.push({ ...scored, kinds: misresolved });
     for (const id of entry.resultIds) seen.add(id);
-    if (entry.tool === "start_work" && entry.ok && !sessionId) {
-      sessionId =
-        entry.resultIds.find(
-          (id) => decodePublicSessionId(id)?.environmentId === expected.environmentId,
-        ) ?? null;
-    }
+    const started =
+      entry.tool === "start_work" && entry.ok
+        ? entry.resultIds.find(
+            (id) => decodePublicSessionId(id)?.environmentId === expected.environmentId,
+          )
+        : undefined;
+    if (started && started !== sessionIds.at(-1)) sessionIds.push(started);
   });
   const rate = (count: number) => (targetedCalls > 0 ? count / targetedCalls : null);
   return {
-    sessionId,
+    sessionIds,
     targetedCalls,
     misresolvedTargets,
     handleCopyErrors,

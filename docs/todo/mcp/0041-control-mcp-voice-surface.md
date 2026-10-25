@@ -169,7 +169,7 @@ Measured on this branch (2026-10-24, `control-mcp-voice.test.ts` harness):
 | `mise run test` (non-iOS) on the rebased branch | Fails only on unrelated cases | every failure passed alone and is a registered flake (0192, 0632, 0244, 0258, new 0775), except the 14 OpenCode execution-policy conformance cases, which fail on `main` too: #1198 moved the OpenCode pin to 1.19.4 and `conformance-execution-policy.test.ts` still expects 1.19.0 |
 | Live: the script over MCP with a real agent; real MCP clients on `full` | Done (no speaking model) | Live evidence |
 | Live: the approval step with a real command approval | Done 2026-10-25 | Live evidence, "Real command approval" |
-| Recording relay and scoring of misresolved targets and handle copy errors | Done 2026-10-25 | `packages/cli/tests/voice-recording.test.ts` (10 tests: targets and result IDs, no prompt or token in a recording, zero score for exact handles, misresolution versus copy error, report, relay forwarding and bounds, `--score`, `--expect-approval` pass and fail); a live relay recording scored 0 / 0 |
+| Recording relay and scoring of misresolved targets and handle copy errors | Done 2026-10-25 | `packages/cli/tests/voice-recording.test.ts` (11 tests: targets and result IDs, no prompt or token in a recording, zero score for exact handles, misresolution versus copy error, repeats following the latest session, report, relay forwarding and bounds, `--score`, `--expect-approval` pass and fail); a live relay recording scored 0 / 0 |
 | Live: a realtime voice runtime runs the script | **Not done** | Remaining work 1 |
 
 ## Remaining work
@@ -615,9 +615,9 @@ the choice, why, and its pros and cons.
 
 **D21. How a recording is scored.**
 - Options: (a) per-step expected targets written by the person; (b) infer
-  from the script's single environment and the session `start_work` started
-  in it.
-- Chosen: (b). A targeted ID that no earlier result returned (and the run
+  from the script's single environment and the latest session `start_work`
+  started in it.
+- Chosen: (b), so one recording can hold several repeats. A targeted ID that no earlier result returned (and the run
   was not given), or a malformed `ses_` handle, is a copy error; a returned
   ID that is not the script's environment, project or session is a
   misresolution; operation and interaction IDs are checked for copy errors
@@ -625,7 +625,7 @@ the choice, why, and its pros and cons.
 - Why: no annotation step, and the script addresses exactly one environment
   and one session.
 - Pros: automatic and exact for the script. Cons: only valid for that
-  script; a session reached by `environmentId` plus a wrong `tabId` counts as
+  script (addressing an earlier repeat's session counts as a misresolution); a session reached by `environmentId` plus a wrong `tabId` counts as
   a copy error, since the handle was never returned.
 
 **D22. When the harness stops after answering.**

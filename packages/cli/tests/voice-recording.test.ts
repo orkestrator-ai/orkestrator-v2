@@ -104,7 +104,7 @@ describe("voice recordings", () => {
     ];
     const score = scoreRecording(entries, { environmentId: ENV });
     expect(score).toEqual({
-      sessionId: SESSION,
+      sessionIds: [SESSION],
       targetedCalls: 5,
       misresolvedTargets: [],
       handleCopyErrors: [],
@@ -126,7 +126,7 @@ describe("voice recordings", () => {
       call("read_session", { session: SESSION }),
     ];
     const score = scoreRecording(entries, { environmentId: ENV });
-    expect(score.sessionId).toBe(SESSION);
+    expect(score.sessionIds).toEqual([SESSION]);
     expect(score.misresolvedTargets).toEqual([
       { index: 1, tool: "start_work", kinds: ["environment"] },
       { index: 3, tool: "stop_session", kinds: ["session"] },
@@ -139,6 +139,24 @@ describe("voice recordings", () => {
     expect(score.targetedCalls).toBe(7);
     expect(score.misresolvedRate).toBeCloseTo(2 / 7);
     expect(score.copyErrorRate).toBeCloseTo(3 / 7);
+  });
+
+  test("repeats of the script follow the latest session", () => {
+    const second = encodePublicSessionId(ENV, "tab-2");
+    const entries: RecordingEntry[] = [
+      call("start_work", { environment: ENV }, ["op-1", SESSION]),
+      call("stop_session", { session: SESSION }),
+      call("start_work", { environment: ENV }, ["op-2", second]),
+      call("stop_session", { session: second }),
+      // Addressing the first run's session after the second started is wrong.
+      call("read_session", { session: SESSION }),
+    ];
+    const score = scoreRecording(entries, { environmentId: ENV });
+    expect(score.sessionIds).toEqual([SESSION, second]);
+    expect(score.misresolvedTargets).toEqual([
+      { index: 4, tool: "read_session", kinds: ["session"] },
+    ]);
+    expect(score.handleCopyErrors).toEqual([]);
   });
 
   test("the report covers latency, sizes and the score", () => {
@@ -268,7 +286,7 @@ describe("voice-qualify script modes", () => {
       );
       expect(run.exitCode).toBe(0);
       const report = JSON.parse(run.stdout.toString()) as ReturnType<typeof recordingReport>;
-      expect(report.score).toMatchObject({ sessionId: SESSION, targetedCalls: 2 });
+      expect(report.score).toMatchObject({ sessionIds: [SESSION], targetedCalls: 2 });
       expect(report.score.handleCopyErrors).toEqual([]);
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -408,7 +426,7 @@ describe("voice-qualify script modes", () => {
     expect(approval.answers.map((answer) => answer.confirmToken)).toEqual([undefined, "tok"]);
     expect(approval.answers[1]!.answers).toEqual([{ questionId: "q", optionIds: ["allow"] }]);
     expect(approval.report.selfCheck).toMatchObject({
-      sessionId: SESSION,
+      sessionIds: [SESSION],
       misresolvedTargets: [],
       handleCopyErrors: [],
     });

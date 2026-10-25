@@ -169,7 +169,13 @@ All on this branch, 2026-10-25.
   (no bridge code changed here), whose owner passed alone (123 pass).
 - `bun run typecheck` in `apps/backend`: no errors (1,531 and 1,036 files).
 - `mise run lint`: exit 0, no finding in a changed file.
-- `mise run test`: see the coordinator report for the run on the pushed head.
+- First `mise run test` (head `f960eca3`): bridges and codex protocol lockfile
+  passed; root failed one test (`mise-tasks.test.ts`: this file named
+  `bun run typecheck`, fixed); the backend workspace failed 9 of 11,530: the
+  8 routing tests above (fixed) and one timeout recorded as flake
+  [0905](../../tests/flaky-tests/backend-services-and-tooling/0905-public-api-environment-create-replay-timeout.md)
+  (its owner passed alone).
+- Final `mise run test`: see the coordinator report for the pushed head.
 
 ## Assumptions and decisions
 

@@ -158,3 +158,171 @@ test("a direct panel is never re-probed on use", async () => {
     setSystemTime();
   }
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+for (const change of ["release", "replace", "invalidate", "epoch", "retarget-throw"] as const) {
+  test(`a pending upgrade cleans its candidate after ${change}`, async () => {
+    setSystemTime(new Date("2026-10-25T00:00:00Z"));
+    const pending = deferred<WorkspaceBinding>();
+    const revoked: string[] = [];
+    let portalReleased = false;
+    let retained = false;
+    let releases = 0;
+    let epoch = 1;
+    const applied: string[] = [];
+    const scopes = new NodeWorkspaceScopes(async () => ({}));
+    const invoke = (command: string, args: Record<string, unknown>) => {
+      if (portalReleased) throw new Error("Scope is released");
+      if (command === "close_node_workspace") revoked.push(String(args.workspaceId));
+      return Promise.resolve({});
+    };
+    scopes.track("panel", "old", {
+      invoke,
+      relayed: true,
+      epoch: () => epoch,
+      reopen: () => pending.promise,
+      retain: async () => {
+        retained = true;
+        return {
+          invoke: async (command, args) => {
+            expect(retained).toBe(true);
+            if (command === "close_node_workspace") revoked.push(String(args.workspaceId));
+            return {};
+          },
+          reopen: () => pending.promise,
+          release: () => {
+            retained = false;
+            releases++;
+          },
+        };
+      },
+      retarget: (value) => {
+        if (change === "retarget-throw") throw new Error("callback failed synchronously");
+        applied.push(value.workspaceId);
+      },
+    });
+    try {
+      setSystemTime(new Date(Date.now() + WORKSPACE_DIRECT_RETRY_MS));
+      scopes.noteUse("panel");
+      await settle();
+      expect(retained).toBe(true);
+      if (change === "release") scopes.release("panel");
+      if (change === "replace") scopes.track("panel", "replacement", { invoke });
+      if (change === "invalidate") scopes.invalidate("panel");
+      if (change === "epoch") epoch++;
+      portalReleased = true;
+      pending.resolve(directBinding("trial"));
+      await settle();
+      await settle();
+      expect(applied).toEqual([]);
+      expect(revoked).toContain("trial");
+      if (change === "release" || change === "replace") expect(revoked).toContain("old");
+      expect(releases).toBe(1);
+      expect(retained).toBe(false);
+      // Even release callbacks that throw synchronously are contained.
+      expect(() => scopes.releaseAll()).not.toThrow();
+    } finally {
+      scopes.releaseAll();
+      setSystemTime();
+    }
+  });
+}
+
+test("a rejected retry releases retained access and the next use can recover", async () => {
+  setSystemTime(new Date("2026-10-25T00:00:00Z"));
+  const pending = deferred<WorkspaceBinding>();
+  let reopens = 0;
+  let releases = 0;
+  const applied: string[] = [];
+  const scopes = new NodeWorkspaceScopes(async () => ({}));
+  const reopen = () =>
+    ++reopens === 1 ? pending.promise : Promise.resolve(directBinding("recovered"));
+  scopes.track("panel", "old", {
+    relayed: true,
+    reopen,
+    retain: async () => ({
+      invoke: async () => ({}),
+      reopen,
+      release: () => {
+        releases++;
+      },
+    }),
+    retarget: (value) => {
+      applied.push(value.workspaceId);
+    },
+  });
+  try {
+    setSystemTime(new Date(Date.now() + WORKSPACE_DIRECT_RETRY_MS));
+    scopes.noteUse("panel");
+    await settle();
+    pending.reject(new Error("probe failed"));
+    await settle();
+    await settle();
+    expect(releases).toBe(1);
+    setSystemTime(new Date(Date.now() + WORKSPACE_DIRECT_RETRY_MS));
+    scopes.noteUse("panel");
+    await settle();
+    await settle();
+    expect(applied).toEqual(["recovered"]);
+    expect(releases).toBe(2);
+  } finally {
+    scopes.releaseAll();
+    setSystemTime();
+  }
+});
+
+test("invalidation during a retry rejects the candidate and reconcile re-arms relay retries", async () => {
+  setSystemTime(new Date("2026-10-25T00:00:00Z"));
+  const pending = deferred<WorkspaceBinding>();
+  const applied: string[] = [];
+  const revoked: string[] = [];
+  let reopens = 0;
+  const scopes = new NodeWorkspaceScopes(async (command, args) => {
+    if (command === "close_node_workspace") revoked.push(String(args.workspaceId));
+    return {};
+  });
+  scopes.track("panel", "old", {
+    relayed: true,
+    reopen: () => {
+      reopens++;
+      if (reopens === 1) return pending.promise;
+      return Promise.resolve(reopens === 2 ? binding("new-relay", 45002) : directBinding("direct"));
+    },
+    retarget: (value) => {
+      applied.push(value.workspaceId);
+    },
+  });
+  try {
+    setSystemTime(new Date(Date.now() + WORKSPACE_DIRECT_RETRY_MS));
+    scopes.noteUse("panel");
+    await settle();
+    scopes.invalidate("panel");
+    pending.resolve(directBinding("stale"));
+    await settle();
+    await settle();
+    expect(revoked).toContain("stale");
+    expect(applied).toEqual([]);
+    await scopes.reconcile("panel");
+    expect(applied).toEqual(["new-relay"]);
+    scopes.noteUse("panel");
+    await settle();
+    expect(reopens).toBe(2);
+    setSystemTime(new Date(Date.now() + WORKSPACE_DIRECT_RETRY_MS));
+    scopes.noteUse("panel");
+    await settle();
+    await settle();
+    expect(applied).toEqual(["new-relay", "direct"]);
+  } finally {
+    scopes.releaseAll();
+    setSystemTime();
+  }
+});

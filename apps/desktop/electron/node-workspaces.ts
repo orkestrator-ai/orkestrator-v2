@@ -47,6 +47,21 @@ export function isDirectBinding(binding: WorkspaceBinding): boolean {
 
 type Invoke = (command: string, args: Record<string, unknown>) => Promise<unknown>;
 
+/** Command access retained until a candidate is adopted or revoked. */
+export interface WorkspaceAttempt {
+  invoke: Invoke;
+  reopen(): Promise<WorkspaceBinding>;
+  release(): void;
+}
+
+async function closeWorkspace(invoke: Invoke, workspaceId: string): Promise<void> {
+  try {
+    await invoke("close_node_workspace", { workspaceId });
+  } catch {
+    // A callback may throw before returning a promise (for example a closed scope).
+  }
+}
+
 /** Open the node's workspace and choose how the panel reaches it. */
 export async function openNodeWorkspace(options: {
   nodeId: string;
@@ -124,12 +139,14 @@ export class NodeWorkspaceScopes {
       timer: ReturnType<typeof setInterval>;
       invoke: Invoke;
       reopen?: () => Promise<WorkspaceBinding>;
+      retain?: () => Promise<WorkspaceAttempt>;
       retarget?: (binding: WorkspaceBinding) => void;
       epoch?: () => number;
       lastEpoch: number;
       renewedAt: number;
       running: boolean;
       failed: boolean;
+      revision: number;
       /** Bound through the relay rather than the node's own route. */
       relayed: boolean;
       directTriedAt: number;
@@ -144,21 +161,26 @@ export class NodeWorkspaceScopes {
     options: {
       invoke?: Invoke;
       reopen?: () => Promise<WorkspaceBinding>;
+      retain?: () => Promise<WorkspaceAttempt>;
       retarget?: (binding: WorkspaceBinding) => void;
       epoch?: () => number;
       relayed?: boolean;
     } = {},
   ): void {
+    this.release(scope);
     const timer = setInterval(() => {
-      const entry = this.scopes.get(scope);
-      if (!entry) return;
-      if (
-        entry.failed ||
-        (entry.epoch?.() ?? 0) !== entry.lastEpoch ||
-        Date.now() - entry.renewedAt >= WORKSPACE_RENEW_INTERVAL_MS
-      ) {
-        void this.reconcile(scope);
-      }
+      void Promise.resolve()
+        .then(() => {
+          const entry = this.scopes.get(scope);
+          if (
+            entry &&
+            (entry.failed ||
+              (entry.epoch?.() ?? 0) !== entry.lastEpoch ||
+              Date.now() - entry.renewedAt >= WORKSPACE_RENEW_INTERVAL_MS)
+          )
+            return this.reconcile(scope);
+        })
+        .catch(() => undefined);
     }, 5_000);
     timer.unref?.();
     this.scopes.set(scope, {
@@ -170,6 +192,7 @@ export class NodeWorkspaceScopes {
       renewedAt: Date.now(),
       running: false,
       failed: false,
+      revision: 0,
       relayed: options.relayed ?? false,
       directTriedAt: Date.now(),
     });
@@ -185,35 +208,52 @@ export class NodeWorkspaceScopes {
     if (!entry?.relayed || entry.running || entry.failed || !entry.reopen) return;
     if (Date.now() - entry.directTriedAt < WORKSPACE_DIRECT_RETRY_MS) return;
     entry.directTriedAt = Date.now();
-    void this.upgrade(scope);
+    void this.upgrade(scope).catch(() => undefined);
   }
 
   private async upgrade(scope: string): Promise<void> {
     const entry = this.scopes.get(scope);
     if (!entry?.reopen || entry.running) return;
     entry.running = true;
+    let attempt: WorkspaceAttempt | undefined;
+    let candidate: WorkspaceBinding | undefined;
     try {
-      const binding = await entry.reopen().catch(() => null);
-      if (!binding) return;
-      if (this.scopes.get(scope) !== entry || entry.failed || !isDirectBinding(binding)) {
-        // Still no better route, or the panel moved on: keep what it has.
-        await entry
-          .invoke("close_node_workspace", { workspaceId: binding.workspaceId })
-          .catch(() => undefined);
+      const revision = entry.revision;
+      const epoch = entry.epoch?.() ?? 0;
+      attempt = entry.retain
+        ? await entry.retain()
+        : {
+            invoke: entry.invoke,
+            reopen: entry.reopen,
+            release: () => undefined,
+          };
+      const binding = (candidate = await attempt.reopen());
+      if (
+        this.scopes.get(scope) !== entry ||
+        entry.failed ||
+        entry.revision !== revision ||
+        (entry.epoch?.() ?? 0) !== epoch ||
+        !isDirectBinding(binding)
+      )
         return;
-      }
       const oldId = entry.workspaceId;
       entry.retarget?.(binding);
       entry.workspaceId = binding.workspaceId;
+      candidate = undefined;
       entry.lastEpoch = entry.epoch?.() ?? 0;
       entry.renewedAt = Date.now();
       entry.relayed = false;
       console.info(
         `[Workspaces] ${binding.params.node ?? binding.nodeId} moved to its direct route.`,
       );
-      await entry.invoke("close_node_workspace", { workspaceId: oldId }).catch(() => undefined);
+      await closeWorkspace(attempt.invoke, oldId);
     } finally {
-      entry.running = false;
+      try {
+        if (candidate && attempt) await closeWorkspace(attempt.invoke, candidate.workspaceId);
+      } finally {
+        entry.running = false;
+        attempt?.release();
+      }
     }
   }
 
@@ -228,26 +268,44 @@ export class NodeWorkspaceScopes {
       entry.renewedAt = Date.now();
     } catch {
       entry.failed = true;
+      let attempt: WorkspaceAttempt | undefined;
+      let candidate: WorkspaceBinding | undefined;
       try {
         if (!entry.reopen) return;
-        const binding = await entry.reopen();
-        if (this.scopes.get(scope) !== entry) {
-          await entry
-            .invoke("close_node_workspace", { workspaceId: binding.workspaceId })
-            .catch(() => undefined);
+        const revision = entry.revision;
+        const epoch = entry.epoch?.() ?? 0;
+        attempt = entry.retain
+          ? await entry.retain()
+          : {
+              invoke: entry.invoke,
+              reopen: entry.reopen,
+              release: () => undefined,
+            };
+        const binding = (candidate = await attempt.reopen());
+        if (
+          this.scopes.get(scope) !== entry ||
+          entry.revision !== revision ||
+          (entry.epoch?.() ?? 0) !== epoch
+        )
           return;
-        }
         const oldId = entry.workspaceId;
         entry.retarget?.(binding);
         entry.workspaceId = binding.workspaceId;
+        candidate = undefined;
         entry.lastEpoch = entry.epoch?.() ?? 0;
         entry.renewedAt = Date.now();
         entry.failed = false;
         entry.relayed = !isDirectBinding(binding);
         entry.directTriedAt = Date.now();
-        await entry.invoke("close_node_workspace", { workspaceId: oldId }).catch(() => undefined);
+        await closeWorkspace(attempt.invoke, oldId);
       } catch {
         /* Retry with the same captured command node on the next bounded tick. */
+      } finally {
+        try {
+          if (candidate && attempt) await closeWorkspace(attempt.invoke, candidate.workspaceId);
+        } finally {
+          attempt?.release();
+        }
       }
     } finally {
       entry.running = false;
@@ -258,7 +316,8 @@ export class NodeWorkspaceScopes {
     const entry = this.scopes.get(scope);
     if (entry) {
       entry.failed = true;
-      void this.reconcile(scope);
+      entry.revision++;
+      void this.reconcile(scope).catch(() => undefined);
     }
   }
 
@@ -267,9 +326,7 @@ export class NodeWorkspaceScopes {
     if (!entry) return;
     this.scopes.delete(scope);
     clearInterval(entry.timer);
-    void entry
-      .invoke("close_node_workspace", { workspaceId: entry.workspaceId })
-      .catch(() => undefined);
+    void closeWorkspace(entry.invoke, entry.workspaceId);
   }
 
   releaseAll(): void {

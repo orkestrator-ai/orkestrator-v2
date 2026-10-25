@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ConnectionManager } from "./connection-manager.js";
 import {
   isDirectBinding,
@@ -112,10 +113,25 @@ async function applyTarget<T extends WorkspaceContext>(
       options.scopes.track(context.scope, binding.workspaceId, {
         invoke,
         reopen: () => reopen(),
+        retain: async () => {
+          const retryScope = `${context.scope}:workspace-retry:${randomUUID()}`;
+          try {
+            await manager.bind(retryScope, manager.getConnectionId(portalScope));
+            return {
+              invoke: (command, args) => manager.invoke(command, args, retryScope),
+              reopen: () => reopen(retryScope),
+              release: () => manager.release(retryScope),
+            };
+          } catch (error) {
+            manager.release(retryScope);
+            throw error;
+          }
+        },
         epoch: () => manager.epochOf(manager.getConnectionId(portalScope)),
         retarget: (replacement) => {
           manager.rebindWorkspace(context.scope, replacement);
           context.target = workspaceTargetFrom(nodeId, replacement.params);
+          options.committed(context);
         },
         relayed: !isDirectBinding(binding),
       });

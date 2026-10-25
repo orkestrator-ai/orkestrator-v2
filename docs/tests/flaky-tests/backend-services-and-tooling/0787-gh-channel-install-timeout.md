@@ -10,3 +10,9 @@
 - **Failure:** Bun's five-second generic budget at 5035.35 ms.
 - **Isolated rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/host-maintenance-tasks.test.ts` passed the unchanged owner (13 of 13, 0.6 s).
 - **Hypothesis:** the fixture's archive extraction and checksum work runs in subprocesses that aggregate load can slow past the generic budget. The branch does not touch host maintenance. No assertion, timeout or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** single observation at load 17 to 38. The owner passed alone today (13/13, 0.56 s), so reaching five seconds means the case's subprocesses stalled for seconds.
+- **Next step:** give the case an explicit budget like the other subprocess fixtures; if it does not recur by the next sweep, reclassify it as environmental.

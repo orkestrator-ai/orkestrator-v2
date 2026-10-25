@@ -165,3 +165,11 @@ The final-source retry, `mise run test:logged -- --name final-complete-tests -- 
   `root-and-agent-support-tests.log` (compressed at aggregate finalization).
 - This confirms another intermittent deadline recurrence. The assertion,
   deadline and skip behavior were not changed.
+
+## Container resource budget review fixes — 2026-10-25
+
+- **Aggregate:** `mise run test:logged -- --name resource-tests -- mise run test`, Bun 1.4.4 on macOS arm64. The root/support group used one worker after a 33.2-second capacity wait; other worktrees were validating concurrently.
+- **Failure:** the supported SDK staging case exceeded its unchanged 30-second deadline (30003.50 ms). Root/support completed 3,418 tests across 162 files in 862.91 seconds, with 3,404 passing, fourteen failing and one between-test error. The other failures came from the Settings save mock omitting the new config refresh response; that mock was corrected and its complete owner passed separately.
+- **Complete unchanged Pi owner:** `mise run test:logged -- --name pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed (exit 0, 23.4 seconds logged).
+- **Evidence:** host temporary artifact `orkestrator-test-run.9oxrhT/root-and-agent-support-tests.log` (compressed when the aggregate finishes); outer run `orkestrator-test-run.cHUVnH`.
+- **Assessment:** confirmed intermittent recurrence. No Pi source, test assertion, deadline or skip changed.

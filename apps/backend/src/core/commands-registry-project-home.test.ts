@@ -17,13 +17,7 @@ import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.j
 import { ProjectGitService } from "./project-git-service.js";
 import { NativeAgentService } from "./native-agent-service.js";
 import type { NativeAgentRuntimeProvider } from "./native-agent-provider.js";
-import {
-  wakePrMonitorForCompletion,
-  requestPrMonitorRefresh,
-  projectHomePrTarget,
-  detectEnvironmentPullRequest,
-  prMonitorService,
-} from "./commands-pr-monitor.js";
+import { projectHomePrTarget, detectEnvironmentPullRequest } from "./commands-pr-monitor.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
 let root: string;
@@ -79,7 +73,6 @@ afterEach(async () => {
   try {
     projectHomeTesting.reset();
     runtime.shutdown();
-    prMonitorService.sync([]);
     await rm(root, { recursive: true, force: true });
   } finally {
     restoreDiffTracking();
@@ -228,8 +221,8 @@ test("base and detached homes never discover a PR or delete a remote ref", async
   const home = await ensure();
   const gh = await fakeGh();
   try {
-    await wakePrMonitorForCompletion(home.id, context);
-    await requestPrMonitorRefresh(home.id, context);
+    await context.runtime.prMonitor.wakeForCompletion(home.id, context);
+    await context.runtime.prMonitor.requestRefresh(home.id, context);
     expect((await storage.getEnvironment(home.id))?.prUrl).toBeNull();
     await deleteMergedEnvironmentRemoteBranch({
       ...home,
@@ -240,7 +233,7 @@ test("base and detached homes never discover a PR or delete a remote ref", async
     await runCommand("git", ["clone", checkout, detached]);
     await runCommand("git", ["checkout", "--detach"], { cwd: detached });
     await storage.updateProject(projectId, { localPath: detached });
-    await wakePrMonitorForCompletion(home.id, context);
+    await context.runtime.prMonitor.wakeForCompletion(home.id, context);
     const target = await projectHomePrTarget((await storage.getEnvironment(home.id))!, storage);
     expect(target.ready).toBe(false);
     expect(await gh.log()).toBe("");
@@ -275,7 +268,7 @@ test("toolbar and external switches clear home PR identity before selection, ref
     prUrl: "https://github.com/org/repo/pull/1",
     prState: "open",
   });
-  await requestPrMonitorRefresh(home.id, context);
+  await context.runtime.prMonitor.requestRefresh(home.id, context);
   expect(await storage.getEnvironment(home.id)).toMatchObject({ branch: "feature/B", prUrl: null });
   await storage.updateEnvironment(home.id, {
     branch: "feature/A",
@@ -413,8 +406,8 @@ test("completion discovers only a same-repository PR targeting the home base", a
   );
   try {
     const target = await projectHomePrTarget(home, storage);
-    expect((await detectEnvironmentPullRequest(target))?.url).toBe(candidate.url);
-    await wakePrMonitorForCompletion(home.id, context);
+    expect((await detectEnvironmentPullRequest(target, { storage }))?.url).toBe(candidate.url);
+    await context.runtime.prMonitor.wakeForCompletion(home.id, context);
     const deadline = Date.now() + 3000;
     while (!(await storage.getEnvironment(home.id))?.prUrl && Date.now() < deadline)
       await Bun.sleep(10);

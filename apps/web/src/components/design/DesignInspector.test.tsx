@@ -78,7 +78,14 @@ function props(overrides: Partial<DesignInspectorProps> = {}): DesignInspectorPr
   };
 }
 
-const textbox = (name: string) => screen.getByRole("textbox", { name }) as HTMLInputElement;
+/** The text field for a CSS property; fields are named by their visible label. */
+const textbox = (property: string) => {
+  const field = document.querySelector<HTMLInputElement>(
+    `[data-property="${property}"] input:not([type=color])`,
+  );
+  if (!field) throw new Error(`No text field for ${property}`);
+  return field;
+};
 const applyButton = () => screen.getByRole("button", { name: "Apply styles" }) as HTMLButtonElement;
 const type = (name: string, value: string) =>
   fireEvent.change(textbox(name), { target: { value } });
@@ -109,9 +116,21 @@ describe("DesignInspector", () => {
     expect(inspector.className).toContain("design-inspector");
     for (const title of ["Layout", "Size and spacing", "Typography", "Appearance", "Advanced"])
       expect(screen.getByRole("region", { name: title })).toBeTruthy();
-    expect(screen.getByRole("combobox", { name: "position" })).toBeTruthy();
-    expect(screen.getByLabelText("Pick background-color")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Position" })).toBeTruthy();
+    expect(screen.getByLabelText("Pick Fill")).toBeTruthy();
     expect(applyButton().disabled).toBe(true);
+  });
+
+  test("names each field by its visible label and keeps the CSS property in data-property", () => {
+    render(<DesignInspector {...props()} />);
+    // WCAG 2.5.3: speech input says the label it sees ("Fill"), not the property.
+    const fill = screen.getByRole("textbox", { name: "Fill" });
+    expect(fill).toBe(textbox("background-color"));
+    expect(fill.closest("[data-property]")!.getAttribute("data-property")).toBe("background-color");
+    expect(screen.getByRole("textbox", { name: "Size" })).toBe(textbox("font-size"));
+    expect(screen.getByRole("combobox", { name: "Display" })).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "background-color" }) === null).toBe(true);
+    expect(screen.queryByRole("combobox", { name: "display" }) === null).toBe(true);
   });
 
   test("shows the authored inline override separately from the computed value", () => {
@@ -123,12 +142,12 @@ describe("DesignInspector", () => {
     expect(textbox("width").value).toBe("");
     expect(textbox("width").placeholder).toBe("100px");
     expect(textbox("width").closest("[data-property]")!.textContent).not.toContain("inline");
-    expect(screen.queryByRole("button", { name: "Reset width" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Reset Width" }) === null).toBe(true);
   });
 
   test("per-property reset removes the inline declaration instead of assigning the computed value", () => {
     render(<DesignInspector {...props()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Reset color" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset Color" }));
     expect(textbox("color").value).toBe("");
     expect(textbox("color").getAttribute("data-changed")).toBe("true");
     fireEvent.click(applyButton());
@@ -140,7 +159,7 @@ describe("DesignInspector", () => {
     type("width", "50px");
     expect(textbox("width").getAttribute("data-changed")).toBe("true");
     expect(textbox("height").getAttribute("data-changed")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Revert width" }));
+    fireEvent.click(screen.getByRole("button", { name: "Revert Width" }));
     expect(textbox("width").value).toBe("");
     expect(applyButton().disabled).toBe(true);
   });

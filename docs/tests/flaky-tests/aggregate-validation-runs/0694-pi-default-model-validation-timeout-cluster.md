@@ -1,7 +1,7 @@
 # Pi default-model validation: backend and root timeout cluster
 
 - **ID:** 0694
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-23.
 - **Baseline:** `062971245`, with the 0054 Pi default-model change in the working tree (Pi bridge model resolution, `host-agent-credentials.ts` and their tests).
 - **Original command:** `mise run test:logged -- --name full-tests -- mise run test`.
@@ -239,3 +239,7 @@ owner), under the platform temporary directory. The extra manual profile
 The previous refresh's private-preview/public/design passes and its native
 branch-selection limitation remain recorded above. Electron, Docker,
 live-provider and iOS qualification were not repeated for this backend refactor.
+
+## Triage 2026-10-25
+
+Resolved: run record only. The failing owners all have owner cases: terminal history [0213](../backend-services-and-tooling/0213-terminal-history-aggregate-timeout.md), environment move [0621](../environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md), public API 0261, agent mail 0661, runtime-env wiring 0160, disk report [0259](../environments-and-containers/0259-disk-report-aggregate-timeout.md), coordinator digest [0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md), Mermaid 0512, workspace probe 0256, Pi cancel [0500](0500-agent-mail-main-merge-validation.md) and service-preview Electron 0620/0622. The nine-worker component failures are covered by [0382](../web-ui/0382-component-browser-parallel-load.md) and [0493](0493-component-browser-aggregate-timeout-cluster.md); native branch selection is the deterministic failure tracked in 0493.

@@ -52,6 +52,21 @@ export const TERMINAL_TRANSPORT_STORAGE_KEY = "orkestrator-terminal-transport";
 const TERMINAL_FILTER_NARROW_DELAY_MS = 50;
 
 type EventCallback<T> = (payload: T) => unknown;
+/**
+ * Whether the authoritative main event stream is up.
+ *
+ * - `idle`: nothing is listening, so no stream is open (or has failed).
+ * - `connecting`: the first connection is being opened.
+ * - `connected`: the stream opened (`onopen`, or the OK response).
+ * - `disconnected`: the stream failed or dropped and is waiting out its
+ *   backoff, or the browser is retrying it. It stays `disconnected` through
+ *   reconnect attempts until one opens.
+ */
+export type GatewayEventStreamConnectionState =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "disconnected";
 type GatewayWindow = Pick<
   Window,
   | "location"
@@ -156,6 +171,21 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       { random: options.eventReconnectRandom, now: options.eventReconnectNow },
     );
   const mainStreamBackoff = createStreamBackoff();
+  let mainStreamConnectionState: GatewayEventStreamConnectionState = "idle";
+  const mainStreamConnectionListeners = new Set<
+    (state: GatewayEventStreamConnectionState) => void
+  >();
+  const setMainStreamConnectionState = (next: GatewayEventStreamConnectionState) => {
+    if (mainStreamConnectionState === next) return;
+    mainStreamConnectionState = next;
+    for (const listener of Array.from(mainStreamConnectionListeners)) {
+      try {
+        listener(next);
+      } catch (error) {
+        console.error("[RemoteGateway] Connection-state listener failed", error);
+      }
+    }
+  };
   let bootMetricsTimeout: ReturnType<typeof setTimeout> | null = null;
   let bootMetricsDeferredTimer: ReturnType<typeof setTimeout> | null = null;
   let bootMetricsLoadObserved =
@@ -574,6 +604,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           throw new Error(`Gateway event stream failed with HTTP ${response.status}`);
         }
         mainStreamBackoff.connected();
+        setMainStreamConnectionState("connected");
         retryWaitingTerminalFallbacks();
         if (bootMetricsEventStreamConnectedMs === null && typeof performance !== "undefined") {
           bootMetricsEventStreamConnectedMs = performance.now();
@@ -588,7 +619,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         const shouldReconnect = !controller.signal.aborted;
         controller.abort();
         if (streamAbortController === controller) streamAbortController = null;
-        if (shouldReconnect) scheduleReconnect();
+        if (shouldReconnect) {
+          setMainStreamConnectionState("disconnected");
+          scheduleReconnect();
+        }
       }
     })();
   };
@@ -596,6 +630,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const ensureEventStream = () => {
     if (eventSource || streamAbortController || !hasMainEventListeners()) return;
     startBootMetricsReporter();
+    // A retry after a failure stays `disconnected` until it actually opens.
+    if (mainStreamConnectionState === "idle") setMainStreamConnectionState("connecting");
     if (bearerToken || baseUrl) {
       connectFetchEventStream();
       return;
@@ -608,6 +644,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     source.onopen = () => {
       if (eventSource === source) {
         mainStreamBackoff.connected();
+        setMainStreamConnectionState("connected");
         retryWaitingTerminalFallbacks();
       }
       if (bootMetricsEventStreamConnectedMs === null && typeof performance !== "undefined") {
@@ -622,6 +659,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     source.onerror = () => {
       if (eventSource !== source) return;
       console.warn("[RemoteGateway] Event stream disconnected");
+      // Whether the browser is retrying it or it is CLOSED, nothing is
+      // arriving until the next `onopen`.
+      setMainStreamConnectionState("disconnected");
       // A recoverable error leaves the socket CONNECTING and the browser retries
       // it for us, carrying Last-Event-ID; reconnecting here would race that. A
       // CLOSED socket is dead, and because `ensureEventStream` early-returns
@@ -643,6 +683,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     reconnectTimer = null;
     // A later listener starts a fresh connection, not the tail of an old outage.
     mainStreamBackoff.reset();
+    setMainStreamConnectionState("idle");
     // Nothing is listening any more, so there is no boot left to measure. A
     // surviving timer would hold this whole closure and still report for a
     // session that has already torn down.
@@ -984,6 +1025,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       url: terminalWebSocketUrl(baseUrl),
       token: bearerToken,
       reconnectDelayMs: options.terminalWebSocketReconnectDelayMs,
+      // One jitter source and clock for every reconnect ladder this gateway owns.
+      reconnectRandom: options.eventReconnectRandom,
+      reconnectNow: options.eventReconnectNow,
       createSocket: options.terminalWebSocketFactory,
       onFallbackRequired: () => {
         for (const stream of terminalEventStreams.values()) {
@@ -1197,6 +1241,22 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       return ensureTerminalEventStream(event).ready;
     },
 
+    /**
+     * Connection state of the authoritative main stream. Observing it never
+     * opens or holds a stream: it reports what the event listeners caused.
+     */
+    eventStreamConnection: {
+      state(): GatewayEventStreamConnectionState {
+        return mainStreamConnectionState;
+      },
+      subscribe(listener: (state: GatewayEventStreamConnectionState) => void): () => void {
+        mainStreamConnectionListeners.add(listener);
+        return () => {
+          mainStreamConnectionListeners.delete(listener);
+        };
+      },
+    },
+
     clipboard: {
       readText(): Promise<string> {
         return navigator.clipboard?.readText() ?? Promise.resolve("");
@@ -1286,6 +1346,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     },
   };
   browserGatewayDisposers.set(api, (reason = new Error("Browser gateway disposed")) => {
+    // A replaced gateway's state says nothing about its successor.
+    setMainStreamConnectionState("idle");
+    mainStreamConnectionListeners.clear();
     disposeAgentTestActivity();
     removeRetryWakeListeners();
     terminalInput.dispose(reason);

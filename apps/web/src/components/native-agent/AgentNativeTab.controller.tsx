@@ -20,6 +20,7 @@ import {
   withResolvedNativeComposerModel,
   resolveReasoningId,
   withoutSuppressedComposerControls,
+  type AgentModelRef,
   type NativeAgentModelSubstitution,
   type NativeAgentNotice,
 } from "@orkestrator/protocol/native-agent";
@@ -69,7 +70,10 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
+import {
+  mergeReorderedFavoriteModels,
+  useAgentModelFavorites,
+} from "@/hooks/useAgentModelFavorites";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useComposerFileSearchFeedback } from "@/hooks/useComposerFileSearchFeedback";
@@ -617,7 +621,24 @@ export function SharedNativeAgentController({
   const backendOwnsStartupPrompt =
     tabId === "startup-agent" &&
     (environment?.pendingAgentLaunch === true || environment?.startupAgentSession !== undefined);
-  const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
+  const {
+    favorites: allFavorites,
+    toggleFavorite,
+    reorderFavorites: reorderAllFavorites,
+  } = useAgentModelFavorites();
+  // The tab's platform is locked, so a favourite on any other platform is a
+  // model it cannot switch to; hidden, and kept in place when reordering.
+  const favorites = useMemo(
+    () => allFavorites.filter((favorite) => favorite.platform === platform),
+    [allFavorites, platform],
+  );
+  const reorderFavorites = useCallback(
+    (reorderedVisible: AgentModelRef[]) => {
+      const merged = mergeReorderedFavoriteModels(allFavorites, favorites, reorderedVisible);
+      if (merged) reorderAllFavorites(merged);
+    },
+    [allFavorites, favorites, reorderAllFavorites],
+  );
   // An "open full conversation" request parked for this tab outranks the
   // activation policy, whichever effect happens to run first.
   const explicitScrollTargetPending = useConversationScrollTargetStore((state) =>

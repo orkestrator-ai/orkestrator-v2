@@ -13,6 +13,7 @@ on:
     paths:
       - ".github/workflows/container-live-qualification.yml"
       - "apps/backend/tests/container-live-*.test.ts"
+      - "apps/backend/tests/container-benchmarks.test.ts"
       - "apps/backend/tests/container-lifecycle-fixtures.ts"
       - "apps/backend/tests/container-live-rebuild-*.ts"
       - "apps/backend/tests/container-live-workspace.ts"
@@ -120,3 +121,21 @@ jobs:
       - name: Live rebuild faults (C15)
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rebuild-faults.test.ts --parallel=1
+
+      # Numbers only: the regression targets are compared by hand
+      # (container-qualification.md, "Benchmarks"). Runtimes get the
+      # built-in default budget, as on a new install.
+      - name: Benchmarks (C28)
+        if: ${{ !cancelled() }}
+        env:
+          RUN_CONTAINER_BENCHMARKS: "1"
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts --parallel=1
+
+      - name: Upload the benchmark report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: container-benchmarks-${{ matrix.name }}
+          path: output/benchmarks/b*.json
+          if-no-files-found: ignore
+          retention-days: 30

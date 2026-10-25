@@ -45,6 +45,7 @@ import {
   parseNativeAgentSteerRejection,
 } from "@orkestrator/protocol/native-agent";
 import { bridgeRuntimeSummary, snapshotNotices } from "./http-bridge-runtime-health.js";
+import { ensureCodexMode, updateCodexSessionConfig } from "./http-bridge-codex-config.js";
 import { readBridgeMcpConfigEvidence } from "./http-bridge-mcp-evidence.js";
 import {
   refreshHttpBridgeRuntimeMetadata,
@@ -327,7 +328,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
     if (this.agent === "codex" && options.mode && this.codexModes.get(sessionId) !== options.mode) {
-      await this.ensureCodexMode(sessionId, options.mode);
+      await ensureCodexMode(this.connection, this.fetchImpl, sessionId, options.mode);
       this.codexModes.set(sessionId, options.mode);
     }
     const attachments = bridgePromptAttachments(
@@ -406,73 +407,6 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       throw new PromptRejectedError(
         `${this.agent} rejected the prompt (HTTP ${response.status})${detailMessage}`,
       );
-    }
-  }
-
-  /**
-   * Codex stores execution mode on the session rather than accepting it on the
-   * prompt route. Reused workflow threads can move between plan and build
-   * turns, so reconcile the idle thread before dispatching when needed.
-   */
-  private async ensureCodexMode(sessionId: string, mode: ProviderExecutionMode): Promise<void> {
-    const path = `/session/${encodeURIComponent(sessionId)}/config`;
-    const currentResponse = await bridgeFetch(this.connection, path, {}, this.fetchImpl);
-    if (
-      currentResponse.status === 404 ||
-      currentResponse.status === 409 ||
-      isTransientHttpStatus(currentResponse.status)
-    ) {
-      throw new ProviderUnavailableError(
-        `Codex mode reconciliation is temporarily unavailable (HTTP ${currentResponse.status})`,
-      );
-    }
-    assertOk(currentResponse, "Codex config read");
-    const current = (await currentResponse.json()) as {
-      model?: unknown;
-      modelReasoningEffort?: unknown;
-      mode?: unknown;
-      fastMode?: unknown;
-      durable?: unknown;
-    };
-    if (
-      (current.mode !== "plan" && current.mode !== "build") ||
-      (current.model !== undefined && typeof current.model !== "string") ||
-      (current.modelReasoningEffort !== undefined &&
-        typeof current.modelReasoningEffort !== "string") ||
-      typeof current.fastMode !== "boolean" ||
-      typeof current.durable !== "boolean"
-    ) {
-      throw new Error("Codex returned a malformed session config");
-    }
-    if (current.mode === mode && current.durable) return;
-
-    const updateResponse = await bridgeFetch(
-      this.connection,
-      path,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          model: current.model,
-          modelReasoningEffort: current.modelReasoningEffort,
-          mode,
-          fastMode: current.fastMode,
-        }),
-      },
-      this.fetchImpl,
-    );
-    if (
-      updateResponse.status === 404 ||
-      updateResponse.status === 409 ||
-      isTransientHttpStatus(updateResponse.status)
-    ) {
-      throw new ProviderUnavailableError(
-        `Codex mode update is temporarily unavailable (HTTP ${updateResponse.status})`,
-      );
-    }
-    assertOk(updateResponse, "Codex config update");
-    const update = (await updateResponse.json()) as { durable?: unknown };
-    if (update.durable !== true) {
-      throw new ProviderUnavailableError("Codex mode update was not durably persisted");
     }
   }
 
@@ -1043,30 +977,18 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       return undefined;
     }
     if (this.agent === "codex") {
-      // Approval-only changes are persisted by the backend, then sent with the turn.
-      const hasConfig = [
-        update.modelId,
-        update.reasoningId,
-        update.mode,
-        update.parameterValues,
-      ].some(Boolean);
-      if (!hasConfig && update.fastMode === undefined) return undefined;
-      const response = await bridgeFetch(
+      // Clear before I/O: any failed or non-durable write leaves cached mode untrusted.
+      const hasConfig =
+        [update.modelId, update.reasoningId, update.mode].some(Boolean) ||
+        update.fastMode !== undefined;
+      if (hasConfig) this.codexModes.delete(sessionId);
+      const outcome = await updateCodexSessionConfig(
         this.connection,
-        `/session/${encodeURIComponent(sessionId)}/config`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            ...(update.modelId ? { model: update.modelId } : {}),
-            ...(update.reasoningId ? { modelReasoningEffort: update.reasoningId } : {}),
-            ...(update.mode ? { mode: update.mode } : {}),
-            ...(update.fastMode === undefined ? {} : { fastMode: update.fastMode }),
-            ...(update.parameterValues ? { parameterValues: update.parameterValues } : {}),
-          }),
-        },
         this.fetchImpl,
+        sessionId,
+        update,
       );
-      assertOk(response, "Codex session config update");
+      if (outcome?.durable) this.codexModes.set(sessionId, outcome.mode);
       return undefined;
     }
     if (this.agent !== "cursor" && this.agent !== "grok" && this.agent !== "pi") {

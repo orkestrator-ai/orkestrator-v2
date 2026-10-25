@@ -9,7 +9,7 @@
   - `design history: per-actor undo/redo, checkpoints and budgets > the per-canvas entry budget prunes the oldest entries and their checkpoint files`
     (`apps/backend/src/core/design-history.test.ts`): failed at 5,058.19 ms, past
     Bun's five-second default.
-  - `large collections > creation cost stays flat as the collection grows (no whole-history rewrite)`
+  - `large collections > SQLite writes per create stay bounded as the collection grows (no whole-history rewrite)` (named "creation cost stays flat …" until 2026-10-25)
     (`apps/backend/src/core/web-annotation-payloads.bench.test.ts:448`):
     `expect(batchMs[2]!).toBeLessThan(Math.max(batchMs[0]! * 4, 2_000))`
     received 2,171.66 against a 2,000 bound.

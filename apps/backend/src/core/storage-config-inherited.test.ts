@@ -5,6 +5,7 @@ import path from "node:path";
 
 import type { InheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 
+import { BackendRuntime } from "./backend-runtime.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { StorageService } from "./storage.js";
@@ -136,17 +137,23 @@ describe("settings inherited from a command node", () => {
       });
       storage.inheritedGlobalSettings = () => ({ terminalScrollback: 9000 });
       const update = createCommandRegistry().get("update_global_config")!;
-      const context = { storage } as CommandContext;
-      await update(
-        {
-          global: { ...own.global, terminalScrollback: 5000, allowedDomains: ["leaf.test"] },
-          preserveInheritedSettings: true,
-        },
-        context,
-      );
-      await expect(
-        update({ global: own.global, preserveInheritedSettings: "yes" }, context),
-      ).rejects.toThrow("preserveInheritedSettings");
+      // The save applies terminal-history retention to the backend's runtime.
+      const runtime = new BackendRuntime({ emit: () => undefined });
+      const context = { storage, runtime } as CommandContext;
+      try {
+        await update(
+          {
+            global: { ...own.global, terminalScrollback: 5000, allowedDomains: ["leaf.test"] },
+            preserveInheritedSettings: true,
+          },
+          context,
+        );
+        await expect(
+          update({ global: own.global, preserveInheritedSettings: "yes" }, context),
+        ).rejects.toThrow("preserveInheritedSettings");
+      } finally {
+        runtime.shutdown();
+      }
       const stored = await storage.loadOwnConfig();
       expect(stored.global.terminalScrollback).toBe(1234);
       expect(stored.global.reviewInstruction).toBe("Leaf review");

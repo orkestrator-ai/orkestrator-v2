@@ -433,6 +433,8 @@ export class AgentMailService {
     }
     const pending = await this.storage.listPendingAgentMailInjects(100, {
       includeDeferred,
+      // Held status notices are listed so they can join a batch below.
+      includeCoalescing: true,
     });
     // One journal read per ambiguous dispatch per pass, shared by its batch.
     const verified = new Map<string, "dispatched" | "not-dispatched" | "unknown">();
@@ -442,7 +444,10 @@ export class AgentMailService {
       deferredUntil,
       verifyRequestId,
       verificationAttempts,
+      coalescingUntil,
     } of pending) {
+      // Still gathering other notices: it may ride along, not start a turn.
+      if (coalescingUntil) continue;
       if (!mayInjectMessage(mailbox, message, settings)) {
         this.noteSkip(message, mailbox, "not-eligible");
         continue;
@@ -564,6 +569,10 @@ export class AgentMailService {
        * `busy` and arrives as its own later turn. A worker that sent three
        * messages would wake its coordinator three times, which is the drip this
        * batching exists to prevent. One prompt, one turn, in send order.
+       *
+       * That includes status notices still inside their coalescing hold. The
+       * hold gathers notices into one wake; this dispatch is that wake, and
+       * leaving them would wake the coordinator again seconds later.
        */
       const batched = [claimed];
       let carrierBytes = Buffer.byteLength(renderAgentMailCarrier(claimed), "utf8");
@@ -581,6 +590,8 @@ export class AgentMailService {
             mailbox.mailboxId,
             sibling.message.id,
             mailbox.incarnationId,
+            undefined,
+            { joinCoalescing: Boolean(sibling.coalescingUntil) },
           ),
         );
         if (!siblingClaim) continue;

@@ -23,9 +23,11 @@ import type {
   NativeAgentTabData,
 } from "@orkestrator/protocol/native-agent";
 import { nativeAsyncQuestionRequestId } from "@orkestrator/protocol/native-agent";
+import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as scrollState from "@/hooks/useVirtuosoScrollState";
 import * as realBackend from "@/lib/backend";
+import * as modelPicker from "@/components/chat/AgentModelPicker";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -55,7 +57,7 @@ import {
 } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { dispatchResourceChange } from "@/lib/resource-sync";
-import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { getReadCoordinator, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { GLOBAL_SETTINGS_REQUEST_EVENT } from "@/lib/settings-navigation";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
@@ -456,6 +458,64 @@ beforeEach(() => {
     ],
   });
 });
+
+/**
+ * `resource-sync` holds every announcement for its 50 ms coalescing window
+ * (`COALESCE_MS`) before delivering it to subscribers.
+ */
+const RESOURCE_CHANGE_COALESCE_MS = 50;
+/** Macrotask turns a coordinated read may take to settle once delivered. */
+const MAX_READ_SETTLE_TURNS = 100;
+
+/**
+ * Delivers one resource change through the production coalescing timer instead
+ * of sleeping past it, then waits until the shared read coordinator has no read
+ * in flight. Delivery and the coordinator's decision to read are synchronous,
+ * so once nothing is in flight every read the change caused has settled (or was
+ * never started), and an assertion that follows sees its outcome.
+ *
+ * The clock is installed around the dispatch rather than before rendering: the
+ * timer it captures is the one this call schedules, and the narrower window
+ * keeps unrelated 50 ms timers (scroll retries, read-resume coalescing) out of
+ * it. A collision still fails loudly through the pending and dropped counts.
+ */
+async function deliverResourceChange(change: ResourceChange): Promise<void> {
+  const coalesce = installControlledTimeout(RESOURCE_CHANGE_COALESCE_MS, {
+    label: "resource-sync coalescing",
+  });
+  let armed = 0;
+  let dropped = 0;
+  try {
+    act(() => {
+      dispatchResourceChange(change);
+      armed = coalesce.pendingCount();
+      coalesce.advance();
+    });
+  } finally {
+    dropped = coalesce.restore();
+  }
+  expect(armed).toBe(1);
+  expect(dropped).toBe(0);
+  await settleCoordinatedReads();
+}
+
+/**
+ * Yields whole macrotask turns until the shared read coordinator has no read in
+ * flight. A coordinator read starts synchronously and re-reads synchronously
+ * when it settles dirty, so an idle coordinator means none is still coming.
+ */
+async function settleCoordinatedReads(): Promise<void> {
+  const coordinator = getReadCoordinator();
+  const readInFlight = () => coordinator.getDiagnostics().entries.some((entry) => entry.inFlight);
+  let settled = false;
+  await act(async () => {
+    for (let turn = 0; turn < MAX_READ_SETTLE_TURNS && !settled; turn += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      settled = !readInFlight();
+    }
+  });
+  expect(settled).toBe(true);
+}
 
 let readCoordinatorFaked = false;
 
@@ -2131,13 +2191,10 @@ describe("AgentNativeTab", () => {
     fireEvent.input(input, { target: { textContent: "Preserved draft" } });
 
     authenticationRequired = false;
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 2,
-      });
-      await new Promise<void>((resolve) => setTimeout(resolve, 80));
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 2,
     });
 
     await waitFor(() =>
@@ -2315,6 +2372,120 @@ describe("AgentNativeTab", () => {
     // The pane store owns a normal tab's lock; a coordinator conversation is
     // backend state and must not be locked locally.
     expect(usePaneLayoutStore.getState().environments.size).toBe(0);
+  });
+
+  test("a platform-locked tab filters favourites and merges visible reorder into their original slots", async () => {
+    const favoriteModels = [
+      { platform: "codex" as const, modelId: "gpt-5.4" },
+      { platform: "claude" as const, modelId: "claude-a" },
+      { platform: "opencode" as const, modelId: "hidden" },
+      { platform: "claude" as const, modelId: "claude-b" },
+    ];
+    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+      const projection = await defaultProjection(input);
+      return {
+        ...projection,
+        composer: {
+          ...projection.composer,
+          models: [
+            { platform: "claude", id: "claude-a", label: "Claude A" },
+            { platform: "claude", id: "claude-b", label: "Claude B" },
+          ],
+        },
+      } as NativeAgentSessionProjection<NativeMessage>;
+    });
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      favoriteModels,
+    });
+    let pickerProps: Parameters<typeof modelPicker.AgentModelPicker>[0] | undefined;
+    const OriginalPicker = modelPicker.AgentModelPicker;
+    const picker = spyOn(modelPicker, "AgentModelPicker").mockImplementation((props) => {
+      pickerProps = props;
+      return <OriginalPicker {...props} />;
+    });
+    const persist = spyOn(realBackend, "updateGlobalConfig").mockImplementation(async (global) => ({
+      ...useConfigStore.getState().config,
+      global,
+    }));
+    try {
+      render(
+        <AgentNativeTab
+          tabId="locked-favourites"
+          data={{ environmentId: "env-1", platform: "claude" }}
+          isActive
+        />,
+      );
+      fireEvent.pointerDown(await screen.findByTitle(/^Choose /));
+      fireEvent.click(await screen.findByRole("button", { name: "Favorite models" }));
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByRole("menuitemradio")
+            .map((item) => item.textContent)
+            .filter((row) => row?.startsWith("Claude ")),
+        ).toEqual(["Claude AClaude", "Claude BClaude"]),
+      );
+      expect(screen.queryByRole("menuitemradio", { name: /GPT-5.4/ }) === null).toBe(true);
+      expect(pickerProps?.platformSelectionLocked).toBe(true);
+      expect(pickerProps?.favorites).toEqual([favoriteModels[1]!, favoriteModels[3]!]);
+      await act(async () => {
+        pickerProps!.onReorderFavorites!([favoriteModels[3]!, favoriteModels[1]!]);
+      });
+      const reordered = [
+        favoriteModels[0]!,
+        favoriteModels[3]!,
+        favoriteModels[2]!,
+        favoriteModels[1]!,
+      ];
+      await waitFor(() =>
+        expect(useConfigStore.getState().config.global.favoriteModels).toEqual(reordered),
+      );
+      expect(persist).toHaveBeenCalledWith(expect.objectContaining({ favoriteModels: reordered }));
+    } finally {
+      cleanup();
+      picker.mockRestore();
+      persist.mockRestore();
+    }
+  });
+
+  test("an unassigned coordinator composer hides favourites for platforms it cannot use", async () => {
+    seedUnassignedDefaultCatalog();
+    const favoriteModels: Array<{ platform: AgentPlatform; modelId: string }> = [
+      { platform: "opencode", modelId: "anthropic/opencode-only-model" },
+      { platform: "codex", modelId: "gpt-5.4" },
+      { platform: "claude", modelId: "claude-sonnet-5" },
+    ];
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      favoriteModels,
+      agentSettings: { defaultAgent: "claude" },
+    } as never);
+    useEnvironmentStore.setState({ environments: [] });
+
+    render(
+      <AgentNativeTab
+        tabId="coordinator-tab-favorites"
+        data={{ environmentId: "coordinator:workspace-1:conversation-6", isLocal: true }}
+        isActive
+        executionPolicy="coordinator-read-only"
+        coordinatorProjectId="project-1"
+        onAssignPlatform={async () => undefined}
+        availablePlatforms={["claude", "codex"]}
+      />,
+    );
+
+    fireEvent.pointerDown(await screen.findByTitle(/^Choose /));
+    fireEvent.click(await screen.findByRole("button", { name: "Favorite models" }));
+    // Model rows only; the speed choices are radio items too.
+    const modelRows = () =>
+      screen
+        .getAllByRole("menuitemradio")
+        .map((item) => item.textContent ?? "")
+        .filter((row) => !row.includes("credit rate"));
+    await waitFor(() => expect(modelRows()).toEqual(["GPT-5.4Codex", "Claude SonnetClaude"]));
+    // The hidden favourite is still a favourite.
+    expect(useConfigStore.getState().config.global.favoriteModels).toEqual(favoriteModels);
   });
 
   test("an unassigned coordinator composer searches the checkout and stages pastes outside it", async () => {
@@ -5859,40 +6030,24 @@ describe("AgentNativeTab", () => {
   test.each([
     ["review", true],
     ["ordinary", false],
-  ] as const)(
-    "hides only the Codex reasoning summary control in a %s tab",
-    async (kind, review) => {
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
-        ...(await defaultProjection(input)),
-        composerControls: codexSummaryControls,
-      }));
-
-      render(
-        <AgentNativeTab
-          tabId={`tab-codex-${kind}-parameters`}
-          data={identity("codex")}
-          isActive
-          isReviewTab={review}
-        />,
-      );
-
-      expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
-      // The filter must not swallow Codex's other parameter controls.
-      expect(screen.getByText(/Effort: Medium/)).toBeTruthy();
-      expect(screen.queryByText(/Reasoning summary: Automatic/) === null).toBe(true);
-    },
-  );
-
-  test("keeps the reasoning summary control for a platform other than Codex", async () => {
+  ] as const)("hides unsupported Codex summary in a %s tab", async (kind, review) => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       composerControls: codexSummaryControls,
     }));
 
-    render(<AgentNativeTab tabId="tab-cursor-summary" data={freshTab("cursor")} isActive />);
+    render(
+      <AgentNativeTab
+        tabId={`tab-codex-${kind}-parameters`}
+        data={identity("codex")}
+        isActive
+        isReviewTab={review}
+      />,
+    );
 
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
-    expect(screen.getByText(/Reasoning summary: Automatic/)).toBeTruthy();
+    expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
+    expect(screen.getByText(/Effort: Medium/)).toBeTruthy();
+    expect(screen.queryByText(/Reasoning summary: Automatic/) === null).toBe(true);
   });
 
   test("renders model parameters supplied for a non-Claude platform", async () => {
@@ -6961,17 +7116,12 @@ describe("AgentNativeTab", () => {
     // Invalidations are announced per environment, so every projection commit
     // by a sibling agent tab reaches this one too. With a second Cursor tab
     // open that makes this the common path, not a rare race.
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
-      });
-      // The dispatcher coalesces for 50ms; wait past that so the invalidation
-      // genuinely reaches the hook while creation is still in flight.
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    // Delivered through the dispatcher's coalescing timer, so the invalidation
+    // genuinely reaches the hook while creation is still in flight.
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 1,
     });
 
     // Cursor is still being spawned. There is no conversation to refresh, and
@@ -6990,9 +7140,6 @@ describe("AgentNativeTab", () => {
     getNativeAgentProjectionMock.mockImplementation(defaultProjection);
     await act(async () => {
       settleEnsure!();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
     });
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
@@ -7013,15 +7160,10 @@ describe("AgentNativeTab", () => {
       ...(await defaultProjection(input)),
       connection: "connecting" as const,
     }));
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 1,
     });
 
     await waitFor(() => expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy());
@@ -7052,15 +7194,10 @@ describe("AgentNativeTab", () => {
           "Cursor is not signed in. Sign in from Settings › Cursor, or set a Cursor API key.",
       },
     }));
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 1,
     });
 
     expect(await screen.findByText(/Cursor is not signed in/)).toBeTruthy();
@@ -7087,15 +7224,10 @@ describe("AgentNativeTab", () => {
       connection: "connecting" as const,
       interactions: [pendingInteraction("question", "question-1")],
     }));
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 1,
     });
 
     expect(await screen.findByTestId("agent-question-card")).toBeTruthy();
@@ -7115,29 +7247,19 @@ describe("AgentNativeTab", () => {
       ...(await defaultProjection(input)),
       connection: "connecting" as const,
     }));
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 1,
     });
     await waitFor(() => expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy());
     expect(screen.queryByTestId("shared-native-compose-bar") === null).toBe(true);
 
     getNativeAgentProjectionMock.mockImplementation(defaultProjection);
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 2,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 2,
     });
 
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
@@ -7166,15 +7288,10 @@ describe("AgentNativeTab", () => {
       connection: "connecting" as const,
       messages: [existingRow],
     }));
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 1,
     });
     await waitFor(() => expect(screen.getByText("Cleared later")).toBeTruthy());
 
@@ -7184,15 +7301,10 @@ describe("AgentNativeTab", () => {
       connection: "connecting" as const,
       messages: [],
     }));
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 2,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 2,
     });
 
     await waitFor(() => expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy());
@@ -7218,15 +7330,10 @@ describe("AgentNativeTab", () => {
       ...(await defaultProjection(input)),
       connection: "connecting" as const,
     }));
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 1,
     });
 
     await waitFor(() => expect(screen.getByText("Query stopped by user.")).toBeTruthy());
@@ -7256,9 +7363,6 @@ describe("AgentNativeTab", () => {
 
     await act(async () => {
       settleRead!(await defaultProjection({ agent: "cursor", environmentId: "env-1" }));
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
     });
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
   });
@@ -7284,15 +7388,10 @@ describe("AgentNativeTab", () => {
       connection: "connecting" as const,
       messages: [existingRow],
     }));
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 1,
     });
 
     await waitFor(() => expect(screen.getByText("Already answered")).toBeTruthy());
@@ -7325,15 +7424,10 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-new-cursor-fail" data={freshTab("cursor")} isActive />);
       await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
 
-      await act(async () => {
-        dispatchResourceChange({
-          resource: "native-agent-session",
-          id: "env-1",
-          revision: 1,
-        });
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 120);
-        });
+      await deliverResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
       });
 
       await act(async () => {
@@ -7415,29 +7509,27 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
     getNativeAgentProjectionMock.mockClear();
 
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 1,
     });
     // Deferred, not dropped: reading now could only answer "not created yet".
     expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
 
     await act(async () => {
       settleEnsure!();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30);
-      });
     });
 
     // Two reads: the one `connect` owns, and the deferred reconcile. Counting
     // matters — the connect-owned read alone would satisfy "was called" and hide
     // a dropped invalidation, which is the state the announcement described.
+    // The reconcile runs through the read coordinator, so once both reads were
+    // issued an idle coordinator means no further read is still coming.
+    await waitFor(() =>
+      expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+    await settleCoordinatedReads();
     expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
   });
@@ -7480,15 +7572,10 @@ describe("AgentNativeTab", () => {
     });
 
     getNativeAgentProjectionMock.mockClear();
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 2,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 2,
     });
 
     // The second connect has not returned, so there is still nothing to resolve.
@@ -7500,23 +7587,15 @@ describe("AgentNativeTab", () => {
     getNativeAgentProjectionMock.mockImplementation(defaultProjection);
     await act(async () => {
       settles[1]!();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30);
-      });
     });
     // And the window does close — a stuck counter would mute this tab's
     // background refreshes for the rest of its life.
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
     getNativeAgentProjectionMock.mockClear();
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 3,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 3,
     });
     expect(getNativeAgentProjectionMock).toHaveBeenCalled();
   });
@@ -8112,17 +8191,12 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(0));
     const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
 
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
-      });
-      // The dispatcher coalesces for 50ms, so the invalidation has to be given
-      // time to actually reach the hook while the read above is still parked.
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 80);
-      });
+    // Delivered through the dispatcher's coalescing timer, so the invalidation
+    // reaches the hook while the read above is still parked.
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 1,
     });
     // Coalesced, not executed: proof the read below is the trailing
     // reconciliation rather than the invalidation's own read.
@@ -8130,14 +8204,14 @@ describe("AgentNativeTab", () => {
 
     await act(async () => {
       releaseRefresh();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
     });
-    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked + 1);
+    // Only the trailing read answers with the latest transcript; once it shows
+    // and the coordinator is idle, the read count is final.
     await waitFor(() =>
       expect(screen.getByTestId("hook-message").textContent).toBe("latest transcript"),
     );
+    await settleCoordinatedReads();
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked + 1);
   });
 
   test("drops the queued reconciliation read when the tab stops being active", async () => {
@@ -8146,15 +8220,10 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(0));
     const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
 
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 80);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 1,
     });
     expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
     // The tab stops being visible before the in-flight read drains. A tab the
@@ -8179,15 +8248,10 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(0));
     const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
 
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 80);
-      });
+    await deliverResourceChange({
+      resource: "native-agent-session",
+      id: "env-1",
+      revision: 1,
     });
     expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
     unmount();

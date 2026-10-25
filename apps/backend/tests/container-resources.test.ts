@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
-import { parseResourceLimits } from "@orkestrator/protocol/container-resources";
 import {
+  builtInResourceDefault,
+  parseResourceLimits,
+} from "@orkestrator/protocol/container-resources";
+import {
+  dockerCapacity,
+  dockerAdmissionCapacity,
   environmentResourcePolicy,
   parseAppliedLimits,
   parseDockerInfo,
@@ -16,7 +21,7 @@ import {
   sharedMemoryMiB,
   updateEnvironmentResources,
 } from "../src/core/container-resources";
-import { resetDockerTopologyCache } from "../src/core/docker-image";
+import { detectDockerTopology, resetDockerTopologyCache } from "../src/core/docker-image";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import type { Environment } from "../src/core/models";
 import {
@@ -53,19 +58,82 @@ describe("resource limits", () => {
     expect(parseResourceLimits({ pids: "1024" })).toMatchObject({ ok: false, field: "pids" });
   });
 
-  test("an environment override wins; nothing configured is unrestricted", () => {
+  const enforcing = {
+    memoryBytes: 32 * 1024 ** 3,
+    rootless: false,
+    support: { cpuQuota: true, memoryLimit: true, pidsLimit: true },
+  };
+
+  test("an environment override wins, then Settings, then the built-in default", () => {
     const global = { containerResourceLimits: { cpus: 2, memoryMiB: 4096, pids: null } };
-    expect(resolveResourceLimits({}, {})).toEqual({
-      limits: { cpus: null, memoryMiB: null, pids: null },
-      source: "none",
+    expect(resolveResourceLimits({}, {}, enforcing)).toEqual({
+      limits: { cpus: null, memoryMiB: 8192, pids: 4096 },
+      source: "default",
+      unenforced: [],
     });
-    expect(resolveResourceLimits({}, global).source).toBe("global");
+    expect(resolveResourceLimits({}, global, enforcing).source).toBe("global");
     expect(
       resolveResourceLimits(
         { containerResourceLimits: { cpus: 1, memoryMiB: null, pids: 512 } },
         global,
+        enforcing,
       ),
-    ).toEqual({ limits: { cpus: 1, memoryMiB: null, pids: 512 }, source: "environment" });
+    ).toEqual({
+      limits: { cpus: 1, memoryMiB: null, pids: 512 },
+      source: "environment",
+      unenforced: [],
+    });
+    // All-null limits are an explicit opt-out, at either level.
+    const unrestricted = { cpus: null, memoryMiB: null, pids: null };
+    expect(resolveResourceLimits({}, { containerResourceLimits: unrestricted }, enforcing)).toEqual(
+      { limits: unrestricted, source: "global", unenforced: [] },
+    );
+    expect(
+      resolveResourceLimits({ containerResourceLimits: unrestricted }, {}, enforcing).limits,
+    ).toEqual(unrestricted);
+  });
+
+  test("the built-in default caps memory at three quarters of the daemon", () => {
+    // Docker Desktop's default 8 GB VM (7.75 GiB reported).
+    expect(builtInResourceDefault({ ...enforcing, memoryBytes: 8317267968 }).limits).toEqual({
+      cpus: null,
+      memoryMiB: 5888,
+      pids: 4096,
+    });
+    expect(builtInResourceDefault({ ...enforcing, memoryBytes: null }).limits.memoryMiB).toBe(8192);
+    // Never below the smallest accepted limit.
+    expect(
+      builtInResourceDefault({ ...enforcing, memoryBytes: 256 * 1024 ** 2 }).limits.memoryMiB,
+    ).toBe(512);
+  });
+
+  test("the built-in default leaves off what the daemon cannot enforce, and says so", () => {
+    expect(
+      builtInResourceDefault({
+        ...enforcing,
+        support: { cpuQuota: true, memoryLimit: false, pidsLimit: true },
+      }),
+    ).toEqual({ limits: { cpus: null, memoryMiB: null, pids: 4096 }, unenforced: ["memoryMiB"] });
+    // Rootless with unknown support (no delegation reported): nothing is claimed.
+    const rootless = {
+      ...enforcing,
+      rootless: true,
+      support: { cpuQuota: null, memoryLimit: null, pidsLimit: null },
+    };
+    expect(builtInResourceDefault(rootless)).toEqual({
+      limits: { cpus: null, memoryMiB: null, pids: null },
+      unenforced: ["memoryMiB", "pids"],
+    });
+    // Unknown support on a rootful daemon is trusted, as for explicit budgets.
+    expect(builtInResourceDefault({ ...rootless, rootless: false }).limits).toEqual({
+      cpus: null,
+      memoryMiB: 8192,
+      pids: 4096,
+    });
+    // The default is never refused, unlike an explicit unenforceable budget.
+    expect(() =>
+      refuseUnenforceableLimits(resolveResourceLimits({}, {}, rootless).limits, rootless, "x"),
+    ).not.toThrow();
   });
 
   test("docker arguments disable swap by pinning it to the memory limit", () => {
@@ -89,6 +157,12 @@ describe("resource limits", () => {
       pids: 512,
     });
     expect(parseAppliedLimits("0\t0\t<nil>")).toEqual({ cpus: null, memoryMiB: null, pids: null });
+    // Docker Engine 29 renders the nil pointer as `<no value>`.
+    expect(parseAppliedLimits("0\t0\t<no value>")).toEqual({
+      cpus: null,
+      memoryMiB: null,
+      pids: null,
+    });
     expect(parseAppliedLimits("garbage")).toBeNull();
   });
 });
@@ -400,5 +474,163 @@ exit 0
       expect(policy.unsupported).toEqual(["cpus", "memoryMiB", "pids"]);
       expect(policy.daemonRootless).toBe(true);
     });
+  });
+});
+
+describe("default policy reporting and inherited updates", () => {
+  test("public capacity agrees with admission and policy after a known-rootless probe failure", async () => {
+    const { context } = await rootlessFixture();
+    await withDockerScript(
+      `#!/bin/sh
+case "$1" in
+  info)
+    [ "$3" = "{{json .}}" ] && exit 1
+    echo '{"SecurityOptions":["name=rootless"]}' ;;
+esac
+`,
+      async () => {
+        expect((await detectDockerTopology()).rootless).toBe(true);
+        const capacity = await dockerCapacity({ refresh: true });
+        const admission = await dockerAdmissionCapacity();
+        const policy = await environmentResourcePolicy("env-lifecycle", context);
+        expect(capacity.rootless).toBe(true);
+        expect(capacity.builtInDefault).toEqual(admission.builtInDefault);
+        expect(capacity.builtInDefault).toEqual({
+          limits: { cpus: null, memoryMiB: null, pids: null },
+          unenforced: ["memoryMiB", "pids"],
+        });
+        expect(policy).toMatchObject({
+          source: "default",
+          requested: capacity.builtInDefault!.limits,
+          unsupported: capacity.builtInDefault!.unenforced,
+          daemonRootless: true,
+        });
+      },
+    );
+  });
+
+  for (const rootless of [false, true]) {
+    for (const memoryLimit of [false, true]) {
+      test(`default reports dropped axes and unsupported applied axes (rootless=${rootless}, memory=${memoryLimit})`, async () => {
+        const { context } = await rootlessFixture({ containerId: "c1" });
+        const info = {
+          ...ROOTLESS_NO_CGROUPS_INFO,
+          SecurityOptions: rootless ? ["name=rootless"] : [],
+          MemoryLimit: memoryLimit,
+          PidsLimit: false,
+        };
+        await withDockerScript(
+          rootlessDocker("1000000000\t536870912\t256").replace(
+            JSON.stringify(ROOTLESS_NO_CGROUPS_INFO),
+            JSON.stringify(info),
+          ),
+          async () => {
+            const policy = await environmentResourcePolicy("env-lifecycle", context);
+            expect(policy.source).toBe("default");
+            expect(policy.requested).toEqual({
+              cpus: null,
+              memoryMiB: memoryLimit ? 5888 : null,
+              pids: null,
+            });
+            expect(policy.unsupported).toEqual(
+              memoryLimit ? ["cpus", "pids"] : ["cpus", "memoryMiB", "pids"],
+            );
+          },
+        );
+      });
+    }
+  }
+
+  for (const source of ["default", "global"] as const) {
+    for (const applyNow of [false, true]) {
+      test(`clearing an override inherits ${source} (applyNow=${applyNow})`, async () => {
+        const { context, environments, writes } = await rootlessFixture({
+          containerId: "c1",
+          containerResourceLimits: { cpus: 2, memoryMiB: 16000, pids: 1000 },
+        });
+        if (source === "global")
+          Object.assign(context.storage, {
+            loadConfig: async () => ({
+              global: { containerResourceLimits: { cpus: 1, memoryMiB: 2048, pids: 512 } },
+            }),
+          });
+        const info = {
+          ...ROOTLESS_NO_CGROUPS_INFO,
+          SecurityOptions: [],
+          CpuCfsQuota: true,
+          MemoryLimit: true,
+          PidsLimit: true,
+        };
+        await withDockerScript(
+          `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  info) echo '${JSON.stringify(info)}' ;;
+  ps) printf 'c1\\trunning\\tenv-lifecycle\\n' ;;
+  stats) echo '{"ID":"c1","MemUsage":"1GiB / 16GiB","PIDs":"12"}' ;;
+  inspect) printf '0\\t0\\t<nil>\\n' ;;
+esac
+`,
+          async (log) => {
+            const policy = await updateEnvironmentResources(
+              { environmentId: "env-lifecycle", limits: undefined, applyNow },
+              context,
+            );
+            expect(policy.source).toBe(source);
+            expect(environments.get("env-lifecycle")).not.toHaveProperty("containerResourceLimits");
+            expect(writes.length).toBeGreaterThan(0);
+            const calls = await log.read();
+            if (applyNow)
+              expect(calls).toContain(
+                source === "default"
+                  ? "update --memory 5888m --memory-swap 5888m --pids-limit 4096 --cpus 0 c1"
+                  : "update --cpus 1 --memory 2048m --memory-swap 2048m --pids-limit 512 c1",
+              );
+            else expect(calls).not.toMatch(/^update /m);
+          },
+        );
+      });
+    }
+  }
+
+  test("clearing an override below current use refuses without Docker or storage mutation, then applies on confirmation", async () => {
+    const { context, environments, writes } = await rootlessFixture({
+      containerId: "c1",
+      containerResourceLimits: { cpus: null, memoryMiB: 16000, pids: null },
+    });
+    const info = {
+      ...ROOTLESS_NO_CGROUPS_INFO,
+      SecurityOptions: [],
+      CpuCfsQuota: true,
+      MemoryLimit: true,
+      PidsLimit: true,
+    };
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  info) echo '${JSON.stringify(info)}' ;;
+  ps) printf 'c1\\trunning\\tenv-lifecycle\\n' ;;
+  stats) echo '{"ID":"c1","MemUsage":"6GiB / 16GiB","PIDs":"12"}' ;;
+  inspect) printf '0\\t0\\t<nil>\\n' ;;
+esac
+`,
+      async (log) => {
+        const request = { environmentId: "env-lifecycle", limits: undefined, applyNow: true };
+        await expect(updateEnvironmentResources(request, context)).rejects.toThrow(
+          "confirmation-required",
+        );
+        expect(await log.read()).not.toMatch(/^update /m);
+        expect(writes).toEqual([]);
+        expect(environments.get("env-lifecycle")!.containerResourceLimits!.memoryMiB).toBe(16000);
+        const policy = await updateEnvironmentResources(
+          { ...request, allowBelowUsage: true },
+          context,
+        );
+        expect(policy.source).toBe("default");
+        expect(await log.read()).toContain("update --memory 5888m");
+        expect(environments.get("env-lifecycle")).not.toHaveProperty("containerResourceLimits");
+      },
+    );
   });
 });

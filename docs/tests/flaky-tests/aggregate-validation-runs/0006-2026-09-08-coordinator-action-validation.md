@@ -76,3 +76,16 @@
   package at a time. No test exclusion, assertion, or timeout changed. The
   aggregate-only timeout remains open; a green reduced-worker run does not
   establish its root cause.
+
+## Gateway-auth part resolved, 2026-10-25
+
+- **Disposition:** the `remote gateway > closes an established event stream
+  when its agent-test session expires` part is resolved by the 2026-09-21
+  fixture correction above. It has not recurred since: no registry case names
+  it, and none of the 44 failing `main` CI runs from 2026-10-23 to 2026-10-25
+  (logs searched for the test name and `did not register the event-stream
+  client`) failed it.
+- **Stress:** `bun test --preload ../../tests/setup-node.ts ./tests/gateway-auth.test.ts`
+  from `apps/backend` passed 10 of 10 runs (35 pass each) at load average
+  about 45 on 2026-10-25.
+- The rest of this case (the 2026-09-08 aggregate timeout cluster) stays open.

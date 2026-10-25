@@ -1,5 +1,7 @@
 import { expect, mock, test } from "bun:test";
-import { RealmContexts } from "../electron/realm-contexts";
+import { RealmContexts, refreshWorkspaceRealm } from "../electron/realm-contexts";
+import type { WorkspaceContext } from "../electron/window-workspace-target";
+import { exposeActiveConnectionGateway } from "../electron/preload-api";
 
 function context(id: number, parentId: number, events: string[]) {
   return {
@@ -71,4 +73,83 @@ test("transport disposal rejection is handled after the realm is removed", async
   await Promise.resolve();
   expect(report).toHaveBeenCalledWith(error);
   expect(contexts.get(10)).toBeUndefined();
+});
+
+test("route refresh updates registered snapshots before reload and recreates old-origin previews", async () => {
+  const events: string[] = [];
+  const target: WorkspaceContext["target"] = {
+    nodeId: "bk_leaf",
+    nodeName: "Leaf",
+    path: "relay",
+    via: "Command",
+  };
+  const next: WorkspaceContext["target"] = {
+    nodeId: "bk_leaf",
+    nodeName: "Leaf",
+    path: "direct",
+    routeKind: "https",
+  };
+  const contexts = new RealmContexts<
+    ReturnType<typeof context> & {
+      target: WorkspaceContext["target"];
+      previewConnectionId: string;
+      contents: ReturnType<typeof context>["contents"] & { reload(): void };
+    }
+  >(
+    () => undefined,
+    () => undefined,
+  );
+  const replacement = {
+    manager: { destroyAll: () => void events.push("new-previews") },
+    previewTransport: {
+      disposeAll: async () => {
+        events.push("new-transports");
+      },
+    },
+  };
+  const realm = {
+    ...context(10, 1, events),
+    target,
+    previewConnectionId: "workspace:old",
+    contents: {
+      ...context(10, 1, events).contents,
+      reload: () => {
+        events.push("reload");
+        expect(contexts.get(10)?.target).toEqual(next);
+        expect(realm.browserPreviewManager).toBe(replacement.manager);
+        // The new document's preload reads its authoritative IPC snapshot.
+        const exposed = new Map<string, unknown>();
+        exposeActiveConnectionGateway(
+          {
+            exposeInMainWorld: (key, value) => {
+              exposed.set(key, value);
+            },
+          },
+          {
+            sendSync: (channel) =>
+              channel.endsWith("gateway-sync")
+                ? {
+                    baseUrl: "https://leaf.test",
+                    connectionId: "workspace:old",
+                    backendId: "bk_leaf",
+                    legacyOrigin: null,
+                    workspaceTarget: contexts.get(10)?.target,
+                  }
+                : { connections: [] },
+          },
+        );
+        expect(exposed.get("orkestratorWorkspaceTarget")).toEqual(next);
+        expect(exposed.get("orkestratorGateway")).toMatchObject({ baseUrl: "https://leaf.test" });
+      },
+    },
+  };
+  contexts.register(realm);
+  refreshWorkspaceRealm(realm, next, (id) => {
+    expect(id).toBe("workspace:old");
+    return replacement;
+  });
+  expect(events).toEqual(["previews", "transports", "reload"]);
+  expect(contexts.get(10)?.target).toEqual(next);
+  contexts.unregister(10);
+  await Promise.resolve();
 });

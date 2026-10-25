@@ -106,7 +106,7 @@ Done when (all met):
   for backend state remain. The `__testing` object (`commands-testing.ts`)
   keeps only pure helpers plus `resetOpenCodeHostStart` and
   `resetTerminalHistory`, which reset module state outside this file's scope
-  (0066).
+  (0066; both were removed there).
 - `CommandContext.runtime` is the only path to terminal, local-server,
   environment-operation and diff-stats state. The backend itself reaches its
   own runtime from `index.ts` (shutdown, the `NativeAgentService` account

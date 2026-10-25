@@ -719,10 +719,11 @@ mise run test:logged -- --name long-diagnostic -- command arg
 ```
 
 Do not make a larger limit the normal configuration. The deadline exists to
-catch a wedged run, not a slow one: the slowest group measured on the reference
-host is the workspace group at roughly four minutes on a cold cache. A default
-`mise run test` that gets anywhere near thirty minutes needs investigation
-rather than a raised limit.
+catch a wedged run, not a slow one. The slowest group is the workspace group:
+roughly four minutes cold on the 18-core reference host, and 20–22 minutes on
+GitHub's four-core runner (see the reference timings below), which is the
+closest any group comes to the limit. A default `mise run test` that gets
+anywhere near thirty minutes needs investigation rather than a raised limit.
 
 If an interrupted manual command leaves a process behind, identify it by its
 exact command, working directory, PID, or owned port before stopping it. Never
@@ -971,9 +972,18 @@ shared across worktrees.
 
 When comparing performance, record whether the run was cold or warm, the commit,
 the host's logical core count, and whether a development profile or another
-focused suite was active. On the 18-core reference machine, the measured
-post-change runs were about 188 seconds cold and 75 seconds warm; these are
-diagnostic reference points, not fixed pass criteria.
+focused suite was active. These are diagnostic reference points, not fixed
+pass criteria:
+
+- **18-core reference machine** (2026-09, before the backend and desktop
+  suites moved into their packages): about 188 seconds cold and 75 seconds
+  warm.
+- **GitHub's `ubuntu-latest` runner** (Ubuntu 26.04, four cores, 16 GB;
+  `mise run test:full`, `main` runs of 2026-10-25): workspace group
+  1,215–1,296 s, with the backend package 700–755 s and web 377–407 s, which
+  run one after the other at one worker each on four cores; root and
+  agent-support 199–214 s; bridges 145–191 s, of which ACP is 140–152 s. The
+  test job takes about 21 minutes.
 
 ## Parallel isolation and Bun module mocks
 

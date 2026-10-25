@@ -7,10 +7,13 @@ reads and discusses the configured local checkout, searches the code, and uses
 Orkestrator controls to delegate implementation to isolated worker environments.
 It cannot edit the project checkout itself.
 
-What is still missing — mainly provider parity — lives in
-[0026-coordinator-read-only-adapters.md](../todo/coordinator-and-multi-review/0026-coordinator-read-only-adapters.md),
-[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md) and
-[0028-coordinator-consistency-gaps.md](../todo/coordinator-and-multi-review/0028-coordinator-consistency-gaps.md).
+What is still missing — mainly provider parity and live qualification — lives in
+[0026-coordinator-read-only-adapters.md](../todo/coordinator-and-multi-review/0026-coordinator-read-only-adapters.md) and
+[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md);
+OpenCode and Grok steer in
+[0005-mid-turn-steer-and-interrupt.md](../todo/agent-engines/0005-mid-turn-steer-and-interrupt.md);
+deferred coordinator features in
+[0142-coordinator-product-surfaces.md](../todo/coordinator-and-multi-review/0142-coordinator-product-surfaces.md).
 Engine internals live in [`agent-engines.md`](agent-engines.md). Control MCP
 operator detail lives in [`control-mcp.md`](control-mcp.md). Qualification
 invariants for agents live in `AGENTS.md` under **Coordinator qualification**.
@@ -115,7 +118,16 @@ selected conversation, else the oldest with an agent, becomes main and the
 others become side agents. Nothing is closed. Workers a former conversation
 launched belong to the main.
 
-At most 16 conversations may be open, the main included.
+At most 16 conversations may be open, the main included. A new conversation
+starts unassigned, so empty composers could fill that limit: **New side agent**
+therefore names the unassigned side agents whose composer is empty in this
+window (`unusedCoordinatorConversationIds`, which reads the live draft and so
+covers text typed in the last few hundred milliseconds), and
+`createConversation({ closeUnused })` closes, in the same write, each one the
+backend agrees was never used: unassigned, no provider session, no saved draft
+with text, mentions, attachments or annotations, no mail and no owned work. The
+main coordinator is never closed this way, and a caller that names nothing
+(the CLI, an older client) closes nothing.
 
 ## Tab groups
 
@@ -405,7 +417,12 @@ checkout.
 
 A chip in the same toolbar shows **Waiting on N workers** when the selected
 conversation has open delegations. It is a projection from the snapshot, not
-from anything this page observed, so it is correct after a reload.
+from anything this page observed, so it is correct after a reload. A worker
+whose delegation has a waiting episode (`delegation.waiting`, written by status
+wakes from the worker tab's own turn activity, never the environment aggregate)
+is marked as needing a person ("1 needs you", and named in the tooltip). The
+episode starting or ending announces a `coordinator` change, so the chip
+refreshes without a reload; the notice's own bookkeeping is not announced.
 
 ## Control MCP
 
@@ -429,10 +446,13 @@ JSON result includes `delivery: "async"`, a wake sentence, and
 exported `COORDINATOR_ASYNC_CONTRACT` used in the coordinator context prompt
 and the mailbox poll guard.
 
-Repeated unchanged reads of `read_messages` or `get_message_status` return the
-authorized page with `repeatedRead: true` and the contract attached, after
-three identical answers inside 120 seconds. The guard never withholds data.
-`list_environments` is not covered.
+Repeated unchanged reads of `read_messages`, `get_message_status` or
+`list_environments` return the authorized page with `repeatedRead: true` and
+the contract attached, after three identical answers inside 120 seconds. The
+guard never withholds data. For `list_environments` "identical" means the same
+filters and the same lifecycle, setup, activity and PR state for every listed
+environment (and every other node's rows); `lastActivityAt` is left out, so
+re-listing while a worker is still `working` counts as the same answer.
 
 ## Worker delegation
 
@@ -557,7 +577,7 @@ stable key; a key is sent once, recorded on the association
 | Build pipeline | a stage `stalled` (`stallWarning`) | `settled` |
 | Build pipeline | `completed` (task, last verification), `failed` (error) | always |
 | Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
-| Delegated tab | `waiting` on input or an approval for 20 s (with its last message) | `settled` |
+| Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message | `settled` |
 | Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |
 
 Individual reviewers finishing never wakes anyone: that is progress, and a
@@ -613,7 +633,10 @@ is a mail tile toned by the notice.
   arriving while the window is open join it, so reviews settling together are
   one wake, and the drain batches them into one carrier (at most 10 messages,
   128 KiB). A coordinator mid-turn gets everything that settled meanwhile in
-  its next wake.
+  its next wake. A held notice never starts a turn itself, but when the drain
+  dispatches other mail to the same coordinator (a worker's report, say) the
+  held notices ride along in that batch (`includeCoalescing`,
+  `joinCoalescing`) rather than wake it again when their hold ends.
 - Debounce: workflow saves are observed at most every 2 seconds per resource;
   a waiting episode must last 20 seconds before it is reported, so an approval
   answered at once wakes nobody.

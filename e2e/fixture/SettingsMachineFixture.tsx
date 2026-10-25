@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { builtInResourceDefault } from "@orkestrator/protocol/container-resources";
 import { FederationProvider } from "../../apps/web/src/components/federation/FederationProvider";
 import { SettingsPage } from "../../apps/web/src/components/settings/SettingsPage";
 import { useAccountMachineStore } from "../../apps/web/src/components/settings/account-machine";
@@ -40,6 +41,28 @@ function install() {
           throw new Error("Fixture machine offline");
         }
         return read(owner);
+      case "get_docker_capacity": {
+        const daemon = {
+          scope: "docker-daemon",
+          cpus: 8,
+          memoryBytes: 16 * 1024 ** 3,
+          operatingSystem: "Linux",
+          rootless: false,
+          cgroupVersion: "2",
+          support: { cpuQuota: true, memoryLimit: true, pidsLimit: true },
+        };
+        return { ...daemon, builtInDefault: builtInResourceDefault(daemon) };
+      }
+      case "set_container_resource_limits": {
+        const config = read(owner);
+        if (args.limits)
+          config.global.containerResourceLimits = args.limits as NonNullable<
+            GlobalConfig["containerResourceLimits"]
+          >;
+        else delete config.global.containerResourceLimits;
+        localStorage.setItem(`settings-machine:${owner}`, JSON.stringify(config));
+        return { limits: args.limits };
+      }
       case "update_global_config": {
         const saved = { ...read(owner), global: args.global as GlobalConfig };
         localStorage.setItem(`settings-machine:${owner}`, JSON.stringify(saved));

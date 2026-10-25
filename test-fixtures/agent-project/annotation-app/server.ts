@@ -8,14 +8,18 @@
  *   POST /__fixture/state   JSON patch of `FixtureState` (server-side "hot reload")
  *   POST /__fixture/reset   restore the deterministic initial state
  *   GET  /health            liveness plus the Team CTA label rendered from source
+ *   GET  /__fixture/font    the late font, answered after `?delay=<ms>` (bounded);
+ *                           it is a 404, so the page falls back once it settles
+ *
+ * `/account` answers 302 to `/sign-in?next=/account` while `sessionExpired`.
  *
  * In the page, `window.__annotationFixture` exposes DOM-replacement hooks
  * (`reorderCards`, `reorderFeatures`, `duplicateTeamCard`, `removeTeamCard`,
  * `replaceSaveButton`, `hotReload`).
  */
 import { PLANS } from "./content";
-import { FIXTURE_MARKER } from "./fixture-data";
-import { INITIAL_STATE, renderPage, type FixtureState } from "./page";
+import { FIXTURE_MARKER, ROUTE_VARIANTS } from "./fixture-data";
+import { INITIAL_STATE, lateFontDelay, renderPage, type FixtureState } from "./page";
 
 export interface AnnotationFixture {
   url: string;
@@ -35,9 +39,9 @@ function applyPatch(state: FixtureState, patch: unknown): FixtureState | null {
     if (key === "cardOrder" || key === "featureOrder") {
       if (value !== "default" && value !== "reversed") return null;
       next[key] = value;
-    } else if (key === "duplicateTeam") {
+    } else if (key === "duplicateTeam" || key === "sessionExpired") {
       if (typeof value !== "boolean") return null;
-      next.duplicateTeam = value;
+      next[key] = value;
     } else {
       return null;
     }
@@ -89,6 +93,17 @@ export function startAnnotationFixture(
       }
       if (request.method !== "GET")
         return new Response("Method not allowed", { status: 405, headers });
+      if (url.pathname === "/__fixture/font") {
+        await Bun.sleep(lateFontDelay(url));
+        return new Response("No font", { status: 404, headers });
+      }
+      if (url.pathname === ROUTE_VARIANTS.account && state.sessionExpired) {
+        const next = encodeURIComponent(ROUTE_VARIANTS.account);
+        return new Response(null, {
+          status: 302,
+          headers: { ...headers, location: `${ROUTE_VARIANTS.signIn}?next=${next}` },
+        });
+      }
       const page = renderPage(url, state);
       if (!page) return new Response("Not found", { status: 404, headers });
       return new Response(page.html, {

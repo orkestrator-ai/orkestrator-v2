@@ -14,10 +14,11 @@ of 2026-10-20 to 2026-10-22.
 integration tests".
 Branch `todo-0030-test-suite-ci-health-e11a519267e2` (2026-10-25) fixes every
 cause those runs showed, and a GitHub Actions run of the branch's exact
-`ci.yml` jobs is the evidence (item 1). It also finishes items 3, 6, 8 and 9,
-the measurable part of item 4, and a triage of the flake registry. What remains
+`ci.yml` jobs is the evidence (item 1). It also finishes items 3, 4, 6, 8 and 9 and
+a triage of the flake registry. What remains
 is the maintainer applying the prepared ruleset once `main` has three green
-runs, one tmux-session timer conversion, the open flakes and two live checks.
+runs, two open CI flakes (0182, 0672), owner cases the triage suggested, and
+one live check (an Electron spec with a hung `close()`).
 
 ## Current state
 
@@ -50,7 +51,7 @@ runs, one tmux-session timer conversion, the open flakes and two live checks.
   | Runner "received a shutdown signal" about 5 minutes in | 8 | Started with #1227's own pull-request run (22:01) and stopped once #1236 changed the same tool-group animation code; pull-request runs in that window died the same way. The likely cause is a test from #1227 exhausting the runner; no runner diagnostics exist to confirm it. | None needed: gone since #1236. |
   | `native shell completion execution > zsh bashcompinit …` | 6 | Since #1246. The runner has no `zsh`; with it installed, `compinit` aborts on the world-writable completion directories because it cannot prompt. | CI installs `zsh` and `fish`; the test runs `compinit -u` and skips on a host without `zsh`. The fish test now runs on CI and checks short flags in a way fish 3.7 and 4 both answer. |
   | `interactive preview in Chromium > resource escape …` (`Page crashed`) | 2 | Unknown ([flake 0672](../../tests/flaky-tests/design-canvas-and-artifacts/0672-preview-interactive-chromium-page-crash.md)). | Registered recurrence; open. |
-  | ACP composer patch/prompt race | 1 | The test assumes two concurrent requests overlap ([0875](../../tests/flaky-tests/agent-bridges/0875-acp-composer-patch-prompt-overlap-assumption.md)). | Open, with a concrete next step. |
+  | ACP composer patch/prompt race | 1 | The test assumed two concurrent requests overlap ([0875](../../tests/flaky-tests/agent-bridges/0875-acp-composer-patch-prompt-overlap-assumption.md)). | The fake agent holds the composer RPC, so the overlap is certain. |
   | ACP `401` after `spawnBridge` | 1 | Another server took the harness's released port; readiness checked only unauthenticated health ([0876](../../tests/flaky-tests/agent-bridges/0876-acp-harness-port-squatter-401.md)). | Reproduced and fixed. |
   | Claude persistence `EEXIST` | 1 | A previous test's unawaited preference write landed in the next test ([0877](../../tests/flaky-tests/agent-bridges/0877-claude-session-preference-write-crosses-tests.md)). | Shown and fixed. |
   | Interaction hold `rejected` | 1 | The fixture read the clock twice, so the pause could predate the request ([0878](../../tests/flaky-tests/native-agents-and-transcripts/0878-interaction-hold-fixture-clock-boundary.md)). | Reproduced and fixed. |
@@ -220,7 +221,7 @@ runs, one tmux-session timer conversion, the open flakes and two live checks.
      production timer: a regression would be a mount effect or render loop).
    - Both files passed 5 runs in a row, and the web package passed (9,660
      pass, 10 skip).
-4. **Backend slow owners.** Measured alone, macOS, 2026-10-25.
+4. **Done (2026-10-25): backend slow owners.** Measured alone, macOS.
    - Done: `review-validation-worker.test.ts`. The worker already honours
      `ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS`; `a command that expires while queued
      keeps no stale queue explanation` now uses 3 s instead of 6 s and watches
@@ -238,10 +239,15 @@ runs, one tmux-session timer conversion, the open flakes and two live checks.
      `createGitWorktreeWithOrigin` builds its repository once. No fixture waste.
      `tmux-session.test.ts` (15.7 s, 71 cases): 237 spawns, almost all to the
      fake `tmux`; the time is the real 250 ms poll loop (`POLL_INTERVAL_MS`).
-   - **Still to do:** step the poll in the slow `tmux-session.test.ts` hook and
-     notification cases with the existing `pollTick` hook
-     (`pollTickStepper()`, used by two cases today). It could save most of
-     about 12 s. This is a timer conversion, so the timer rules apply.
+   - Done: `tmux-session.test.ts` steps the poll. Nine hook and notification
+     cases use the existing `pollTick` seam (`pollTickStepper()`): each former
+     wait for the 250 ms tick is one `ticks.step()`, and the snapshot-failure
+     case steps the 3 ticks its 750 ms wait covered and now also asserts the
+     warning fired 3 times. The stepper fails if the loop does not park again
+     within 5 s instead of hanging. The `delay(25)` before each "nothing
+     happened" assertion stays: it waits for the notification's promise chain,
+     not a tick. 18.5 s to 8–12 s (sum of cases 17.8 s to 10.4 s); 8 runs
+     passed; 9 mutations of `tmux-session-manager.ts` each failed a case.
 5. **Done (2026-10-22): skipped settings test.** It runs again, stepping the
    controlled debounce per attempt.
 6. **Done (2026-10-25): desktop test gaps.**
@@ -265,9 +271,17 @@ runs, one tmux-session timer conversion, the open flakes and two live checks.
      next step in its case.
    - Done (2026-10-25): resolved with a shown cause 0179 (the ACP harness
      child announced `ready` before installing its SIGTERM handler), 0697,
-     0876, 0877, 0878 and 0879. 0875 is new and open.
-   - **Still to do:** the gateway-auth part of 0006; 0182 (Cursor HTTP hooks)
-     and 0672 (Chromium page crash) on CI; 0875's held-RPC fixture. Owner cases
+     0875 (the fake ACP agent now holds composer RPCs, so all three race
+     orders overlap deterministically; removing the bridge's claim or busy
+     check fails them), 0876, 0877, 0878 and 0879. 0258 (fixture digest) got
+     the explicit 30 s budget its case asked for after failing alone 3 of 3 at
+     load 45, then passed 3 of 3.
+   - Done (2026-10-25): the gateway-auth part of 0006 is resolved: no
+     recurrence since the 2026-09-21 fixture correction, and 10 of 10 runs
+     passed. The rest of 0006 (a 2026-09-08 aggregate timeout cluster) stays
+     open.
+   - **Still to do:** 0182 (Cursor HTTP hooks) and 0672 (Chromium page crash)
+     on CI. Owner cases
      the triage suggested but did not create (no numbers were free):
      `media-stream.browser.test.ts` (timed out in 0694, 0801 and 0825),
      `cursor-bridge/src/initial-run.test.ts`, `RemoteWorkspaceRegion.test.tsx`

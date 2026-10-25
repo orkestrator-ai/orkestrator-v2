@@ -1,7 +1,7 @@
 # Coordinator fixture digest times out in the aggregate
 
 - **ID:** 0258
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Test:** `fixture tree digest > names every class of change a coordinator could make`
 - **Owning file:** `apps/desktop/scripts/dev/coordinator-live.test.ts`
@@ -210,4 +210,8 @@ The unchanged owning file passed alone (48 pass, 2.3 s, after failing twice more
 - **Scope:** the branch does not touch `scripts/dev/` or the test's imports.
   The same desktop package passed on GitHub Actions in todo 0030's probe run
   40195714408.
-- **Next step:** unchanged: an explicit budget for this git-heavy case.
+- **Fix:** the case now has an explicit 30 s budget
+  (`apps/desktop/scripts/dev/coordinator-live.test.ts`): it takes about two
+  dozen digests, each spawning Git several times. No assertion changed.
+- **Verification:** at the same load (44–47), the owner passed 3 of 3 runs
+  (48 pass each), where it had failed 3 of 3 before.

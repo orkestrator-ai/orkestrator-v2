@@ -995,6 +995,8 @@ describe("fixture tree digest", () => {
     expect(describeDigestChanges(first, second)).toEqual([]);
   });
 
+  // About two dozen digests, each spawning Git several times: the default 5 s
+  // budget is exceeded under host load (flake 0258).
   test("names every class of change a coordinator could make", async () => {
     const project = await checkout();
     const base = await fixtureTreeDigest(project);
@@ -1049,7 +1051,7 @@ describe("fixture tree digest", () => {
       ),
     ).toEqual(["git refs", "git worktrees"]);
     expect((await fixtureTreeDigest(project)).digest).not.toBe(base.digest);
-  });
+  }, 30_000);
 
   test("bounds the listed paths", () => {
     const files = (count: number) =>

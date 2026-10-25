@@ -131,8 +131,11 @@ describe("mermaid rendering", () => {
       };
       const chain = (edges: number) =>
         `flowchart LR\n${Array.from({ length: edges }, (_, i) => `  A${i} --> A${i + 1}`).join("\n")}`;
-      // 2,000 notes stay under 32 KiB of source but generate more than 5,000 SVG elements.
-      const notes = `sequenceDiagram\n${Array.from({ length: 2_000 }, () => "Note over A:x").join("\n")}`;
+      // Each pie slice adds three SVG elements, so 2,000 slices (~6,000 elements) exceed the
+      // 5,000-element limit from ~27 KiB of source. Pie layout is cheap; a sequence diagram
+      // of the same size can exceed the parse/layout deadline on a loaded host and fail with
+      // render_timeout before the SVG check runs.
+      const slices = `pie\n${Array.from({ length: 2_000 }, (_, i) => `  "s${i}" : 1`).join("\n")}`;
       // The five jobs are independent (each has its own environment), so they
       // run at once on a runner admitting all five.
       const concurrent = new TranscriptPreviewRunner({
@@ -149,7 +152,7 @@ describe("mermaid rendering", () => {
           run(padded(MERMAID_POLICY.maxSourceBytes + 1), concurrent),
           run(chain(MERMAID_POLICY.maxEdges), concurrent),
           run(chain(MERMAID_POLICY.maxEdges + 1), concurrent),
-          run(notes, concurrent),
+          run(slices, concurrent),
         ]);
         expect(atLimit.ok).toBe(true);
         expect(over.ok).toBe(false);

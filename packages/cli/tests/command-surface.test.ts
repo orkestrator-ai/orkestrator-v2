@@ -344,38 +344,41 @@ describe("shell completion", () => {
 });
 
 describe("native shell completion execution", () => {
-  test("zsh bashcompinit parses option values and offers short flags", () => {
-    const script = completionScript("zsh", CLIENT_COMMANDS);
-    for (const args of [
-      ["--profile", "project", "session", "comm"],
-      ["--connection=session", "project", "rem"],
-      ["session", "-h"],
-    ]) {
-      const run = spawnSync(
-        "zsh",
-        [
-          "-f",
-          "-c",
-          `autoload -Uz compinit; compinit -D
+  test.skipIf(!Bun.which("zsh"))(
+    "zsh bashcompinit parses option values and offers short flags",
+    () => {
+      const script = completionScript("zsh", CLIENT_COMMANDS);
+      for (const args of [
+        ["--profile", "project", "session", "comm"],
+        ["--connection=session", "project", "rem"],
+        ["session", "-h"],
+      ]) {
+        const run = spawnSync(
+          "zsh",
+          [
+            "-f",
+            "-c",
+            `autoload -Uz compinit; compinit -D
 ${script}
 COMP_WORDS=(orkestrator ${args.map((word) => `'${word}'`).join(" ")})
 COMP_CWORD=${args.length}
 _orkestrator
 print -l -- \${COMPREPLY[@]}`,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(run.status).toBe(0);
-      expect(run.stderr).toBe("");
-      expect(run.stdout.trim().split(/\s+/)).toEqual(
-        args.at(-1) === "comm"
-          ? ["commands", "command"]
-          : args.at(-1) === "rem"
-            ? ["remove"]
-            : ["-h"],
-      );
-    }
-  });
+          ],
+          { encoding: "utf8" },
+        );
+        expect(run.status).toBe(0);
+        expect(run.stderr).toBe("");
+        expect(run.stdout.trim().split(/\s+/)).toEqual(
+          args.at(-1) === "comm"
+            ? ["commands", "command"]
+            : args.at(-1) === "rem"
+              ? ["remove"]
+              : ["-h"],
+        );
+      }
+    },
+  );
 
   test.skipIf(!Bun.which("fish"))(
     "fish parses collisions, equals forms, list/duration values and short flags",

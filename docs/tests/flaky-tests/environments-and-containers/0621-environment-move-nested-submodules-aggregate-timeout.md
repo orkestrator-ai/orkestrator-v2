@@ -46,3 +46,12 @@
 - **Owning-file rerun:** `mise run test:logged -- --name backend-submodule-recheck -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged (34.4 s logged).
 - **Evidence:** `orkestrator-test-run.45VcQo/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Changes:** recorded recurrence only; no backend tests, timeouts or skips changed.
+
+## Design links resume identity validation — 2026-10-25
+
+- **Failure:** `move_environment > moves a worktree with nested submodules (same disk)` timed out (5231.33 ms).
+- **Original command:** `mise run test` on `todo-0038-design-conversation-links-852aa84d76e8` (commit `f771a8b8c`; native-session resume identity and teardown fallback, no environment-move or Git code changed), Bun 1.4.4, default reservations, host load average 37–52 from other workers.
+- **Aggregate counts:** backend 11,437 passed, 89 skipped, 3 failed across 681 files (796.55 s); the third failure is the new owner case [0930](../backend-services-and-tooling/0930-coordinator-codex-login-renewal-loginless.md).
+- **Owning-file rerun:** `mise exec -- bun test --preload ../../tests/setup-node.ts src/core/environment-move.test.ts` from `apps/backend` passed unchanged twice (37 pass, 0 fail each).
+- **Evidence:** `orkestrator-test-run.ZkIWTS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Changes:** recorded recurrence only; no test, timeout, assertion or skip changed.

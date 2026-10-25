@@ -10,9 +10,14 @@
  * the command node: an event (or a possible gap) re-reads that machine only.
  * Grok and Pi have no accounts; their sign-in state is shown read-only, with a
  * terminal sign-in on the machine.
+ *
+ * A preferred login per platform (an email, kept by the machine answering)
+ * flags machines on another login and offers to switch the ones that have
+ * it. It is chosen in the "By account" view and never switches anything by
+ * itself.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, Loader2, LogIn, RefreshCw } from "lucide-react";
+import { AlertCircle, Loader2, LogIn, RefreshCw, Star } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +33,7 @@ import {
   openAgentSignInTerminal,
   readHostAgentSignIns,
   setActiveAgentAccount,
+  setPreferredAgentIdentity,
 } from "@/lib/backend";
 import { subscribeCommandNodeEvents, subscribeNodeEvents } from "@/lib/federation/node-events";
 import { requestCloseGlobalSettings, requestGlobalSettings } from "@/lib/settings-navigation";
@@ -35,8 +41,10 @@ import { useAccountMachineStore } from "@/components/settings/account-machine";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import {
+  isPreferredIdentity,
   parseHostAgentSignIns,
   parseAgentAccountsSnapshot,
+  parsePreferredAgentIdentities,
   AGENT_ACCOUNT_PLATFORMS,
   AGENT_ACCOUNTS_CHANGED_EVENT,
   HOST_SIGN_IN_PLATFORMS,
@@ -44,6 +52,7 @@ import {
   type AgentAccountSummary,
   type HostSignInPlatform,
   type MachineAgentAccounts,
+  type PreferredAgentIdentities,
 } from "@orkestrator/protocol/agent-accounts";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
@@ -78,16 +87,42 @@ function manageOn(
   requestGlobalSettings(platform);
 }
 
+/** Where a machine stands against the preferred login for a platform. */
+export type PreferredStatus =
+  | { kind: "active" }
+  | { kind: "available"; accountId: string }
+  | { kind: "signed-out" }
+  | { kind: "missing" };
+
+/** Undefined when nothing is preferred or the machine could not be read. */
+export function preferredStatus(
+  machine: MachineAgentAccounts,
+  platform: AgentAccountPlatform,
+  email: string | undefined,
+): PreferredStatus | undefined {
+  const snapshot = machine.snapshot;
+  if (!email || machine.state !== "ok" || !snapshot) return undefined;
+  const accounts = snapshot.accounts.filter((account) => account.platform === platform);
+  const active = accounts.find((account) => account.id === snapshot.active[platform]);
+  if (active?.signedIn && isPreferredIdentity(active.identity, email)) return { kind: "active" };
+  const matches = accounts.filter((account) => isPreferredIdentity(account.identity, email));
+  const match = matches.find((account) => account.signedIn);
+  if (match) return { kind: "available", accountId: match.id };
+  return { kind: matches.length > 0 ? "signed-out" : "missing" };
+}
+
 function AccountCell({
   machine,
   platform,
   busy,
+  preferredEmail,
   onChoose,
   onManage,
 }: {
   machine: MachineAgentAccounts;
   platform: AgentAccountPlatform;
   busy: boolean;
+  preferredEmail?: string;
   onChoose: (accountId: string) => void;
   onManage?: () => void;
 }) {
@@ -101,8 +136,9 @@ function AccountCell({
   }
   const accounts = snapshot.accounts.filter((account) => account.platform === platform);
   const active = accounts.find((account) => account.id === snapshot.active[platform]);
+  const preferred = preferredStatus(machine, platform, preferredEmail);
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
       <Select
         value={snapshot.active[platform]}
         onValueChange={(accountId) => {
@@ -127,6 +163,30 @@ function AccountCell({
       {active && !active.signedIn ? (
         <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">
           Signed out
+        </span>
+      ) : null}
+      {preferred?.kind === "available" ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2 text-xs text-amber-400"
+          disabled={busy}
+          title={`Switch ${machine.name} to ${preferredEmail}`}
+          onClick={() => onChoose(preferred.accountId)}
+        >
+          Use preferred
+        </Button>
+      ) : preferred?.kind === "signed-out" ? (
+        <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">
+          Preferred login signed out
+        </span>
+      ) : preferred?.kind === "missing" ? (
+        <span
+          className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400"
+          title={`${machine.name} has no ${preferredEmail} login`}
+        >
+          No preferred login
         </span>
       ) : null}
       <Button
@@ -203,6 +263,7 @@ interface IdentityGroup {
 export function groupAccountsByIdentity(
   machines: readonly MachineAgentAccounts[],
   platform: AgentAccountPlatform,
+  preferredEmail?: string,
 ): IdentityGroup[] {
   const groups = new Map<string, IdentityGroup>();
   for (const machine of machines) {
@@ -221,30 +282,39 @@ export function groupAccountsByIdentity(
       group.on.set(machine.nodeId, account);
     }
   }
+  const preferredKey = preferredEmail ? `email:${preferredEmail.toLowerCase()}` : undefined;
   return [...groups.values()].sort(
-    (a, b) => b.on.size - a.on.size || a.label.localeCompare(b.label),
+    (a, b) =>
+      Number(b.key === preferredKey) - Number(a.key === preferredKey) ||
+      b.on.size - a.on.size ||
+      a.label.localeCompare(b.label),
   );
 }
 
 function IdentityView({
   machines,
   busy,
+  preferred,
   onChoose,
+  onPrefer,
   onManage,
 }: {
   machines: MachineAgentAccounts[];
-  busy: string | null;
+  busy: ReadonlySet<string>;
+  preferred: PreferredAgentIdentities;
   onChoose: (
     machine: MachineAgentAccounts,
     platform: AgentAccountPlatform,
     accountId: string,
   ) => void;
+  /** Make an email the platform's preferred login, or clear it with `null`. */
+  onPrefer: (platform: AgentAccountPlatform, email: string | null) => void;
   onManage?: () => void;
 }) {
   return (
     <div className="space-y-4">
       {AGENT_ACCOUNT_PLATFORMS.map((platform) => {
-        const groups = groupAccountsByIdentity(machines, platform);
+        const groups = groupAccountsByIdentity(machines, platform, preferred[platform]);
         return (
           <div key={platform} className="space-y-1.5">
             <p className="text-xs font-medium text-zinc-400">{AGENT_PLATFORM_LABELS[platform]}</p>
@@ -258,8 +328,20 @@ function IdentityView({
                     data-testid="machine-agent-identity"
                     className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2.5"
                   >
-                    <span className="min-w-[10rem] truncate text-sm text-zinc-100">
-                      {group.label}
+                    <span className="flex min-w-[10rem] items-center gap-1.5">
+                      <span className="truncate text-sm text-zinc-100">{group.label}</span>
+                      {group.key.startsWith("email:") ? (
+                        <PreferToggle
+                          platform={platform}
+                          email={group.label}
+                          preferred={isPreferredIdentity(
+                            { email: group.label },
+                            preferred[platform],
+                          )}
+                          busy={busy.has(`preferred:${platform}`)}
+                          onPrefer={onPrefer}
+                        />
+                      ) : null}
                     </span>
                     <span className="flex flex-wrap items-center gap-1.5">
                       {machines.map((machine) => {
@@ -310,7 +392,10 @@ function IdentityView({
                               <button
                                 type="button"
                                 className="ml-1 text-zinc-400 underline-offset-2 hover:text-zinc-100 hover:underline disabled:opacity-50"
-                                disabled={busy === `${machine.nodeId}:${platform}`}
+                                disabled={
+                                  busy.has(`${machine.nodeId}:${platform}`) ||
+                                  busy.has(`preferred:${platform}`)
+                                }
                                 onClick={() => onChoose(machine, platform, account.id)}
                               >
                                 use
@@ -328,6 +413,125 @@ function IdentityView({
         );
       })}
     </div>
+  );
+}
+
+function PreferToggle({
+  platform,
+  email,
+  preferred,
+  busy,
+  onPrefer,
+}: {
+  platform: AgentAccountPlatform;
+  email: string;
+  preferred: boolean;
+  busy: boolean;
+  onPrefer: (platform: AgentAccountPlatform, email: string | null) => void;
+}) {
+  const label = AGENT_PLATFORM_LABELS[platform];
+  return (
+    <button
+      type="button"
+      aria-pressed={preferred}
+      aria-label={
+        preferred
+          ? `Stop preferring ${email} for ${label}`
+          : `Prefer ${email} for ${label} on every machine`
+      }
+      title={preferred ? "Preferred login. Click to clear." : "Prefer this login on every machine"}
+      disabled={busy}
+      className={
+        preferred
+          ? "flex items-center gap-1 rounded px-1 text-[10px] font-medium text-amber-300 disabled:opacity-50"
+          : "flex items-center rounded px-1 text-zinc-500 hover:text-zinc-200 disabled:opacity-50"
+      }
+      onClick={() => onPrefer(platform, preferred ? null : email)}
+    >
+      <Star className={preferred ? "h-3 w-3 fill-current" : "h-3 w-3"} />
+      {preferred ? "Preferred" : null}
+    </button>
+  );
+}
+
+/**
+ * One line per platform with a preferred login: how many machines use it and
+ * a switch for every machine that has it but uses another.
+ */
+function PreferredSummary({
+  machines,
+  preferred,
+  busy,
+  onSwitchToPreferred,
+  onPrefer,
+}: {
+  machines: MachineAgentAccounts[];
+  preferred: PreferredAgentIdentities;
+  busy: ReadonlySet<string>;
+  onSwitchToPreferred: (platform: AgentAccountPlatform) => void;
+  onPrefer: (platform: AgentAccountPlatform, email: string | null) => void;
+}) {
+  const rows = AGENT_ACCOUNT_PLATFORMS.flatMap((platform) => {
+    const email = preferred[platform];
+    if (!email) return [];
+    const statuses = machines.map((machine) => preferredStatus(machine, platform, email));
+    const read = statuses.filter((status) => status !== undefined);
+    return [
+      {
+        platform,
+        email,
+        on: read.filter((status) => status.kind === "active").length,
+        read: read.length,
+        switchable: read.filter((status) => status.kind === "available").length,
+        missing: read.filter((status) => status.kind === "missing").length,
+        signedOut: read.filter((status) => status.kind === "signed-out").length,
+      },
+    ];
+  });
+  if (rows.length === 0) return null;
+  return (
+    <ul className="space-y-1" data-testid="machine-agent-preferred">
+      {rows.map((row) => (
+        <li key={row.platform} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          <Star className="h-3 w-3 fill-current text-amber-300" />
+          <span className="text-zinc-300">
+            Preferred {AGENT_PLATFORM_LABELS[row.platform]} login:{" "}
+            <span className="text-zinc-100">{row.email}</span>
+          </span>
+          <span className="text-zinc-500">
+            · {row.on} of {row.read} {row.read === 1 ? "machine" : "machines"} on it
+            {row.missing > 0 ? ` · ${row.missing} without it` : ""}
+            {row.signedOut > 0 ? ` · ${row.signedOut} signed out` : ""}
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2 text-xs text-zinc-400"
+            aria-label={`Clear preferred ${AGENT_PLATFORM_LABELS[row.platform]} login`}
+            disabled={busy.has(`preferred:${row.platform}`)}
+            onClick={() => onPrefer(row.platform, null)}
+          >
+            Clear
+          </Button>
+          {row.switchable > 0 ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs text-amber-400"
+              disabled={busy.has(`preferred:${row.platform}`)}
+              onClick={() => onSwitchToPreferred(row.platform)}
+            >
+              {busy.has(`preferred:${row.platform}`) ? (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              ) : null}
+              Use on {row.switchable} more {row.switchable === 1 ? "machine" : "machines"}
+            </Button>
+          ) : null}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -371,12 +575,28 @@ export function MachineAgentAccountsSection({
   onManage?: () => void;
 }) {
   const [machines, setMachines] = useState<MachineAgentAccounts[] | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
+  const pending = useRef(new Set<string>());
+  // Per-platform revisions keep slow overview reads from restoring an old preference.
+  const preferenceRevision = useRef({ claude: 0, codex: 0 });
+
   const [error, setError] = useState<string | null>(null);
   const [byIdentity, setByIdentity] = useState(false);
+  const [preferred, setPreferred] = useState<PreferredAgentIdentities>({});
   const mounted = useRef(true);
   /** The latest read of each machine; an older answer is dropped. */
   const readSeq = useRef(new Map<string, number>());
+
+  const begin = (key: string) => {
+    if (pending.current.has(key)) return false;
+    pending.current.add(key);
+    setBusy(new Set(pending.current));
+    return true;
+  };
+  const end = (key: string) => {
+    pending.current.delete(key);
+    if (mounted.current) setBusy(new Set(pending.current));
+  };
 
   useEffect(() => {
     mounted.current = true;
@@ -403,12 +623,30 @@ export function MachineAgentAccountsSection({
   );
 
   const load = useCallback(async () => {
+    const revisions = { ...preferenceRevision.current };
+    const writing = new Set(pending.current);
     try {
       const result = await listMachineAgentAccounts();
       if (!mounted.current) return;
       const next = Array.isArray(result?.machines) ? result.machines : [];
       for (const machine of next) nextSeq(machine.nodeId);
       setMachines(next);
+      const readPreferred = parsePreferredAgentIdentities(result?.preferred);
+      setPreferred((current) => {
+        const next = { ...current };
+        for (const platform of AGENT_ACCOUNT_PLATFORMS) {
+          const key = `preferred:${platform}`;
+          if (
+            revisions[platform] !== preferenceRevision.current[platform] ||
+            writing.has(key) ||
+            pending.current.has(key)
+          )
+            continue;
+          if (readPreferred[platform]) next[platform] = readPreferred[platform];
+          else delete next[platform];
+        }
+        return next;
+      });
       setError(null);
     } catch (cause) {
       if (mounted.current) setError(messageOf(cause));
@@ -499,7 +737,7 @@ export function MachineAgentAccountsSection({
     accountId: string,
   ) => {
     const key = `${machine.nodeId}:${platform}`;
-    setBusy(key);
+    if (!begin(key)) return;
     setError(null);
     try {
       const seq = nextSeq(machine.nodeId);
@@ -511,13 +749,68 @@ export function MachineAgentAccountsSection({
       if (mounted.current) setError(`${machine.name}: ${messageOf(cause)}`);
       void reread(machine);
     } finally {
-      if (mounted.current) setBusy(null);
+      end(key);
     }
+  };
+
+  const prefer = async (platform: AgentAccountPlatform, email: string | null) => {
+    const key = `preferred:${platform}`;
+    if (!begin(key)) return;
+    preferenceRevision.current[platform] += 1;
+    setError(null);
+    try {
+      const result = parsePreferredAgentIdentities(
+        await setPreferredAgentIdentity(platform, email),
+      );
+      if (mounted.current)
+        setPreferred((current) => {
+          const next = { ...current };
+          if (result[platform]) next[platform] = result[platform];
+          else delete next[platform];
+          return next;
+        });
+    } catch (cause) {
+      if (mounted.current) setError(messageOf(cause));
+    } finally {
+      end(key);
+    }
+  };
+
+  /** Switch every listed machine that has the preferred login but uses another. */
+  const switchToPreferred = async (platform: AgentAccountPlatform) => {
+    const email = preferred[platform];
+    const targets = shown.flatMap((machine) => {
+      const status = preferredStatus(machine, platform, email);
+      return status?.kind === "available" ? [{ machine, accountId: status.accountId }] : [];
+    });
+    if (targets.length === 0) return;
+    const key = `preferred:${platform}`;
+    if (!begin(key)) return;
+    setError(null);
+    const failures: string[] = [];
+    await Promise.all(
+      targets.map(async ({ machine, accountId }) => {
+        const seq = nextSeq(machine.nodeId);
+        try {
+          const snapshot = parseAgentAccountsSnapshot(
+            await setActiveAgentAccount(platform, accountId, machineTarget(machine)),
+          );
+          if (!snapshot) throw new Error("Invalid account snapshot");
+          patch(machine.nodeId, seq, { snapshot });
+        } catch (cause) {
+          failures.push(`${machine.name}: ${messageOf(cause)}`);
+          void reread(machine);
+        }
+      }),
+    );
+    if (!mounted.current) return;
+    if (failures.length > 0) setError(failures.join("; "));
+    end(key);
   };
 
   const signIn = async (machine: MachineAgentAccounts, platform: HostSignInPlatform) => {
     const key = `${machine.nodeId}:${platform}`;
-    setBusy(key);
+    if (!begin(key)) return;
     setError(null);
     try {
       const terminal = await openAgentSignInTerminal(
@@ -535,7 +828,7 @@ export function MachineAgentAccountsSection({
     } catch (cause) {
       if (mounted.current) setError(`${machine.name}: ${messageOf(cause)}`);
     } finally {
-      if (mounted.current) setBusy(null);
+      end(key);
     }
   };
 
@@ -553,7 +846,7 @@ export function MachineAgentAccountsSection({
       description={
         single
           ? "The agent logins this machine's agents use. Each machine keeps its own logins."
-          : "The agent logins each machine's agents use. Each machine keeps its own logins; a change applies to that machine's agents the next time they start work while idle."
+          : "The agent logins each machine's agents use. Each machine keeps its own logins; a change applies to that machine's agents the next time they start work while idle. Star a login under By account to flag machines not on it."
       }
       testId="machine-agent-accounts"
       action={
@@ -595,11 +888,22 @@ export function MachineAgentAccountsSection({
           Reading each machine's accounts…
         </p>
       ) : null}
+      {!single ? (
+        <PreferredSummary
+          machines={shown}
+          preferred={preferred}
+          busy={busy}
+          onSwitchToPreferred={(platform) => void switchToPreferred(platform)}
+          onPrefer={(platform, email) => void prefer(platform, email)}
+        />
+      ) : null}
       {shown.length > 0 && byIdentity && !single ? (
         <IdentityView
           machines={shown}
           busy={busy}
+          preferred={preferred}
           onChoose={(machine, platform, accountId) => void choose(machine, platform, accountId)}
+          onPrefer={(platform, email) => void prefer(platform, email)}
           {...(onManage ? { onManage } : {})}
         />
       ) : null}
@@ -644,7 +948,13 @@ export function MachineAgentAccountsSection({
                       <AccountCell
                         machine={machine}
                         platform={platform}
-                        busy={busy === `${machine.nodeId}:${platform}`}
+                        busy={
+                          busy.has(`${machine.nodeId}:${platform}`) ||
+                          busy.has(`preferred:${platform}`)
+                        }
+                        {...(single || !preferred[platform]
+                          ? {}
+                          : { preferredEmail: preferred[platform] })}
                         onChoose={(accountId) => void choose(machine, platform, accountId)}
                         {...(onManage ? { onManage } : {})}
                       />
@@ -655,7 +965,7 @@ export function MachineAgentAccountsSection({
                       <SignInCell
                         machine={machine}
                         platform={platform}
-                        busy={busy === `${machine.nodeId}:${platform}`}
+                        busy={busy.has(`${machine.nodeId}:${platform}`)}
                         onSignIn={() => void signIn(machine, platform)}
                       />
                     </td>

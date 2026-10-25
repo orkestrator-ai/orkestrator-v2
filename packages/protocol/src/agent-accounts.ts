@@ -132,6 +132,52 @@ export interface AgentSignInTerminal {
 
 export interface MachineAgentAccountsResult {
   machines: MachineAgentAccounts[];
+  /**
+   * The login the user wants each machine on, per platform, kept by the
+   * machine answering (`set_preferred_agent_identity`). Absent from older
+   * machines and when nothing is preferred.
+   */
+  preferred?: PreferredAgentIdentities;
+}
+
+/**
+ * The email of the login a user prefers for a platform across machines. It is
+ * a pointer, never a credential: the overview flags machines whose active
+ * login has another email and offers to switch the ones that have it. Nothing
+ * switches by itself and nothing is sent to other machines.
+ */
+export type PreferredAgentIdentities = Partial<Record<AgentAccountPlatform, string>>;
+
+const MAX_PREFERRED_EMAIL_LENGTH = 320;
+
+/** A trimmed email, or undefined when `value` cannot name one. */
+export function normalizePreferredEmail(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const email = value.trim();
+  if (!email || email.length > MAX_PREFERRED_EMAIL_LENGTH || !/^[^\s@]+@[^\s@]+$/.test(email)) {
+    return undefined;
+  }
+  return email;
+}
+
+/** Keep only platforms with a valid email; peer and stored values are untrusted. */
+export function parsePreferredAgentIdentities(value: unknown): PreferredAgentIdentities {
+  const preferred: PreferredAgentIdentities = {};
+  if (!isAccountRecord(value)) return preferred;
+  for (const platform of AGENT_ACCOUNT_PLATFORMS) {
+    const email = normalizePreferredEmail(value[platform]);
+    if (email) preferred[platform] = email;
+  }
+  return preferred;
+}
+
+/** Whether a login's email names the preferred one. Emails compare case-insensitively. */
+export function isPreferredIdentity(
+  identity: AgentAccountIdentity,
+  preferredEmail: string | undefined,
+): boolean {
+  const email = identity.email?.trim();
+  return Boolean(email && preferredEmail && email.toLowerCase() === preferredEmail.toLowerCase());
 }
 
 /**

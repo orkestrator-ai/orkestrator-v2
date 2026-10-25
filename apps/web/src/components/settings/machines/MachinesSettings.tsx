@@ -204,7 +204,11 @@ export function MachinesSettings() {
         </div>
       )}
 
-      {!leaf ? (
+      {leaf ? (
+        // A leaf's own window: its machines are its command node's to manage,
+        // so only its own logins are listed here.
+        <MachineAgentAccountsSection key="leaf-self" selfOnly />
+      ) : (
         <MachineAgentAccountsSection
           key={(nodes?.nodes ?? [])
             .filter((node) => node.enabled && !node.detachPending)
@@ -212,7 +216,7 @@ export function MachinesSettings() {
             .sort()
             .join(",")}
         />
-      ) : null}
+      )}
 
       {nodes && nodes.pendingDetaches.length > 0 ? (
         <PendingDetaches entries={nodes.pendingDetaches} onChanged={changed} />

@@ -2,8 +2,10 @@ import {
   DEFAULT_AGENT_ACCOUNT_ID,
   isAgentAccountPlatform,
   MAX_AGENT_ACCOUNT_LABEL_LENGTH,
+  parsePreferredAgentIdentities,
   type AgentAccountIdentity,
   type AgentAccountPlatform,
+  type PreferredAgentIdentities,
 } from "@orkestrator/protocol/agent-accounts";
 
 /**
@@ -30,6 +32,12 @@ export interface AgentAccountStore {
   loginGeneration?: Partial<Record<AgentAccountPlatform, string>>;
   accounts: StoredAgentAccount[];
   active: Partial<Record<AgentAccountPlatform, string>>;
+  /**
+   * The email of the login wanted on every machine, per platform, for the
+   * accounts overview (`set_preferred_agent_identity`). A pointer only: no
+   * account here or elsewhere is switched because of it.
+   */
+  preferred?: PreferredAgentIdentities;
 }
 
 export function emptyAgentAccountStore(): AgentAccountStore {
@@ -100,6 +108,8 @@ export function parseAgentAccountStore(value: unknown): AgentAccountStore {
     }
     if (Object.keys(generations).length) store.loginGeneration = generations;
   }
+  const preferred = parsePreferredAgentIdentities(record.preferred);
+  if (Object.keys(preferred).length) store.preferred = preferred;
   const seen = new Set<string>();
   for (const entry of Array.isArray(record.accounts) ? record.accounts : []) {
     const account = parseAccount(entry);

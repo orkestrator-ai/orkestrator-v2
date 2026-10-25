@@ -5,6 +5,7 @@ import {
   MULTI_REVIEW_FIX_TAB_TITLE,
   type MultiReviewModelSelection,
   type MultiReviewStepKind,
+  type MultiReviewStepTranscript,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -971,7 +972,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     }
   });
 
-  test("lays the validation table beside the package transcript on a wide inspector", () => {
+  test("places validation and the package transcript in separate split columns", () => {
     const workflow = validatingWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(workflow);
 
@@ -985,9 +986,79 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
     const split = screen.getByTestId("multi-review-step-split");
     expect(split.className).toContain("@min-[88rem]:grid-cols-2");
-    const [details, transcript] = Array.from(split.children);
-    expect(details.querySelector("[aria-label='Review validation']")).not.toBeNull();
-    expect(transcript.querySelector("[data-testid='multi-review-transcript-tail']")).not.toBeNull();
+    expect(split.children).toHaveLength(2);
+    expect(
+      split.querySelector(":scope > div:first-child [aria-label='Review validation']"),
+    ).not.toBeNull();
+    expect(
+      split.querySelector(":scope > div:last-child [data-testid='multi-review-transcript-tail']"),
+    ).not.toBeNull();
+  });
+
+  test("preserves the package transcript and its source token when validation arrives", async () => {
+    const validated = validatingWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...validated,
+      validationRun: undefined,
+      reviewSession: {
+        agent: "codex",
+        model: "gpt-5.6",
+        sessionKey: "multi-review:multi-1:prepare",
+        providerSessionId: "prepare-session",
+        requestIds: ["prepare-1"],
+        status: "running",
+        startedAt: validated.createdAt,
+      },
+    };
+    const snapshot: MultiReviewStepTranscript = {
+      workflowId: workflow.id,
+      step: "prepare",
+      workflowPhase: "preparing",
+      session: "own",
+      agent: "codex",
+      transcript: "snapshot",
+      sourceToken: "package-output-1",
+      messages: [{ id: "output-1", role: "assistant", content: "Preparing validation commands" }],
+    };
+    const loadStepTranscript = mock(
+      async (_id: string, _step: MultiReviewStepKind, options?: { knownSourceToken?: string }) =>
+        options?.knownSourceToken === snapshot.sourceToken
+          ? { ...snapshot, transcript: "unchanged" as const, messages: [] }
+          : snapshot,
+    );
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+        loadStepTranscript={loadStepTranscript}
+      />,
+    );
+    const tail = screen.getByRole("log", { name: "Latest review package generation activity" });
+    await waitFor(() => expect(tail.textContent).toContain("Preparing validation commands"));
+    const message = within(tail).getByText("Preparing validation commands");
+    expect(screen.queryByLabelText("Review validation") === null).toBe(true);
+
+    act(() => {
+      useMultiReviewStore.getState().replaceWorkflow({
+        ...workflow,
+        validationRun: validated.validationRun,
+        backendRevision: workflow.backendRevision + 1,
+      });
+    });
+
+    await waitFor(() =>
+      expect(loadStepTranscript).toHaveBeenLastCalledWith(workflow.id, "prepare", {
+        knownSourceToken: snapshot.sourceToken,
+      }),
+    );
+    expect(screen.getByLabelText("Review validation")).toBeTruthy();
+    expect(screen.getByRole("log", { name: "Latest review package generation activity" })).toBe(
+      tail,
+    );
+    expect(tail.textContent).toContain("Preparing validation commands");
+    expect(within(tail).getByText("Preparing validation commands")).toBe(message);
   });
 
   test("stops validation while keeping Multi Review on course for the reviewer step", async () => {

@@ -39,6 +39,7 @@ import { MultiReviewRestartDialog } from "./MultiReviewRestartDialog";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { formatElapsedWithHours } from "@/lib/format-elapsed";
 import { formatTokenCount } from "@/lib/context-usage";
+import { cn } from "@/lib/utils";
 import { formatRuntimeParts, runtimeParts, type RuntimeParts } from "@/lib/review/runtime-summary";
 import {
   flowNodeElementId,
@@ -1090,13 +1091,19 @@ function MultiReviewOverviewTab({
       body: (
         <div className="flex flex-1 flex-col space-y-4">
           <StepFacts model={model} runtime={runtime} status={status} />
-          {splitDetails && details ? (
-            // Side by side once both fit at a readable width; stacked otherwise.
+          {splitDetails ? (
+            // Keep the transcript mounted as validation arrives. Split only
+            // once both columns fit at a readable width; stack otherwise.
             <div
               data-testid="multi-review-step-split"
-              className="flex flex-1 flex-col gap-4 @min-[88rem]:grid @min-[88rem]:grid-cols-2"
+              className={cn(
+                "flex flex-1 flex-col gap-4",
+                details && "@min-[88rem]:grid @min-[88rem]:grid-cols-2",
+              )}
             >
-              <div className="min-w-0 @min-[88rem]:self-start">{details}</div>
+              <div className="min-w-0 @min-[88rem]:self-start" hidden={!details}>
+                {details}
+              </div>
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">{transcriptTabs}</div>
             </div>
           ) : (

@@ -153,9 +153,15 @@ All on this branch, 2026-10-25.
 - `bun test` of every `apps/backend/src/core/storage*.test.ts`,
   `apps/backend/tests/storage*.test.ts` and
   `tests/unit/inheritance-chains.test.ts`: 846 pass, 0 fail.
-- `bun run typecheck` in `apps/backend`: no errors (1,531 and 1,036 files).
+- `mise run typecheck`: no errors (backend: 1,531 and 1,036 files).
 - `mise run lint`: exit 0, no finding in a changed file.
-- `mise run test`: see the coordinator report for the run on the pushed head.
+- First `mise run test` (head `f960eca3`): bridges and codex protocol lockfile
+  passed; root failed one test (`mise-tasks.test.ts`: this file named
+  `bun run typecheck`, fixed); the backend workspace failed 9 of 11,530: the
+  8 routing tests above (fixed) and one timeout recorded as flake
+  [0905](../../tests/flaky-tests/backend-services-and-tooling/0905-public-api-environment-create-replay-timeout.md)
+  (its owner passed alone).
+- Final `mise run test`: see the coordinator report for the pushed head.
 
 ## Assumptions and decisions
 
@@ -215,9 +221,13 @@ All on this branch, 2026-10-25.
    production gets no test surface. Cons: tests that replaced a facade method
    to intercept an internal call must patch the repository instead (a
    repository calls another repository directly); `storage.md` says so.
-   Three such storage tests were updated
-   (`storage-agent-mail.test.ts`), and the full suite is the check that no
-   other test depended on the old routing.
+   The first full `mise run test` found every test that depended on the old
+   routing or on a former protected member: three in
+   `storage-agent-mail.test.ts` (found earlier), plus
+   `native-agent-queued-steer.test.ts` (4 tests),
+   `public-api-command-surface.test.ts` (2), `commands-state-sync.test.ts`
+   and `build-pipeline-transcript-checkpoints.test.ts`. Each now patches or
+   calls the repository; no assertion changed.
 8. **Removed `acquireConfigMutationLock` and `acquireEnvironmentMutationLock`.**
    No production code called them; one test took the config lease through
    the first and now takes the same lease (`config.json`, "configuration

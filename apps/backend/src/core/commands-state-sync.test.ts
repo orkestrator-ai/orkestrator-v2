@@ -28,7 +28,7 @@ import {
 } from "./commands-registry-projects.js";
 import { cachedLaunchModels } from "./control-shared-actions.js";
 import { StorageService } from "./storage.js";
-import { seedUnreadableStore } from "./storage-test-support.js";
+import { seedUnreadableStore, storageInternals } from "./storage-test-support.js";
 import type { ClaudeModelCatalogEntry } from "./models.js";
 import { ClaudeStatePollManager } from "./tmux.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
@@ -6181,9 +6181,12 @@ describe("pr monitor commands", () => {
           prState: "open",
           hasMergeConflicts: true,
         });
-        const loadEnvironments = storage.loadEnvironments.bind(storage);
+        // Every read of the environment store, through the facade or from
+        // another repository, reaches the projects repository.
+        const projects = storageInternals(storage).repos.projects;
+        const loadEnvironments = projects.loadEnvironments.bind(projects);
         let calls = 0;
-        const loadSpy = spyOn(storage, "loadEnvironments").mockImplementation(async () => {
+        const loadSpy = spyOn(projects, "loadEnvironments").mockImplementation(async () => {
           calls += 1;
           if (calls === 2) throw new Error("temporary storage read failure");
           return loadEnvironments();

@@ -27,3 +27,13 @@ headroom on a loaded host. The bound exists to prove that a hanging delete
 does not block other intents, so a fix should assert ordering (the other
 intent completed before the hanging one settled) rather than raise the
 number. Not changed here.
+
+
+## Reconnect freshness qualification — 2026-10-25
+
+The default two-worker backend aggregate repeated this failure while validating
+renderer-only test changes at `33b96fb48`. The complete owners were rerun with one
+isolated Bun worker; exact commands, failures, durations, counts and evidence are
+recorded in [0826](../aggregate-validation-runs/0826-reconnect-freshness-validation.md).
+The unchanged teardown owner passed; the aggregate measured 336.97 ms against
+its 250 ms bound. No assertion or deadline was changed.

@@ -456,7 +456,9 @@ async function finishLogin(context: CommandContext, entry: ActiveLogin): Promise
       // now rather than waiting for the picker to be reopened.
       if (platform === "claude") {
         resetHostModelCatalogSeedCooldown(platform);
-        void seedHostModelCatalogIfMissing(context, platform, refreshHostModelCatalog);
+        void seedHostModelCatalogIfMissing(context, platform, refreshHostModelCatalog).catch(
+          () => undefined,
+        );
       }
       return;
     }

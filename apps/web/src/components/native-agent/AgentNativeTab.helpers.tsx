@@ -439,6 +439,7 @@ export function UnassignedNativeAgentComposer({
   const [resumePlatformDialogOpen, setResumePlatformDialogOpen] = useState(false);
   const [models, setModels] = useState<AgentModel[]>([]);
   const modelCatalogRequestsRef = useRef(new Map<string, Promise<AgentModel[]>>());
+  const modelCatalogInFlightRef = useRef(new Set<string>());
   const modelCatalogEnvironmentRef = useRef(environmentId);
   const modelCatalogMountedRef = useRef(false);
   const modelCatalogRetriedRef = useRef(new Set<string>());
@@ -534,6 +535,7 @@ export function UnassignedNativeAgentComposer({
     if (modelCatalogEnvironmentRef.current === environmentId) return;
     modelCatalogEnvironmentRef.current = environmentId;
     modelCatalogRequestsRef.current.clear();
+    modelCatalogInFlightRef.current.clear();
     modelCatalogRetriedRef.current.clear();
     setModels([]);
   }, [environmentId]);
@@ -552,8 +554,10 @@ export function UnassignedNativeAgentComposer({
     if (modelCatalogRequestsRef.current.has(requestKey)) return;
     const request = getNativeAgentModelCatalog(environmentId, ensureAgent);
     modelCatalogRequestsRef.current.set(requestKey, request);
+    modelCatalogInFlightRef.current.add(requestKey);
     void request
       .then((catalog) => {
+        modelCatalogInFlightRef.current.delete(requestKey);
         modelCatalogRetriedRef.current.delete(requestKey);
         // The backend has already normalized and durably cached these models.
         // Mirror its response even if this tab became inactive while first-use
@@ -582,6 +586,7 @@ export function UnassignedNativeAgentComposer({
         });
       })
       .catch((error) => {
+        modelCatalogInFlightRef.current.delete(requestKey);
         if (modelCatalogRequestsRef.current.get(requestKey) === request) {
           modelCatalogRequestsRef.current.delete(requestKey);
         }
@@ -602,24 +607,36 @@ export function UnassignedNativeAgentComposer({
       });
   }, [environmentId, modelCatalogRetryRevision, models, platform]);
   // A host that was not signed in when the picker first asked has nothing to
-  // list. Ask again when the user comes back to the window (typically after
-  // signing in elsewhere) or after Settings refreshes a catalogue; the backend
-  // rate-limits a signed-out host, and a picker that already has models does
-  // nothing.
+  // list. Focus is a useful retry signal for host probes after an external
+  // sign-in, but must not restart environment bridges (Cursor, Grok or Pi).
+  // An explicit Settings refresh may update any platform. Never invalidate a
+  // request that is still in flight.
   useEffect(() => {
-    const retryEmptyPlatform = () => {
+    const retryEmptyPlatform = (includeBridgeBacked: boolean) => {
       if (models.some((model) => model.platform === platform)) return;
-      modelCatalogRequestsRef.current.clear();
-      modelCatalogRetriedRef.current.clear();
+      if (
+        !includeBridgeBacked &&
+        platform !== "claude" &&
+        platform !== "codex" &&
+        platform !== "opencode"
+      ) {
+        return;
+      }
+      const requestKey = `${environmentId}:${platform}`;
+      if (modelCatalogInFlightRef.current.has(requestKey)) return;
+      modelCatalogRequestsRef.current.delete(requestKey);
+      modelCatalogRetriedRef.current.delete(requestKey);
       setModelCatalogRetryRevision((revision) => revision + 1);
     };
-    window.addEventListener("focus", retryEmptyPlatform);
-    window.addEventListener(MODEL_CATALOG_REFRESHED_EVENT, retryEmptyPlatform);
+    const retryHostOnFocus = () => retryEmptyPlatform(false);
+    const retryAfterRefresh = () => retryEmptyPlatform(true);
+    window.addEventListener("focus", retryHostOnFocus);
+    window.addEventListener(MODEL_CATALOG_REFRESHED_EVENT, retryAfterRefresh);
     return () => {
-      window.removeEventListener("focus", retryEmptyPlatform);
-      window.removeEventListener(MODEL_CATALOG_REFRESHED_EVENT, retryEmptyPlatform);
+      window.removeEventListener("focus", retryHostOnFocus);
+      window.removeEventListener(MODEL_CATALOG_REFRESHED_EVENT, retryAfterRefresh);
     };
-  }, [models, platform]);
+  }, [environmentId, models, platform]);
   const fileSearch = useFileSearch(containerId, worktreePath);
   const {
     isMenuOpen: fileMentionMenuOpen,

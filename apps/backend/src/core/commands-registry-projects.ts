@@ -91,6 +91,27 @@ export function firstUseCatalogFetchTimeoutMs(deadline: number, now = Date.now()
   return Math.max(1_000, deadline - now);
 }
 
+/** Wait for a host probe only while the picker still has first-use budget. */
+async function waitForFirstUseSeed(
+  seed: Promise<boolean>,
+  deadline: number,
+): Promise<boolean | undefined> {
+  const remaining = Math.max(0, deadline - Date.now());
+  if (remaining === 0) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      seed,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), remaining);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function effortLabel(effort: string): string {
   if (effort === "xhigh") return "Extra high";
   return effort.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase());
@@ -587,9 +608,32 @@ export function registerProjectCommands(
       const openCodeModelProviders = normalizeOpenCodeModelProviders(
         config.global.openCodeModelProviders,
       );
-      const openCodeSnapshot = qualified.has("opencode")
+      let openCodeSnapshot = qualified.has("opencode")
         ? await storage.getOpenCodeModelCatalog(projectId)
         : null;
+      let coordinatorSeedFailed = false;
+      const hostSeeded =
+        ensureAgent === "claude" || ensureAgent === "codex" || ensureAgent === "opencode";
+      const alreadyCatalogued =
+        ensureAgent === "opencode"
+          ? Boolean(openCodeSnapshot?.models.length)
+          : ensureAgent === "claude" || ensureAgent === "codex"
+            ? Boolean(cache[ensureAgent]?.models.length)
+            : false;
+      if (hostSeeded && qualified.has(ensureAgent) && !alreadyCatalogued) {
+        const deadline = Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
+        const seeded = await waitForFirstUseSeed(
+          seedHostModelCatalogIfMissing(context, ensureAgent, refreshHostModelCatalog, {
+            projectId,
+          }),
+          deadline,
+        );
+        coordinatorSeedFailed = seeded !== true;
+        cache = await storage.getAgentModelCatalogCache();
+        if (ensureAgent === "opencode") {
+          openCodeSnapshot = await storage.getOpenCodeModelCatalog(projectId);
+        }
+      }
       const openCodeModels = (openCodeSnapshot?.models ?? []).filter((model) =>
         isSelectableOpenCodeProvider(model.provider, openCodeModelProviders),
       );
@@ -612,7 +656,9 @@ export function registerProjectCommands(
         models: coordinatorModels,
         status: coordinatorModels.some((model) => model.platform === ensureAgent)
           ? ("ready" as const)
-          : ("empty" as const),
+          : coordinatorSeedFailed
+            ? ("failed" as const)
+            : ("empty" as const),
       };
     }
     // Bounds the extra work a first-use read may add, so the model picker
@@ -620,6 +666,33 @@ export function registerProjectCommands(
     // first-use branch consumes it; a read served from the durable cache is
     // unaffected.
     let firstUseDeadline: number | null = null;
+    const config = await storage.loadConfig();
+    const openCodeModelProviders = normalizeOpenCodeModelProviders(
+      config.global.openCodeModelProviders,
+    );
+    let openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
+    const runningOpenCodeBridge =
+      environment.environmentType === "local"
+        ? await peekLocalAgentBridge(environment.id, context, "opencode")
+        : environment.containerId
+          ? await peekContainerAgentBridge(environment.containerId, "opencode")
+          : null;
+    const openCodeCatalogInput = {
+      environmentId: id,
+      agent: "opencode" as const,
+      logicalSessionKey: `model-catalog:${id}`,
+    };
+    const liveOpenCodeModels =
+      context.nativeAgents && runningOpenCodeBridge
+        ? await context.nativeAgents.listModelCatalogForCache(openCodeCatalogInput).catch(() => [])
+        : [];
+    // Read after the raw catalogue, whose read reports connectivity too.
+    const liveConnectedProviderIds =
+      context.nativeAgents && liveOpenCodeModels.length > 0
+        ? await context.nativeAgents
+            .connectedModelProviders(openCodeCatalogInput)
+            .catch(() => undefined)
+        : undefined;
     // Claude, Codex and OpenCode are not seeded through a per-environment
     // bridge here: Claude and Codex catalogues are host-wide, and OpenCode's is
     // cached per project from the same host-level probe. A fresh installation
@@ -629,15 +702,28 @@ export function registerProjectCommands(
     let seedFailed = false;
     const hostSeeded =
       ensureAgent === "claude" || ensureAgent === "codex" || ensureAgent === "opencode";
-    if (hostSeeded) {
-      seedFailed = !(await seedHostModelCatalogIfMissing(
-        context,
-        ensureAgent,
-        refreshHostModelCatalog,
-        { projectId: environment.projectId },
-      ));
+    const hostModelsAlreadyAvailable =
+      ensureAgent === "claude"
+        ? Boolean(environment.claudeModelCatalog?.models.length || cache.claude?.models.length)
+        : ensureAgent === "codex"
+          ? Boolean(cache.codex?.models.length)
+          : ensureAgent === "opencode"
+            ? Boolean(openCodeSnapshot?.models.length || liveOpenCodeModels.length)
+            : false;
+    if (hostSeeded && !hostModelsAlreadyAvailable) {
+      firstUseDeadline = Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
+      const seeded = await waitForFirstUseSeed(
+        seedHostModelCatalogIfMissing(context, ensureAgent, refreshHostModelCatalog, {
+          projectId: environment.projectId,
+        }),
+        firstUseDeadline,
+      );
+      seedFailed = seeded !== true;
       cache = await storage.getAgentModelCatalogCache();
-    } else if (ensureAgent && !cache[ensureAgent]?.models.length) {
+      if (ensureAgent === "opencode") {
+        openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
+      }
+    } else if (!hostSeeded && ensureAgent && !cache[ensureAgent]?.models.length) {
       // The empty-tab picker is the first consumer on a fresh installation, so
       // there may be neither a live bridge nor a durable last-known-good list.
       // Start only the platform the user is trying to select; eagerly starting
@@ -688,33 +774,6 @@ export function registerProjectCommands(
     // The live catalogue is already filtered by the provider, but a cache
     // written before the allowlist changed is not. Filter here too so the
     // renderer never receives a provider the user excluded.
-    const config = await storage.loadConfig();
-    const openCodeModelProviders = normalizeOpenCodeModelProviders(
-      config.global.openCodeModelProviders,
-    );
-    const openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
-    const runningOpenCodeBridge =
-      environment.environmentType === "local"
-        ? await peekLocalAgentBridge(environment.id, context, "opencode")
-        : environment.containerId
-          ? await peekContainerAgentBridge(environment.containerId, "opencode")
-          : null;
-    const openCodeCatalogInput = {
-      environmentId: id,
-      agent: "opencode" as const,
-      logicalSessionKey: `model-catalog:${id}`,
-    };
-    const liveOpenCodeModels =
-      context.nativeAgents && runningOpenCodeBridge
-        ? await context.nativeAgents.listModelCatalogForCache(openCodeCatalogInput).catch(() => [])
-        : [];
-    // Read after the raw catalogue, whose read reports connectivity too.
-    const liveConnectedProviderIds =
-      context.nativeAgents && liveOpenCodeModels.length > 0
-        ? await context.nativeAgents
-            .connectedModelProviders(openCodeCatalogInput)
-            .catch(() => undefined)
-        : undefined;
     // A live report is authoritative, so a provider it omits is not offered
     // at all. Without one, the report persisted with the durable catalogue may
     // be stale — the user can have signed in since — so its disconnected

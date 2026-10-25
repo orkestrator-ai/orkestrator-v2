@@ -16,6 +16,7 @@ import {
   COORDINATOR_DELEGATION_PRESENTATION,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { BackendRuntime } from "./backend-runtime.js";
+import { __testing as __seedTesting } from "./host-model-catalog-seed.js";
 
 describe("coordinator command registry", () => {
   let root: string;
@@ -206,6 +207,50 @@ describe("coordinator command registry", () => {
         context,
       ),
     ).rejects.toThrow("coordinator conversation is unavailable");
+  });
+
+  test("seeds a project-scoped OpenCode catalogue for an unassigned coordinator", async () => {
+    __seedTesting.reset();
+    const project = await storage.addProject(createProject("remote", checkout));
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({
+      ...config.global,
+      enabledAgentPlatforms: ["opencode"],
+      coordinatorProviderTiers: "provider-configured",
+      openCodeModelProviders: ["openai"],
+    });
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+    const refresh = mock(async (_context: CommandContext, agent: string) => {
+      expect(agent).toBe("opencode");
+      return {
+        agent: "opencode" as const,
+        models: [
+          {
+            platform: "opencode" as const,
+            id: "openai/gpt-5.4",
+            label: "GPT-5.4",
+            providerLabel: "OpenAI",
+          },
+        ],
+      };
+    });
+    commands = createCommandRegistry({ modelCatalogRefresh: refresh as never });
+
+    const result = (await commands.get("get_native_agent_model_catalog")!(
+      { environmentId, ensureAgent: "opencode" },
+      context,
+    )) as { models: { id: string; platform: string }[]; status: string };
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(
+      (await storage.getOpenCodeModelCatalog(project.id))?.models.map((model) => model.id),
+    ).toEqual(["openai/gpt-5.4"]);
+    expect(result).toMatchObject({ status: "ready" });
+    expect(result.models).toContainEqual(
+      expect.objectContaining({ id: "openai/gpt-5.4", platform: "opencode" }),
+    );
   });
 
   test("rejects invalid coordinator model-catalogue states", async () => {

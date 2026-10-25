@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { CommandContext } from "./commands-context.js";
 import {
   __testing,
@@ -74,6 +74,54 @@ describe("seedHostModelCatalogIfMissing", () => {
     now += HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS;
     await seedHostModelCatalogIfMissing(context, "codex", refresh as never, { now: clock });
     expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  test("reports a durable-cache read failure without rejecting", async () => {
+    const { context } = fakeContext();
+    context.storage.getAgentModelCatalogCache = mock(async () => {
+      throw new Error("cache read failed");
+    });
+    const refresh = mock(async () => ({ agent: "claude" as const, models: [claudeModel] }));
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(
+        seedHostModelCatalogIfMissing(context, "claude", refresh as never),
+      ).resolves.toBe(false);
+      expect(refresh).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("queues a fresh seed when sign-in resets an older in-flight attempt", async () => {
+    const { context, cacheAgentModelCatalog } = fakeContext();
+    let rejectOld!: (error: Error) => void;
+    let oldStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      oldStarted = resolve;
+    });
+    let attempts = 0;
+    const refresh = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        oldStarted();
+        return await new Promise<never>((_resolve, reject) => {
+          rejectOld = reject;
+        });
+      }
+      return { agent: "claude" as const, models: [claudeModel] };
+    });
+
+    const staleSeed = seedHostModelCatalogIfMissing(context, "claude", refresh as never);
+    await started;
+    resetHostModelCatalogSeedCooldown("claude");
+    const authenticatedSeed = seedHostModelCatalogIfMissing(context, "claude", refresh as never);
+    rejectOld(new Error("old credentials"));
+
+    await expect(staleSeed).resolves.toBe(false);
+    await expect(authenticatedSeed).resolves.toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(cacheAgentModelCatalog).toHaveBeenCalledWith("claude", [claudeModel]);
   });
 
   test("seeds every enabled platform that has no catalogue and skips the rest", async () => {

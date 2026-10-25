@@ -54,6 +54,7 @@ import { dispatchResourceChange } from "@/lib/resource-sync";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { GLOBAL_SETTINGS_REQUEST_EVENT } from "@/lib/settings-navigation";
+import { MODEL_CATALOG_REFRESHED_EVENT } from "@/components/settings/agent/refresh-model-catalog";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
 import { CLAUDE_AUTH_LOGIN_COMMAND, CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND } from "@/lib/claude-auth";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -140,6 +141,9 @@ const getNativeAgentModelCatalogMock = mock(
     _environmentId: string,
     _ensureAgent?: "cursor" | "grok" | "pi",
   ): ReturnType<typeof realBackend.getNativeAgentModelCatalog> => [],
+);
+const getAgentModelCatalogCacheMock = mock(
+  async (): ReturnType<typeof realBackend.getAgentModelCatalogCache> => ({ schemaVersion: 1 }),
 );
 const awaitBridgeReadyMock = mock(async () => ({
   status: "ready" as const,
@@ -369,6 +373,7 @@ mock.module("@/hooks/useNativeComposeBarPaste", () => ({
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getNativeAgentModelCatalog: getNativeAgentModelCatalogMock,
+  getAgentModelCatalogCache: getAgentModelCatalogCacheMock,
   awaitBridgeReady: awaitBridgeReadyMock,
   adoptNativeAgentSession: adoptNativeAgentSessionMock,
   forkNativeAgentSession: forkNativeAgentSessionMock,
@@ -445,6 +450,8 @@ afterEach(() => {
   flushPaneLayoutNowMock.mockClear();
   getNativeAgentModelCatalogMock.mockReset();
   getNativeAgentModelCatalogMock.mockImplementation(async () => []);
+  getAgentModelCatalogCacheMock.mockReset();
+  getAgentModelCatalogCacheMock.mockImplementation(async () => ({ schemaVersion: 1 }));
   awaitBridgeReadyMock.mockReset();
   awaitBridgeReadyMock.mockImplementation(async () => ({
     status: "ready" as const,
@@ -3333,6 +3340,97 @@ describe("AgentNativeTab", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
     expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not restart an empty bridge-backed catalogue on window focus", async () => {
+    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["grok"] });
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-grok-focus"), { platform: "grok" });
+    getNativeAgentModelCatalogMock.mockImplementation(async () => []);
+
+    render(<AgentNativeTab tabId="tab-grok-focus" data={{ environmentId: "env-1" }} isActive />);
+    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+
+    expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not invalidate a catalogue request while it is still in flight", async () => {
+    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["opencode"] });
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-opencode-in-flight"), {
+        platform: "opencode",
+      });
+    let resolveRequest!: (
+      models: Awaited<ReturnType<typeof realBackend.getNativeAgentModelCatalog>>,
+    ) => void;
+    getNativeAgentModelCatalogMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRequest = resolve;
+        }),
+    );
+
+    render(
+      <AgentNativeTab tabId="tab-opencode-in-flight" data={{ environmentId: "env-1" }} isActive />,
+    );
+    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event(MODEL_CATALOG_REFRESHED_EVENT));
+    });
+    expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolveRequest([]));
+  });
+
+  test("retries after a catalogue refresh, hydrates the cache, and stops once models arrive", async () => {
+    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["opencode"] });
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-opencode-refresh"), {
+        platform: "opencode",
+      });
+    let attempts = 0;
+    getNativeAgentModelCatalogMock.mockImplementation(async () => {
+      attempts += 1;
+      return attempts === 1
+        ? []
+        : [
+            {
+              id: "openai/gpt-5.4",
+              platform: "opencode",
+              label: "GPT-5.4",
+              providerLabel: "OpenAI",
+            },
+          ];
+    });
+
+    render(
+      <AgentNativeTab tabId="tab-opencode-refresh" data={{ environmentId: "env-1" }} isActive />,
+    );
+    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1));
+
+    act(() => window.dispatchEvent(new Event(MODEL_CATALOG_REFRESHED_EVENT)));
+    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTitle(/Choose model/).textContent).toContain("GPT-5.4"));
+    await waitFor(() => expect(getAgentModelCatalogCacheMock).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event(MODEL_CATALOG_REFRESHED_EVENT));
+    });
+    await act(async () => Promise.resolve());
+    expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(2);
   });
 
   test("drops attachments the newly selected platform cannot receive", async () => {

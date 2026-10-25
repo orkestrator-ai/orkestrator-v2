@@ -14,7 +14,8 @@ import type {
 export const HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS = 30_000;
 
 const failedAt = new Map<string, number>();
-const flights = new Map<string, Promise<boolean>>();
+const generations = new Map<string, number>();
+const flights = new Map<string, { generation: number; promise: Promise<boolean> }>();
 
 /** OpenCode's catalogue is per project; every other platform's is host-wide. */
 function seedKey(agent: AgentPlatform, projectId?: string): string {
@@ -23,8 +24,12 @@ function seedKey(agent: AgentPlatform, projectId?: string): string {
 
 /** Forget recorded failures for a platform, for example because the user just signed in. */
 export function resetHostModelCatalogSeedCooldown(agent: AgentPlatform): void {
-  for (const key of Array.from(failedAt.keys())) {
-    if (key === agent || key.startsWith(`${agent}:`)) failedAt.delete(key);
+  const keys = new Set([...failedAt.keys(), ...flights.keys(), agent]);
+  for (const key of keys) {
+    if (key === agent || key.startsWith(`${agent}:`)) {
+      failedAt.delete(key);
+      generations.set(key, (generations.get(key) ?? 0) + 1);
+    }
   }
 }
 
@@ -92,21 +97,28 @@ export function seedHostModelCatalogIfMissing(
 ): Promise<boolean> {
   const { projectId, now = Date.now } = options;
   const key = seedKey(agent, projectId);
+  const generation = generations.get(key) ?? 0;
   const existing = flights.get(key);
-  if (existing) return existing;
-  const flight = (async () => {
-    if (agent === "opencode" && !projectId) return false;
-    if (await hasCachedModels(context, agent, projectId)) return true;
-    const lastFailure = failedAt.get(key);
-    if (lastFailure !== undefined && now() - lastFailure < HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS) {
-      return false;
-    }
+  if (existing?.generation === generation) return existing.promise;
+
+  const run = async (): Promise<boolean> => {
     try {
+      if (agent === "opencode" && !projectId) return false;
+      if (await hasCachedModels(context, agent, projectId)) return true;
+      const lastFailure = failedAt.get(key);
+      if (
+        lastFailure !== undefined &&
+        now() - lastFailure < HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS
+      ) {
+        return false;
+      }
       await persistHostCatalog(context, await refresh(context, agent), projectId);
-      failedAt.delete(key);
+      if ((generations.get(key) ?? 0) === generation) failedAt.delete(key);
       return true;
     } catch (error) {
-      failedAt.set(key, now());
+      // A sign-in may invalidate this attempt while its old credentials are
+      // still in use. Do not let that stale failure reinstate the cooldown.
+      if ((generations.get(key) ?? 0) === generation) failedAt.set(key, now());
       // The message is the bridge's own error text; it carries no credentials.
       console.warn(
         `[ElectronBackend] Could not download the ${agent} model catalogue yet:`,
@@ -114,10 +126,16 @@ export function seedHostModelCatalogIfMissing(
       );
       return false;
     }
-  })().finally(() => {
-    if (flights.get(key) === flight) flights.delete(key);
+  };
+
+  // A reset during an in-flight pre-login probe queues exactly one fresh
+  // attempt behind it. This avoids concurrent writers while ensuring the
+  // authenticated request is not absorbed by the stale flight.
+  const started = existing ? existing.promise.then(run, run) : run();
+  const flight = started.finally(() => {
+    if (flights.get(key)?.promise === flight) flights.delete(key);
   });
-  flights.set(key, flight);
+  flights.set(key, { generation, promise: flight });
   return flight;
 }
 
@@ -144,6 +162,7 @@ export async function seedEnabledHostModelCatalogs(
 export const __testing = {
   reset(): void {
     failedAt.clear();
+    generations.clear();
     flights.clear();
   },
 };

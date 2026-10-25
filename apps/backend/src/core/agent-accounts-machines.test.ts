@@ -53,6 +53,8 @@ test("asks each enabled machine and keeps going when one cannot answer", async (
     enabled: true,
   });
   const asked: string[] = [];
+  await setPreferredAgentIdentity(context({}), "claude", "work@example.com");
+  await setPreferredAgentIdentity(context({}), "codex", "code@example.com");
   const result = await listMachineAgentAccounts(
     context({
       nodes: {
@@ -87,6 +89,7 @@ test("asks each enabled machine and keeps going when one cannot answer", async (
     }),
     { timeoutMs: 20, readSignIns },
   );
+  expect(result.preferred).toEqual({ claude: "work@example.com", codex: "code@example.com" });
   expect(asked.sort()).toEqual([
     "node-a:list_agent_accounts",
     "node-a:read_host_agent_sign_ins",

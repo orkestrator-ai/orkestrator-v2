@@ -251,6 +251,12 @@ model).
     readiness measurement and manifest output, and answered-card polling
     retries, deadline and empty/new pending interactions. These tests use
     controlled Docker/backend responses and do not qualify live providers.
+  - Static checks, focused regressions and test ownership checks passed.
+    The repository suite exited 1 on the existing terminal-history pagination
+    timeout (5001.99 ms); its unchanged complete owner passed alone in 7.0 s.
+    The backend reported 11433 passed, 89 skipped, one failed and one error;
+    all other packages and groups passed. Recurrence and artifacts are in
+    [flake 0213](../../tests/flaky-tests/backend-services-and-tooling/0213-terminal-history-aggregate-timeout.md#cli-qualification-review-validation--2026-10-25).
   - No provider turns or browser card checks were repeated for these
     harness and documentation fixes.
 

@@ -1,9 +1,12 @@
 #!/bin/bash
-# External egress prototype (0018 item 3): a gateway container owns the
+# External egress prototype (0018 item 1): a gateway container owns the
 # environment's network namespace and runs the unchanged init-firewall.sh
 # with NET_ADMIN; the workload joins that namespace (`--network
-# container:<gateway>`) with no added capability. Nothing in the backend
-# creates this topology yet; this script only proves the path on one daemon.
+# container:<gateway>`) with no added capability. The backend now creates this
+# topology itself (apps/backend/src/core/egress-gateway.ts, with the image's
+# orkestrator-egress-gateway entrypoint), and the live firewall, network,
+# readiness and replacement suites qualify that path. This script keeps the
+# 2026-10-22 prototype's own policy recording and checks.
 #
 #   scripts/qualify-egress-gateway.sh [image]
 #
@@ -132,10 +135,10 @@ for defaults in absent empty; do
     done
     check "$defaults ALLOWED_DOMAINS boots with packaged defaults" ok \
         "$(docker exec "$boot" bash -c 'jq -e ".state == \"applied\"" /run/orkestrator-firewall/firewall.json >/dev/null && curl -fsS -o /dev/null --max-time 8 https://registry.npmjs.org/' && echo ok || echo blocked)"
-    # Positive control: with NET_ADMIN and valid policy, the identical sudo
+    # Positive control: with NET_ADMIN and valid policy, the identical root
     # init command must succeed. It runs in its own namespace.
-    check "$defaults privileged sudo init control" ok \
-        "$(docker exec -u node "$boot" sudo -n /usr/local/bin/init-firewall.sh >/dev/null 2>&1 && echo ok || echo blocked)"
+    check "$defaults privileged root init control" ok \
+        "$(docker exec -u root "$boot" /usr/local/bin/init-firewall.sh >/dev/null 2>&1 && echo ok || echo blocked)"
     docker stop "$boot" >/dev/null
 done
 
@@ -173,14 +176,17 @@ check "workload root sets OUTPUT to ACCEPT" blocked "$(probe root 'iptables -P O
 check "workload root flushes the rules" blocked "$(probe root 'iptables -F')"
 check "workload root flushes the allowlist" blocked "$(probe root 'ipset flush allowed-domains')"
 rules_before=$(rules_digest)
-# Require an iptables permission diagnostic as well as nonzero exit. Missing
-# policy, sudo denial, or other setup errors must not count as tamper resistance.
-check "node sudo init reaches iptables and is denied" ok "$(probe node '
-    sudo -n /usr/local/bin/init-firewall.sh > /tmp/tamper.log 2>&1
+# node has no sudo grant for the firewall: the root entrypoint runs it.
+check "node has no sudo grant for init" blocked "$(probe node 'sudo -n /usr/local/bin/init-firewall.sh')"
+# Root in the workload reaches iptables and is denied. Require an iptables
+# permission diagnostic as well as nonzero exit: missing policy or other setup
+# errors must not count as tamper resistance.
+check "workload root init reaches iptables and is denied" ok "$(probe root '
+    /usr/local/bin/init-firewall.sh > /tmp/tamper.log 2>&1
     code=$?
     [ "$code" -ne 0 ] && grep -Eiq "iptables.*(Permission denied|Operation not permitted|must be root)|Permission denied.*(root|iptables)" /tmp/tamper.log
 ')"
-check "gateway rules unchanged after sudo init" "$rules_before" "$(rules_digest)"
+check "gateway rules unchanged after workload init" "$rules_before" "$(rules_digest)"
 check "a domain off the list after those attempts" blocked "$(probe node 'curl -sS -o /dev/null --max-time 6 https://pypi.org/')"
 
 docker exec -u root "$GW" /usr/local/bin/update-firewall.sh --add pypi.org >/dev/null 2>&1

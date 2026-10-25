@@ -15,6 +15,7 @@ import {
 } from "./constants.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
+import { removeRuntimeContainer } from "./egress-gateway.js";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import {
@@ -273,9 +274,7 @@ export async function discardRecoveryCopy(
         ) {
           keptContainer = group.runtime.containerId;
         } else {
-          await runCommand("docker", ["rm", "-f", group.runtime.containerId], {
-            timeoutMs: 60_000,
-          }).catch((error: unknown) => {
+          await removeRuntimeContainer(group.runtime.containerId, owner).catch((error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);
             if (!/no such (object|container)/i.test(message)) {
               keptContainer = group.runtime!.containerId;

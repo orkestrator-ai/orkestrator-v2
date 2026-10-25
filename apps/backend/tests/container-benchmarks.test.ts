@@ -21,6 +21,7 @@ import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
+import { startRuntime } from "./container-live-start";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_CONTAINER_BENCHMARKS === "1" && IMAGE.length > 0;
@@ -189,7 +190,7 @@ async function freshRuntime(id: string, mode: "restricted" | "full") {
   phases.create = create.ms;
   const containerId = create.value;
   const boot = await timed(async () => {
-    await docker(["start", containerId]);
+    await startRuntime(containerId);
     await waitForContainerBoot(containerId);
   });
   phases.startToReady = boot.ms;
@@ -298,7 +299,7 @@ describe("container baselines", () => {
         });
         warm.stop.push(stop.ms);
         const start = await timed(async () => {
-          await docker(["start", containerId]);
+          await startRuntime(containerId);
           await waitForContainerBoot(containerId);
         });
         warm.start.push(start.ms);

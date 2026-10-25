@@ -1,3 +1,4 @@
+import { parseNetworkModeOwner } from "./container-network-owner.js";
 import { connect } from "node:net";
 
 import {
@@ -58,6 +59,8 @@ export interface ContainerInspection {
   owner: string;
   environmentId: string;
   ports: Record<string, Array<{ HostIp?: string; HostPort?: string }> | null>;
+  /** The egress gateway whose namespace (and published ports) it shares. */
+  networkOwner?: string | null;
 }
 
 /** Docker's container API, CLI, and managed-bridge ports, plus well-known daemon ports. */
@@ -77,11 +80,11 @@ const CONTAINER_AGENT_PORTS = new Set([
 ]);
 
 const INSPECT_FORMAT =
-  '{{.Id}}\t{{.State.Status}}\t{{index .Config.Labels "orkestrator-owner"}}\t{{index .Config.Labels "environment-id"}}\t{{json .NetworkSettings.Ports}}';
+  '{{.Id}}\t{{.State.Status}}\t{{index .Config.Labels "orkestrator-owner"}}\t{{index .Config.Labels "environment-id"}}\t{{json .NetworkSettings.Ports}}\t{{.HostConfig.NetworkMode}}';
 
 export function parseContainerInspection(stdout: string): ContainerInspection | null {
   const line = stdout.trim().split("\n")[0] ?? "";
-  const [id, status, owner, environmentId, portsJson] = line.split("\t");
+  const [id, status, owner, environmentId, portsJson, networkMode = ""] = line.split("\t");
   if (!id || !status || portsJson === undefined) return null;
   let ports: ContainerInspection["ports"] = {};
   try {
@@ -97,6 +100,7 @@ export function parseContainerInspection(stdout: string): ContainerInspection | 
     owner: owner === "<no value>" ? "" : (owner ?? ""),
     environmentId: environmentId === "<no value>" ? "" : (environmentId ?? ""),
     ports,
+    networkOwner: parseNetworkModeOwner(networkMode),
   };
 }
 
@@ -374,10 +378,33 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
         timeoutMs: this.inspectTimeoutMs,
         signal,
       })
-      .then(({ stdout }) => {
+      .then(async ({ stdout }) => {
         const parsed = parseContainerInspection(stdout);
         if (!parsed) throw new Error("Unrecognized docker inspect output");
-        return parsed;
+        if (!parsed.networkOwner) return parsed;
+        // A runtime behind an egress gateway publishes through the gateway,
+        // which owns the namespace; ownership stays the runtime's.
+        const owner = await this.options.runDocker(
+          [
+            "inspect",
+            "--type",
+            "container",
+            "--format",
+            "{{json .NetworkSettings.Ports}}",
+            parsed.networkOwner,
+          ],
+          { timeoutMs: this.inspectTimeoutMs, signal },
+        );
+        let ports: ContainerInspection["ports"] = {};
+        try {
+          const value: unknown = JSON.parse(owner.stdout.trim() || "{}");
+          if (value && typeof value === "object" && !Array.isArray(value)) {
+            ports = value as ContainerInspection["ports"];
+          }
+        } catch {
+          throw new Error("Unrecognized docker inspect output");
+        }
+        return { ...parsed, ports };
       })
       .catch((error: unknown): "missing" => {
         const message = error instanceof Error ? error.message : String(error);

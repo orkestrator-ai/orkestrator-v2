@@ -506,6 +506,7 @@ describe("environment cleanup steps", () => {
     const calls: string[][] = [];
     const run: CleanupCommandRunner = async (command, args) => {
       calls.push([command, ...args]);
+      if (args[0] === "ps") return { stdout: "", stderr: "" };
       throw new Error("Error response from daemon: No such container: c1");
     };
     expect(
@@ -516,7 +517,43 @@ describe("environment cleanup steps", () => {
         { run, containerOwnershipVerified: true },
       ),
     ).toBe(true);
-    expect(calls).toEqual([["docker", "rm", "-f", "c1"]]);
+    expect(calls[0]).toEqual(["docker", "rm", "-f", "c1"]);
+    // Then the environment's egress gateways are listed by their own labels.
+    expect(calls.slice(1).map((call) => call.slice(0, 3))).toEqual([["docker", "ps", "-a"]]);
+  });
+
+  test("removes every egress gateway of the environment with its runtime", async () => {
+    const { context, dataDir } = await cleanupContext();
+    const owner = dockerOwnerNamespace(dataDir);
+    const calls: string[][] = [];
+    const gateway = "a".repeat(64);
+    const run: CleanupCommandRunner = async (command, args) => {
+      calls.push([command, ...args]);
+      if (args[0] === "ps") {
+        return {
+          // The second row claims the app label as well and is never removed.
+          stdout: `${gateway}\tork-x\tenv-1\t2026-10-25 10:00:00 +0000 UTC\t\n${"b".repeat(64)}\tork-y\tenv-1\t2026-10-25 10:00:00 +0000 UTC\torkestrator-v2\n`,
+          stderr: "",
+        };
+      }
+      return { stdout: "", stderr: "" };
+    };
+    expect(
+      await runEnvironmentCleanupStep(
+        entry({ containerId: "c1", pending: ["container"] }),
+        "container",
+        context,
+        { run, containerOwnershipVerified: true },
+      ),
+    ).toBe(true);
+    const list = calls.find((call) => call[1] === "ps") ?? [];
+    expect(list).toContain(`label=orkestrator-owner=${owner}`);
+    expect(list).toContain("label=orkestrator-resource-role=egress-gateway");
+    expect(list).toContain(`label=orkestrator-egress-environment=${entry({}).environmentId}`);
+    expect(calls.filter((call) => call[1] === "rm")).toEqual([
+      ["docker", "rm", "-f", "c1"],
+      ["docker", "rm", "-f", gateway],
+    ]);
   });
 
   test("keeps the container step pending when the daemon fails", async () => {

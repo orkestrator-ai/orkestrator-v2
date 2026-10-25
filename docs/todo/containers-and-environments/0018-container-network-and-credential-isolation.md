@@ -2,16 +2,17 @@
 
 Checked against `main` at `2459b05c` (2026-10-15); Claude credentials
 against `688f9f69` (2026-10-21); default allowlists and the external egress
-prototype against `b83ae534` (2026-10-22).
+prototype against `b83ae534` (2026-10-22); the production egress gateway and
+the credential-delivery items against branch
+`todo-0018-container-isolation-e228f2a04b8e` (2026-10-25).
 
-Restricted mode limits where a container can connect with an in-container
-IPv4 ipset firewall. Root sets it up through narrow sudo grants, and the
-workload needs `NET_ADMIN` to have it. Containers now receive access-only
-copies of the host's rotating OAuth logins. The remaining work qualifies
-renewal delivery and moves enforcement outside the workload: a prototype has
-proved the path on Docker Desktop, and the backend does not use it yet. Only
-once restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
-`no-new-privileges` be considered.
+Restricted mode limits where a container can connect with an IPv4 ipset
+firewall. Since 2026-10-25 a restricted runtime from a current image is
+enforced from outside: an egress gateway owns its network namespace and the
+runtime holds no `NET_ADMIN`. Containers receive access-only copies of the
+host's rotating OAuth logins, and renewals now reach running containers. What
+remains is live qualification: the gateway on Linux Engine and rootless, and
+renewal delivery with real, fresh provider logins.
 
 ## Current state
 
@@ -37,19 +38,22 @@ once restricted containers no longer need `NET_ADMIN` can the sudo grants shrink
   - `environmentNetworkPolicy` reports `applied`, `pending` or
     `rebuild-required`. A mode change (restricted to full or back) is
     always `rebuild-required`.
-- `NET_ADMIN`: `createDockerContainer` (`apps/backend/src/core/commands-containers.ts`)
-  adds `--cap-add NET_ADMIN` to every container that is not in full mode,
-  because the firewall needs it. The capability is container-wide, so a root
-  terminal (`docker exec --user orkroot`) in restricted mode can change the
-  firewall. `AGENTS.md` documents this as a product choice. Full-mode
-  containers do not get `NET_ADMIN`.
-  `scripts/qualify-egress-gateway.sh` (2026-10-22) shows that a gateway owning
-  the namespace can enforce the same firewall with no workload `NET_ADMIN`;
-  nothing in the backend uses it yet (item 1).
-- sudo: `docker/Dockerfile` writes `/etc/sudoers.d/node-firewall` with three
-  `NOPASSWD` grants for `node`: `network-policy-entrypoint.sh *`,
-  `init-firewall.sh` and `run-root-setup.sh *` (the last only acts when the
-  recorded mode is `full`). `node` has no sudoers path to `orkroot`.
+- Egress gateway (2026-10-25, item 1): a restricted runtime whose image
+  declares `egress-gateway=1` joins the namespace of `<runtime>-egress`
+  (`apps/backend/src/core/egress-gateway.ts`, `docker/orkestrator-egress-gateway.sh`),
+  which holds `NET_ADMIN`, the environment network, the published ports and
+  the firewall. The runtime has no `NET_ADMIN`, so a root terminal cannot
+  change the rules. [Container lifecycle](../../architecture/container-lifecycle.md),
+  "Egress gateway", describes creation, the start gate, boot verification,
+  stop, removal and the orphan sweep. Older images and
+  `ORKESTRATOR_EGRESS=in-container` (rollout cap) keep the in-container
+  firewall with `NET_ADMIN`, where a root terminal can still change it;
+  full-mode containers get neither.
+- sudo: `docker/Dockerfile` writes `/etc/sudoers.d/node-firewall` with two
+  `NOPASSWD` grants for `node`: `network-policy-entrypoint.sh *` (which now
+  runs the firewall step as root before dropping privileges) and
+  `run-root-setup.sh *` (only acts when the recorded mode is `full`). The
+  `init-firewall.sh` grant is gone. `node` has no sudoers path to `orkroot`.
 - One canonical default allowlist (2026-10-22). `DEFAULT_ALLOWED_DOMAINS`,
   `AGENT_NETWORK_DOMAINS_BY_PLATFORM` and `requiredAgentNetworkDomains` live in
   `packages/protocol/src/network-allowlist.ts`; `apps/backend/src/core/constants.ts`
@@ -192,80 +196,118 @@ once restricted containers no longer need `NET_ADMIN` can the sudo grants shrink
 
 ### Code
 
-1. External egress enforcement (prototype done 2026-10-22; production wiring
-   open). A gateway container owns the environment's network namespace with
-   `NET_ADMIN` and runs the unchanged `init-firewall.sh`; the workload joins
-   it (`--network container:<gateway>`) with no added capability.
-   `scripts/qualify-egress-gateway.sh` proves the path on Docker Desktop
-   (results under Qualification). What remains:
-   - Backend wiring in `createDockerContainer` and the lifecycle: create and
-     start the gateway first; publish ports on the gateway, not the workload;
-     run `update-firewall.sh` (live edits, `--host-ports`) and the firewall
-     status read in the gateway; include the gateway in rebuild, recreate,
-     stop, deletion and the cleanup ledger; reconcile a gateway restart by
-     restarting the workload.
-   - Gate the workload's start on the gateway's firewall. A restarted
-     gateway's new namespace has no rules until its init finishes, so a
-     workload that joins in that window is unrestricted. The backend must
-     start the workload only after the gateway reports `applied`, and the
-     workload entrypoint should refuse to start agents until it observes a
-     blocked probe. Docker's own start order after a daemon restart
-     (restart policies) is unverified.
-   - A smaller gateway image (it only needs bash, iptables, ipset, dig, curl
-     and conntrack) instead of the 6 GB workload image, which is already
-     local and was used by the prototype.
-   - Then drop `--cap-add NET_ADMIN` from restricted workloads, remove the
-     `init-firewall.sh` sudo grant, and reconsider `no-new-privileges`.
-   - Qualify on Linux Engine and rootless (Desktop alone so far), including
-     IPv6 and sibling isolation.
+1. External egress enforcement. Done 2026-10-25 except its Linux Engine and
+   rootless qualification, which moved to Qualification below.
+   - [x] Backend wiring (2026-10-25). `createDockerContainer` creates the
+     gateway first and the runtime with `--network container:<gateway id>`.
+     Ports are published on the gateway; `update-firewall.sh` (live edits,
+     `--host-ports`) and the firewall status read run in the gateway
+     (`container-network-owner.ts`). Rebuild candidates get their own
+     gateway. Stop (`stopRuntimeContainer`), removal (`removeRuntimeContainer`
+     at every runtime removal), the deletion ledger
+     (`removeEnvironmentEgressGateways`) and a startup orphan sweep all handle
+     gateways. A runtime left on a restarted gateway's namespace is stopped
+     and started again. Evidence: `tests/egress-gateway.test.ts`,
+     `tests/docker-image.test.ts` ("joins its egress gateway"),
+     `environment-cleanup.test.ts`, `preview-target-resolver.test.ts`, and
+     the live runs under Qualification.
+   - [x] Start gate (2026-10-25). The backend starts the runtime only after
+     the gateway reports `applied` for its current boot; the gateway's `/run`
+     is a tmpfs, so no earlier report can be read. The runtime's root
+     entrypoint requires the gateway's rejection of `192.0.2.1:443` before
+     anything else runs (`egress-unverified` or `egress-gateway-unavailable`
+     otherwise). Docker refuses a runtime whose gateway is not running
+     (observed live). Runtimes have no restart policy, so Docker never starts
+     either container after a daemon restart; the backend's start path keeps
+     the order. A live daemon restart was not run (Qualification).
+   - [x] Gateway image (decided 2026-10-25): reuse the workload image rather
+     than build a smaller one. See "Assumptions and decisions".
+   - [x] `NET_ADMIN` dropped from gateway runtimes and the `init-firewall.sh`
+     sudo grant removed from the image (2026-10-25). The root entrypoint runs
+     the firewall step for every image. `no-new-privileges` was reconsidered
+     and stays off (see "Assumptions and decisions").
+   - [ ] Qualify on Linux Engine and rootless, including IPv6. Sibling
+     isolation passed on Docker Desktop (2026-10-25). See Qualification.
    A plain HTTP proxy was not pursued: it does not constrain direct sockets
    without network enforcement beside it.
-2. Optional: change mode in place (restricted to full and back) instead of
-   requiring a rebuild.
-3. Keep container MCP OAuth logins signed in (medium). Claude's `mcpOAuth`
-   entries now reach a container without refresh tokens, so a container's MCP
-   server login lapses with its access token unless the host refreshes it
-   first, which it only does when the host itself uses that server. Either
-   have the keeper refresh near-expiry MCP logins on the host too, or keep a
-   container-owned MCP login separate from the host's.
-4. Read the host Claude login once per keeper pass (low, measure first). Each
-   pass reads the active login (a `security` call on macOS) once to decide on
-   a host refresh and again per running container it syncs. Pass the one read
-   down if a host with many running containers shows it matters.
-5. Re-push access-only logins to running containers when the host's file
-   changes (medium). Grok, OpenCode and Pi copies are refreshed only at
-   container start and bridge start, so a bridge session that outlives the
-   access token (Anthropic about eight hours, xAI about six) signs out
-   mid-session even though the host has since refreshed. Watch the host's
-   `~/.grok/auth.json`, OpenCode `auth.json` and Pi `agent/auth.json` (or
-   poll their mtime) and push to every running container that is authorized
-   for the provider, through the same queue and fences as
-   `syncContainerLogin`. OpenCode and Pi re-read the file per request, so no
-   bridge restart is needed; check whether Grok does. Claude already uses
-   a keeper for renewal delivery; the same mechanism may be shared.
-
-6. Tell a container user how to recover a lapsed Codex login (medium).
-   When a container's access-only Codex login lapses, the tab now says
-   "You've been signed out of Codex. Sign in again to keep working.", and the
-   failed turn shows Codex's raw "workspace routing discovery unauthorized
-   (401)". For a container that imports the host login, the fix is to run
-   `codex` on the host and restart the environment, which restages the host's
-   current login. Signing in inside the container works only until the next
-   restart blanks that login's refresh token. Show the restart guidance for
-   containers whose Codex credentials come from the host, and say the same
-   for Grok.
-7. Decide whether a host sign-out reaches a container that never added an
-   account (medium). When the host's Codex or Grok login is missing or
-   expired, the restage stages nothing and the container keeps the
-   access-only copy it already had. If the host signed out deliberately, a
-   still-valid copy keeps working until it expires (Codex access tokens last
-   ten days from issue). A container that has used agent accounts now has its
-   copy removed at the next bridge start. Options: remove the copy on every
-   restage that stages nothing, or keep today's "leave it to expire"
-   behaviour and document it.
+2. [x] Change the network mode in place. Decided 2026-10-25 not to build it:
+   a mode change stays a rebuild. See "Assumptions and decisions".
+3. [x] Keep container MCP OAuth logins signed in (2026-10-25). A Claude push
+   now merges into the container's credentials file
+   (`buildMergeContainerClaudeCredentialCommand`) instead of replacing it.
+   An `mcpOAuth` entry whose refresh token the host was never seen to hold
+   (SHA-256 digests only, in memory, up to 8 per server for 128 servers) is
+   the container's own login and is kept. A stale host copy is replaced by
+   the host's access-only entry. The restart path already left an existing
+   file alone. Evidence: `agent-accounts-containers.test.ts` (payload has no
+   tokens; the merge script against real files; digest memory across a
+   rotation). A live MCP sign-in inside a container is owed (Qualification).
+4. [x] Read the host Claude login once per keeper pass (2026-10-25). The pass
+   hands its read (`handover`) to every container sync pinned to the same
+   account and login generation. A pass that refreshed reads once more,
+   after the refresh. Evidence: `container-claude-login-keeper.test.ts` (three
+   containers, one read).
+5. [x] Re-push access-only logins when the host file changes (2026-10-25).
+   `ContainerLoginFileWatcher` polls inode, size and mtime of the host Grok,
+   OpenCode and Pi files every 60 s. It runs only while the backend holds
+   the writer lease and is stopped at shutdown. On a change, including a
+   deletion, it pushes through `syncContainerLogin` (same queue and fences)
+   to every running container authorized for that provider. Polling, not
+   `fs.watch`: the CLIs replace the file by rename. Whether Grok re-reads
+   `auth.json` mid-session is unknown from code and docs; the push keeps the
+   file current for the bridge's readiness check and the next Grok process.
+   Evidence: `container-login-file-watcher.test.ts`. Live pickup is owed
+   (Qualification).
+6. [x] Lapsed Codex and Grok guidance (2026-10-25). For a containerized
+   environment whose credentials for that provider come from the host,
+   `containerSignInGuidance` replaces the sign-in message on the provider's
+   readiness snapshots. The message says to run `codex` (or `grok`) on the
+   host and restart the environment, and that signing in inside the
+   container lasts only until the next restart. It has its own wording when
+   an added Codex account is active. The `signIn` route is unchanged.
+   Evidence: `container-sign-in-guidance.test.ts`.
+7. [x] Host sign-out reaching a container (decided and built 2026-10-25). A
+   deliberate host sign-out removes the container's imported copy: a missing
+   host file, or one with no login. An expired host login leaves the copy,
+   which has lapsed too. Only imported copies (blank refresh token) go;
+   API keys and logins made inside the container are kept. For Codex this
+   happens at bridge start and terminal open
+   (`dropImportedCodexLoginAfterHostSignOut`); for Grok on the push.
+   Evidence: `agent-accounts-containers.test.ts` (reconcile matrix, drop
+   scripts against real files). See "Assumptions and decisions".
 
 ### Qualification
 
+- Egress gateway, production path, on Docker Desktop (done 2026-10-25).
+  Docker Desktop 4.96.3 (Engine 29.9.2, linux/arm64), image built from this
+  branch (`orkestrator-v2:q0018-egress`), private owner labels, everything
+  removed afterwards. Details are in
+  [container qualification](../../development/container-qualification.md#egress-gateway-on-docker-desktop-2026-10-25).
+  - Live firewall suite: passed behind the gateway and again with
+    `ORKESTRATOR_EGRESS=in-container`. Behind the gateway: `node`'s `CapEff`
+    0; `orkroot` could not reset `OUTPUT`, flush the rules or flush the set;
+    `sudo -n init-firewall.sh` was refused; ports were published through the
+    gateway; a gateway restart failed closed and recovered.
+  - Live network suite: C22 sibling and host isolation behind the gateway.
+  - Live readiness suite: the gateway fault (no firewall script) refused the
+    start with the runtime never started.
+  - Live replacement: a restricted rebuild with a fixed host port moved to a
+    new gateway on the same port; the whole replacement and rebuild-fault
+    suites passed in that run.
+  - `scripts/qualify-egress-gateway.sh orkestrator-v2:q0018-egress`, with its
+    sudo checks updated for the removed grant: every check passed. The
+    gateway applied its firewall 3.8 s after `docker start` and used 1.8 MiB
+    and 3 PIDs.
+- Egress gateway on Linux Engine and rootless (high; on by default for
+  restricted runtimes on a current image). Still owed: Linux Engine
+  (amd64 and arm64), a rootless daemon, a daemon with IPv6 enabled, a Docker
+  daemon restart with stopped runtimes and gateways, and DNS rotation. To
+  collect: the `container-live-qualification.yml` workflow runs the live
+  firewall, network, readiness and replacement suites on `ubuntu-24.04` and
+  `ubuntu-24.04-arm` for a pull request that changes them (this branch
+  does). On a rootless host run the same command as above against an image
+  built there. Until Linux Engine passes, `ORKESTRATOR_EGRESS=in-container`
+  restores the in-container firewall.
 - External egress prototype, run on 2026-10-22 on Docker Desktop 29.7.2
   (aarch64) with image `orkestrator-v2:latest` (= `ghcr.io/orkestrator-ai/orkestrator-v2:2.23.0`)
   and this change's firewall scripts bind-mounted:
@@ -292,6 +334,14 @@ once restricted containers no longer need `NET_ADMIN` can the sudo grants shrink
     by construction; nothing was measured under load.
   - Not covered: Linux Engine, rootless, IPv6 (the Desktop network had none),
     sibling isolation, DNS rotation, Docker daemon restarts.
+- Container-made MCP login and renewal pickup, live (medium; items 3 and 5).
+  In a container terminal, sign in to an MCP server with `claude /mcp`. Then
+  confirm with `jq 'keys'` on `~/.claude/.credentials.json` (never printing
+  tokens) that the login survives a keeper push and a container restart. For
+  Grok, check whether a running session picks up a host renewal without a
+  bridge restart. This needs a fresh host Grok login; the host's expired on
+  2026-10-23. OpenCode and Pi pickup of a pushed renewal, and the sign-out
+  removal of item 7, fold into the OpenCode and Pi item below.
 - Claude host refresh and mid-session pickup, live (high; on by default).
   Nothing has yet run `refreshHostClaudeLogin` against a real login, because
   doing so spends the host's refresh token. On a host or disposable account
@@ -328,6 +378,8 @@ once restricted containers no longer need `NET_ADMIN` can the sudo grants shrink
 - OpenCode and Pi past expiry with live OAuth logins (medium). The
   2026-10-21 run below had none: the host's OpenCode holds API keys only, and
   Pi's only OAuth login (OpenAI) had expired, so staging rightly withheld it.
+  Still so on 2026-10-25: OpenCode holds two API keys, and Pi's OpenAI OAuth
+  login is expired.
   With a fresh host Pi or OpenCode OAuth login (Anthropic or OpenAI), check in
   a container that a turn works with the access-only copy, that it signs out
   alone past `expires` (or with `expires` edited in the container's copy),
@@ -411,30 +463,23 @@ once restricted containers no longer need `NET_ADMIN` can the sudo grants shrink
     above).
 - The Desktop and arm64 packet matrix and live credential rotation are
   tracked in [0019-container-platform-qualification.md](0019-container-platform-qualification.md).
-  Item 3 needs live packet tests on Linux Engine and Desktop: allowed provider
-  access, blocked destinations, host callbacks, sibling isolation, DNS
-  rotation, IPv6 and firewall initialisation failure.
-- Policy 3 (port tuples, done 2026-10-15) has unit coverage only. C22 now
-  checks that an allowed domain answers on 443, another port on the same
-  address is rejected and Git over SSH reaches GitHub; C23 checks per-port
-  edits and revocation. Neither has run on a real daemon (Docker Desktop
-  would not start containers that day), and `hash:net,port` support on the
-  Desktop and rootless kernels is unconfirmed (init fails closed without
-  it). The live re-run in container-platform-qualification.md covers both.
-- Review follow-up added regressions for explicit GitHub ports and UDP,
-  HTTPS-aware startup probe selection, policy-3 creation metadata,
-  host-service port updates, DNS validation and the settings editor. C23
-  additionally uses a local TCP/UDP echo peer to distinguish protocols on
-  one port, check blocked ports, compare the reported entry count with ipset,
-  and remove one established TCP flow while retaining another and UDP on the
-  removed TCP port. The live attempt on Docker Desktop 29.8.1 still could not
-  start containers (120-second timeouts; a minimal `/bin/true` container also
-  remained `Created`). It did not reach any packet assertions. Evidence:
-  `/tmp/orkestrator-test-run.0g2KQN/live-firewall.log.gz`. Run again with a
-  current qualification image on a working daemon:
+  Allowed provider access, blocked destinations, host callbacks, sibling
+  isolation and firewall initialisation failure passed live on Docker Desktop
+  on 2026-10-25, behind the egress gateway (above). Still owed there and on
+  Linux Engine: DNS rotation and IPv6.
+- Policy 3 port tuples ran live on Docker Desktop (Engine 29.9.2, arm64) on
+  2026-10-25, through the egress gateway and with the in-container
+  firewall. C22 showed that an allowed domain answers on 443, another port on
+  the same address is rejected, and Git over SSH reaches GitHub. C23 covered
+  per-port edits and revocation, and the TCP/UDP echo-peer tuple test (an
+  established flow removed and another kept) passed, so that kernel supports
+  `hash:net,port`. A rootless kernel is still unconfirmed (init fails closed
+  without it); it is part of the Linux Engine and rootless item above. The
+  earlier attempt on Docker Desktop 29.8.1 never started a container
+  (`/tmp/orkestrator-test-run.0g2KQN/live-firewall.log.gz`). The command:
 
   ```bash
-  RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> mise run test:logged -- --name live-firewall -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-firewall.test.ts --parallel=1 --only-failures
+  RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> mise run test:logged -- --name live-firewall -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-firewall.test.ts --parallel=1
   ```
 
 ## Constraints and rationale
@@ -475,18 +520,132 @@ once restricted containers no longer need `NET_ADMIN` can the sudo grants shrink
 
 ## Open questions
 
-- External enforcement (answered 2026-10-22): a per-environment gateway that
+- External enforcement (answered 2026-10-22, built 2026-10-25): a per-runtime gateway that
   owns the network namespace, which the workload joins. The reverse (a
   sidecar joining the workload's namespace) was rejected: a workload restart
   would get a fresh namespace with no rules and run unrestricted until the
   sidecar re-applied them. A routing gateway on the environment network
   would need the workload's default route changed, which itself needs
   `NET_ADMIN`.
-- How far to narrow root-terminal `NET_ADMIN` in restricted mode. Today it is
-  a documented product choice, and the capability cannot be removed from one
-  `docker exec` while the container keeps it. The gateway design removes it
-  from the workload entirely; a root terminal would then need `docker exec`
-  into the gateway to change the firewall.
+- How far to narrow root-terminal `NET_ADMIN` in restricted mode (answered
+  2026-10-25). A gateway runtime has none, so a root terminal cannot change
+  the firewall. A deliberate firewall change is `docker exec --user root`
+  into the gateway, which is what the backend does. Runtimes with an
+  in-container firewall keep the documented behaviour until they are rebuilt.
+
+## Assumptions and decisions
+
+Recorded 2026-10-25, while implementing items 1–7.
+
+- **Gateway image.**
+  - Options: a new minimal image (bash, iptables, ipset, dig, curl,
+    conntrack); a multi-stage target of the same Dockerfile; or the workload
+    image itself.
+  - Chosen: the workload image, same image id. It is already on the daemon,
+    so it costs no disk or pull, and its firewall scripts always match the
+    runtime's. Measured on 2026-10-22 at about 1.7 MiB and 3 PIDs.
+  - Pros: no second artifact to build, publish, pull or version-match; no
+    image or registry change.
+  - Cons: the gateway has the whole workload toolset available as root. Only
+    the backend execs into it and nothing in the workload can reach it, so
+    the extra surface is reachable only by someone who already controls the
+    daemon. Revisit if gateways ever run on a daemon without the workload
+    image.
+- **One gateway per runtime, not per environment.**
+  - Options: per runtime or per environment.
+  - Chosen: per runtime. A rebuild candidate gets its own, and a recovery
+    copy keeps its own, stopped.
+  - Why: a runtime references its gateway by id, immutably. With one shared
+    gateway, a candidate and its source could not run in turn, and restoring
+    a copy would depend on a gateway that a newer runtime had replaced.
+  - Pros: every runtime starts and stops independently.
+  - Cons: retained copies keep a small stopped container each.
+- **Gateway labels.**
+  - Chosen: no app label and no `environment-id`; their own owner, role,
+    workload and environment labels instead.
+  - Why: every existing listing of runtimes (cleanup review, usage, recovery
+    copies, operation reconciliation, OOM attribution) ignores gateways
+    without a change.
+  - Pros: no listing needs a gateway case.
+  - Cons: gateways are invisible to the cleanup review, so they need their
+    own removal paths: removal with their runtime, the ledger step and the
+    startup orphan sweep.
+- **Start gate.**
+  - Options: trust Docker's start order; poll the gateway's report; also
+    verify from the runtime.
+  - Chosen: both of the last two. The backend waits for `applied` from a
+    tmpfs report, and the runtime's root entrypoint probes `192.0.2.1:443`
+    (TEST-NET-1) and requires "No route to host", the gateway's
+    `icmp-admin-prohibited` rejection.
+  - Why: an unrestricted Desktop namespace timed out on that address (rc
+    124), so a timeout or a success means "not enforced", and "Network is
+    unreachable" means the gateway has gone.
+  - Cons: an upstream network that itself sends host-unreachable for
+    TEST-NET would satisfy the probe, so the backend gate stays the primary
+    one.
+  - Docker restart policies: runtimes have none, so Docker never starts
+    either container on its own.
+- **Firewall step moved into the root entrypoint, for every image.**
+  - Options: keep `sudo init-firewall.sh` for in-container runtimes, or run
+    the firewall from the root entrypoint before privileges drop.
+  - Chosen: the root entrypoint.
+  - Pros: the `init-firewall.sh` grant is removed for every runtime, not only
+    gateway ones.
+  - Cons: the firewall now runs before the node entrypoint, so the root
+    entrypoint opens this boot's `initializing` record and hands its boot id
+    over (`ORKESTRATOR_BOOT_ID`). Readiness keeps one boot id from the
+    firewall step to `ready`, as the held-boot readiness tests require. Node
+    can still re-run the root entrypoint through its remaining grant, which
+    re-applies the recorded policy. That is the same power the removed grant
+    gave.
+- **`no-new-privileges` stays off.** The image's entrypoint is `sudo
+  network-policy-entrypoint.sh` running as `node`, which the flag would
+  break. Starting runtimes as root instead would make every `docker exec`
+  without `--user` run as root. A gateway runtime has no `NET_ADMIN` to
+  regain, so the remaining sudo grants give root only inside a namespace
+  root cannot change.
+- **Rollout cap.** `ORKESTRATOR_EGRESS=in-container` keeps the old topology
+  on a gateway-capable image, like `ORKESTRATOR_NETWORK_POLICY=2`. It is
+  listed in the lifecycle doc's rollout switches, and is to be removed once
+  Linux Engine and rootless pass.
+- **Item 2, in-place mode change: not built.**
+  - Options: switch a running gateway between restricted and full; or keep
+    "mode change is a rebuild".
+  - Chosen: keep the rebuild.
+  - Why: the mode is recorded root-owned, once, in the runtime, and
+    `run-root-setup.sh` trusts that record. Changing it in place would need
+    a privileged rewrite path into the runtime, which the design
+    deliberately lacks. A full-mode runtime also has no gateway to restrict
+    later.
+  - Pros: no new privileged path.
+  - Cons: the user waits for a preserving rebuild.
+- **Item 3, container MCP logins.**
+  - Options: (a) the keeper refreshes MCP logins on the host through the
+    CLI; (b) keep container-owned MCP logins separate.
+  - Chosen: (b). No CLI command refreshes an MCP token without launching
+    every configured MCP server, and (a) would stretch "only the host CLI
+    refreshes its own login".
+  - Pros: no host or shared refresh token ever reaches a container.
+  - Cons: host-imported MCP logins still lapse with their access token
+    unless the host uses that server; the user signs in once inside the
+    container instead. Digests are remembered only since backend start.
+- **Item 4.** Built without measuring first, since the change was a few
+  lines.
+- **Item 5.** Polling rather than `fs.watch`, because the CLIs rename over
+  the file. A separate watcher rather than the Claude keeper, because
+  Claude's macOS login lives in the Keychain and has no file to poll.
+- **Item 6.** The guidance is rewritten in the backend rather than in the
+  bridges, so it works with existing images. Turn-time auth notices are left
+  as they are.
+- **Item 7.**
+  - Options: remove the copy on every restage that stages nothing; or leave
+    it to expire and document that.
+  - Chosen: remove it, only on a deliberate host sign-out (no file, or no
+    login), and only the imported copy (blank refresh token).
+  - Pros: honours a host sign-out without destroying the container's own
+    login.
+  - Cons: after a restart, a container-made login also has a blank refresh
+    token, so a later host sign-out removes it too.
 
 ## Related
 

@@ -27,6 +27,7 @@ describe("Electron backend command registry", () => {
   const CLAUDE_CREDENTIAL_SYNC_DOCKER_SCRIPT = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 ${ownedContainerInspect()}
+case "$*" in *'{{.HostConfig.NetworkMode}}'*) printf 'bridge\\n'; exit 0 ;; esac
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
   if [ "$2" = "--user" ]; then exit 0; fi
@@ -472,6 +473,7 @@ exit 0
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 ${ownedContainerInspect()}
+case "$*" in *'{{.HostConfig.NetworkMode}}'*) printf 'bridge\\n'; exit 0 ;; esac
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
   # Only stdin syncs (\`exec -i\`) carry a payload; argument-only execs are not syncs.

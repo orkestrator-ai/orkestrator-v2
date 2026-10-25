@@ -8,6 +8,7 @@ import {
   ContainerClaudeLoginKeeper,
 } from "./container-claude-login-keeper.js";
 import * as credentialFiles from "./commands-files.js";
+import type { ClaudeLoginHandover } from "./agent-accounts-containers.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
 const runtimes: BackendRuntime[] = [];
@@ -49,6 +50,7 @@ function harness(options: {
   let now = NOW;
   const reads: number[] = [];
   const synced: string[] = [];
+  const handovers: Array<ClaudeLoginHandover | undefined> = [];
   const refreshed: string[] = [];
   let credentialIndex = 0;
   const context = {
@@ -82,8 +84,9 @@ function harness(options: {
     readCredentials: read,
     readLocalCredentials: read,
     hasLocalTokenBridges: () => options.localBridges === true,
-    syncContainer: async (containerId) => {
+    syncContainer: async (containerId, handover) => {
       synced.push(containerId);
+      handovers.push(handover);
     },
     refreshHostLogin: async (account) => {
       refreshed.push(account.accountId);
@@ -94,6 +97,7 @@ function harness(options: {
     keeper,
     reads,
     synced,
+    handovers,
     refreshed,
     advance: (ms: number) => {
       now += ms;
@@ -116,6 +120,32 @@ describe("ContainerClaudeLoginKeeper", () => {
     expect(await run.keeper.tick()).toBe(CLAUDE_LOGIN_KEEPER_INTERVAL_MS);
     expect(run.synced).toEqual(["container-a", "container-b"]);
     expect(run.refreshed).toEqual([]);
+  });
+
+  test("reads the host login once per pass and hands that read to every container", async () => {
+    const run = harness({
+      environments: [environment("a"), environment("b"), environment("c")],
+      credentials: [login(NOW + 8 * 60 * 60_000)],
+    });
+    await run.keeper.tick();
+    expect(run.reads).toHaveLength(1);
+    expect(run.handovers).toEqual([
+      { account: { accountId: "default" }, credentials: login(NOW + 8 * 60 * 60_000) },
+      { account: { accountId: "default" }, credentials: login(NOW + 8 * 60 * 60_000) },
+      { account: { accountId: "default" }, credentials: login(NOW + 8 * 60 * 60_000) },
+    ]);
+  });
+
+  test("a pass that refreshes the host hands containers the login read after the refresh", async () => {
+    const renewed = login(NOW + 8 * 60 * 60_000);
+    const run = harness({
+      environments: [environment("a"), environment("b")],
+      credentials: [login(NOW + 60_000), renewed],
+    });
+    await run.keeper.tick();
+    expect(run.refreshed).toEqual(["default"]);
+    expect(run.reads).toHaveLength(2);
+    expect(run.handovers.map((handover) => handover?.credentials)).toEqual([renewed, renewed]);
   });
 
   test("renews the login for local coordinator bridges, even with the container opt-out", async () => {

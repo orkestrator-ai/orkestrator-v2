@@ -1,5 +1,9 @@
 import type { CommandContext } from "./commands-context.js";
-import { activeClaudeCredentials, syncContainerClaudeLogin } from "./agent-accounts-containers.js";
+import {
+  activeClaudeCredentials,
+  syncContainerClaudeLogin,
+  type ClaudeLoginHandover,
+} from "./agent-accounts-containers.js";
 import {
   TOKEN_REPLACEMENT_LEAD_MS,
   readAddedClaudeCredentials,
@@ -51,7 +55,8 @@ export const CLAUDE_HOST_REFRESH_RETRY_MS = 60_000;
 export interface ClaudeLoginKeeperOptions {
   /** Have the host's own CLI refresh this account's login if it is about to expire. */
   refreshHostLogin?: (account: ResolvedAgentAccount) => Promise<void>;
-  syncContainer?: (containerId: string) => Promise<unknown>;
+  /** `handover` is the login this pass read, so a sync need not read it again. */
+  syncContainer?: (containerId: string, handover?: ClaudeLoginHandover) => Promise<unknown>;
   readCredentials?: () => Promise<string | undefined>;
   /** The active login as local bridges read it, regardless of the container opt-out. */
   readLocalCredentials?: () => Promise<string | undefined>;
@@ -81,6 +86,12 @@ interface ClaudeOAuthSummary {
   refreshable: boolean;
 }
 
+/** A refresh check's outcome, with the login as read for containers. */
+interface RefreshResult {
+  login?: ClaudeOAuthSummary;
+  handover?: ClaudeLoginHandover;
+}
+
 function summarize(credentials: string | undefined): ClaudeOAuthSummary | undefined {
   try {
     const oauth = (JSON.parse(credentials ?? "") as { claudeAiOauth?: unknown }).claudeAiOauth;
@@ -101,7 +112,7 @@ export class ContainerClaudeLoginKeeper {
   private readonly timers: NonNullable<ClaudeLoginKeeperOptions["timers"]>;
   private handle: unknown = null;
   private running: Promise<void> | null = null;
-  private refreshing: Promise<ClaudeOAuthSummary | undefined> | null = null;
+  private refreshing: Promise<RefreshResult> | null = null;
   private refreshingConsumer?: "containers" | "local";
   private stopped = true;
   /** Expiry the host refresh was last attempted for, when, and how often. */
@@ -180,13 +191,17 @@ export class ContainerClaudeLoginKeeper {
       this.options.hasLocalTokenBridges?.() ?? hasLocalClaudeTokenBridges(this.context);
     if (containers.length === 0 && !localBridges) return this.intervalMs;
 
-    const login =
-      containers.length > 0 ? await this.refreshHostIfDue() : await this.refreshLocalLoginIfDue();
+    // One read of the host login serves the refresh decision and every
+    // container this pass syncs (a `security` call on macOS each time).
+    const { login, handover } = await this.refreshFor(
+      containers.length > 0 ? "containers" : "local",
+    );
     const sync =
       this.options.syncContainer ??
-      ((containerId: string) => syncContainerClaudeLogin(this.context, containerId));
+      ((containerId: string, read?: ClaudeLoginHandover) =>
+        syncContainerClaudeLogin(this.context, containerId, read ? { handover: read } : {}));
     for (const environment of containers) {
-      await sync(environment.containerId!);
+      await sync(environment.containerId!, handover);
     }
     return this.nextDelay(login);
   }
@@ -199,7 +214,7 @@ export class ContainerClaudeLoginKeeper {
    * afterwards; never throws.
    */
   refreshHostIfDue(): Promise<ClaudeOAuthSummary | undefined> {
-    return this.refreshFor("containers");
+    return this.refreshFor("containers").then((result) => result.login);
   }
 
   /**
@@ -209,10 +224,10 @@ export class ContainerClaudeLoginKeeper {
    * not stop it. Returns the login as it is afterwards; never throws.
    */
   refreshLocalLoginIfDue(): Promise<ClaudeOAuthSummary | undefined> {
-    return this.refreshFor("local");
+    return this.refreshFor("local").then((result) => result.login);
   }
 
-  private refreshFor(consumer: "containers" | "local"): Promise<ClaudeOAuthSummary | undefined> {
+  private refreshFor(consumer: "containers" | "local"): Promise<RefreshResult> {
     if (this.refreshing && this.refreshingConsumer !== consumer) {
       // A container read can be opted out while local launches still need a
       // login. Serialize the refresh, but re-read for each consumer's scope.
@@ -228,24 +243,37 @@ export class ContainerClaudeLoginKeeper {
     return this.refreshing;
   }
 
-  private async refreshHostOnce(
-    consumer: "containers" | "local",
-  ): Promise<ClaudeOAuthSummary | undefined> {
+  private async refreshHostOnce(consumer: "containers" | "local"): Promise<RefreshResult> {
     try {
       const { global } = await this.context.storage.loadConfig();
-      if (consumer === "containers" && global.useHostClaudeCredentials === false) return undefined;
-      const read =
+      if (consumer === "containers" && global.useHostClaudeCredentials === false) return {};
+      // Containers are handed what this read returns, so it is pinned to one
+      // account snapshot; a sync on another account or generation reads again.
+      const account =
+        consumer === "containers"
+          ? await resolveActiveAgentAccount(this.context, "claude")
+          : undefined;
+      const readText =
         consumer === "local"
           ? (this.options.readLocalCredentials ??
             (() => localActiveClaudeCredentials(this.context)))
-          : (this.options.readCredentials ?? (() => activeClaudeCredentials(this.context, global)));
-      const login = summarize(await read());
+          : (this.options.readCredentials ??
+            (() => activeClaudeCredentials(this.context, global, account)));
+      const read = async (): Promise<RefreshResult> => {
+        const credentials = await readText();
+        return {
+          login: summarize(credentials),
+          ...(account ? { handover: { account, credentials } } : {}),
+        };
+      };
+      const first = await read();
+      const login = first.login;
       if (
         login?.expiresAt === undefined ||
         !login.refreshable ||
         !this.mayRefreshHost(login.expiresAt)
       ) {
-        return login;
+        return first;
       }
       const previous = this.refreshAttempt;
       this.refreshAttempt = {
@@ -254,16 +282,16 @@ export class ContainerClaudeLoginKeeper {
         count: previous?.expiresAt === login.expiresAt ? previous.count + 1 : 1,
       };
       const refresh = this.options.refreshHostLogin;
-      if (!refresh) return login;
+      if (!refresh) return first;
       try {
-        await refresh(await resolveActiveAgentAccount(this.context, "claude"));
+        await refresh(account ?? (await resolveActiveAgentAccount(this.context, "claude")));
       } catch {
         // CLI output may contain credentials; only fixed diagnostics escape.
         console.warn("[claude-login-keeper] Host Claude refresh failed");
-        return summarize(await read());
+        return await read();
       }
-      const renewed = summarize(await read());
-      if (renewed?.expiresAt === undefined || renewed.expiresAt <= login.expiresAt) {
+      const renewed = await read();
+      if (renewed.login?.expiresAt === undefined || renewed.login.expiresAt <= login.expiresAt) {
         console.warn("[claude-login-keeper] Host Claude refresh did not extend login expiry");
       }
       return renewed;
@@ -272,7 +300,7 @@ export class ContainerClaudeLoginKeeper {
         "[claude-login-keeper] Host Claude refresh check failed:",
         error instanceof Error ? error.message : String(error),
       );
-      return undefined;
+      return {};
     }
   }
 

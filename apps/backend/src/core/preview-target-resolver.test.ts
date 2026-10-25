@@ -22,8 +22,14 @@ describe("docker binding selection", () => {
       owner: "",
       environmentId: "env",
       ports: { "3000/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }], "53/udp": null },
+      networkOwner: null,
     });
     expect(parseContainerInspection("garbage")).toBeNull();
+    // A runtime that joined its egress gateway's namespace names it.
+    expect(
+      parseContainerInspection(`abc\trunning\to\tenv\t{}\tcontainer:${"f".repeat(64)}\n`)
+        ?.networkOwner,
+    ).toBe("f".repeat(64));
   });
 
   test("prefers an explicit IPv4 loopback binding and carries IPv6-only bindings", () => {
@@ -79,6 +85,28 @@ describe("PreviewTargetResolver", () => {
       (await serviceFor("a")).definition.serviceId,
     );
     expect(service.endpoint.failure?.category).toBe("target-unverified");
+  });
+
+  test("a runtime behind an egress gateway is reached on the gateway's published port", async () => {
+    await harness.addContainerEnvironment("a", { entryPort: 3000 });
+    const gateway = "e".repeat(64);
+    harness.docker.containers.set("container-a", {
+      id: "container-a",
+      environmentId: "a",
+      owner: harness.owner,
+      ports: {},
+      networkOwner: gateway,
+    });
+    harness.docker.containers.set(gateway, {
+      id: gateway,
+      environmentId: "",
+      ports: { "3000/tcp": [{ HostIp: "127.0.0.1", HostPort: "49170" }] },
+    });
+    const service = await serviceFor("a");
+    expect(service.endpoint.failure).toBeFalsy();
+    expect(service.endpoint.hostPort).toBe(49170);
+    // Ownership is still the runtime's own.
+    expect(service.endpoint.containerId).toBe("container-a");
   });
 
   test("a missing container reports a stopped environment, not a port", async () => {

@@ -1,3 +1,4 @@
+import { resetNetworkOwnerCache } from "../src/core/container-network-owner";
 import { expect, test, describe, spyOn } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -187,6 +188,7 @@ test("production registry registers the Docker installer", () => {
 test("production install prepares the host and firewall before writing and fences retirement", async () => {
   const { context } = memoryLifecycleContext([], "/tmp/signal-install");
   context.agentTools = { servicePort: () => 43123 } as typeof context.agentTools;
+  resetNetworkOwnerCache();
   await withDockerScript(
     `#!/bin/sh
 case "$*" in
@@ -206,16 +208,19 @@ printf '%s\\n' "$1 $2 $3 $4 $5" >> "$FAKE_DOCKER_LOG"
         () => true,
       );
       const calls = (await log.read()).trim().split("\n");
-      expect(calls).toHaveLength(6);
-      expect(calls[4]).toContain("--user root container-1 /usr/local/bin/update-firewall.sh");
-      expect(calls[5]).toBe("exec -i container-1 sh -c");
+      // The namespace owner is looked up once (a runtime behind an egress
+      // gateway reads and changes the gateway's firewall), then cached.
+      expect(calls).toHaveLength(7);
+      expect(calls[2]).toContain("{{.HostConfig.NetworkMode}}");
+      expect(calls[5]).toContain("--user root container-1 /usr/local/bin/update-firewall.sh");
+      expect(calls[6]).toBe("exec -i container-1 sh -c");
       await claudeStateSignalInstaller.install(
         "container-1",
         { ...credential, revoke() {} },
         context,
         () => false,
       );
-      expect((await log.read()).trim().split("\n")).toHaveLength(11);
+      expect((await log.read()).trim().split("\n")).toHaveLength(12);
     },
   );
 });

@@ -39,6 +39,35 @@ ORK_GITHUB_ACTIVE="$ORK_STATE_DIR/github-ranges-active"
 ORK_GITHUB_SEED=/etc/orkestrator-seed/github-ranges
 ORK_GITHUB_CACHE="$ORK_STATE_DIR/github-ranges"
 
+# Gateway lookups must never consult Docker's workload-writable network files.
+# Legacy in-container enforcement retains its resolver behavior.
+ORK_RESOLV_CONF=/etc/resolv.conf
+if [ -d "$ORK_POLICY_DIR/trusted-network" ]; then
+    ORK_RESOLV_CONF="$ORK_POLICY_DIR/trusted-network/resolv.conf"
+fi
+ork_dig() {
+    if [ "$ORK_RESOLV_CONF" = /etc/resolv.conf ]; then
+        dig "$@"
+        return
+    fi
+    local resolver answer
+    while read -r resolver; do
+        [ -n "$resolver" ] || continue
+        if answer=$(dig -r @"$resolver" "$@"); then
+            printf '%s\n' "$answer"
+            return 0
+        fi
+    done < <(awk '$1 == "nameserver" { print $2 }' "$ORK_RESOLV_CONF")
+    return 1
+}
+ork_host_addresses() {
+    if [ -d "$ORK_POLICY_DIR/trusted-network" ]; then
+        cat "$ORK_POLICY_DIR/trusted-network/host-addresses"
+    else
+        getent ahostsv4 host.docker.internal 2>/dev/null | awk '{print $1}'
+    fi
+}
+
 # Fixed bounds on one application.
 ORK_MAX_DOMAINS=256
 ORK_MAX_ADDRESSES_PER_DOMAIN=32
@@ -247,7 +276,7 @@ ork_resolve_all() {
             # A failed lookup leaves an empty file; it must not reach the
             # caller's ERR trap from this subshell.
             (
-                { dig +time=3 +tries=2 +noall +answer A "$domain" 2>/dev/null || true; } \
+                { ork_dig +time=3 +tries=2 +noall +answer A "$domain" 2>/dev/null || true; } \
                     | awk -v max="$ORK_MAX_ADDRESSES_PER_DOMAIN" '$4 == "A" && n < max { print $5, $2; n++ }' \
                     > "$dir/$index" || true
             ) &

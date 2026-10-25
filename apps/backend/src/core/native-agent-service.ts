@@ -629,9 +629,13 @@ export class NativeAgentService {
     // life of a bridge connection, so a settings edit would otherwise not
     // reach the model catalogue until the environment restarted.
     const loadConfig = () => this.storage.loadConfig();
+    const guidance = this.options.signInGuidance;
+    const signInGuidance = guidance
+      ? { signInGuidance: (agent: string) => guidance(environmentId, agent) }
+      : {};
     return typeof this.storage.getDataDir === "function"
-      ? { environmentId, dataDir: this.storage.getDataDir(), loadConfig }
-      : { environmentId, loadConfig };
+      ? { environmentId, dataDir: this.storage.getDataDir(), loadConfig, ...signInGuidance }
+      : { environmentId, loadConfig, ...signInGuidance };
   }
 
   /** Stage base64 images into the workspace so a bridge will accept them. */

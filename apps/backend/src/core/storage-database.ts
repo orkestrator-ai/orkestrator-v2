@@ -492,7 +492,10 @@ export class StorageDatabase {
   /**
    * Reads one committed row without loading the store's cached history. The
    * header and value share a read snapshot, including representation changes
-   * by another connection. A document representation retains the legacy fallback.
+   * by another connection. When this connection already caches the store at
+   * the committed revision the row comes from that cache and fetches nothing;
+   * a miss fetches only the row and leaves the cache alone. A document
+   * representation retains the legacy fallback.
    */
   readStoreRow(store: string, key: string, collection = ""): unknown | undefined {
     return this.db
@@ -503,6 +506,13 @@ export class StorageDatabase {
         try {
           if (header.mode === "rows") {
             this.observe?.("read");
+            const cached = this.pendingCache?.has(store)
+              ? this.pendingCache.get(store)
+              : this.cache.get(store);
+            if (cached && cached.revision === header.revision && cached.mode === "rows") {
+              const hit = cached.rows.get(rowId(collection, key));
+              return hit ? (JSON.parse(hit.value) as unknown) : undefined;
+            }
             const row = this.db
               .query("SELECT value FROM store_rows WHERE store = ? AND collection = ? AND key = ?")
               .get(store, collection, key) as { value: string } | null;

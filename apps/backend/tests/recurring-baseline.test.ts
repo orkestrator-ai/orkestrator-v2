@@ -134,7 +134,9 @@ describe("driven native observation baseline (step 07)", () => {
       expect(counts.externalEndDiscoveryMs!).toBeLessThanOrEqual(4_000);
     }
     expect(shared.turnEndEdges).toBe(rollback.turnEndEdges);
-  });
+    // Four runs over a real on-disk store take about a second on an idle
+    // host, but aggregate load has stretched them past five (flake 0177).
+  }, 30_000);
 });
 
 // Storage reads plus stats each workflow attempt may cost, from the current
@@ -192,8 +194,9 @@ describe("driven workflow supervision baseline (step 08)", () => {
         expect(storage).toBeLessThanOrEqual(STORAGE_PER_ATTEMPT[mode][domain] * counts.attempts);
       }
     }
-    // A feature-planning pass reads its whole store once; the row cache serves
-    // it and it still counts. A whole-store tick also lists the store first.
+    // A feature-planning pass reads its plan's row once; a warm row cache
+    // serves it and it still counts. A whole-store tick also lists the store
+    // first.
     expect(keyed["feature-planning"].storageReads).toBe(keyed["feature-planning"].attempts);
     expect(rollback["feature-planning"].storageReads).toBe(
       rollback["feature-planning"].attempts * (1 + fixture.activePerStore),

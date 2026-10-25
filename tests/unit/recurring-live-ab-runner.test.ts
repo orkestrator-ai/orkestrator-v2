@@ -8,6 +8,7 @@ import {
   __testing,
   countGuardLines,
   measureFreshness,
+  measureSoak,
   parseOptions,
   runArm,
   type Status,
@@ -514,3 +515,151 @@ test.each(["SIGTERM", "SIGINT"] as const)(
   },
   10_000,
 );
+
+describe("soak", () => {
+  const footprint = (keys: number, records: number) => ({
+    stream: { open: 1 },
+    recurringWork: {
+      metrics: { kinds: {} },
+      schedulers: [{ owner: "backend-activity", keys, settling: 0, byKind: {} }],
+      admission: [],
+      fetchPolicies: [{ name: "container-git-fetch", status: { records, containers: records } }],
+      signals: [],
+    },
+  });
+
+  function soakHarness(responses: Array<ReturnType<typeof footprint>>, failing: string[] = []) {
+    let now = 0;
+    const calls: string[][] = [];
+    const cli = ((args: string[]) => {
+      calls.push(args);
+      const verb = `${args[0]} ${args[1]}`;
+      const status = failing.includes(verb) ? 1 : 0;
+      const stdout =
+        verb === "environment create"
+          ? JSON.stringify({ result: { environment: { id: `env-${calls.length}` } } })
+          : "{}";
+      return { status, stdout, stderr: "" };
+    }) as never;
+    const gateway = {
+      metrics: mock(async () => (responses.length > 1 ? responses.shift()! : responses[0]!)),
+    };
+    const runtime = {
+      ...__testing.soakRuntime,
+      now: () => now,
+      sleep: async (ms: number) => {
+        now += ms;
+      },
+      fixtureProjectId: () => "project-1",
+    };
+    return { cli, calls, gateway, runtime };
+  }
+
+  test("parses soak options", () => {
+    expect(parseOptions([]).soakCycles).toBe(0);
+    const parsed = parseOptions(["--soak-cycles", "5", "--soak-environments", "local,container"]);
+    expect(parsed.soakCycles).toBe(5);
+    expect(parsed.soakEnvironments).toEqual(["local", "container"]);
+    expect(() => parseOptions(["--soak-environments", "vm"])).toThrow();
+    expect(() => parseOptions(["--soak-cycles", "1.5"])).toThrow();
+  });
+
+  test("cycles every kind through create, start, stop, restart and delete", async () => {
+    const h = soakHarness([footprint(4, 0)]);
+    const result = await measureSoak(
+      h.gateway,
+      h.cli,
+      { soakCycles: 2, soakEnvironments: ["local", "container"], settleMs: 1_000 },
+      () => 2048,
+      undefined,
+      h.runtime,
+    );
+    expect(result.cyclesCompleted).toBe(2);
+    expect(result.failures).toEqual([]);
+    expect(result.leaks).toEqual([]);
+    expect(result.baseline?.["scheduler:backend-activity:keys"]).toBe(4);
+    expect(result.backendRssKiB).toEqual({ baseline: 2048, final: 2048 });
+    const verbs = h.calls.map(
+      (args) => args.slice(0, 2).join(" ") + (args[3] ? ` ${args[3]}` : ""),
+    );
+    expect(verbs.slice(0, 5)).toEqual([
+      "environment create project-1",
+      "environment start --wait",
+      "environment stop --wait",
+      "environment start --wait",
+      "environment delete --wait",
+    ]);
+    expect(h.calls.filter((args) => args[1] === "create")).toHaveLength(4);
+    expect(h.calls.find((args) => args[1] === "create")).toContain("local");
+    expect(h.calls.filter((args) => args[1] === "create")[1]).toContain("container");
+  });
+
+  test("a gauge above its baseline after the settle is a leak; a transient one is not", async () => {
+    // Before: 4 keys at most. After: one sample still at 6 while a job
+    // settles, but the lowest settled reading is 5 with one fetch record.
+    const h = soakHarness([
+      footprint(4, 0),
+      footprint(3, 0),
+      footprint(4, 0),
+      footprint(6, 1),
+      footprint(5, 1),
+      footprint(5, 1),
+    ]);
+    const result = await measureSoak(
+      h.gateway,
+      h.cli,
+      { soakCycles: 1, soakEnvironments: ["local"], settleMs: 1_000 },
+      () => null,
+      undefined,
+      h.runtime,
+    );
+    expect(result.leaks).toEqual([
+      { gauge: "fetch:container-git-fetch:containers", baseline: 0, final: 1 },
+      { gauge: "fetch:container-git-fetch:records", baseline: 0, final: 1 },
+      { gauge: "scheduler:backend-activity:keys", baseline: 4, final: 5 },
+    ]);
+  });
+
+  test("a failed step still deletes the environment and is reported", async () => {
+    const h = soakHarness([footprint(4, 0)], ["environment stop"]);
+    const result = await measureSoak(
+      h.gateway,
+      h.cli,
+      { soakCycles: 1, soakEnvironments: ["local"], settleMs: 0 },
+      () => null,
+      undefined,
+      h.runtime,
+    );
+    expect(result.failures).toEqual([{ cycle: 1, kind: "local", step: "stop" }]);
+    expect(h.calls.map((args) => args[1])).toEqual(["create", "start", "stop", "delete"]);
+  });
+
+  test("runArm soaks only when cycles are requested", async () => {
+    const soak = mock(async () => ({
+      cyclesRequested: 1,
+      cyclesCompleted: 1,
+      durationMs: 0,
+      failures: [],
+      baseline: {},
+      final: {},
+      leaks: [],
+      backendRssKiB: { baseline: null, final: null },
+    }));
+    const h = harness({ measureSoak: soak, cliRunner: (() => () => undefined) as never });
+    const skipped = await runArm(options(), "candidate", 1, "/stub", undefined, "a", h.runtime);
+    expect(skipped.soak).toBeUndefined();
+    expect(soak).not.toHaveBeenCalled();
+    const h2 = harness({ measureSoak: soak, cliRunner: (() => () => undefined) as never });
+    const soaked = await runArm(
+      { ...options(), soakCycles: 1 },
+      "candidate",
+      1,
+      "/stub",
+      undefined,
+      "b",
+      h2.runtime,
+    );
+    expect(soaked.error).toBeUndefined();
+    expect(soaked.soak?.cyclesCompleted).toBe(1);
+  });
+});

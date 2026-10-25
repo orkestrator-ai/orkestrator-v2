@@ -1354,12 +1354,13 @@ seeding each one from the host installation when it has the same pinned version
 so the default normally costs a local copy rather than a download, and enabling
 that same selection in the profile so the platforms it provisions are the ones
 the app offers. Narrow it with `--agent-platforms cursor,grok` when a run does
-not need all five; the flag is rejected by `mise run dev`, which keeps the
-durable per-installation selection. Do not remove this to save startup time
-without checking what the run launches: Claude, Codex and OpenCode fall back to
-a PATH lookup, but Cursor and Grok resolve only through the managed toolchain,
-so a profile that provisions nothing fails their session creation with
-`enabled but not installed yet`. Anything the host cannot seed is downloaded at
+not need all six; the flag is rejected by `mise run dev`, which keeps the
+durable per-installation selection. An agent-test profile runs only agents
+present in its own managed toolchain. Claude, Codex, OpenCode and Pi fall back
+to a PATH lookup only outside agent-test profiles; inside one, a missing agent
+fails with `<Agent> is not installed in this agent-test profile's toolchain`.
+Cursor and Grok resolve only through the managed toolchain everywhere.
+Anything the host cannot seed is downloaded at
 startup, which needs network access; an agent-test profile that cannot prepare
 its toolchains logs the reason and exits rather than waiting on a retry dialog.
 

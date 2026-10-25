@@ -219,12 +219,19 @@ platform by default, taking its selection from the launcher rather than from the
 durable per-installation choice — an isolated run never inherits or rewrites
 your real one.
 
-This matters most for Cursor and Grok. Claude, Codex and OpenCode fall back to a
-PATH lookup, so they run in a profile that provisioned nothing; Cursor and Grok
-resolve **only** through the managed toolchain, by design (`cursor` on PATH is
-the desktop editor, not the ACP agent). A profile without them reports
-`Cursor Agent is enabled but not installed yet` when a session is created,
-which reads like a broken install rather than a missing selection.
+An agent-test profile runs only the agents its own toolchain holds. Outside a
+profile, Claude, Codex, OpenCode and Pi fall back to a PATH lookup when no
+managed copy exists; inside one they do not, so availability reporting
+(`checkHostTool`) and spawning agree: a platform the profile did not provision
+reports as unavailable, and a launch requested directly through the backend
+fails with `<Agent> is not installed in this agent-test profile's toolchain`
+rather than running whatever version the host has on PATH. Cursor and Grok
+resolve **only** through the managed toolchain everywhere, by design (`cursor`
+on PATH is the desktop editor, not the ACP agent). A profile without them
+reports `Cursor Agent is enabled but not installed yet` when a session is
+created, which reads like a broken install rather than a missing selection.
+A terminal tab is a shell, not a backend launch: a command typed there still
+resolves through the shell's PATH, with the managed directories first.
 
 The launcher's selection is also written into the profile's own state, so the
 platforms it provisions are the platforms the app offers. Without that, a run
@@ -384,12 +391,13 @@ if it is absent, and removes only the marker it created during cleanup. This
 does not authenticate Claude or modify the host's configuration.
 
 The live OpenCode spec (`e2e/agent-testing/opencode-live.spec.ts`) has its own
-opt-in and uses the host's OpenCode credentials. It also requires a pinned
-model, written as `<provider>/<model>`, from a provider your OpenCode login has
-connected. The build-pipeline case also needs a model that emits reasoning.
-The spec still requires the pin even though no fixed default model ships any
-more; making it optional is tracked in
-[0031-live-provider-and-platform-qualification.md](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md).
+opt-in and uses the host's OpenCode credentials. No fixed default model ships,
+so without a pin the native-tab case starts on the default your connected
+providers resolve and reads that model back from the projection.
+`ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL`, written as `<provider>/<model>` from a
+connected provider, pins the native tab. The build-pipeline case asserts
+thinking rows, so it needs a pinned model that emits reasoning and is skipped
+without one.
 
 ```bash
 mise run dev:test --profile qa-opencode-live --fixture --credential-source opencode --agent-platforms opencode
@@ -404,10 +412,12 @@ mise run dev:reset --profile qa-opencode-live
 
 The native-tab case sends a real turn and switches environments while it
 runs. It then checks the transcript after returning and after a hard reload.
-It also checks Agent Info usage metrics, undo, redo, compact and fork. The
-build-pipeline case starts an OpenCode build on the pinned model. It checks
-that the served transcript has no raw `{ info, parts }` envelopes, then checks
-that thinking and timed tool rows render before and after reload. Each case
+It also checks Agent Info usage metrics, undo (the reverted reply leaves the
+transcript), redo, compact and fork (the fork tab keeps the source's model and
+reasoning profile before its first prompt). The build-pipeline case starts an
+OpenCode build on the pinned model. It checks that the served transcript has
+no raw `{ info, parts }` envelopes, then checks that thinking and timed tool
+rows render before and after reload. Each case
 removes its pipeline and environments during cleanup. The spec never presses
 **Share…**, which would publish the conversation. Without the opt-in, every
 case is skipped and no profile is needed.

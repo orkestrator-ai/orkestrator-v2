@@ -156,7 +156,7 @@ describe("settleTurnEnd plan rejection", () => {
       requestId: "original",
       outputSchema: { type: "object" },
     });
-    turn.stream.pendingPlanRejectionFeedback = "Revise the plan";
+    turn.pendingPlanRejectionFeedback = "Revise the plan";
     try {
       const followUp = settleTurnEnd(turn);
       expect(followUp?.prompt).toBe("Revise the plan");
@@ -170,7 +170,7 @@ describe("settleTurnEnd plan rejection", () => {
         permissionMode: "plan",
         _isReprompt: true,
       });
-      expect(turn.stream.pendingPlanRejectionFeedback).toBeNull();
+      expect(turn.pendingPlanRejectionFeedback).toBeNull();
       expect(turn.session.status).toBe("idle");
       expect(turn.session.abortController).toBeUndefined();
       expect(settleTurnEnd(turn)).toBeUndefined();
@@ -181,7 +181,7 @@ describe("settleTurnEnd plan rejection", () => {
 
   test.each(["reprompt", "aborted", "superseded"])("does not follow up a %s turn", (reason) => {
     const turn = preparedTurn(reason === "reprompt" ? { _isReprompt: true } : undefined);
-    turn.stream.pendingPlanRejectionFeedback = "Revise again";
+    turn.pendingPlanRejectionFeedback = "Revise again";
     if (reason === "aborted") turn.abortController.abort();
     if (reason === "superseded") turn.superseded = true;
     try {
@@ -197,7 +197,7 @@ describe("synthetic approval-mode retention", () => {
     "approved-plan continuation preserves %s and caps implementation permissions",
     (approvalMode) => {
       const turn = preparedTurn({ permissionMode: "plan", approvalMode });
-      turn.stream.pendingPlanApprovalContinuation = "Implement the approved plan";
+      turn.pendingPlanApprovalContinuation = "Implement the approved plan";
       try {
         expect(settleTurnEnd(turn)?.options).toMatchObject({
           approvalMode,
@@ -210,7 +210,7 @@ describe("synthetic approval-mode retention", () => {
           projectResources: true,
           networkAccess: "full",
         };
-        turn.stream.pendingPlanApprovalContinuation = "Implement safely";
+        turn.pendingPlanApprovalContinuation = "Implement safely";
         expect(settleTurnEnd(turn)?.options).toMatchObject({
           approvalMode,
           permissionMode: "default",

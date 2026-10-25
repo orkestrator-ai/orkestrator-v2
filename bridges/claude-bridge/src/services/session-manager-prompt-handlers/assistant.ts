@@ -153,11 +153,11 @@ export function handleAssistantMessage(turn: TurnState, message: SDKMessage): vo
   // If we receive a new assistant message after a plan denial, it means
   // the SDK continued the agent loop and Claude did see the feedback.
   // Clear the pending feedback so we don't re-prompt unnecessarily.
-  if (stream.pendingPlanRejectionFeedback) {
+  if (turn.pendingPlanRejectionFeedback) {
     debugLog("[session-manager] Claude responded after plan denial, clearing re-prompt feedback", {
       sessionId,
     });
-    stream.pendingPlanRejectionFeedback = null;
+    turn.pendingPlanRejectionFeedback = null;
   }
 
   // Assistant message - parse content and register tools with tracker

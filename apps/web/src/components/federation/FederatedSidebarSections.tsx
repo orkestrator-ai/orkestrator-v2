@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -20,7 +20,6 @@ import { ChevronDown, ChevronRight, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
-import { Separator } from "@/components/ui/separator";
 import { activityRows, isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import {
   arrangeMachines,
@@ -469,7 +468,7 @@ export function MergedProjectList({
     return `${plural(machineCount, "machine")} · ${plural(environmentCount, "environment")}`;
   };
 
-  const renderEntry = (entry: ProjectTreeEntry<MergedProject>) => {
+  const renderEntry = (entry: ProjectTreeEntry<MergedProject>, index: number) => {
     if (entry.kind === "project") return renderProject(entry.project);
     const folderActions =
       mode === "project"
@@ -495,6 +494,7 @@ export function MergedProjectList({
         sortableId={mode === "repository" ? `project-folder:${entry.key}` : undefined}
         label={mode === "repository" ? repositoryLabel(entry.name) : entry.name}
         repository={mode === "repository"}
+        repositorySeparator={mode === "repository" && index > 0}
         {...(mode === "repository"
           ? {
               icon: <CommandNodeHomeIcon colorToken={commandNodeColor} />,
@@ -548,15 +548,7 @@ export function MergedProjectList({
         onDragCancel={() => setDraggingProject(false)}
       >
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-          {tree.map((entry, index) => (
-            <Fragment key={entry.kind === "project" ? entry.project.id : `folder:${entry.key}`}>
-              {/* Each repository is ruled off from the one above it. */}
-              {mode === "repository" && index > 0 ? (
-                <Separator data-testid="repository-separator" className="mx-3 my-1 w-auto!" />
-              ) : null}
-              {renderEntry(entry)}
-            </Fragment>
-          ))}
+          {tree.map(renderEntry)}
           <SidebarRootDropZone active={draggingProject && mode === "project"} />
         </SortableContext>
       </DndContext>

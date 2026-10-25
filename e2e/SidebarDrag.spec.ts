@@ -1,13 +1,13 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-async function drag(page: Page, handle: Locator, target: Locator) {
+async function drag(page: Page, handle: Locator, target: Locator, targetYFraction = 0.5) {
   const start = (await handle.boundingBox())!;
   const end = (await target.boundingBox())!;
   await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
   await page.mouse.down();
   await page.mouse.move(start.x + start.width / 2 + 12, start.y + start.height / 2, { steps: 3 });
   await expect(handle).toHaveAttribute("aria-pressed", "true");
-  await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 12 });
+  await page.mouse.move(end.x + end.width / 2, end.y + end.height * targetYFraction, { steps: 12 });
   await page.mouse.up();
 }
 
@@ -87,6 +87,51 @@ for (const repository of [false, true]) {
         .getByRole("button", { name: /^(Self · )?q 3$/ }),
     ).toBeVisible();
   });
+}
+
+for (const collapsed of [false, true]) {
+  for (const [region, fraction] of [
+    ["rule", 0.5],
+    ["above rule", 0.1],
+    ["below rule", 0.9],
+  ] as const) {
+    test(`repository drop ${region} reorders ${collapsed ? "collapsed" : "expanded"} groups and survives reload`, async ({
+      page,
+    }) => {
+      await page.goto("/sidebar-drag?groups=1&merged=1&repository=1");
+      const source = page.getByRole("button", { name: /^Open acme\/source( on |$)/ });
+      const target = page.locator('[data-project-folder="github.com/acme/target"]');
+      await expect(source).toBeVisible();
+      if (collapsed) {
+        await page
+          .getByRole("button", { name: "Collapse folder acme/source", exact: true })
+          .click();
+        await page
+          .getByRole("button", { name: "Collapse folder acme/target", exact: true })
+          .click();
+      }
+      // Exercise the line and both padding bands inside the following group's drop target.
+      const separatorBand = target.getByTestId("repository-separator").locator("..");
+      await drag(page, source, separatorBand, fraction);
+      await expect(page.getByTestId("sidebar-writes")).toContainText('"repositoryOrder"');
+      const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
+      expect(writes.at(-1).args.repositoryOrder.map((id: string) => JSON.parse(id)[2])).toEqual([
+        "q",
+        "q2",
+        "p",
+        "p2",
+      ]);
+      await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
+        "data-project-folder",
+        "github.com/acme/target",
+      );
+      await page.reload();
+      await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
+        "data-project-folder",
+        "github.com/acme/target",
+      );
+    });
+  }
 }
 
 for (const input of ["pointer", "keyboard"] as const) {

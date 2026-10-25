@@ -500,15 +500,57 @@ test("repositories are separated by a rule, but projects are not", async () => {
   const repositories = await renderList("repository");
   const separators = screen.getAllByTestId("repository-separator");
   expect(separators).toHaveLength(1);
-  // The rule sits between the two repository groups, not above the first.
+  // The rule belongs to the following repository's measured drop target.
   const separator = separators[0]!;
-  expect(separator.previousElementSibling).not.toBeNull();
-  expect(separator.nextElementSibling).not.toBeNull();
+  expect(separator.closest("[data-project-folder]")?.getAttribute("data-project-folder")).toBe(
+    "github.com/acme/api",
+  );
   repositories.unmount();
 
   await renderList("project");
-  expect(screen.queryByTestId("repository-separator")).toBeNull();
+  expect(screen.queryByTestId("repository-separator") === null).toBe(true);
 });
+
+for (const { hints, ruledRepositories } of [
+  {
+    hints: ["github.com/acme/app", undefined, "", "github.com/acme/api"],
+    ruledRepositories: ["github.com/acme/api"],
+  },
+  { hints: [undefined, ""], ruledRepositories: [] },
+  { hints: [undefined, "", "github.com/acme/app"], ruledRepositories: ["github.com/acme/app"] },
+]) {
+  test(`repository rules only introduce repository groups in ${JSON.stringify(hints)}`, async () => {
+    const machine = machineView();
+    machine.projects = hints.map((repositoryHint, order) => {
+      const ref = projectRef(machine.backendId!, `project-${order}`);
+      return { ref, key: projectKey(ref), name: `project-${order}`, order, repositoryHint };
+    });
+    machine.environmentsByProject = new Map();
+    await act(async () => {
+      render(
+        <MergedProjectList
+          machines={[machine]}
+          shownIds={new Set([machine.connectionId])}
+          mode="repository"
+          renderBoundProject={() => null}
+          onBoundEnvironmentDragEnd={() => undefined}
+        />,
+      );
+    });
+
+    const list = screen.getByTestId("federated-repository-list");
+    expect(
+      within(list)
+        .queryAllByTestId("repository-separator")
+        .map((separator) =>
+          separator.closest("[data-project-folder]")?.getAttribute("data-project-folder"),
+        ),
+    ).toEqual(ruledRepositories);
+    for (const project of within(list).getAllByTestId("federated-project")) {
+      expect(within(project).queryByTestId("repository-separator") === null).toBe(true);
+    }
+  });
+}
 
 describe("CL-05: machine identity visual rules", () => {
   test("CL-05: a decorative MachineDot is hidden from assistive technology", () => {

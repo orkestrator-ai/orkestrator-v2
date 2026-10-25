@@ -73,6 +73,7 @@ function flush(): Promise<void> {
 }
 
 class FakeProvider {
+  dispatchStatus?: BuildPipelineProvider["dispatchStatus"];
   readonly agent: "claude" | "codex";
   statusValue: "running" | "idle" = "running";
   createCalls: number[] = [];
@@ -645,6 +646,14 @@ describe("bounded concurrent admission", () => {
     const requestId = reviewers[0]!.requestId;
 
     provider.sendImpl = async () => {};
+    await h.runner().advanceReviewers(reviewers);
+    // A working session or transport is not acceptance of this exact ID.
+    expect(reviewers[0]!.dispatchState).toBe("dispatching");
+    provider.dispatchStatus = async (sessionId, observedRequestId) => {
+      expect(sessionId).toBe("claude-session-1");
+      expect(observedRequestId).toBe(requestId!);
+      return "dispatched";
+    };
     await h.runner().advanceReviewers(reviewers);
     // Reconciled to sent under the same request id; no second prompt.
     expect(reviewers[0]!.dispatchState).toBe("sent");

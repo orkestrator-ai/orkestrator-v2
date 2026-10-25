@@ -9,7 +9,7 @@
     "test:bridge": "bun test src --preload ../../tests/setup-node.ts --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/codex-bridge.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-1}",
     "typecheck": "bun check",
     "start": "node dist/index.js",
-    "dev": "tsx watch src/index.ts"
+    "dev": "bun --watch src/index.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.5",
@@ -18,7 +18,6 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
-    "tsx": "^4.23.15",
     "typescript": "~7.0.2"
   }
 }

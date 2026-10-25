@@ -107,3 +107,26 @@ corrected and revalidated by the settings change.
 ## Environment-list UI main merge — 2026-10-24
 
 The normalization case exceeded 5000 ms in the combined workspace run (5000.99 ms), with a subsequent null-cursor error from the timed-out work. The complete unchanged owner passed alone (7.2 s). See [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md) for commands, parents and retained evidence. No implementation, assertion, timeout or skip changed.
+
+## Federated dialog readiness validation — 2026-10-25
+
+A different pagination case in the unchanged owner reproduced its deadline in
+both the aggregate and an isolated rerun; this observation does not establish
+that this particular case is intermittent.
+
+- Original command: `mise run test:logged -- --name repo-tests -- mise run test`,
+  Bun 1.4.4, workspace/root/bridges/protocol reservations 4/1/2/1, two backend
+  workers and other worktrees validating concurrently.
+- Failure: `terminal history > pages fixed history backwards and rejects a cursor for another history`
+  at `apps/backend/src/core/terminal-history.test.ts:257`, 5240.04 ms against the
+  five-second deadline. Backend counts: 10457 passed, 79 skipped, two failed,
+  one error across 615 files in 585.85 seconds. The other failing case was the
+  duplicate-account directory assertion recorded in 0239.
+- Complete unchanged owner:
+  `mise run test:logged -- --name history-owner-rerun -- bun test --cwd apps/backend ./src/core/terminal-history.test.ts --parallel=1 --only-failures`.
+  Result: 24 passed, one failed, one error in 12.8 seconds. The same case timed
+  out after 5020.94 ms; late work then expected `row-1250` from a missing page.
+- Evidence: `orkestrator-test-run.DHlEAe/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and `orkestrator-test-run.ZGKKU9/history-owner-rerun.log.gz` in the platform
+  temporary directory. No history implementation, assertion, timeout or skip
+  was changed.

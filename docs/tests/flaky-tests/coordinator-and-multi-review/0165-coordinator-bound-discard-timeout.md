@@ -739,3 +739,11 @@ assertion, timeout or skip was changed for validation.
 - Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.iQtiOF/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - Isolated rerun: `mise exec -- bun test --cwd apps/backend ./src/core/coordinator-service.test.ts --parallel=1` passed unchanged (56 passed) at load 11.
 - Assessment: the 2026-10-20 fix made these cases fit the 5 s budget on a loaded host, but not on this one. Reopened; no code, assertion or timeout changed in this run.
+
+## Recurrence — 2026-10-25
+
+- Command: `mise run test:logged -- --name full-test-2 -- mise run test` on branch `todo-0054-design-a11y-findings-ec88681caf58` (`ba7cc8d4` plus the design-canvas accessibility working tree, which touches only `apps/web/src/components/design/`, its tests and two `e2e/` specs, not this test's code), macOS 27.0 arm64, default `mise run test` groups, host load average 55 to 66. The same suite's first run on this branch, an hour earlier, passed the workspace group.
+- Failure: `project coordinator > discards an unborn HEAD and a dirty remote-tracking switch` timed out at 5054.03 ms (five-second default), inside a `runCommand` Git call at `coordinator-service.test.ts:925`. Backend: 10,457 passed, 79 skipped and 2 failed across 10,538 tests in 615 files (853.45 s); the other failure was 0785.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.MUtdn0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Isolated rerun: `mise run test:logged -- --name coordinator-service-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 52.5 s logged, host still loaded).
+- Assessment: the same aggregate-load timeout. Still open; no code, assertion or timeout changed.

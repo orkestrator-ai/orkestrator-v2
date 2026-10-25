@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import type { CoordinatorSnapshot, ProjectGitStatus } from "@orkestrator/protocol/coordinator";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
@@ -122,8 +123,12 @@ let latest: CoordinatorPanelData;
 let renders = 0;
 
 function Harness({ projectId }: { projectId: string }) {
-  latest = useCoordinatorPanelData(projectId);
-  renders += 1;
+  const data = useCoordinatorPanelData(projectId);
+  // Recorded per commit: every render of this harness commits.
+  useLayoutEffect(() => {
+    latest = data;
+    renders += 1;
+  });
   return null;
 }
 

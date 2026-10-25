@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type DragEvent,
-  type MouseEvent,
-  type ReactNode,
-} from "react";
+import { useMemo, useState, type DragEvent, type MouseEvent, type ReactNode } from "react";
 import { useFilesPanelStore } from "@/stores";
 import { useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import {
@@ -119,14 +112,15 @@ export function AllFilesView({
   );
   const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
 
-  useEffect(() => {
+  // Files that left the tree leave the selection, while rendering.
+  const [selectionTree, setSelectionTree] = useState(fileTree);
+  if (fileTree !== selectionTree) {
+    setSelectionTree(fileTree);
     const existing = new Set(collectAllFilePaths(fileTree));
-    setSelectedPaths((current) => {
-      const next = current.filter((path) => existing.has(path));
-      return next.length === current.length ? current : next;
-    });
-    setAnchorPath((current) => (current && existing.has(current) ? current : null));
-  }, [fileTree]);
+    const kept = selectedPaths.filter((path) => existing.has(path));
+    if (kept.length !== selectedPaths.length) setSelectedPaths(kept);
+    if (anchorPath && !existing.has(anchorPath)) setAnchorPath(null);
+  }
 
   const handleFileClick = (path: string, event: MouseEvent<HTMLButtonElement>) => {
     const result = resolveFileSelection(

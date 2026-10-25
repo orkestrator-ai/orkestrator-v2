@@ -24,7 +24,12 @@ const MAX_LOG_LINES = 500;
  */
 const STALE_LOG_FAILURE_THRESHOLD = 3;
 
-export function InitializationLogs({
+export function InitializationLogs(props: InitializationLogsProps) {
+  // Another container starts from an empty, loading view.
+  return <ContainerInitializationLogs key={props.containerId} {...props} />;
+}
+
+function ContainerInitializationLogs({
   containerId,
   className,
   pollIntervalMs = 1_000,
@@ -51,14 +56,6 @@ export function InitializationLogs({
   // tail writes no state, so it neither re-renders nor re-scrolls.
   const lastSnapshotRef = useRef<string | null>(null);
   const failureLoggedRef = useRef(false);
-  useEffect(() => {
-    lastSnapshotRef.current = null;
-    failureLoggedRef.current = false;
-    setLogs([]);
-    setError(null);
-    setIsStale(false);
-    setIsLoading(true);
-  }, [containerId]);
   useCoordinatedRead<string>({
     key: { resource: "container-init-logs", target: containerId, options: `tail=${MAX_LOG_LINES}` },
     demand: { intervalMs: pollIntervalMs, priority: "standard" },

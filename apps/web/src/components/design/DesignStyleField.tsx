@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { ChevronDown, RotateCcw, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,10 +87,16 @@ export function DesignStyleField({
   const errorId = `${id}-error`;
   const noteId = `${id}-note`;
   const stateId = `${id}-state`;
+  const labelId = `${id}-label`;
   const scope = scopeKey ?? property.name;
   const [customScope, setCustomScope] = useState<string | null>(null);
+  // Leaving a scope forgets custom mode, so returning to it starts from the list.
+  const [prevScope, setPrevScope] = useState(scope);
+  if (prevScope !== scope) {
+    setPrevScope(scope);
+    setCustomScope(null);
+  }
   const custom = customScope === scope;
-  useEffect(() => setCustomScope(null), [scope]);
   // The picker starts from what the user sees: the draft/inline value, else the cascade.
   const colorBase = value || computed || "";
   const color = useMemo(
@@ -124,13 +130,21 @@ export function DesignStyleField({
     "data-changed": changed ? "true" : undefined,
   };
   const changedClass = changed ? "border-primary ring-1 ring-primary/40" : "";
+  // Controls are named by the visible label, so speech input can say what it
+  // sees (WCAG 2.5.3); tests and tooling address the CSS property through
+  // data-property.
   return (
     <div
       className={`min-w-0 space-y-1 ${property.wide ? "col-span-2" : ""}`}
       data-property={property.name}
     >
       <div className="flex min-w-0 items-center gap-1">
-        <label htmlFor={id} className="min-w-0 truncate text-[11px] text-muted-foreground">
+        <label
+          id={labelId}
+          htmlFor={id}
+          className="min-w-0 truncate text-[11px] text-muted-foreground"
+          title={property.name}
+        >
           {property.label}
         </label>
         {inline && (
@@ -149,7 +163,7 @@ export function DesignStyleField({
             <button
               type="button"
               className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-ring disabled:opacity-50"
-              aria-label={`Revert ${property.name}`}
+              aria-label={`Revert ${property.label}`}
               title="Discard the unsent value"
               disabled={disabled}
               onClick={onRevert}
@@ -161,7 +175,7 @@ export function DesignStyleField({
             <button
               type="button"
               className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-ring disabled:opacity-50"
-              aria-label={`Reset ${property.name}`}
+              aria-label={`Reset ${property.label}`}
               title="Remove the inline declaration and use the stylesheet"
               disabled={disabled}
               onClick={onReset}
@@ -177,7 +191,7 @@ export function DesignStyleField({
             <span className="absolute inset-0" style={{ backgroundColor: colorBase }} />
             <input
               type="color"
-              aria-label={`Pick ${property.name}`}
+              aria-label={`Pick ${property.label}`}
               title={`Pick ${property.label.toLowerCase()}`}
               className="absolute inset-0 size-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
               value={color?.hex ?? "#000000"}
@@ -207,7 +221,7 @@ export function DesignStyleField({
           >
             <SelectTrigger
               id={id}
-              aria-label={property.name}
+              aria-labelledby={labelId}
               size="sm"
               className={`w-full min-w-0 gap-1 px-2 text-xs data-[size=sm]:h-7 [&_svg]:size-3 ${changedClass}`}
               {...fieldState}
@@ -232,7 +246,7 @@ export function DesignStyleField({
           <>
             <Input
               id={id}
-              aria-label={property.name}
+              aria-labelledby={labelId}
               className={`${inputClass} ${changedClass}`}
               value={value}
               placeholder={computed || "Use stylesheet"}
@@ -248,7 +262,7 @@ export function DesignStyleField({
                 variant="ghost"
                 size="icon"
                 className="size-7"
-                aria-label={`Choose ${property.name} preset`}
+                aria-label={`Choose ${property.label} preset`}
                 disabled={disabled}
                 onClick={() => setCustomScope(null)}
               >

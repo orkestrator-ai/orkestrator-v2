@@ -50,6 +50,7 @@
  * reach test output.
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expectPlaceHeld, holdPosition } from "../transcript-hold";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -358,7 +359,10 @@ async function firstVisibleRow(list: Locator) {
   });
 }
 
-/** Where the tool naming `stop` sits relative to the viewport, if rendered. */
+/**
+ * Where the tool naming `stop` sits relative to the viewport, if rendered,
+ * with the list's scroll position and how far it can scroll.
+ */
 async function rowPosition(list: Locator, trail: Trail, stop: number) {
   const pattern = trail.files[stop - 1]!.replace(".txt", "");
   return list.evaluate((element, needle) => {
@@ -373,10 +377,52 @@ async function rowPosition(list: Locator, trail: Trail, stop: number) {
         ),
         offset: Math.round(rect.top - top),
         visible: rect.bottom > top && rect.top < top + height,
+        scrollTop: Math.round(element.scrollTop),
+        maxScrollTop: Math.max(0, Math.round(element.scrollHeight - element.clientHeight)),
       };
     }
     return null;
   }, pattern);
+}
+
+/**
+ * The geometry around the top of the list, content-free: each rendered
+ * source part's id, the trail stops its text names, and its box; the first
+ * rows' keys and boxes; and the group frames' fold state. Recorded around
+ * every click so a drift can be attributed without reading transcript text.
+ */
+async function layoutAtTop(list: Locator, trail: Trail) {
+  const names = trail.files.map((file) => file.replace(".txt", ""));
+  return list.evaluate((element, stopNames) => {
+    const top = element.getBoundingClientRect().top;
+    const stopsIn = (text: string) =>
+      stopNames.flatMap((name, index) => (text.includes(name) ? [index + 1] : [])).slice(0, 4);
+    const box = (node: Element) => {
+      const rect = node.getBoundingClientRect();
+      return { top: Math.round(rect.top - top), height: Math.round(rect.height) };
+    };
+    return {
+      scrollTop: Math.round(element.scrollTop),
+      maxScrollTop: Math.max(0, Math.round(element.scrollHeight - element.clientHeight)),
+      parts: Array.from(element.querySelectorAll<HTMLElement>("[data-transcript-part-id]"))
+        .slice(0, 8)
+        .map((part) => ({
+          id: part.dataset.transcriptPartId,
+          stops: stopsIn(part.textContent ?? ""),
+          row: part.closest<HTMLElement>("[data-chat-message-index]")?.dataset.chatMessageIndex,
+          frame: part.closest<HTMLElement>("[data-transcript-group-frame]")?.dataset.state ?? null,
+          ...box(part),
+        })),
+      rows: Array.from(element.querySelectorAll<HTMLElement>("[data-chat-message-index]"))
+        .slice(0, 4)
+        .map((row) => ({
+          index: row.dataset.chatMessageIndex,
+          key: row.dataset.chatMessageKey,
+          groups: row.querySelectorAll("[data-transcript-group-frame]").length,
+          ...box(row),
+        })),
+    };
+  }, names);
 }
 
 /**
@@ -428,20 +474,25 @@ async function loadEarlierOnce(page: Page, list: Locator, trail: Trail, label: s
   const before = await firstVisibleRow(list);
   const anchorStop = before ? trail.stopInText(before.text) : undefined;
   expect(anchorStop, `${label}: the first visible row must name a trail stop`).toBeDefined();
+  const layoutBefore = await layoutAtTop(list, trail);
   await control.click();
   // The click either retires the control (history complete) or offers it again.
   await expect(page.getByRole("button", { name: "Loading…", exact: true })).toHaveCount(0, {
     timeout: 60_000,
   });
-  await expect
-    .poll(
-      async () => {
-        const anchor = await rowPosition(list, trail, anchorStop!);
-        return anchor ? Math.abs(anchor.offset - before!.offset) : Infinity;
-      },
-      { timeout: 5_000, intervals: [100] },
-    )
-    .toBeLessThanOrEqual(8);
+  try {
+    await expect
+      .poll(
+        async () => {
+          const anchor = await rowPosition(list, trail, anchorStop!);
+          return anchor ? holdPosition(before!, anchor).errorPx : Infinity;
+        },
+        { timeout: 5_000, intervals: [100] },
+      )
+      .toBeLessThanOrEqual(8);
+  } finally {
+    note(`${label}-layout`, { before: layoutBefore, after: await layoutAtTop(list, trail) });
+  }
   const after = await firstVisibleRow(list);
   const anchor = anchorStop === undefined ? null : await rowPosition(list, trail, anchorStop);
   const measurement = {
@@ -449,37 +500,13 @@ async function loadEarlierOnce(page: Page, list: Locator, trail: Trail, label: s
     anchorIndexBefore: before?.index,
     anchorOffsetBefore: before?.offset,
     anchorAfter: anchor,
+    hold: anchor ? holdPosition(before!, anchor) : null,
     firstVisibleStopAfter: after ? trail.stopInText(after.text) : undefined,
     scrollTopAfter: after?.scrollTop,
     controlStillOffered: await control.isVisible(),
   };
   note(`${label}-load-earlier`, measurement);
   return measurement;
-}
-
-/**
- * The row that was first on screen is still on screen after the click. When
- * the page put rows above it, the list must also have moved off the top: a
- * list that keeps its offset shows the loaded page and pushes the reader's
- * row down by the page's height, which short rows alone can keep on screen.
- */
-function expectPlaceHeld(measured: Awaited<ReturnType<typeof loadEarlierOnce>>, label: string) {
-  expect(measured.anchorStop, `${label}: no observable trail tool to anchor`).toBeDefined();
-  expect(measured.anchorAfter?.visible, `${label}: lost the reader's place`).toBe(true);
-  expect(
-    Math.abs(measured.anchorAfter!.offset - measured.anchorOffsetBefore!),
-    `${label}: the original tool moved within the viewport`,
-  ).toBeLessThanOrEqual(8);
-  const landedAbove =
-    measured.anchorAfter !== null &&
-    measured.anchorIndexBefore !== undefined &&
-    measured.anchorAfter.index > measured.anchorIndexBefore;
-  if (landedAbove) {
-    expect(
-      measured.scrollTopAfter,
-      `${label}: stayed at the top of the loaded page`,
-    ).toBeGreaterThan(0);
-  }
 }
 
 /** Scrolls up through everything loaded and returns the first row's text. */
@@ -699,8 +726,8 @@ test.describe("live transcript paging", () => {
       };
 
       // Claude reads with its Read tool, one response per read, and the
-      // tool-only rows coalesce into tall per-minute blocks: the harder case
-      // for holding the reader's place. Codex reads with `cat` and notes each
+      // tool-only rows coalesce into one folded tool group that each page
+      // grows from the front. Codex reads with `cat` and notes each
       // stop in a sentence; with notes off the run is tool calls only, and each
       // response still gets its own row from the bridge's usage report.
       const firstPrompt = [

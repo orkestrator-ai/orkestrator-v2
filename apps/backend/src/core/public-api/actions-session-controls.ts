@@ -98,7 +98,9 @@ async function activeRunFor(
     active
       .filter(
         (record) =>
-          (record.action === "session.start" || record.action === "session.prompt") &&
+          (record.action === "session.start" ||
+            record.action === "session.prompt" ||
+            record.action === "session.command") &&
           record.resources.sessionId === session.sessionId &&
           !!record.resources.dispatchRequestId &&
           dispatched.includes(record.resources.dispatchRequestId),

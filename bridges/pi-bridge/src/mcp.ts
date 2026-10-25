@@ -9,6 +9,7 @@
  */
 import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import {
   callsOwnWorkflowResult,
@@ -722,5 +723,7 @@ function formatMcpContent(result: { content?: unknown }): string {
 
 function publicMcpError(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
-  return text.replace(/Bearer\s+\S+/gi, "Bearer [redacted]").slice(0, 500);
+  // The shared rules cover bearer tokens and the other credential shapes an
+  // MCP server's error can echo (keys in URLs, headers, provider tokens).
+  return redactSecrets(text).slice(0, 500);
 }

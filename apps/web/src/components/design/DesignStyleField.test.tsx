@@ -83,37 +83,35 @@ test("the color input preserves partial transparency when changing hue", () => {
       onChange={onChange}
     />,
   );
-  fireEvent.change(screen.getByLabelText("Pick background-color"), {
+  fireEvent.change(screen.getByLabelText("Pick Background"), {
     target: { value: "#336699" },
   });
   expect(onChange).toHaveBeenCalledWith("rgba(51, 102, 153, 0.4)");
 });
 
 test("custom input mode resets to the stylesheet preset when the selected element changes", async () => {
-  const property = { name: "font-weight", label: "Weight", options: ["400", "700"] };
+  const property = { name: "Weight", label: "Weight", options: ["400", "700"] };
   const onChange = mock((_value: string) => undefined);
   const view = render(
     <DesignStyleField property={property} value="" onChange={onChange} scopeKey="frame-a:#one" />,
   );
-  fireEvent.pointerDown(screen.getByRole("combobox", { name: "font-weight" }), {
+  fireEvent.pointerDown(screen.getByRole("combobox", { name: "Weight" }), {
     button: 0,
     ctrlKey: false,
     pointerType: "mouse",
   });
   fireEvent.click(await screen.findByRole("option", { name: "Custom…" }));
-  expect(screen.getByRole("textbox", { name: "font-weight" })).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "Weight" })).toBeTruthy();
 
   view.rerender(
     <DesignStyleField property={property} value="" onChange={onChange} scopeKey="frame-a:#two" />,
   );
-  expect(screen.queryByRole("textbox", { name: "font-weight" }) === null).toBe(true);
-  expect(screen.getByRole("combobox", { name: "font-weight" }).textContent).toContain(
-    "Use stylesheet",
-  );
+  expect(screen.queryByRole("textbox", { name: "Weight" }) === null).toBe(true);
+  expect(screen.getByRole("combobox", { name: "Weight" }).textContent).toContain("Use stylesheet");
   view.rerender(
     <DesignStyleField property={property} value="" onChange={onChange} scopeKey="frame-a:#one" />,
   );
-  expect(screen.getByRole("combobox", { name: "font-weight" })).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "Weight" })).toBeTruthy();
 });
 
 test("the color picker starts from the computed value when there is no inline value", () => {
@@ -133,9 +131,9 @@ test("the color picker starts from the computed value when there is no inline va
     />,
   );
   expect(
-    (screen.getByRole("textbox", { name: "background-color" }) as HTMLInputElement).placeholder,
+    (screen.getByRole("textbox", { name: "Background" }) as HTMLInputElement).placeholder,
   ).toBe("rgba(10, 20, 30, .4)");
-  fireEvent.change(screen.getByLabelText("Pick background-color"), {
+  fireEvent.change(screen.getByLabelText("Pick Background"), {
     target: { value: "#336699" },
   });
   expect(onChange).toHaveBeenCalledWith("rgba(51, 102, 153, 0.4)");
@@ -150,7 +148,7 @@ test("the stylesheet choice names the computed value", () => {
       onChange={() => undefined}
     />,
   );
-  expect(screen.getByRole("combobox", { name: "position" }).textContent).toContain(
+  expect(screen.getByRole("combobox", { name: "Position" }).textContent).toContain(
     "Use stylesheet (static)",
   );
 });
@@ -172,7 +170,7 @@ test("errors, notes, and change state are associated with the field", () => {
       onRevert={onRevert}
     />,
   );
-  const input = screen.getByRole("textbox", { name: "width" });
+  const input = screen.getByRole("textbox", { name: "Width" });
   expect(input.getAttribute("aria-invalid")).toBe("true");
   expect(input.getAttribute("data-changed")).toBe("true");
   const described = input
@@ -183,8 +181,8 @@ test("errors, notes, and change state are associated with the field", () => {
   expect(described.some((text) => text?.includes("computed 100px"))).toBe(true);
   expect(screen.queryByText("hidden while invalid") === null).toBe(true);
   expect(screen.getByText("inline")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Reset width" }));
-  fireEvent.click(screen.getByRole("button", { name: "Revert width" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reset Width" }));
+  fireEvent.click(screen.getByRole("button", { name: "Revert Width" }));
   expect(onReset).toHaveBeenCalledTimes(1);
   expect(onRevert).toHaveBeenCalledTimes(1);
 
@@ -197,6 +195,6 @@ test("errors, notes, and change state are associated with the field", () => {
       onChange={() => undefined}
     />,
   );
-  expect(screen.getByRole("textbox", { name: "width" }).getAttribute("aria-invalid")).toBeNull();
-  expect((screen.getByRole("textbox", { name: "width" }) as HTMLInputElement).disabled).toBe(true);
+  expect(screen.getByRole("textbox", { name: "Width" }).getAttribute("aria-invalid")).toBeNull();
+  expect((screen.getByRole("textbox", { name: "Width" }) as HTMLInputElement).disabled).toBe(true);
 });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import type { ReactNode } from "react";
 import * as sortable from "@dnd-kit/sortable";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -1042,6 +1043,129 @@ describe("UI-04: creating inside a project instance", () => {
   });
 });
 
+describe("another machine's menus offer what this machine's do", () => {
+  function installMachineA(respond?: Parameters<typeof installDesktopFake>[0]["respond"]) {
+    const dataset = sharedIdDataset("idle");
+    dataset.projects = [{ ...dataset.projects[0]!, gitUrl: "git@github.com:Acme/App.git" }];
+    return installDesktopFake({
+      list: connectionList([MACHINE_A]),
+      datasets: { a: dataset },
+      ...(respond ? { respond } : {}),
+    });
+  }
+
+  async function openProjectMenu() {
+    await act(async () => {
+      fireEvent.contextMenu(screen.getByTitle("Open app on Machine A"));
+    });
+    return screen.findByRole("menu");
+  }
+
+  test("a project's menu has the local actions, and its dialogs open in that machine's workspace", async () => {
+    const fake = installMachineA();
+    const open = spyOn(window, "open").mockImplementation(() => null);
+    try {
+      renderWithFederation(<RemoteSections />);
+      await waitForRows(1);
+
+      const menu = await openProjectMenu();
+      expect(
+        within(menu)
+          .getAllByRole("menuitem")
+          .map((item) => item.textContent),
+      ).toEqual([
+        "Open Board",
+        "Open Repo on GitHub",
+        "Repository Settings",
+        "New Environment",
+        "Copy to Machine…",
+        "Add to Folder",
+        "Delete Project",
+      ]);
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Open Repo on GitHub" }));
+      expect(open).toHaveBeenCalledWith(
+        "https://github.com/acme/app",
+        "_blank",
+        "noopener,noreferrer",
+      );
+
+      for (const [name, dialog] of [
+        ["Repository Settings", "repository-settings"],
+        ["Delete Project", "delete-project"],
+      ] as const) {
+        fireEvent.click(within(await openProjectMenu()).getByRole("menuitem", { name }));
+        await waitFor(() =>
+          expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request).toEqual({
+            type: "select",
+            projectId: "project-1",
+            dialog,
+          }),
+        );
+      }
+      // Deleting is confirmed in the machine's own dialog; nothing is sent yet.
+      expect(fake.calls.filter((call) => /^(remove|delete)_/.test(call.command))).toEqual([]);
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  test("an environment's settings, fork and restart reach its own machine", async () => {
+    const fake = installMachineA((call) =>
+      call.command === "fork_environment"
+        ? { id: "env-fork", projectId: "project-1", name: "feature-fork" }
+        : call.command === "check_docker"
+          ? { available: true, reason: null }
+          : undefined,
+    );
+    renderWithFederation(<RemoteSections />);
+    await waitForRows(1);
+
+    let menu = await openRowActions("Machine A");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Settings" }));
+    await waitFor(() =>
+      expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request).toEqual({
+        type: "select",
+        projectId: "project-1",
+        environmentId: "env-1",
+        dialog: "environment-settings",
+      }),
+    );
+
+    menu = await openRowActions("Machine A");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Fork container" }));
+    await waitFor(() =>
+      expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request).toEqual({
+        type: "select",
+        projectId: "project-1",
+        environmentId: "env-fork",
+      }),
+    );
+    expect(fake.callsTo("a", "fork_environment")[0]!.args).toEqual({
+      environmentId: "env-1",
+      environmentType: "containerized",
+    });
+    expect(fake.callsTo("a", "start_environment_background")[0]!.args).toEqual({
+      environmentId: "env-fork",
+    });
+
+    menu = await openRowActions("Machine A");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Restart" }));
+    await waitFor(() => expect(fake.callsTo("a", "start_environment_background")).toHaveLength(2));
+    expect(
+      mockToastSuccess.mock.calls.some(([message]) => message === "Environment restarted"),
+    ).toBe(false);
+    expect(
+      fake.calls
+        .filter((call) => /^(stop|start)_environment/.test(call.command))
+        .slice(-2)
+        .map((call) => [call.command, call.args.environmentId]),
+    ).toEqual([
+      ["stop_environment", "env-1"],
+      ["start_environment_background", "env-1"],
+    ]);
+  });
+});
+
 describe("Machine filter is presentation only", () => {
   test("filter: choosing a machine updates the store without reloading, switching or routing anything", async () => {
     const fake = installTwoMachines();
@@ -1685,3 +1809,136 @@ describe("command handover dialog edge cases", () => {
     );
   });
 });
+
+for (const lostResponse of [false, true]) {
+  test(`a persisted fork opens when startup ${lostResponse ? "has an unknown outcome" : "is rejected"}`, async () => {
+    const fake = installTwoMachines(({ command }) => {
+      if (command === "check_docker") return { available: true, reason: null };
+      if (command === "fork_environment")
+        return { id: "fork-created", projectId: "project-1", name: "saved-fork" };
+      if (command === "start_environment_background") {
+        expect(useRemoteWorkspaceStore.getState().active?.environmentId).toBe("fork-created");
+        return lostResponse ? OUTCOME_UNKNOWN : new Error("start admission rejected");
+      }
+    });
+    renderWithFederation(<RemoteSections />);
+    await waitForRows(2);
+    const menu = await openRowActions("Machine A");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Fork container" }));
+    await waitFor(() =>
+      expect(lostResponse ? mockToastWarning : mockToastError).toHaveBeenCalled(),
+    );
+    const toast = (lostResponse ? mockToastWarning : mockToastError).mock.calls.at(-1)!;
+    expect(String(toast[0])).toContain("Start fork saved-fork");
+    expect(String(toast[0])).toContain("Machine A");
+    expect(useRemoteWorkspaceStore.getState().active?.environmentId).toBe("fork-created");
+    expect(fake.callsTo("a", "fork_environment")).toHaveLength(1);
+    expect(fake.callsTo("a", "start_environment_background")).toHaveLength(1);
+    expect(fake.callsTo("b", "fork_environment")).toHaveLength(0);
+    expect(fake.callsTo("b", "start_environment_background")).toHaveLength(0);
+  });
+}
+
+test("a container fork checks Docker on its owner before persisting a record", async () => {
+  const fake = installTwoMachines(({ command }) =>
+    command === "check_docker" ? { available: false, reason: "daemon-unavailable" } : undefined,
+  );
+  renderWithFederation(<RemoteSections />);
+  await waitForRows(2);
+  const menu = await openRowActions("Machine A");
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Fork container" }));
+  await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+  expect(fake.callsTo("a", "check_docker")).toHaveLength(1);
+  expect(fake.callsTo("a", "fork_environment")).toHaveLength(0);
+  expect(fake.callsTo("a", "start_environment_background")).toHaveLength(0);
+  expect(mockToastSuccess).not.toHaveBeenCalled();
+});
+
+test("a stop failure prevents restart admission", async () => {
+  const fake = installTwoMachines(({ command }) =>
+    command === "stop_environment" ? new Error("stop failed") : undefined,
+  );
+  renderWithFederation(<RemoteSections />);
+  await waitForRows(2);
+  const menu = await openRowActions("Machine A");
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Restart" }));
+  await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+  expect(fake.callsTo("a", "stop_environment")).toHaveLength(1);
+  expect(fake.callsTo("a", "start_environment_background")).toHaveLength(0);
+  expect(mockToastSuccess).not.toHaveBeenCalled();
+});
+
+test("background restart admission followed by lifecycle failure never reports restarted success", async () => {
+  const dataset = sharedIdDataset("idle");
+  const fake = installDesktopFake({ list: connectionList([MACHINE_A]), datasets: { a: dataset } });
+  renderWithFederation(<RemoteSections />);
+  await waitForRows(1);
+  const menu = await openRowActions("Machine A");
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Restart" }));
+  await waitFor(() => expect(fake.callsTo("a", "start_environment_background")).toHaveLength(1));
+  expect(mockToastSuccess).not.toHaveBeenCalled();
+  dataset.environments["project-1"]![0]!.status = "error";
+  await act(async () => {
+    await portalStore.refresh();
+  });
+  await waitFor(() =>
+    expect(portalStore.node("bk_a" as BackendId)?.environments[0]?.status).toBe("error"),
+  );
+  expect(mockToastSuccess).not.toHaveBeenCalled();
+});
+
+for (const rejectWrite of [false, true]) {
+  test(`remote folder actions ${rejectWrite ? "roll back failed writes" : "submit owner-specific changes and expand the destination"}`, async () => {
+    let finish!: (value: unknown) => void;
+    const write = new Promise((resolve) => {
+      finish = resolve;
+    });
+    const fake = installDesktopFake({
+      list: connectionList([MACHINE_A, MACHINE_B]),
+      datasets: {
+        a: {
+          projects: [
+            { id: "p", name: "App A", order: 0 },
+            { id: "q", name: "Other A", order: 1, folder: "Work" },
+          ],
+          environments: {},
+        },
+        b: { projects: [{ id: "p", name: "App B", order: 0 }], environments: {} },
+      },
+      respond: ({ command }) => (command === "arrange_projects" ? write : undefined),
+    });
+    useMachineViewStore.getState().setFolderKeyCollapsed("bk_a/work", true);
+    renderWithFederation(<RemoteSections />);
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "App A" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Add to Folder" }));
+    fireEvent.change(await screen.findByLabelText("Folder name"), {
+      target: { value: "  Work  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add to Folder" }));
+    await waitFor(() => expect(fake.callsTo("a", "arrange_projects")).toHaveLength(1));
+    expect(fake.callsTo("a", "arrange_projects")[0]!.args).toEqual({
+      projectIds: ["q", "p"],
+      folders: { p: "Work" },
+    });
+    expect(fake.callsTo("b", "arrange_projects")).toHaveLength(0);
+    await screen.findByRole("button", { name: "Collapse folder Work" });
+    await act(async () => finish(rejectWrite ? new Error("write denied") : { ok: true }));
+    if (rejectWrite) {
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+      expectDomAbsent(
+        screen.getByRole("button", { name: "App A" }).closest("[data-project-folder-content]"),
+      );
+    } else {
+      fireEvent.contextMenu(screen.getByRole("button", { name: "App A" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Remove from Folder" }));
+      await waitFor(() => expect(fake.callsTo("a", "arrange_projects")).toHaveLength(2));
+      expect(fake.callsTo("a", "arrange_projects")[1]!.args).toEqual({
+        projectIds: ["q", "p"],
+        folders: { p: null },
+      });
+      expectDomAbsent(
+        screen.getByRole("button", { name: "App A" }).closest("[data-project-folder-content]"),
+      );
+    }
+  });
+}

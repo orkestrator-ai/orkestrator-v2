@@ -19,9 +19,10 @@ import {
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
+import { getLocalServerStatus } from "./commands-servers.js";
 import { runCommandBuffer } from "./shell.js";
 import type { ApplyEnvironment, ApplySession, RuntimeProbe } from "./mcp-management/apply.js";
-import { DOCKER_LABEL_INPUTS_REVISION } from "./constants.js";
+import { DOCKER_LABEL_INPUTS_REVISION, DOCKER_LABEL_NETWORK_POLICY } from "./constants.js";
 import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
 import { containerAllowedDomains, containerNetworkPolicy } from "./container-network.js";
 import { observeContainerBoot } from "./container-readiness.js";
@@ -101,6 +102,12 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
           logicalSessionKey: session.logicalSessionKey,
           providerSessionId: session.providerSessionId,
           pendingDispatch: !!session.pendingDispatch,
+          ...(session.pendingDispatch?.requestId
+            ? { pendingDispatchId: session.pendingDispatch.requestId }
+            : {}),
+          ...(session.dispatchedRequestIds?.length
+            ? { lastDispatchId: session.dispatchedRequestIds.at(-1) }
+            : {}),
           coordinator: session.executionPolicy === "coordinator-read-only",
           projectResources: session.policy?.projectResources,
         }));
@@ -117,6 +124,22 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
       // Environment-level and no-spawn: never resolves a session (which a
       // restarted bridge may not have) and never cold-starts app-server.
       return service.reloadMcpConfigurationIfRunning(environmentId, "codex");
+    },
+    async reloadOpenCode(environmentId) {
+      const service = context.nativeAgents;
+      if (!service) return { outcome: "not-running" };
+      // Idle-gated inside the provider too: the directory's instance is
+      // disposed only while no session there is busy and no dispatch is open.
+      const outcome = await service.reloadMcpConfigurationIfRunning(environmentId, "opencode");
+      if (outcome !== "reloaded") return { outcome };
+      // Disposal dropped the runtime-only `orkestrator` entry with the old
+      // instance. Post it again now rather than when its memo expires.
+      context.runtime.localServers.openCodeAgentTools.forget(`local:${environmentId}`);
+      void getLocalServerStatus(environmentId, context, "opencode").catch(() => undefined);
+      return { outcome };
+    },
+    async openCodeMcpServerNames(environmentId) {
+      return context.nativeAgents?.openCodeMcpServerNamesIfRunning(environmentId);
     },
     async mcpConfigEvidence(environmentId, agent, logicalSessionKey) {
       const service = context.nativeAgents;
@@ -395,11 +418,19 @@ export function containerNetworkView(
     if (!environment || environment.environmentType !== "containerized") return null;
     if (environment.networkAccessMode === "full") return { mode: "full" };
     const config = await context.storage.loadConfig();
-    const imageId = currentRuntimeIdentity(environment, context)?.imageId;
-    const policyVersion = containerNetworkPolicy(
-      (await imageCapabilities(imageId, context))?.["network-policy"] ?? 0,
-      process.env.ORKESTRATOR_NETWORK_POLICY,
-    );
+    const runtime = currentRuntimeIdentity(environment, context);
+    const policyLabel = runtime?.containerId
+      ? await containerLabel(runtime.containerId, DOCKER_LABEL_NETWORK_POLICY)
+      : null;
+    // Kept runtimes retain the policy selected at creation, even when their
+    // image supports a newer policy or the backend override has changed.
+    const policyVersion =
+      policyLabel === "1" || policyLabel === "2" || policyLabel === "3"
+        ? (Number(policyLabel) as 1 | 2 | 3)
+        : containerNetworkPolicy(
+            (await imageCapabilities(runtime?.imageId, context))?.["network-policy"] ?? 0,
+            process.env.ORKESTRATOR_NETWORK_POLICY,
+          );
     return {
       mode: "restricted",
       allowedDomains: containerAllowedDomains(environment, config, policyVersion),

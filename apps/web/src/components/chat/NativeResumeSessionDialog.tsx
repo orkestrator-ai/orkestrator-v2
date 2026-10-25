@@ -80,12 +80,21 @@ export function NativeResumeSessionDialog({
     agentLabelRef.current = agentLabel;
   });
 
+  // Each open cycle starts loading from a clean slate, set while rendering so
+  // the effect below only issues the request.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) {
+      setIsLoading(true);
+      setError(null);
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
 
     const requestGeneration = ++requestGenerationRef.current;
-    setIsLoading(true);
-    setError(null);
 
     void (async () => {
       try {

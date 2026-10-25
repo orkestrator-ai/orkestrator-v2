@@ -30,6 +30,35 @@ export async function stopFederatedEnvironment(
   });
 }
 
+/** Stops, then starts again, as a container's Restart does on its own machine. */
+export async function restartFederatedEnvironment(
+  portal: PortalStore,
+  ref: EnvironmentRef,
+): Promise<void> {
+  await stopFederatedEnvironment(portal, ref);
+  await startFederatedEnvironment(portal, ref);
+}
+
+/**
+ * Persists a fork on its own node. The caller opens it before requesting startup.
+ */
+export async function forkFederatedEnvironment(
+  portal: PortalStore,
+  ref: EnvironmentRef,
+  environmentType: "local" | "containerized",
+): Promise<{ environmentId: string; projectId: string; name: string }> {
+  if (environmentType === "containerized") {
+    const docker = await portal.invokeOnNode<{ available: boolean }>(ref.backendId, "check_docker");
+    if (!docker.available) throw new Error("Docker is unavailable on the owning machine");
+  }
+  const fork = await portal.invokeOnNode<{ id: string; projectId: string; name: string }>(
+    ref.backendId,
+    "fork_environment",
+    { environmentId: ref.environmentId, environmentType },
+  );
+  return { environmentId: fork.id, projectId: fork.projectId, name: fork.name };
+}
+
 /** Persists a drag within one project of its node, in that node's own order. */
 export async function reorderFederatedEnvironments(
   portal: PortalStore,

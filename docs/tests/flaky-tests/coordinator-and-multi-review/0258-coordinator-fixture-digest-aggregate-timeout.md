@@ -189,3 +189,12 @@ The unchanged owning file passed alone (48 pass, 2.3 s, after failing twice more
 - **Assessment:** confirmed recurrence of the existing intermittent failure. No implementation, assertion, timeout or skip changed.
 
 - **Recurrence 2026-10-24 (node mbp3, Control MCP voice branch `todo-0041-control-mcp-voice-4a2c0ccc548b`):** failed in both `mise run test` aggregates (artifacts `orkestrator-test-run.SqxFKk` and `orkestrator-test-run.NcXAI6` under `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/`); failed in the second aggregate only; the unchanged owner passed alone (48 pass, 0 fail). The branch does not touch this area.
+
+
+## Activity sort review fixes — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name activity-repository -- mise run test`, on `activity-sort-order-6c8937d415e6-r1` with the activity sorting fixes staged. Workspace/root/bridges/protocol reservations were 4/1/2/1; desktop used two workers while isolated browser validation and other worktrees ran.
+- **Failure and counts:** `fixture tree digest > names every class of change a coordinator could make` exceeded its 5000 ms deadline at 5015.88 ms, followed by an `ENOENT` while the timed-out fixture was being removed. Desktop reported 1233 passed, fourteen skipped, one failed and one between-tests error across 1248 tests in 87 files (31.53 seconds).
+- **Complete unchanged owner:** `mise run test:logged -- --name activity-coordinator-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures` passed (exit 0, 3.3 seconds logged).
+- **Evidence:** `orkestrator-test-run.iufUhv/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after aggregate finalization, outer artifact `orkestrator-test-run.Kpp8NC/activity-repository.log.gz`; passing owner summary `orkestrator-test-run.nmfRRF/summary.json`, under the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Shared-host filesystem/process contention remains a hypothesis; no desktop implementation, assertion, timeout or skip changed.

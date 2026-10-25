@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Loader2, Plus, RefreshCw } from "lucide-react";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import {
@@ -94,39 +94,58 @@ export function DestinationPicker({
 }) {
   const [options, setOptions] = useState<WebAnnotationDestinationOption[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
+  // Each environment (or excluded session) loads its options afresh.
+  const optionsKey = `${environmentId}\0${excludeTabId ?? ""}`;
+  const [loadingFor, setLoadingFor] = useState(optionsKey);
+  if (optionsKey !== loadingFor) {
+    setLoadingFor(optionsKey);
     setLoading(true);
     setError(null);
-    try {
-      const result = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.destinations, {
-        environmentId,
-      });
-      const usable = excludeTabId
-        ? result.options.filter((option) => option.destination.tabId !== excludeTabId)
-        : result.options;
-      setOptions(usable);
-      const selected = usable.find(
-        (option) => option.destination.tabId === latest.current.valueTabId,
-      );
-      if (selected) latest.current.onChange(selected);
-      return usable;
-    } catch (loadError) {
-      setError(describeWebAnnotationError(loadError));
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, [environmentId, excludeTabId]);
+  }
 
   const valueTabId = value?.destination.tabId ?? null;
   // Preselect once per load; later renders must not override a user choice.
   const latest = useRef({ onChange, fallback, valueTabId });
-  latest.current = { onChange, fallback, valueTabId };
+  useLayoutEffect(() => {
+    latest.current = { onChange, fallback, valueTabId };
+  });
+
+  /**
+   * Callers mark the list loading first (while rendering above, or in
+   * `refresh`); state changes only once the request settles.
+   */
+  const fetchOptions = useCallback(
+    () =>
+      webAnnotationCommand(WEB_ANNOTATION_COMMANDS.destinations, { environmentId })
+        .then((result) => {
+          const usable = excludeTabId
+            ? result.options.filter((option) => option.destination.tabId !== excludeTabId)
+            : result.options;
+          setOptions(usable);
+          const selected = usable.find(
+            (option) => option.destination.tabId === latest.current.valueTabId,
+          );
+          if (selected) latest.current.onChange(selected);
+          return usable;
+        })
+        .catch((loadError: unknown) => {
+          setError(describeWebAnnotationError(loadError));
+          return null;
+        })
+        .finally(() => {
+          setLoading(false);
+        }),
+    [environmentId, excludeTabId],
+  );
+  const refresh = () => {
+    setLoading(true);
+    setError(null);
+    void fetchOptions();
+  };
   useEffect(() => {
-    void load().then((loaded) => {
+    void fetchOptions().then((loaded) => {
       const { onChange: select, fallback: annotationDefault, valueTabId: chosen } = latest.current;
       if (!loaded || chosen) return;
       const remembered = rememberedDestinationTabId(environmentId);
@@ -141,7 +160,7 @@ export function DestinationPicker({
         null;
       if (preferred) select(preferred);
     });
-  }, [environmentId, load]);
+  }, [environmentId, fetchOptions]);
 
   const choose = (option: WebAnnotationDestinationOption) => {
     onChange(option);
@@ -175,7 +194,7 @@ export function DestinationPicker({
             size="sm"
             variant="ghost"
             className="h-6 gap-1 px-1.5 text-[11px]"
-            onClick={() => void load()}
+            onClick={refresh}
             aria-label="Refresh agent sessions"
           >
             <RefreshCw

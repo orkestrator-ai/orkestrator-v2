@@ -63,14 +63,27 @@ describe("storage set identity", () => {
   test("uses persistent volumes only for a capable image on a sub-path capable engine", () => {
     const capable = { "persistent-workspace": 1 };
     const engine = { kind: "local-engine" as const, serverVersion: "29.7.2" };
-    expect(selectStorageFormat(capable, engine, {})).toEqual({ format: "volume-v1" });
-    expect(selectStorageFormat(null, engine, {})).toMatchObject({ format: "legacy-layer" });
-    expect(selectStorageFormat(capable, { ...engine, serverVersion: "25.0.3" }, {})).toMatchObject({
+    expect(selectStorageFormat(capable, engine)).toEqual({ format: "volume-v1" });
+    expect(selectStorageFormat(null, engine)).toMatchObject({ format: "legacy-layer" });
+    expect(selectStorageFormat(capable, { ...engine, serverVersion: "25.0.3" })).toMatchObject({
       reason: "engine-without-volume-subpath",
     });
-    expect(
-      selectStorageFormat(capable, engine, { ORKESTRATOR_CONTAINER_STORAGE: "legacy-layer" }),
-    ).toMatchObject({ reason: "disabled-by-configuration" });
+  });
+
+  test("the removed legacy-layer switch no longer keeps a capable image off volumes", () => {
+    const previous = process.env.ORKESTRATOR_CONTAINER_STORAGE;
+    process.env.ORKESTRATOR_CONTAINER_STORAGE = "legacy-layer";
+    try {
+      expect(
+        selectStorageFormat(
+          { "persistent-workspace": 1 },
+          { kind: "local-engine", serverVersion: "29.7.2" },
+        ),
+      ).toEqual({ format: "volume-v1" });
+    } finally {
+      if (previous === undefined) delete process.env.ORKESTRATOR_CONTAINER_STORAGE;
+      else process.env.ORKESTRATOR_CONTAINER_STORAGE = previous;
+    }
   });
 
   test("mounts the workspace whole and provider state only at its verified paths", () => {

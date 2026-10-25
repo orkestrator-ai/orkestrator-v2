@@ -518,10 +518,11 @@ Generate the reference before making the change; no artifact is committed
   runs the real native activity sweep and queue scan against fake providers,
   in rollback and shared modes. `workflows` (`recurring-baseline-workflows.ts`)
   runs the real feature-planning, build-pipeline, looped-review and
-  multi-review supervisors over a temporary store, in whole-store rollback and
-  keyed modes. Multi review's real rollback, `WorkflowDueScheduler`, runs on
-  real timers, so its legacy whole-store tick (`adaptiveScheduling: false`)
-  stands in for it. Each domain reports `storageReads` (store content
+  multi-review supervisors over a temporary store, in rollback and keyed
+  modes, on one manual clock. Rollback is what
+  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects: the whole-store tick, or for
+  multi review its `WorkflowDueScheduler` (15 s reconciliation scan,
+  per-workflow due passes). Each domain reports `storageReads` (store content
   decoded, cached or not, and uncached row queries) beside `storageStats`
   (reuse of already-decoded records). The test holds every attempt to a
   per-domain budget (`STORAGE_PER_ATTEMPT` in `recurring-baseline.test.ts`),

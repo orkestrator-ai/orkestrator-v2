@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type {
@@ -1047,7 +1047,10 @@ export function useNativeAgentSession<TMessage = unknown>({
    */
   const establishmentFailureRef = useRef(false);
   const backgroundRefreshEnabledRef = useRef(enabled && isActive);
-  backgroundRefreshEnabledRef.current = enabled && isActive;
+  // Published at commit, before the effects that schedule background reads.
+  useLayoutEffect(() => {
+    backgroundRefreshEnabledRef.current = enabled && isActive;
+  }, [enabled, isActive]);
   const refreshRef =
     useRef<
       (options?: {
@@ -2744,6 +2747,11 @@ export function useNativeAgentSession<TMessage = unknown>({
   // keep vouching for a platform or environment it never covered — a deferred
   // tab resolves its platform after mount, which is exactly that case.
   useEffect(() => {
+    // The reset is one unit with the ref and shared projection-cache reads
+    // below, which only an effect may touch: the restored availability and
+    // errors come from that external cache, so they cannot be derived while
+    // rendering, and resetting the state half earlier would split the unit.
+    // oxlint-disable-next-line react/set-state-in-effect
     setHasCompletedRead(false);
     setResumeSessionReplacement(null);
     // For the same reason: one identity's creation failure must not keep
@@ -2839,6 +2847,10 @@ export function useNativeAgentSession<TMessage = unknown>({
 
   useEffect(() => {
     if (!enabled || !isActive) {
+      // Connecting is the external system this effect owns, and its indicators
+      // start and stop with it: `connect()` raises them synchronously, so going
+      // inactive clears them here rather than in a separate render-time path.
+      // oxlint-disable-next-line react/set-state-in-effect
       setIsRefreshing(false);
       setTranscriptRefreshing(false);
       return;
@@ -2890,7 +2902,9 @@ export function useNativeAgentSession<TMessage = unknown>({
       await runNativeSessionReadRound(sharedReadTarget, context);
     },
   });
-  coordinatedInvalidateRef.current = coordinatedInvalidate;
+  useLayoutEffect(() => {
+    coordinatedInvalidateRef.current = coordinatedInvalidate;
+  }, [coordinatedInvalidate]);
 
   useEffect(() => {
     const unsubscribeChange = onResourceChanged("native-agent-session", (change) => {
@@ -3235,8 +3249,8 @@ export function useNativeAgentSession<TMessage = unknown>({
    * counter, so repeated clicks cannot outrun the provider or ask for a window
    * the session never had.
    */
-  const loadEarlierMessages =
-    useCallback(async (): Promise<NativeAgentSessionProjection<TMessage> | null> => {
+  const loadEarlierMessages = useCallback(
+    async function loadEarlierMessagesPage(): Promise<NativeAgentSessionProjection<TMessage> | null> {
       const requestedOperationEpoch = projectionOperationEpochRef.current;
       const progressive = await nativeAgentProgressiveSupported();
       if (progressive && !historyCursorRef.current) {
@@ -3403,7 +3417,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           ) {
             duplicatePageSkipsRef.current += 1;
             historyCursorRef.current = page.nextCursor;
-            return loadEarlierMessages();
+            return loadEarlierMessagesPage();
           }
           duplicatePageSkipsRef.current = 0;
           const retained = historyMessagesRef.current.map(
@@ -3481,7 +3495,8 @@ export function useNativeAgentSession<TMessage = unknown>({
         if (!added) return retireLoadEarlierControl({ sticky: true });
       }
       return projection;
-    }, [
+    },
+    [
       applyProjection,
       commitSyncMaterialization,
       historyRequestBudget,
@@ -3494,7 +3509,8 @@ export function useNativeAgentSession<TMessage = unknown>({
       resetSyncState,
       retireLoadEarlierControl,
       sessionKey,
-    ]);
+    ],
+  );
 
   return {
     sessionKey,

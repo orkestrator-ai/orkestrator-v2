@@ -165,8 +165,21 @@ ork session transcript "$SESSION" --limit 20
 ```
 
 - Send long prompts with `--prompt-file`, not `--prompt`.
-- `session prompt` against a busy session exits 8. Use `session steer` (on
-  providers that support it) or wait for the turn to end.
+- **Prompt text is typed intent.** A prompt whose first word names a provider
+  command (`/review …`, a Codex `$skill`) runs that command, as typing it in
+  the composer would. Add `--literal` to send it as plain text; a provider
+  that would still run it (Claude, for a known command) refuses instead
+  (exit 1, nothing sent).
+- `session prompt` against a busy session exits 8. Add `--enqueue` to queue it
+  behind the running turn (the backend sends it later), use `session steer`
+  (on providers that support it), or wait for the turn to end.
+- `ork session commands "$SESSION"` lists the session's slash commands;
+  `ork session command "$SESSION" --command /review --wait -- the open diff`
+  runs one as a selection. An unknown, ambiguous, changed or unavailable
+  command fails (exit 3 or 8) and nothing is sent.
+- `--attach FILE` (repeatable) sends local files with `session start` or
+  `session prompt` (at most 8 files, 256 KiB in total); the backend writes them
+  into the workspace under `.orkestrator/prompt-attachments/`.
 - `session stop SESSION` stops the current turn, not the environment.
 - `environment launch` does create, start and first prompt in one call. Do
   not follow it with `session start`.
@@ -244,6 +257,9 @@ adding a test, check where its scenario class is already proved:
 | Transcript recovery | `public-api-launch.test.ts` (ordered bounded pages, older cursor); `public-api-sessions.test.ts` (routine reads never read transcripts) |
 | Following | `client-waits.test.ts` (JSONL once per message, gaps flagged). Following polls snapshots; there is no event stream |
 | Exec | `exec` scenario, local and container (exit passthrough, argv, cancel, delete during a run drains); `public-api-exec.test.ts` |
+| Project init and cascade removal | `project-init` (local) and `project-cascade` scenarios; `public-api-project-init-cascade.test.ts` (no remote, refusals, per-environment results, partial cascade keeps the project, Control MCP refused); browser check in `cli-ui.spec.ts` (an open and a reloaded renderer) |
+| Selected commands, literal, enqueue, attachments | `public-api-command-surface.test.ts` (listing without private bindings, refusals before admission, vanished-at-dispatch fails, literal and its refusal, queue identity, refusal and removal, staging and fingerprints, typed-command retry keeps its selection); `command-surface.test.ts` (client inputs, attachment bounds); live Claude in `live-session` |
+| Shell completion | `command-surface.test.ts` (table covers every command; bash completes words across IDs) |
 | Live provider turn | `live-session` scenario (opt-in, `--provider`): one bounded turn with a file assertion and a follow-up |
 
 `setup-failure` and `client-exit` run locally only, so the container matrix has

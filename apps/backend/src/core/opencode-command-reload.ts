@@ -95,6 +95,11 @@ export class OpenCodeInstanceReload {
     return (await this.attempt()) === "reloaded" ? "reloaded" : "deferred";
   }
 
+  /** MCP apply owns retries and cancellation; a busy attempt must leave no idle callback. */
+  async requestOnce(): Promise<"reloaded" | "busy"> {
+    return this.attempt();
+  }
+
   /**
    * Every stream event, owned session or not: a deferred reload waits for the
    * whole directory, so any session's idle edge re-checks it.

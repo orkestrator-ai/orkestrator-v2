@@ -12,6 +12,7 @@ import { openCodeCoordinatorResearchToolIds } from "./opencode-coordinator-resea
 import { runCommand } from "./shell.js";
 import { createOpenCodeProviderLogin } from "./opencode-provider-login.js";
 import type { OpenCodeAgentToolsTuning } from "./opencode-agent-tools.js";
+import { createMcpRuntimeProbe } from "./commands-registry-mcp.js";
 import { createProject, StorageService } from "./storage.js";
 
 /**
@@ -200,6 +201,24 @@ process.on("SIGTERM", () => process.exit(0));
     // Never the tab credential: it would leave the coordinator with mail and
     // ticket tools but none of its delegation tools.
     expect(new Set(urls)).toEqual(new Set([SCOPED_URL]));
+    expect(tabConnection).not.toHaveBeenCalled();
+  });
+
+  test("an MCP disposal forgets the memo and the real status path reposts the launch connection", async () => {
+    const { context, runtimeId, tabConnection } = await coordinatorContext();
+    await startLocalServerUnlocked(runtimeId, context, "opencode");
+    const tools = context.runtime.localServers.openCodeAgentTools;
+    expect(await posted()).toEqual([SCOPED_URL]);
+    context.nativeAgents = {
+      reloadMcpConfigurationIfRunning: async () => "reloaded",
+    } as unknown as CommandContext["nativeAgents"];
+    const probe = createMcpRuntimeProbe(context);
+    expect(await probe.reloadOpenCode!(runtimeId)).toEqual({ outcome: "reloaded" });
+    // Join the status operation queued by the production probe, then its actual HTTP POST.
+    await readLocalServerStatus(runtimeId, context, "opencode");
+    await tools.settled(`local:${runtimeId}`);
+    expect(await posted()).toEqual([SCOPED_URL, SCOPED_URL]);
+    expect(tools.state(`local:${runtimeId}`)).toBe("connected");
     expect(tabConnection).not.toHaveBeenCalled();
   });
 

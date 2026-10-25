@@ -151,9 +151,10 @@ All four were closed in code on 2026-10-24; the live checks are under
    `applyActiveCodexLoginAfterLegacyBoot`, the active Codex login, but only
    when the Codex marker proves an unreconciled boot and Codex has no live
    work. The marker is left as is, so the next bridge start still replaces the
-   bridge. Retiring the legacy mount path
-   ([0021](../containers-and-environments/0021-container-rebuild-state-preservation.md))
-   removes this code. Evidence: `agent-accounts-containers.test.ts` (three
+   bridge. The legacy mount path is kept for images that predate staged
+   inputs, so this code stays while they are supported
+   ([container lifecycle](../../architecture/container-lifecycle.md#rollout-switches-and-legacy-runtimes)).
+   Evidence: `agent-accounts-containers.test.ts` (three
    legacy-boot tests).
 2. **`claude` / `codex` run from a container terminal.** Done.
    `start_terminal_session` calls `applyActiveAgentAccountsForContainerTerminal`
@@ -452,8 +453,6 @@ Assumptions:
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) (MCP OAuth).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the Codex round trip and agent-test credential isolation.
-- [0021-container-rebuild-state-preservation.md](../containers-and-environments/0021-container-rebuild-state-preservation.md)
-  (retiring the legacy host mount removes the gap 1 push).
 - [agent-engines.md](../../architecture/agent-engines.md).
 
 ## Replaces

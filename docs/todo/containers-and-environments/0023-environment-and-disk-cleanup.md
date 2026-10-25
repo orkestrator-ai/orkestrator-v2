@@ -238,7 +238,7 @@ here must keep these invariants:
 ## Related
 
 - [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
-  (Desktop runs), [0021-container-rebuild-state-preservation.md](0021-container-rebuild-state-preservation.md)
+  (Desktop runs), [container lifecycle](../../architecture/container-lifecycle.md#recovery-copies)
   (recovery copies and volumes the ledger removes),
   [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md),
   [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).

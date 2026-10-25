@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
@@ -127,7 +127,9 @@ export function DesignWorkspaceDialog({
   const backendKey = designBackendKey();
   const scope = `${backendKey}\u0000${environmentId}`;
   const scopeRef = useRef(scope);
-  scopeRef.current = scope;
+  useLayoutEffect(() => {
+    scopeRef.current = scope;
+  }, [scope]);
 
   const [mode, setMode] = useState<DesignWorkspaceMode>(initialMode);
   // The draft lives here, outside the tab panels, so switching modes, closing
@@ -206,8 +208,9 @@ export function DesignWorkspaceDialog({
   useEffect(() => {
     if (open) refreshReadiness();
   }, [open, scope, refreshReadiness]);
-  useEffect(() => {
-    importEpoch.current++;
+  const [renderedScope, setRenderedScope] = useState(scope);
+  if (renderedScope !== scope) {
+    setRenderedScope(scope);
     setBusy(false);
     setUploadFallback(false);
     setError(null);
@@ -215,6 +218,9 @@ export function DesignWorkspaceDialog({
     setNotice(null);
     // Images were written into the previous environment's workspace.
     setBriefImages([]);
+  }
+  useEffect(() => {
+    importEpoch.current++;
   }, [scope]);
 
   // Layout facts follow the pane store so open/focus choices stay current.

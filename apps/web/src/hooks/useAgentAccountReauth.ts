@@ -31,6 +31,16 @@ export function useAgentAccountReauth(
   const current = useRef(IDLE);
   const epoch = useRef(0);
   const pending = progress.state === "pending";
+  // A new platform, machine, failure or enablement starts from idle. Reset
+  // while rendering so the previous scope's result is never shown for this one;
+  // the effect below fences that scope's in-flight reads.
+  const scope = JSON.stringify([platform, enabled, failureAt ?? null, machine]);
+  const [renderedScope, setRenderedScope] = useState(scope);
+  if (renderedScope !== scope) {
+    setRenderedScope(scope);
+    setProgress(IDLE);
+    setError(null);
+  }
 
   const adopt = useCallback(
     (next: AgentAccountLoginProgress) => {
@@ -51,8 +61,6 @@ export function useAgentAccountReauth(
   useEffect(() => {
     const version = ++epoch.current;
     current.current = IDLE;
-    setProgress(IDLE);
-    setError(null);
     if (enabled) {
       void getAgentAccountLogin(machine)
         .then(async (existing) => {

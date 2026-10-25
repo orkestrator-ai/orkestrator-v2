@@ -838,6 +838,7 @@ export type RebuildUnavailableReason =
   | "image-unavailable"
   | "image-without-storage-contract"
   | "engine-without-volume-subpath"
+  /** Sent only by a backend of 2.30.0-beta or earlier, which had a storage switch. */
   | "disabled-by-configuration"
   | "unsupported-topology"
   | "retention-limit"

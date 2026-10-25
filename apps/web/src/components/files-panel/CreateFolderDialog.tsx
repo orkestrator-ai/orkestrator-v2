@@ -36,10 +36,18 @@ export function CreateFolderDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const folderName = value.trim();
 
+  // Opening the dialog for a directory starts from the default name.
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  if (parentDirectory !== openedFor) {
+    setOpenedFor(parentDirectory);
+    if (parentDirectory !== null) {
+      setValue(DEFAULT_NEW_FOLDER_NAME);
+      setError(null);
+    }
+  }
+
   useEffect(() => {
     if (parentDirectory === null) return;
-    setValue(DEFAULT_NEW_FOLDER_NAME);
-    setError(null);
     const frame = requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.select();

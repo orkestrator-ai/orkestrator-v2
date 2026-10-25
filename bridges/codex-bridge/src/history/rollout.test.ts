@@ -957,6 +957,25 @@ describe("rollout public helpers (continued)", () => {
         "user",
       ),
     ).toBeNull();
+    // Codex's injected environment block is not a user turn either.
+    expect(
+      extractPersistedMessageText(
+        [
+          {
+            type: "input_text",
+            text: "<environment_context>\n  <cwd>/workspace</cwd>\n  <shell>zsh</shell>\n</environment_context>",
+          },
+        ],
+        "user",
+      ),
+    ).toBeNull();
+    // A user who quotes the block inside their own message is still shown.
+    expect(
+      extractPersistedMessageText(
+        [{ type: "input_text", text: "<environment_context> looks wrong, why?" }],
+        "user",
+      ),
+    ).toBe("<environment_context> looks wrong, why?");
     // A user who writes about the heading is still shown.
     expect(
       extractPersistedMessageText(

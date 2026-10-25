@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, File, Folder, FolderPlus, Home, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -50,54 +50,68 @@ export function HostPathPickerDialog() {
     setCreateFolderError(null);
   };
 
-  const load = useCallback(
-    async (path: string | undefined, hidden: boolean) => {
+  /** The state a new listing starts from; the rest of `load` follows in `fetchListing`. */
+  const startListing = () => {
+    setIsCreatingFolder(false);
+    setIsLoading(true);
+    setSelectedFile(null);
+    setError(null);
+    // The new-folder form targets the listed folder, so it never outlives a navigation.
+    setNewFolderName(null);
+    setCreateFolderError(null);
+  };
+
+  const fetchListing = useCallback(
+    (path: string | undefined, hidden: boolean) => {
       const generation = ++loadGeneration.current;
       createOperation.current = null;
-      setIsCreatingFolder(false);
       navigationPending.current = true;
-      setIsLoading(true);
-      setSelectedFile(null);
-      setError(null);
-      // The new-folder form targets the listed folder, so it never outlives a navigation.
-      setNewFolderName(null);
-      setCreateFolderError(null);
-      try {
-        const next = await listHostDirectory(path, {
-          includeFiles: isFileMode,
-          showHidden: hidden,
+      return listHostDirectory(path, { includeFiles: isFileMode, showHidden: hidden })
+        .then(
+          (result) => {
+            if (generation !== loadGeneration.current) return;
+            setListing(result);
+            setAddressInput(result.path);
+            // A typed path that names a file selects it instead of just opening its folder.
+            // Older remote backends omit requestedFile; preserve their exact-path selection.
+            const requestedFile =
+              result.requestedFile === undefined
+                ? result.entries.find((entry) => !entry.isDirectory && entry.path === path)?.path
+                : result.requestedFile;
+            setSelectedFile(isFileMode ? (requestedFile ?? null) : null);
+          },
+          (loadError: unknown) => {
+            if (generation !== loadGeneration.current) return;
+            setListing(null);
+            setSelectedFile(null);
+            setError(
+              loadError instanceof Error ? loadError.message : "Could not read that folder.",
+            );
+          },
+        )
+        .finally(() => {
+          if (generation === loadGeneration.current) {
+            navigationPending.current = false;
+            setIsLoading(false);
+          }
         });
-        if (generation !== loadGeneration.current) return;
-        setListing(next);
-        setAddressInput(next.path);
-        // A typed path that names a file selects it instead of just opening its folder.
-        // Older remote backends omit requestedFile; preserve their exact-path selection.
-        const requestedFile =
-          next.requestedFile === undefined
-            ? next.entries.find((entry) => !entry.isDirectory && entry.path === path)?.path
-            : next.requestedFile;
-        setSelectedFile(isFileMode ? (requestedFile ?? null) : null);
-      } catch (loadError) {
-        if (generation !== loadGeneration.current) return;
-        setListing(null);
-        setSelectedFile(null);
-        setError(loadError instanceof Error ? loadError.message : "Could not read that folder.");
-      } finally {
-        if (generation === loadGeneration.current) {
-          navigationPending.current = false;
-          setIsLoading(false);
-        }
-      }
     },
     [isFileMode],
   );
 
-  // `load` only changes with the request's mode, so this restarts browsing once per request.
-  useEffect(() => {
-    if (!request) {
-      loadGeneration.current += 1;
-      createOperation.current = null;
-      navigationPending.current = false;
+  const load = (path: string | undefined, hidden: boolean) => {
+    startListing();
+    return fetchListing(path, hidden);
+  };
+
+  // Each request starts browsing afresh; without one, nothing is shown.
+  const [shownRequest, setShownRequest] = useState(request);
+  if (shownRequest !== request) {
+    setShownRequest(request);
+    if (request) {
+      setShowHidden(false);
+      startListing();
+    } else {
       setListing(null);
       setSelectedFile(null);
       setError(null);
@@ -105,11 +119,21 @@ export function HostPathPickerDialog() {
       setNewFolderName(null);
       setCreateFolderError(null);
       setIsCreatingFolder(false);
+    }
+  }
+
+  // `fetchListing` only changes with the request's mode, so this restarts
+  // browsing once per request. A layout effect retires the previous request's
+  // listing in the same commit that cleared its state.
+  useLayoutEffect(() => {
+    if (!request) {
+      loadGeneration.current += 1;
+      createOperation.current = null;
+      navigationPending.current = false;
       return;
     }
-    setShowHidden(false);
-    void load(request.defaultPath?.trim() || undefined, false);
-  }, [request, load]);
+    void fetchListing(request.defaultPath?.trim() || undefined, false);
+  }, [request, fetchListing]);
 
   const navigate = (path: string) => void load(path, showHidden);
 

@@ -9,9 +9,8 @@ declare global {
   }
 }
 
-export function TmuxComposeFocusFixture() {
-  const [submitting, setSubmitting] = useState(false);
-  const [completed, setCompleted] = useState(0);
+/** Installed before the fixture renders. */
+export function installTmuxComposeFocusFixture() {
   window.orkestrator = {
     invoke: async <T,>(command: string) => {
       if (command === "get_compose_draft") return null as T;
@@ -29,6 +28,11 @@ export function TmuxComposeFocusFixture() {
     process: { exit: async () => {} },
     window: { startDragging: async () => {} },
   };
+}
+
+export function TmuxComposeFocusFixture() {
+  const [submitting, setSubmitting] = useState(false);
+  const [completed, setCompleted] = useState(0);
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
       <output data-testid="completed-sends">{completed}</output>

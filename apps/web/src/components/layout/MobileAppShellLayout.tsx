@@ -11,6 +11,7 @@ import { Menu, Wrench, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 
 /**
@@ -136,8 +137,36 @@ export function MobileAppShellLayout({
     [],
   );
 
-  useEffect(() => {
+  // Realm dialogs live in another document and never update the local dialog
+  // store. Yield on each request even when local selection was already empty.
+  useEffect(
+    () =>
+      useRemoteWorkspaceStore.subscribe((state, previous) => {
+        const nodeId = state.active?.nodeId;
+        if (!nodeId) return;
+        const next = state.requests[nodeId];
+        if (!next || next === previous.requests[nodeId]) return;
+        if (
+          !next.request.dialog &&
+          !next.request.createEnvironmentProjectId &&
+          !next.request.addProject
+        )
+          return;
+        restoreSidebarFocusRef.current = false;
+        restoreToolsFocusRef.current = false;
+        setSidebarOpen(false);
+        setToolsOpen(false);
+      }),
+    [],
+  );
+
+  // A new title closes its tooltip and forgets the pointer that opened it.
+  const [tooltipTitle, setTooltipTitle] = useState(title);
+  if (tooltipTitle !== title) {
+    setTooltipTitle(title);
     setTitleTooltipOpen(false);
+  }
+  useEffect(() => {
     titlePointerTypeRef.current = null;
     titleTooltipWasOpenOnPointerDownRef.current = false;
   }, [title]);

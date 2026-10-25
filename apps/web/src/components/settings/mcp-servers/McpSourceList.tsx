@@ -120,6 +120,7 @@ function DefinitionRow({
         "flex flex-col gap-1 px-3 py-2 sm:flex-row sm:items-center sm:gap-3",
         highlighted && "bg-blue-500/10",
       )}
+      aria-current={highlighted ? "true" : undefined}
       aria-label={`${definition.name}, ${STATUS_TEXT[definition.status]}`}
     >
       <div className="min-w-0 flex-1">
@@ -201,7 +202,7 @@ function DefinitionRow({
 
 export function McpSourceList({
   snapshot,
-  highlightName,
+  highlightEntryId,
   onEdit,
   onRename,
   onRemove,
@@ -209,7 +210,8 @@ export function McpSourceList({
   onReload,
 }: {
   snapshot: McpManagementSnapshot;
-  highlightName?: string;
+  /** The saved row a live session's link resolved to (`joinLiveMcpServer`). */
+  highlightEntryId?: string;
   /** Re-read the snapshot; environment overlay actions end with one. */
   onReload: () => void;
   onEdit: McpRowAction;
@@ -295,7 +297,7 @@ export function McpSourceList({
                     key={definition.entryId}
                     definition={definition}
                     snapshot={snapshot}
-                    highlighted={highlightName === definition.name}
+                    highlighted={highlightEntryId === definition.entryId}
                     onEdit={onEdit}
                     onRename={onRename}
                     onRemove={onRemove}

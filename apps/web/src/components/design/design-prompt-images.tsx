@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { X } from "lucide-react";
 import { toast } from "sonner";
 import type { WorkspaceAttachment } from "@/components/chat/NativeAttachmentMenu";
@@ -18,6 +26,13 @@ import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeCompos
 export type DesignPromptImage = WorkspaceAttachment & { type: "image" };
 
 export const DESIGN_PROMPT_IMAGE_LIMIT = MAX_PROMPT_ATTACHMENTS;
+
+/** Image writes and submission state owned by one paste destination. */
+interface Reservations {
+  pending: number;
+  submitting: boolean;
+  active: boolean;
+}
 
 /**
  * Adds images to a conversation's unsent draft. Returns false, changing
@@ -66,46 +81,52 @@ export function useDesignPromptImagePaste({
   const writable = enabled && Boolean(containerId || worktreePath);
 
   // Each destination owns its reservations. Old writes may finish, but cannot
-  // append to a replacement scope or alter its pending count.
-  const operationScope = useMemo(
-    () => ({
-      scopeKey,
-      environmentId,
-      containerId,
-      worktreePath,
-      pending: 0,
-      submitting: false,
-      active: true,
-    }),
+  // append to a replacement destination or alter its pending count.
+  const destination = useMemo(
+    () => ({ scopeKey, environmentId, containerId, worktreePath }),
     [scopeKey, environmentId, containerId, worktreePath],
   );
-  const currentScope = useRef(operationScope);
-  currentScope.current = operationScope;
-  const [, refresh] = useState(0);
+  const reservations = useRef(new WeakMap<object, Reservations>());
+  const reservationsFor = useCallback((owner: object) => {
+    let found = reservations.current.get(owner);
+    if (!found) {
+      found = { pending: 0, submitting: false, active: true };
+      reservations.current.set(owner, found);
+    }
+    return found;
+  }, []);
+  const currentDestination = useRef(destination);
+  // Mirrors the current destination's pending count so a render shows it.
+  const [pasting, setPasting] = useState({ destination, pending: 0 });
   const imagesRef = useRef(images);
-  imagesRef.current = images;
   const enabledRef = useRef(writable);
-  enabledRef.current = writable;
   const onChangeRef = useRef(onImagesChange);
-  onChangeRef.current = onImagesChange;
-  const previousScope = useRef(operationScope);
+  useLayoutEffect(() => {
+    currentDestination.current = destination;
+    imagesRef.current = images;
+    enabledRef.current = writable;
+    onChangeRef.current = onImagesChange;
+  });
+  const previousDestination = useRef(destination);
   useEffect(() => {
-    operationScope.active = true;
-    if (previousScope.current !== operationScope) {
-      previousScope.current = operationScope;
+    const owned = reservationsFor(destination);
+    owned.active = true;
+    if (previousDestination.current !== destination) {
+      previousDestination.current = destination;
       imagesRef.current = [];
       onChangeRef.current([]);
     }
     return () => {
-      operationScope.active = false;
+      owned.active = false;
     };
-  }, [operationScope]);
+  }, [destination, reservationsFor]);
 
   const beginPaste = useCallback(
     (knownImage: boolean) => {
-      if (operationScope.submitting) return false;
+      const owned = reservationsFor(destination);
+      if (owned.submitting) return false;
       const writableAtStart = enabledRef.current;
-      const hasSlot = imagesRef.current.length + operationScope.pending < DESIGN_PROMPT_IMAGE_LIMIT;
+      const hasSlot = imagesRef.current.length + owned.pending < DESIGN_PROMPT_IMAGE_LIMIT;
       const canAttachImage = () => {
         if (!writableAtStart) {
           toast.error("Start this environment to attach images");
@@ -122,19 +143,19 @@ export function useDesignPromptImagePaste({
       // Native clipboard probes can represent text. Delay their rejection until
       // decoding proves they are images, so ordinary text has no error toast.
       if (knownImage && !canAttachImage()) return false;
-      operationScope.pending += 1;
-      refresh((revision) => revision + 1);
-      const isCurrent = () => operationScope.active && currentScope.current === operationScope;
+      owned.pending += 1;
+      setPasting({ destination, pending: owned.pending });
+      const isCurrent = () => owned.active && currentDestination.current === destination;
       return {
         isCurrent,
         canAttachImage,
         finish: () => {
-          operationScope.pending -= 1;
-          if (isCurrent()) refresh((revision) => revision + 1);
+          owned.pending -= 1;
+          if (isCurrent()) setPasting({ destination, pending: owned.pending });
         },
       };
     },
-    [operationScope],
+    [destination, reservationsFor],
   );
   const onAttach = useCallback((attachment: PastedImageAttachment) => {
     const next = [...imagesRef.current, attachment];
@@ -152,15 +173,16 @@ export function useDesignPromptImagePaste({
   });
 
   return {
-    isPasting: operationScope.pending > 0,
+    isPasting: pasting.destination === destination && pasting.pending > 0,
     // The synchronous guard also covers paste and click in the same event turn.
     tryBeginSubmission: () => {
-      if (operationScope.pending > 0 || operationScope.submitting) return false;
-      operationScope.submitting = true;
+      const owned = reservationsFor(destination);
+      if (owned.pending > 0 || owned.submitting) return false;
+      owned.submitting = true;
       return true;
     },
     endSubmission: () => {
-      operationScope.submitting = false;
+      reservationsFor(destination).submitting = false;
     },
   };
 }

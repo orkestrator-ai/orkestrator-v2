@@ -614,6 +614,116 @@ export const SCENARIOS: ScenarioDefinition[] = [
     },
   },
   {
+    name: "project-cascade",
+    description:
+      "Cascade removal: a project with a started and a stopped environment is refused without --cascade, then removed with it; checkout and origin survive.",
+    async run(context) {
+      await configureConnection(context);
+      const fixture = await addFixtureProject(context, "cascade");
+      const started = await createEnvironment(context, fixture.projectId, "cascade-a");
+      const stopped = await createEnvironment(context, fixture.projectId, "cascade-b");
+      const ready = await context.cli.ok<{ environment: PublicEnvironmentSummary }>(
+        ["environment", "start", started.id, "--wait", "ready", "--timeout", "3m"],
+        "start one environment",
+      );
+      const refused = await context.cli.run(["--json", "project", "remove", fixture.projectId], {
+        stage: "remove without cascade",
+        expectCode: 8,
+      });
+      expectThat(
+        refused.envelope && !refused.envelope.ok && refused.envelope.error.code === "not-empty",
+        "a project with environments was not refused",
+      );
+      const removed = await context.cli.run(
+        [
+          "--json",
+          "project",
+          "remove",
+          fixture.projectId,
+          "--cascade",
+          "--wait",
+          "--timeout",
+          "5m",
+          "--request-id",
+          "cascade-remove",
+        ],
+        { stage: "remove --cascade --wait", expectCode: 0, timeoutMs: 6 * 60_000 },
+      );
+      expectThat(receiptOf(removed).state === "succeeded", "cascade removal did not succeed");
+      for (const environment of [started, stopped]) {
+        await context.cli.run(["--json", "environment", "get", environment.id], {
+          stage: "environment deleted by cascade",
+          expectCode: 3,
+        });
+      }
+      await context.cli.run(["--json", "project", "get", fixture.projectId], {
+        stage: "project removed",
+        expectCode: 3,
+      });
+      if (context.environmentType === "local" && ready.result.environment.workspacePath) {
+        expectThat(
+          !(await exists(ready.result.environment.workspacePath)),
+          "the cascade left a worktree behind",
+        );
+      }
+      expectThat(await exists(fixture.projectPath), "the cascade deleted the checkout");
+      expectThat(
+        git(fixture.projectPath, ["remote", "get-url", "origin"]) === fixture.originPath,
+        "the cascade changed the checkout's origin",
+      );
+      const replay = await context.cli.run(
+        [
+          "--json",
+          "project",
+          "remove",
+          fixture.projectId,
+          "--cascade",
+          "--request-id",
+          "cascade-remove",
+        ],
+        { stage: "replay cascade key", expectCode: 0 },
+      );
+      expectThat(receiptOf(replay).replayed, "replaying the cascade key ran it again");
+    },
+  },
+  {
+    name: "project-init",
+    description:
+      "Local-only init: git init with one commit and no remote, registered; a local environment starts from its own branch.",
+    environmentTypes: ["local"],
+    async run(context) {
+      await configureConnection(context);
+      const target = path.join(context.root, "fixtures", "init-scratch");
+      const { result } = await context.cli.ok<{ project: PublicProjectSummary }>(
+        ["project", "init", "--path", target, "--request-id", "init-scratch"],
+        "project init",
+      );
+      const projectId = result.project.id;
+      context.cleanup.push({
+        label: `remove project ${projectId}`,
+        run: async () => {
+          await context.cli.run(
+            ["--json", "project", "remove", projectId, "--cascade", "--wait", "--timeout", "3m"],
+            { stage: "cleanup init project" },
+          );
+        },
+      });
+      expectThat(git(target, ["rev-list", "--count", "HEAD"]) === "1", "init made no commit");
+      expectThat(git(target, ["remote"]) === "", "init configured a remote");
+      const environment = await createEnvironment(context, projectId, "init-env");
+      const started = await context.cli.ok<{ environment: PublicEnvironmentSummary }>(
+        ["environment", "start", environment.id, "--wait", "ready", "--timeout", "3m"],
+        "start an environment of the local-only project",
+      );
+      const workspace = started.result.environment.workspacePath;
+      expectThat(workspace && (await exists(workspace)), "no worktree was created");
+      expectThat(
+        git(workspace!, ["rev-parse", "HEAD"]) === git(target, ["rev-parse", "HEAD"]),
+        "the worktree did not start from the repository's own main",
+      );
+    },
+  },
+  {
     name: "live-session",
     description:
       "Opt-in, credentialed: one bounded turn per provider, checked by a file assertion and a follow-up.",
@@ -743,9 +853,194 @@ export const SCENARIOS: ScenarioDefinition[] = [
         (follow.envelope?.receipt as PublicReceipt)?.state === "succeeded",
         "follow-up did not complete",
       );
+      await liveCommandSurface(context, sessionId);
     },
   },
 ];
+
+/**
+ * The live half of the post-release command surface: the session's command
+ * catalogue, refusals that never send text, a selected project command
+ * (Claude), --literal, --attach and --enqueue behind a running turn.
+ */
+async function liveCommandSurface(context: ScenarioContext, sessionId: string): Promise<void> {
+  const listed = await context.cli.ok<{
+    catalogue: { status: string };
+    commands: Array<{ id: string; name: string; bindingRevision: string | null }>;
+  }>(["session", "commands", sessionId, "--refresh"], "session commands --refresh", {
+    timeoutMs: 3 * 60_000,
+  });
+  const unknown = await context.cli.run(
+    ["--json", "session", "command", sessionId, "--command", "/ork-no-such-command"],
+    { stage: "unknown command refused", expectCode: 3 },
+  );
+  expectThat(!maybeReceipt(unknown), "an unknown command was admitted");
+  const listedCommand = listed.result.commands.find(
+    (entry) => entry.bindingRevision && !entry.id.startsWith("orkestrator:"),
+  );
+  if (listedCommand) {
+    await context.cli.run(
+      [
+        "--json",
+        "session",
+        "command",
+        sessionId,
+        "--command",
+        listedCommand.id,
+        "--expected-binding-revision",
+        "stale-revision",
+      ],
+      { stage: "changed command refused", expectCode: 8 },
+    );
+  }
+  if (context.provider === "claude") {
+    // A built-in Claude Code command answered without a model turn.
+    const selected = listed.result.commands.find((entry) => entry.name === "/context");
+    expectThat(
+      selected,
+      `Claude's /context is not listed (${listed.result.catalogue.status}): ${listed.result.commands
+        .map((entry) => entry.name)
+        .join(" ")
+        .slice(0, 1500)}`,
+    );
+    const ran = await context.cli.run(
+      [
+        "--json",
+        "session",
+        "command",
+        sessionId,
+        "--command",
+        selected!.id,
+        "--expected-binding-revision",
+        selected!.bindingRevision ?? "",
+        "--wait",
+        "--timeout",
+        "3m",
+        "--request-id",
+        "live-command",
+      ],
+      { stage: "session command --wait", timeoutMs: 4 * 60_000 },
+    );
+    const receipt = receiptOf(ran);
+    expectThat(
+      receipt.state === "succeeded",
+      `the selected command ended ${receipt.state}: ${receipt.error?.message ?? ""} ${receipt.execution?.reason ?? ""}`.trim(),
+    );
+  }
+  const literal = await context.cli.run(
+    [
+      "--json",
+      "session",
+      "prompt",
+      sessionId,
+      "--literal",
+      "--prompt",
+      "/srv is just a directory name here. Reply with the single word: literal-ok",
+      "--wait",
+      "--timeout",
+      "5m",
+      "--request-id",
+      "live-literal",
+    ],
+    { stage: "prompt --literal --wait", timeoutMs: 6 * 60_000 },
+  );
+  expectThat(receiptOf(literal).state === "succeeded", "the literal prompt did not complete");
+  const note = path.join(context.root, "attached-note.txt");
+  await writeFile(note, "The secret word is: marigold\n");
+  const attached = await context.cli.run(
+    [
+      "--json",
+      "session",
+      "prompt",
+      sessionId,
+      "--attach",
+      note,
+      "--prompt",
+      "Reply with only the secret word from the attached file. Do not change any files.",
+      "--wait",
+      "--timeout",
+      "5m",
+      "--request-id",
+      "live-attach",
+    ],
+    { stage: "prompt --attach --wait", timeoutMs: 6 * 60_000 },
+  );
+  const refusedFile =
+    attached.code === 8 &&
+    attached.envelope &&
+    !attached.envelope.ok &&
+    attached.envelope.error.code === "capability-unavailable";
+  // Codex, Cursor and Grok take image attachments only: a text file is
+  // refused before admission, which is the behaviour to check there.
+  if (!refusedFile) {
+    expectThat(
+      receiptOf(attached).state === "succeeded",
+      "the prompt with an attachment did not complete",
+    );
+    const transcript = await context.cli.ok<{ messages: Array<{ role: string; text: string }> }>(
+      ["session", "transcript", sessionId, "--limit", "4"],
+      "transcript after attachment",
+    );
+    expectThat(
+      transcript.result.messages.some((message) => /marigold/i.test(message.text)),
+      "the agent did not read the attached file",
+    );
+  } else {
+    expectThat(!maybeReceipt(attached), "a refused attachment was admitted");
+  }
+  // A running turn, then a prompt queued behind it.
+  const busy = await context.cli.run(
+    [
+      "--json",
+      "session",
+      "prompt",
+      sessionId,
+      "--prompt",
+      "Run the shell command `sleep 20`, then reply with the single word: slept. Do not change any files.",
+      "--request-id",
+      "live-busy",
+    ],
+    { stage: "start a slow turn", expectCode: 0 },
+  );
+  const refused = await context.cli.run(
+    ["--json", "session", "prompt", sessionId, "--prompt", "too early"],
+    { stage: "busy prompt refused", expectCode: 8 },
+  );
+  expectThat(
+    refused.envelope && !refused.envelope.ok && refused.envelope.error.code === "busy",
+    "a busy session accepted an ordinary prompt",
+  );
+  const queued = await context.cli.run(
+    [
+      "--json",
+      "session",
+      "prompt",
+      sessionId,
+      "--enqueue",
+      "--prompt",
+      "Reply with the single word: queued-ok. Do not change any files.",
+      "--wait",
+      "--timeout",
+      "8m",
+      "--request-id",
+      "live-enqueue",
+    ],
+    { stage: "prompt --enqueue --wait", timeoutMs: 9 * 60_000 },
+  );
+  expectThat(receiptOf(queued).state === "succeeded", "the queued prompt did not complete");
+  const first = await context.cli.ok<unknown>(
+    ["run", "get", receiptOf(busy).operationId],
+    "the slow turn settled first",
+  );
+  expectThat(
+    (first.envelope.receipt as PublicReceipt | undefined)?.state === "succeeded",
+    "the queued prompt overtook the running turn",
+  );
+}
+
+function maybeReceipt(result: CliResult): PublicReceipt | undefined {
+  return result.envelope?.receipt;
+}
 
 export async function listFiles(directory: string): Promise<string[]> {
   return readdir(directory).catch(() => []);

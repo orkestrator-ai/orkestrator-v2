@@ -29,35 +29,41 @@ describe("build-pipeline stage turns' artifact authority", () => {
     await withPipeline(
       async ({ service, read, provider }) => {
         const started = await service.start(startInput(fourReviewers()));
-        // The consolidation runs in tool mode and never submits, so the
-        // pipeline fails after its turn ended.
-        const failed = await advanceUntil(service, read, started.id, "failed", 30);
+        // The consolidation runs in tool mode and never submits, so after its
+        // one result reminder the pipeline fails with both turns ended.
+        const failed = await advanceUntil(service, read, started.id, "failed", 40);
         const consolidation = failed.sessions.find((session) => session.label === "Consolidation");
         expect(consolidation).toBeDefined();
-        const requestId = failed.reviewFanout?.consolidation?.requestId;
-        expect(typeof requestId).toBe("string");
+        expect(failed.reviewFanout?.consolidation?.resultReminderSent).toBe(true);
+        const requestIds = provider.sent
+          .filter((entry) => entry.sessionId === consolidation!.sdkSessionId)
+          .map((entry) => entry.requestId);
+        expect(requestIds).toHaveLength(2);
+        expect(requestIds.at(-1)).toBe(failed.reviewFanout?.consolidation?.requestId);
 
-        expect(begun).toEqual([
-          {
+        expect(begun).toEqual(
+          requestIds.map((requestId) => ({
             environmentId: "env-1",
             projectId: "project-1",
             conversationKey: consolidation!.sessionKey,
-            turnId: requestId!,
+            turnId: requestId,
             providerSessionId: consolidation!.sdkSessionId,
             needsGrant: true,
-          },
-        ]);
-        const sent = provider.sent.find((entry) => entry.requestId === requestId);
-        expect(sent?.agentMcp).toEqual({
-          url: "http://127.0.0.1:1234/mcp",
-          token: "test-token",
-          artifacts: { token: `oag1.grant-${requestId}` },
-        });
+          })),
+        );
+        for (const requestId of requestIds) {
+          const sent = provider.sent.find((entry) => entry.requestId === requestId);
+          expect(sent?.agentMcp).toEqual({
+            url: "http://127.0.0.1:1234/mcp",
+            token: "test-token",
+            artifacts: { token: `oag1.grant-${requestId}` },
+          });
+          expect(settled).toContainEqual(["env-1", consolidation!.sessionKey, requestId]);
+        }
         // Structured-output reviewers had no tool-mode connection to carry one.
         expect(
-          provider.sent.filter((entry) => entry.requestId !== requestId && entry.agentMcp),
+          provider.sent.filter((entry) => !requestIds.includes(entry.requestId) && entry.agentMcp),
         ).toEqual([]);
-        expect(settled).toContainEqual(["env-1", consolidation!.sessionKey, requestId!]);
       },
       { toolMode: true, artifactDispatch },
     );

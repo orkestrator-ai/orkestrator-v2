@@ -5,6 +5,7 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/componen
 import { Sidebar } from "./Sidebar";
 import { ActionBar } from "./ActionBar";
 import { OpenFileDialog } from "./OpenFileDialog";
+import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { FilesPanel } from "@/components/files-panel";
 import {
   useConfigStore,
@@ -198,6 +199,7 @@ export function AppShell({ children }: AppShellProps) {
     return (
       <div className="flex h-full w-full flex-col overflow-hidden">
         <OpenFileDialog />
+        <KeyboardShortcutsDialog />
         <AppDialogHost />
         <HostPark parkRef={contentParkRef} />
         {/*
@@ -239,6 +241,7 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       <OpenFileDialog />
+      <KeyboardShortcutsDialog />
       {/* Outside both layouts, so a dialog outlives the drawer that requested it. */}
       <AppDialogHost />
       <AgentMailPanel />

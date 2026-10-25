@@ -73,3 +73,12 @@ implementation, assertion, timeout or skip changed.
 - **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts src/core/transcript-artifacts/content-server.engines.test.ts` from `apps/backend` passed, 39 of 39.
 - **Aggregate counts:** backend 11,077 passed, 84 skipped, 2 failed across 658 files (698.8 s); the other failure was 0247.
 - **Assessment:** recurrence of the existing intermittent hook timeout; nothing changed.
+
+## Voice qualification review fixes — 2026-10-25
+
+- **Change:** `9b1b42be8`; only CLI voice examples and their tests changed.
+- **Original command:** `mise run test:logged -- --name voice-suite -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1, with other worktrees validating on the same host.
+- **Failure:** the unnamed Chromium policy hook exceeded its five-second deadline (5001.05 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name artifact-engine-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1 --only-failures` passed, exit 0 in 178.3 seconds logged.
+- **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** recurrence of this tracked intermittent hook failure. No implementation, assertion, timeout or skip changed in the owner; the aggregate result is not made green by the isolated pass.

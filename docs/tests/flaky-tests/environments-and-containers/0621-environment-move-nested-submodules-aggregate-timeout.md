@@ -46,3 +46,12 @@
 - **Owning-file rerun:** `mise run test:logged -- --name backend-submodule-recheck -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged (34.4 s logged).
 - **Evidence:** `orkestrator-test-run.45VcQo/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Changes:** recorded recurrence only; no backend tests, timeouts or skips changed.
+
+## Voice qualification review fixes — 2026-10-25
+
+- **Change:** `9b1b42be8`; only CLI voice examples and their tests changed.
+- **Original command:** `mise run test:logged -- --name voice-suite -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1, with other worktrees validating on the same host.
+- **Failure:** The nested-submodule same-disk move exceeded its five-second deadline (5156.02 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name environment-move-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 42.5 seconds logged.
+- **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** recurrence of this tracked intermittent failure. No implementation, assertion, timeout or skip changed in the owner; the aggregate result is not made green by the isolated pass.

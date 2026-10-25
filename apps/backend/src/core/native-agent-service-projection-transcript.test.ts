@@ -20,7 +20,12 @@ import {
   SUCCESSFUL_PUBLISH_CONTRACT,
   publishArtifactCallContract,
 } from "@orkestrator/protocol/testing/artifact-tool-fixtures";
-import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
+import {
+  createProviderStub,
+  waitForCondition,
+  withService,
+} from "./native-agent-service-projection-test-support.js";
+import { nativeAgentSessionResumeIdentity } from "./models.js";
 import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
 import { adaptAppServerItem } from "../../../../bridges/codex-bridge/src/app-server/item-adapter.js";
 import { itemToParts } from "../../../../bridges/codex-bridge/src/messages/normalization.js";
@@ -409,6 +414,43 @@ describe("NativeAgentService transcript projection", () => {
           storage.recordEnvironmentAgentAttention = original;
           console.warn = warn;
         }
+      },
+    );
+  });
+
+  test("keeps the thread an open session reports, for a close after the session is gone", async () => {
+    let thread = "thread-observed";
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        resumableSessionId: thread,
+      }),
+      sessionStateSnapshot: async () => ({ status: "idle", resumableSessionId: thread }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-projection-resume-identity-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-resume-identity",
+        };
+        await service.ensureSession(identity);
+        const key = nativeAgentSessionStorageKey("env-1", "codex", identity.logicalSessionKey);
+        const recorded = async () => {
+          const session = await storage.getNativeAgentSession(key);
+          return session ? nativeAgentSessionResumeIdentity(session) : undefined;
+        };
+        await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        await waitForCondition(async () => (await recorded()) === "thread-observed");
+        // A full projection reports it too, and a newer thread replaces the old one.
+        thread = "thread-later";
+        await service.getProjection(identity);
+        await waitForCondition(async () => (await recorded()) === "thread-later");
       },
     );
   });

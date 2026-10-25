@@ -1,7 +1,8 @@
 # Design agent conversation links
 
 Checked against `main` at `2459b05c` (2026-10-15). Code items done on
-2026-10-24 against `main` at `8454d18b8`; see
+2026-10-24 against `main` at `8454d18b8`; the two-client Resume run and the
+bridge-restart close done on 2026-10-25 against `main` at `00a0cb82e`; see
 [`design-canvas.md` → Agent context](../../architecture/design-canvas.md#agent-context)
 for how links, link states and Resume now work.
 
@@ -10,7 +11,8 @@ agent** and **Use as implementation reference** put revisioned design context
 into a conversation's draft. Links used to point at pane tabs only, so closing
 the agent tab lost the way back even though native sessions can be resumed,
 and design context became plain text in a brand-new conversation. Both are
-fixed; what remains is listed under [Remaining work](#remaining-work).
+fixed; only the archived state, blocked on native archive semantics, remains
+(see [Remaining work](#remaining-work)).
 
 ## Current state
 
@@ -146,24 +148,56 @@ the unassigned composer did not regress it.
 
 ## Remaining work
 
-What is left of items 1, 3 and 5, narrowed; nothing here is new scope.
+What was left of items 1, 3 and 5, narrowed; nothing here is new scope.
 
-1. **Two real clients pressing Resume at the same moment** (the live half of
-   item 5). Covered
-   deterministically by the backend lane tests and two simulated clients, but
-   not run with two live browser clients against one backend. Run it with two
-   pages of one `dev:test` profile (or two machines on one backend) and
-   confirm both focus one `design-resume-…` tab and the provider is resumed
-   once. Low risk: the backend serializes resumes per canvas.
-2. **A close replayed after a bridge restart** (an edge of item 1). Codex's thread id is read from
-   the open session at teardown. If the close is pending and only completes
-   after the bridge restarted, the read fails and nothing is recorded, so that
-   link reads "no conversation to resume". Decide whether to persist the
-   resumable identity on the native-session record when the session is
-   created, which would also cover this.
-3. **Archived state** (the part of item 3 with nothing to read yet). Blocked on native archive semantics
-   ([0006](../agent-engines/0006-session-titles-and-history.md)); add an
-   archived state to the dialog when that lands.
+1. ~~**Two real clients pressing Resume at the same moment** (the live half of
+   item 5).~~ Done live on arktech-mini, 2026-10-25, disposable profile
+   `qa-design-resume-0038` (`--fixture --credential-source claude
+   --credential-source codex`), with the new opt-in spec
+   `e2e/agent-testing/design-resume-clients-live.spec.ts`. Each provider
+   launched a design workspace with a one-word brief, the conversation's tab
+   was closed (the link recorded its session), and two separately signed-in
+   browser contexts opened Ask agent on the canvas and pressed **Resume
+   conversation** together:
+   - Claude: both `design_session_resume` requests were sent at +0 ms and
+     answered at +33 ms and +34 ms, with the same `design-resume-…` tab and the
+     same live session. The shared layout held exactly that one agent tab, the
+     link named it, and the transcript kept its one user turn (nothing sent).
+   - Codex (`ORKESTRATOR_AGENT_TEST_DESIGN_MODELS=codex=gpt-6-sol`; the
+     profile default `gpt-5.4` is not offered to this ChatGPT login): both sent
+     at +0 ms, both answered at +1656 ms with the same tab and the same live
+     bridge session. A second Codex resume would have opened a second bridge
+     session with a different id, so this also shows the provider was resumed
+     once. Layout, link and transcript checks as for Claude.
+2. ~~**A close replayed after a bridge restart** (an edge of item 1).~~ Done
+   2026-10-25 (decision 11). Every native state read (the progressive state
+   view and the full projection) now keeps the resume identity the provider
+   reports for the open session on the tab's mapping
+   (`PersistedNativeAgentSession.resumeIdentity`,
+   `StorageService.recordNativeAgentSessionResumeIdentity`), written only when
+   it changes and only for the provider session it was read from. Teardown
+   prefers the live read, then that kept identity, then (not for Codex) the
+   session id. The identity read before a close was already journaled on the
+   teardown intent, so a close whose response is lost and is replayed after a
+   restart records the same one. Evidence:
+   `commands-registry-teardown.test.ts` ("a Codex session the bridge lost is
+   named by the thread it reported while open"),
+   `storage-native-agent-resume-identity.test.ts` (kept per mapped session,
+   written only on change, seen by another process, never lands on a mapping
+   that moved on, malformed or stale values read as absent), and
+   `native-agent-service-projection-transcript.test.ts` ("keeps the thread an
+   open session reports, for a close after the session is gone"; it fails
+   with the capture removed). Deterministic only: no live run restarted a
+   bridge between a turn and a close. That is not needed for the decision,
+   and a live check is optional: run a Codex turn in a design tab, restart the
+   profile's Codex bridge, close the tab and confirm the link reads "can be
+   resumed".
+3. **Archived state** (the part of item 3 with nothing to read yet). Still
+   blocked on native archive semantics
+   ([0006](../agent-engines/0006-session-titles-and-history.md)), checked
+   2026-10-25: nothing calls Codex `thread/archive`, Cursor never reads
+   `SDKAgentInfo.archived`, and no platform has an archive state for a link to
+   report. Add an archived state to the dialog when that lands.
 
 ## Assumptions and decisions
 
@@ -193,8 +227,9 @@ cons.
      replay, exactly when the tab id stops leading to the conversation.
    - Pros: works with no dialog or canvas open; no client involvement. Cons:
      design code hooks into teardown (best effort, never blocks the close); a
-     close replayed after a bridge restart cannot read Codex's thread id
-     (Remaining work 2).
+     close that lands after the bridge lost the session cannot read Codex's
+     thread id, so teardown falls back to the identity kept on the mapping
+     (decision 11).
 3. **Which identity to record.**
    - Options: (a) the live provider session id; (b) the identity the
      provider's resume accepts.
@@ -264,6 +299,37 @@ cons.
     `unsupported`: links show the old "Closed — conversation ended" and Remove
     link, so a new client on an old backend behaves as before.
 
+11. **Covering a close that lands after the bridge lost the session**
+    (Remaining work 2).
+    - Options: (a) leave it: the link reads "no conversation to resume";
+      (b) persist the resume identity on the native-session record when the
+      session is created; (c) keep the identity the provider reports on every
+      state read of the open session on the tab's mapping, and fall back to it
+      at teardown; (d) have teardown start a bridge to read it.
+    - Chosen: (c), scoped to the provider session it was read from and
+      written only when it changes; teardown order is live read, kept identity,
+      then (not Codex) the session id.
+    - Why: (b) misses Codex, which names its thread only after the session
+      starts (and can move to a new thread), so creation time is too early;
+      the state reads every open tab already makes see the current value at no
+      extra provider cost. (d) defeats idle detachment and still fails once the
+      bridge has dropped the session. (a) loses a resumable conversation.
+    - Pros: the link stays resumable whenever any client read the session's
+      state while it was open; no extra bridge contact; content-free and
+      backend-only (no event is announced). Cons: one storage write per
+      session (and per thread change) from a read path, fire-and-forget like
+      the inferred-composer write beside it; a session never read while open
+      (no client mounted it) still has nothing to fall back to.
+12. **Proving two-client Resume live.**
+    - Options: (a) add the step to `design-live.spec.ts`; (b) a short
+      companion spec with a one-word brief.
+    - Chosen: (b), `design-resume-clients-live.spec.ts`, sharing the live
+      helpers through `e2e/agent-testing/design-live-support.ts`.
+    - Why: the full cycle costs minutes and many design tool calls per
+      provider; the concurrency check needs only one short turn.
+    - Pros: about 30 s per provider; rerunnable on its own. Cons: one more
+      opt-in spec to keep in step with the dialog's labels.
+
 Assumptions, each checked live on 2026-10-24 unless noted:
 
 - Claude resumes by its `session-client-…` id after the tab closed (checked).
@@ -272,8 +338,8 @@ Assumptions, each checked live on 2026-10-24 unless noted:
 - Design conversations are Claude or Codex only (`DesignAgentDialog` offers
   only those); other platforms read as "closed".
 - Two clients that create a tab with the same id converge on one native
-  session mapping, as the one-shot environment launch relies on (not checked
-  with two live clients; Remaining work 1).
+  session mapping, as the one-shot environment launch relies on (checked with
+  two live clients for Claude and Codex on 2026-10-25; Remaining work 1).
 
 ## Constraints and rationale
 

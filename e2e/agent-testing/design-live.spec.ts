@@ -40,21 +40,22 @@
  * profile-free runs.
  */
 import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { withDesignLiveHeartbeat } from "./design-live-heartbeat";
+import {
+  authenticatedInvoke,
+  layoutTabs,
+  profileStatus,
+  selectedModel,
+  sidebarNavigator,
+  type Environment,
+  type LayoutNode,
+  type Project,
+  type SessionLink,
+} from "./design-live-support";
 import { detailBytes, summarizeDesignToolCalls, type TranscriptMessage } from "./design-live-usage";
 
-type Status = {
-  status: string;
-  profile?: string;
-  flavor?: string;
-  browserUrl?: string;
-  testProject?: string;
-};
-type Project = { id: string; name: string; localPath: string | null };
-type Environment = { id: string; name: string; worktreePath?: string | null };
 type Interaction = {
   id: string;
   kind: string;
@@ -69,17 +70,7 @@ type Projection = {
 } | null;
 type Frame = { id: string; name: string; revision: number; html: string };
 type Summary = { id: string; revision: number; frames: Array<{ id: string; name: string }> };
-type LayoutTab = {
-  id: string;
-  type: string;
-  nativeAgentData?: { platform?: string };
-  designCanvasData?: { canvasId: string };
-};
-type LayoutNode = { kind: "leaf"; tabs: LayoutTab[] } | { kind: "split"; children: LayoutNode[] };
-type SessionLink = { tabId: string; platform: string; role: string; sessionId?: string };
-type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
-const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const LIVE_OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN === "1";
 const TURN_TIMEOUT_MS = Number(
@@ -105,18 +96,6 @@ const TOOL_APPROVAL_KINDS = new Set([
 /** The interaction card's confirm button (`NativeAgentInteractionCard`). */
 const confirmLabel = (item: Interaction) => item.presentation.confirmLabel ?? "Continue";
 
-/**
- * `ORKESTRATOR_AGENT_TEST_DESIGN_MODELS`: `<platform>=<model id>` pairs, for
- * example `claude=claude-haiku-4-5` when a busy account rate-limits the default.
- */
-function selectedModel(provider: Provider): string | undefined {
-  for (const pair of (process.env.ORKESTRATOR_AGENT_TEST_DESIGN_MODELS ?? "").split(",")) {
-    const [platform, model] = pair.split("=").map((value) => value.trim());
-    if (platform === provider && model) return model;
-  }
-  return undefined;
-}
-
 function selectedProviders(): Provider[] {
   const raw = process.env.ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS?.trim() || "claude,codex";
   return raw.split(",").map((value) => {
@@ -129,64 +108,6 @@ function selectedProviders(): Provider[] {
     }
     return provider as Provider;
   });
-}
-
-function profileStatus(): Status {
-  const command = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-  });
-  if (!command.stdout.trim()) {
-    throw new Error(
-      `dev:status for profile "${profile}" returned no manifest: ${command.stderr.trim()}`,
-    );
-  }
-  return JSON.parse(command.stdout) as Status;
-}
-
-async function authenticatedInvoke(page: Page, status: Status): Promise<Invoke> {
-  // The one-shot login URL is parsed in memory and never copied into output.
-  const command = spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-  });
-  if (command.status !== 0) throw new Error(command.stderr || "dev:login failed");
-  const login = JSON.parse(command.stdout) as { loginUrl?: unknown };
-  if (typeof login.loginUrl !== "string") throw new Error("dev:login returned no login URL");
-  const response = await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
-  expect(response?.ok() ?? false).toBe(true);
-  return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
-    const invokeResponse = await page.request.post(
-      new URL("/__orkestrator/invoke", status.browserUrl!).href,
-      { data: { command, args } },
-    );
-    expect(invokeResponse.ok(), `${command}: ${await invokeResponse.text()}`).toBe(true);
-    return ((await invokeResponse.json()) as { result: T }).result;
-  };
-}
-
-function sidebarNavigator(page: Page, projectName: string) {
-  return async (name: string) => {
-    const expand = page.getByRole("button", { name: `Expand project ${projectName}` });
-    const entry = page.getByText(name, { exact: true }).first();
-    await expect(expand.or(entry).first()).toBeVisible({ timeout: 30_000 });
-    for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
-      const continueButton = page.getByRole("button", { name: label, exact: true });
-      if (await continueButton.isVisible()) await continueButton.click();
-    }
-    if (await expand.isVisible()) await expand.click();
-    // A sidebar tooltip from the previous hover can sit over the entry. Never
-    // press Escape to clear it: with nothing focused, Escape stops the active
-    // tab's running turn (useEscapeToStop).
-    await page.mouse.move(0, 0);
-    await entry.click();
-  };
-}
-
-function layoutTabs(node: LayoutNode | undefined): LayoutTab[] {
-  if (!node) return [];
-  if (node.kind === "split") return node.children.flatMap(layoutTabs);
-  return node.tabs;
 }
 
 /** Seven random digits: unique per run, and never part of the visible UI. */
@@ -236,11 +157,11 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
         },
       );
 
-      const status = profileStatus();
+      const status = profileStatus(profile);
       expect(status.profile, "dev:status answered for a different profile").toBe(profile);
       expect(status.status, `profile "${profile}" is not running`).toBe("ready");
       expect(status.flavor).toBe("agent-test");
-      const invoke = await authenticatedInvoke(page, status);
+      const invoke = await authenticatedInvoke(page, status, profile);
       const config = await invoke<{ global?: { enabledAgentPlatforms?: string[] } }>(
         "get_config",
       ).catch(() => null);

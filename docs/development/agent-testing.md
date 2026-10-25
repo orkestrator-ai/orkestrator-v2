@@ -937,6 +937,22 @@ and nothing sent. The design MCP call count, failed calls and response bytes are
 attached as `design-mcp-usage`. A content-free heartbeat runs every minute for
 the whole case, including approval waits and cleanup, and is cleared in `finally`.
 
+`e2e/agent-testing/design-resume-clients-live.spec.ts` is the short companion
+for two clients resuming one design conversation at once
+(`ORKESTRATOR_AGENT_TEST_LIVE_DESIGN_RESUME=1`; providers from
+`ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS`, default `claude`). It launches a
+design workspace with a one-word brief, closes the conversation's tab, then has
+two separately signed-in browser contexts press **Resume conversation**
+together. Both `design_session_resume` answers must name the same
+`design-resume-…` tab and live session, the shared layout must hold that one
+tab, and the transcript must keep its user turns:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-design-live ORKESTRATOR_AGENT_TEST_LIVE_DESIGN_RESUME=1 \
+  mise run test:logged -- --name design-resume-clients -- mise run test:agent:browser -- \
+  e2e/agent-testing/design-resume-clients-live.spec.ts
+```
+
 Never press Escape to clear a sidebar tooltip in a live spec: with nothing
 focused, Escape stops the active tab's running turn (`useEscapeToStop`). A
 Claude CLI rate limit (429) ends the turn on an API error; rerun later rather

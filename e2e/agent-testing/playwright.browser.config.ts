@@ -14,6 +14,7 @@ export default defineConfig({
     "design-canvas.spec.ts",
     "design-container-export.spec.ts",
     "design-live.spec.ts",
+    "design-resume-clients-live.spec.ts",
     "native-draft-attachments.spec.ts",
     "web-annotations-gateway.spec.ts",
     "web-annotations-approval-live.spec.ts",

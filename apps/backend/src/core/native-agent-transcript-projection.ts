@@ -112,7 +112,7 @@ import {
   normalizeNativeAgentSelectionPricing,
   resolveNativeAgentApprovalMode,
 } from "@orkestrator/protocol/native-agent";
-import { sessionIncompleteTurnNotice } from "./models.js";
+import { nativeAgentSessionResumeIdentity, sessionIncompleteTurnNotice } from "./models.js";
 import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import { randomUUID } from "node:crypto";
 import { legacyCompatibilityCounts } from "./change-tracking/legacy-payload.js";
@@ -1920,6 +1920,24 @@ export class NativeAgentTranscriptProjection {
     return trailing;
   }
 
+  /**
+   * Keep the resume identity a provider reports for an open session, so tab
+   * teardown can still name the conversation if the session is gone by the
+   * time the tab closes (a Codex thread id dies with its bridge session).
+   * Best effort and written only when it changes.
+   */
+  private observeResumeIdentity(
+    session: PersistedNativeAgentSession,
+    snapshot: { status?: unknown; resumableSessionId?: unknown },
+  ): void {
+    if (snapshot.status === "missing" || typeof snapshot.resumableSessionId !== "string") return;
+    const resumable = snapshot.resumableSessionId.trim();
+    if (!resumable || nativeAgentSessionResumeIdentity(session) === resumable) return;
+    void this.storage
+      .recordNativeAgentSessionResumeIdentity(session.key, session.providerSessionId, resumable)
+      .catch(() => undefined);
+  }
+
   private sharedInteractiveSnapshot(
     input: NativeAgentProgressiveInput,
     provider: NativeAgentRuntimeProvider,
@@ -3195,6 +3213,7 @@ export class NativeAgentTranscriptProjection {
       timer?.sourceEnded(),
     );
     if (snapshot.status === "missing") return null;
+    this.observeResumeIdentity(resolved.session, snapshot);
     const commandRevision = (snapshot as ProviderSessionStateSnapshot).commandCatalogueRevision;
     if (commandRevision !== undefined) {
       this.catalogs.observeCommandRevision(
@@ -4854,6 +4873,8 @@ export class NativeAgentTranscriptProjection {
                 steer: false,
               },
             };
+      // A transient (unpersisted) session has no mapping to keep it on.
+      if (!resolved.transient) this.observeResumeIdentity(resolved.session, snapshot);
       // A live session's own answer wins over the platform table. The table
       // says what a platform *may* raise; a Pi session with its approval gate
       // off raises nothing, and reporting the platform's list there would

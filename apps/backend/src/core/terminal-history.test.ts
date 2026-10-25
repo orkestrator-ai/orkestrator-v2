@@ -118,9 +118,26 @@ describe.serial("terminal history", () => {
     history.append("before-graceful-restart", "first\r\n", 1, 1);
     await history.stateSnapshot("before-graceful-restart");
     history.append("before-graceful-restart", "latest-marker", 2, 1);
+    // Production shuts the owner down before awaiting its final flush. Leave
+    // both parser work and an unterminated archive line pending at that point.
+    const other = createHistory();
+    other.configure({
+      sessionId: "other",
+      dataDir,
+      stableIdentity: "other-backend",
+      cols: 30,
+      rows: 5,
+    });
+    other.append("other", "before\r\n", 1, 1);
+    history.shutdown();
     await history.flush(true);
     history.append("before-graceful-restart", "after-quiesce", 3, 1);
     restartHistory();
+
+    other.append("other", "still-usable", 2, 1);
+    expect(await other.stateSnapshot("other")).toMatchObject({ revision: 2, historyGap: false });
+    expect((await other.stateSnapshot("other"))?.output).toContain("still-usable");
+    await other.flush(true);
 
     history.configure({
       sessionId: "after-graceful-restart",
@@ -133,6 +150,9 @@ describe.serial("terminal history", () => {
     expect(restored?.revision).toBe(2);
     expect(restored?.output).toContain("latest-marker");
     expect(restored?.output).not.toContain("after-quiesce");
+    expect((await history.page("after-graceful-restart"))?.rows.map((row) => row.text)).toContain(
+      "latest-marker",
+    );
   });
 
   test("rejects cursors from another terminal incarnation", async () => {

@@ -308,3 +308,13 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - **Owning-file rerun:** `mise run test:logged -- --name watcher-environment-move-owner -- bun test --cwd <checkout>/apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged in 35.3 seconds.
 - **Evidence:** `orkestrator-test-run.iTzv5K/` under the host temporary directory; the full aggregate remains failed. None of these owning files was changed.
 - **Final aggregate counts:** backend 10705 passed, 116 skipped, 20 failed and five between-test errors across 10841 tests (747.20 seconds). Fourteen failures were the unchanged OpenCode conformance expectation for CLI 1.19.0 versus the installed 1.19.4; the other six were the timing cases recorded here and in companion records. The complete repository run exited 1 after 1189.0 seconds, including time queued for shared worker capacity.
+
+## PR monitor shutdown validation recurrence — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name residual-state-suite -- mise run test`, on `todo-0066-residual-module-state-40e8f98a7ef0`, Bun 1.4.4.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 slots, including two isolated backend workers. Workspace admission waited 81.6 seconds for shared host capacity.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` hit the five-second deadline (5069.11 ms), followed by termination of a dangling process.
+- **Owning-file rerun:** `mise run test:logged -- --name environment-move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 21.8 seconds.
+- **Evidence:** `orkestrator-test-run.jMkwTI/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate completion.
+- **Assessment:** recurrence of the existing aggregate deadline failure; this change touches no environment-move source, assertions, deadlines, or skips.
+- **Final aggregate counts:** backend 10968 passed, 84 skipped and one failed across 11053 tests in 638 files (576.56 seconds). The full run exited 1 in 719.6 seconds; its other two failures were the existing Codex bridge cases 0492 and 0800, whose unchanged owners also passed separately. Root/support and protocol validation passed.

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { PrMonitorService } from "./pr-monitor.js";
 import type { Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
@@ -49,13 +50,15 @@ export class PrMonitorRuntime {
   private syncGeneration = 0;
   private syncQueue: Promise<void> = Promise.resolve();
   private warnedMissingMergeCleanup = false;
+  private closedService: Pick<PrMonitorService, keyof PrMonitorService> | undefined;
 
   constructor(options: PrMonitorRuntimeOptions = {}) {
     this.scheduleMergeCleanup = options.scheduleMergeCleanup;
   }
 
   /** The polling service; callers reach it at call time, never hold it. */
-  get service(): PrMonitorService {
+  get service(): Pick<PrMonitorService, keyof PrMonitorService> {
+    if (this.closedService) return this.closedService;
     this.monitor ??= this.createMonitor();
     return this.monitor.service;
   }
@@ -65,11 +68,13 @@ export class PrMonitorRuntime {
    * a later lifecycle action invalidated while it was loading is discarded.
    */
   async sync(context: CommandContext): Promise<void> {
+    if (this.closedService) return;
     this.bind(context);
     const generation = this.syncGeneration;
     const operation = this.syncQueue
       .catch(() => undefined)
       .then(async () => {
+        if (this.closedService) return;
         const environments = await context.storage.loadEnvironments();
         // A stop, delete, shutdown, or newer reconciliation may have happened
         // while storage was loading; applying this older snapshot would recreate
@@ -109,13 +114,15 @@ export class PrMonitorRuntime {
    * nothing.
    */
   async wakeForCompletion(environmentId: string, context: CommandContext): Promise<void> {
+    if (this.closedService) return;
     this.bind(context);
     const stored = await context.storage.getEnvironment(environmentId);
-    if (!stored) return;
+    if (this.closedService || !stored) return;
     // A turn in the project home may have switched the checkout's branch (a PR
     // session branches off the base before pushing); follow it first.
     const environment = await refreshProjectHomeBranch(stored, context.storage, readCheckoutBranch);
-    this.service.wakeForCompletion(await projectHomePrTarget(environment, context.storage));
+    const target = await projectHomePrTarget(environment, context.storage);
+    if (!this.closedService) this.service.wakeForCompletion(target);
   }
 
   /**
@@ -129,13 +136,14 @@ export class PrMonitorRuntime {
     context: CommandContext,
     reason: "interactive" | "completion" = "interactive",
   ): Promise<void> {
+    if (this.closedService) return;
     await this.sync(context);
     this.service.requestCheck(environmentId, reason);
   }
 
   /** Applies a merge the backend itself confirmed, without waiting for a poll. */
   async reconcileConfirmedMerge(environment: Environment, context: CommandContext): Promise<void> {
-    if (!environment.prUrl) return;
+    if (this.closedService || !environment.prUrl) return;
     this.bind(context);
     const confirmedEnvironment: Environment = {
       ...environment,
@@ -162,7 +170,7 @@ export class PrMonitorRuntime {
     environmentId: string,
     observation: { url: string; state: "merged" | "closed" },
   ): void {
-    if (observation.state !== "merged" || !this.context) return;
+    if (this.closedService || observation.state !== "merged" || !this.context) return;
     if (this.scheduleMergeCleanup) {
       this.scheduleMergeCleanup(environmentId, this.context);
       return;
@@ -174,14 +182,35 @@ export class PrMonitorRuntime {
     );
   }
 
-  /** Releases every PR polling timer and the admission pool; called on backend shutdown. */
+  /** Terminal close: releases every PR polling timer and the admission pool. */
   shutdown(): void {
+    if (this.closedService) return;
     this.invalidatePendingSync();
     const monitor = this.monitor;
     this.monitor = null;
-    if (!monitor) return;
-    monitor.service.shutdown();
-    monitor.admission.close();
+    monitor?.service.shutdown();
+    monitor?.admission.close();
+    // Late lifecycle cleanup still reaches `service` after the backend stops.
+    // Keep the public surface inert, even if the lazy monitor was never used.
+    const stamp = monitor?.service.currentRevision() ?? { generation: randomUUID(), revision: 0 };
+    const noop = () => undefined;
+    this.closedService = {
+      generation: stamp.generation,
+      sync: noop,
+      requestMode: noop,
+      requestCheck: noop,
+      reconcileTerminal: async () => undefined,
+      wakeForCompletion: noop,
+      probe: noop,
+      pause: noop,
+      untrack: noop,
+      trackedIds: () => [],
+      snapshot: () => [],
+      observationPolicy: () => null,
+      currentRevision: () => ({ ...stamp }),
+      revisionedSnapshot: () => ({ ...stamp, entries: [] }),
+      shutdown: noop,
+    };
   }
 
   private bind(context: CommandContext): void {

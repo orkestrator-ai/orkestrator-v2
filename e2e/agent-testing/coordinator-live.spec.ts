@@ -38,10 +38,6 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  AGENT_INTERACTION_CONTRACT_VERSION,
-  type AgentInteractionKind,
-} from "@orkestrator/protocol/agent-interactions";
 import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -61,7 +57,6 @@ import {
   coordinatorLivePlatformsFromEnv,
   coordinatorLiveScenariosFromEnv,
   coordinatorLiveSummaryFile,
-  createTurnWatch,
   describeDigestChanges,
   evaluateReadOnlyConversation,
   fixtureTreeDigest,
@@ -106,25 +101,12 @@ import {
   createDelegationWatch,
   removeLaunchedEnvironments,
   runCoordinatorCleanup,
+  settleCoordinatorTurn,
 } from "../../apps/desktop/scripts/dev/coordinator-live-observer";
-import {
-  STATUS_REVIEWEE_FILE,
-  STATUS_REVIEW_DONE_MARKER,
-  STATUS_WAITER_DONE_MARKER,
-  STATUS_WAITING_MARKER,
-  STATUS_WAITING_STATE,
-  approvalWaitApplies,
-  evaluateStatusReview,
-  evaluateStatusWaiting,
-  revieweeEnvironmentInput,
-  statusReviewAgentSettings,
-  statusReviewPrompt,
-  statusWaitingPrompt,
-  waiterEnvironmentInput,
-  type StatusProbe,
-} from "../../apps/desktop/scripts/dev/coordinator-live-status";
+import { runStatusScenario } from "../../apps/desktop/scripts/dev/coordinator-live-status-orchestration";
 import { evaluateMailTiles } from "./coordinator-mail-tiles";
 import {
+  coordinatorTurn,
   deliverAsyncReport,
   finishFamilyExchange,
 } from "../../apps/desktop/scripts/dev/coordinator-live-orchestration";
@@ -149,11 +131,6 @@ const LIVE = process.env[COORDINATOR_LIVE_OPT_IN_ENV] === "1";
 const budgets = coordinatorLiveBudgets();
 const TURN_TIMEOUT_MS = budgets.turn;
 const POLL_INTERVAL_MS = 2_000;
-/**
- * A live turn prints nothing for minutes. `test:logged` kills a command after
- * five minutes without output, so the wait reports progress well inside that.
- */
-const HEARTBEAT_MS = 60_000;
 const CANARY_FILE = "coordinator-live-canary.txt";
 
 function profileStatus(): Status {
@@ -217,56 +194,19 @@ async function openProfile(page: Page) {
 /**
  * Wait for the coordinator's turn to end, answering nothing on its behalf.
  *
- * See {@link createTurnWatch}: a pending approval or question has escaped the
+ * See {@link settleCoordinatorTurn}: a pending approval or question has escaped the
  * coordinator policy. It is denied (or cancelled) here so the turn stays safe
  * and bounded, and recorded so the verdict fails.
  */
-async function settleTurn(
+const settleTurn = (
   invoke: Invoke,
   identity: SessionIdentity,
   summary: CoordinatorLivePlatformSummary,
-): Promise<{ projection: Projection; escaped: AgentInteractionKind[] }> {
-  const started = Date.now();
-  const deadline = started + TURN_TIMEOUT_MS;
-  let nextHeartbeat = started + HEARTBEAT_MS;
-  const watch = createTurnWatch();
-  for (;;) {
-    const projection = await invoke<Projection | null>("get_native_agent_projection", {
-      ...identity,
-      messageLimit: 200,
-    });
-    const { settled, answers } = watch.observe(projection);
-    for (const answer of answers) {
-      await invoke("resolve_native_agent_interaction", {
-        ...identity,
-        interactionId: answer.interactionId,
-        resolution: {
-          version: AGENT_INTERACTION_CONTRACT_VERSION,
-          ...answer,
-          resolvedAt: Date.now(),
-        },
-      }).catch(() => undefined);
-    }
-    if (answers.length > 0) summary.escapedInteractions = watch.escapedInteractions();
-    if (projection && settled) {
-      return { projection, escaped: watch.escapedInteractions() };
-    }
-    const phase = projection?.turn.phase ?? "idle";
-    const now = Date.now();
-    if (now >= deadline) {
-      throw new Error(
-        `the ${identity.agent} coordinator turn did not finish within ${TURN_TIMEOUT_MS / 1_000}s (phase ${phase})`,
-      );
-    }
-    if (now >= nextHeartbeat) {
-      console.log(
-        `[coordinator-live] ${identity.agent}: turn ${phase} for ${Math.round((now - started) / 1_000)}s, ${transcriptToolCalls(projection?.messages ?? []).length} tool calls so far`,
-      );
-      nextHeartbeat = now + HEARTBEAT_MS;
-    }
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-  }
-}
+) =>
+  settleCoordinatorTurn(invoke, identity, summary, {
+    timeoutMs: TURN_TIMEOUT_MS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+  });
 
 async function writeSummary(summary: CoordinatorLivePlatformSummary): Promise<void> {
   const file = coordinatorLiveSummaryFile(
@@ -564,37 +504,6 @@ function recordChecks(
  * for two reads after it was seen working or added a row, with nothing left
  * in its prompt queue.
  */
-async function coordinatorTurn(
-  watch: ReturnType<typeof createDelegationWatch>,
-  coordinator: CoordinatorCase,
-  label: string,
-  prompt: string,
-): Promise<{ phases: string[]; rowsBefore: number; endedAt: number }> {
-  const before = await watch.observe();
-  const rowsBefore = watch.projection()?.messages.length ?? 0;
-  await coordinator.invoke("dispatch_native_agent_intent", {
-    ...coordinator.identity,
-    prompt,
-    requestId: randomUUID(),
-    mode: "build",
-  });
-  const phases = [before.coordinatorPhase];
-  let sawActive = false;
-  let idleReads = 0;
-  const end = await watch.until(label, (observation) => {
-    phases.push(observation.coordinatorPhase);
-    if (observation.coordinatorPhase === "error") {
-      throw new Error(
-        `the ${coordinator.identity.agent} coordinator turn failed: ${watch.projection()?.turn.error ?? "no error text"}`,
-      );
-    }
-    if (observation.coordinatorPhase !== "idle") sawActive = true;
-    idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
-    const grew = (watch.projection()?.messages.length ?? 0) > rowsBefore;
-    return idleReads >= 2 && (sawActive || grew) && observation.queueLength === 0;
-  });
-  return { phases, rowsBefore, endedAt: end.at };
-}
 
 function mailCountsObserved(
   mail: readonly DelegationMailMessage[],
@@ -864,257 +773,15 @@ async function familyCase(input: {
   expect(failures, `${platform}: the worker-mail family scenario`).toEqual([]);
 }
 
-/**
- * Waits for one of `identity`'s turns to settle (see {@link settleTurn}) and
- * fails on a turn error: an ordinary environment's startup turn here.
- */
-async function startupTurn(
-  invoke: Invoke,
-  identity: SessionIdentity,
-  summary: CoordinatorLivePlatformSummary,
-  label: string,
-): Promise<void> {
-  const { projection } = await settleTurn(invoke, identity, summary);
-  if (projection.turn.phase === "error") {
-    throw new Error(`${label} failed: ${projection.turn.error ?? "no error text"}`);
-  }
-}
-
-/** Whether the coordinator's assistant text after `fromRow` carries `line`. */
-function saidAfter(
-  watch: ReturnType<typeof createDelegationWatch>,
-  fromRow: number,
-  line: string,
-): boolean {
-  return transcriptAssistantText((watch.projection()?.messages ?? []).slice(fromRow)).includes(
-    line,
-  );
-}
-
-/**
- * The status scenario, in two parts on one coordinator. Review: it launches a
- * Multi Review on an environment the harness prepared, is woken when the
- * review is ready, addresses it, and is woken when the Fix turn finishes.
- * Approval (not on Cursor, which never asks): it delegates a task to an
- * environment whose policy asks for approvals; the harness holds the
- * worker's approval until the coordinator has been woken by the `waiting`
- * notice, then denies it and waits for the worker's report.
- */
 async function statusCase(input: {
   coordinator: CoordinatorCase;
   summary: CoordinatorLivePlatformSummary;
   cleanup: Array<() => Promise<unknown>>;
 }): Promise<void> {
-  const { coordinator, summary, cleanup } = input;
-  const { invoke, identity, projectId } = coordinator;
-  const platform = identity.agent;
-  const coordinatorEnvironmentId = identity.environmentId;
-  // Removes the two environments made here too: neither existed before.
-  await removeLaunchedEnvironments(invoke, projectId, cleanup);
-  const token = randomBytes(6).toString("hex");
-
-  // Saved Multi Review defaults on this platform, as the button would use.
-  const config = await invoke<{ global: Record<string, unknown> }>("get_config");
-  const previousAgentSettings = config.global.agentSettings;
-  await invoke("update_global_config", {
-    global: {
-      ...config.global,
-      agentSettings: statusReviewAgentSettings(previousAgentSettings, platform),
-    },
-  });
-  cleanup.push(async () => {
-    const current = await invoke<{ global: Record<string, unknown> }>("get_config");
-    await invoke("update_global_config", {
-      global: { ...current.global, agentSettings: previousAgentSettings },
-    });
-  });
-
-  // The environment under review: a change with one real defect.
-  const reviewee = await invoke<{ id: string }>(
-    "create_environment",
-    revieweeEnvironmentInput({ projectId, token }),
-  );
-  await invoke("start_environment", { environmentId: reviewee.id });
-  const revieweeWorktree = (
-    await invoke<{ worktreePath?: string | null }>("get_environment", {
-      environmentId: reviewee.id,
-    })
-  ).worktreePath;
-  expect(revieweeWorktree, "the reviewed environment has no worktree").toBeTruthy();
-  await writeFile(
-    path.join(revieweeWorktree!, STATUS_REVIEWEE_FILE.path),
-    STATUS_REVIEWEE_FILE.content,
-  );
-
-  // The worker held on an approval: started and idle before it is delegated to.
-  const holdsApproval = approvalWaitApplies(platform);
-  const outsideDirectory = await mkdtemp(path.join(tmpdir(), "coordinator-live-status-"));
-  cleanup.push(() => rm(outsideDirectory, { recursive: true, force: true }));
-  let waiterEnvironmentId = "";
-  if (holdsApproval) {
-    const waiter = await invoke<{ id: string }>(
-      "create_environment",
-      waiterEnvironmentInput({ projectId, token, platform }),
-    );
-    await invoke("start_environment", { environmentId: waiter.id });
-    waiterEnvironmentId = waiter.id;
-    await startupTurn(
-      invoke,
-      {
-        environmentId: waiter.id,
-        agent: platform,
-        logicalSessionKey: `env-${waiter.id}:startup-agent`,
-      },
-      summary,
-      "the waiting worker's startup turn",
-    );
-  }
-  const probe: StatusProbe = {
-    platform,
-    token,
-    revieweeEnvironmentId: reviewee.id,
-    waiterEnvironmentId,
-    waiterTabId: "startup-agent",
-    outsidePath: path.join(outsideDirectory, "approval-probe.txt"),
-  };
-  const watch = createDelegationWatch(invoke, coordinator, summary, undefined, {
-    holdWorkerInteractions: (environmentId) => environmentId === waiterEnvironmentId,
-  });
-  const toCoordinator = (message: DelegationMailMessage) =>
-    message.toEnvironmentId === coordinatorEnvironmentId && message.from.kind === "system";
-  const failOnCoordinatorError = (phase: string) => {
-    if (phase === "error") {
-      throw new Error(
-        `the ${platform} coordinator turn failed: ${watch.projection()?.turn.error ?? "no error text"}`,
-      );
-    }
-  };
-
-  // Review part.
-  let reviewFinished: string | undefined;
-  let reviewRowsBefore = watch.projection()?.messages.length ?? 0;
-  try {
-    reviewRowsBefore = (
-      await coordinatorTurn(watch, coordinator, "the review launch turn", statusReviewPrompt(probe))
-    ).rowsBefore;
-    let idleReads = 0;
-    await watch.until(
-      "the Multi Review's fix-done wake",
-      (observation) => {
-        failOnCoordinatorError(observation.coordinatorPhase);
-        const notices = observation.mail.filter(
-          (message) =>
-            toCoordinator(message) &&
-            message.notice?.resource?.kind === "multi-review" &&
-            message.notice.resource.environmentId === reviewee.id,
-        );
-        const ended = notices.find((message) =>
-          ["failed", "cancelled", "fix-failed"].includes(message.notice?.state ?? ""),
-        );
-        if (ended) throw new Error(`the Multi Review reported ${ended.notice?.state}`);
-        idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
-        const fixDone = notices.some(
-          (message) => message.notice?.state === "fix-done" && message.placement === "injected",
-        );
-        return (
-          fixDone &&
-          saidAfter(watch, reviewRowsBefore, `${STATUS_REVIEW_DONE_MARKER} ${token}`) &&
-          idleReads >= 2 &&
-          observation.queueLength === 0
-        );
-      },
-      budgets.review,
-    );
-  } catch (error) {
-    reviewFinished = error instanceof Error ? error.message.slice(0, 500) : String(error);
-  }
-  const reviewMessages = (watch.projection()?.messages ?? []).slice(reviewRowsBefore);
-  const reviewLaunches = await watch.toolOutputs("launch_multi_review", reviewMessages);
-  const reviewEscaped = watch.escaped();
-  const checks: CoordinatorLiveCheck[] = [
-    {
-      name: "review-finished",
-      passed: reviewFinished === undefined,
-      ...(reviewFinished ? { detail: reviewFinished } : {}),
-    },
-    ...evaluateStatusReview({
-      probe,
-      coordinatorEnvironmentId,
-      messages: reviewMessages,
-      launchResults: reviewLaunches,
-      mail: watch.observations.at(-1)?.mail ?? [],
-      escapedInteractions: reviewEscaped,
-    }),
-  ];
-
-  // Approval part.
-  if (holdsApproval) {
-    let waitingFinished: string | undefined;
-    let waitingRowsBefore = watch.projection()?.messages.length ?? 0;
-    try {
-      waitingRowsBefore = (
-        await coordinatorTurn(
-          watch,
-          coordinator,
-          "the approval delegation turn",
-          statusWaitingPrompt(probe),
-        )
-      ).rowsBefore;
-      await watch.until(
-        "the worker's approval to reach the harness",
-        () => watch.held(waiterEnvironmentId).length > 0,
-      );
-      let idleReads = 0;
-      await watch.until("the waiting wake", (observation) => {
-        failOnCoordinatorError(observation.coordinatorPhase);
-        idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
-        const waiting = observation.mail.some(
-          (message) =>
-            toCoordinator(message) &&
-            message.notice?.resource?.environmentId === waiterEnvironmentId &&
-            message.notice.state === STATUS_WAITING_STATE &&
-            message.placement === "injected",
-        );
-        return (
-          waiting &&
-          saidAfter(watch, waitingRowsBefore, `${STATUS_WAITING_MARKER} ${token}`) &&
-          idleReads >= 2 &&
-          observation.queueLength === 0
-        );
-      });
-      await watch.release(waiterEnvironmentId);
-      idleReads = 0;
-      await watch.until("the waiting worker's report", (observation) => {
-        failOnCoordinatorError(observation.coordinatorPhase);
-        idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
-        return (
-          saidAfter(watch, waitingRowsBefore, `${STATUS_WAITER_DONE_MARKER} ${token}`) &&
-          idleReads >= 2 &&
-          observation.queueLength === 0
-        );
-      });
-    } catch (error) {
-      waitingFinished = error instanceof Error ? error.message.slice(0, 500) : String(error);
-      await watch.release(waiterEnvironmentId).catch(() => undefined);
-    }
-    checks.push(
-      {
-        name: "waiting-finished",
-        passed: waitingFinished === undefined,
-        ...(waitingFinished ? { detail: waitingFinished } : {}),
-      },
-      ...evaluateStatusWaiting({
-        probe,
-        coordinatorEnvironmentId,
-        messages: (watch.projection()?.messages ?? []).slice(waitingRowsBefore),
-        mail: watch.observations.at(-1)?.mail ?? [],
-        held: watch.held(waiterEnvironmentId),
-        escapedInteractions: watch.escaped().slice(reviewEscaped.length),
-        workerInteractions: watch.workerEscaped(),
-      }),
-    );
-  }
-
+  const { coordinator, summary } = input;
+  const { checks, watch, holdsApproval, waiterEnvironmentId } = await runStatusScenario(input);
+  const coordinatorEnvironmentId = coordinator.identity.environmentId;
+  const platform = coordinator.identity.agent;
   const projection = watch.projection();
   const messages = projection?.messages ?? [];
   const mail = await watch.mailWithBodies();

@@ -1137,7 +1137,10 @@ message is `stored` or `inject_failed`, and nothing reached the harness.
 The `status` case runs two parts on one coordinator, with default messaging
 settings (status updates at *Decisions and problems*). It waits at most
 `ORKESTRATOR_AGENT_TEST_COORDINATOR_REVIEW_TIMEOUT_MS` (default 2700000) for
-the review and one step budget for each of the other waits.
+the review, one turn budget for the waiting worker's startup turn, and five
+step budgets for the remaining waits. The enclosing test deadline includes
+`turn + 5 * step + review` plus four minutes for setup/cleanup; the runner adds
+two more minutes per case.
 
 1. **Review.** The harness sets the saved Multi Review defaults to the
    platform with the fewest reviewers a panel allows (restored afterwards),
@@ -1169,11 +1172,11 @@ the review and one step budget for each of the other waits.
    written its line, then denies it and waits for the worker's report. It
    passes when one `send_prompt_to_tab` call was made, only approvals reached
    the harness from that worker, exactly one `waiting` notice (toned
-   attention) was injected at least 18 seconds after the harness first saw
-   the approval (the 20-second debounce less one harness read) and before it
-   was answered, the coordinator acknowledged it, the worker's report (or its
-   finished notice) followed, nothing was polled, and no other interaction
-   reached anybody.
+   attention) was injected at least 19.5 seconds after the backend created
+   the approval (the 20-second debounce less a 500 ms timestamp tolerance) and
+   before it was answered, the coordinator acknowledged it, the worker's report
+   (or its finished notice when no report arrived) followed, nothing was polled,
+   and no other interaction reached anybody.
 
 What the `status` case leaves to `coordinator-status-wakes.test.ts`, because
 no provider is involved: which states notify under each setting, dedupe and
@@ -1232,9 +1235,15 @@ Credential-free tests in `coordinator-live-observer.test.ts` exercise the same
 observer and gate/queue orchestration as the live spec, including completion
 and mail injection between reads, queue overlap, poll output collection,
 cleanup after a worker deletion fails, and a held worker's approval staying
-pending until it is released. `coordinator-live-status.test.ts` and
-`coordinator-mail-tiles.test.ts` cover the status and tile evaluations. Evaluator and runner tests cover
-negative evidence and deadline relationships.
+pending until it is released, with retries after failed resolutions.
+`coordinator-live-status-orchestration.test.ts` runs the same status orchestration
+as the live spec through a scripted command transport: environment creation and
+startup, review and approval waits, release recovery, cleanup, and startup
+interactions that must fail qualification. `coordinator-live-status.test.ts` and
+`coordinator-mail-tiles.test.ts` cover the status and tile evaluations, including
+observation lag and report selection independent of mailbox order. Evaluator and
+runner tests cover negative evidence and deadline relationships, including a
+startup turn budget larger than a step budget.
 
 To run the spec against a profile you started yourself, set the opt-in and
 optionally narrow the platforms and scenarios

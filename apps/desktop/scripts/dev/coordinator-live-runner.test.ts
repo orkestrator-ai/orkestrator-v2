@@ -282,6 +282,10 @@ test("runner budgets cover selected Playwright timeouts, underlying waits and cl
   for (const env of [
     {},
     {
+      ORKESTRATOR_AGENT_TEST_COORDINATOR_TURN_TIMEOUT_MS: "1800000",
+      ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS: "100000",
+    },
+    {
       ORKESTRATOR_AGENT_TEST_COORDINATOR_TURN_TIMEOUT_MS: "900000",
       ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS: "1200000",
       ORKESTRATOR_AGENT_TEST_COORDINATOR_FAMILY_TIMEOUT_MS: "3000000",
@@ -292,7 +296,22 @@ test("runner budgets cover selected Playwright timeouts, underlying waits and cl
     expect(budgets.waits.async).toBe(7 * budgets.step);
     expect(budgets.waits.family).toBe(2 * budgets.step + budgets.family);
     expect(budgets.waits.peer).toBe(2 * budgets.step + budgets.peer);
-    expect(budgets.waits.status).toBe(6 * budgets.step + budgets.review);
+    // Independently enumerate the live sequence: startup, review launch,
+    // review completion, delegation, approval arrival, waiting wake, report.
+    const statusWaits = [
+      budgets.turn,
+      budgets.step,
+      budgets.review,
+      budgets.step,
+      budgets.step,
+      budgets.step,
+      budgets.step,
+    ];
+    const statusTotal = statusWaits.reduce((sum, wait) => sum + wait, 0);
+    expect(budgets.tests.status).toBeGreaterThanOrEqual(statusTotal + budgets.overhead);
+    expect(coordinatorLiveRunnerTimeout(["status"], env)).toBeGreaterThanOrEqual(
+      statusTotal + budgets.overhead + budgets.processMargin,
+    );
     const all = COORDINATOR_LIVE_SCENARIOS;
     for (const scenario of all) {
       expect(budgets.tests[scenario]).toBeGreaterThanOrEqual(

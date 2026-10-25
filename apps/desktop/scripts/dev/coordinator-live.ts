@@ -731,7 +731,9 @@ export function isApprovalKind(kind: AgentInteractionKind): boolean {
 export interface CoordinatorTurnProjection {
   turn: { phase: string; error?: string };
   messages: CoordinatorTranscriptMessage[];
-  interactions?: Array<Pick<AgentInteractionRequest, "id" | "kind" | "state" | "sessionId">>;
+  interactions?: Array<
+    Pick<AgentInteractionRequest, "id" | "kind" | "state" | "sessionId" | "createdAt">
+  >;
   notices?: NativeAgentNotice[];
 }
 

@@ -23,8 +23,8 @@ import {
  * provider gets for work it started, with default messaging settings.
  *
  * Review part: the coordinator launches a Multi Review on an environment the
- * harness prepared (one committed file with a real defect). Consolidation
- * reaching `ready` must wake it once with an attention-toned notice; it then
+ * harness prepared (one uncommitted worktree file with a real defect).
+ * Consolidation reaching `ready` must wake it once with an attention-toned notice; it then
  * calls `address_multi_review`, and the Fix turn finishing must wake it once
  * more (`fix-done`). An interactive Fix ends there: `completed` is reached only
  * by a structured Fix, which a coordinator's `address_multi_review` does not
@@ -73,8 +73,9 @@ export function statusEnvironmentNames(token: string) {
 }
 
 /**
- * The file the reviewee commits: a percentage never divided by 100, so every
- * reviewer has something to report without a long turn.
+ * The uncommitted file the harness writes into the reviewee worktree: a
+ * percentage never divided by 100, so every reviewer has something to report
+ * without a long turn.
  */
 export const STATUS_REVIEWEE_FILE = {
   path: "discount.ts",
@@ -429,6 +430,8 @@ export function evaluateStatusReview(input: StatusReviewInput): CoordinatorLiveC
 /** The approval the harness held, as it saw it. */
 export interface HeldApproval {
   kind: AgentInteractionKind;
+  /** The interaction creation timestamp from the backend projection. */
+  createdAt: number;
   /** When the harness first saw it pending. */
   seenAt: number;
   /** When the harness denied it; absent when it never did. */
@@ -447,11 +450,8 @@ export interface StatusWaitingInput {
   workerInteractions: readonly AgentInteractionKind[];
 }
 
-/**
- * How long a worker must wait before its coordinator hears, less one harness
- * poll: the harness sees a request up to one read after it opened.
- */
-export const STATUS_WAITING_MIN_MS = 20_000 - 2_000;
+/** Backend debounce less a small timestamp tolerance, independent of harness polling. */
+export const STATUS_WAITING_MIN_MS = 20_000 - 500;
 
 /**
  * The approval part's checks: the delegation, an approval held at the
@@ -495,7 +495,7 @@ export function evaluateStatusWaiting(input: StatusWaitingInput): CoordinatorLiv
   checks.push(waiting.check);
   const notice = notices.find((item) => item.notice?.state === STATUS_WAITING_STATE);
   const createdAt = notice ? Date.parse(notice.createdAt) : Number.NaN;
-  const waitedMs = first && Number.isFinite(createdAt) ? createdAt - first.seenAt : Number.NaN;
+  const waitedMs = first && Number.isFinite(createdAt) ? createdAt - first.createdAt : Number.NaN;
   const beforeAnswer =
     first !== undefined &&
     Number.isFinite(createdAt) &&
@@ -505,7 +505,7 @@ export function evaluateStatusWaiting(input: StatusWaitingInput): CoordinatorLiv
       "waiting-after-debounce",
       Number.isFinite(waitedMs) && waitedMs >= STATUS_WAITING_MIN_MS && beforeAnswer,
       Number.isFinite(waitedMs)
-        ? `notice ${Math.round(waitedMs / 1_000)}s after the approval was seen; before it was answered ${beforeAnswer}`
+        ? `notice ${Math.round(waitedMs / 1_000)}s after approval creation (observed ${Math.round((first!.seenAt - first!.createdAt) / 1_000)}s later); before it was answered ${beforeAnswer}`
         : "no waiting notice or no held approval",
     ),
   );
@@ -516,18 +516,36 @@ export function evaluateStatusWaiting(input: StatusWaitingInput): CoordinatorLiv
       `waiting carrier row ${waiting.row}`,
     ),
   );
-  // The worker's report, or the notice of a turn that ended without one.
-  const report = input.mail
-    .filter(
-      (message) =>
-        message.toEnvironmentId === input.coordinatorEnvironmentId &&
-        ((message.from.kind === "tab" &&
-          message.from.environmentId === probe.waiterEnvironmentId) ||
-          (message.from.kind === "system" &&
-            message.notice?.resource?.environmentId === probe.waiterEnvironmentId &&
-            message.notice.state !== STATUS_WAITING_STATE)),
-    )
-    .find((message) => message.placement === "injected");
+  // Prefer the worker's report over a later completion notice, independent
+  // of mailbox ordering. Use a finished notice only when no report arrived.
+  const delivered = input.mail.filter(
+    (message) =>
+      message.toEnvironmentId === input.coordinatorEnvironmentId &&
+      message.placement === "injected",
+  );
+  const earliest = (candidates: DelegationMailMessage[]) =>
+    candidates.sort(
+      (a, b) =>
+        carrierRowIndex(messages, a.id) - carrierRowIndex(messages, b.id) ||
+        Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
+        a.id.localeCompare(b.id),
+    )[0];
+  const report =
+    earliest(
+      delivered.filter(
+        (message) =>
+          message.from.kind === "tab" && message.from.environmentId === probe.waiterEnvironmentId,
+      ),
+    ) ??
+    earliest(
+      delivered.filter(
+        (message) =>
+          message.from.kind === "system" &&
+          message.notice?.resource?.kind === "agent-tab" &&
+          message.notice.resource.environmentId === probe.waiterEnvironmentId &&
+          ["completed", "failed", "cancelled"].includes(message.notice.state ?? ""),
+      ),
+    );
   const reportRow = report ? carrierRowIndex(messages, report.id) : -1;
   checks.push(
     check(

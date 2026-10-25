@@ -848,6 +848,7 @@ describe("transcript and turn", () => {
       id: "i-1",
       kind: "command-approval",
       state: "pending",
+      createdAt: 1,
       sessionId: "s",
     } as const;
     const first = watch.observe(projection("running", { interactions: [command] }));
@@ -858,10 +859,10 @@ describe("transcript and turn", () => {
       projection("running", {
         interactions: [
           command,
-          { id: "i-2", kind: "file-approval", state: "pending", sessionId: "s" },
-          { id: "i-3", kind: "question", state: "pending", sessionId: "s" },
+          { id: "i-2", kind: "file-approval", state: "pending", createdAt: 1, sessionId: "s" },
+          { id: "i-3", kind: "question", state: "pending", createdAt: 1, sessionId: "s" },
           // Settled by the policy before the harness saw it: bookkeeping.
-          { id: "i-4", kind: "command-approval", state: "declined", sessionId: "s" },
+          { id: "i-4", kind: "command-approval", state: "declined", createdAt: 1, sessionId: "s" },
         ],
       }),
     );

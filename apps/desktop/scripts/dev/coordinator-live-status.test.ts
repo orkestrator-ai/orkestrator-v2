@@ -253,13 +253,49 @@ describe("the approval part", () => {
     coordinatorEnvironmentId: COORDINATOR,
     messages,
     mail: [waiting, report],
-    held: [{ kind: "command-approval" as const, seenAt, releasedAt: seenAt + 40_000 }],
+    held: [
+      { kind: "command-approval" as const, createdAt: seenAt, seenAt, releasedAt: seenAt + 40_000 },
+    ],
     escapedInteractions: [],
     workerInteractions: [],
   };
 
   test("a held approval, one waiting wake after 20 s, then the report pass", () => {
     expect(failed(evaluateStatusWaiting(base))).toEqual([]);
+  });
+
+  test("a four-second observation lag does not shorten the backend debounce", () => {
+    expect(
+      failed(
+        evaluateStatusWaiting({
+          ...base,
+          held: [{ ...base.held[0]!, seenAt: seenAt + 4_000 }],
+          mail: [{ ...waiting, createdAt: "2026-10-25T10:00:20.000Z" }, report],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("worker report takes precedence over a later finished notice in either mailbox order", () => {
+    const finished = notice(
+      "n-done",
+      waiterTab,
+      "completed",
+      "success",
+      "2026-10-25T10:02:00.000Z",
+    );
+    // The coordinator acknowledged the report before the later notice arrived.
+    const rows = [...messages, user(carrier(finished.id))];
+    for (const mail of [
+      [waiting, report, finished],
+      [finished, report, waiting],
+    ]) {
+      const checks = evaluateStatusWaiting({ ...base, messages: rows, mail });
+      expect(failed(checks)).toEqual([]);
+      expect(checks.find((item) => item.name === "waiting-report")?.detail).toContain(
+        "report from tab",
+      );
+    }
   });
 
   test("a notice too early or after the answer fails the debounce check", () => {
@@ -282,7 +318,7 @@ describe("the approval part", () => {
       failed(
         evaluateStatusWaiting({
           ...base,
-          held: [...base.held, { kind: "question", seenAt }],
+          held: [...base.held, { kind: "question", createdAt: seenAt, seenAt }],
         }),
       ),
     ).toEqual(["waiting-approval-held"]);

@@ -17,8 +17,8 @@ export function coordinatorLiveBudgets(env: NodeJS.ProcessEnv = process.env) {
     "read-only": turn,
     async: step * 7,
     family: step * 2 + family,
-    // Two environment starts, the review, then the approval wait's four steps.
-    status: step * 6 + review,
+    // Waiter startup uses the turn budget; launch/review/delegation waits use five steps.
+    status: turn + step * 5 + review,
     // Two environment starts, then the exchange.
     peer: step * 2 + peer,
   };

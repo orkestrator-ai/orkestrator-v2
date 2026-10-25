@@ -6,6 +6,7 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
 import {
   createTurnWatch,
+  transcriptToolCalls,
   isApprovalKind,
   type CoordinatorLivePlatformSummary,
   type CoordinatorTurnProjection,
@@ -120,7 +121,13 @@ export function createDelegationWatch(
     string,
     Map<
       string,
-      { kind: AgentInteractionKind; sessionId: string; seenAt: number; releasedAt?: number }
+      {
+        kind: AgentInteractionKind;
+        sessionId: string;
+        createdAt: number;
+        seenAt: number;
+        releasedAt?: number;
+      }
     >
   >();
   let projection: Projection | null = null;
@@ -140,7 +147,7 @@ export function createDelegationWatch(
           ...item,
           resolvedAt: Date.now(),
         },
-      }).catch(() => undefined);
+      });
     }
   };
   const mailbox = async (environmentId: string, tabId: string) =>
@@ -164,26 +171,36 @@ export function createDelegationWatch(
     workerEscaped: () => [...workerTurns.values()].flatMap((turn) => turn.escapedInteractions()),
     /** Interactions held for a worker named by `holdWorkerInteractions`, in arrival order. */
     held: (environmentId: string) =>
-      [...(held.get(environmentId)?.values() ?? [])].map(({ kind, seenAt, releasedAt }) => ({
-        kind,
-        seenAt,
-        ...(releasedAt === undefined ? {} : { releasedAt }),
-      })),
+      [...(held.get(environmentId)?.values() ?? [])].map(
+        ({ kind, createdAt, seenAt, releasedAt }) => ({
+          kind,
+          createdAt,
+          seenAt,
+          ...(releasedAt === undefined ? {} : { releasedAt }),
+        }),
+      ),
     /** Deny (or cancel) every interaction still held for a worker. */
     async release(environmentId: string): Promise<void> {
       const pending = held.get(environmentId);
       if (!pending) return;
-      const answers: TurnAnswer[] = [];
+      const failures: unknown[] = [];
       for (const [interactionId, request] of pending) {
         if (request.releasedAt !== undefined) continue;
-        request.releasedAt = Date.now();
-        answers.push({
-          interactionId,
-          sessionId: request.sessionId,
-          action: isApprovalKind(request.kind) ? "deny" : "cancel",
-        });
+        try {
+          await answer(workerIdentity(environmentId), [
+            {
+              interactionId,
+              sessionId: request.sessionId,
+              action: isApprovalKind(request.kind) ? "deny" : "cancel",
+            },
+          ]);
+          request.releasedAt = Date.now();
+        } catch (error) {
+          failures.push(error);
+        }
       }
-      await answer(workerIdentity(environmentId), answers);
+      if (failures.length > 0)
+        throw new AggregateError(failures, "Held interaction release failed");
     },
     async observe(): Promise<DelegationObservation> {
       // Read coordinator mail before the confirming delegation snapshot. A
@@ -262,6 +279,7 @@ export function createDelegationWatch(
             pending.set(request.id, {
               kind: request.kind,
               sessionId: request.sessionId,
+              createdAt: request.createdAt,
               seenAt: Date.now(),
             });
           }
@@ -389,4 +407,59 @@ export function createDelegationWatch(
     },
   };
   return watch;
+}
+
+/**
+ * Settle a fresh turn, safely denying/cancelling escaped interactions and
+ * retaining them for qualification. Report progress during long provider turns
+ * so the logged-command watchdog can distinguish waiting from a hung harness.
+ */
+export async function settleCoordinatorTurn(
+  invoke: Invoke,
+  identity: SessionIdentity,
+  summary: CoordinatorLivePlatformSummary,
+  options: { timeoutMs?: number; pollIntervalMs?: number } = {},
+): Promise<{ projection: Projection; escaped: AgentInteractionKind[] }> {
+  const timeoutMs = options.timeoutMs ?? coordinatorLiveBudgets().turn;
+  const pollIntervalMs = options.pollIntervalMs ?? 2_000;
+  const started = Date.now();
+  const deadline = started + timeoutMs;
+  let nextHeartbeat = started + HEARTBEAT_MS;
+  const watch = createTurnWatch();
+  for (;;) {
+    const projection = await invoke<Projection | null>("get_native_agent_projection", {
+      ...identity,
+      messageLimit: 200,
+    });
+    const { settled, answers } = watch.observe(projection);
+    for (const answer of answers) {
+      await invoke("resolve_native_agent_interaction", {
+        ...identity,
+        interactionId: answer.interactionId,
+        resolution: {
+          version: AGENT_INTERACTION_CONTRACT_VERSION,
+          ...answer,
+          resolvedAt: Date.now(),
+        },
+      });
+    }
+    if (answers.length > 0) summary.escapedInteractions = watch.escapedInteractions();
+    if (projection && settled) {
+      return { projection, escaped: watch.escapedInteractions() };
+    }
+    const phase = projection?.turn.phase ?? "idle";
+    const now = Date.now();
+    if (now >= deadline) {
+      throw new Error(
+        `the ${identity.agent} coordinator turn did not finish within ${timeoutMs / 1_000}s (phase ${phase})`,
+      );
+    }
+    if (now >= nextHeartbeat) {
+      console.log(
+        `[coordinator-live] ${identity.agent}: turn ${phase} for ${Math.round((now - started) / 1_000)}s, ${transcriptToolCalls(projection?.messages ?? []).length} tool calls so far`,
+      );
+      nextHeartbeat = now + HEARTBEAT_MS;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
 }

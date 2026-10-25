@@ -46,7 +46,8 @@ import {
   STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
-import { composeDraftKey } from "@/lib/compose-draft-persistence";
+import { awaitComposeDraftWrites, composeDraftKey } from "@/lib/compose-draft-persistence";
+import { handTabInitialPromptToBackend } from "@/lib/tab-initial-prompt";
 import { createSessionKey } from "@/lib/utils";
 import {
   AGENT_HANDOFF_VERSION,
@@ -921,7 +922,7 @@ function seedAssignedPane(
   tabId: string,
   initial: Pick<
     TabInfo,
-    "initialConversationMode" | "initialFastMode" | "initialExecutionProfileId"
+    "initialConversationMode" | "initialFastMode" | "initialExecutionProfileId" | "initialPrompt"
   >,
 ) {
   usePaneLayoutStore.setState({
@@ -6300,6 +6301,129 @@ describe("AgentNativeTab", () => {
     expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
       prompt: ADDRESS_ALL_REVIEW_PROMPT,
     });
+  });
+
+  for (const failure of ["rejected", "transport"] as const) {
+    for (const edited of [false, true]) {
+      test(`queue hand-off owns a pending ${failure} fallback and preserves edits=${edited}`, async () => {
+        const tabId = `tab-opening-race-${failure}-${edited}`;
+        const sessionKey = createSessionKey("env-1", tabId);
+        const key = composeDraftKey("claude", "env-1", sessionKey);
+        const prompt = "Use the design MCP server to build the header";
+        const image = {
+          id: "opening-image",
+          type: "image" as const,
+          path: ".orkestrator/opening.png",
+          name: "opening.png",
+        };
+        seedAssignedPane(tabId, { initialPrompt: prompt });
+        useNativeComposeStore.getState().updateDraft(sessionKey, { attachments: [image] });
+        getNativeAgentProjectionMock.mockImplementation(async (input) => {
+          const projection = await defaultProjection(input);
+          return {
+            ...projection,
+            capabilities: {
+              ...projection.capabilities,
+              attachments: { images: true, files: true },
+            },
+          };
+        });
+        let finish!: (outcome: NativeAgentDispatchOutcome) => void;
+        dispatchNativeAgentIntentMock.mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finish = resolve;
+            }),
+        );
+        const view = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+        await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+        expect(dispatchNativeAgentIntentMock.mock.calls[0]![0]).toMatchObject({
+          requestId: `initial-prompt:env-1:${tabId}`,
+          prompt,
+          attachments: [{ type: "image", path: image.path, filename: image.name }],
+        });
+        if (edited)
+          act(() =>
+            useNativeComposeStore.getState().updateDraft(sessionKey, { text: "My follow-up" }),
+          );
+        view.unmount(); // Background completion must also work without the tab mounted.
+        await handTabInitialPromptToBackend({
+          environmentId: "env-1",
+          tabId,
+          agent: "claude",
+          prompt,
+          options: { attachments: [{ type: "image", path: image.path }] },
+        });
+        await act(async () =>
+          finish(
+            failure === "rejected"
+              ? { outcome: "rejected", error: "Busy" }
+              : {
+                  outcome: "unknown",
+                  origin: "transport",
+                  requestId: `initial-prompt:env-1:${tabId}`,
+                  error: "Offline",
+                },
+          ),
+        );
+        await awaitComposeDraftWrites(key);
+        expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey)).toMatchObject({
+          text: edited ? "My follow-up" : "",
+          attachments: [],
+        });
+        expect(composeDraftRecords.get(key)?.value).toMatchObject({
+          text: edited ? "My follow-up" : "",
+          attachments: [],
+        });
+        expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.initialPrompt).toBeUndefined();
+      });
+    }
+  }
+
+  test("never queues an opening prompt behind a running turn", async () => {
+    // The backend prompt queue may already be running this very prompt under
+    // its stable id. Queueing it again would carry no id and send it twice, so
+    // the tab waits for idle and sends it under the id the backend dedupes.
+    let phase: "running" | "idle" = "running";
+    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+      const projection = await defaultProjection(input);
+      return {
+        ...projection,
+        capabilities: { ...projection.capabilities, queue: true },
+        turn: { phase },
+      };
+    });
+    render(
+      <AgentNativeTab
+        tabId="tab-opening-running"
+        data={identity("codex")}
+        isActive
+        initialPrompt="Summarize this repository"
+      />,
+    );
+
+    expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    });
+    expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+
+    phase = "idle";
+    await act(async () => {
+      dispatchResourceChange({ resource: "native-agent-session", id: "env-1", revision: 2 });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
+    });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
+      prompt: "Summarize this repository",
+      requestId: "initial-prompt:env-1:tab-opening-running",
+    });
+    expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
   });
 
   test("withholds a resumed tab's opening prompt when the session was substituted", async () => {

@@ -21,9 +21,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { modelSupportsSpeed } from "@/lib/agent-launch";
+import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { pickHostPath } from "@/lib/host-path-picker";
+import { buildReviewModelCatalog } from "@/lib/review-launch-options";
+import {
+  handTabInitialPromptToBackend,
+  type TabInitialPromptOptions,
+} from "@/lib/tab-initial-prompt";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
@@ -107,6 +115,39 @@ function removeTab(environmentId: string, tabId: string) {
 }
 
 const errorText = (error: unknown) => failureOf(error).message;
+
+/**
+ * The settings the mounted tab would send its opening prompt with, so the
+ * backend queue and the renderer fallback start the same session.
+ */
+function designInitialPromptOptions(
+  environmentId: string,
+  platform: DesignAgent,
+  images: readonly DesignPromptImage[],
+): TabInitialPromptOptions {
+  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+  const configured = resolvedPlatformSettings(
+    useConfigStore.getState().config,
+    environment?.projectId,
+    environment,
+    platform,
+  );
+  const fastMode = modelSupportsSpeed(platform, buildReviewModelCatalog(), configured.model)
+    ? configured.fastMode
+    : undefined;
+  return {
+    model: configured.model,
+    reasoningEffort: configured.reasoningEffort,
+    ...(typeof fastMode === "boolean" ? { fastMode } : {}),
+    mode: "build",
+    attachments: images.map((image) => ({
+      id: image.id,
+      type: image.type,
+      path: image.path,
+      filename: image.name,
+    })),
+  };
+}
 
 export function DesignWorkspaceDialog({
   open,
@@ -355,14 +396,33 @@ export function DesignWorkspaceDialog({
             throw new Error(
               "Too many images for this conversation. Remove some images and try again.",
             );
+          const promptOptions = designInitialPromptOptions(environmentId, platform, images);
           let created = false;
           try {
+            // The prompt stays on the tab as the renderer fallback until the
+            // backend queue has it; see `handTabInitialPromptToBackend`.
             created = createTab(platform, {
               tabId,
               agentLaunchMode: "native",
               displayTitle: "Design",
               initialPrompt,
+              initialAgentModel: promptOptions.model,
+              initialReasoningEffort: promptOptions.reasoningEffort,
+              initialFastMode: promptOptions.fastMode,
+              initialConversationMode: "build",
             });
+            if (created)
+              void handTabInitialPromptToBackend({
+                environmentId,
+                tabId,
+                agent: platform,
+                prompt: initialPrompt,
+                options: promptOptions,
+              }).catch((reason) => {
+                toast.error("Could not send the design opening prompt", {
+                  description: errorText(reason),
+                });
+              });
             return created;
           } finally {
             const store = usePaneLayoutStore.getState();

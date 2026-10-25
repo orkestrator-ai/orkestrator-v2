@@ -399,6 +399,33 @@ ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE=orkestrator-v2:latest \
   ./src/core/design/export-container.test.ts
 ```
 
+The same export into a container Orkestrator created (its network-policy
+entrypoint, cloned workspace and lifecycle) is the Docker fixture case
+`e2e/agent-testing/design-container-export.spec.ts`: round trip, a container
+stopped outside Orkestrator, then an Orkestrator restart and a fingerprinted
+replace. It runs with the other Docker fixture specs, or alone:
+
+```bash
+mise run dev:test --profile <p> --fixture --fixture-environments local,container
+ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_DOCKER=1 \
+  mise run test:logged -- --name design-container-export -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts design-container-export.spec.ts
+```
+
+Design canvases across a published backend and this checkout (upgrade, a
+legacy `.orkdes` migration, the downgrade fence and the export-then-import
+downgrade path, a future record version and a corrupt record) run against the
+real `orkestrator` npm package on a private temporary data directory:
+
+```bash
+mise run test:logged -- --name design-mixed-versions -- bun scripts/qualify-design-mixed-versions.ts \
+  --old-version 2.22.3 --report output/agent-testing/design-mixed-versions/report.json
+```
+
+`e2e/DesignCanvas.spec.ts` takes `ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE=<rate>`
+(CDP `Emulation.setCPUThrottlingRate`, Chromium only) to slow the page instead
+of loading the host when chasing a timing flake.
+
 ### CLI scenarios
 
 The published client has targeted scenarios that start isolated backends

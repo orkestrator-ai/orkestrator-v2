@@ -43,3 +43,25 @@ After this run's Electron annotation check had closed, the complete unchanged ow
 ## Keyboard shortcuts review validation — 2026-10-25
 
 `mise run test:logged -- --name design-isolated -- mise run test:agent:design:isolated` repeated the guided-design brief failure at `design-canvas.spec.ts:287`: `Mock up the sidebar` was absent after five seconds. One scenario passed, one failed, and teardown removed the failed trace after it exceeded the 16 MiB sanitization limit (98.3 seconds logged). The runner stopped and reset disposable profile `qa-browser-a7273c35-ebd`. This matches the separately recorded brief-visibility failure above; this observation was not rerun and is not a newly established flake. No design-launch, transcript, assertion or deadline changes were made. Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.5NZ34d/design-isolated.log.gz` and `output/agent-testing/qa-browser-a7273c35-ebd/browser/artifacts/` (excluding the removed oversized trace).
+
+## Design opening-prompt review — 2026-10-25
+
+- `mise run test:logged -- --name design-isolated -- mise run test:agent:design:isolated`
+  used disposable credential-free Codex profile `qa-browser-8626a8bc-414`.
+  The unchanged file-opening case again lacked
+  `"filePath":".private/hidden.orkdes"` in the persisted pane layout at
+  `design-canvas.spec.ts:250` after five seconds. The run also exposed an
+  insufficient readiness wait in the newly added opening-prompt race test.
+- After giving the new test's provider startup a bounded 30-second wait,
+  `mise run test:logged -- --name design-isolated-rerun -- mise run test:agent:design:isolated`
+  used fresh profile `qa-browser-07f55979-0cc`. The same unchanged hidden-file
+  case failed again; the other two cases passed, including delayed image-brief
+  enqueue acknowledgement across tab unmount and a subsequent failed renderer
+  fallback (195.1 seconds including startup and cleanup).
+- This observation remains non-green in the owning suite and is not newly
+  classified as intermittent. The failing case's assertions, timeouts and
+  implementation were not changed.
+- Evidence: `output/agent-testing/qa-browser-8626a8bc-414/browser/` and
+  `output/agent-testing/qa-browser-07f55979-0cc/browser/`, with compressed logs
+  in host temporary directories `orkestrator-test-run.c9Ge59` and
+  `orkestrator-test-run.hBv8qd`. Both disposable profiles were stopped and reset.

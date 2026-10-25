@@ -4,7 +4,10 @@ Checked against `main` at `2459b05c` (2026-10-15); the flake review against
 `9906db30` (2026-10-16); the live agent cycle against `a5d338c1`
 (2026-10-18) and its Claude rerun against `9b3f53a2` (2026-10-21); container
 export, Electron, accessibility and client performance against `b83ae534`
-(2026-10-22, see [Qualification evidence](#qualification-evidence-2026-10-22)).
+(2026-10-22, see [Qualification evidence](#qualification-evidence-2026-10-22));
+the opening prompt, export into an Orkestrator container, mixed versions and
+the 0174 reproduction against `20f6de91` (2026-10-25, see
+[Qualification evidence (2026-10-25)](#qualification-evidence-2026-10-25)).
 
 The design canvas ([`design-canvas.md`](../../architecture/design-canvas.md)) is
 complete in code: recoverable operations, safe export, history, incremental
@@ -20,10 +23,17 @@ nobody builds them speculatively.
 - Real-stack suite: `mise run test:agent:design:isolated` runs
   `apps/desktop/scripts/test-agent-browser-isolated.ts --design` against
   `e2e/agent-testing/design-canvas.spec.ts` on a disposable profile. The spec
-  has two tests: "real gateway saves a design and rehydrates another client's
-  edits" and "private canvases survive reload and can be retired to recover
-  quota". It drives the backend through the `design_action` gateway command and
-  the UI, never through an agent.
+  has three tests: "real gateway saves a design and rehydrates another client's
+  edits", "private canvases survive reload and can be retired to recover
+  quota" and "a new design tab's brief is sent while its environment is
+  inactive". It drives the backend through the `design_action` gateway command
+  and the UI, never through an agent.
+- Opening prompt: since 2026-10-25 the backend owns it. The **New design
+  workspace** brief goes onto the new tab's durable prompt queue
+  (`handTabInitialPromptToBackend`, `apps/web/src/lib/tab-initial-prompt.ts`)
+  under `initial-prompt:<environment>:<tab>`, and the backend queue dispatcher
+  sends it whether or not the tab is mounted. See
+  [`design-canvas.md`](../../architecture/design-canvas.md).
 - The task passed on `7081ae8c` (2026-09-24). The Electron dev-startup failure
   that had blocked it was fixed by #840. On 2026-10-15, after the `AppShell`
   breakpoint fix that resolved flake 0209, both tests passed on a fresh profile
@@ -50,7 +60,10 @@ nobody builds them speculatively.
   exports from a running container of the environment image through real
   `docker exec` and interrupts it. It passed on 2026-10-22 on Docker Desktop
   (macOS arm64). The container is started directly, not by Orkestrator's
-  container lifecycle.
+  container lifecycle. The Docker fixture case
+  `e2e/agent-testing/design-container-export.spec.ts` (part of
+  `mise run test:agent:docker`) covers a container Orkestrator created; it
+  passed three times on 2026-10-25.
 - Electron: `e2e/agent-testing/design-canvas-electron.spec.ts`, part of
   `mise run test:agent:electron`, opens, edits, exports, downloads, imports a
   host file and drives the keyboard shortcuts in the real window.
@@ -65,8 +78,10 @@ nobody builds them speculatively.
   tested in `design-viewport.test.ts`); `scripts/benchmark-design.ts`
   measures the backend side.
 - Mixed-version fallback and migration are unit-tested
-  (`design-controller.test.ts`, `records.test.ts`); no run used real old and
-  new binaries.
+  (`design-controller.test.ts`, `records.test.ts`). On 2026-10-25
+  `scripts/qualify-design-mixed-versions.ts` ran the published backend
+  `orkestrator@2.22.3` and this checkout's backend over one data directory
+  (see [Mixed versions](#mixed-versions)). No run used an old renderer.
 
 ## Outstanding work
 
@@ -75,42 +90,58 @@ nobody builds them speculatively.
 Live-agent and platform runs share prerequisites and batching with other todo
 files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 
-- **Opening prompt of a new design tab needs the tab mounted.** The agent tab
-  of **New design workspace** sends its brief from the mounted tab
-  (`AgentNativeTab.controller.tsx`, `initialPrompt`) once its projection loads.
-  Switching environment before that defers the first turn until the user
-  returns; nothing is lost, but the agent sits idle. Only the environment's
-  `startup-agent` tab has a backend-owned startup prompt. Give tabs created
-  with an initial prompt a backend-owned dispatch (the same request id
-  `initial-prompt:<environment>:<tab>` keeps it at most once), with an
-  inactive-environment test. This applies to every tab created with an
-  initial prompt, not only design.
-  - Evidence (2026-10-22): `mise run test:agent:design:isolated` failed the
-    same way three times at line 220 of `design-canvas.spec.ts` ("Mock up the
-    sidebar" never visible), once with this branch's product files reverted to
-    `b83ae534`. The new Codex tab showed "Ready to build!" with a disabled
-    composer and **Resume Session**, and no brief. The private-canvas case
-    passed every time. The owning file fails alone, so this is a failing
-    case, not a flake.
+- **Opening prompt of a new design tab without the tab mounted.** Done on
+  2026-10-25 (see [Opening prompt](#opening-prompt)). The brief is handed to
+  the backend's durable prompt queue the moment the tab exists, under the
+  same request id `initial-prompt:<environment>:<tab>` the mounted tab would
+  use, so it is sent at most once with the tab and its environment off
+  screen. The review action already did this; both now share
+  `handTabInitialPromptToBackend`. The renderer fallback no longer joins a
+  running turn's id-less queue. The owning tests are the new inactive case in
+  `design-canvas.spec.ts` (fails with the hand-off disabled), "never queues an
+  opening prompt behind a running turn" in `AgentNativeTab.test.tsx` (fails
+  without the guard), `tab-initial-prompt.test.ts`, and the queue assertions
+  in `DesignWorkspaceDialog.test.tsx`.
+  - The line 220/221 failure did not reproduce on `20f6de91`: four runs of
+    `mise run test:agent:design:isolated` passed before any change, and the
+    file with the new case passed twice after it. Something merged between `b83ae534` and `20f6de91`
+    fixed the mounted path; the backend hand-off makes it no longer matter.
+  - Every other native tab created with an opening prompt already had a
+    backend-owned dispatch: the environment's `startup-agent` tab (the launch
+    reconciler), review tabs (now through the shared helper) and
+    `launch_native_agent_job` tabs. Coordinator conversations bind their
+    platform and first prompt through backend authority (`onAssignPlatform`).
+    No other caller passes `initialPrompt` to a native tab today; the
+    mounted-tab path stays as the fallback, and it alone handles a tab
+    resumed to a requested session, because that prompt must be withheld if
+    the session was substituted (see
+    [Assumptions and decisions](#assumptions-and-decisions)).
 - **Real-container export.** Done on 2026-10-22 for the export protocol
   against a running container of the environment image on Docker Desktop
   (macOS arm64): every interruption the item named reconciled by exact
   digest, and reconciliation never started a second writer (see
   [Container export](#container-export)). Local export was already covered by
-  `exports.test.ts` and `export-writer.test.ts`. Still open:
-  - the same run against a container Orkestrator created (its
-    network-policy entrypoint, workspace setup and the `ContainerService`
-    lifecycle), for example as a case in the Docker agent fixture
-    (`mise run test:agent:docker`);
+  `exports.test.ts` and `export-writer.test.ts`. On 2026-10-25 the same
+  protocol passed against a container Orkestrator created, through its
+  network-policy entrypoint, cloned workspace and `ContainerService`
+  lifecycle (`design-container-export.spec.ts`, see
+  [Orkestrator container export](#orkestrator-container-export)). Still
+  open:
   - Docker Engine on Linux, batched with
     [0019](../containers-and-environments/0019-container-platform-qualification.md).
+    This machine is macOS with Docker Desktop only.
   Describe container export as qualified on Docker Desktop for macOS only.
 - **Electron window.** Done on 2026-10-22 through
   `e2e/agent-testing/design-canvas-electron.spec.ts` (see
   [Electron](#electron)). Not covered: native menu key equivalents (Playwright
   delivers keys through Chromium, not the OS), the native Save dialog of a
   download (the spec sets the save path in `will-download`), and the packaged
-  `file://` renderer.
+  `file://` renderer. Not attempted on 2026-10-25: the packaged renderer needs
+  a packaged app, because the production main loads it from
+  `process.resourcesPath/web` (`apps/desktop/electron/main.ts`), so it belongs
+  with the release smoke of a built app; the other two need OS-level input
+  and dialogs in a real desktop session, which a shared host running other
+  worktrees and a production instance is not.
 - **Manual accessibility.** The automated part is done (see
   [Accessibility](#accessibility)): the keyboard-only journey, focus survival
   across acknowledgment, drawers, culling and errors, reduced motion, 200%
@@ -123,34 +154,51 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   frame titles, Preview-mode frames, rotor and browse-mode navigation). The
   400% zoom layout defect and the other findings were fixed on 2026-10-25 in
   [0054-design-canvas-accessibility-findings.md](0054-design-canvas-accessibility-findings.md).
+  Still not done on 2026-10-25: it needs a person listening to VoiceOver
+  (macOS) and NVDA (Windows); no automated run stands in for it.
 - **Large-canvas client performance.** Done on 2026-10-22 on one host and
   build, including a 100-cycle leak check on the committed fixes that
   converged at every size (see [Client performance](#client-performance)).
   Other hosts (Linux, a slower laptop) and the Electron renderer are not
-  measured; the numbers are host evidence, not thresholds.
-- **Mixed versions and migration on real binaries.** Old client with new
-  backend and the reverse. Migrate a copied legacy `.orkdes` fixture, and check
-  the explicit downgrade path (export before running an older backend). Cover
-  a migrated record, an interrupted migration, a future record version and a
-  corrupted record with an older backup. Not attempted on 2026-10-22: it
-  needs real old desktop and backend binaries, which are batched with
-  [0034](../cross-cutting/0034-mixed-version-compatibility.md).
+  measured; the numbers are host evidence, not thresholds. Still not done on
+  2026-10-25: only this Apple M5 Max host was available, and the harness
+  (`e2e/perf/design-canvas-perf.ts`) drives headless Chrome, not an Electron
+  window.
+- **Mixed versions and migration on real binaries.** The backend half is
+  done on 2026-10-25 with the published `orkestrator@2.22.3` (the oldest
+  Stable release on npm, inside the support window) and this checkout's
+  backend over one data directory (`scripts/qualify-design-mixed-versions.ts`,
+  see [Mixed versions](#mixed-versions)). The upgrade read, edited and
+  re-exported the old canvas; a copied legacy `.orkdes` migrated on its first
+  write with a backup; a future record version and a corrupt record with an
+  older backup were each fenced and left in place. The downgrade is refused
+  by the backend database's schema fence before any design record is read,
+  and the explicit downgrade path (export, then import into the older
+  release) worked. Still open:
+  - an old renderer against the new backend, and the reverse. The npm package
+    ships no renderer, so this needs an old desktop app build; the hosted web
+    client always follows `main`.
+  - an interrupted migration on a real binary. The window (record written,
+    legacy file not yet moved) is not reachable from outside the process; it
+    stays covered by "an interrupted migration (record written, legacy not
+    retired) reads the record" in `records.test.ts`.
 - **Browser design flakes under controlled parallel load.**
   [0174](../../tests/flaky-tests/design-canvas-and-artifacts/0174-design-canvas-parallel-browser-timeout.md)
-  (`e2e/DesignCanvas.spec.ts` timeouts with six workers) and
-  [0208](../../tests/flaky-tests/design-canvas-and-artifacts/0208-design-canvas-private-import-picker-disabled-in-suite.md)
-  (import picker stays disabled late in `test:agent:browser`). Neither
-  reproduced on 2026-10-22, so there is nothing yet to decide between a client
-  wait on an observable state (the controller's 3 s cursor check is a real
-  timer) and a product fix.
-  - 0174 passed all 24 runs with six workers and `--repeat-each=3`: three
-    runs at host load 41–64, and one with 18 synthetic `yes` processes on 18
-    cores. It also passed both nine-worker `mise run test:browser` runs.
-  - 0208's case passed all three standalone `test:agent:design:isolated` runs.
-    It has only failed late in a full `test:agent:browser` run on a shared
-    profile, which was not attempted.
-  - Next step: rerun with more repeats, or with the CPU throttled (CDP
-    `Emulation.setCPUThrottlingRate`), instead of adding host load.
+  (`e2e/DesignCanvas.spec.ts` timeouts with six workers) is fixed on
+  2026-10-25: a 4x CDP CPU throttle reproduced it as a race in the test's
+  conflicting edit, now made deterministic (see
+  [Design flakes](#design-flakes)). Still open:
+  - [0208](../../tests/flaky-tests/design-canvas-and-artifacts/0208-design-canvas-private-import-picker-disabled-in-suite.md)
+    (import picker stays disabled late in `test:agent:browser`). Its case
+    passed all seven standalone `test:agent:design:isolated` runs on
+    2026-10-25 and all three on 2026-10-22. It has only failed late in a full
+    `test:agent:browser` run on a shared profile, which was not attempted:
+    the host was shared with other worktrees throughout. Next step: that run,
+    then the same CPU throttle on the private-canvas case if it does not
+    reproduce.
+  - 0174 is resolved; one quiet nine-worker `mise run test:browser` would
+    confirm it does not recur in the aggregate suite. Every 2026-10-25 run
+    was on a host shared with other worktrees.
 
 ### Deferred until measured
 
@@ -628,6 +676,127 @@ in the phone project.
   client numbers do not measure repeated captures, render-worker contention
   or full-record rewrites.
 
+## Qualification evidence (2026-10-25)
+
+Branch `todo-0036-design-canvas-qualification-e17e8f7e743c` from `20f6de91`.
+Host: Apple M5 Max (18 cores), macOS (Darwin 27.0.0), Bun 1.4.4 (mise),
+Docker Desktop 29.9.2 (arm64). The host was shared with other worktrees
+(load averages 18–54 during the runs).
+
+### Opening prompt
+
+- **Before the change.** `mise run test:agent:design:isolated` passed four
+  times in a row on `20f6de91` (39.0, 31.9, 33.2 and 32.9 s), so the 2026-10-22
+  failure at the opening brief no longer reproduces.
+- **New case.** "a new design tab's brief is sent while its environment is
+  inactive" creates a Codex design workspace, switches to another environment
+  at once, and refuses every `dispatch_native_agent_intent` the page sends
+  under an `initial-prompt:` id, so only the backend can send the brief. It
+  polls `get_native_agent_projection` for the new tab's session until the
+  brief is in it, then returns and checks the brief shows once and the canvas
+  guidance never shows. With the change the whole file passed twice (3 passed;
+  1.0 min, then 70.0 s through `test:logged`). With the hand-off disabled the new case failed (the projection
+  never held the brief) and the other two passed.
+- **Unit tests.** "never queues an opening prompt behind a running turn"
+  fails without the `noQueue` guard: the mounted tab put the prompt on the
+  id-less queue while a turn ran. The review action's existing queue
+  assertions in `ActionBar.test.tsx` pass unchanged through the shared
+  helper.
+
+### Orkestrator container export
+
+Profile `qa-design-ctr-0036`: `mise run dev:test --profile qa-design-ctr-0036
+--fixture --fixture-environments local,container`, which built and ran
+`orkestrator-v2:dev-62ff71e7ec52` from this checkout. Command:
+`ORKESTRATOR_AGENT_TEST_PROFILE=qa-design-ctr-0036 ORKESTRATOR_AGENT_TEST_DOCKER=1
+bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts
+e2e/agent-testing/design-container-export.spec.ts`. Passed three times (6.5,
+25.7 and 7.9 s). The profile was stopped and reset afterwards (one container,
+two volumes and one network removed by exact owner).
+
+- **Round trip** into the fixture environment's cloned `/workspace`: the
+  file reads back through `read_container_file` with the canvas id and
+  revision, is owned by `node` with mode 644, shows in `git status` as an
+  untracked repository file, and leaves no temporary file. A preview without
+  a path suggests the same file and reports the same canvas with the
+  receipt's digest.
+- **Stopped outside Orkestrator** (`docker stop`): the export fails with
+  `storage` before writing and reconcile reports `none`.
+- **Restarted through Orkestrator** (`start_environment`, so the
+  network-policy entrypoint runs again): nothing was published while
+  stopped, the export association survived, a fingerprinted replace landed
+  revision 3, and an unconfirmed overwrite of the changed file was refused.
+- The client-kill interruptions are not repeated here: they need the spawn
+  seam that only `export-container.test.ts` has.
+
+### Mixed versions
+
+`bun scripts/qualify-design-mixed-versions.ts --report
+output/agent-testing/design-mixed-versions/2026-10-25.json` exited 0 with no
+failed check. Old: the published `orkestrator@2.22.3` (it reported 2.22.3).
+New: this checkout's `apps/backend/src/main.ts`. One temporary data directory
+and HOME, loopback only.
+
+| Step | Result |
+| --- | --- |
+| 2.22.3 creates a local environment and a canvas, exports `designs/old.orkdes` | ok |
+| New reads and edits the old canvas | `snapshot`; edit committed |
+| New previews the old export | same path, same canvas, fingerprint equals 2.22.3's digest |
+| New opens `designs/old.orkdes` | reuses the old canvas |
+| A legacy portable `.orkdes` in the private store | read in place; first write wrote `.orkrec` and moved the legacy file to `legacy-backups` |
+| 2.22.3 on the upgraded directory | refuses to start: "Storage database schema version 4 is newer than this build supports (3)" |
+| Downgrade path: new exports, 2.22.3 imports into a fresh directory | imported with the new backend's edit |
+| New after the round trip | old canvas intact; `recordVersion: 99` gives `record-problem/unsupported-version` and the file stays; a corrupt record gives `record-problem/corrupt` with `backupAvailable` |
+
+The downgrade fence sits in the backend database, so 2.22.3 never reads a
+design record written by the new backend; the design-level fence for a future
+record version was exercised on the new backend instead.
+
+### Design flakes
+
+- **0174** (`e2e/DesignCanvas.spec.ts` timeouts). `DesignCanvas.spec.ts` now
+  takes `ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE` (CDP
+  `Emulation.setCPUThrottlingRate` on the page). With
+  `--workers=1 --repeat-each=5` over both projects:
+  - rate 4: 2 of 10 failed, both at the 30 s test deadline on the last
+    steps (clicking **Done** in the export dialog, line 278); the page
+    snapshot shows Done enabled and focused, so nothing was stuck.
+  - rate 8: 10 of 10 failed at the deadline, each at a different step (lines
+    147–202: options, comboboxes, the colour field, `page.reload`).
+  - unthrottled, the journey took 9.5–22.2 s per run on this loaded host
+    (`--repeat-each=3`, 6 passed).
+  - rate 4 with a 120 s deadline (`--repeat-each=3`): four runs took
+    29.6–38.8 s, and two stalled until the deadline at line 209, clicking
+    **Apply styles** with "element is not enabled" for 80 s. The test
+    landed another client's edit just before that click; when its live hint
+    reached the page first, the inspector rightly disabled Apply styles for
+    the stale selection, and the click could never happen. This is the race
+    behind 0174: the variety of failing steps under load came from the same
+    budget being spent waiting here or simply running slow.
+  - **Fixed in the test** (no product change): the other client's edit now
+    lands when the page's `design_prepare` for Apply styles reaches the
+    service, so the server always moves on while the edit is in flight.
+    After the fix, rate 4 passed 10 of 10 (24.3–38.3 s, 120 s deadline) and
+    the unthrottled file passed 6 of 6 at the default 30 s (7.2–11.7 s).
+- **0208** (import picker disabled late in `test:agent:browser`). The
+  private-canvas case passed all seven `test:agent:design:isolated` runs
+  above. A full shared-profile `test:agent:browser` run was still not
+  attempted; see [Assumptions and decisions](#assumptions-and-decisions).
+
+### Repository validation
+
+`mise run format:check`, `mise run lint` (no new findings) and
+`mise run typecheck` passed. The web package's native-agent, design and
+action-bar tests passed (1,030). `mise run test` passed every group except
+root/support, which failed two cases of
+`scripts/opencode-live-compatibility-probe.test.ts` on the shared temporary
+directory; the file passed alone three times, recorded as a recurrence of
+flake [0242](../../tests/flaky-tests/agent-bridges/0242-opencode-probe-shared-temp-root.md).
+The flake-index, doc and mise-task unit tests passed. Electron, iOS and the
+full `test:agent:browser` suite were not run: the change is renderer
+dispatch, the design specs and a script, covered by the isolated design
+suite and the Docker fixture case above.
+
 ## Constraints and rationale
 
 - Runs use a unique isolated profile and only its fixture repository, with
@@ -689,6 +858,88 @@ in the phone project.
   `react-virtuoso` so focused and selected rows stay mounted; "agent
   available" means enabled in settings.
 
+## Assumptions and decisions
+
+Made on 2026-10-25 while working this file.
+
+1. **Where the opening prompt's backend dispatch comes from.**
+   - Options: (a) a new backend command that ensures the session and
+     dispatches for a renderer-chosen tab id; (b) the backend reads opening
+     prompts out of the saved pane layout and dispatches them; (c) the
+     durable prompt queue the review action already used, behind one shared
+     helper.
+   - Chosen: (c), `handTabInitialPromptToBackend`.
+   - Why: the queue dispatcher already creates the session, waits until the
+     environment is ready for agents, retries with backoff, settles
+     ambiguous dispatches and dedupes by request id; the review action had
+     proved it.
+   - Pros: no new backend surface, one path for every renderer-created tab,
+     survives switching environment and never mounting the tab. Cons: the
+     queue write is still issued by the creating renderer, so a renderer
+     that dies between creating the tab and the write loses the prompt, as
+     before; (b) would close that but needs prompts in the pane layout,
+     which deliberately never stores them.
+2. **Keeping the mounted-tab fallback.**
+   - Options: drop it once the queue has the prompt; keep it until the queue
+     write lands, under the same request id.
+   - Chosen: keep it, cleared on a successful write.
+   - Why: a failed queue write must not strand the brief; the shared request
+     id makes the race at most once.
+   - Pros: no lost prompt on a transient failure. Cons: two paths to reason
+     about, and one more guard (next decision).
+3. **The fallback and a running turn.**
+   - Options: let it queue as before; skip the opening prompt while a turn
+     runs (`noQueue`), retrying when idle.
+   - Chosen: `noQueue`.
+   - Why: the queue carries no request id, so if the backend had already sent
+     the prompt and its turn was running, the fallback would send it again.
+     The new unit test proves it did.
+   - Pros: at most once holds on every path. Cons: an opening prompt for a
+     tab opened onto a busy session now waits for idle instead of sitting in
+     the queue; the effect is the same order of turns.
+4. **Resumed tabs keep the mounted path.** The controller withholds a resumed
+   tab's opening prompt when the provider substituted the session; only the
+   mounted tab can see that, so such tabs are not handed to the queue. No
+   caller creates one today.
+5. **Orkestrator-container export as a Docker fixture spec**, not a variant of
+   `export-container.test.ts`.
+   - Why: only the real stack runs the network-policy entrypoint, the cloned
+     workspace and `ContainerService`. Pros: runs with `test:agent:docker`.
+     Cons: the client-kill interruptions stay in the backend test, which has
+     the spawn seam they need.
+6. **Mixed versions with the published npm backend.**
+   - Options: old releases built from tags in worktrees (as
+     `qualify-backend-upgrade-rollback.ts` does); the published
+     `orkestrator` package.
+   - Chosen: the published package, `2.22.3` by default.
+   - Why: it is the binary users run, it installs in seconds, and 2.22.3 is
+     the oldest Stable release on npm inside the support window (v2.21.0 was
+     never published to npm).
+   - Pros: real binary, quick, repeatable. Cons: no renderer in the package,
+     so the old-client half stays open; the floor release itself is not
+     covered.
+7. **Flake 0174: fix the order, not the deadline.**
+   - Options: raise the journey's 30 s budget; split the journey; make the
+     conflicting edit deterministic.
+   - Chosen: the third. The other client's edit now lands when the page's
+     **Apply styles** operation reaches the service, instead of before the
+     click.
+   - Why: a 4x CPU throttle reproduced a real stall: when the edit's live hint
+     reached the page before the click, the inspector correctly disabled
+     Apply styles for the stale selection and the click waited until the
+     deadline. Raising the deadline would only have waited longer.
+   - Pros: removes the race and keeps every assertion. Cons: the 8x and some
+     4x failures were the 30 s budget running out under emulated slowdown
+     well beyond the suite's; those are not addressed and are not product
+     defects.
+8. **0208 was not chased further.** Its case passed all seven isolated runs
+   here, and the remaining reproduction needs a full shared-profile
+   `test:agent:browser` run on an otherwise idle host.
+9. **Criticality stays Medium.** The most serious remaining work is
+   qualification on other platforms (Linux Docker Engine, other hosts,
+   screen readers) and an old renderer, all Medium by the rating rules; the
+   opening prompt, which users hit, is done.
+
 ## Open questions
 
 - Should design join a shared live-provider harness (like
@@ -706,15 +957,16 @@ in the phone project.
   [0054-design-canvas-accessibility-findings.md](0054-design-canvas-accessibility-findings.md).
 - [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)
   for container runs, [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)
-  for old-client and old-backend runs, and
+  for the support window (its old-binary runs for design are recorded here), and
   [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md) for flake triage.
 - [`agent-testing.md`](../../development/agent-testing.md) and
   [`testing-guide.md`](../../development/testing-guide.md).
 - Open design flakes:
-  [0174](../../tests/flaky-tests/design-canvas-and-artifacts/0174-design-canvas-parallel-browser-timeout.md),
   [0208](../../tests/flaky-tests/design-canvas-and-artifacts/0208-design-canvas-private-import-picker-disabled-in-suite.md)
   and [0246](../../tests/flaky-tests/design-canvas-and-artifacts/0246-design-renderer-real-chromium-launch-deadline.md)
-  (real-Chromium launch on CI). Resolved on 2026-10-16 as test artefacts:
+  (real-Chromium launch on CI). Resolved on 2026-10-25 as a test race:
+  [0174](../../tests/flaky-tests/design-canvas-and-artifacts/0174-design-canvas-parallel-browser-timeout.md).
+  Resolved on 2026-10-16 as test artefacts:
   [0193](../../tests/flaky-tests/design-canvas-and-artifacts/0193-design-sync-gap-aggregate-timeout.md),
   [0215](../../tests/flaky-tests/design-canvas-and-artifacts/0215-design-operation-replay-event-count.md),
   [0218](../../tests/flaky-tests/design-canvas-and-artifacts/0218-design-service-replay-aggregate-timeout.md)

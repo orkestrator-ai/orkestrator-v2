@@ -168,6 +168,14 @@ with unchanged user turns and no prompt sent. Current Codex bridges can restore
 registrations across a restart; the deterministic tests separately cover a
 bridge that has lost the live session. The profile was stopped and reset.
 
+Focused identity/teardown and progressive/lifecycle suites, formatting, lint and
+typechecking passed. The repository suite reached the outer 30-minute watchdog
+after a 876.2 s workspace capacity wait and is incomplete. Five unrelated test
+cases failed in four files; every complete unchanged owner passed alone. They
+are recorded in flake cases 0259 (disk report), backend/tooling 0692 (CLI shared
+deadline), 0931 (Multi Review state wait) and 0932 (MCP lock setup). No passing
+full-suite result is claimed.
+
 ## Remaining work
 
 What was left of items 1, 3 and 5, narrowed; nothing here is new scope.

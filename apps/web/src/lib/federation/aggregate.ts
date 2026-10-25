@@ -85,10 +85,13 @@ export function activityRows(
         ACTIVITY_PRIORITY[a.environment.activity] - ACTIVITY_PRIORITY[b.environment.activity]
       : 0;
   const recency = (a: ActivityRow, b: ActivityRow) => {
-    const newestFirst = compareTimestampsDesc(
-      a.environment.activityUpdatedAt ?? a.environment.lastActivityAt,
-      b.environment.activityUpdatedAt ?? b.environment.lastActivityAt,
-    );
+    // Snapshot writes (including lease refreshes) are not user activity.
+    // Keep the priority timestamp policy separate from chronological orders.
+    const timestamp = (environment: FederatedEnvironment) =>
+      order === "priority"
+        ? (environment.activityUpdatedAt ?? environment.lastActivityAt)
+        : environment.lastActivityAt;
+    const newestFirst = compareTimestampsDesc(timestamp(a.environment), timestamp(b.environment));
     return order === "oldest" ? -newestFirst : newestFirst;
   };
   return rows.sort(

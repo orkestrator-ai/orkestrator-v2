@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { useUIStore } from "../../../apps/web/src/stores/uiStore";
+import { createUIStore, useUIStore } from "../../../apps/web/src/stores/uiStore";
 
 describe("uiStore", () => {
   beforeEach(() => {
@@ -213,6 +213,31 @@ describe("uiStore", () => {
       state?: Record<string, unknown>;
     };
     expect(persisted.state?.activitySortOrder).toBe("oldest");
+  });
+
+  for (const order of ["priority", "newest", "oldest"] as const) {
+    test(`rehydrates ${order} activity order in a new store`, () => {
+      useUIStore.getState().setEnvironmentSortMode("activity");
+      useUIStore.getState().setActivitySortOrder(order);
+      const persisted = localStorage.getItem("ui-storage")!;
+
+      // Restore the serialized settings as a fresh renderer would read them.
+      localStorage.clear();
+      localStorage.setItem("ui-storage", persisted);
+      const reloaded = createUIStore();
+
+      expect(reloaded.getState().environmentSortMode).toBe("activity");
+      expect(reloaded.getState().activitySortOrder).toBe(order);
+    });
+  }
+
+  test("rehydrates older settings without an activity order using priority", () => {
+    localStorage.setItem(
+      "ui-storage",
+      JSON.stringify({ state: { environmentSortMode: "activity" }, version: 0 }),
+    );
+    const reloaded = createUIStore();
+    expect(reloaded.getState().activitySortOrder).toBe("priority");
   });
 
   test("no longer persists unread activity, which the environment record owns", () => {

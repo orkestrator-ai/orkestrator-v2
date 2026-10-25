@@ -665,8 +665,8 @@ describe("HierarchicalSidebar", () => {
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By project" }));
     await screen.findByRole("menuitemradio", { name: "By project" });
-    expect(screen.queryByRole("menuitemradio", { name: "Priority order" })).toBeNull();
-    expect(screen.queryByRole("menuitemradio", { name: "Oldest first" })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: "Priority order" }) === null).toBe(true);
+    expect(screen.queryByRole("menuitemradio", { name: "Oldest first" }) === null).toBe(true);
     view.unmount();
 
     useUIStore.getState().setEnvironmentSortMode("activity");

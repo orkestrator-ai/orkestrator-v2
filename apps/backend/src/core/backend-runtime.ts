@@ -1,6 +1,8 @@
 import { DiffStatsTracking } from "./diff-stats-tracking.js";
+import { DockerContainerStateCache } from "./docker-container-state-cache.js";
 import { EnvironmentOperations } from "./environment-operations.js";
 import { LocalServerRuntime, type LocalServerRuntimeOptions } from "./local-server-runtime.js";
+import { PrMonitorRuntime, type PrMonitorRuntimeOptions } from "./pr-monitor-runtime.js";
 import { TerminalRuntime, type TerminalRuntimeOptions } from "./terminal-runtime.js";
 import type { ChangeTrackingService } from "./change-tracking/service.js";
 import type { BackendEmit } from "./commands-context.js";
@@ -13,6 +15,8 @@ export type BackendRuntimeOptions = {
   worktreeSignal?: ContainerWorktreeSignalInstaller | null;
   terminals?: TerminalRuntimeOptions;
   localServers?: LocalServerRuntimeOptions;
+  /** The backend and command fixtures pass `scheduleMergeCleanup`; see `PrMonitorRuntimeOptions`. */
+  prMonitor?: PrMonitorRuntimeOptions;
 };
 
 /**
@@ -32,6 +36,9 @@ export class BackendRuntime {
   readonly terminals: TerminalRuntime;
   readonly localServers: LocalServerRuntime;
   readonly environments: EnvironmentOperations;
+  readonly prMonitor: PrMonitorRuntime;
+  /** The short-lived `docker ps` snapshot shared by status reads. */
+  readonly containerStates = new DockerContainerStateCache();
   /**
    * Backend change tracking (docs/architecture/change-tracking.md). Attached
    * by the backend once storage exists; absent in lightweight command
@@ -48,6 +55,7 @@ export class BackendRuntime {
     this.terminals = new TerminalRuntime(options.terminals);
     this.localServers = new LocalServerRuntime(options.localServers);
     this.environments = new EnvironmentOperations();
+    this.prMonitor = new PrMonitorRuntime(options.prMonitor);
   }
 
   attachChangeTracking(service: ChangeTrackingService): void {
@@ -63,5 +71,6 @@ export class BackendRuntime {
     this.diffStats.shutdown();
     this.changeTracking?.shutdown();
     this.terminals.shutdown();
+    this.prMonitor.shutdown();
   }
 }

@@ -57,7 +57,6 @@ import {
   claudeBashMaxTimeoutEnvValue,
 } from "@orkestrator/protocol/claude-background-commands";
 import {
-  invalidateDockerContainerStateCache,
   isContainerRunning,
   getHostPort,
   shouldAddDockerHostGatewayAlias,
@@ -563,7 +562,7 @@ export async function createDockerContainer(
     });
     containerId = stdout.trim();
   } catch (error) {
-    invalidateDockerContainerStateCache();
+    context.runtime.containerStates.invalidate();
     if (!identity.operationId) throw error;
     // A timeout or dropped connection does not say whether Docker created the
     // container. Resolve it by exact label identity before reporting failure,
@@ -584,7 +583,7 @@ export async function createDockerContainer(
       );
     }
   }
-  invalidateDockerContainerStateCache();
+  context.runtime.containerStates.invalidate();
   if (stagedInputs) {
     // Earlier revisions no container binds any more (recovery copies keep
     // theirs) are removed. Best effort: a failure only leaves a revision for

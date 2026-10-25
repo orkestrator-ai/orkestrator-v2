@@ -1,4 +1,3 @@
-import { beginEnvironmentAgentWork } from "./environment-replacement-fence.js";
 import * as shared from "./tmux-shared.js";
 import { TranscriptTaskTracker, bytesPayload, randomUUID } from "./tmux-shared.js";
 import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
@@ -149,7 +148,7 @@ export class InteractiveTmuxTerminalManager {
 
   async start(id: string, context: CommandContext): Promise<void> {
     const terminal = this.require(id);
-    const release = beginEnvironmentAgentWork(terminal.tmux.environmentId);
+    const release = context.runtime.environments.fence.beginAgentWork(terminal.tmux.environmentId);
     try {
       terminal.context = context;
       await this.changeGeometry(terminal, terminal.cols, terminal.rows);
@@ -160,9 +159,9 @@ export class InteractiveTmuxTerminalManager {
     }
   }
 
-  async write(id: string, data: string): Promise<void> {
+  async write(id: string, data: string, context: CommandContext): Promise<void> {
     const terminal = this.require(id);
-    const release = beginEnvironmentAgentWork(terminal.tmux.environmentId);
+    const release = context.runtime.environments.fence.beginAgentWork(terminal.tmux.environmentId);
     try {
       // Input is about to produce output, so undo any backoff before it lands.
       terminal.intervalMs = INTERACTIVE_SNAPSHOT_MIN_MS;

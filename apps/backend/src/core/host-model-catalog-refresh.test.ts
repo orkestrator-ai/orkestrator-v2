@@ -10,7 +10,6 @@ import type { CommandContext } from "./commands-context.js";
 import { withShortLivedBridge, __testing as refreshTesting } from "./host-model-catalog-refresh.js";
 import { HOST_ACP_MODEL_FETCH_TIMEOUT_MS } from "./commands-servers.js";
 import { openCodeSdkFetch } from "./http-bridge-transport.js";
-import { acquireOpenCodeHostStart } from "./opencode-host-start.js";
 import { spawnCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
 
@@ -386,7 +385,7 @@ describe("OpenCode probe host-start ownership", () => {
           async () => undefined,
         ),
       ).rejects.toThrow("spawn refused");
-      const release = await acquireOpenCodeHostStart();
+      const release = await runtime.localServers.openCodeHostStart.acquire();
       release();
       expect(runtime.localServers.processCount()).toBe(0);
     },
@@ -417,7 +416,7 @@ describe("OpenCode probe host-start ownership", () => {
       expect(children[0]?.exited).toBe(true);
       expect(read).not.toHaveBeenCalled();
       expect(runtime.localServers.processCount()).toBe(0);
-      const release = await acquireOpenCodeHostStart();
+      const release = await runtime.localServers.openCodeHostStart.acquire();
       release();
     },
   );
@@ -425,7 +424,7 @@ describe("OpenCode probe host-start ownership", () => {
   test.each(["catalog-refresh", "provider-sign-in"] as const)(
     "%s refuses a spawn and releases its queued turn after shutdown",
     async (purpose) => {
-      const release = await acquireOpenCodeHostStart();
+      const release = await runtime.localServers.openCodeHostStart.acquire();
       let queued = false;
       const spawn = mock(() => {
         throw new Error("must not spawn");
@@ -462,7 +461,7 @@ describe("OpenCode probe host-start ownership", () => {
       expect(((await outcome) as Error).message).toContain("shutting down");
       expect(spawn).not.toHaveBeenCalled();
       expect(read).not.toHaveBeenCalled();
-      const releaseNext = await acquireOpenCodeHostStart();
+      const releaseNext = await runtime.localServers.openCodeHostStart.acquire();
       releaseNext();
       expect(runtime.localServers.processCount()).toBe(0);
     },

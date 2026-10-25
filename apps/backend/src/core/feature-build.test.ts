@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
@@ -341,6 +341,74 @@ printf '%s\\n' '{"slug":"from-codex-exec"}' > "$out"
       }
     });
   }, 15_000);
+
+  test("agent-test naming never launches a PATH-only Codex and preserves feature creation", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      const root = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-feature-path-codex-"));
+      const pathBinDir = path.join(root, "host-bin");
+      const toolchainBinDir = path.join(root, "toolchain-bin");
+      const launchedPath = path.join(root, "codex-launched");
+      const originalPath = process.env.PATH;
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+
+      try {
+        await fs.mkdir(pathBinDir);
+        await fs.mkdir(toolchainBinDir);
+        await fs.writeFile(
+          path.join(pathBinDir, "codex"),
+          `#!/bin/sh
+printf 'launched' > "${launchedPath}"
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "--output-last-message" ]; then
+    printf '%s\\n' '{"slug":"from-host-codex"}' > "$argument"
+    exit 0
+  fi
+  previous="$argument"
+done
+exit 2
+`,
+          { mode: 0o755 },
+        );
+        process.env.PATH = pathBinDir;
+
+        const created = await createFeatureBuild(
+          { ...input, title: "", description: "Add account export controls" },
+          {
+            storage,
+            buildPipelines: supervisor.service,
+            appRoot: path.join(root, "app"),
+            resourceRoot: path.join(root, "resources"),
+            toolchainBinDir,
+            runtimeFlavor: "agent-test",
+          },
+        );
+        await waitForPendingFeatureTitleRefinements();
+
+        expect(existsSync(launchedPath)).toBe(false);
+        const tasks = await storage.getKanbanTasks("project-1");
+        expect(tasks).toHaveLength(1);
+        expect(tasks[0]!.id).toBe(created.taskId);
+        expect(tasks[0]!.title).toBe("Add account export controls");
+        expect(tasks[0]!.status).toBe("in-progress");
+        expect(created.pipelineId).toBe("pipeline-1");
+        expect(supervisor.started).toHaveLength(1);
+        expect(supervisor.started[0]!.taskId).toBe(created.taskId);
+        expect(supervisor.started[0]!.taskTitle).toBe("Add account export controls");
+        expect(warn).toHaveBeenCalledWith(
+          "[FeatureBuild] Automatic naming failed; using a local fallback",
+          "Error",
+        );
+      } finally {
+        await waitForPendingFeatureTitleRefinements();
+        if (originalPath === undefined) delete process.env.PATH;
+        else process.env.PATH = originalPath;
+        warn.mockRestore();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
 
   test("creates one in-progress ticket and starts the build that implements it", async () => {
     await withStorage(async (storage) => {

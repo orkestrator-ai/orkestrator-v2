@@ -156,3 +156,12 @@ No owning implementation, assertion, deadline or skip was changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name terminal-history-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures` passed, exit 0 in 8.4 seconds.
 - **Evidence:** `orkestrator-test-run.Sh2roc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of the existing aggregate timeout, confirmed intermittent by the unchanged owner's isolated pass. No history code, assertion, timeout or skip changed.
+
+## Live provider review validation — 2026-10-25
+
+The two-worker backend aggregate repeated this failure at `2238f5ec4`. The
+complete unchanged owner passed alone with one isolated worker. Exact failure
+text, durations, commands, suite counts and retained evidence are recorded in
+[0887](../aggregate-validation-runs/0887-live-provider-review-validation.md).
+No implementation, assertion, deadline or skip changed; the original aggregate
+remains failed.

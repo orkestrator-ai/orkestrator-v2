@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { nativeAgentSessionResumeIdentity } from "./models.js";
 import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import {
   addEnvironment,
@@ -128,6 +129,37 @@ describe("NativeAgentTranscriptProjection", () => {
       ).toBe(projected);
     });
   });
+
+  test.each([undefined, "thread-kept"])(
+    "a missing snapshot cannot create or overwrite the stored identity (%s)",
+    async (stored) => {
+      const stub = createProviderStub("opencode", {
+        interactiveSnapshot: async () => ({
+          status: "missing",
+          messages: [],
+          resumableSessionId: "thread-unverified",
+        }),
+        sessionStateSnapshot: async () => ({
+          status: "missing",
+          resumableSessionId: "thread-unverified",
+        }),
+      });
+      await withProjection(stub.provider, async ({ projection, storage }) => {
+        if (stored)
+          await storage.recordNativeAgentSessionResumeIdentity(
+            sessionKey,
+            "provider-session",
+            stored,
+          );
+        const before = await storage.getNativeAgentSession(sessionKey);
+        await projection.refreshProjection(identity, true);
+        await projection.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        const after = await storage.getNativeAgentSession(sessionKey);
+        expect(after && nativeAgentSessionResumeIdentity(after)).toBe(stored);
+        expect(after).toEqual(before);
+      });
+    },
+  );
 
   test("an unknown session projects to null", async () => {
     const stub = createProviderStub("opencode");

@@ -1,106 +1,181 @@
 # Claude bridge prompt stream state
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15). Done on
+`todo-0013-claude-prompt-stream-state-00f9c30bd403` from `ba7cc8d4` (2026-10-25).
+Every item below is done. The durable rules now live in
+[`bridges/claude-bridge/AGENTS.md`](../../../bridges/claude-bridge/AGENTS.md)
+("One row per model response"); delete this file and its index row once the
+branch has merged.
 
 `createPromptStreamState` in the Claude bridge turns the SDK's streamed
 frames into transcript rows. It carries the bridge's transcript-row rules (one
 row per model response, late updates finding their row, bounded state, rows
-shared across a turn handoff), yet it is tested only indirectly through
-`sendPrompt`. It is also the one function left in `session-manager-prompt*.ts`
-over the 300-line cap set when `sendPrompt` was broken up in #984. The work is
+shared across a turn handoff), yet it was tested only indirectly through
+`sendPrompt`. It was also the one function left in `session-manager-prompt*.ts`
+over the 300-line cap set when `sendPrompt` was broken up in #984. The work was
 to give it direct tests first, then split its per-token delta handler and move
 turn concerns out of it.
 
 ## Current state
 
+As of this branch:
+
 - `createPromptStreamState` in
-  `bridges/claude-bridge/src/services/session-manager-prompt-stream.ts` is
-  one factory of about 630 lines. It is a class written as a closure: private
-  `let`s and maps (flush timer, rows, row indexes, current row, sequence,
-  current streamed API message id, dirty rows), about twenty short closures
-  over them, and a returned object typed as `PromptStreamState`.
-- Its parts: row bookkeeping (`forgetRow`, `createRow`, `rowForApiMessage`,
-  `getBlocks`, `materializeEntryValue`, `rebuildOrderedParts`); publishing
-  (`emitRow`, `newestRowMessage`, `insertAfterAnchor`, `materializeRow`); delta
-  coalescing (`flushStreamedAssistantMessage`,
-  `scheduleStreamedAssistantMessageFlush`); `applyAssistantRecord` and
-  `refreshToolRows`; and `applyPartialAssistantMessage`.
-- `applyPartialAssistantMessage` is the only long closure (about 130 lines).
-  It handles `message_start`, `message_stop`, `content_block_start` and
-  `content_block_delta` in one body, with a nested `appendStreamedDelta`.
-- Bounds and constants in the same module: `MAX_STREAM_CONTENT_BLOCK_INDEX`
-  (4,095), `MAX_TRACKED_STREAM_ROWS` (256), `MAX_SUBAGENT_PARTS_PER_CALL`
-  (128). `MAX_STREAM_CONTENT_BLOCK_INDEX` already has a single definition;
-  `session-manager-prompt-admission.ts` re-exports it.
-  `STREAM_EVENT_COALESCE_MS` (100) lives in `session-manager-prompt-admission.ts`.
-- `sessionStreamRows` is a module-level `WeakMap` keyed by session, which lets
-  a released turn and its successor agree on API message identity.
+  `bridges/claude-bridge/src/services/session-manager-prompt-stream.ts` is a
+  four-line factory returning a `PromptStream` class (private fields, typed by
+  the unchanged `PromptStreamState` interface). The longest method is `emitRow`
+  at 54 lines; the old factory was 631 lines.
+- `applyPartialAssistantMessage` is a dispatcher over `applyMessageStart`,
+  `applyMessageStop`, `applyContentBlockStart` and `applyContentBlockDelta`.
+  The shared block lookup (block index, message key, parent task id, row,
+  blocks) is `locateStreamBlock`; `appendStreamedDelta` and
+  `storeStreamedEntry` are their own methods.
 - The plan-mode flags `pendingPlanRejectionFeedback`, `planApprovedThisTurn`
-  and `pendingPlanApprovalContinuation` are on `PromptStreamState`, but only
-  turn code reads or writes them: `session-manager-prompt-can-use-tool.ts`,
-  `session-manager-prompt-settle.ts` and the `user` and `assistant` handlers in
-  `session-manager-prompt-handlers/`. The comment above them still points at
-  "the permissionMode site above", which now lives in
-  `session-manager-prompt-query.ts`.
-- There is no `session-manager-prompt-stream.test.ts`. The only test that
-  calls `createPromptStreamState` directly is "an API response crossing a
-  released-turn handoff adopts its existing row" in
-  `session-manager-prompt.test.ts`. `session-manager-prompt-handlers/turn-fixture.ts`
-  builds a stream state for handler tests. Everything else is covered through
-  `sendPrompt` (`session-manager-prompt.test.ts`,
-  `session-manager-transcript-revision.test.ts`,
-  `session-manager-catalog-steer.test.ts` and others).
-- Other prompt-module functions near the cap, for reference: `turnCanUseTool`
-  (251 lines), `handleResultMessage` (240) and `claudeQueryOptions` (236).
+  and `pendingPlanApprovalContinuation` are on `TurnState`
+  (`session-manager-prompt-turn.ts`), initialized in `createTurnState`. Their
+  comment now points at `resolveQueryPlan` (`session-manager-prompt-query.ts`),
+  where `permissionMode: "plan"` is forwarded.
+- `session-manager-prompt-stream.test.ts` drives the stream directly on a bare
+  session (14 tests).
+- `turnCanUseTool` had grown to 327 lines since this file was written (it said
+  251). AskUserQuestion, EnterPlanMode and ExitPlanMode moved verbatim into
+  `askUserQuestion`, `enterPlanMode` and `requestPlanApproval`.
+- Longest functions now in `session-manager-prompt*.ts` and
+  `session-manager-prompt-handlers/` (non-test): `handleResultMessage` 254,
+  `runMcpCallProbe` (live probe) 242, `claudeQueryOptions` 223,
+  `resolveQueryPlan` 168, `requestPlanApproval` 158.
+- Bounds and constants are unchanged: `MAX_STREAM_CONTENT_BLOCK_INDEX`
+  (4,095), `MAX_TRACKED_STREAM_ROWS` (256), `MAX_SUBAGENT_PARTS_PER_CALL`
+  (128) in the stream module; `STREAM_EVENT_COALESCE_MS` (100) in
+  `session-manager-prompt-admission.ts`. `sessionStreamRows` is still a
+  module-level `WeakMap` keyed by session and looked up in the constructor
+  exactly as the factory did.
 
 ## Outstanding work
 
 ### Code
 
-Each step is one PR and keeps behaviour identical. Read `bridges/AGENTS.md` and
-`bridges/claude-bridge/AGENTS.md` before starting.
+All four steps are done, one commit each on the branch (decision 1).
 
-1. **Direct tests first.** Add `session-manager-prompt-stream.test.ts`,
-   driving `createPromptStreamState` on a bare session (the `turn-fixture.ts`
-   pattern) and asserting emitted `message.updated` frames and
-   `session.messages`. Cover at least:
+1. **Done — direct tests** (`26bcee502`).
+   `session-manager-prompt-stream.test.ts` drives `createPromptStreamState` on
+   a bare session (the `turn-fixture.ts` pattern) and asserts emitted
+   `message.updated` / `message.patched` frames and `session.messages`. It
+   was written and passing against the unchanged closure before any refactor.
+   Coverage, one test each unless noted:
    - one row per API message id, in creation order;
-   - deltas for one block collapsing into one part, and the final
-     `assistant` record overwriting what streamed;
-   - a subagent frame joining the row that holds its call, including after a
-     newer root row exists;
-   - `refreshToolRows` rebuilding an older row for a late tool result;
-   - the 256-row bound and the 128-part subagent bound;
-   - a block index above `MAX_STREAM_CONTENT_BLOCK_INDEX` being ignored;
-   - flush ordering: a non-delta flush publishes pending rows oldest first,
-     and `clearFlushTimer` leaves nothing scheduled;
-   - two stream states on one session (a released turn and its successor)
-     sharing rows through `sessionStreamRows`;
+   - deltas for one block (thinking and text) collapsing into one part each,
+     nothing published before a flush, and the final per-block `assistant`
+     records overwriting what streamed;
+   - a subagent frame (streamed and finalized) joining the row that holds its
+     call after a newer root row exists, with the parent noted in
+     `revisedRows`;
+   - `refreshToolRows` rebuilding an older row for a late tool result, only
+     the changed row publishing a frame;
+   - the 256-row bound (forgotten row stays in the transcript; a late frame for
+     its call lands on the current row) and the 128-part subagent bound;
+   - block indices above `maxBlockIndex`, negative, fractional, string and
+     missing being ignored, and the bound itself accepted; plus a test that
+     unrendered events (`tool_use` start, `input_json_delta`,
+     `content_block_stop`, `message_stop`) publish nothing;
+   - flush ordering: a non-delta frame publishes pending rows oldest first
+     although the newer row turned dirty first; the timer publishes coalesced
+     deltas once, and `clearFlushTimer` leaves nothing scheduled;
+   - two stream states on one session sharing a row through
+     `sessionStreamRows` (block count included), and a replaced
+     `session.messages` not adopting old rows;
    - `beginPostSteerScope` publishing everything streamed before a steer, and a
-     response that started before the steer's row staying above it (its
-     anchor).
-2. **Split `applyPartialAssistantMessage`** into one function per
-   `stream_event` type, with the shared block lookup (block index, message
-   key, parent task id) and `appendStreamedDelta` as their own helpers.
-3. **Move the three plan-mode flags to `TurnState`**
-   (`session-manager-prompt-turn.ts`) and fix the stale comment.
-4. **Optional:** turn the factory into a `PromptStream` class with private
-   fields, keeping `PromptStreamState` as its interface. Skip this if steps
-   1–3 already leave every function short and the factory readable;
-   converting a closure to a class meets the line metric without making the
-   code much easier to read.
+     response that started before the steer's row staying above it.
 
-Done when:
+   Mutation check: removing the flush sort, the block-index bound, the subagent
+   shed, the row anchor or the shared-row lookup each fails exactly the test
+   aimed at it.
+2. **Done — `applyPartialAssistantMessage` split** (`3128367a4`), one method
+   per `stream_event` type plus `locateStreamBlock` and `appendStreamedDelta`.
+   Event order and side effects are kept: `content_block_stop` and other block
+   events still route their message to a row before being ignored.
+3. **Done — plan-mode flags on `TurnState`** (`3128367a4`), stale comment
+   fixed; callers in `session-manager-prompt-can-use-tool.ts`,
+   `session-manager-prompt-settle.ts` and the `user` and `assistant` handlers
+   read `turn.*`.
+4. **Done — `PromptStream` class** (`3128367a4`). Not optional in the end:
+   after steps 2–3 the factory would still have been about 470 lines, over the
+   150-line bar below (decision 2).
 
-- `createPromptStreamState` (or its replacement) has direct tests for every
-  behaviour in step 1;
-- no function in `session-manager-prompt-stream.ts` exceeds about 150 lines,
-  and no function in any `session-manager-prompt*.ts` exceeds about 300;
-- the plan-mode flags live on `TurnState`.
+Also done, for the second "done when" bullet: **`turnCanUseTool` split**
+(`482283d4d`), decision 4.
+
+Done when, checked on the branch:
+
+- `createPromptStreamState` (now `PromptStream`) has direct tests for every
+  behaviour in step 1 — done;
+- no function in `session-manager-prompt-stream.ts` exceeds about 150 lines
+  (longest 54), and no function in any `session-manager-prompt*.ts` exceeds
+  about 300 (longest 254) — done, measured with an oxc-parser walk of every
+  function, method and arrow;
+- the plan-mode flags live on `TurnState` — done.
 
 ### Qualification
 
-- Run the full claude-bridge suite after every step.
+Done. The full claude-bridge suite
+(`bun run --cwd bridges/claude-bridge test:bridge`) ran after each commit: with
+the new tests on the unchanged stream, after the stream refactor and after the
+`turnCanUseTool` split. Each run: 1,633 pass, 5 skip, 0 fail. The bridge
+typecheck (`bun run --cwd bridges/claude-bridge typecheck`) is clean, `bun fmt`
+changed only files on this branch, and `oxlint` reports nothing in the touched
+files.
+
+## Assumptions and decisions
+
+1. **One branch, one commit per step** instead of one PR per step. Options:
+   four PRs, or one branch with a commit each. Chosen: one branch, because the
+   coordinator delegated the whole file as one unit. Steps 2–4 share a commit:
+   splitting the closure first and then converting it to a class would have
+   rewritten the same lines twice, and step 3 removes members from the same
+   interface. Pros: one review of the finished structure; the tests commit
+   still lands first and proves the refactor against the old code. Cons: the
+   refactor commit is a near-total rewrite of one file, so its diff reads worse
+   than a pure move would.
+2. **Do step 4 (class), though marked optional.** Options: stop after steps
+   2–3 and leave a ~470-line factory, hoist the closures into module functions
+   over a shared state record, or convert to a class. Chosen: a class. The
+   "done when" bar (no function over ~150 lines) cannot be met by a closure
+   factory, and module functions over a state record are a class written by
+   hand. Pros: every method is short; private fields make the state explicit;
+   `PromptStreamState` and `createPromptStreamState` are unchanged, so no
+   caller moved. Cons: `this.` noise throughout; `spyOn(stream, …)` now also
+   intercepts the stream's internal calls (harmless today, since the only
+   spy is in `settleFailedTurn`, which makes none).
+3. **A reused lookup target instead of a returned object.** The per-token
+   constraint forbids new allocations on the delta path, but the lookup yields
+   five values. Options: an object literal per event, five private scratch
+   fields, or one `StreamBlockTarget` per stream refilled on every event.
+   Chosen: the reused target. Pros: no allocation per event; handlers take one
+   typed argument. Cons: the target is only valid until the next event, so it
+   must never be retained (nothing does). As a side effect the delta path now
+   allocates less than before: the per-event `appendStreamedDelta` closure is
+   gone, and the flush timer callback is created once per stream rather than
+   once per scheduled flush.
+4. **Split `turnCanUseTool` here, though the file did not list it.** It had
+   grown past 300 lines since the file was written, so the second "done when"
+   bullet failed on `main`. Options: record it as a new todo, or move its
+   three tool branches into functions. Chosen: move them verbatim; the
+   dispatch and every message are unchanged. Pros: the done-when holds; the
+   policy decision for ordinary tools is now visible at a glance. Cons: a
+   change outside the stream module, in code the existing `sendPrompt` tests
+   cover only through the full turn.
+5. **The successor turn adopts a shared row by API message id only.** While
+   writing the handoff test, the first draft expected a successor's subagent
+   frame to find an earlier turn's call before any record named that call's
+   response. It does not: rows are adopted in `createRow` when a record or
+   `message_start` names the same API message, and a subagent's frames reach
+   the turn holding its call through `routeClaudeFrame`. The test pins the
+   real behaviour (adoption, block count carried over, then subagent routing).
+   No code changed.
+6. **Kept as-is.** `pendingApiRetryMessageId` stays on `PromptStreamState`:
+   the file asked only for the plan-mode flags, and `settlePendingApiRetry`
+   takes the stream as its argument. Moving it is a separate, optional
+   cleanup.
 
 ## Constraints and rationale
 

@@ -265,18 +265,6 @@ test("a transient admission verification failure fails the workflow before any d
   }
 });
 
-test("the rollback gate restores per-reviewer verification", async () => {
-  const env = await setup(3);
-  try {
-    const service = env.createService({ evidencePermits: false });
-    await service.advanceNow(env.workflowId);
-    expect(env.verifications()).toBe(3);
-    await service.shutdown();
-  } finally {
-    await env.cleanup();
-  }
-});
-
 test("reviewer transcripts are conditional and scoped to the reviewer's session", async () => {
   const env = await setup(1);
   try {

@@ -40,6 +40,7 @@ import {
   reviewersSettled,
   usableReviewerReports,
   type ReviewerRecord,
+  type ReviewConsolidationSession,
   type ReviewFanoutState,
 } from "@orkestrator/protocol/review-fanout";
 import type {
@@ -64,6 +65,7 @@ import {
   lastAssistantText,
   missingWorkflowResultMessage,
   workflowRestartContinuationPrompt,
+  workflowResultReminderPrompt,
 } from "./workflow-result-missing.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
@@ -111,6 +113,7 @@ import {
   settleArtifactDispatchTurn,
   type ArtifactTurnDispatch,
 } from "./workflow-artifact-turns.js";
+import type { ReviewPackageVerification } from "./commands-review.js";
 
 /** Names the pipeline in reviewer-facing and user-facing failure text. */
 const FANOUT_LABEL = "Multi-model review";
@@ -155,7 +158,7 @@ export interface BuildPipelineReviewFanoutDeps {
   verifyReviewPackage(
     pipeline: BuildPipeline,
     reviewPackage: ReviewPackageReference,
-  ): Promise<void>;
+  ): Promise<Pick<ReviewPackageVerification, "artifacts" | "artifactBytes"> | void>;
   progress: MultiReviewProgressTracker;
   stallWarningMs?: number;
   stallAbandonMs?: number;
@@ -411,12 +414,14 @@ export class BuildPipelineReviewFanout {
         }
         if (!("kind" in reviewPackage)) return;
         const started = Date.now();
-        await this.deps.verifyReviewPackage(pipeline, reviewPackage);
+        const verification = await this.deps.verifyReviewPackage(pipeline, reviewPackage);
         recordEfficiency(this.deps.efficiency, {
           owner: "build-pipeline",
           operation: "evidence.verify",
           phase: "reviewing",
-          bytes: reviewPackage.bytes,
+          // The package and every validation artifact it references were hashed.
+          bytes: reviewPackage.bytes + (verification?.artifactBytes ?? 0),
+          count: verification?.artifacts,
           elapsedMs: Date.now() - started,
         });
       },
@@ -931,28 +936,18 @@ export class BuildPipelineReviewFanout {
           error: `The consolidation session failed: ${statusDetail ?? "interrupted again"}`,
         };
       }
-      const previousRequestId = consolidation.requestId;
-      consolidation.requestId = randomUUID();
-      consolidation.state = "prepared";
-      consolidation.createdAt = reviewFanoutNowIso();
-      consolidation.restartContinuationSent = true;
-      consolidation.continuationPrompt = workflowRestartContinuationPrompt({
-        workLabel: "consolidation",
-        resultLabel: "consolidated report",
-        ...(consolidation.resultTransport === "tool-v1"
-          ? { toolName: workflowResultToolName("consolidated-review") }
-          : {}),
-      });
-      delete consolidation.schemaRepairPrompt;
-      delete consolidation.idleResultPolls;
-      delete consolidation.progressDigest;
-      delete consolidation.stalledSince;
-      consolidation.progressAt = consolidation.createdAt;
-      if (consolidation.resultTransport === "tool-v1") consolidation.resultSubmission = "preparing";
-      await this.save(pipeline);
-      if (consolidation.resultTransport === "tool-v1") {
-        await this.deps.workflowResults?.close(previousRequestId, "superseded");
-      }
+      await this.prepareConsolidationFollowUp(
+        pipeline,
+        consolidation,
+        "restartContinuationSent",
+        workflowRestartContinuationPrompt({
+          workLabel: "consolidation",
+          resultLabel: "consolidated report",
+          ...(consolidation.resultTransport === "tool-v1"
+            ? { toolName: workflowResultToolName("consolidated-review") }
+            : {}),
+        }),
+      );
       return { kind: "working" };
     }
     if (!result) {
@@ -975,6 +970,7 @@ export class BuildPipelineReviewFanout {
               finalText: lastAssistantText(session.messages),
             })
           : "The consolidation session became idle without returning its consolidated report",
+        () => this.prepareConsolidationResultReminder(pipeline, consolidation, session),
       );
     }
     let parsed: ReturnType<typeof parseStructuredReportResult>;
@@ -1082,19 +1078,89 @@ export class BuildPipelineReviewFanout {
     return { kind: "working" };
   }
 
+  /**
+   * Counts one idle poll, failing once the bound is reached. `remind`, when
+   * given, may claim the exhausted bound for one more turn instead.
+   */
   private async countIdlePoll(
     pipeline: BuildPipeline,
     state: ReviewFanoutState,
     error: string,
+    remind?: () => Promise<boolean>,
   ): Promise<ReviewFanoutStep> {
     const consolidation = state.consolidation;
     if (!consolidation) return { kind: "working" };
     consolidation.idleResultPolls = (consolidation.idleResultPolls ?? 0) + 1;
     await this.save(pipeline);
     if (consolidation.idleResultPolls >= MAX_REVIEW_IDLE_RESULT_POLLS) {
+      if (remind && (await remind())) return { kind: "working" };
       return { kind: "failed", error };
     }
     return { kind: "working" };
+  }
+
+  /**
+   * Queues the consolidation's one reminder to submit a report it never
+   * delivered through its result tool, as the reviewers and Multi Review's
+   * consolidation get. Returns false when it does not apply or was spent.
+   */
+  private async prepareConsolidationResultReminder(
+    pipeline: BuildPipeline,
+    consolidation: ReviewConsolidationSession,
+    session: PipelineSession,
+  ): Promise<boolean> {
+    if (
+      consolidation.resultTransport !== "tool-v1" ||
+      consolidation.resultReminderSent === true ||
+      // Accepted-but-unread and budget-exhausted slots are not a delivery gap
+      // another turn can close.
+      consolidation.resultSubmission === "received" ||
+      consolidation.resultSubmission === "needs-attention"
+    ) {
+      return false;
+    }
+    await this.prepareConsolidationFollowUp(
+      pipeline,
+      consolidation,
+      "resultReminderSent",
+      workflowResultReminderPrompt({
+        resultLabel: "consolidated report",
+        toolName: workflowResultToolName("consolidated-review"),
+        submission: consolidation.resultSubmission,
+        finalText: lastAssistantText(session.messages),
+        workLabel: "consolidation work",
+      }),
+    );
+    return true;
+  }
+
+  /**
+   * One automatic follow-up turn in the consolidation's own session under a
+   * new request id; the spent flag is saved with it, before the old slot is
+   * retired.
+   */
+  private async prepareConsolidationFollowUp(
+    pipeline: BuildPipeline,
+    consolidation: ReviewConsolidationSession,
+    spend: "restartContinuationSent" | "resultReminderSent",
+    prompt: string,
+  ): Promise<void> {
+    const previousRequestId = consolidation.requestId;
+    consolidation.requestId = randomUUID();
+    consolidation.state = "prepared";
+    consolidation.createdAt = reviewFanoutNowIso();
+    consolidation[spend] = true;
+    consolidation.continuationPrompt = prompt;
+    delete consolidation.schemaRepairPrompt;
+    delete consolidation.idleResultPolls;
+    delete consolidation.progressDigest;
+    delete consolidation.stalledSince;
+    consolidation.progressAt = consolidation.createdAt;
+    if (consolidation.resultTransport === "tool-v1") consolidation.resultSubmission = "preparing";
+    await this.save(pipeline);
+    if (consolidation.resultTransport === "tool-v1") {
+      await this.deps.workflowResults?.close(previousRequestId, "superseded");
+    }
   }
 
   /**

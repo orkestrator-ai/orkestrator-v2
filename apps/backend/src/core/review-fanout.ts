@@ -1445,6 +1445,9 @@ export class ReviewFanoutRunner {
         host.finishResultConsumption?.(reviewer.requestId);
         await this.commit();
       } catch (error) {
+        // A lost fence is not a deferred consumption: the owner that took over
+        // consumes the result, and this pass must stop.
+        if (this.isFatal(error)) throw error;
         host.stageResultConsumption?.(reviewer.requestId);
         console.warn(
           `[review-fanout] Deferred result consumption: ${reviewFanoutErrorMessage(error)}`,

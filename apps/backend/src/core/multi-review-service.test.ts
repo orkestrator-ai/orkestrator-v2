@@ -293,6 +293,17 @@ class Provider implements BuildPipelineProvider {
         : {}),
     };
   }
+  /**
+   * The bounded snapshot surface every reviewer provider has, served from the
+   * same messages. It never answers unchanged.
+   */
+  transcriptSnapshot?: (
+    sessionId: string,
+    options: { limit: number },
+  ) => Promise<{ messages: unknown[]; complete: boolean }> = async (sessionId, options) => {
+    const messages = await this.messages(sessionId, { limit: options.limit });
+    return { messages: messages.slice(-options.limit), complete: messages.length < options.limit };
+  };
   async messages(_sessionId: string, options?: { limit?: number }): Promise<unknown[]> {
     this.messagesCalls += 1;
     this.messageOptions.push(options);
@@ -756,6 +767,8 @@ test("MultiReviewService keeps reviewer usage monotonic and rejects malformed to
 
 test("MultiReviewService treats transcript-derived usage failures as non-fatal", async () => {
   const provider = new Provider(false);
+  // Exercises the messages-based progress and usage path.
+  delete provider.transcriptSnapshot;
   provider.statusValue = "running";
   provider.usageMessageLimit = 64;
   provider.usageFromMessages = () => {
@@ -9872,6 +9885,8 @@ test("MultiReviewService warns when an idle background reviewer stops making pro
 
 test("MultiReviewService gives a fresh reviewer baseline a grace clock", async () => {
   const provider = new Provider();
+  // Exercises the messages-based progress and usage path.
+  delete provider.transcriptSnapshot;
   provider.statusValue = "running";
   provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Fresh progress" }];
   await withService(
@@ -10010,6 +10025,8 @@ test("MultiReviewService fails a consolidation session whose transcript stopped 
 
 test("MultiReviewService gives a fresh consolidation baseline a grace clock", async () => {
   const provider = new Provider();
+  // Exercises the messages-based progress and usage path.
+  delete provider.transcriptSnapshot;
   provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Fresh merge" }];
   provider.statusOverrides.set("session-2", "running");
   await withService(
@@ -11515,6 +11532,8 @@ test("retrying consolidation restarts its numbers and preserves preparation's", 
 
 test("fix-session usage falls back to the transcript and never fails the turn", async () => {
   const provider = new Provider();
+  // Exercises the messages-based progress and usage path.
+  delete provider.transcriptSnapshot;
   provider.statusValue = "running";
   provider.usageMessageLimit = 32;
   provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Preparing" }];
@@ -11545,6 +11564,8 @@ test("fix-session usage falls back to the transcript and never fails the turn", 
 
 test("throttles transcript-derived fix-session usage to the progress probe cadence", async () => {
   const provider = new Provider();
+  // Exercises the messages-based progress and usage path.
+  delete provider.transcriptSnapshot;
   provider.statusValue = "running";
   provider.usageMessageLimit = 64;
   provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Preparing" }];

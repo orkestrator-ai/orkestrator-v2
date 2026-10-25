@@ -344,6 +344,7 @@ export async function withPipeline(
     assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
     efficiency?: RecordingEfficiencyObserver;
     artifactDispatch?: BuildPipelineServiceOptions["artifactDispatch"];
+    structuredResultDeadlineMs?: number;
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-fanout-"));
@@ -427,6 +428,9 @@ export async function withPipeline(
     autoAdvance: false,
     provider: async (_pipeline, agent) => providers.get(agent)!,
     transcriptPersistIntervalMs: options.transcriptPersistIntervalMs,
+    ...(options.structuredResultDeadlineMs !== undefined
+      ? { structuredResultDeadlineMs: options.structuredResultDeadlineMs }
+      : {}),
     ...(options.efficiency ? { efficiency: options.efficiency } : {}),
     ...(options.artifactDispatch ? { artifactDispatch: options.artifactDispatch } : {}),
     ...(workflowResults

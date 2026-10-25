@@ -241,7 +241,12 @@ test("real backend runner seals hashed evidence and refuses a moved head or repl
       context,
       { expectedHead: head, validationPlan: run.plan },
     );
-    expect(await verifyEnvironmentReviewPackage("env", pkg, context)).toEqual({ valid: true });
+    // Both streams were hashed; the report counts them and their bytes.
+    expect(await verifyEnvironmentReviewPackage("env", pkg, context)).toEqual({
+      valid: true,
+      artifacts: 2,
+      artifactBytes: 8,
+    });
     const slow = newReviewValidationRun("review-validation-stop-fixture", {
       ...initial.plan,
       commands: [{ ...initial.plan.commands[0]!, command: "sleep 20", timeoutMs: 30000 }],

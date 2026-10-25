@@ -15,6 +15,10 @@ import type { Environment } from "./models.js";
 import { PreviewMetrics } from "../preview-metrics.js";
 import { PreviewRelaySupervisor, type RelayProcess } from "../preview-relay-supervisor.js";
 import { PreviewAccessService, type PreviewPublicationPort } from "./preview-access.js";
+import {
+  LoopbackListenerOwnership,
+  type ManagedProcessRoot,
+} from "./preview-listener-ownership.js";
 import { PreviewReadinessProber } from "./preview-readiness.js";
 import { PreviewServiceRegistry, type PreviewRegistryStorage } from "./preview-service-registry.js";
 import type { ResolvedPreviewTarget } from "./preview-service-registry.js";
@@ -41,6 +45,14 @@ export interface PreviewRuntimeOptions {
   probeFamily?: ConstructorParameters<typeof PreviewTargetResolver>[0]["probeFamily"];
   /** Starts the in-container relay (defaults to `docker exec -i`). */
   relaySpawn?: (containerId: string) => RelayProcess;
+  /**
+   * Processes this backend started for local environments (terminal shells,
+   * agent bridges), read at call time. Without it, loopback listeners are
+   * never attributed and seeded worktree services wait for confirmation.
+   */
+  managedProcessRoots?: () => readonly ManagedProcessRoot[];
+  /** Test seam replacing the `lsof`/`ps` listener check. */
+  listenerOwnership?: ConstructorParameters<typeof PreviewTargetResolver>[0]["listenerOwnership"];
 }
 
 const defaultDockerRunner: DockerRunner = (args, { timeoutMs }) =>
@@ -88,6 +100,11 @@ export class PreviewRuntime {
       strictOwner: options.strictDockerOwner ?? false,
       reservedPorts: () => this.reservedPorts(),
       probeFamily: options.probeFamily,
+      listenerOwnership:
+        options.listenerOwnership ??
+        (options.managedProcessRoots
+          ? new LoopbackListenerOwnership({ roots: options.managedProcessRoots })
+          : undefined),
       relay: {
         // Owned containers only; worktrees and backend-host targets never relay.
         available: (environment) =>

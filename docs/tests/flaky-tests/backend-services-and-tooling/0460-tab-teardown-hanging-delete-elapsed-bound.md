@@ -45,3 +45,12 @@ isolated Bun worker; exact commands, failures, durations, counts and evidence ar
 recorded in [0826](../aggregate-validation-runs/0826-reconnect-freshness-validation.md).
 The unchanged teardown owner passed; the aggregate measured 336.97 ms against
 its 250 ms bound. No assertion or deadline was changed.
+
+## Live provider review validation — 2026-10-25
+
+The two-worker backend aggregate repeated this failure at `2238f5ec4`. The
+complete unchanged owner passed alone with one isolated worker. Exact failure
+text, durations, commands, suite counts and retained evidence are recorded in
+[0887](../aggregate-validation-runs/0887-live-provider-review-validation.md).
+No implementation, assertion, deadline or skip changed; the original aggregate
+remains failed.

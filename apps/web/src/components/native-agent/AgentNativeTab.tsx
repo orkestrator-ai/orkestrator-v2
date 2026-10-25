@@ -25,6 +25,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { type AgentNativeTabProps, findNativeAgentAdapter } from "./adapter";
 import { UnassignedNativeAgentComposer } from "./AgentNativeTab.helpers";
 import { SharedNativeAgentController } from "./AgentNativeTab.controller";
+import { PreviewLinkSourceContext } from "@/components/chat/link-source-context";
 
 function firstPromptDraftKeys(
   environmentId: string,
@@ -76,6 +77,10 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
   const [startingFirstPrompt, setStartingFirstPrompt] = useState(false);
   const [awaitingDurability, setAwaitingDurability] = useState(false);
   const [durabilityError, setDurabilityError] = useState<string | null>(null);
+  const linkSource = useMemo(
+    () => ({ environmentId: props.data.environmentId, tabId: props.tabId }),
+    [props.data.environmentId, props.tabId],
+  );
   const [pendingDurabilityOperation, setPendingDurabilityOperation] = useState<
     "send" | "resume" | null
   >(null);
@@ -449,10 +454,18 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
     );
   }
 
-  return (
+  const controller = (
     <SharedNativeAgentController
       {...props}
       initialResumeOpen={resumeRequestedPlatform === props.data.platform}
     />
+  );
+  // A coordinator has no environment to resolve its loopback links in.
+  if (props.coordinatorProjectId || props.executionPolicy === "coordinator-read-only")
+    return controller;
+  return (
+    <PreviewLinkSourceContext.Provider value={linkSource}>
+      {controller}
+    </PreviewLinkSourceContext.Provider>
   );
 });

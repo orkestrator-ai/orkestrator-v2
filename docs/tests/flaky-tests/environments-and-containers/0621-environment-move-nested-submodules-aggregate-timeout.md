@@ -54,3 +54,12 @@
 - **Owning-file reruns:** passed in the three-file rerun `mise run test:logged -- --name owners-0048 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-worktree-signal-install.test.ts ./src/core/coordinator-service.test.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures`. A later rerun of the file alone at load average 55 (`--name env-move-owner-0048`) failed it at 10005.30 ms together with the `(copy)` variant (5042.92 ms) and case 0248. Evidence: `orkestrator-test-run.fSNcim/` and `orkestrator-test-run.f5VfI7/`.
 - **Aggregate evidence:** `orkestrator-test-run.VrI5KW/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` (enclosing log `orkestrator-test-run.JFzi7O/full-0048.log.gz`) under the host temporary directory. Backend 11433 passed, 89 skipped and 4 failed across 11526 tests in 680 files (872.95 s); web 9760 passed; root/support, bridges and the Codex protocol lockfile passed. Test groups finished in 942.4 s; the run exited 1.
 - **Assessment:** recurrence under heavy host load; no owning code, assertion, deadline or skip changed.
+
+## Voice qualification review fixes — 2026-10-25
+
+- **Change:** `9b1b42be8`; only CLI voice examples and their tests changed.
+- **Original command:** `mise run test:logged -- --name voice-suite -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1, with other worktrees validating on the same host.
+- **Failure:** The nested-submodule same-disk move exceeded its five-second deadline (5156.02 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name environment-move-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 42.5 seconds logged.
+- **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** recurrence of this tracked intermittent failure. No implementation, assertion, timeout or skip changed in the owner; the aggregate result is not made green by the isolated pass.

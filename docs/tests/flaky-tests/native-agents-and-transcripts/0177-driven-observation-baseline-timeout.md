@@ -87,3 +87,13 @@ After the full aggregate ended, `mise run test:logged -- --name merge2-after-agg
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-recurring-baseline-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/recurring-baseline.test.ts --parallel=1 --only-failures` also failed at 5000.36 ms, with four passes, one failure and 66 expectations (27.0 s logged).
 - **Evidence:** `orkestrator-test-run.BDDGcj/merge-backend-complete.log.gz` after finalization and `orkestrator-test-run.GJ6mlD/merge-recurring-baseline-owner.log.gz` under the host temporary directory. Aggregate counts are in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#mixed-version-compatibility-main-merge--2026-10-24).
 - **Assessment:** remains unresolved on this host; the isolated failure does not establish a new flake. No owning implementation, assertion, timeout or skip changed.
+
+
+## Reconnect freshness qualification — 2026-10-25
+
+The default two-worker backend aggregate repeated this failure while validating
+renderer-only test changes at `33b96fb48`. The complete owners were rerun with one
+isolated Bun worker; exact commands, failures, durations, counts and evidence are
+recorded in [0826](../aggregate-validation-runs/0826-reconnect-freshness-validation.md).
+The baseline exceeded five seconds in both the aggregate (5025.31 ms) and
+owning-file rerun (5215.64 ms). This observation remains unresolved.

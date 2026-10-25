@@ -11,6 +11,11 @@ import {
   TERMINAL_WEBSOCKET_SUBPROTOCOL,
   type TerminalWebSocketClientControlFrame,
 } from "@orkestrator/protocol/terminal-websocket";
+import {
+  ReconnectBackoff,
+  reconnectDelayMs,
+  type ReconnectBackoffPolicy,
+} from "@orkestrator/protocol/reconnect-backoff";
 
 export type TerminalSocketPayload = {
   bytes?: Uint8Array;
@@ -59,10 +64,18 @@ type PendingOperation = {
 export type TerminalWebSocketClientOptions = {
   url: string;
   token?: string;
+  /** First socket reconnect delay; consecutive failures back off from it. */
   reconnectDelayMs?: number;
   maxReconnectDelayMs?: number;
+  /** How long a ready socket must stay up before its loss counts as a first failure. */
+  reconnectHealthyAfterMs?: number;
+  /** First retry delay after a denied subscription; repeated denials back off. */
   subscriptionRetryDelayMs?: number;
   maxSubscriptionRetryDelayMs?: number;
+  /** Jitter source for both ladders; uniform in [0, 1). */
+  reconnectRandom?: () => number;
+  /** Clock that decides whether a dropped socket had stayed up long enough. */
+  reconnectNow?: () => number;
   maxAwaitingSnapshotFrames?: number;
   maxAwaitingSnapshotBytes?: number;
   maxPendingOperations?: number;
@@ -82,6 +95,10 @@ const DEFAULT_MAX_PENDING_OPERATIONS = 1_024;
 const DEFAULT_MAX_PENDING_OPERATION_BYTES = 2 * 1024 * 1024;
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000;
 export const DEFAULT_TERMINAL_ACKNOWLEDGEMENT_DELAY_MS = 50;
+const DEFAULT_RECONNECT_DELAY_MS = 500;
+const DEFAULT_MAX_RECONNECT_DELAY_MS = 10_000;
+/** Matches the gateway's event streams: longer than its 25 s keepalive. */
+const DEFAULT_RECONNECT_HEALTHY_AFTER_MS = 30_000;
 
 export class TerminalWebSocketClient {
   private readonly desired = new Map<string, DesiredChannel>();
@@ -90,7 +107,15 @@ export class TerminalWebSocketClient {
   private readonly pendingOperations = new Map<number, PendingOperation>();
   private socket: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconnectAttempts = 0;
+  /**
+   * A backend restart drops every tab's terminal socket at once. Consecutive
+   * failures back off with equal jitter so those tabs do not reconnect in
+   * lock-step; the first retry is never slower than `reconnectDelayMs`, and
+   * only a socket that stayed ready for `reconnectHealthyAfterMs` resets it.
+   */
+  private readonly socketBackoff: ReconnectBackoff;
+  private readonly subscriptionRetryPolicy: ReconnectBackoffPolicy;
+  private readonly random: () => number;
   private requestId = 0;
   private operationId = 0;
   private pendingOperationBytes = 0;
@@ -100,6 +125,26 @@ export class TerminalWebSocketClient {
 
   constructor(private readonly options: TerminalWebSocketClientOptions) {
     this.token = options.token;
+    this.random = options.reconnectRandom ?? Math.random;
+    const reconnectDelay = options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
+    this.socketBackoff = new ReconnectBackoff(
+      {
+        initialDelayMs: reconnectDelay,
+        maxDelayMs:
+          options.maxReconnectDelayMs ?? Math.max(reconnectDelay, DEFAULT_MAX_RECONNECT_DELAY_MS),
+        healthyAfterMs: options.reconnectHealthyAfterMs ?? DEFAULT_RECONNECT_HEALTHY_AFTER_MS,
+      },
+      { random: this.random, now: options.reconnectNow },
+    );
+    const subscriptionDelay = options.subscriptionRetryDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
+    this.subscriptionRetryPolicy = {
+      initialDelayMs: subscriptionDelay,
+      maxDelayMs:
+        options.maxSubscriptionRetryDelayMs ??
+        Math.max(subscriptionDelay, DEFAULT_MAX_RECONNECT_DELAY_MS),
+      // A subscription's ladder resets when the server accepts it.
+      healthyAfterMs: 0,
+    };
     document.addEventListener("visibilitychange", this.onVisibilityChange);
   }
 
@@ -319,6 +364,8 @@ export class TerminalWebSocketClient {
     this.reconnectTimer = null;
     const oldSocket = this.socket;
     this.socket = null;
+    // A deliberate replacement, not a failure: the ladder is kept.
+    this.socketBackoff.disconnected();
     oldSocket?.close(1000, "Foreground reconciliation");
     this.resetChannelsForReconnect(new Error("Terminal WebSocket is reconnecting"));
     this.ensureSocket();
@@ -374,7 +421,7 @@ export class TerminalWebSocketClient {
       switch (frame.type) {
         case "ready":
           this.serverReady = true;
-          this.reconnectAttempts = 0;
+          this.socketBackoff.connected();
           this.options.onSocketReady();
           for (const channel of this.desired.values()) this.sendSubscribe(channel);
           break;
@@ -686,30 +733,25 @@ export class TerminalWebSocketClient {
   private fallbackAndReconnect(): void {
     this.options.onFallbackRequired();
     if (this.disposed || this.desired.size === 0 || this.reconnectTimer) return;
-    const base = this.options.reconnectDelayMs ?? 500;
-    const cap = this.options.maxReconnectDelayMs ?? 10_000;
-    const delay = Math.min(cap, base * 2 ** Math.min(this.reconnectAttempts, 5));
-    this.reconnectAttempts += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.ensureSocket();
-    }, delay);
+    }, this.socketBackoff.nextDelayMs());
   }
 
   /**
    * A denied subscription costs the backend two command invocations per
    * attempt, so a session the server will never accept must not be retried at a
-   * fixed interval forever. `delay` is only supplied for a recovery resubscribe
-   * the client itself initiated, which is not a failed attempt.
+   * fixed interval forever, nor in lock-step with every other client it denied.
+   * `delay` is only supplied for a recovery resubscribe the client itself
+   * initiated, which is not a failed attempt.
    */
   private scheduleSubscribe(channel: DesiredChannel, delay?: number): void {
     if (this.disposed || this.desired.get(channel.sessionId) !== channel || channel.retryTimer)
       return;
     let wait = delay;
     if (wait === undefined) {
-      const base = this.options.subscriptionRetryDelayMs ?? 500;
-      const cap = this.options.maxSubscriptionRetryDelayMs ?? 10_000;
-      wait = Math.min(cap, base * 2 ** Math.min(channel.subscribeAttempts, 5));
+      wait = reconnectDelayMs(this.subscriptionRetryPolicy, channel.subscribeAttempts, this.random);
       channel.subscribeAttempts += 1;
     }
     channel.retryTimer = setTimeout(() => {
@@ -935,6 +977,8 @@ export class TerminalWebSocketClient {
   private closeIdleSocket(): void {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+    // A later subscription starts a fresh connection, not the tail of an outage.
+    this.socketBackoff.reset();
     this.rejectAllOperations(new Error("Terminal WebSocket closed because it is idle"));
     const socket = this.socket;
     this.socket = null;

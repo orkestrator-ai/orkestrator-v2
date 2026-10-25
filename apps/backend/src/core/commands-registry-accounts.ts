@@ -25,7 +25,7 @@ import {
   startAgentAccountLogin,
   submitAgentAccountLoginCode,
 } from "./agent-accounts.js";
-import { listMachineAgentAccounts } from "./agent-accounts-machines.js";
+import { listMachineAgentAccounts, setPreferredAgentIdentity } from "./agent-accounts-machines.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { openAgentSignInTerminal, readHostAgentSignIns } from "./agent-sign-ins.js";
 import { openCodeProviderLogin, openCodeProviderLoginProgress } from "./opencode-provider-login.js";
@@ -70,6 +70,15 @@ export function registerAgentAccountCommands(
   register("list_machine_agent_accounts", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
     return listMachineAgentAccounts(context);
+  });
+  /** The login the overview flags each machine against; an email only, never switching anything. */
+  register("set_preferred_agent_identity", async (args, context) => {
+    assertOnlyKeys(args, ["platform", "email"], "arguments");
+    return setPreferredAgentIdentity(
+      context,
+      asAccountPlatform(args.platform),
+      args.email === null || args.email === undefined ? null : asString(args.email, "email"),
+    );
   });
   /** Grok's and Pi's login on this machine, from files and variable names only. */
   register("read_host_agent_sign_ins", async (args) => {

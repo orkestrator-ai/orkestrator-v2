@@ -607,6 +607,43 @@ describe("Machine settings", () => {
   });
 });
 
+test("a leaf's own window lists only its own agent logins", async () => {
+  install({
+    status: {
+      ...commandStatus,
+      mode: "leaf",
+      controllers: [
+        {
+          controllerId: "bk_top" as never,
+          displayName: "Office desktop",
+          attachedAt: "2026-10-21T00:00:00.000Z",
+          lastContactAt: "2026-10-21T00:01:00.000Z",
+        },
+      ],
+      mostRecentControllerId: "bk_top" as never,
+      suspendedSubordinateCount: 0,
+    },
+    nodes: [],
+  });
+  const originalInvoke = invokeMock.getMockImplementation()!;
+  const snapshot = { accounts: [], active: { claude: "default", codex: "default" } };
+  invokeMock.mockImplementation((command, args) =>
+    command === "list_machine_agent_accounts"
+      ? Promise.resolve({
+          machines: [
+            { nodeId: "self", name: "Desk", self: true, state: "ok", snapshot },
+            // A stray peer row must not show: a leaf's machines are not its own to manage.
+            { nodeId: "bk_other", name: "Other", self: false, state: "ok", snapshot },
+          ],
+        })
+      : originalInvoke(command, args),
+  );
+  render(<MachinesSettings />);
+  await waitFor(() => expect(screen.getAllByTestId("machine-agent-accounts-row")).toHaveLength(1));
+  expect(screen.getByTestId("machine-agent-accounts-row").textContent).toContain("Desk");
+  expect(screen.queryByRole("button", { name: "By account" })).toBeNull();
+});
+
 // Settings is a z-[60] fullscreen surface; a default z-50 dialog renders
 // behind it while Radix blocks pointer events, so the app looks frozen.
 describe("machine dialogs open above fullscreen settings", () => {

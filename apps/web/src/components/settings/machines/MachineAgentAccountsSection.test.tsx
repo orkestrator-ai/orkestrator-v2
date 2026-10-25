@@ -4,6 +4,7 @@ import type {
   AgentAccountsSnapshot,
   AgentAccountSummary,
   MachineAgentAccounts,
+  PreferredAgentIdentities,
 } from "@orkestrator/protocol/agent-accounts";
 import * as realNodeEvents from "@/lib/federation/node-events";
 import type { NodeEventSubscriber } from "@/lib/federation/node-events";
@@ -12,6 +13,8 @@ const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 let machines: MachineAgentAccounts[];
 /** What each machine answers when it is read again after an event. */
 let rereads: Record<string, AgentAccountsSnapshot>;
+/** The command node's preferred logins, as the overview reads them. */
+let preferred: PreferredAgentIdentities | undefined;
 
 /** A command as one machine answers it, the command node being `node-self`. */
 function answer(nodeId: string, command: string, args: Record<string, unknown>): unknown {
@@ -24,6 +27,14 @@ function answer(nodeId: string, command: string, args: Record<string, unknown>):
     } satisfies AgentAccountsSnapshot;
   }
   if (command === "list_agent_accounts") return rereads[nodeId] ?? machine.snapshot;
+  if (command === "set_preferred_agent_identity") {
+    const inner = args as { platform: "claude" | "codex"; email: string | null };
+    const next = { ...preferred };
+    if (inner.email) next[inner.platform] = inner.email;
+    else delete next[inner.platform];
+    preferred = next;
+    return next;
+  }
   if (command === "read_host_agent_sign_ins") return machine.signIns ?? {};
   if (command === "open_agent_sign_in_terminal") {
     return { environmentId: "env-leaf", projectId: "project-leaf", tabId: "tab-1" };
@@ -34,7 +45,9 @@ function answer(nodeId: string, command: string, args: Record<string, unknown>):
 mock.module("@/lib/native/backend", () => ({
   invoke: mock((command: string, args: Record<string, unknown> = {}) => {
     calls.push({ command, args });
-    if (command === "list_machine_agent_accounts") return Promise.resolve({ machines });
+    if (command === "list_machine_agent_accounts") {
+      return Promise.resolve({ machines, ...(preferred ? { preferred } : {}) });
+    }
     if (command === "invoke_on_node") {
       return Promise.resolve({
         outcome: "ok",
@@ -69,7 +82,7 @@ afterAll(() => {
   mock.module("@/lib/federation/node-events", () => realNodeEventsSnapshot);
 });
 
-const { MachineAgentAccountsSection, groupAccountsByIdentity } =
+const { MachineAgentAccountsSection, groupAccountsByIdentity, preferredStatus } =
   await import("./MachineAgentAccountsSection");
 const { useRemoteWorkspaceStore } = await import("@/stores/remoteWorkspaceStore");
 
@@ -106,6 +119,7 @@ const SNAPSHOT: AgentAccountsSnapshot = {
 beforeEach(() => {
   calls.length = 0;
   rereads = {};
+  preferred = undefined;
   subscribers.clear();
   machines = [
     { nodeId: "node-self", name: "Studio", self: true, state: "ok", snapshot: SNAPSHOT },
@@ -269,4 +283,114 @@ test("a malformed live account snapshot shows an error in By account", async () 
   await screen.findAllByText("Could not read accounts");
   fireEvent.click(screen.getByRole("button", { name: "By account" }));
   expect(document.body.textContent).toContain("MBP3");
+});
+
+describe("preferred login", () => {
+  test("says where each machine stands against the preferred email", () => {
+    const [studio, leaf, off] = machines;
+    expect(preferredStatus(studio!, "claude", undefined)).toBeUndefined();
+    expect(preferredStatus(off!, "claude", "work@example.com")).toBeUndefined();
+    expect(preferredStatus(leaf!, "claude", "WORK@example.com")).toEqual({
+      kind: "available",
+      accountId: WORK,
+    });
+    expect(preferredStatus(leaf!, "codex", "work@example.com")).toEqual({ kind: "missing" });
+    const onWork = {
+      ...leaf!,
+      snapshot: { ...SNAPSHOT, active: { ...SNAPSHOT.active, claude: WORK } },
+    };
+    expect(preferredStatus(onWork, "claude", "work@example.com")).toEqual({ kind: "active" });
+    // The preferred group sorts first.
+    expect(groupAccountsByIdentity(machines, "claude", "work@example.com")[0]?.label).toBe(
+      "work@example.com",
+    );
+  });
+
+  test("is chosen under By account and kept by the machine answering", async () => {
+    await act(async () => {
+      render(<MachineAgentAccountsSection />);
+    });
+    await screen.findAllByTestId("machine-agent-accounts-row");
+    fireEvent.click(screen.getByRole("button", { name: "By account" }));
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Prefer work@example.com for Claude Code on every machine",
+        }),
+      );
+    });
+    expect(calls).toContainEqual({
+      command: "set_preferred_agent_identity",
+      args: { platform: "claude", email: "work@example.com" },
+    });
+    // Choosing it switches nothing.
+    expect(calls.some((call) => call.args.command === "set_active_agent_account")).toBe(false);
+    expect((await screen.findByTestId("machine-agent-preferred")).textContent).toContain(
+      "0 of 2 machines on it",
+    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Stop preferring work@example.com for Claude Code" }),
+      );
+    });
+    expect(calls).toContainEqual({
+      command: "set_preferred_agent_identity",
+      args: { platform: "claude", email: null },
+    });
+    await waitFor(() => expect(screen.queryByTestId("machine-agent-preferred")).toBeNull());
+  });
+
+  test("flags machines off it and switches the ones that have it", async () => {
+    preferred = { claude: "work@example.com" };
+    machines[1] = {
+      ...machines[1]!,
+      snapshot: { ...SNAPSHOT, accounts: SNAPSHOT.accounts.filter((a) => a.id !== WORK) },
+    };
+    machines.push({
+      nodeId: "node-mini",
+      name: "Mini",
+      self: false,
+      state: "ok",
+      snapshot: SNAPSHOT,
+    });
+    await act(async () => {
+      render(<MachineAgentAccountsSection />);
+    });
+    await screen.findAllByTestId("machine-agent-accounts-row");
+    const summary = screen.getByTestId("machine-agent-preferred");
+    expect(summary.textContent).toContain("work@example.com");
+    expect(summary.textContent).toContain("0 of 3 machines on it · 1 without it");
+    expect(screen.getAllByText("No preferred login")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Use preferred" })).toHaveLength(2);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Use on 2 more machines" }));
+    });
+    const switched = calls.flatMap((call) =>
+      call.command === "set_active_agent_account"
+        ? [`node-self:${String(call.args.accountId)}`]
+        : call.args.command === "set_active_agent_account"
+          ? [
+              `${String(call.args.nodeId)}:${String((call.args.args as { accountId: string }).accountId)}`,
+            ]
+          : [],
+    );
+    expect(switched.sort()).toEqual([`node-mini:${WORK}`, `node-self:${WORK}`]);
+    await waitFor(() =>
+      expect(screen.getByTestId("machine-agent-preferred").textContent).toContain(
+        "2 of 3 machines on it",
+      ),
+    );
+    expect(screen.queryByRole("button", { name: "Use preferred" })).toBeNull();
+  });
+
+  test("a machine's own dialog does not flag it", async () => {
+    preferred = { claude: "work@example.com" };
+    await act(async () => {
+      render(<MachineAgentAccountsSection nodeId="node-leaf" />);
+    });
+    await screen.findAllByTestId("machine-agent-accounts-row");
+    expect(screen.queryByTestId("machine-agent-preferred")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Use preferred" })).toBeNull();
+  });
 });

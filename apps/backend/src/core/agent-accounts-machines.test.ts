@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { CommandContext } from "./commands-context.js";
-import { listMachineAgentAccounts } from "./agent-accounts-machines.js";
+import { listMachineAgentAccounts, setPreferredAgentIdentity } from "./agent-accounts-machines.js";
 import { NodeUnavailableError } from "./nodes/node-link.js";
 import { StorageService } from "./storage.js";
 
@@ -209,3 +209,30 @@ for (const invalid of [
     expect(result.machines[1]?.snapshot).toBeUndefined();
   });
 }
+
+test("keeps a preferred login per platform on the machine asking and reports it", async () => {
+  const ctx = context({});
+  expect((await listMachineAgentAccounts(ctx, { readSignIns })).preferred).toBeUndefined();
+
+  expect(await setPreferredAgentIdentity(ctx, "claude", " Work@Example.com ")).toEqual({
+    claude: "Work@Example.com",
+  });
+  expect(await setPreferredAgentIdentity(ctx, "codex", "me@example.com")).toEqual({
+    claude: "Work@Example.com",
+    codex: "me@example.com",
+  });
+  expect((await listMachineAgentAccounts(ctx, { readSignIns })).preferred).toEqual({
+    claude: "Work@Example.com",
+    codex: "me@example.com",
+  });
+  // Nothing switches because of it.
+  expect((await storage.loadAgentAccounts()).active).toEqual({});
+
+  await expect(setPreferredAgentIdentity(ctx, "claude", "not an email")).rejects.toThrow(
+    "valid email",
+  );
+  expect(await setPreferredAgentIdentity(ctx, "claude", null)).toEqual({ codex: "me@example.com" });
+  await setPreferredAgentIdentity(ctx, "codex", null);
+  expect(await storage.loadAgentAccounts()).not.toHaveProperty("preferred");
+  expect((await listMachineAgentAccounts(ctx, { readSignIns })).preferred).toBeUndefined();
+});

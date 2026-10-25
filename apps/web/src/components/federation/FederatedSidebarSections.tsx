@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -20,6 +20,7 @@ import { ChevronDown, ChevronRight, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
+import { Separator } from "@/components/ui/separator";
 import { activityRows, isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import {
   arrangeMachines,
@@ -47,6 +48,7 @@ import {
   resolveSortProjectFolder,
   resolveUngroupProjectFolder,
   type ProjectArrangement,
+  type ProjectTreeEntry,
 } from "@/lib/project-folders";
 import { machineTextClass } from "@/lib/federation/machine-colors";
 import { cn } from "@/lib/utils";
@@ -467,6 +469,69 @@ export function MergedProjectList({
     return `${plural(machineCount, "machine")} · ${plural(environmentCount, "environment")}`;
   };
 
+  const renderEntry = (entry: ProjectTreeEntry<MergedProject>) => {
+    if (entry.kind === "project") return renderProject(entry.project);
+    const folderActions =
+      mode === "project"
+        ? {
+            onRename: (nextName: string) => {
+              const normalized = normalizeProjectFolderName(nextName);
+              if (!normalized) return;
+              const collapsed = isFolderCollapsed(entry.name);
+              apply(resolveRenameProjectFolder(list.shown, entry.name, nextName));
+              setFolderKeyCollapsed(folderCollapseKey(entry.name), false);
+              setFolderKeyCollapsed(folderCollapseKey(normalized), collapsed);
+            },
+            onSort: () => apply(resolveSortProjectFolder(list.shown, entry.name)),
+            onUngroup: () => apply(resolveUngroupProjectFolder(list.shown, entry.name)),
+          }
+        : {};
+    const opens =
+      mode === "repository" ? repositoryOpenTarget(entry.projects, portalState.selfId) : null;
+    return (
+      <SortableProjectFolder
+        key={`folder:${entry.key}`}
+        name={entry.name}
+        sortableId={mode === "repository" ? `project-folder:${entry.key}` : undefined}
+        label={mode === "repository" ? repositoryLabel(entry.name) : entry.name}
+        repository={mode === "repository"}
+        {...(mode === "repository"
+          ? {
+              icon: <CommandNodeHomeIcon colorToken={commandNodeColor} />,
+              subtitle: repositorySummary(entry.projects),
+            }
+          : {})}
+        projectCount={entry.projects.length}
+        isCollapsed={isFolderCollapsed(entry.name)}
+        onToggleCollapse={() => setFolderKeyCollapsed(folderCollapseKey(entry.name))}
+        onOpen={
+          opens
+            ? () =>
+                openMachineWorkspace({
+                  connectionId: opens.machine.connectionId,
+                  projectId: opens.project.ref.projectId,
+                  title: opens.name,
+                })
+            : undefined
+        }
+        openMachineName={opens?.machine.name}
+        badge={
+          opens ? (
+            <MachineDot colorToken={opens.machine.colorToken} machineName={opens.machine.name} />
+          ) : undefined
+        }
+        {...folderActions}
+      >
+        {entry.projects.map((item) =>
+          renderProject(
+            item,
+            mode === "repository" ? repositoryMemberLabel(item, entry.projects) : undefined,
+          ),
+        )}
+      </SortableProjectFolder>
+    );
+  };
+
   return (
     <div
       className="py-1"
@@ -483,73 +548,15 @@ export function MergedProjectList({
         onDragCancel={() => setDraggingProject(false)}
       >
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-          {tree.map((entry) => {
-            if (entry.kind === "project") return renderProject(entry.project);
-            const folderActions =
-              mode === "project"
-                ? {
-                    onRename: (nextName: string) => {
-                      const normalized = normalizeProjectFolderName(nextName);
-                      if (!normalized) return;
-                      const collapsed = isFolderCollapsed(entry.name);
-                      apply(resolveRenameProjectFolder(list.shown, entry.name, nextName));
-                      setFolderKeyCollapsed(folderCollapseKey(entry.name), false);
-                      setFolderKeyCollapsed(folderCollapseKey(normalized), collapsed);
-                    },
-                    onSort: () => apply(resolveSortProjectFolder(list.shown, entry.name)),
-                    onUngroup: () => apply(resolveUngroupProjectFolder(list.shown, entry.name)),
-                  }
-                : {};
-            const opens =
-              mode === "repository"
-                ? repositoryOpenTarget(entry.projects, portalState.selfId)
-                : null;
-            return (
-              <SortableProjectFolder
-                key={`folder:${entry.key}`}
-                name={entry.name}
-                sortableId={mode === "repository" ? `project-folder:${entry.key}` : undefined}
-                label={mode === "repository" ? repositoryLabel(entry.name) : entry.name}
-                repository={mode === "repository"}
-                {...(mode === "repository"
-                  ? {
-                      icon: <CommandNodeHomeIcon colorToken={commandNodeColor} />,
-                      subtitle: repositorySummary(entry.projects),
-                    }
-                  : {})}
-                projectCount={entry.projects.length}
-                isCollapsed={isFolderCollapsed(entry.name)}
-                onToggleCollapse={() => setFolderKeyCollapsed(folderCollapseKey(entry.name))}
-                onOpen={
-                  opens
-                    ? () =>
-                        openMachineWorkspace({
-                          connectionId: opens.machine.connectionId,
-                          projectId: opens.project.ref.projectId,
-                          title: opens.name,
-                        })
-                    : undefined
-                }
-                openMachineName={opens?.machine.name}
-                badge={
-                  opens ? (
-                    <MachineDot
-                      colorToken={opens.machine.colorToken}
-                      machineName={opens.machine.name}
-                    />
-                  ) : undefined
-                }
-                {...folderActions}
-              >
-                {entry.projects.map((item) =>
-                  renderProject(
-                    item,
-                    mode === "repository" ? repositoryMemberLabel(item, entry.projects) : undefined,
-                  ),
-                )}
-              </SortableProjectFolder>
-            );
-          })}
+          {tree.map((entry, index) => (
+            <Fragment key={entry.kind === "project" ? entry.project.id : `folder:${entry.key}`}>
+              {/* Each repository is ruled off from the one above it. */}
+              {mode === "repository" && index > 0 ? (
+                <Separator data-testid="repository-separator" className="mx-3 my-1 w-auto!" />
+              ) : null}
+              {renderEntry(entry)}
+            </Fragment>
+          ))}
           <SidebarRootDropZone active={draggingProject && mode === "project"} />
         </SortableContext>
       </DndContext>

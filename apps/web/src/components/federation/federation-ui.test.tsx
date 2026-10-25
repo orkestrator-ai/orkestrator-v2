@@ -464,6 +464,52 @@ test("a repository with one visible environment uses singular summary labels and
   expect(within(heading).getByText("1 machine · 1 environment")).toBeTruthy();
 });
 
+test("repositories are separated by a rule, but projects are not", async () => {
+  const first = machineView();
+  first.projects[0]!.repositoryHint = "github.com/acme/app";
+  const second = machineView({
+    connectionId: "b",
+    backendId: "bk_b" as never,
+    name: "Machine B",
+    colorToken: "rose",
+    projects: [
+      {
+        ref: projectRef("bk_b" as BackendId, "project-1"),
+        key: projectKey(projectRef("bk_b" as BackendId, "project-1")),
+        name: "api",
+        order: 0,
+        repositoryHint: "github.com/acme/api",
+      },
+    ],
+  });
+  const renderList = async (mode: "project" | "repository") => {
+    let result!: ReturnType<typeof render>;
+    await act(async () => {
+      result = render(
+        <MergedProjectList
+          machines={[first, second]}
+          shownIds={new Set(["a", "b"])}
+          mode={mode}
+          renderBoundProject={() => null}
+          onBoundEnvironmentDragEnd={() => undefined}
+        />,
+      );
+    });
+    return result;
+  };
+  const repositories = await renderList("repository");
+  const separators = screen.getAllByTestId("repository-separator");
+  expect(separators).toHaveLength(1);
+  // The rule sits between the two repository groups, not above the first.
+  const separator = separators[0]!;
+  expect(separator.previousElementSibling).not.toBeNull();
+  expect(separator.nextElementSibling).not.toBeNull();
+  repositories.unmount();
+
+  await renderList("project");
+  expect(screen.queryByTestId("repository-separator")).toBeNull();
+});
+
 describe("CL-05: machine identity visual rules", () => {
   test("CL-05: a decorative MachineDot is hidden from assistive technology", () => {
     render(<MachineDot colorToken="teal" machineName="Machine A" />);

@@ -137,7 +137,7 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
       context.runtime.localServers.openCodeAgentTools.forget(`local:${environmentId}`);
       void getLocalServerStatus(environmentId, context, "opencode").catch(() => undefined);
       const names = await service
-        .loadedMcpServerNamesIfRunning(environmentId, "opencode")
+        .openCodeMcpServerNamesIfRunning(environmentId)
         .catch(() => undefined);
       return { outcome, ...(names ? { names } : {}) };
     },

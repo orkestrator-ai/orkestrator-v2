@@ -234,7 +234,7 @@ describe("OpenCode reload probe", () => {
           calls.push(args);
           return outcome;
         },
-        loadedMcpServerNamesIfRunning: async (...args: unknown[]) => {
+        openCodeMcpServerNamesIfRunning: async (...args: unknown[]) => {
           calls.push(["names", ...args]);
           return names;
         },
@@ -260,7 +260,7 @@ describe("OpenCode reload probe", () => {
     });
     expect(calls).toEqual([
       ["env-1", "opencode"],
-      ["names", "env-1", "opencode"],
+      ["names", "env-1"],
     ]);
     // Disposal dropped the runtime-only entry; it is posted again at once.
     expect(forgotten).toEqual(["local:env-1"]);

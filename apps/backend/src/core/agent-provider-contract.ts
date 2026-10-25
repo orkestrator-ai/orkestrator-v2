@@ -791,12 +791,6 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * while idle). Session-free, so it survives a bridge restart.
    */
   reloadMcpConfiguration?(): Promise<"reloaded" | "not-running" | "unsupported" | "busy">;
-  /**
-   * Names of the MCP servers the provider's runtime has loaded now, for the
-   * MCP apply scheduler's post-reload check. Process- or directory-level, not
-   * a session's; never starts a process that is not running.
-   */
-  loadedMcpServerNames?(): Promise<string[]>;
   authStatus?(): Promise<NativeAgentAuthStatus>;
   /**
    * `deviceCode` asks for a flow without a loopback callback, for a browser

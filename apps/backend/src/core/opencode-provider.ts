@@ -1315,18 +1315,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return this.capabilitiesAdapter.mcpServers();
   }
 
-  /**
-   * MCP apply: rebuild this directory's instance so it reads the saved
-   * configuration files again. The same idle-gated `instance.dispose` the
-   * command refresh uses, so it never runs during a dispatch or while any
-   * session in the directory is busy (that is `busy`, and the apply waits).
-   */
+  /** MCP apply: the command refresh's idle-gated `instance.dispose`; `busy` waits. */
   async reloadMcpConfiguration(): Promise<"reloaded" | "busy"> {
     return (await this.commandReload.request()) === "reloaded" ? "reloaded" : "busy";
-  }
-
-  async loadedMcpServerNames(): Promise<string[]> {
-    return (await this.capabilitiesAdapter.mcpServers()).map((server) => server.name);
   }
 
   mcpServerAction(

@@ -1166,13 +1166,22 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
 ): TMessage[] {
   const tasksById = new Map<string, ClaudeBackgroundTaskState>();
   const tasksByToolUseId = new Map<string, ClaudeBackgroundTaskState>();
+  const cleanupTaskIds = new Set<string>();
+  const cleanupToolUseIds = new Set<string>();
   for (const task of Object.values(backgroundTasks)) {
     // Its launch row already shows how it really ended; the resume scan's
     // stop would relabel it, under the scan's text instead of its own name.
-    if (isResumeCleanupTask(task)) continue;
+    if (isResumeCleanupTask(task)) {
+      cleanupTaskIds.add(task.id);
+      if (task.toolUseId) cleanupToolUseIds.add(task.toolUseId);
+      continue;
+    }
     tasksById.set(task.id, task);
     if (task.toolUseId) tasksByToolUseId.set(task.toolUseId, task);
   }
+  const isCleanupLaunch = (part: NativeMessagePart, recoveredId: string | undefined): boolean =>
+    (part.toolUseId !== undefined && cleanupToolUseIds.has(part.toolUseId)) ||
+    (recoveredId !== undefined && cleanupTaskIds.has(recoveredId));
 
   /*
    * Transcript replay does not persist SDK task lifecycle edges on every
@@ -1197,6 +1206,9 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
         hasSubagentLaunch = true;
       }
       const recoveredId = backgroundTaskIdFromLaunchOutput(part);
+      // Recovery must not turn a historical shell launch back into a task card
+      // after the resume scan has excluded its lifecycle above.
+      if (isCleanupLaunch(part, recoveredId)) continue;
       const authoritative =
         (part.toolUseId ? tasksByToolUseId.get(part.toolUseId) : undefined) ??
         (recoveredId ? tasksById.get(recoveredId) : undefined);
@@ -1232,6 +1244,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
 
       const isAgentTool = isTaskTool(part.toolName);
       const recoveredId = backgroundTaskIdFromLaunchOutput(part);
+      if (!isAgentTool && isCleanupLaunch(part, recoveredId)) return part;
       const authoritativeLaunch =
         (part.toolUseId ? tasksByToolUseId.get(part.toolUseId) : undefined) ??
         (recoveredId ? tasksById.get(recoveredId) : undefined);

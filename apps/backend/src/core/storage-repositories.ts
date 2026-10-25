@@ -14,6 +14,7 @@ import { ProjectsRepository } from "./storage-projects.js";
 import { PromptsRepository } from "./storage-prompts.js";
 import { PublicOperationsRepository } from "./storage-public-operations.js";
 import { ReviewsRepository } from "./storage-reviews.js";
+import { ScheduledJobsRepository } from "./storage-scheduled-jobs.js";
 import { SessionsRepository } from "./storage-sessions.js";
 
 /**
@@ -30,6 +31,7 @@ import { SessionsRepository } from "./storage-sessions.js";
  * points `storage-writer-guards.test.ts` follows writes back to.
  */
 export class StorageRepositories {
+  readonly scheduledJobs: ScheduledJobsRepository;
   readonly files: StorageFiles;
   readonly projects: ProjectsRepository;
   readonly config: ConfigRepository;
@@ -50,6 +52,7 @@ export class StorageRepositories {
   constructor(context: StorageContext) {
     const files = new StorageFiles(context.dataDir);
     this.files = files;
+    this.scheduledJobs = new ScheduledJobsRepository(context);
     this.projects = new ProjectsRepository(context, files, this);
     this.config = new ConfigRepository(context, files);
     this.sessions = new SessionsRepository(context, files, this);

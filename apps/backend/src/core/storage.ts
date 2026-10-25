@@ -1,8 +1,8 @@
 export * from "./storage-shared.js";
 
+import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import { StorageContext } from "./storage-context.js";
 import { StorageRepositories } from "./storage-repositories.js";
-import { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import path from "node:path";
 import type { AgentAccountStore } from "./agent-accounts-store.js";
 import type { BuildPipelineTranscriptMigrationReport } from "./build-pipeline-transcript-migration.js";
@@ -147,74 +147,8 @@ export class StorageService {
 
   }
 
-  /** Store for scheduled jobs, sharing this facade's database and change journal. */
   scheduledJobStore(): ScheduledJobStore {
-    this.scheduledJobStoreInstance ??= new ScheduledJobStore({
-      database: () => this.context.database,
-      announce: (scheduleId) => this.context.changes.announce("scheduled-job", scheduleId),
-    });
-    return this.scheduledJobStoreInstance;
-  }
-
-  async init(): Promise<void> {
-    await this.context.open();
-    await this.repos.nativeAgentSessions.recoverExpiredPromptQueueClaims();
-    this.context.startSnapshots();
-    await this.repos.config.migrateConfigSchema();
-    await this.repos.nativeAgentSessions.migrateNativeAgentSessionOwners();
-  }
-
-  /** Closes the database connection. Later calls reopen it. */
-  close(): void {
-    this.context.close();
-  }
-
-  getDataDir(): string {
-    return this.context.dataDir;
-  }
-
-  getLogDirectory(): string {
-    return path.join(this.context.dataDir, "logs");
-  }
-
-  /**
-   * Installs the sink that broadcasts persistent mutations to connected
-   * clients. Kept as a setter rather than a constructor argument because the
-   * gateway that ultimately delivers these does not exist yet when the backend
-   * builds its storage service.
-   */
-  setResourceChangeListener(listener: ResourceChangeListener | null): void {
-    this.context.changes.setResourceChangeListener(listener);
-  }
-
-  /** Subscribe backend services without replacing the gateway's broadcast sink. */
-  addResourceChangeListener(listener: ResourceChangeListener): () => void {
-    return this.context.changes.addResourceChangeListener(listener);
-  }
-
-  /**
-   * Publish a changed provider-authoritative native-session projection.
-   *
-   * Unlike the durable identity record, transcript and turn state live in the
-   * provider. The native runtime first commits the new bounded projection to
-   * its cache and only then calls this method, preserving the same
-   * announce-after-commit ordering as file-backed resources.
-   */
-  announceNativeAgentSessionProjection(
-    environmentId: string,
-    scope?: { agent: string; logicalSessionKey: string },
-  ): void {
-    this.context.changes.announce("native-agent-session", environmentId, undefined, scope);
-  }
-
-  /**
-   * Publish a content-free hint that a conversation's transcript artifacts
-   * (drafts, verification operations or publication ledger) changed. The
-   * artifact service commits to its own store first and only then calls
-   * this; the id is the conversation's logical session key.
-   */
-  announceTranscriptArtifact(conversationKey: string): void {
-    this.context.changes.announce("transcript-artifact", conversationKey);
+    return this.repos.scheduledJobs.store();
   }
 
   async getResourceSnapshotRevision(
@@ -999,6 +933,16 @@ export class StorageService {
       key,
       expectedProviderSessionId,
       selection,
+    );
+  }
+
+  recordNativeAgentSessionResumeIdentity(
+    key: string,
+    providerSessionId: string,
+    resumableSessionId: string,
+  ): Promise<boolean> {
+    return this.repos.nativeAgentSessions.recordNativeAgentSessionResumeIdentity(
+      key, providerSessionId, resumableSessionId,
     );
   }
 

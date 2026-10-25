@@ -167,6 +167,9 @@ All on this branch, 2026-10-25.
   test, the known Codex flake
   [0492](../../tests/flaky-tests/agent-bridges/0492-codex-deleted-session-initial-retry-race.md)
   (no bridge code changed here), whose owner passed alone (123 pass).
+- `bun run typecheck` in `apps/backend`: no errors (1,531 and 1,036 files).
+- `mise run lint`: exit 0, no finding in a changed file.
+- `mise run test`: see the coordinator report for the run on the pushed head.
 
 ## Assumptions and decisions
 
@@ -233,6 +236,9 @@ All on this branch, 2026-10-25.
    `public-api-command-surface.test.ts` (2), `commands-state-sync.test.ts`
    and `build-pipeline-transcript-checkpoints.test.ts`. Each now patches or
    calls the repository; no assertion changed.
+   Three such storage tests were updated
+   (`storage-agent-mail.test.ts`), and the full suite is the check that no
+   other test depended on the old routing.
 8. **Removed `acquireConfigMutationLock` and `acquireEnvironmentMutationLock`.**
    No production code called them; one test took the config lease through
    the first and now takes the same lease (`config.json`, "configuration

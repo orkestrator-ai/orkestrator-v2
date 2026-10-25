@@ -686,6 +686,7 @@ export class KanbanRepository {
     return typeof stored === "object" && stored !== null && (stored as FeaturePlan).id === featureId
       ? (stored as FeaturePlan)
       : null;
+
   }
 
   /**

@@ -31,6 +31,8 @@ import {
   type AcpTurnUsage,
 } from "./usage.js";
 import { acpSignInMissing, assertAcpSignedIn } from "./acp-credentials.js";
+import { grokQuestionTimeoutFromEnv } from "./acp-question-timeout.js";
+import { syncPromptTurnClock } from "./acp-prompt-clock.js";
 import {
   AcpProcess,
   bumpCursorDiscoveryRevision,
@@ -1194,47 +1196,52 @@ export function clearApprovals(state: SessionState): void {
 export function clearInteractions(state: SessionState): void {
   for (const interaction of state.interactions.values()) interaction.deadline.settle();
   state.interactions.clear();
+  syncPromptTurnClock(state);
 }
 
-/** Grok CLI's own `ask_user_question` wait when nothing overrides it. */
-export const GROK_QUESTION_DEFAULT_TIMEOUT_MS = 1_800_000;
+export { GROK_QUESTION_DEFAULT_TIMEOUT_MS } from "./acp-question-timeout.js";
 
 /**
  * How long Grok itself waits on an `ask_user_question` before abandoning it,
- * or undefined when that timeout is disabled.
+ * or undefined when that timeout is off.
  *
- * Read from the environment the child is spawned with (`AcpProcess`: the
- * bridge's own merged with the launcher record's), which is where Grok reads
- * `GROK_ASK_USER_QUESTION_TIMEOUT_SECS` / `_ENABLED`. Grok's `config.toml`
- * `[toolset.ask_user_question]` ranks below the environment and is not read
- * here; an unset environment is taken as Grok's documented default.
+ * A child the bridge launched records what it resolved at spawn
+ * (`AcpProcess.questionTimeout`, which also raised Grok's default to the hold
+ * ceiling). Anything else, a stub in a test, is read from the environment a
+ * child would get, with Grok's documented default when nothing sets it.
  */
 export function grokQuestionTimeoutMs(
   env: NodeJS.ProcessEnv = { ...process.env, ...providerConfig.env },
+  child?: Pick<AcpProcess, "questionTimeout">,
 ): number | undefined {
-  const enabled = env.GROK_ASK_USER_QUESTION_TIMEOUT_ENABLED?.trim().toLowerCase();
-  if (enabled === "false" || enabled === "0") return undefined;
-  const seconds = env.GROK_ASK_USER_QUESTION_TIMEOUT_SECS?.trim() ?? "";
-  // Grok requires a positive integer; anything else leaves its default.
-  return /^[1-9]\d{0,9}$/.test(seconds)
-    ? Number(seconds) * 1_000
-    : GROK_QUESTION_DEFAULT_TIMEOUT_MS;
+  return child?.questionTimeout ? child.questionTimeout.timeoutMs : grokQuestionTimeoutFromEnv(env);
+}
+
+/**
+ * The turn's deadline as a limit on how long a pause may hold, or undefined
+ * when holding a request stops the turn's clock (`acp-prompt-clock.ts`). A
+ * turn without that clock still ends every pause at its timeout.
+ */
+function turnHoldLimit(state: SessionState): number | undefined {
+  return state.promptTurnClock ? undefined : state.promptDeadlineAt;
 }
 
 /**
  * The countdown of one parked request.
  *
  * `limitAt` is the latest moment the agent still waits, read again at every
- * pause and resume. The first deadline is capped by it too, so a request
- * raised near the end of a turn never shows more time than the agent will
- * give it. Unref'd, so a parked request cannot by itself keep the bridge alive.
+ * pause and resume. The first deadline is capped by it and by the turn's
+ * timeout as it stands now, so a request raised near the end of a turn never
+ * shows more time than the agent will give it. Unref'd, so a parked request
+ * cannot by itself keep the bridge alive.
  */
 function parkedDeadline(
+  state: SessionState,
   requestedAt: number,
   limitAt: () => number | undefined,
   onExpire: () => void,
 ): InteractionDeadline {
-  const limit = limitAt();
+  const limit = earliest(limitAt(), state.promptDeadlineAt);
   const windowEnd = requestedAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
   return new InteractionDeadline({
     requestedAt,
@@ -1280,6 +1287,7 @@ export function parkGrokInteraction(
     if (!interaction) return;
     interaction.deadline.settle();
     state.interactions.delete(toolCallId);
+    syncPromptTurnClock(state);
     child.respond(requestId, result);
     state.revision += 1;
     schedulePersist();
@@ -1304,7 +1312,7 @@ export function parkGrokInteraction(
       requestedAt,
       respond: finish,
       // Grok keeps no timeout of its own on a plan approval; the turn's does.
-      deadline: parkedDeadline(requestedAt, () => state.promptDeadlineAt, expire),
+      deadline: parkedDeadline(state, requestedAt, () => turnHoldLimit(state), expire),
     });
   } else {
     const rawQuestions = Array.isArray(params.questions) ? params.questions : [];
@@ -1354,7 +1362,7 @@ export function parkGrokInteraction(
     }
     // Grok abandons the question on its own timeout, counted from when it
     // asked; the turn's deadline still applies on top of it.
-    const questionTimeoutMs = grokQuestionTimeoutMs();
+    const questionTimeoutMs = grokQuestionTimeoutMs(undefined, child);
     const questionLimitAt =
       questionTimeoutMs === undefined ? undefined : requestedAt + questionTimeoutMs;
     state.interactions.set(toolCallId, {
@@ -1364,8 +1372,9 @@ export function parkGrokInteraction(
       requestedAt,
       respond: finish,
       deadline: parkedDeadline(
+        state,
         requestedAt,
-        () => earliest(state.promptDeadlineAt, questionLimitAt),
+        () => earliest(turnHoldLimit(state), questionLimitAt),
         expire,
       ),
     });
@@ -1511,6 +1520,7 @@ export function parkPermission(
     if (!approval) return;
     approval.deadline.settle();
     state.approvals.delete(id);
+    syncPromptTurnClock(state);
     let selected = optionId
       ? approval.options.find((option) => option.optionId === optionId)
       : undefined;
@@ -1562,7 +1572,7 @@ export function parkPermission(
     options,
     requestedAt,
     respond: finish,
-    deadline: parkedDeadline(requestedAt, () => state.promptDeadlineAt, expire),
+    deadline: parkedDeadline(state, requestedAt, () => turnHoldLimit(state), expire),
   });
   recordAcpToolApproval(state, toolCallId, "awaiting");
   state.revision += 1;

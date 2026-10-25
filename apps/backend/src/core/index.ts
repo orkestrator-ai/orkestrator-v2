@@ -916,9 +916,6 @@ export class OrkestratorBackend {
         workflowResultRollout: this.workflowResultRollout,
         resolveAgentToolConnection,
         assertAgentToolsReachable,
-        onInteractionObservation: (event) => {
-          this.nativeAgents.recordProviderInteractionObservation(event);
-        },
         workflowAdmission: this.workflowAdmission,
         artifactDispatch,
         artifactLedger,
@@ -937,9 +934,6 @@ export class OrkestratorBackend {
         workflowResultRollout: this.workflowResultRollout,
         resolveAgentToolConnection,
         assertAgentToolsReachable,
-        onInteractionObservation: (event) => {
-          this.nativeAgents.recordProviderInteractionObservation(event);
-        },
         workflowAdmission: this.workflowAdmission,
       },
     );

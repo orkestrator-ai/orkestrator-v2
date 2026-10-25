@@ -134,6 +134,8 @@ describe("Electron tmux hooks and transcripts", () => {
         payload: { tool_name: "Edit" },
         requestedAt: 1_700_000_000_123,
         expiresAt: 1_700_000_300_123,
+        // The original sidecar shape comes from a hook that cannot pause.
+        hold: { available: false, reason: "hook-outdated" },
       });
       for (const eventId of invalidTimingEventIds) {
         expect(pendingHooks).toContainEqual({
@@ -278,7 +280,8 @@ describe("Electron tmux hooks and transcripts", () => {
       expect(timeout?.[1]).toBe("300");
       expect(installedScript).toContain('REQUESTED_AT_MS="$(epoch_millis)"');
       expect(installedScript).toContain("EXPIRES_AT_MS=$((REQUESTED_AT_MS + TIMEOUT_SECS * 1000))");
-      expect(installedScript).toContain('sleep "$TIMEOUT_SECS" &');
+      expect(installedScript).toContain('arm_deadline "$TIMEOUT_SECS"');
+      expect(installedScript).toContain('sleep "$1" &');
       expect(installedScript).not.toContain("TIMEOUT_SECS * 4");
 
       // Exercise the real generated shell branches without waiting five

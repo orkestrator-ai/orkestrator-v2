@@ -89,6 +89,27 @@ const CODEX_APPROVAL_AMENDMENT_QUESTION_ID = "codex-approval-amendment";
 const MAX_RENDERED_FILE_CHANGES = 48;
 const MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH = 256;
 
+/** One option preview, in characters; longer ones end in an ellipsis. */
+const CLAUDE_QUESTION_PREVIEW_MAX_LENGTH = 4_096;
+/** Every preview in one request together; past it the request carries none. */
+const CLAUDE_QUESTION_PREVIEW_BUDGET = 32_768;
+
+/**
+ * Drop every preview from a question request whose previews together exceed
+ * the budget. Previews are optional context: a request over the snapshot's
+ * byte bound would be refused whole, and the question with it.
+ */
+function withinClaudePreviewBudget(questions: AgentInteractionQuestion[]): void {
+  let total = 0;
+  for (const question of questions) {
+    for (const option of question.options) total += option.preview?.length ?? 0;
+  }
+  if (total <= CLAUDE_QUESTION_PREVIEW_BUDGET) return;
+  for (const question of questions) {
+    for (const option of question.options) delete option.preview;
+  }
+}
+
 export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCapability {
   private readonly interactionTracker = new InteractionSnapshotTracker();
   private readonly providerInteractionIds = new Map<
@@ -212,10 +233,22 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
               option?.description === undefined
                 ? undefined
                 : truncatedText(option.description, "Option"),
+            // Markdown/ASCII (`previewFormat: "markdown"`); the card shows it
+            // verbatim in a monospace block.
+            ...(typeof option.preview === "string" && option.preview.trim()
+              ? {
+                  preview: truncatedText(
+                    option.preview,
+                    "Preview",
+                    CLAUDE_QUESTION_PREVIEW_MAX_LENGTH,
+                  ),
+                }
+              : {}),
           };
         }),
       };
     });
+    withinClaudePreviewBudget(mapped);
     const id = this.normalizedId(sessionId, providerRequestId, "question");
     const createdAt = claudeCreatedAt(request.requestedAt, expiresAt, () =>
       this.interactionTracker.firstSeen(id),

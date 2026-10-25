@@ -4929,7 +4929,6 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             return createBuildPipelineProvider(connection, {
               ...this.options.providerDependencies,
               workflowResults: this.options.workflowResults,
-              autoAnswerRequests: false,
             });
           })();
       const managed = managedProvider(provider);

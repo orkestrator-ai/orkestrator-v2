@@ -387,6 +387,14 @@ export function NativeAgentInteractionCard({
                             {option.description}
                           </p>
                         ) : null}
+                        {option.preview ? (
+                          <pre
+                            data-testid="interaction-option-preview"
+                            className="max-h-48 max-w-md overflow-auto whitespace-pre rounded border border-border/40 bg-black/20 p-2 font-mono text-[11px] leading-snug text-muted-foreground"
+                          >
+                            {option.preview}
+                          </pre>
+                        ) : null}
                       </div>
                     );
                   })}

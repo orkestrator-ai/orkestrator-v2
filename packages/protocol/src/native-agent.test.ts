@@ -118,6 +118,7 @@ describe("native agent capability table", () => {
 
   test("pins Codex and Grok interaction capabilities", () => {
     expect(nativeAgentCapabilities("codex").interactions?.kinds).toEqual([
+      "question",
       "command-approval",
       "file-approval",
       "permission",
@@ -1236,6 +1237,31 @@ describe("native agent approval modes", () => {
     expect(
       resolveNativeAgentApprovalMode("claude", { approvals: "ask" }, "bypassPermissions"),
     ).toBe("default");
+  });
+
+  test("a Codex container describes the sandbox-edge modes as what they do there", () => {
+    const description = (approvals: "ask" | "auto-approve", sandbox?: "container" | "none") =>
+      Object.fromEntries(
+        nativeAgentApprovalModes("codex", { approvals, ...(sandbox ? { sandbox } : {}) }).map(
+          (mode) => [mode.id, mode.description],
+        ),
+      );
+    const host = description("auto-approve", "none");
+    expect(host["on-request"]).toBe("Work in a sandbox; Codex asks before stepping outside it");
+
+    const container = description("auto-approve", "container");
+    expect(container["on-request"]).toContain("never asks; choose Untrusted");
+    expect(container["auto-review"]).toContain("reviewer is never consulted");
+    // The modes that do not depend on a sandbox keep their own text.
+    expect(container.untrusted).toBe(host.untrusted);
+    expect(container.never).toBe(host.never);
+
+    // Under `ask` the bridge runs `on-request` as `untrusted` in a container.
+    expect(description("ask", "container")["on-request"]).toContain("like Untrusted");
+    // Claude has no sandbox-edge modes, so a container changes nothing.
+    expect(
+      nativeAgentApprovalModes("claude", { approvals: "auto-approve", sandbox: "container" }),
+    ).toEqual(nativeAgentApprovalModes("claude", { approvals: "auto-approve" }));
   });
 
   test("a deny policy offers no choice", () => {

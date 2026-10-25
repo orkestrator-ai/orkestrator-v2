@@ -113,6 +113,20 @@ export function appendNativeAgentPolicyNote(
   return { ...policy, note: policy.note ? `${policy.note} ${note}` : note };
 }
 
+/** Why a session reports the read-only policy rather than its own. */
+export const READ_ONLY_TURN_POLICY_NOTE =
+  "The current turn is read-only, so it runs under the read-only policy rather than this session's own.";
+
+/**
+ * What a bridge reports while a `readOnly` turn runs: the policy that turn
+ * applies, marked so Agent Info says why it differs from the session's.
+ */
+export function readOnlyTurnReportedPolicy(
+  turnPolicy: NativeAgentExecutionPolicy,
+): NativeAgentExecutionPolicy {
+  return appendNativeAgentPolicyNote(turnPolicy, READ_ONLY_TURN_POLICY_NOTE);
+}
+
 /**
  * The policy an agent with no sandbox of its own actually runs under.
  *

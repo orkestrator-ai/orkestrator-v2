@@ -175,6 +175,7 @@ not advertise at its version before sending it.
 | `session config get/set` | `session.config.get/set` | live composer controls | provider |
 | `session history/resume/fork` | `session.history/resume/fork` | resumable sessions; fork adopts into a new tab | provider |
 | `session interactions list/resolve` | `session.interactions`, `session.interaction.resolve` | pending interactions, `resolve_native_agent_interaction` | provider |
+| `session interactions hold [--resume]` | `session.interaction.hold` | `hold_native_agent_interaction` (the card timer's pause) | provider |
 | `session transcript` | `session.transcript` | transcript window + message pages | read (content) |
 | `changes view ENV` | `changes.view` | `ChangeTrackingService.getView` / `projections.files` after `diffStats.sync` (the `changes_get_view` path) | read |
 | `changes history SESSION` | `changes.history` | `ChangeTrackingService.getHistory` + each turn's projection (no scan) | read |
@@ -473,6 +474,19 @@ read, so a question that was just answered does not report 6.
   interaction before anything reaches the provider. Stale, replaced, expired or
   malformed answers are refused and never approve; the same answer key does
   not answer twice. A CLI exiting never answers an interaction.
+- **Pausing a countdown**: each listed interaction carries `expiresAt` and,
+  where its deadline's authority publishes one, `hold` (`available`, `heldAt`
+  while paused, `reason`). `session interactions hold SESSION INTERACTION`
+  pauses the countdown and `--resume` restarts a fresh window, through the
+  same `hold_native_agent_interaction` path as the card's timer. The bridge
+  enforces the pause, so a paused request still ends at the 24-hour hold
+  ceiling or the provider's own sooner limit (the moved `expiresAt` in the
+  result). Pausing answers nothing, so it needs no `--revision` and no voice
+  confirmation. An interaction with no countdown (OpenCode), one whose pause
+  is unavailable (`no-extension`) or one whose bridge predates pausing
+  (`bridge-outdated`, or no `hold` at all) is refused with `unsupported`
+  before anything reaches the provider; one that is gone or expired is
+  `interaction-stale`.
 
 ### Transcripts
 

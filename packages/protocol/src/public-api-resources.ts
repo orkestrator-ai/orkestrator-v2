@@ -313,9 +313,23 @@ export interface PublicInteractionQuestion {
   options: PublicInteractionOption[];
 }
 
+/**
+ * Countdown pause state, as the deadline's authority publishes it
+ * (`AgentInteractionHold`). Absent when nothing publishes a deadline.
+ */
+export interface PublicInteractionHold {
+  /** Whether `session.interaction.hold` can pause (or, while paused, resume) now. */
+  available: boolean;
+  /** When the countdown was paused; present only while paused. */
+  heldAt?: number;
+  /** Why a pause is limited (`provider-limit`, `upstream-may-expire`) or unavailable. */
+  reason?: string;
+}
+
 export interface PublicInteraction extends PublicInteractionRef {
   sessionId: string;
   state: string;
+  hold?: PublicInteractionHold;
   title: string;
   body?: string;
   questions: PublicInteractionQuestion[];

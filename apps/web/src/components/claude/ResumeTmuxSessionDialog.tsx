@@ -42,6 +42,7 @@ export function ResumeTmuxSessionDialog({
   if (prevFetchKey !== fetchKey) {
     setPrevFetchKey(fetchKey);
     if (fetchKey !== null) {
+      setSessions([]);
       setIsLoading(true);
       setError(null);
     }
@@ -49,12 +50,24 @@ export function ResumeTmuxSessionDialog({
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
     listPreviousSessions(environmentId)
-      .then(setSessions, (err: unknown) => {
-        console.error("[ResumeTmuxSessionDialog] Failed to list sessions:", err);
-        setError(String(err));
-      })
-      .finally(() => setIsLoading(false));
+      .then(
+        (sessions) => {
+          if (!cancelled) setSessions(sessions);
+        },
+        (err: unknown) => {
+          if (cancelled) return;
+          console.error("[ResumeTmuxSessionDialog] Failed to list sessions:", err);
+          setError(String(err));
+        },
+      )
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, environmentId]);
 
   return (

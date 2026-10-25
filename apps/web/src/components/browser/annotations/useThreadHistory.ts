@@ -8,7 +8,7 @@
  * by the thread's own entry limit. Supersession is recomputed across the
  * merged set because a snapshot only marks entries inside its own window.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   WEB_ANNOTATION_COMMANDS,
   WEB_ANNOTATION_LIMITS,
@@ -28,21 +28,29 @@ export function useThreadHistory(environmentId: string, data: WebAnnotationGetRe
   const [pagedNewer, setPagedNewer] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** The note a page request belongs to; read after its response arrives. */
-  const annotationRef = useRef(annotationId);
-  useEffect(() => {
-    annotationRef.current = annotationId;
-  }, [annotationId]);
+  // Invalidate every completion, including errors/finally, on identity changes
+  // and unmount. A generation also fences a switch away and back to the same note.
+  const generationRef = useRef(0);
+  useLayoutEffect(() => {
+    return () => {
+      generationRef.current += 1;
+    };
+  }, [environmentId, annotationId]);
 
   // Each snapshot is merged while rendering; a different note starts again.
-  const [historyFor, setHistoryFor] = useState(annotationId);
+  const [historyFor, setHistoryFor] = useState({ environmentId, annotationId });
   const [mergedData, setMergedData] = useState<WebAnnotationGetResult | null>(null);
-  if (annotationId !== historyFor || data !== mergedData) {
-    if (annotationId !== historyFor) {
-      setHistoryFor(annotationId);
+  const identityChanged =
+    environmentId !== historyFor.environmentId || annotationId !== historyFor.annotationId;
+  if (identityChanged || data !== mergedData) {
+    if (identityChanged) {
+      setHistoryFor({ environmentId, annotationId });
       setKnown(new Map());
+      setOlderCursor(null);
+      setNewerCursor(null);
       setPagedOlder(false);
       setPagedNewer(false);
+      setLoading(false);
       setError(null);
     }
     setMergedData(data);
@@ -52,8 +60,8 @@ export function useThreadHistory(environmentId: string, data: WebAnnotationGetRe
         for (const entry of data.entries) next.set(entry.id, entry);
         return bound(next);
       });
-      if (!pagedOlder) setOlderCursor(data.previousEntrySequence ?? null);
-      if (!pagedNewer) setNewerCursor(data.nextEntrySequence);
+      if (identityChanged || !pagedOlder) setOlderCursor(data.previousEntrySequence ?? null);
+      if (identityChanged || !pagedNewer) setNewerCursor(data.nextEntrySequence);
     }
   }
 
@@ -62,6 +70,7 @@ export function useThreadHistory(environmentId: string, data: WebAnnotationGetRe
       if (!annotationId || loading) return;
       const cursor = direction === "older" ? olderCursor : newerCursor;
       if (cursor === null) return;
+      const generation = generationRef.current;
       setLoading(true);
       setError(null);
       try {
@@ -73,7 +82,7 @@ export function useThreadHistory(environmentId: string, data: WebAnnotationGetRe
             : { afterSequence: cursor }),
           limit: WEB_ANNOTATION_LIMITS.entryPageItems,
         });
-        if (annotationRef.current !== annotationId) return;
+        if (generationRef.current !== generation) return;
         if (page.resetRequired) {
           // History moved under us: start again from the current snapshot.
           setKnown(new Map((data?.entries ?? []).map((entry) => [entry.id, entry])));
@@ -96,9 +105,9 @@ export function useThreadHistory(environmentId: string, data: WebAnnotationGetRe
           setNewerCursor(page.nextSequence);
         }
       } catch (pageError) {
-        setError(describeWebAnnotationError(pageError));
+        if (generationRef.current === generation) setError(describeWebAnnotationError(pageError));
       } finally {
-        setLoading(false);
+        if (generationRef.current === generation) setLoading(false);
       }
     },
     [annotationId, data, environmentId, loading, newerCursor, olderCursor],

@@ -19,3 +19,70 @@
 - **Evidence:** `orkestrator-test-run.9LICZu/` (test) and `orkestrator-test-run.ewcPRe/` (browser) under the host temporary directory.
 
 No assertion, timeout or skip was changed for these tests. Shared-host and external-drive contention is a possible contributor, not an established cause.
+
+## Request-ownership regression coverage follow-up — 2026-10-25
+
+Validation of the thread-history and tmux-resume request fences on branch
+`todo-0032-dependency-upgrades-0571b7a3a6e3`, based on `012aa5fb2`, repeated
+unrelated suite failures. None of the failing owners or their production
+implementations was changed in this follow-up.
+
+- `mise run test` reserved workspace/root/bridges/protocol slots 4/1/2/1;
+  backend used two Bun workers. Other worktrees were validating on the host.
+  Web passed all 9,582 tests. Bridges, the protocol lockfile and all other
+  non-backend workspace packages passed. The aggregate exited 1 after
+  1,159.4 s: backend reported 11,012 passed, 79 skipped and the two failures
+  below across 660 files (1,004.42 s); the initial root failure is described
+  next and was corrected before its passing rerun.
+- The initial root group reported 3,405 passed and one failure in
+  `tests/unit/test-diagnostic-bounds.test.ts`: the newly added dialog tests
+  used DOM-producing `toBeNull` assertions. Those assertions were corrected
+  to compare booleans. Both the owning diagnostic check and the complete
+  root rerun passed:
+  `mise run test:logged -- --name root-regressions -- bun test ./tests --parallel=2 --only-failures`
+  (218.1 s). This was a corrected test-convention violation, not a flake.
+- Backend `mermaid rendering > the external watchdog ends a blocked render
+  within the deadline and the browser is gone` measured 5,157 ms against
+  less than 5,000 ms (5,423.73 ms test duration); see
+  [0512](../design-canvas-and-artifacts/0512-mermaid-watchdog-elapsed-under-load.md).
+  The complete unchanged owner passed in 44.2 s:
+  `mise run test:logged -- --name mermaid-watchdog-owner -- bun --cwd=apps/backend test ./src/core/transcript-artifacts/mermaid-render.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+- Backend `local OpenCode server starts on one host > shutdown between
+  database-lock attempts prevents a retry spawn` received
+  `opencode server exited before becoming healthy (code 1, signal null)`
+  instead of `shutting down` (219.39 ms); see
+  [0723](../backend-services-and-tooling/0723-opencode-host-shutdown-retry-race.md).
+  The complete unchanged owner passed in 6.1 s:
+  `mise run test:logged -- --name opencode-shutdown-owner -- bun --cwd=apps/backend test ./src/core/opencode-host-start.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+
+`mise run test:logged -- --name browser -- mise run test:browser` ran nine
+component workers and reported 672 passed, 102 skipped and eight failures
+(594.8 s). Every failing file was then rerun alone, sequentially, with one
+worker. The command for each row was
+`mise run test:logged -- --name owner-<lowercase Spec> -- bunx playwright test --config e2e/playwright.config.ts e2e/<Spec>.spec.ts --workers=1 --output output/playwright/stale-request-<Spec>`.
+
+| Spec | Aggregate failure | Complete unchanged owner |
+| --- | --- | --- |
+| AgentLaunchDialog | Both projects retained `rel` instead of `release/2.0` at line 49. | Still fails both native suggestion cases; two other cases pass (52.8 s). Matches the base-commit comparison above. |
+| PaneBreakpoint | Mobile app-shell appendChild fallback showed transcript message 35 instead of 36 at line 140. | Pass (45.8 s). |
+| MonacoRuntime | Desktop `.monaco-editor` absent at the five-second deadline, line 25; see [0517](../web-ui/0517-monaco-runtime-browser-startup.md). | Pass (15.0 s). |
+| SidebarDrag | Desktop machine pointer reorder found two `sidebar-writes` outputs instead of one, line 151. | Pass (144.8 s). |
+| ToolGroupFold | Desktop live group growing above a released reader timed out after 30 seconds awaiting `scrollend`, line 173. | Pass (114.9 s). |
+| TranscriptPaging | Desktop native paging retained the Load earlier messages button at the five-second deadline, line 78; see [0483](../native-agents-and-transcripts/0483-transcript-paging-prepend-index-timing.md) for this scenario's earlier timing failures. | Pass (93.8 s). |
+| VirtuosoFollow | Desktop small-wheel release retained `false` instead of `auto` at the five-second deadline, line 86; see [0153](../native-agents-and-transcripts/0153-virtuoso-follow-parallel-scroll-release.md). | Pass (4.7 s). |
+
+The failed component command prevented its chained public-site suite from
+starting. That suite passed separately:
+`mise run test:logged -- --name public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts --workers=1`
+(22.9 s). All 19 new request-ownership regression cases and `mise run check`
+passed after the assertion correction.
+
+Evidence under the host temporary directory:
+`orkestrator-test-run.rvR2BT/` (repository aggregate),
+`orkestrator-test-run.wPZekI/browser.log.gz` (components), and
+`orkestrator-test-run.8AzqsX/owner-agentlaunchdialog.log.gz` (native branch
+owner). Browser traces are under `output/playwright/test-results/` and the
+per-owner `output/playwright/stale-request-<Spec>/` directories.
+The isolated passes establish intermittence for the other owners; shared-host
+contention remains a hypothesis. No failing-owner assertion, timeout or skip
+was changed.

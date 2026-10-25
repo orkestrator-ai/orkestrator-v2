@@ -266,7 +266,8 @@ export async function dockerCapacity(options: { refresh?: boolean } = {}): Promi
     });
     base = parseDockerInfo(stdout.trim());
   } catch {
-    base = parseDockerInfo("{}");
+    const topology = await detectDockerTopology();
+    base = { ...parseDockerInfo("{}"), rootless: topology.rootless };
   }
   const value = { ...base, disk: await dockerDisk(), builtInDefault: builtInResourceDefault(base) };
   capacityCache = { at: now, value };

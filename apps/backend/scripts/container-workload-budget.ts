@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { ContainerResourceLimits } from "@orkestrator/protocol/container-resources";
 import { resourceArguments, sharedMemoryMiB } from "../src/core/container-resources.js";
@@ -13,7 +14,7 @@ import { resourceArguments, sharedMemoryMiB } from "../src/core/container-resour
  *     --image orkestrator-v2:dev-<hash> \
  *     [--workloads browser,build,provider,combined] [--repeat 1] \
  *     [--budget budget=2,4096,1024] [--budget other=null,6144,4096] \
- *     [--no-unrestricted] [--source <git checkout>] [--out <file.json>]
+ *     [--no-unrestricted] [--timeout-ms 1800000] [--source <git checkout>] [--out <file.json>]
  *
  * Each run gets a fresh container from the image (entrypoint bypassed, so no
  * firewall or workspace clone; the default bridge network, so `bun install`
@@ -37,10 +38,14 @@ import { resourceArguments, sharedMemoryMiB } from "../src/core/container-resour
  * `memory.events` and `cpu.stat` are read at the end. Timings are measured
  * inside the container. The report holds sizes, counts and durations only:
  * no paths, commands, file contents or prompts. Containers are labelled
- * `app=orkestrator-workload-budget` and removed; nothing else is touched.
+ * `app=orkestrator-workload-budget` plus a unique invocation label and removed;
+ * cleanup only selects that invocation. Each workload has a 30-minute deadline
+ * (override with `--timeout-ms`); other Docker commands have a one-minute deadline.
  */
 
 const LABEL = "app=orkestrator-workload-budget";
+const RUN_LABEL = `orkestrator-workload-run=${randomUUID()}`;
+const activeCommands = new Set<Bun.Subprocess>();
 const WORKLOAD_DIR = path.join(import.meta.dir, "container-workload");
 const WORKLOADS = ["browser", "browser-single", "build", "provider", "combined"] as const;
 type Workload = (typeof WORKLOADS)[number];
@@ -69,18 +74,32 @@ function parseCondition(spec: string): Condition {
 
 async function docker(
   args: string[],
-  options: { stdin?: ReadableStream | Blob; allowFailure?: boolean } = {},
+  options: { stdin?: ReadableStream | Blob; allowFailure?: boolean; timeoutMs?: number } = {},
 ): Promise<string> {
   const child = Bun.spawn(["docker", ...args], {
     stdin: options.stdin ?? "ignore",
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
+  activeCommands.add(child);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, options.timeoutMs ?? 60_000);
+  let result: [string, string, number];
+  try {
+    result = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    activeCommands.delete(child);
+  }
+  if (timedOut) throw new Error("Docker command timed out");
+  const [stdout, stderr, code] = result;
   if (code !== 0 && !options.allowFailure) {
     throw new Error(
       `docker ${args.slice(0, 2).join(" ")} failed (${code}): ${stderr.trim().slice(0, 400)}`,
@@ -133,6 +152,7 @@ async function runOnce(
   workload: Workload,
   condition: Condition,
   source: string,
+  timeoutMs: number,
 ): Promise<Record<string, unknown>> {
   const shm = sharedMemoryMiB(condition.limits);
   const container = await docker([
@@ -140,6 +160,8 @@ async function runOnce(
     "-d",
     "--label",
     LABEL,
+    "--label",
+    RUN_LABEL,
     "--user",
     "node",
     "--shm-size",
@@ -155,6 +177,7 @@ async function runOnce(
     if (workload === "build" || workload === "combined") await copySource(container, source);
     await docker(["exec", "-d", container, "bash", "/tmp/w/sampler.sh"]);
     const started = performance.now();
+    let executionError: string | null = null;
     const output = await docker(
       [
         "exec",
@@ -171,8 +194,11 @@ async function runOnce(
             ? "BROWSERS=1 node browser.cjs"
             : `bash ${workload}.sh`,
       ],
-      { allowFailure: true },
-    );
+      { allowFailure: true, timeoutMs },
+    ).catch((error: unknown) => {
+      executionError = error instanceof Error ? error.message : String(error);
+      return "";
+    });
     const hostWallMs = Math.round(performance.now() - started);
     await docker(["exec", container, "touch", "/tmp/w/stop"], { allowFailure: true });
     let peaks: Record<string, unknown> | null = null;
@@ -198,6 +224,7 @@ async function runOnce(
       shmMiB: shm,
       hostWallMs,
       result: lastJson(output),
+      executionError,
       peaks,
       cgroup,
       containerStillRunning: state.startsWith("true"),
@@ -209,6 +236,8 @@ async function runOnce(
 }
 
 async function main(): Promise<void> {
+  const timeoutMs = Number(argument("--timeout-ms") ?? 1_800_000);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("Invalid --timeout-ms");
   const image = argument("--image");
   if (!image) throw new Error("--image is required");
   const workloads = (argument("--workloads") ?? WORKLOADS.join(","))
@@ -243,7 +272,7 @@ async function main(): Promise<void> {
   for (let index = 0; index < repeat; index += 1) {
     for (const workload of workloads) {
       for (const condition of conditions) {
-        const run = await runOnce(image, workload, condition, source);
+        const run = await runOnce(image, workload, condition, source, timeoutMs);
         runs.push({ repeat: index, ...run });
         console.log(JSON.stringify(runs.at(-1)));
       }
@@ -269,12 +298,21 @@ async function main(): Promise<void> {
 }
 
 const cleanup = async () => {
-  const ids = (await docker(["ps", "-aq", "--filter", `label=${LABEL}`], { allowFailure: true }))
+  const ids = (
+    await docker(["ps", "-aq", "--filter", `label=${RUN_LABEL}`], { allowFailure: true })
+  )
     .split("\n")
     .filter(Boolean);
   if (ids.length > 0) await docker(["rm", "-f", ...ids], { allowFailure: true });
 };
-process.on("SIGINT", () => void cleanup().finally(() => process.exit(130)));
+function cancel(exitCode: number): void {
+  void cleanup().finally(() => {
+    for (const child of activeCommands) child.kill("SIGKILL");
+    process.exit(exitCode);
+  });
+}
+process.once("SIGINT", () => cancel(130));
+process.once("SIGTERM", () => cancel(143));
 await main().catch(async (error) => {
   console.error(error instanceof Error ? error.message : String(error));
   await cleanup();

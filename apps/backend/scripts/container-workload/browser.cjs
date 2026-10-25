@@ -69,40 +69,49 @@ async function worker(index, totals) {
     if (!closing) totals.browserDisconnects += 1;
   });
   totals.launchMs.push(performance.now() - started);
-  await Promise.all(
-    Array.from({ length: PAGES }, async (_, pageIndex) => {
-      const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-      const page = await context.newPage();
-      page.on("crash", () => {
-        totals.pageCrashes += 1;
-      });
-      for (let round = 0; round < ROUNDS; round++) {
-        const roundStarted = performance.now();
+  try {
+    await Promise.all(
+      Array.from({ length: PAGES }, async (_, pageIndex) => {
+        let context;
         try {
-          await page.goto(`file://${PAGE_FILE}?b=${index}&p=${pageIndex}&r=${round}`, {
-            waitUntil: "load",
-            timeout: 120_000,
+          context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+          const page = await context.newPage();
+          page.on("crash", () => {
+            totals.pageCrashes += 1;
           });
-          await page.evaluate(async () => {
-            for (let y = 0; y < document.body.scrollHeight; y += 2000) {
-              window.scrollTo(0, y);
-              await new Promise((resolve) => requestAnimationFrame(resolve));
+          for (let round = 0; round < ROUNDS; round++) {
+            const roundStarted = performance.now();
+            try {
+              await page.goto(`file://${PAGE_FILE}?b=${index}&p=${pageIndex}&r=${round}`, {
+                waitUntil: "load",
+                timeout: 120_000,
+              });
+              await page.evaluate(async () => {
+                for (let y = 0; y < document.body.scrollHeight; y += 2000) {
+                  window.scrollTo(0, y);
+                  await new Promise((resolve) => requestAnimationFrame(resolve));
+                }
+              });
+              await page.screenshot({
+                clip: { x: 0, y: 0, width: 1920, height: 12_000 },
+                timeout: 120_000,
+              });
+              totals.roundMs.push(performance.now() - roundStarted);
+            } catch {
+              totals.roundErrors += 1;
             }
-          });
-          await page.screenshot({
-            clip: { x: 0, y: 0, width: 1920, height: 12_000 },
-            timeout: 120_000,
-          });
-          totals.roundMs.push(performance.now() - roundStarted);
+          }
         } catch {
-          totals.roundErrors += 1;
+          totals.setupFailures += 1;
+        } finally {
+          if (context) await context.close().catch(() => undefined);
         }
-      }
-      await context.close().catch(() => undefined);
-    }),
-  );
-  closing = true;
-  await browser.close().catch(() => undefined);
+      }),
+    );
+  } finally {
+    closing = true;
+    await browser.close().catch(() => undefined);
+  }
 }
 
 async function main() {
@@ -110,6 +119,7 @@ async function main() {
     launchMs: [],
     roundMs: [],
     launchFailures: 0,
+    setupFailures: 0,
     browserDisconnects: 0,
     pageCrashes: 0,
     roundErrors: 0,
@@ -129,6 +139,7 @@ async function main() {
       roundMedianMs: at(0.5),
       roundP90Ms: at(0.9),
       launchFailures: totals.launchFailures,
+      setupFailures: totals.setupFailures,
       browserDisconnects: totals.browserDisconnects,
       pageCrashes: totals.pageCrashes,
       roundErrors: totals.roundErrors,

@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { SegmentedSelector } from "@/components/ui/segmented-selector";
 import * as backend from "@/lib/backend";
 import { useAccountMachine } from "./account-machine";
+import { useSettingsConfig } from "./settings-config";
 
 export interface ResourceLimitDraft {
   cpus: string;
@@ -133,6 +134,7 @@ export function ContainerResourceLimitsSettings({
   const [capacity, setCapacity] = useState<DockerCapacity | null>(null);
   const [saving, setSaving] = useState(false);
   const { machine } = useAccountMachine();
+  const { setConfig } = useSettingsConfig();
 
   useEffect(() => {
     let cancelled = false;
@@ -165,6 +167,7 @@ export function ContainerResourceLimitsSettings({
             : null,
         machine,
       );
+      setConfig(await backend.getConfig(machine));
       toast.success("Resource limits saved", {
         description: "They apply to containers created or rebuilt from now on.",
       });
@@ -194,7 +197,7 @@ export function ContainerResourceLimitsSettings({
         <p className="text-xs text-muted-foreground">
           {mode === "default"
             ? builtIn
-              ? `On this Docker: ${describeBuiltInDefault(builtIn.limits)}. Contains a runaway environment without slowing normal work.`
+              ? `On this Docker: ${describeBuiltInDefault(builtIn.limits)}. ${Object.values(builtIn.limits).some((limit) => limit !== null) ? "Contains a runaway environment without slowing normal work." : "No built-in limit applies on this Docker."}`
               : "Measured limits that contain a runaway environment without slowing normal work."
             : mode === "unrestricted"
               ? "No limits: one environment can use all of Docker's memory and processes."

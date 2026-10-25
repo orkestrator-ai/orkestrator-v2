@@ -736,7 +736,6 @@ export abstract class StorageConfig extends StorageProjects {
     });
   }
 
-  /** Turn the startup GitHub CLI reminder off, or back on. */
   /**
    * The Settings → Container budget for new runtimes. `undefined` removes it,
    * so new runtimes get the built-in default; a budget whose limits are all
@@ -756,6 +755,7 @@ export abstract class StorageConfig extends StorageProjects {
     });
   }
 
+  /** Turn the startup GitHub CLI reminder off, or back on. */
   async setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadOwnConfig();

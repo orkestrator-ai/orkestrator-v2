@@ -158,3 +158,41 @@ describe("environment resources section", () => {
     expect(screen.getByText(/cannot enforce: memory/)).toBeTruthy();
   });
 });
+
+describe("clearing an environment budget", () => {
+  afterEach(() => {
+    cleanup();
+    invokeMock.mockImplementation(() => Promise.resolve());
+  });
+  for (const source of ["global", "default"] as const) {
+    test(`unchecking environment limits saves null and inherits ${source}`, async () => {
+      const inherited = { ...policy, source };
+      const update = install(mock((_args: Record<string, unknown>) => inherited));
+      const base = invokeMock.getMockImplementation()!;
+      let saved = false;
+      invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+        if (command === "get_environment_resources")
+          return saved ? inherited : { ...policy, source: "environment" };
+        if (command === "update_environment_resources") saved = true;
+        return base(command, args);
+      });
+      render(
+        <EnvironmentResourcesSection environmentId="env-r" containerId="c1" dockerAvailable />,
+      );
+      await screen.findByText(/2 CPU · 4 GB/);
+      const checkbox = screen.getByRole("checkbox", {
+        name: "Use limits specific to this environment",
+      });
+      expect((checkbox as HTMLInputElement).checked).toBe(true);
+      fireEvent.click(checkbox);
+      fireEvent.click(screen.getByRole("button", { name: "Save resource limits" }));
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      expect(update.mock.calls[0]?.[0]).toEqual({
+        environmentId: "env-r",
+        limits: null,
+        applyNow: true,
+      });
+      await screen.findByText(source === "global" ? "(Settings default)" : "(built-in default)");
+    });
+  }
+});

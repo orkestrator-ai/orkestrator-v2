@@ -14,7 +14,7 @@ for _ in $(seq 1 50); do
 done
 now() { date +%s%3N; }
 agent() {
-  local index=$1 turn started rc
+  local index=$1 turn started rc tools
   mkdir -p "/tmp/w/agent-$index"
   for turn in $(seq 1 "$TURNS"); do
     started=$(now)
@@ -26,7 +26,8 @@ agent() {
         --output-format stream-json --verbose --dangerously-skip-permissions \
         > "/tmp/w/agent-$index/turn-$turn.jsonl" 2>/dev/null)
     rc=$?
-    echo "$index $turn $rc $(( $(now) - started )) $(grep -c '"type":"tool_result"' "/tmp/w/agent-$index/turn-$turn.jsonl" 2>/dev/null || echo 0)" >> /tmp/w/provider.tsv
+    tools=$(grep -c '"type":"tool_result"' "/tmp/w/agent-$index/turn-$turn.jsonl" 2>/dev/null) || true
+    printf '%s %s %s %s %s\n' "$index" "$turn" "$rc" "$(( $(now) - started ))" "${tools:-0}" >> /tmp/w/provider.tsv
   done
 }
 : > /tmp/w/provider.tsv

@@ -149,11 +149,6 @@ import {
 import { recoverInterruptedEnvironmentMoves } from "./environment-move.js";
 import { createBackendChangeTracking } from "./change-tracking/backend-wiring.js";
 import {
-  configureTerminalHistoryRetention,
-  flushTerminalHistories,
-  pruneTerminalHistoryStorage,
-} from "./terminal-history.js";
-import {
   cancelScheduledEnvironmentCleanup,
   runStartupEnvironmentCleanup,
 } from "./environment-cleanup-reconciler.js";
@@ -1217,13 +1212,13 @@ export class OrkestratorBackend {
       );
     });
     const terminalHistoryConfig = (await this.context.storage.loadConfig()).global;
-    configureTerminalHistoryRetention({
+    this.runtime.terminals.history.configureRetention({
       enabled: terminalHistoryConfig.terminalHistoryEnabled,
       sessionMb: terminalHistoryConfig.terminalHistoryRetentionMb,
       globalMb: terminalHistoryConfig.terminalHistoryGlobalRetentionMb,
       days: terminalHistoryConfig.terminalHistoryRetentionDays,
     });
-    await pruneTerminalHistoryStorage(this.context.storage.getDataDir());
+    await this.runtime.terminals.history.pruneStorage(this.context.storage.getDataDir());
     if (!this.terminalStartupReconciled) {
       // A terminal session id names state owned by this backend process. On a
       // renderer-only reload the backend stays alive and the id remains valid;
@@ -2009,7 +2004,7 @@ export class OrkestratorBackend {
         }
         this.workflowAdmission.close();
         await lifecycleDrain;
-        await flushTerminalHistories(true);
+        await this.runtime.terminals.history.flush(true);
         await this.runtime.localServers.shutdown({
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });

@@ -57,7 +57,6 @@ import {
 } from "./agent-accounts-last-usage.js";
 import { readAgentAccountPlanUsage, readPlanUsage, type PlanUsageReader } from "./plan-usage.js";
 import { promoteClaudeLogin, removeTemporaryClaudeLogin } from "./agent-accounts-promotion.js";
-import { terminalAccountHomes } from "./terminal-account-usage.js";
 
 /**
  * Added Claude and Codex logins: registry, switching, sign-in and per-account
@@ -279,11 +278,7 @@ export async function removeAgentAccount(
     throw new Error("An agent is still running on this account. Try again once it is idle.");
   }
   return withAccountMutation(async () => {
-    if (
-      Array.from(terminalAccountHomes.values()).some(
-        (home) => home === homeFor(context, platform, accountId),
-      )
-    ) {
+    if (context.runtime.terminals.isAccountHomeInUse(homeFor(context, platform, accountId))) {
       throw new Error(
         "A terminal is still running on this account. Close it before removing the account.",
       );

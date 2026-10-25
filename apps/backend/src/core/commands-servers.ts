@@ -83,7 +83,6 @@ import {
   resolveManagedAcpBinary,
   resolveBunBinary,
 } from "./commands-agent-support.js";
-import { deleteTerminalHistories } from "./terminal-history.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 import { environmentCleanupLedger } from "./environment-cleanup-ledger.js";
 import { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } from "./environment-cleanup.js";
@@ -1405,7 +1404,7 @@ export async function deleteEnvironment(
           "Terminal process trees are still running; environment deletion can be retried",
         );
       }
-      await deleteTerminalHistories({
+      await context.runtime.terminals.history.deleteHistories({
         dataDir: storage.getDataDir(),
         environmentId,
       });
@@ -1542,7 +1541,7 @@ export async function deleteEnvironment(
       // storage or filesystem I/O during the first sweep. Close anything that
       // became visible before deletion completed.
       context.runtime.terminals.cleanupSessionsForEnvironment(environmentId);
-      await deleteTerminalHistories({
+      await context.runtime.terminals.history.deleteHistories({
         dataDir: storage.getDataDir(),
         environmentId,
       });

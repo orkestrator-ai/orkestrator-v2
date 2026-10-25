@@ -1,5 +1,4 @@
 import { resetOpenCodeHostStartForTests } from "./opencode-host-start.js";
-import { terminalHistoryTesting } from "./terminal-history.js";
 import {
   ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
   BRANCH_REF_EXISTS_SENTINEL,
@@ -98,7 +97,4 @@ export const __testing = {
   waitForUnhealthy,
   // Module state outside `BackendRuntime` that fixtures reset between tests.
   resetOpenCodeHostStart: resetOpenCodeHostStartForTests,
-  resetTerminalHistory(): void {
-    terminalHistoryTesting.clear();
-  },
 };

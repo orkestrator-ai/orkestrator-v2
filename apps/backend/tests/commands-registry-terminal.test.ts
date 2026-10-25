@@ -11,7 +11,6 @@ import * as containerAccounts from "../src/core/agent-accounts-containers";
 import type { AgentAccountStore } from "../src/core/agent-accounts-store";
 import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/terminal-runtime";
 import { MAX_TEXT_FILE_BYTES } from "../src/core/path-safety";
-import { terminalAccountHomes } from "../src/core/terminal-account-usage";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -46,13 +45,6 @@ const {
   withGitSubcommandLog,
 } = await createCommandFixtures();
 
-const {
-  configureTerminalHistory,
-  configureTerminalHistoryRetention,
-  flushTerminalHistories,
-  getTerminalStateSnapshot,
-  terminalHistoryTesting,
-} = await import("../src/core/terminal-history");
 const { beginSetupPreparationSession } = await import("../src/core/commands-environment");
 
 type RunCommand = typeof import("../src/core/shell").runCommand;
@@ -2552,9 +2544,11 @@ printf '["exists","missing"]'
       const launchEnv = ptySpawn.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv | undefined;
       expect(launchEnv?.CODEX_HOME).toBe(accountHome);
       expect(launchEnv?.OPENAI_API_KEY).toBeUndefined();
-      expect(terminalAccountHomes.get(`${sessionId}:${accountHome}`)).toBe(accountHome);
+      expect(context.runtime.terminals.accountHome(`${sessionId}:${accountHome}`)).toBe(
+        accountHome,
+      );
       await commands.get("close_local_terminal_session")?.({ sessionId }, context);
-      expect(terminalAccountHomes.has(`${sessionId}:${accountHome}`)).toBe(false);
+      expect(context.runtime.terminals.accountHome(`${sessionId}:${accountHome}`)).toBeUndefined();
     } finally {
       if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = originalApiKey;
@@ -2574,7 +2568,7 @@ printf '["exists","missing"]'
     ).sessionId;
     await commands.get("start_local_terminal_session")?.({ sessionId }, context);
     for (let index = 0; index < 8; index += 1) {
-      configureTerminalHistory({
+      context.runtime.terminals.history.configure({
         sessionId: `saturated-${index}`,
         dataDir: context.storage.getDataDir(),
         stableIdentity: `saturated-terminal-${index}`,
@@ -2587,13 +2581,27 @@ printf '["exists","missing"]'
       commands.get("local_terminal_resize")?.({ sessionId, cols: 1_000, rows: 1_000 }, context),
     ).toEqual({ delivered: true });
     expect(ptyProcesses[0]?.resize).toHaveBeenCalledWith(1_000, 1_000);
-    await flushTerminalHistories();
+    await context.runtime.terminals.history.flush();
   });
 
   test("contains terminal-history checkpoint failures on PTY exit", async () => {
     const worktreePath = await createTempDir("ork-electron-terminal-history-exit-");
     const environment = createEnvironment({ worktreePath });
-    const { context } = createContext(environment);
+    let failSerialization = false;
+    let serializationAttempted = false;
+    const { context } = createContext(environment, {
+      runtimeOptions: {
+        terminals: {
+          history: {
+            serializeHook: () => {
+              if (!failSerialization) return;
+              serializationAttempted = true;
+              throw new Error("snapshot too large");
+            },
+          },
+        },
+      },
+    });
     const commands = createCommandRegistry();
     const sessionId = terminalSessionResult(
       await commands.get("create_local_terminal_session")?.(
@@ -2603,11 +2611,7 @@ printf '["exists","missing"]'
     ).sessionId;
     await commands.get("start_local_terminal_session")?.({ sessionId }, context);
 
-    let serializationAttempted = false;
-    terminalHistoryTesting.setSerializeHook(() => {
-      serializationAttempted = true;
-      throw new Error("snapshot too large");
-    });
+    failSerialization = true;
     try {
       ptyProcesses[0]?.emitExit({ exitCode: 0 });
       await waitForCondition(
@@ -2615,12 +2619,11 @@ printf '["exists","missing"]'
         "the terminal history completion checkpoint",
       );
     } finally {
-      terminalHistoryTesting.setSerializeHook(null);
+      failSerialization = false;
     }
 
-    const snapshot = await getTerminalStateSnapshot(sessionId);
+    const snapshot = await context.runtime.terminals.history.stateSnapshot(sessionId);
     expect(snapshot).toMatchObject({ completed: true, historyGap: true });
-    terminalHistoryTesting.clear();
   });
 
   test("creates and attaches terminals and setup sessions when history admission is exhausted", async () => {
@@ -2628,9 +2631,9 @@ printf '["exists","missing"]'
     const environment = createEnvironment({ worktreePath });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    configureTerminalHistoryRetention({ sessionMb: 8, globalMb: 128, days: 7 });
+    context.runtime.terminals.history.configureRetention({ sessionMb: 8, globalMb: 128, days: 7 });
     for (let index = 0; index < 42; index += 1) {
-      configureTerminalHistory({
+      context.runtime.terminals.history.configure({
         sessionId: `admission-${index}`,
         dataDir: context.storage.getDataDir(),
         stableIdentity: `admission-terminal-${index}`,
@@ -2647,7 +2650,7 @@ printf '["exists","missing"]'
     );
     expect(created.created).toBe(true);
     expect(created.sessionId).toBeString();
-    expect(await getTerminalStateSnapshot(created.sessionId)).toBeNull();
+    expect(await context.runtime.terminals.history.stateSnapshot(created.sessionId)).toBeNull();
     await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
       const containerCreated = terminalSessionResult(
         await commands.get("create_terminal_session")?.(
@@ -2657,19 +2660,20 @@ printf '["exists","missing"]'
       );
       expect(containerCreated.created).toBe(true);
       expect(containerCreated.sessionId).toBeString();
-      expect(await getTerminalStateSnapshot(containerCreated.sessionId)).toBeNull();
+      expect(
+        await context.runtime.terminals.history.stateSnapshot(containerCreated.sessionId),
+      ).toBeNull();
       const attached = await commands.get("attach_terminal")?.(
         { containerId: "container-without-history", cols: 80, rows: 24 },
         context,
       );
       expect(attached).toBeString();
-      expect(await getTerminalStateSnapshot(String(attached))).toBeNull();
+      expect(await context.runtime.terminals.history.stateSnapshot(String(attached))).toBeNull();
     });
     const setupSessionId = beginSetupPreparationSession(environment, context);
     expect(setupSessionId).toBe(`${environment.id}:setup`);
-    expect(await getTerminalStateSnapshot(setupSessionId)).toBeNull();
-    await flushTerminalHistories();
-    terminalHistoryTesting.clear();
+    expect(await context.runtime.terminals.history.stateSnapshot(setupSessionId)).toBeNull();
+    await context.runtime.terminals.history.flush();
   });
 
   test("atomically bootstraps a terminal session at most once", async () => {

@@ -1519,7 +1519,6 @@ exit 0
       resetLocalServerHooks();
       commandTesting.resetOpenCodeHostStart();
       commandTesting.resetDockerContainerStateCache();
-      commandTesting.resetTerminalHistory();
       await Promise.all(
         tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
       );

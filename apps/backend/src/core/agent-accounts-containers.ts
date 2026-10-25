@@ -17,7 +17,6 @@ import { dockerExec } from "./commands-container-exec.js";
 import {
   buildSyncContainerClaudeCredentialCommand,
   resolveContainerClaudeCredentials,
-  SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND,
 } from "./commands-files.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
@@ -68,8 +67,9 @@ import {
  * Pi OAuth logins rotate theirs, so containers receive these logins access-only
  * (`accessOnlyLoginText`). All five are re-read from the host before every
  * start. Claude, Grok, OpenCode and Pi are also pushed before every bridge
- * start; Claude is kept current while containers run by
- * `container-claude-login-keeper.ts`.
+ * start. While containers run, Claude is kept current by
+ * `container-claude-login-keeper.ts` and the other three by
+ * `container-login-file-watcher.ts`.
  */
 
 const ACCOUNT_MARKER: Record<AgentAccountPlatform, string> = {
@@ -136,6 +136,156 @@ async function readLoginFile(file: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+type HostLoginFile =
+  | { kind: "present"; text: string }
+  | { kind: "absent" }
+  | { kind: "unreadable" };
+
+/** A host login file, telling a missing one (signed out) from one that cannot be read. */
+async function readHostLoginFile(file: string): Promise<HostLoginFile> {
+  try {
+    await fs.lstat(file);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? { kind: "absent" }
+      : { kind: "unreadable" };
+  }
+  const text = await readLoginFile(file);
+  return text === undefined ? { kind: "unreadable" } : { kind: "present", text };
+}
+
+/**
+ * Whether the host has signed out of Codex or Grok, as opposed to holding a
+ * login that has expired: no file, or a readable one holding no login at all.
+ * An unreadable file says nothing and never counts.
+ */
+function hostSignedOut(provider: "codex" | "grok", host: HostLoginFile): boolean {
+  if (host.kind === "absent") return true;
+  if (host.kind !== "present") return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(host.text);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const record = parsed as Record<string, unknown>;
+  if (provider === "codex") {
+    const apiKey = record.OPENAI_API_KEY;
+    return (
+      (record.tokens === undefined || record.tokens === null) &&
+      !(typeof apiKey === "string" && apiKey.trim())
+    );
+  }
+  return !Object.values(record).some((entry) => entry && typeof entry === "object");
+}
+
+/**
+ * Remove the logins a container imported from the host, after the host signed
+ * out. An imported login is recognisable by its blank refresh token, which
+ * staging, every push and the entrypoint give it. A login made inside the
+ * container keeps its refresh token until the next restart blanks it, so it
+ * is kept; an API key cannot be told apart and is kept too. Prints `removed`
+ * when anything changed.
+ */
+function buildDropImportedLoginCommand(file: string, kind: "codex" | "grok"): string {
+  const script = `
+const fs = require("fs");
+const path = require("path");
+const [file, kind] = process.argv.slice(1);
+let login;
+try {
+  if (fs.lstatSync(file).isSymbolicLink()) process.exit(0);
+  login = JSON.parse(fs.readFileSync(file, "utf8"));
+} catch {
+  process.exit(0);
+}
+if (!login || typeof login !== "object" || Array.isArray(login)) process.exit(0);
+let changed = false;
+if (kind === "codex") {
+  const tokens = login.tokens;
+  if (tokens && typeof tokens === "object" && tokens.refresh_token === "") {
+    delete login.tokens;
+    delete login.last_refresh;
+    delete login.auth_mode;
+    changed = true;
+  }
+} else {
+  for (const [key, entry] of Object.entries(login)) {
+    if (entry && typeof entry === "object" && entry.refresh_token === "") {
+      delete login[key];
+      changed = true;
+    }
+  }
+}
+if (!changed) process.exit(0);
+const empty = kind === "codex"
+  ? !(typeof login.OPENAI_API_KEY === "string" && login.OPENAI_API_KEY.trim())
+  : Object.keys(login).length === 0;
+if (empty) {
+  fs.rmSync(file, { force: true });
+} else {
+  const temporary = path.join(path.dirname(file), ".auth.json." + process.pid + ".tmp");
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(login), { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary, file);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+process.stdout.write("removed");`;
+  return `node -e ${quoteShell(script)} ${quoteShell(file)} ${kind}`;
+}
+
+export const DROP_IMPORTED_LOGIN_COMMAND = {
+  codex: buildDropImportedLoginCommand(CONTAINER_CODEX_AUTH_FILE, "codex"),
+  grok: buildDropImportedLoginCommand(CONTAINER_GROK_AUTH_FILE, "grok"),
+} as const;
+
+/** Test seam: the drop command against another file. */
+export { buildDropImportedLoginCommand };
+
+/**
+ * A host sign-out from Codex reaches a container that never used an added
+ * account (an account switch already removes the copy through
+ * `pushContainerLogin`). Without this the container would keep its imported
+ * access-only copy, still valid for up to ten days. An expired host login
+ * leaves the copy alone: it is no newer than the host's, so it has lapsed too.
+ * The idle bridge is stopped so the next start runs signed out; one with live
+ * work keeps going until it is idle and next starts.
+ */
+async function dropImportedCodexLoginAfterHostSignOut(
+  context: CommandContext,
+  environment: Environment,
+  containerId: string,
+  bridge: ContainerBridgeControl | null,
+  runners: ContainerRunners,
+): Promise<void> {
+  const { global } = await context.storage.loadConfig();
+  if (!providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, "codex")) {
+    return;
+  }
+  const home = hostStagingSources(context).codexHome;
+  const host = home ? await readHostLoginFile(path.join(home, "auth.json")) : null;
+  if (!host || !hostSignedOut("codex", host)) return;
+  if (await context.nativeAgents?.hasObservedLiveWork(environment.id, "codex")) return;
+  const current = await context.storage.getEnvironment(environment.id);
+  if (
+    !current?.containerId ||
+    !containerIdMatches(current.containerId, containerId) ||
+    !providerCredentialsAllowed(
+      context,
+      (await context.storage.loadConfig()).global.enabledAgentPlatforms,
+      current,
+      "codex",
+    )
+  ) {
+    return;
+  }
+  const result = await runners.exec(containerId, DROP_IMPORTED_LOGIN_COMMAND.codex);
+  if (result.trim() === "removed" && bridge && (await bridge.isRunning())) await bridge.stop();
 }
 
 /** Where the host login lives for staging, exactly as `portableInputSpec` reads it. */
@@ -291,8 +441,16 @@ export async function refreshStagedAgentAccountLogins(
   }
 }
 
-const PUSHED_LOGIN_PROVIDERS = ["grok", "opencode", "pi"] as const;
-type PushedLoginProvider = (typeof PUSHED_LOGIN_PROVIDERS)[number];
+export const PUSHED_LOGIN_PROVIDERS = ["grok", "opencode", "pi"] as const;
+export type PushedLoginProvider = (typeof PUSHED_LOGIN_PROVIDERS)[number];
+
+/** The host file a pushed login is read from, or undefined when this profile has none. */
+export function pushedLoginHostFile(
+  context: CommandContext,
+  provider: PushedLoginProvider,
+): string | undefined {
+  return PUSHED_LOGINS[provider].hostFile(context);
+}
 
 /**
  * Keep credential staging and its start hand-off together. A no-op start must
@@ -461,10 +619,13 @@ node -e ${quoteShell(script)} ${quoteShell(file)}
  * OAuth plugins read it (`Auth.get`) on each request, so a bridge that is
  * reused picks a renewed login up too; only a provider first signed in after
  * an OpenCode server started waits for that server to restart, as on the
- * host. A host with no usable login leaves the container's copy alone, as the
- * Claude sync does: it is either still valid or already signed out on its
- * own. OpenCode and Pi still strip a refresh token the copy holds for one of
- * the host's rotating providers (`providerAuthMergePayload`).
+ * host. A host whose login has expired leaves the container's copy alone, as
+ * the Claude sync does: it is either still valid or already signed out on its
+ * own. A host signed out of Grok (no `auth.json`, or one holding no login) has
+ * the container's imported copy removed too (`dropImportedLoginAfterHostSignOut`).
+ * OpenCode and Pi still strip a refresh token the copy holds for one of the
+ * host's rotating providers (`providerAuthMergePayload`). Also run by
+ * `ContainerLoginFileWatcher` whenever the host's file changes.
  */
 export async function syncContainerLogin(
   context: CommandContext,
@@ -497,20 +658,22 @@ export async function syncContainerLoginUnlocked(
       return;
     }
     const source = login.hostFile(context);
-    const text = source ? await readLoginFile(source) : undefined;
-    const payload = text === undefined ? undefined : login.payload(text);
+    const host = source ? await readHostLoginFile(source) : { kind: "absent" as const };
+    const payload = host.kind === "present" ? login.payload(host.text) : undefined;
+    const signedOut = provider === "grok" && hostSignedOut("grok", host);
     // Revocation is persisted before its queued cleanup. Re-read after host I/O
     // so a revoke requested during the read also fences this delivery.
     const current = await context.storage.getEnvironment(environment.id);
     const config = await context.storage.loadConfig();
     if (
-      payload &&
+      (payload || signedOut) &&
       current &&
       current.containerId &&
       containerIdMatches(current.containerId, containerId) &&
       providerCredentialsAllowed(context, config.global.enabledAgentPlatforms, current, provider)
     ) {
-      await runners.pipe(containerId, login.command, payload);
+      if (payload) await runners.pipe(containerId, login.command, payload);
+      else await runners.exec(containerId, DROP_IMPORTED_LOGIN_COMMAND.grok);
     }
   } catch (error) {
     logFailure(`Failed to sync the ${login.label} login into the container`, error);
@@ -526,9 +689,125 @@ async function containerClaudeCredentials(
   context: CommandContext,
   global: AppConfig["global"],
   active: ResolvedAgentAccount,
-): Promise<string | undefined> {
-  return accessOnlyLoginText("claude", await activeClaudeCredentials(context, global, active));
+): Promise<ClaudeLoginHandoff | undefined> {
+  return claudeLoginHandoff(await activeClaudeCredentials(context, global, active));
 }
+
+/**
+ * What a container is handed for Claude: the access-only login, and digests of
+ * every MCP refresh token the host has been seen to hold
+ * (`buildMergeContainerClaudeCredentialCommand`). Never a token itself.
+ */
+export interface ClaudeLoginHandoff {
+  /** The `stdin` for the merge command. */
+  payload: string;
+}
+
+/** The host's MCP refresh-token digests, most recent first, per `mcpOAuth` key. */
+const hostMcpRefreshDigests = new Map<string, string[]>();
+const MAX_MCP_DIGESTS_PER_SERVER = 8;
+const MAX_MCP_SERVERS = 128;
+
+function rememberHostMcpRefreshTokens(credentials: string): void {
+  let mcpOAuth: unknown;
+  try {
+    mcpOAuth = (JSON.parse(credentials) as { mcpOAuth?: unknown } | null)?.mcpOAuth;
+  } catch {
+    return;
+  }
+  if (!mcpOAuth || typeof mcpOAuth !== "object" || Array.isArray(mcpOAuth)) return;
+  for (const [key, entry] of Object.entries(mcpOAuth)) {
+    const token = (entry as { refreshToken?: unknown } | null)?.refreshToken;
+    if (typeof token !== "string" || !token.trim()) continue;
+    const digest = createHash("sha256").update(token).digest("hex");
+    const known = hostMcpRefreshDigests.get(key) ?? [];
+    hostMcpRefreshDigests.delete(key);
+    hostMcpRefreshDigests.set(
+      key,
+      [digest, ...known.filter((value) => value !== digest)].slice(0, MAX_MCP_DIGESTS_PER_SERVER),
+    );
+  }
+  for (const key of hostMcpRefreshDigests.keys()) {
+    if (hostMcpRefreshDigests.size <= MAX_MCP_SERVERS) break;
+    hostMcpRefreshDigests.delete(key);
+  }
+}
+
+/** The host's whole Claude credential as a container handoff; undefined when nothing is usable. */
+export function claudeLoginHandoff(
+  credentials: string | undefined,
+): ClaudeLoginHandoff | undefined {
+  const text = accessOnlyLoginText("claude", credentials);
+  if (!text || credentials === undefined) return undefined;
+  rememberHostMcpRefreshTokens(credentials);
+  return {
+    payload: JSON.stringify({
+      login: JSON.parse(text) as unknown,
+      hostMcpRefresh: Object.fromEntries(hostMcpRefreshDigests),
+    }),
+  };
+}
+
+/** Test seam: forget the MCP refresh tokens seen on the host. */
+export function resetHostMcpRefreshDigests(): void {
+  hostMcpRefreshDigests.clear();
+}
+
+/**
+ * Write the host's access-only Claude login (`{ login, hostMcpRefresh }` on
+ * stdin) into a container, keeping the MCP logins the container made itself.
+ *
+ * The host's MCP logins reach a container without refresh tokens, so they
+ * lapse with their access tokens. A user who signs in to an MCP server inside
+ * the container gets a login of the container's own, refresh token included,
+ * which is its to refresh: it shares nothing with the host. This keeps such an
+ * entry across every push. An entry is the container's own when it holds a
+ * refresh token that is not one the host was seen to hold for that server
+ * (`hostMcpRefresh`, SHA-256 digests); one that matches is a stale copy of the
+ * host's and gives way to the host's access-only entry, or is dropped. The
+ * subscription login (`claudeAiOauth`) is always the host's. A symlinked or
+ * unreadable file is replaced, never followed.
+ */
+export function buildMergeContainerClaudeCredentialCommand(
+  file = CONTAINER_CLAUDE_CREDENTIAL_FILE,
+): string {
+  const script = `
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const file = process.argv[1];
+const payload = JSON.parse(fs.readFileSync(0, "utf8"));
+const next = payload && payload.login;
+if (!next || typeof next !== "object" || Array.isArray(next)) process.exit(1);
+const host = payload.hostMcpRefresh && typeof payload.hostMcpRefresh === "object" ? payload.hostMcpRefresh : {};
+let current;
+try {
+  if (!fs.lstatSync(file).isSymbolicLink()) current = JSON.parse(fs.readFileSync(file, "utf8"));
+} catch {}
+const own = current && typeof current === "object" && current.mcpOAuth && typeof current.mcpOAuth === "object" && !Array.isArray(current.mcpOAuth) ? current.mcpOAuth : {};
+for (const [key, entry] of Object.entries(own)) {
+  const token = entry && typeof entry === "object" ? entry.refreshToken : undefined;
+  if (typeof token !== "string" || !token.trim()) continue;
+  const digest = crypto.createHash("sha256").update(token).digest("hex");
+  if (Array.isArray(host[key]) && host[key].includes(digest)) continue;
+  const servers = next.mcpOAuth && typeof next.mcpOAuth === "object" && !Array.isArray(next.mcpOAuth) ? next.mcpOAuth : {};
+  next.mcpOAuth = { ...servers, [key]: entry };
+}
+fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+const temporary = path.join(path.dirname(file), ".credentials." + process.pid + ".tmp");
+try {
+  fs.writeFileSync(temporary, JSON.stringify(next), { mode: 0o600, flag: "wx" });
+  fs.renameSync(temporary, file);
+} finally {
+  fs.rmSync(temporary, { force: true });
+}`;
+  return `set -e
+umask 077
+node -e ${quoteShell(script)} ${quoteShell(file)}
+`;
+}
+
+export const SYNC_CONTAINER_CLAUDE_LOGIN_COMMAND = buildMergeContainerClaudeCredentialCommand();
 
 /** The active account's whole Claude credential, refresh token included. Never leaves the host. */
 export async function activeClaudeCredentials(
@@ -666,7 +945,7 @@ async function freshContainerClaudeCredentials(
   context: CommandContext,
   global: AppConfig["global"],
   account?: ResolvedAgentAccount,
-): Promise<string | undefined> {
+): Promise<ClaudeLoginHandoff | undefined> {
   if (global.useHostClaudeCredentials === false) return undefined;
   const active = account ?? (await resolveActiveAgentAccount(context, "claude"));
   // MCP entries can survive an expired subscription login. Always run the due
@@ -689,10 +968,10 @@ function loginDigest(text: string): string {
 async function pipeClaudeLogin(
   runners: ContainerRunners,
   containerId: string,
-  text: string,
+  handoff: ClaudeLoginHandoff,
 ): Promise<void> {
-  await runners.pipe(containerId, SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND, text);
-  pushedClaudeLogins.set(containerId, loginDigest(text));
+  await runners.pipe(containerId, SYNC_CONTAINER_CLAUDE_LOGIN_COMMAND, handoff.payload);
+  pushedClaudeLogins.set(containerId, loginDigest(handoff.payload));
 }
 
 async function removeClaudeLogin(runners: ContainerRunners, containerId: string): Promise<void> {
@@ -716,11 +995,16 @@ async function restrictClaudeLogin(runners: ContainerRunners, containerId: strin
  * With no usable token to hand over, `restrictWhenUnusable` strips any refresh
  * token the container's copy still holds instead. Caller holds the Claude
  * bridge-operation queue. Returns whether anything was written.
+ *
+ * `handover` is the login the keeper already read for this pass. It is used
+ * when it belongs to the account and generation this sync pins, so one pass
+ * reads the host login once (a `security` call on macOS) however many
+ * containers it keeps current; anything else reads the login afresh.
  */
 export async function syncContainerClaudeLoginUnlocked(
   context: CommandContext,
   containerId: string,
-  options: { restrictWhenUnusable?: boolean; runners?: ContainerRunners } = {},
+  options: ClaudeLoginSyncOptions = {},
 ): Promise<boolean> {
   const runners = options.runners ?? defaultRunners;
   try {
@@ -746,7 +1030,13 @@ export async function syncContainerClaudeLoginUnlocked(
         : {}),
     };
     if ((await readMarker(runners, containerId, "claude")) !== expected) return false;
-    const text = await freshContainerClaudeCredentials(context, global, active);
+    const handover = options.handover;
+    const text =
+      handover &&
+      handover.account.accountId === accountId &&
+      handover.account.loginGeneration === generation
+        ? claudeLoginHandoff(handover.credentials)
+        : await freshContainerClaudeCredentials(context, global, active);
     // Revocation is persisted before its queued cleanup. Re-read after host I/O
     // so a revoke requested during the read also fences this delivery.
     const current = await context.storage.getEnvironment(environment.id);
@@ -769,7 +1059,7 @@ export async function syncContainerClaudeLoginUnlocked(
       if (options.restrictWhenUnusable) await restrictClaudeLogin(runners, containerId);
       return false;
     }
-    if (pushedClaudeLogins.get(containerId) === loginDigest(text)) return false;
+    if (pushedClaudeLogins.get(containerId) === loginDigest(text.payload)) return false;
     await pipeClaudeLogin(runners, containerId, text);
     return true;
   } catch (error) {
@@ -778,11 +1068,26 @@ export async function syncContainerClaudeLoginUnlocked(
   }
 }
 
+/**
+ * The active Claude account's whole login, read once by the keeper for a pass.
+ * It never leaves the host: a sync derives the access-only handoff from it.
+ */
+export interface ClaudeLoginHandover {
+  account: ResolvedAgentAccount;
+  credentials: string | undefined;
+}
+
+export interface ClaudeLoginSyncOptions {
+  restrictWhenUnusable?: boolean;
+  runners?: ContainerRunners;
+  handover?: ClaudeLoginHandover;
+}
+
 /** `syncContainerClaudeLoginUnlocked` under the container's Claude bridge-operation queue. */
 export async function syncContainerClaudeLogin(
   context: CommandContext,
   containerId: string,
-  options: { restrictWhenUnusable?: boolean; runners?: ContainerRunners } = {},
+  options: ClaudeLoginSyncOptions = {},
 ): Promise<boolean> {
   const operationId = await containerBridgeOperationId(context, containerId);
   return enqueueContainerBridgeOperation(context, "claude", operationId, () =>
@@ -1043,8 +1348,18 @@ export async function reconcileContainerAgentAccount(
     !loginRenewed &&
     !(await accountHasBeenUsed(context, platform)) &&
     !(platform === "claude" && global.useHostClaudeCredentials === false)
-  )
+  ) {
+    if (platform === "codex") {
+      await dropImportedCodexLoginAfterHostSignOut(
+        context,
+        environment,
+        containerId,
+        bridge,
+        runners,
+      );
+    }
     return;
+  }
   if (!providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, platform)) {
     return;
   }

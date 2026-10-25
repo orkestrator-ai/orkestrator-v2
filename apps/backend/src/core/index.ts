@@ -43,6 +43,8 @@ import {
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
 import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
+import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
+import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { setHostClaudeLoginRefresher } from "./agent-accounts-containers.js";
 import {
@@ -216,6 +218,7 @@ export class OrkestratorBackend {
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
+  private containerLoginFileWatcher: ContainerLoginFileWatcher | null = null;
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
   private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
   /** Step 08 named due jobs; `null` on the rollback bundle. Never both. */
@@ -608,6 +611,8 @@ export class OrkestratorBackend {
       {
         changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
         localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
+        signInGuidance: (environmentId, agent) =>
+          containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
@@ -1325,6 +1330,9 @@ export class OrkestratorBackend {
     setHostClaudeLoginRefresher(() => keeper.refreshHostIfDue());
     setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
     keeper.start();
+    // Grok, OpenCode and Pi logins: pushed again whenever the host's file changes.
+    this.containerLoginFileWatcher ??= new ContainerLoginFileWatcher(this.context);
+    this.containerLoginFileWatcher.start();
     setLocalCodexLoginRefresher(createCodexLoginRefresher(this.context));
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
@@ -1962,6 +1970,8 @@ export class OrkestratorBackend {
     this.hostSuspendDetector = null;
     this.claudeLoginKeeper?.stop();
     this.claudeLoginKeeper = null;
+    this.containerLoginFileWatcher?.stop();
+    this.containerLoginFileWatcher = null;
     setHostClaudeLoginRefresher(undefined);
     setLocalClaudeLoginRefresher(undefined);
     setLocalCodexLoginRefresher(undefined);

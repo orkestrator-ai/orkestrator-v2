@@ -627,13 +627,35 @@ image. Backend code that needs to know checks
   `login-withheld`). GitHub Copilot (both) and Meta (Pi) reuse their refresh
   token rather than rotate it and are kept whole. All four are re-read from
   the host before every start. Grok's, OpenCode's and Pi's are also pushed
-  before every bridge start, including a reused bridge; OpenCode and Pi merge
+  before every bridge start, including a reused bridge, and whenever the
+  host's file changes: `ContainerLoginFileWatcher` polls each file's inode,
+  size and mtime every minute and pushes a changed one to every running
+  container that may receive it, through the same bridge-operation queue and
+  revocation fences (the writer-lease holder only). Pi and OpenCode re-read the
+  file per request, so a running session picks a renewal up; whether Grok's
+  agent re-reads it mid-session is not known. OpenCode and Pi merge
   the host's providers into the container's file, keeping a login made inside
   the container, and a host file of expired logins still blanks any refresh
   token the container holds for those providers. The entrypoint blanks the
   refresh tokens again in the container's own copy; for OpenCode and Pi only
   for providers the mounted host file holds as rotating OAuth, so a login
   made inside the container survives a restart.
+- A host sign-out reaches the container. When the host has no Codex or Grok
+  login at all (no `auth.json`, or one holding no login), the container's
+  imported copy is removed: Codex at the next bridge start or terminal open
+  (an idle bridge is stopped so it restarts without it), Grok at the next
+  push. An imported login is recognised by its blank refresh token; a login
+  made inside the container keeps its refresh token until the next restart and
+  is kept, as is an API key. A host login that has only expired leaves the copy
+  alone, since it has lapsed too. A container that used an added account
+  already had its copy removed by the account switch path.
+- When a container's host-imported Codex or Grok login lapses, the tab's
+  sign-in message (readiness `authentication-required`) is replaced by
+  guidance to renew the login on the host (or the added Codex account in
+  Settings) and restart the environment (`containerSignInGuidance`), because
+  a sign-in inside the container lasts only until the next restart. A
+  container whose credentials for that provider are revoked keeps the bridge's
+  own message.
 - Claude's `.credentials.json` is access-only the same way
   (`restrictClaudeCredentialsSnapshot`): `claudeAiOauth` and every `mcpOAuth`
   entry lose `refreshToken` (the key is removed, because Claude Code treats an
@@ -644,10 +666,19 @@ image. Backend code that needs to know checks
   every start and account switch, and a new push before every Claude bridge
   start. With nothing usable to push, the container's own copy has its refresh
   tokens stripped in place. The entrypoint strips a copy it takes from the
-  `/claude-config` mount. The access token lasts about eight hours, so the
+  `/claude-config` mount. A push merges rather than replaces
+  (`buildMergeContainerClaudeCredentialCommand`): an `mcpOAuth` login the
+  container made itself, holding a refresh token that is not one the host was
+  seen to hold for that server (the push carries SHA-256 digests of the host's
+  current and recently rotated MCP refresh tokens, never the tokens), is kept,
+  so signing in to an MCP server inside the container lasts. A copy of a host
+  token gives way to the host's access-only entry. The fallback strip with
+  nothing usable to push, and the removal on an account sign-out, still take
+  such a login too. The access token lasts about eight hours, so the
   backend's `ContainerClaudeLoginKeeper` re-reads the active login every five
-  minutes and pushes it into each running container whose copy differs; the
-  container CLI notices the new file by its mtime. Just before the token
+  minutes, once per pass whatever the number of containers, and pushes it into
+  each running container whose copy differs; the container CLI notices the new
+  file by its mtime. Just before the token
   expires the keeper has the host's own CLI refresh it
   (`refreshHostClaudeLogin`: a `-p` request for a model no catalogue knows,
   with settings, tools, MCP and session persistence off), so the refresh runs

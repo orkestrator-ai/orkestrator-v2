@@ -418,6 +418,11 @@ export interface NativeAgentServiceOptions {
   /** Graceful-interrupt window before provider hard-stop escalation. */
   abortGraceMs?: number;
   /**
+   * What a tab says instead of the bridge's sign-in message when a provider's
+   * login lapses (`containerSignInGuidance`), or undefined to keep it.
+   */
+  signInGuidance?: (environmentId: string, agent: string) => Promise<string | undefined>;
+  /**
    * Clock for the activity sweep's backoff. Injectable so a test can prove the
    * retry schedule without sleeping through a 60-second ceiling.
    */

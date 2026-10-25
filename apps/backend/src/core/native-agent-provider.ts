@@ -3,6 +3,7 @@ import type { BridgeConnection, NativeAgentRuntimeProvider } from "./agent-provi
 import { HttpBridgeProvider } from "./http-bridge-provider.js";
 import type { HttpBridgeProviderDependencies } from "./http-bridge-transport.js";
 import type { AppConfig } from "./models.js";
+import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
 import { OpenCodeProvider, type OpenCodeProviderDependencies } from "./opencode-provider.js";
 import { openCodeEnvironmentDependencies } from "./opencode-provider-environment.js";
 import { resolveCodexBridgeDefaultModel } from "./session-held-model.js";
@@ -29,6 +30,44 @@ export interface NativeAgentProviderEnvironment {
    * edit would otherwise not reach them until the environment restarted.
    */
   loadConfig?: () => Promise<Pick<AppConfig, "global">>;
+  /**
+   * What the tab should say when this agent's login lapses, in place of the
+   * bridge's own sign-in message; undefined keeps it. Read only when a
+   * snapshot reports a sign-in problem.
+   */
+  signInGuidance?: (agent: string) => Promise<string | undefined>;
+}
+
+/**
+ * Replace the message of a confirmed sign-out (readiness
+ * `authentication-required`) with the environment's guidance: a container's
+ * imported login cannot be renewed inside it. The bridge's sign-in route is
+ * kept. Turn-time auth notices are left as the bridge wrote them.
+ */
+async function withSignInGuidance<T extends { readiness?: NativeAgentReadiness }>(
+  snapshot: T,
+  guidance: () => Promise<string | undefined>,
+): Promise<T> {
+  const readiness = snapshot.readiness;
+  if (readiness?.state !== "authentication-required") return snapshot;
+  const message = await guidance().catch(() => undefined);
+  return message ? { ...snapshot, readiness: { ...readiness, message } } : snapshot;
+}
+
+function applySignInGuidance(
+  provider: NativeAgentRuntimeProvider,
+  guidance: () => Promise<string | undefined>,
+): void {
+  const interactive = provider.interactiveSnapshot?.bind(provider);
+  if (interactive) {
+    provider.interactiveSnapshot = async (sessionId) =>
+      withSignInGuidance(await interactive(sessionId), guidance);
+  }
+  const state = provider.sessionStateSnapshot?.bind(provider);
+  if (state) {
+    provider.sessionStateSnapshot = async (sessionId) =>
+      withSignInGuidance(await state(sessionId), guidance);
+  }
 }
 
 export type ProviderDependencies = HttpBridgeProviderDependencies &
@@ -59,6 +98,10 @@ export function createNativeAgentProvider(
   if (connection.agent === "codex") {
     provider.resolveDefaultModel = (modelId) =>
       resolveCodexBridgeDefaultModel(connection, dependencies.fetch ?? fetch, modelId);
+  }
+  const signInGuidance = dependencies.environment?.signInGuidance;
+  if (signInGuidance && (connection.agent === "codex" || connection.agent === "grok")) {
+    applySignInGuidance(provider, () => signInGuidance(connection.agent));
   }
   if (dependencies.workflowResults) {
     const providerStructured = provider.structured.bind(provider);

@@ -14,6 +14,10 @@
  * - no work while the document is hidden;
  * - every pass shares one traversal budget and deadline.
  *
+ * Pins are redrawn (not re-resolved) on scroll, resize, a settled font load
+ * and a change in the document's size, so a font swap that reflows the page
+ * without touching the DOM still moves them.
+ *
  * Main reads `snapshot()` (results, a change revision, and content-free
  * counters) and forwards a content-free "pins changed" hint to the renderer.
  *
@@ -174,11 +178,17 @@ function installBrowserPreviewPins(
         ? pin.element.isConnected
         : Boolean(pin.range?.startContainer.isConnected);
       const rect = pin.element ? kit.rectOf(pin.element) : pin.range ? kit.rectOf(pin.range) : null;
-      if (pin.result.state !== "matched" || !connected || !rect) {
+      // A matched element that renders no box (inside a closed dialog) gets
+      // no pin, rather than one at the page's corner.
+      const box = pin.element ?? pin.range?.startContainer.parentElement ?? null;
+      const rendered = !box || typeof box.checkVisibility !== "function" || box.checkVisibility();
+      if (pin.result.state !== "matched" || !connected || !rect || !rendered) {
         pin.node.style.display = "none";
         pin.outline.style.display = "none";
         continue;
       }
+      // The snapshot reports where the pin is drawn now, not where it resolved.
+      pin.result.rect = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       pin.node.style.display = "block";
       pin.outline.style.display = "block";
       Object.assign(pin.outline.style, {
@@ -334,10 +344,22 @@ function installBrowserPreviewPins(
     if (!hidden() && dirty) schedulePass();
   };
 
+  // A web font swap (or any reflow) moves targets without a DOM mutation:
+  // redraw when a font load settles or the document's size changes.
+  const fonts = (document as Document & { fonts?: EventTarget }).fonts;
+  let resizeObserver: ResizeObserver | null = null;
   if (pins.length > 0) {
     window.addEventListener("scroll", schedulePlace, true);
     window.addEventListener("resize", schedulePlace);
     document.addEventListener("visibilitychange", onVisibility);
+    fonts?.addEventListener?.("loadingdone", schedulePlace);
+    fonts?.addEventListener?.("loadingerror", schedulePlace);
+    const Resize = (window as unknown as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver;
+    if (typeof Resize === "function") {
+      resizeObserver = new Resize(() => schedulePlace());
+      resizeObserver.observe(document.documentElement);
+      if (document.body) resizeObserver.observe(document.body);
+    }
   }
   const snapshotValue = () => ({
     revision,
@@ -355,6 +377,9 @@ function installBrowserPreviewPins(
     window.removeEventListener("scroll", schedulePlace, true);
     window.removeEventListener("resize", schedulePlace);
     document.removeEventListener("visibilitychange", onVisibility);
+    fonts?.removeEventListener?.("loadingdone", schedulePlace);
+    fonts?.removeEventListener?.("loadingerror", schedulePlace);
+    resizeObserver?.disconnect();
     if (frame !== null) window.cancelAnimationFrame?.(frame);
     layer.remove();
     if (host[config.key] === runtime) delete host[config.key];

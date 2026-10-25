@@ -347,6 +347,8 @@ export function useAnnotationPins({
           switch (result.outcome) {
             case "shown":
               return { status: "shown", navigated: result.navigated };
+            case "hidden":
+              return { status: "hidden" };
             case "not-found":
               return {
                 status: "not-found",

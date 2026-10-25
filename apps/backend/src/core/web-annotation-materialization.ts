@@ -4,7 +4,8 @@
  *
  * The request record is the ownership ledger: each attachment names the
  * app-generated relative path, the agent-readable path it was written to,
- * and the digest of the exact bytes. A file is removed only when:
+ * and the digest of the exact bytes. The file itself is
+ * `materializedEvidencePath(request, relativePath)`. A file is removed only when:
  *
  * - its request is settled (never while queued/running/unconfirmed), and
  * - its notes were all deleted, or the settlement is older than the
@@ -15,8 +16,10 @@
  * Environment deletion removes the whole workspace through the existing
  * lifecycle, so nothing is tracked past it.
  */
+import path from "node:path";
 import {
   WEB_ANNOTATION_LIMITS,
+  WEB_ANNOTATION_WORKSPACE_DIRECTORY,
   isWebAnnotationRequestActive,
 } from "@orkestrator/protocol/web-annotations";
 import {
@@ -25,6 +28,19 @@ import {
 } from "./web-annotation-evidence-files.js";
 import type { WebAnnotationHostEnvironment } from "./web-annotation-context.js";
 import type { WebAnnotationManifest } from "./web-annotation-storage.js";
+
+/**
+ * The workspace file a request's attachment is written to: the brief's
+ * app-generated name (`<digest>.png`) prefixed with the request id, so two
+ * requests never share a file. Null when either part cannot name a file.
+ */
+export function materializedEvidencePath(requestId: string, relativePath: string): string | null {
+  const safeRequest = requestId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
+  if (!safeRequest || safeRequest.startsWith(".")) return null;
+  const basename = path.posix.basename(relativePath);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.png$/.test(basename)) return null;
+  return `${WEB_ANNOTATION_WORKSPACE_DIRECTORY}/${safeRequest}-${basename}`;
+}
 
 /** Settled evidence stays in the workspace this long for transcript references. */
 export const MATERIALIZED_EVIDENCE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -62,10 +78,13 @@ export function planMaterializedCleanup(
     if (!notesDeleted && !expired) continue;
     for (const attachment of pending) {
       if (out.length >= batch) break;
+      // The file written, not the brief's name for it (`relativePath`).
+      const written = materializedEvidencePath(request.id, attachment.relativePath);
+      if (!written) continue;
       out.push({
         requestId: request.id,
         assetId: attachment.assetId,
-        relativePath: attachment.relativePath,
+        relativePath: written,
         digest: attachment.digest,
       });
     }

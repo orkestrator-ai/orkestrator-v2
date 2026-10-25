@@ -614,7 +614,13 @@ export class BrowserPreviewPinSessions {
       );
       last =
         results.find((entry) => entry.annotationId === input.pin.annotationId)?.resolution ?? null;
-      if (last?.state === "matched") return outcome("shown", navigated, last);
+      if (last?.state === "matched") {
+        // A target that renders no box (inside a closed dialog, a collapsed
+        // menu) matched, but there is nothing on screen to show.
+        const rect = last.rect;
+        const rendered = rect !== null && rect !== undefined && (rect.width > 0 || rect.height > 0);
+        return outcome(rendered ? "shown" : "hidden", navigated, last);
+      }
       // Late-rendering pages: only a missing target is worth waiting for.
       if (last && last.state !== "missing") return outcome("not-found", navigated, last);
       if (last?.rule === "route-mismatch") return outcome("navigation-required", navigated, last);

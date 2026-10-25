@@ -9,7 +9,10 @@ import {
   WEB_ANNOTATION_LIMITS,
 } from "@orkestrator/protocol/web-annotations";
 import { fixtureAnnotation } from "@orkestrator/protocol/testing/web-annotations-fixtures";
-import { MATERIALIZED_EVIDENCE_RETENTION_MS } from "./web-annotation-materialization.js";
+import {
+  MATERIALIZED_EVIDENCE_RETENTION_MS,
+  materializedEvidencePath,
+} from "./web-annotation-materialization.js";
 import type { WebAnnotationFaultStage } from "./web-annotation-storage.js";
 import {
   ENV_A,
@@ -326,14 +329,21 @@ describe("materialized evidence ownership and cleanup", () => {
     const sent = await sendRequest(harness.service, receipt.annotationId, "req-1");
     const attachment = sent.request.attachments[0]!;
     expect(attachment.materializedPath).toBeDefined();
-    const file = join(worktree, attachment.relativePath);
+    // Written where the materializer writes it, not at the brief's name.
+    const written = materializedEvidencePath("req-1", attachment.relativePath)!;
+    expect(attachment.materializedPath).toBe(`/workspace/${written}`);
+    expect(written).toBe(attachment.relativePath.replace(/([^/]+)$/, "req-1-$1"));
+    const file = join(worktree, written);
     await mkdir(join(worktree, ".orkestrator", "annotations"), { recursive: true });
     await writeFile(file, makePng(4, 3, 3));
-    return { receipt, attachment, file, worktree };
+    // A user's file at the brief's own name is never the backend's to remove.
+    const bystander = join(worktree, attachment.relativePath);
+    await writeFile(bystander, makePng(4, 3, 3));
+    return { receipt, attachment, file, worktree, bystander };
   }
 
   test("settled evidence is kept for the retention period, then removed and untracked", async () => {
-    const { file } = await materializedRequest({ environmentType: "local" });
+    const { file, bystander } = await materializedRequest({ environmentType: "local" });
     await harness!.service.collectGarbage(ENV_A);
     expect(existsSync(file)).toBe(true); // queued: never removed while active
     harness!.dispatch.observe_("req-1", "awaiting-review");
@@ -344,6 +354,7 @@ describe("materialized evidence ownership and cleanup", () => {
     const result = await harness!.service.collectGarbage(ENV_A);
     expect(result.removedEvidence).toBe(1);
     expect(existsSync(file)).toBe(false);
+    expect(existsSync(bystander)).toBe(true);
     const { request } = await harness!.service.getRequest(ENV_A, "req-1");
     expect(request.attachments[0]?.removedAt).toBeDefined();
   });

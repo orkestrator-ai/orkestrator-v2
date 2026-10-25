@@ -31,6 +31,7 @@ import {
 } from "@orkestrator/protocol/web-annotations";
 import { isSafeRelativePath } from "@orkestrator/protocol/web-annotations-validation";
 import { checkWebAnnotationWorkspacePaths } from "./web-annotation-source-checks.js";
+import { materializedEvidencePath } from "./web-annotation-materialization.js";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
 import type { Environment, PersistedNativeAgentSession, PersistedPromptQueue } from "./models.js";
 import type { NativeAgentService } from "./native-agent-service.js";
@@ -557,11 +558,11 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
     const materialized: WebAnnotationRequestAttachment[] = [];
     // Sequential on purpose: at most one image buffer is held at a time.
     for (const attachment of input.attachments) {
-      const basename = path.posix.basename(attachment.relativePath);
-      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.png$/.test(basename)) {
+      // Cleanup removes this same name (`planMaterializedCleanup`).
+      const relativePath = materializedEvidencePath(requestId, attachment.relativePath);
+      if (!relativePath) {
         throw new Error("Attachment path is not an app-generated evidence path");
       }
-      const relativePath = `${WEB_ANNOTATION_WORKSPACE_DIRECTORY}/${safeRequest}-${basename}`;
       if (
         !isSafeRelativePath(relativePath) ||
         !relativePath.startsWith(`${WEB_ANNOTATION_WORKSPACE_DIRECTORY}/`)

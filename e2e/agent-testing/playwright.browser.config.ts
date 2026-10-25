@@ -15,6 +15,7 @@ export default defineConfig({
     "design-live.spec.ts",
     "native-draft-attachments.spec.ts",
     "web-annotations-gateway.spec.ts",
+    "web-annotations-approval-live.spec.ts",
     "cli-ui.spec.ts",
     "container-settings.spec.ts",
     "grok-container-login.spec.ts",
@@ -48,7 +49,8 @@ export default defineConfig({
   outputDir: path.join(outputRoot, "artifacts"),
   globalTeardown: path.join(import.meta.dirname, "global-teardown.ts"),
   use: {
-    browserName: "chromium",
+    // `webkit` runs a spec in Safari's engine (the iOS wrapper's WKWebView).
+    browserName: process.env.ORKESTRATOR_AGENT_TEST_BROWSER === "webkit" ? "webkit" : "chromium",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

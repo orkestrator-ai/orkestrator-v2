@@ -56,6 +56,43 @@ describe("live pin layer", () => {
     expect(outline.getAttribute("aria-hidden")).toBe("true");
   });
 
+  test("a matched target that renders no box (a closed dialog) gets no pin", () => {
+    const harness = page(`<dialog><button data-testid="confirm">Save</button></dialog>`);
+    const button = harness.document.querySelector("button")!;
+    const target = captureElement(harness, button);
+    // Chromium's answer for an element inside a closed <dialog>.
+    Object.assign(button, { checkVisibility: () => false });
+    const result = show(harness, [
+      { annotationId: "annotation-1", number: 1, label: target.label, target },
+    ]);
+    expect(result.results[0]).toMatchObject({ state: "matched", rule: "stable-id" });
+    expect(badges(harness)[0]!.style.display).toBe("none");
+    Object.assign(button, { checkVisibility: () => true });
+    show(harness, [{ annotationId: "annotation-1", number: 1, label: target.label, target }]);
+    expect(badges(harness).at(-1)!.style.display).toBe("block");
+  });
+
+  test("a font swap that reflows the page without a DOM mutation moves the drawn pin", async () => {
+    const harness = page(`<h1>Release notes</h1><button data-testid="read">Read</button>`);
+    const button = harness.document.querySelector("button")!;
+    let top = 40;
+    Object.assign(button, {
+      getBoundingClientRect: () => ({ left: 10, top, width: 80, height: 24, x: 10, y: top }),
+    });
+    const fonts = new harness.window.EventTarget();
+    Object.defineProperty(harness.document, "fonts", { value: fonts, configurable: true });
+    const target = captureElement(harness, button);
+    show(harness, [{ annotationId: "annotation-1", number: 1, label: target.label, target }]);
+    const outline = badges(harness)[0]!.previousElementSibling as HTMLElement;
+    expect(outline.style.top).toBe("40px");
+    // The web font arrives: the heading grows and the button moves down.
+    top = 84;
+    fonts.dispatchEvent(new harness.window.Event("loadingdone"));
+    await wait(50);
+    expect(outline.style.top).toBe("84px");
+    expect(snapshot(harness).results[0].rect).toMatchObject({ y: 84 });
+  });
+
   test("a replaced element (hot reload) is re-resolved and the pin follows the new node", async () => {
     const markup = `<main><h2>Settings</h2><button data-testid="save">Save</button></main>`;
     const harness = page(markup);

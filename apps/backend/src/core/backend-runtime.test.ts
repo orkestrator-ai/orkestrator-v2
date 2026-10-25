@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
@@ -264,5 +267,67 @@ describe("two BackendRuntimes in one process", () => {
     second.containerStates.invalidate();
     expect(first.containerStates.read("legacy", fetchStates)).toBe(snapshot);
     expect(fetches).toBe(2);
+  });
+
+  test("terminal history and terminal account homes are per backend", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-runtime-history-"));
+    try {
+      const historyId = first.terminals.history.configure({
+        sessionId: "env-1:terminal",
+        dataDir,
+        stableIdentity: "env-1:tab-1",
+        cols: 80,
+        rows: 24,
+      });
+      expect(historyId).not.toBeNull();
+      expect(first.terminals.history.stats().configurations).toBe(1);
+      expect(second.terminals.history.stats().configurations).toBe(0);
+      expect(await second.terminals.history.page("env-1:terminal")).toBeNull();
+
+      first.terminals.recordAccountHome("env-1:terminal:/accounts/a", "/accounts/a");
+      expect(first.terminals.isAccountHomeInUse("/accounts/a")).toBe(true);
+      expect(second.terminals.isAccountHomeInUse("/accounts/a")).toBe(false);
+      // Closing the session in the other backend does not release this one's home.
+      second.terminals.cleanupSession("env-1:terminal", { explicit: true });
+      expect(first.terminals.isAccountHomeInUse("/accounts/a")).toBe(true);
+      first.terminals.cleanupSession("env-1:terminal", { explicit: true });
+      expect(first.terminals.isAccountHomeInUse("/accounts/a")).toBe(false);
+      await first.terminals.history.flush(true);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("PR monitoring and merge cleanup are per backend", async () => {
+    const scheduled: string[] = [];
+    const runtimeWithScheduler = (name: string) =>
+      createRuntime({
+        emit: () => undefined,
+        prMonitor: {
+          scheduleMergeCleanup: (environmentId) => scheduled.push(`${name}:${environmentId}`),
+        },
+      });
+    const first = runtimeWithScheduler("first");
+    const second = runtimeWithScheduler("second");
+    const contextWithNoEnvironments = (runtime: BackendRuntime): CommandContext => ({
+      ...contextFor(runtime),
+      storage: { loadEnvironments: async () => [] } as unknown as StorageService,
+    });
+    await first.prMonitor.sync(contextWithNoEnvironments(first));
+    await second.prMonitor.sync(contextWithNoEnvironments(second));
+
+    expect(first.prMonitor.service).not.toBe(second.prMonitor.service);
+    first.prMonitor.resumeTerminalEffects("env-1", {
+      url: "https://github.com/o/r/pull/1",
+      state: "merged",
+    });
+    expect(scheduled).toEqual(["first:env-1"]);
+
+    // Shutting one monitor down leaves the other's service in place.
+    const secondService = second.prMonitor.service;
+    first.prMonitor.shutdown();
+    expect(second.prMonitor.service).toBe(secondService);
   });
 });

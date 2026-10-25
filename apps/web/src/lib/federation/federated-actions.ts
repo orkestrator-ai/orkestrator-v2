@@ -40,20 +40,22 @@ export async function restartFederatedEnvironment(
 }
 
 /**
- * Forks an environment on its own node and starts the fork there in the
- * background, as the node's sidebar does. Returns the fork's ID.
+ * Persists a fork on its own node. The caller opens it before requesting startup.
  */
 export async function forkFederatedEnvironment(
   portal: PortalStore,
   ref: EnvironmentRef,
   environmentType: "local" | "containerized",
 ): Promise<{ environmentId: string; projectId: string; name: string }> {
+  if (environmentType === "containerized") {
+    const docker = await portal.invokeOnNode<{ available: boolean }>(ref.backendId, "check_docker");
+    if (!docker.available) throw new Error("Docker is unavailable on the owning machine");
+  }
   const fork = await portal.invokeOnNode<{ id: string; projectId: string; name: string }>(
     ref.backendId,
     "fork_environment",
     { environmentId: ref.environmentId, environmentType },
   );
-  await startFederatedEnvironment(portal, { backendId: ref.backendId, environmentId: fork.id });
   return { environmentId: fork.id, projectId: fork.projectId, name: fork.name };
 }
 

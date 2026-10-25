@@ -9,6 +9,7 @@ import { useEnvironments } from "@/hooks";
 import { useProjects } from "@/hooks/useProjects";
 import * as backend from "@/lib/backend";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 
@@ -82,8 +83,9 @@ function useRequestedProject(projectId: string) {
 function RepositorySettingsHost({ projectId }: { projectId: string }) {
   const { project, close } = useRequestedProject(projectId);
   const { updateProject } = useProjects();
+  const configLoaded = useConfigStore((state) => state.hasLoaded);
 
-  if (!project) return null;
+  if (!project || !configLoaded) return null;
   return (
     <LazyLoadBoundary
       loadingFallback={<LazyDialogLoadingFallback label="Loading repository settings…" />}
@@ -123,9 +125,11 @@ function DeleteProjectHost({ projectId }: { projectId: string }) {
       }
       onConfirm={async () => {
         try {
+          // A cold realm or a missed update can leave the renderer list empty.
+          // A failed owner read must retain the project and allow a retry.
           await deleteProjectAndEnvironments(
             projectId,
-            projectEnvironments,
+            await backend.getEnvironmentSnapshots(projectId),
             deleteEnvironment,
             removeProject,
           );

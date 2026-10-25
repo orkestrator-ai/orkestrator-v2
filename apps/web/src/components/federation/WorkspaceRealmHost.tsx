@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
 import { useSidebarHydration } from "@/components/sidebar/useSidebarHydration";
@@ -49,11 +49,15 @@ export function WorkspaceRealmHost() {
   useEnvironmentListSync(projectIds, (projectId) =>
     loadEnvironments(projectId, { silent: true, reconcileStatus: false }),
   );
+  const loadAuthoritativeEnvironments = useCallback(
+    (projectId: string) => loadEnvironments(projectId, { throwOnError: true }),
+    [loadEnvironments],
+  );
   const environmentsReady = useSidebarHydration(
     projects,
     projectsLoaded && !projectsLoading,
     allEnvironments,
-    loadEnvironments,
+    loadAuthoritativeEnvironments,
   );
 
   // What the window asked for last, numbered so the same request twice counts twice.
@@ -157,6 +161,8 @@ export function WorkspaceRealmHost() {
     if (!request.environmentId) {
       // A project's dialog reads the project from the node's loaded list.
       if (request.dialog && (!projectsLoaded || projectsLoading)) return;
+      if (request.dialog === "delete-project" && !environmentsReady) return;
+      if (request.dialog === "repository-settings" && !configLoaded) return;
       appliedSeq.current = request.seq;
       ui.selectProject(request.projectId);
       if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
@@ -189,6 +195,7 @@ export function WorkspaceRealmHost() {
   }, [
     allEnvironments,
     createReady,
+    configLoaded,
     environmentsReady,
     projects,
     projectsLoaded,

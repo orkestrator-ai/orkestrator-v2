@@ -171,7 +171,6 @@ export function useFederatedEnvironmentActions(
       const ref = environment.ref;
       void run("Restart", async () => {
         await restartFederatedEnvironment(portal, ref);
-        toast.success("Environment restarted", { description: `On ${machine.name}` });
       });
     },
     fork: (environmentType) => {
@@ -188,6 +187,12 @@ export function useFederatedEnvironmentActions(
           environmentId: fork.environmentId,
           title: fork.name,
         });
+        await run(`Start fork ${fork.name}`, () =>
+          startFederatedEnvironment(portal, {
+            backendId: ref.backendId,
+            environmentId: fork.environmentId,
+          }),
+        );
       });
     },
     requestDelete: () => setPendingDelete(environment.ref),

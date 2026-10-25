@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createPortal } from "react-dom";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { portalStore } from "@/lib/portal/portal-store";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { useUIStore } from "@/stores/uiStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import {
   MOBILE_TOOLS_TRIGGER_LABEL,
@@ -538,3 +542,43 @@ describe("MobileAppShellLayout", () => {
     expect(screen.getByText("Files")).toBeTruthy();
   });
 });
+
+for (const action of [
+  "delete-project",
+  "repository-settings",
+  "environment-settings",
+  "createEnvironment",
+] as const) {
+  test(`closes the drawer for a remote ${action} request with no local selection`, async () => {
+    const remote = useRemoteWorkspaceStore.getState();
+    const ui = useUIStore.getState();
+    const portal = portalStore.getState();
+    try {
+      portalStore.store.setState({ selfId: "bk_self" as never });
+      useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+      renderLayout(
+        { selectedProjectId: null, selectedEnvironmentId: null },
+        { keepInitialDrawerOpen: true },
+      );
+      expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
+      act(() =>
+        openMachineWorkspace({
+          connectionId: "bk_remote",
+          projectId: "project",
+          environmentId: "env",
+          title: "Remote",
+          ...(action === "createEnvironment" ? { createEnvironment: true } : { dialog: action }),
+        }),
+      );
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull(),
+      );
+      expect(useUIStore.getState().selectedProjectId).toBeNull();
+      expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_remote");
+    } finally {
+      useRemoteWorkspaceStore.setState(remote, true);
+      useUIStore.setState(ui, true);
+      portalStore.store.setState(portal, true);
+    }
+  });
+}

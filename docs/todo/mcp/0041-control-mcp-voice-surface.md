@@ -2,7 +2,9 @@
 
 Checked against `main` at `9906db30` (2026-10-16). Items 2 to 11 implemented on
 branch `todo-0041-control-mcp-voice-4a2c0ccc548b` (2026-10-24, rebased onto
-`main` at `a5d78cfc`).
+`main` at `a5d78cfc`). Remaining work 1(b) (a live command approval) and the
+tooling for 1(a) done on branch `todo-0041-control-mcp-voice-699c0075ce9c`
+(2026-10-25, from `main` at `00a0cb82`).
 
 The goal is to let an external agent, in particular a realtime voice agent,
 do everything the public CLI can do through Control MCP, without loading
@@ -65,7 +67,10 @@ What exists, by part:
 - **CLI** (`packages/cli/`): `CommandSpec.action` and `inputFields`,
   `SHARED_INPUT_FIELDS`; commands `attention`, `ticket …`, `mail …`;
   `waitForOperation` uses the shared classifier; reference scripts
-  `examples/voice-attention-relay.ts` and `examples/voice-qualify.ts`.
+  `examples/voice-attention-relay.ts`, `examples/voice-qualify.ts` (the
+  scripted run, `--expect-approval`, `--record`, `--score`),
+  `examples/voice-mcp-relay.ts` (a recording relay for a real voice runtime)
+  and `examples/voice-recording.ts` (the recording format and scoring).
 - **Web**: Settings → MCP (`apps/web/src/components/settings/McpSettings.tsx`)
   lists credentials, creates one with a profile (custom: a capability list),
   and gives each Copy setup for Codex, Claude Code and "Other or voice
@@ -163,6 +168,8 @@ Measured on this branch (2026-10-24, `control-mcp-voice.test.ts` harness):
 | Coordinator regression | Done | `control-mcp-server.test.ts`: the coordinator tests pass as they were; nine former operator tests now run under a coordinator credential (the path that keeps those implementations) and two that covered removed operator-only branches moved to `control-mcp-operator-tools.test.ts` |
 | `mise run test` (non-iOS) on the rebased branch | Fails only on unrelated cases | every failure passed alone and is a registered flake (0192, 0632, 0244, 0258, new 0775), except the 14 OpenCode execution-policy conformance cases, which fail on `main` too: #1198 moved the OpenCode pin to 1.19.4 and `conformance-execution-policy.test.ts` still expects 1.19.0 |
 | Live: the script over MCP with a real agent; real MCP clients on `full` | Done (no speaking model) | Live evidence |
+| Live: the approval step with a real command approval | Done 2026-10-25 | Live evidence, "Real command approval" |
+| Recording relay and scoring of misresolved targets and handle copy errors | Done 2026-10-25 | `packages/cli/tests/voice-recording.test.ts` (10 tests: targets and result IDs, no prompt or token in a recording, zero score for exact handles, misresolution versus copy error, report, relay forwarding and bounds, `--score`, `--expect-approval` pass and fail); a live relay recording scored 0 / 0 |
 | Live: a realtime voice runtime runs the script | **Not done** | Remaining work 1 |
 
 ## Remaining work
@@ -174,15 +181,40 @@ Measured on this branch (2026-10-24, `control-mcp-voice.test.ts` harness):
    session-handle copy errors, and tool-definition and result token counts.
    `packages/cli/examples/voice-qualify.ts` runs the same script without a
    speaking model and measures everything but the two model-dependent
-   counts; Live evidence records its run on node mbp3 with a real Claude
-   session. Still needed: (a) the same script driven by a realtime voice
-   runtime, for misresolved targets and handle copy errors; (b) the approval
-   step with a real command approval, which needs a profile whose execution
-   policy asks for approvals. Not done because no realtime voice runtime
-   (audio in and out, a realtime model session) is installed or credentialed
-   on mbp3, misresolution and copy errors can only be judged with a speaking
-   model and a person, and no public setting enables approvals for a test
-   profile.
+   counts; Live evidence records its runs with a real Claude session.
+   - (b) **Done 2026-10-25:** the approval step with a real command approval.
+     An environment set to Settings → Execution policy → Approvals: Ask
+     raised a real Claude `command-approval`; the harness confirmed it
+     (`confirmation-required`, then the call with `confirmToken`), approved
+     it, and the command ran (Live evidence, "Real command approval"). The
+     earlier note that "no public setting enables approvals" was right about
+     public actions but missed the environment's own policy override, which
+     is enough (D19).
+   - (a) **Still open:** the same script driven by a realtime voice runtime,
+     for misresolved targets and session-handle copy errors. The tooling is
+     ready and tested: `voice-mcp-relay.ts` records a runtime's calls (IDs and
+     sizes only) and `voice-qualify.ts --score` counts both errors (D20, D21);
+     a live relay recording of the scripted run scored 0 / 0. Not done because
+     no realtime voice runtime (audio in and out, a realtime model session) is
+     installed or credentialed on this machine (arktech-mini, 2026-10-25: no
+     OpenAI, Gemini or other realtime credentials in the environment), and the
+     two counts need a speaking model and a person. To close it:
+     1. In a disposable profile (`mise run dev:test --profile voice-live
+        --fixture --credential-source claude --agent-platforms claude`),
+        create a local environment, set its Approvals to Ask, and create a
+        Voice credential in Settings → MCP.
+     2. Run `bun packages/cli/examples/voice-mcp-relay.ts --record voice.jsonl
+        --url <profile's Control MCP URL>` and give the voice runtime
+        `http://127.0.0.1:34199/mcp` with the credential's Authorization
+        header.
+     3. Speak the script, naming the environment by name: "what's going on";
+        "start work in <name> with Claude: run printf voice >
+        voice-qualify-canary.txt, then say done"; "yes" to the approval it
+        reads out; "stop it"; "what did it say". Repeat at least five times,
+        with a new session each time.
+     4. Run `bun packages/cli/examples/voice-qualify.ts --score voice.jsonl
+        --environment <id>` and record `latency`, `tools`, `resultText` and
+        `score` here, with the runtime, model and audio path used.
 2. **Optional, deferred:** `delegate` into a coordinator turn (D13), and a
    stateful MCP session with `list_changed` and subscriptions (D14). Each
    needs its own todo file when it is wanted.
@@ -240,6 +272,48 @@ Node mbp3 (macOS, Darwin 25.6), 2026-10-24, isolated profile
     (`cli: orkestrator session prompt`); 13,566 tokens for the whole run.
 - Not measured: misresolved spoken targets and session-handle copy errors
   (no speaking model or person; see Remaining work 1).
+
+Node arktech-mini (macOS, Darwin 27.0), 2026-10-25, isolated profile
+`dev:test --profile mcp-voice-0041b --fixture --credential-source claude
+--agent-platforms claude` on branch `todo-0041-control-mcp-voice-699c0075ce9c`;
+profile stopped and reset afterwards.
+
+- **Real command approval.** A local environment of the fixture project was
+  created with `executionPolicy.approvals: "ask"` (the Settings → Execution
+  policy → Approvals: Ask override, set through
+  `update_environment_agent_settings`, as the renderer does), and a Voice
+  credential was created (`create_control_mcp_credential`, 12 tools,
+  7,118 bytes). `voice-qualify.ts --expect-approval` then ran the script with
+  a real Claude session:
+  1. A first attempt with a read-only prompt (`ls`) raised nothing: Claude
+     runs read-only commands without asking even under Ask. The approval
+     script's default prompt now writes a canary file instead.
+  2. With `printf voice > voice-qualify-canary.txt`, Claude raised a real
+     `command-approval`; `run_status` reported `waiting-for-input`; the
+     harness read it with `session.interactions`; the first `answer_question`
+     returned `confirmation-required` with a token; the repeat with
+     `confirmToken` approved it. Two runs stopped the turn straight after the
+     answer (a real mid-turn stop, 123 ms and 129 ms) before the command
+     ran, so the harness now waits for the run to settle first.
+  3. The final run: approval confirmed and answered, run then `completed`,
+     `stop_session` refused as `session-idle` (the turn had finished), and
+     `voice-qualify-canary.txt` in the environment's worktree contained
+     `voice`: the approved command ran.
+
+  | Measure (final run, through the recording relay) | Result |
+  | --- | --- |
+  | Voice `tools/list` | 12 tools, 7,118 bytes (about 1,780 tokens) |
+  | Reads (`overview`, `read_session`, `run_status`), p50 / p95 | 4.2 ms / 78 ms (target p95 < 1 s: met) |
+  | `start_work` | 485 ms |
+  | `answer_question` (refusal, then confirmed) | 11.8 ms / 17.6 ms |
+  | Largest result text | 400 bytes (about 100 tokens) |
+  | `selfCheck` and relay score | 34 targeted calls; 0 misresolved, 0 copy errors |
+
+- **Recording relay against the real backend.** The same runs went through
+  `voice-mcp-relay.ts` (loopback, the client's own Authorization header): 54
+  calls recorded, `voice-qualify.ts --score` gave the same counts as the
+  harness's own `selfCheck`, and the recording contained no prompt text
+  (`printf` appears 0 times) and no token.
 
 ## Constraints and rationale
 
@@ -508,6 +582,61 @@ the choice, why, and its pros and cons.
 - Pros: behaves like a voice agent that heard the question. Cons: it is a
   heuristic for a harness, not product behaviour; `answer_question` itself
   never guesses an answer.
+
+**D19. How the qualification gets a real command approval.**
+- Options: (a) add a public setting (for example `agent.approvals`) so the CLI
+  and MCP can turn approvals on; (b) use the environment's existing execution
+  policy override (Settings → Execution policy → Approvals: Ask, stored by
+  `update_environment_agent_settings`); (c) a dev-only flag on `dev:test`.
+- Chosen: (b), with `--expect-approval` in the harness, which fails the run
+  unless a command or file approval is confirmed and answered, and defaults to
+  a prompt that writes a file.
+- Why: host and container sessions auto-approve by design and `ask` is the
+  documented override; a public approvals setting would let any credential
+  holding `settings` loosen a human-in-the-loop guard, which the qualification
+  does not need.
+- Pros: no new security-relevant surface; the run uses the policy a user
+  would set. Cons: the setup step is in the UI (or the renderer's command),
+  not scriptable through the public CLI.
+
+**D20. How misresolved targets and copy errors are captured from a real runtime.**
+- Options: (a) ask the person to log errors by hand; (b) a recording relay
+  between the runtime and Control MCP; (c) record inside the backend.
+- Chosen: (b), `voice-mcp-relay.ts`: loopback only, forwards each request
+  with the runtime's own Authorization header (it holds no token), buffers
+  each response, and records per call only the tool, latency, outcome, the
+  IDs it targeted and the IDs its result returned.
+- Why: it works with any runtime that takes an MCP URL, keeps the backend
+  unchanged, and the recording carries no prompts, answers, result text or
+  token.
+- Pros: repeatable, scored by a program. Cons: it buffers responses (fine for
+  Control MCP's single stateless replies, not a general streaming proxy); a
+  hosted platform still needs its own relay (D12).
+
+**D21. How a recording is scored.**
+- Options: (a) per-step expected targets written by the person; (b) infer
+  from the script's single environment and the session `start_work` started
+  in it.
+- Chosen: (b). A targeted ID that no earlier result returned (and the run
+  was not given), or a malformed `ses_` handle, is a copy error; a returned
+  ID that is not the script's environment, project or session is a
+  misresolution; operation and interaction IDs are checked for copy errors
+  only. Rates are per targeted call.
+- Why: no annotation step, and the script addresses exactly one environment
+  and one session.
+- Pros: automatic and exact for the script. Cons: only valid for that
+  script; a session reached by `environmentId` plus a wrong `tabId` counts as
+  a copy error, since the handle was never returned.
+
+**D22. When the harness stops after answering.**
+- Options: (a) stop straight after the answer; (b) wait, up to 30 s, until
+  the run finishes or asks again, and treat `session-idle` at the stop step
+  as "already finished".
+- Chosen: (b), after (a) interrupted the approved command before it ran in
+  two live runs.
+- Pros: the run proves the answer took effect. Cons: the stop step usually
+  meets an idle session in the approval script; a real mid-turn stop is
+  covered by the runs without `--expect-approval` and by the earlier evidence.
 
 **Assumptions.**
 - `capabilities` stays without a CLI command of its own; `connection check`

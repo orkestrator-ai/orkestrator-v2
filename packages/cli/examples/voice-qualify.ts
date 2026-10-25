@@ -19,65 +19,49 @@
  * read tool, and every mutation once), the size of the voice `tools/list`
  * and of each result's text, with a rough token estimate (bytes / 4).
  * Misresolved targets and session-handle copy errors need a speaking model
- * and a person; this harness copies handles exactly, so it cannot measure
- * them and says so in its report.
+ * and a person. This harness copies handles exactly, so its own score is a
+ * self-check that must come out zero; a real voice runtime is scored from a
+ * recording made by `voice-mcp-relay.ts`.
  *
  *   ORKESTRATOR_MCP_TOKEN=<voice credential token> \
  *     bun packages/cli/examples/voice-qualify.ts \
  *     --environment <ready environment id> [--url http://127.0.0.1:34122/mcp] \
- *     [--agent claude] [--prompt "…"] [--read-repeats 20] [--approval-wait 60]
+ *     [--agent claude] [--prompt "…"] [--read-repeats 20] [--approval-wait 60] \
+ *     [--expect-approval] [--record run.jsonl]
+ *
+ * --expect-approval exits 1 unless a command or file approval was raised,
+ * confirmed and answered; the environment must ask for approvals (its
+ * Settings → Execution policy → Approvals: Ask), and the default prompt then
+ * writes a canary file, since read-only commands are not asked about.
+ * --record writes this run's recording.
+ *
+ *   bun packages/cli/examples/voice-qualify.ts --score <recording.jsonl> \
+ *     --environment <id> [--project <id>]
+ *
+ * scores a recording instead of running the script.
  *
  * The report is one JSON document on stdout. The prompt is spent on a real
  * provider; use a disposable environment of a test profile.
  */
 
-interface ToolCall {
-  tool: string;
-  ms: number;
-  textBytes: number;
-  ok: boolean;
-  code?: string;
-}
+import { appendFile } from "node:fs/promises";
+import {
+  parseRecording,
+  payloadOf,
+  percentile,
+  recordCall,
+  recordingReport,
+  scoreRecording,
+  summarize,
+  type RecordingEntry,
+  type ToolCall,
+} from "./voice-recording.js";
 
-export function percentile(values: readonly number[], fraction: number): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.ceil(fraction * sorted.length) - 1);
-  return sorted[Math.max(0, index)]!;
-}
-
-export function summarize(calls: readonly ToolCall[]) {
-  const byTool = new Map<string, ToolCall[]>();
-  for (const call of calls) byTool.set(call.tool, [...(byTool.get(call.tool) ?? []), call]);
-  return Object.fromEntries(
-    [...byTool.entries()].map(([tool, entries]) => {
-      const times = entries.map((entry) => entry.ms);
-      return [
-        tool,
-        {
-          calls: entries.length,
-          p50Ms: percentile(times, 0.5),
-          p95Ms: percentile(times, 0.95),
-          maxTextBytes: Math.max(...entries.map((entry) => entry.textBytes)),
-          failures: entries.filter((entry) => !entry.ok).map((entry) => entry.code ?? "error"),
-        },
-      ];
-    }),
-  );
-}
-
-function payloadOf(text: string, contentType: string | null): unknown {
-  const payload = contentType?.startsWith("text/event-stream")
-    ? text
-        .split("\n")
-        .find((line) => line.startsWith("data: "))
-        ?.slice("data: ".length)
-    : text;
-  return JSON.parse(payload ?? "{}");
-}
+export { percentile, summarize };
 
 export function createClient(url: string, token: string) {
   const calls: ToolCall[] = [];
+  const recording: RecordingEntry[] = [];
   async function rpc(method: string, params?: Record<string, unknown>) {
     const response = await fetch(url, {
       method: "POST",
@@ -102,54 +86,29 @@ export function createClient(url: string, token: string) {
   }
   return {
     calls,
+    recording,
     async listTools() {
       const { body, bytes } = await rpc("tools/list");
       const tools = (body as { result?: { tools?: Array<{ name: string }> } }).result?.tools ?? [];
+      recording.push({
+        type: "tools/list",
+        at: new Date().toISOString(),
+        tools: tools.length,
+        bytes,
+      });
       return { names: tools.map((tool) => tool.name), bytes };
     },
     async call(tool: string, args: Record<string, unknown> = {}) {
       const started = performance.now();
       const { body } = await rpc("tools/call", { name: tool, arguments: args });
-      const ms = performance.now() - started;
-      const payload = body as { error?: { code?: number | string } };
-      const result = (
-        body as {
-          result?: {
-            isError?: boolean;
-            content?: Array<{ text?: string }>;
-            structuredContent?: Record<string, unknown> & {
-              ok?: boolean;
-              error?: { code?: string; details?: Record<string, unknown> };
-            };
-          };
-        }
-      ).result;
-      const text = result?.content?.map((entry) => entry.text ?? "").join("\n") ?? "";
-      const envelope = result?.structuredContent;
-      const valid =
-        !payload.error &&
-        result?.isError !== true &&
-        envelope?.ok === true &&
-        envelope.schemaVersion === 1 &&
-        typeof envelope.action === "string" &&
-        "result" in envelope;
-      const code = payload.error
-        ? `json-rpc:${payload.error.code ?? "error"}`
-        : result?.isError
-          ? (envelope?.error?.code ?? "mcp-tool-error")
-          : (envelope?.error?.code ?? "invalid-envelope");
-      const structured = valid
-        ? envelope!
-        : {
-            ok: false,
-            error: { ...envelope?.error, code },
-          };
+      const { entry, text, structured } = recordCall(tool, args, body, performance.now() - started);
+      recording.push(entry);
       calls.push({
         tool,
-        ms,
-        textBytes: Buffer.byteLength(text),
-        ok: valid,
-        ...(structured.error?.code ? { code: structured.error.code } : {}),
+        ms: entry.ms,
+        textBytes: entry.textBytes,
+        ok: entry.ok,
+        ...(entry.code ? { code: entry.code } : {}),
       });
       return { text, structured };
     },
@@ -190,6 +149,14 @@ function argument(name: string, fallback?: string): string | undefined {
 async function main() {
   const token = process.env.ORKESTRATOR_MCP_TOKEN;
   const environmentId = argument("environment");
+  const scorePath = argument("score");
+  if (scorePath && environmentId) {
+    const entries = parseRecording(await Bun.file(scorePath).text());
+    const projectId = argument("project");
+    const report = recordingReport(entries, { environmentId, ...(projectId ? { projectId } : {}) });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
   if (!token || !environmentId) {
     process.stderr.write("Set ORKESTRATOR_MCP_TOKEN and pass --environment <id>\n");
     process.exit(2);
@@ -197,6 +164,7 @@ async function main() {
   const client = createClient(argument("url", "http://127.0.0.1:34122/mcp")!, token);
   const repeats = Math.max(1, Number(argument("read-repeats", "20")));
   const approvalWaitMs = Math.max(0, Number(argument("approval-wait", "60"))) * 1_000;
+  const expectApproval = process.argv.includes("--expect-approval");
   const steps: Array<{ step: string; outcome: string }> = [];
   const listed = await client.listTools();
 
@@ -212,9 +180,13 @@ async function main() {
   const started = await client.call("start_work", {
     environmentId,
     ...(argument("agent") ? { agent: argument("agent") } : {}),
+    // Read-only commands such as `ls` run without an approval even when the
+    // environment asks, so the approval script writes a file.
     prompt:
       argument("prompt") ??
-      "Run `ls` in the workspace root and tell me how many entries there are. Ask before running anything.",
+      (expectApproval
+        ? "Run the Bash command `printf voice > voice-qualify-canary.txt` exactly once, then reply DONE. Do not use other tools or ask me any questions."
+        : "Run `ls` in the workspace root and tell me how many entries there are. Ask before running anything."),
     requestId: runKey,
   });
   const receipt = started.structured.receipt as
@@ -228,6 +200,7 @@ async function main() {
 
   // 3. answer an approval if one appears.
   let answered = "nothing was asked";
+  let approvalConfirmed = false;
   const deadline = Date.now() + approvalWaitMs;
   while (receipt && sessionId && Date.now() < deadline) {
     const status = await client.call("run_status", { operationId: receipt.operationId });
@@ -264,12 +237,38 @@ async function main() {
       const confirmed = confirmToken
         ? await client.call("answer_question", { ...answer, confirmToken })
         : first;
+      approvalConfirmed =
+        Boolean(confirmToken) && confirmed.structured.ok !== false && detail?.kind !== "question";
       answered =
         confirmed.structured.ok === false
           ? `refused: ${confirmed.structured.error?.code}`
           : confirmToken
             ? `${detail?.kind ?? "interaction"} confirmed and answered`
             : `${detail?.kind ?? "interaction"} answered`;
+      if (confirmed.structured.ok !== false) {
+        // Let the agent act on the answer before step 4 stops it, so the run
+        // shows the answer took effect: wait until the run finishes or asks
+        // something else.
+        const resumeDeadline = Date.now() + 30_000;
+        let after: string | undefined;
+        while (Date.now() < resumeDeadline) {
+          const next = (await client.call("run_status", { operationId: receipt.operationId }))
+            .structured.receipt as
+            | {
+                state?: string;
+                execution?: { state?: string; interactions?: Array<{ id: string }> };
+              }
+            | undefined;
+          after = next?.execution?.state ?? next?.state;
+          const askedAgain =
+            after === "waiting-for-input" &&
+            !next?.execution?.interactions?.some((item) => item.id === pending.id);
+          if (askedAgain || !["pending", "running", "waiting-for-input"].includes(after ?? ""))
+            break;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        answered += after ? `; run then ${after}` : "";
+      }
       break;
     }
     if (execution?.state && !["admitted", "running"].includes(execution.state)) break;
@@ -282,7 +281,14 @@ async function main() {
     const stopped = await client.call("stop_session", { sessionId, requestId: `${runKey}-stop` });
     steps.push({
       step: "stop_session",
-      outcome: stopped.structured.ok === false ? String(stopped.structured.error?.code) : "stopped",
+      // An answered run may already have finished; stopping an idle session
+      // is refused as session-idle, which is the expected outcome then.
+      outcome:
+        stopped.structured.ok !== false
+          ? "stopped"
+          : stopped.structured.error?.code === "session-idle"
+            ? "already finished (session-idle)"
+            : String(stopped.structured.error?.code),
     });
     for (let index = 0; index < repeats; index += 1)
       await client.call("read_session", { sessionId });
@@ -292,6 +298,12 @@ async function main() {
     });
   }
 
+  const recordPath = argument("record");
+  if (recordPath) {
+    const lines = client.recording.map((entry) => `${JSON.stringify(entry)}\n`).join("");
+    await appendFile(recordPath, lines, { mode: 0o600 });
+  }
+  if (expectApproval && !approvalConfirmed) process.exitCode = 1;
   const summary = summarize(client.calls);
   const reads = client.calls.filter((call) =>
     ["overview", "read_session", "run_status"].includes(call.tool),
@@ -328,9 +340,13 @@ async function main() {
             Math.max(0, ...client.calls.map((call) => call.textBytes)) / 4,
           ),
         },
+        ...(expectApproval
+          ? { approval: approvalConfirmed ? "confirmed and answered" : "not raised or refused" }
+          : {}),
+        selfCheck: scoreRecording(client.recording, { environmentId }),
         notMeasured: [
-          "misresolved spoken targets (needs a speaking model and a person)",
-          "session-handle copy errors (this harness copies handles exactly)",
+          "misresolved spoken targets (needs a speaking model and a person; score a relay recording)",
+          "session-handle copy errors (this harness copies handles exactly; selfCheck must be zero)",
         ],
       },
       null,

@@ -224,3 +224,123 @@ export function summarizeWindow(samples: readonly LiveSample[]): WindowSummary {
   }
   return { windowMs, samples: samples.length, kinds, processes };
 }
+
+/**
+ * Live footprint gauges for the soak: what must return to its starting value
+ * once every environment a soak added is gone. Read from one gateway metrics
+ * response; every gauge is a count, never a key, target or identifier.
+ *
+ * - `schedulers` / `pools`: registered diagnostic sources (a leaked owner).
+ * - `scheduler:<owner>:keys` and `…:settling`, and `scheduler:<owner>:<kind>`
+ *   keys per job kind: timers held per owner.
+ * - `pool:<pool>:active` / `…:waiting`: admission leases.
+ * - `fetch:<policy>:records|containers|inFlight` and `signal:<source>:containers`:
+ *   per-container state.
+ * - `kind:<kind>:active`: recorded jobs still running.
+ * - `stream:open`, `terminal:open`, `terminal:channels`: subscribers.
+ *
+ * `null` when the response holds no `recurringWork` block.
+ */
+export function soakFootprint(metrics: unknown): Record<string, number> | null {
+  if (!metrics || typeof metrics !== "object") return null;
+  const root = metrics as Record<string, unknown>;
+  const block = root.recurringWork;
+  if (!block || typeof block !== "object") return null;
+  const work = block as Record<string, unknown>;
+  const gauges: Record<string, number> = {};
+  const add = (name: string, value: unknown) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) return;
+    gauges[name] = (gauges[name] ?? 0) + value;
+  };
+  const records = (value: unknown): Record<string, unknown>[] =>
+    Array.isArray(value)
+      ? value.filter(
+          (entry): entry is Record<string, unknown> => !!entry && typeof entry === "object",
+        )
+      : [];
+  const label = (value: unknown) => (typeof value === "string" && value ? value : "unknown");
+
+  const schedulers = records(work.schedulers);
+  add("schedulers", schedulers.length);
+  for (const scheduler of schedulers) {
+    const owner = label(scheduler.owner);
+    add(`scheduler:${owner}:keys`, scheduler.keys);
+    add(`scheduler:${owner}:settling`, scheduler.settling);
+    const byKind = scheduler.byKind;
+    if (byKind && typeof byKind === "object") {
+      for (const [kind, entry] of Object.entries(byKind as Record<string, unknown>)) {
+        if (entry && typeof entry === "object") {
+          add(`scheduler:${owner}:${kind}`, (entry as Record<string, unknown>).keys);
+        }
+      }
+    }
+  }
+  const pools = records(work.admission);
+  add("pools", pools.length);
+  for (const pool of pools) {
+    add(`pool:${label(pool.pool)}:active`, pool.active);
+    add(`pool:${label(pool.pool)}:waiting`, pool.waiting);
+  }
+  for (const policy of records(work.fetchPolicies)) {
+    const status = policy.status as Record<string, unknown> | undefined;
+    for (const field of ["records", "containers", "inFlight"]) {
+      add(`fetch:${label(policy.name)}:${field}`, status?.[field]);
+    }
+  }
+  for (const signal of records(work.signals)) {
+    const status = signal.status as Record<string, unknown> | undefined;
+    add(`signal:${label(signal.name)}:containers`, status?.containers);
+  }
+  const kinds = (work.metrics as Record<string, unknown> | undefined)?.kinds;
+  if (kinds && typeof kinds === "object") {
+    for (const [kind, entry] of Object.entries(kinds as Record<string, unknown>)) {
+      if (entry && typeof entry === "object") {
+        add(`kind:${kind}:active`, (entry as Record<string, unknown>).active);
+      }
+    }
+  }
+  const stream = root.stream as Record<string, unknown> | undefined;
+  add("stream:open", stream?.open);
+  const terminal = root.terminalWebSocket as Record<string, unknown> | undefined;
+  add("terminal:open", terminal?.open);
+  add("terminal:channels", terminal?.channelsOpen);
+  return gauges;
+}
+
+/**
+ * Per gauge, the minimum (`"min"`) or maximum (`"max"`) over several
+ * footprints, so a job that happens to be running at one sample is not read
+ * as a leak. Footprints that could not be read are skipped.
+ */
+export function combineFootprints(
+  footprints: ReadonlyArray<Record<string, number> | null>,
+  mode: "min" | "max",
+): Record<string, number> | null {
+  const read = footprints.filter((entry): entry is Record<string, number> => entry !== null);
+  if (read.length === 0) return null;
+  const combined: Record<string, number> = {};
+  const names = new Set(read.flatMap((entry) => Object.keys(entry)));
+  for (const name of names) {
+    // A gauge absent from one footprint is zero there.
+    const values = read.map((entry) => entry[name] ?? 0);
+    combined[name] = mode === "min" ? Math.min(...values) : Math.max(...values);
+  }
+  return combined;
+}
+
+export type SoakLeak = { gauge: string; baseline: number; final: number };
+
+/**
+ * Gauges that ended above where they started. Compare the lowest settled
+ * value after the soak with the highest before it: what is still above
+ * that after the settle did not return to baseline.
+ */
+export function soakLeaks(
+  baseline: Record<string, number>,
+  final: Record<string, number>,
+): SoakLeak[] {
+  return Object.entries(final)
+    .filter(([gauge, value]) => value > (baseline[gauge] ?? 0))
+    .map(([gauge, value]) => ({ gauge, baseline: baseline[gauge] ?? 0, final: value }))
+    .sort((left, right) => left.gauge.localeCompare(right.gauge));
+}

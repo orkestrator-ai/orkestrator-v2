@@ -677,12 +677,15 @@ export class KanbanRepository {
     return await this.context.loadJson<FeaturePlan[]>(this.files.featurePlansFile(), () => []);
   }
 
+  /**
+   * One plan by ID, read as its own row. The planning supervisor calls this
+   * on every pass, so it must cost one plan however many the store retains.
+   */
   async getFeaturePlan(featureId: string): Promise<FeaturePlan | null> {
-    const plans = await this.context.loadJson<FeaturePlan[]>(
-      this.files.featurePlansFile(),
-      () => [],
-    );
-    return plans.find((candidate) => candidate.id === featureId) ?? null;
+    const stored = this.context.loadStoreRow(this.files.featurePlansFile(), featureId);
+    return typeof stored === "object" && stored !== null && (stored as FeaturePlan).id === featureId
+      ? (stored as FeaturePlan)
+      : null;
   }
 
   /**

@@ -141,8 +141,9 @@ All done on 2026-10-25; evidence in
      as the `multi-review` domain's rollback under
      `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK`. Their removal is owned by
      [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)
-     ("Code: after soak"), which now also says to move `stableJitterMs`
-     first: the keyed path still uses it.
+     ("Code: after soak"). `stableJitterMs`, which the keyed path still
+     uses, moved to `multi-review-scheduling.ts` on 2026-10-25, so that
+     removal is now self-contained.
    - ~~Drop the rollback wording from `reviewFanoutConcurrency`~~: done.
 2. ~~**Retire the reviewer-transcript compatibility fallback.**~~ Done. The
    branch, the `fallback` flag on snapshot reads, the `transcript.ui_fallback`

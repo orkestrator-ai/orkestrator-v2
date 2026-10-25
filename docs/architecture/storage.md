@@ -239,7 +239,9 @@ Whole-store reads are cached per store and revalidated against the committed
 revision on every read (one indexed lookup), which also observes other
 processes' writes. Keyed reads and mutations fetch only their named row even
 on a cold connection or after another process writes; keyed mutations invalidate
-any whole-store cache after commit. Legacy document representations retain the
+any whole-store cache after commit. A keyed read on a connection that already
+caches the store at the committed revision takes its row from that cache and
+fetches nothing; a miss does not fill the cache. Legacy document representations retain the
 whole-document fallback. `getResourceSnapshotRevision` hashes the database
 identity and that revision.
 

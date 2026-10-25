@@ -1093,6 +1093,8 @@ export async function cleanupProjectForRemoval(
   commands: RegistryDependencies["commands"],
 ): Promise<void> {
   const { storage } = context;
+  // The coordinator's schedules go with the project; others aimed at it pause.
+  context.scheduledJobs?.projectRemoved(id);
   const coordinator =
     typeof storage.getCoordinatorWorkspace === "function"
       ? await storage.getCoordinatorWorkspace(id)

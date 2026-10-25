@@ -35,6 +35,12 @@ export const RESOURCE_KINDS = [
    * ledger read is authoritative and recovers anything a missed event hid.
    */
   "transcript-artifact",
+  /**
+   * A scheduled job (or its fire history) changed. The id is the schedule
+   * id; clients re-read `list_scheduled_jobs`. A hint only, like
+   * `transcript-artifact`: the list read is authoritative.
+   */
+  "scheduled-job",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

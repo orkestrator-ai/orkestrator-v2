@@ -2,6 +2,7 @@ export * from "./storage-shared.js";
 
 import { StorageContext } from "./storage-context.js";
 import { StorageRepositories } from "./storage-repositories.js";
+import { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import path from "node:path";
 import type { AgentAccountStore } from "./agent-accounts-store.js";
 import type { BuildPipelineTranscriptMigrationReport } from "./build-pipeline-transcript-migration.js";
@@ -138,10 +139,21 @@ import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protoco
 export class StorageService {
   private readonly context: StorageContext;
   private readonly repos: StorageRepositories;
+  private scheduledJobStoreInstance: ScheduledJobStore | null = null;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
     this.repos = new StorageRepositories(this.context);
+
+  }
+
+  /** Store for scheduled jobs, sharing this facade's database and change journal. */
+  scheduledJobStore(): ScheduledJobStore {
+    this.scheduledJobStoreInstance ??= new ScheduledJobStore({
+      database: () => this.context.database,
+      announce: (scheduleId) => this.context.changes.announce("scheduled-job", scheduleId),
+    });
+    return this.scheduledJobStoreInstance;
   }
 
   async init(): Promise<void> {

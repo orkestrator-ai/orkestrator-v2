@@ -201,6 +201,7 @@ the running attempt.
 | B22 | `opencode-reconnect` | `opencode-observation-stream.ts` | Event stream; reconnect backs off from 1 s to 30 s and resets after a healthy stream. Gaps are marked and reconciled. |
 | B23 | `bridge-observation-stream` | `http-bridge-observation-stream.ts` | One content-free `/event/subscribe?observe=1` connection per observed Claude or Codex bridge, opened by the sweep. Reconnect backs off from 1 s to 30 s with jitter and resumes from its cursor; a connection silent for 75 s is torn down. Connects, gaps and disconnects wake the whole group. An older bridge that does not confirm the mode is not reconnected. |
 | B26 | `node-summary-reconcile` | `nodes/node-read-model.ts` | Named activity due job, every 60 s; reconciles connected node summaries and stops with the portal. |
+| B27 | `scheduled-job-tick` | `scheduled-jobs/service.ts` | One timer for the earliest due fire, pending retry or stale heartbeat, capped at 30 s; woken by every schedule change in this process and by host resume. Fires only while the registry writer lease is held; claims are single-row transactions; at most four fires at once; a running fire heartbeats every 20 s. See [scheduled-jobs.md](scheduled-jobs.md). |
 | C08 | `system-usage-sample`, `process-usage` | `commands-registry-system.ts` | Demand-driven by clients; concurrent reads join. |
 | L01 | `gateway-heartbeat` | `gateway-handlers.ts` | Shared 25 s keepalive. It also advances the scoped stream cursor and checks client buffers, so it is replay convergence, not a cosmetic ping. |
 

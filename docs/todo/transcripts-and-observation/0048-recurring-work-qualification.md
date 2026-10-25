@@ -349,10 +349,12 @@ fetch reach").
 
 ### Code: after soak
 
-Not started. The idle A/B on macOS shows the keyed drivers starting no more
-often than the rollback drivers, with the same freshness and no guard lines.
-But the busy profile, live GitHub, providers and soak above have not run, so
-the rollback drivers stay.
+Removal not started; its preparation is done (2026-10-25: `stableJitterMs`
+moved, the metrics switch decided). The idle A/B on macOS shows the keyed
+drivers starting no more often than the rollback drivers, with the same
+freshness and no guard lines, and a 10-cycle lifecycle soak left no leaked
+footprint. But the busy profile, live GitHub, providers and a long soak have
+not run, so the rollback drivers stay.
 
 - Remove `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the whole-store drivers
   domain by domain, with the desktop allowlist entry. Remove the

@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -14,7 +14,11 @@ const READY_TIMEOUT_MS = 10_000;
 const EXIT_TIMEOUT_MS = 10_000;
 
 async function run(command: string[], cwd: string): Promise<void> {
-  const child = Bun.spawn(command, { cwd, stdout: "inherit", stderr: "inherit" });
+  const child = Bun.spawn(command, {
+    cwd,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
   const exitCode = await child.exited;
   if (exitCode !== 0) {
     throw new Error(`${command.join(" ")} exited with ${exitCode}`);
@@ -83,10 +87,14 @@ try {
     ORKESTRATOR_CLI_CONFIG_DIR: path.join(temporaryRoot, "cli-config"),
     ORKESTRATOR_CONTROL_MCP_DISABLED: "1",
   };
-  const client = async (argv: string[], expected = 0): Promise<string> => {
+  const client = async (
+    argv: string[],
+    expected = 0,
+    env: Record<string, string | undefined> = clientEnv,
+  ): Promise<string> => {
     const run = Bun.spawn([executable, ...argv], {
       cwd: temporaryRoot,
-      env: clientEnv,
+      env,
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -182,6 +190,46 @@ try {
       // Exited.
     }
   })();
+
+  // Without ORKESTRATOR_CLI_CONFIG_DIR the client keeps its configuration in
+  // the platform's per-user directory (macOS: Application Support), private
+  // to the user, and refuses a configuration other users could rewrite. A
+  // disposable HOME keeps the operator's own configuration out of reach.
+  const home = path.join(temporaryRoot, "home");
+  const platformEnv: Record<string, string | undefined> = {
+    ...clientEnv,
+    HOME: home,
+    XDG_CONFIG_HOME: path.join(home, ".config"),
+  };
+  delete platformEnv.ORKESTRATOR_CLI_CONFIG_DIR;
+  const platformConfigDir =
+    process.platform === "darwin"
+      ? path.join(home, "Library", "Application Support", "orkestrator-cli")
+      : path.join(home, ".config", "orkestrator-cli");
+  const platformConfig = path.join(platformConfigDir, "connections.json");
+  await client(
+    ["connection", "add", "platform", "--data-dir", dataDir, "--default"],
+    0,
+    platformEnv,
+  );
+  const modeOf = async (target: string) => (await stat(target)).mode & 0o777;
+  if ((await modeOf(platformConfigDir)) !== 0o700 || (await modeOf(platformConfig)) !== 0o600) {
+    throw new Error(
+      `${platformConfigDir} is not private (directory ${(await modeOf(platformConfigDir)).toString(8)}, file ${(await modeOf(platformConfig)).toString(8)})`,
+    );
+  }
+  await client(["--json", "project", "list"], 0, platformEnv);
+  await chmod(platformConfig, 0o664);
+  const refused = JSON.parse(await client(["--json", "project", "list"], 4, platformEnv)) as {
+    ok: boolean;
+    error?: { code?: string };
+  };
+  if (refused.ok || refused.error?.code !== "connection-not-configured") {
+    throw new Error("A group-writable client configuration was not refused");
+  }
+  await chmod(platformConfig, 0o600);
+  await client(["--json", "project", "list"], 0, platformEnv);
+  console.log(`platform config directory ${platformConfigDir} is private and enforced`);
 
   // The installed client drives the installed service end to end.
   await client(["connection", "add", "smoke", "--data-dir", dataDir, "--default"]);

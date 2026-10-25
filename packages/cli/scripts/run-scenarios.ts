@@ -30,7 +30,7 @@ import {
  * every selected scenario passed and cleaned up.
  */
 
-interface Options {
+export interface Options {
   scenarios: string[];
   provider?: string;
   environmentType: "local" | "container";
@@ -91,29 +91,48 @@ function select(options: Options): ScenarioDefinition[] {
   });
 }
 
-async function runOne(
+interface ScenarioDependencies {
+  newScenarioRoot: typeof newScenarioRoot;
+  startIsolatedBackend: typeof startIsolatedBackend;
+  removeTree: typeof removeTree;
+  now: () => number;
+}
+
+const defaultDependencies: ScenarioDependencies = {
+  newScenarioRoot,
+  startIsolatedBackend,
+  removeTree,
+  now: Date.now,
+};
+
+export async function runOne(
   definition: ScenarioDefinition,
   options: Options,
   manifest: RunManifest,
+  dependencies: ScenarioDependencies = defaultDependencies,
 ): Promise<{
   name: string;
   passed: boolean;
   durationMs: number;
+  /** Launch to the backend's readiness line; null when it never became ready. */
+  backendReadyMs: number | null;
   error?: string;
   cleanupErrors: string[];
 }> {
-  const started = Date.now();
-  const root = await newScenarioRoot(definition.name);
+  const started = dependencies.now();
+  let backendReadyMs: number | null = null;
+  const root = await dependencies.newScenarioRoot(definition.name);
   const cleanupErrors: string[] = [];
   let passed = false;
   let error: string | undefined;
   let context: ScenarioContext | undefined;
   try {
-    const backend = await startIsolatedBackend({
+    const backend = await dependencies.startIsolatedBackend({
       root,
       ...(options.provider && definition.live ? { credentialSource: options.provider } : {}),
       extraArgs: options.dockerImage ? ["--docker-image", options.dockerImage] : [],
     });
+    backendReadyMs = dependencies.now() - started;
     context = {
       name: definition.name,
       root,
@@ -131,6 +150,7 @@ async function runOne(
       cleanup: [],
       ...(options.provider ? { provider: options.provider } : {}),
       environmentType: options.environmentType,
+      ...(options.dockerImage ? { dockerImage: options.dockerImage } : {}),
     };
     await definition.run(context);
     passed = true;
@@ -161,13 +181,15 @@ async function runOne(
       }
     }
     manifest.cleanupErrors.push(...cleanupErrors.map((entry) => `${definition.name}: ${entry}`));
-    if (!(options.keepOnFailure && !passed)) await removeTree(root);
+    if (!(options.keepOnFailure && (!passed || cleanupErrors.length > 0)))
+      await dependencies.removeTree(root);
     else console.error(`kept ${root} for inspection`);
   }
   return {
     name: definition.name,
     passed: passed && cleanupErrors.length === 0,
-    durationMs: Date.now() - started,
+    durationMs: dependencies.now() - started,
+    backendReadyMs,
     ...(error ? { error } : {}),
     cleanupErrors,
   };
@@ -188,9 +210,20 @@ async function main(): Promise<number> {
   const id = runId();
   const artifactDir = path.resolve(PACKAGE_ROOT, "../../output/cli-scenarios", id);
   const manifest = new RunManifest(path.join(artifactDir, "manifest.json"));
+  return runScenarios(selected, options, manifest, id);
+}
+
+/** Execute the selected cases and persist the same readiness evidence we measured. */
+export async function runScenarios(
+  selected: ScenarioDefinition[],
+  options: Options,
+  manifest: RunManifest,
+  id: string,
+  dependencies: ScenarioDependencies = defaultDependencies,
+): Promise<number> {
   const results = [];
   for (const definition of selected) {
-    const result = await runOne(definition, options, manifest);
+    const result = await runOne(definition, options, manifest, dependencies);
     results.push(result);
     console.log(
       `${result.passed ? "PASS" : "FAIL"} ${result.name} (${(result.durationMs / 1000).toFixed(1)}s)${
@@ -202,10 +235,11 @@ async function main(): Promise<number> {
     run: id,
     provider: options.provider ?? null,
     environmentType: options.environmentType,
-    results: results.map(({ name, passed, durationMs, cleanupErrors }) => ({
+    results: results.map(({ name, passed, durationMs, backendReadyMs, cleanupErrors }) => ({
       name,
       passed,
       durationMs,
+      backendReadyMs,
       cleanupErrors,
     })),
   });
@@ -213,7 +247,9 @@ async function main(): Promise<number> {
   return results.every((result) => result.passed) ? 0 : 1;
 }
 
-process.exitCode = await main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  return 2;
-});
+if (import.meta.main) {
+  process.exitCode = await main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 2;
+  });
+}

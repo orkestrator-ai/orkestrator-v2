@@ -1253,11 +1253,24 @@ export class AgentMailRepository {
    * comparison decides on a millisecond boundary and drops the very case it was
    * written for. Delivery state alone is the evidence, and it is unambiguous:
    * an uninjected request has not reached any turn.
+   *
+   * A worker started by `launch_environment` receives its request as the
+   * startup tab's initial prompt rather than as mail. That prompt is pending
+   * until the provider accepts it, which can be minutes after the delegation
+   * opened (setup) and seconds after the tab's session exists and already
+   * reads idle. `pendingAgentLaunch` is cleared only after acceptance, so it
+   * is the same delivery evidence for that path.
    */
   async hasUndeliveredCoordinatorRequest(
     workerEnvironmentId: string,
     workerTabId: string,
   ): Promise<boolean> {
+    if (
+      workerTabId === "startup-agent" &&
+      (await this.repos.projects.getEnvironment(workerEnvironmentId))?.pendingAgentLaunch === true
+    ) {
+      return true;
+    }
     const store = await this.loadAgentMailStore();
     const mailbox = store.mailboxes[agentMailboxId(workerEnvironmentId, workerTabId)];
     if (!mailbox) return false;

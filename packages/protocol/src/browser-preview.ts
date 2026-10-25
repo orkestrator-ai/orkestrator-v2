@@ -31,9 +31,10 @@ export interface BrowserPreviewAttachInput {
   /** Service previews: resolved and authorized in the main process. */
   service?: BrowserPreviewServiceTarget;
   /**
-   * Service previews: the view navigation (`BrowserPreviewState.service.navigation`)
-   * that `service.path` was chosen against. A path chosen against an older
-   * navigation is stale and never navigates the view. Absent from older renderers.
+   * The view navigation that `service.path` (`BrowserPreviewState.service.navigation`)
+   * or `url` (`BrowserPreviewState.navigation`) was chosen against. A target
+   * chosen against an older navigation is stale and never navigates the view.
+   * Absent from older renderers.
    */
   navigationBasis?: number;
   bounds: BrowserPreviewBounds;
@@ -63,6 +64,11 @@ export interface BrowserPreviewState {
    * history, in-page routes); echo it as `navigationBasis`.
    */
   service?: { serviceId: string; path: string; displayUrl: string; navigation?: number };
+  /**
+   * Legacy/manual previews: the view's main-frame navigation count, as
+   * `service.navigation` is for service previews; echo it as `navigationBasis`.
+   */
+  navigation?: number;
   transport?: BrowserPreviewTransportState;
 }
 

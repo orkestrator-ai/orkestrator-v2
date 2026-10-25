@@ -9,6 +9,22 @@ export const BLOCKING_OVERLAY_SELECTOR = [
   '[role="listbox"]',
 ].join(",");
 
+/*
+ * Toolbar layout shared by service and manual browser tabs, sized against the
+ * pane (`@container/browser`), not the window. Below `@2xl` (42rem, 672 px)
+ * the address form takes a full-width second row and the buttons share the
+ * first; the narrowest window (800×600) gives a 519 px pane. From `@2xl` it
+ * is one row with at least 10rem for the address, and the service picker
+ * shrinks before the address does.
+ */
+export const BROWSER_TOOLBAR_CLASS =
+  "flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 border-b border-border/80 bg-muted/25 px-2 py-1.5 @2xl/browser:flex-nowrap";
+export const BROWSER_ADDRESS_FORM_CLASS =
+  "order-last flex w-full min-w-0 basis-full items-center @2xl/browser:order-none @2xl/browser:w-auto @2xl/browser:basis-0 @2xl/browser:flex-1";
+export const BROWSER_ADDRESS_INPUT_CLASS =
+  "h-full min-w-[min(10rem,60%)] flex-1 bg-transparent px-2.5 font-mono text-xs text-foreground outline-none placeholder:font-sans placeholder:text-muted-foreground";
+export const BROWSER_TOOLBAR_ACTIONS_CLASS = "ml-auto flex shrink-0 items-center gap-1.5";
+
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

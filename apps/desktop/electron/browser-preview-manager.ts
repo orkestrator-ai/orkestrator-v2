@@ -404,9 +404,20 @@ export class BrowserPreviewManager {
       preview = undefined;
     }
 
+    // As for service previews (see `attachService`): the renderer learns the
+    // view's URL from state events and re-attaches on every resize and scroll,
+    // so an attach sent before it applied a link, a redirect or Back carries
+    // the previous URL, and loading it would undo the navigation (seen live:
+    // Back during a resize bounced between the two URLs). A URL chosen against
+    // an older navigation is stale. Renderers that send no basis keep the old
+    // rule: any URL other than the view's is new.
+    const basis = input.navigationBasis;
     if (!preview) {
       preview = this.createPreview(input.tabId, url, navigationScope);
-    } else if (preview.requestedUrl !== url) {
+    } else if (
+      preview.requestedUrl !== url &&
+      (basis === undefined || basis >= preview.navigation)
+    ) {
       this.clipboardUserActivations.delete(preview.view.webContents);
       preview.requestedUrl = url;
       preview.navigationScope = navigationScope;
@@ -1029,7 +1040,7 @@ export class BrowserPreviewManager {
               : {}),
             transport: transport.transportState(preview.service.key),
           }
-        : {}),
+        : { navigation: preview.navigation }),
     };
   }
 

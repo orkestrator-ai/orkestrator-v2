@@ -80,6 +80,7 @@ import { connectionPreviewBackend } from "./preview-connection-backend.js";
 import { PreviewTransportManager } from "./preview-transport-manager.js";
 import { createPreviewPortHints } from "./preview-port-hints.js";
 import {
+  nodePartitionKey,
   PreviewPartitionRetention,
   previewPartitionsInUse,
 } from "./preview-partition-retention.js";
@@ -128,7 +129,11 @@ import {
   projectMenuWindows,
   resolveFocusedWindowContext,
 } from "./window-menu.js";
-import { chromiumSwitchesForRuntime, runtimeProfileFromEnvironment } from "./runtime-profile.js";
+import {
+  chromiumSwitchesForRuntime,
+  previewRetentionTimingForRuntime,
+  runtimeProfileFromEnvironment,
+} from "./runtime-profile.js";
 import {
   installProductionApplicationLogging,
   registerApplicationLoggingShutdown,
@@ -457,6 +462,13 @@ function previewRetention(): PreviewPartitionRetention {
   return previewPartitionRetention;
 }
 
+/** A node's preview partitions stay while a command node this device uses lists it. */
+function rememberPreviewNode(nodeId: string, commandConnectionId: string): void {
+  void previewRetention()
+    .rememberNode(nodePartitionKey(nodeId), connectionPartitionKey(commandConnectionId))
+    .catch(() => console.warn("[Previews] Failed to record a preview node."));
+}
+
 /** A realm's native views follow it in its window; see `realmChildViewClass`. */
 type RealmViewOwner = { contents: Electron.WebContents; ViewCtor: typeof WebContentsView };
 
@@ -491,10 +503,22 @@ function createWindowBrowserPreviews(
     onStateChange: (serviceKey) => manager?.refreshService(serviceKey),
     logger: console,
   });
-  previewRetention().schedule(connectionPartitionKey(partitionKey), previewTransport, {
-    delayMs: 60_000,
-    intervalMs: 30 * 60_000,
-  });
+  // A window on a command node also reconciles the nodes reached through it.
+  const retentionSource = realm
+    ? previewTransport
+    : {
+        listServices: () => previewTransport.listServices(),
+        listNodes: () => previewBackend.invoke<unknown>("list_nodes", {}),
+        get closed() {
+          return previewTransport.closed;
+        },
+      };
+  // Agent-test profiles may shorten the passes; every other flavor ignores that.
+  previewRetention().schedule(
+    connectionPartitionKey(partitionKey),
+    retentionSource,
+    previewRetentionTimingForRuntime(runtimeFlavor),
+  );
   const transport: BrowserPreviewServiceTransport = {
     acquire: (target, holderId) => previewTransport.acquire(target, holderId),
     release: (serviceKey, holderId) => previewTransport.release(serviceKey, holderId),
@@ -858,6 +882,7 @@ function createWorkspaceViews(): WorkspaceViews {
                 (realm) => realm.scope === updated.scope,
               );
               if (!context?.realm) return; // Initial open precedes registration.
+              rememberPreviewNode(updated.target!.nodeId, parent.previewConnectionId);
               const owner: RealmViewOwner = {
                 contents: context.contents,
                 ViewCtor: realmChildViewClass(WebContentsView, context.realm.layout),
@@ -909,6 +934,7 @@ function registerRealm(record: WorkspaceViewRecord, parentWebContentsId: number)
     ViewCtor: realmChildViewClass(WebContentsView, record.layout),
   };
   const connectionId = connectionManager.getConnectionId(record.scope);
+  rememberPreviewNode(binding.target.nodeId, parent.previewConnectionId);
   // Preview site data stays with the node, as it would for a direct connection.
   const previews = createWindowBrowserPreviews(
     parent.window,
@@ -1046,7 +1072,7 @@ function registerIpc(): void {
       previewCommandHandover(commandHandoverDeps(event), targetConnectionId),
     handOverCommandNode: async (input, event) => {
       const deps = commandHandoverDeps(event);
-      const result = await handOverCommandNode(deps, input);
+      const result = await handOverCommandNode(deps, input, previewRetention());
       // The window follows the new command node.
       if (input.targetConnectionId !== deps.currentConnectionId) {
         const context = contextForEvent(event);

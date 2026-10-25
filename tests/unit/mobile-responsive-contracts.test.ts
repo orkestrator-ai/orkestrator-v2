@@ -7,12 +7,12 @@ const read = (relativePath: string) => readFileSync(path.join(root, relativePath
 
 describe("mobile responsive layout contracts", () => {
   test.each<string[]>([
+    ["apps/web/src/components/browser/BrowserTab.tsx", "@container/browser", "overflow-hidden"],
     [
-      "apps/web/src/components/browser/BrowserTab.tsx",
-      "@container/browser",
+      "apps/web/src/components/browser/browser-tab-hooks.ts",
       "basis-full",
-      "@md/browser:flex-nowrap",
-      "overflow-hidden",
+      "@2xl/browser:flex-nowrap",
+      "min-w-[min(10rem,60%)]",
     ],
     ["apps/web/src/components/chat/FileMentionMenu.tsx", "w-full min-w-0", "sm:w-96"],
     ["apps/web/src/components/chat/NativeComposeDock.tsx", "px-2", "sm:px-4"],

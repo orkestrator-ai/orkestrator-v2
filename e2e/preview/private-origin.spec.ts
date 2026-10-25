@@ -1,9 +1,20 @@
-import { chromium, firefox, webkit, expect, test, type Browser, type Page } from "@playwright/test";
+import {
+  chromium,
+  firefox,
+  webkit,
+  expect,
+  test,
+  type Browser,
+  type BrowserContextOptions,
+  type Page,
+} from "@playwright/test";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import { previewFixtureSourceMap } from "../../test-fixtures/preview-app/server.ts";
 import { startLoopbackProxy } from "./loopback-proxy";
 
 /**
@@ -23,6 +34,8 @@ interface Ready {
   domain: string;
   spki: string;
   services: string[];
+  /** Why the `ipv6` service (a fixture bound only to `::1`) is absent, if it is. */
+  ipv6Unavailable: string | null;
   gateway: string;
   redirectPort: number;
 }
@@ -39,10 +52,10 @@ let browser: Browser;
 let proxy: Awaited<ReturnType<typeof startLoopbackProxy>>;
 let engine: string;
 
-function newContext() {
+function newContext(options: BrowserContextOptions = {}) {
   // Chromium trusts the exact test leaf; Firefox/WebKit bypass validation only
   // in this throwaway context. No system trust store or browser profile changes.
-  return browser.newContext({ ignoreHTTPSErrors: engine !== "chromium" });
+  return browser.newContext({ ...options, ignoreHTTPSErrors: engine !== "chromium" });
 }
 const waiting: Array<{ type: string; resolve: (message: unknown) => void }> = [];
 
@@ -91,8 +104,8 @@ test.afterAll(async () => {
   harness?.stdin.end();
 });
 
-async function signIn(page: Page, service: string): Promise<Grant> {
-  const grant = await next<Grant>("grant", `grant ${service}`);
+async function signIn(page: Page, service: string, path = "/"): Promise<Grant> {
+  const grant = await next<Grant>("grant", `grant ${service} ${path}`);
   // The same form POST the web client submits (`submitPreviewBootstrap`).
   await page.setContent(
     `<!doctype html><meta name="referrer" content="no-referrer">
@@ -102,7 +115,7 @@ async function signIn(page: Page, service: string): Promise<Grant> {
      </form>`,
   );
   await Promise.all([
-    page.waitForURL(`${grant.origin}/`),
+    page.waitForURL((url) => url.href === `${grant.origin}${path}`),
     page.evaluate(() => document.querySelector("form")!.submit()),
   ]);
   return grant;
@@ -525,6 +538,423 @@ test("a hostile service worker blocks re-sign-in until site data is cleared and 
   expect(await fresh.evaluate(() => navigator.serviceWorker.controller)).toBeNull();
   expect((await appSession())?.startsWith(`${recovered.attachmentId}.`)).toBe(true);
   expect((await next<GatewayRequests>("gateway-requests", "gateway-requests")).invokes).toEqual([]);
+  await context.close();
+});
+
+/** Requests the named fixture received since `before` (a previous length). */
+async function fixtureRequestsSince(name: string, before: number) {
+  return (
+    await next<FixtureRequests>("fixture-requests", `fixture-requests ${name}`)
+  ).requests.slice(before);
+}
+async function fixtureRequestCount(name: string): Promise<number> {
+  return (await next<FixtureRequests>("fixture-requests", `fixture-requests ${name}`)).requests
+    .length;
+}
+
+test("the page's srcset picks the candidate for the pixel ratio and it decodes through the service origin", async () => {
+  for (const [scale, chosen] of [
+    [1, "small.png"],
+    [2, "large.png"],
+  ] as const) {
+    const context = await newContext({ deviceScaleFactor: scale });
+    const page = await context.newPage();
+    const before = await fixtureRequestCount("app");
+    const grant = await signIn(page, "app");
+    const image = page.locator("img[srcset]");
+    await expect
+      .poll(() => image.evaluate((element: HTMLImageElement) => element.complete))
+      .toBe(true);
+    expect(
+      await image.evaluate((element: HTMLImageElement) => ({
+        currentSrc: element.currentSrc,
+        naturalWidth: element.naturalWidth,
+        naturalHeight: element.naturalHeight,
+      })),
+    ).toEqual({
+      currentSrc: `${grant.origin}/assets/${chosen}`,
+      // Density-corrected: 2 px at 1x and 4 px at 2x are both 2 CSS px.
+      naturalWidth: 2,
+      naturalHeight: 2,
+    });
+    const paths = (await fixtureRequestsSince("app", before)).map((request) => request.path);
+    expect(paths).toContain(`/assets/${chosen}`);
+    await context.close();
+  }
+});
+
+test("a script's source map is served from the page's own origin unchanged", async () => {
+  const context = await newContext();
+  const page = await context.newPage();
+  const grant = await signIn(page, "app");
+  const scriptUrl = `${grant.origin}/assets/mapped.js`;
+  const mapUrl = `${grant.origin}/assets/mapped.js.map`;
+  // Chromium only: DevTools Protocol reports the map URL the engine parsed.
+  const cdp = engine === "chromium" ? await context.newCDPSession(page) : null;
+  const parsed = cdp
+    ? new Promise<{ url: string; sourceMapURL?: string }>((resolve) => {
+        cdp.on("Debugger.scriptParsed", (event) => {
+          if (event.url === scriptUrl) resolve(event);
+        });
+      })
+    : null;
+  await cdp?.send("Debugger.enable");
+  const before = await fixtureRequestCount("app");
+  await page.addScriptTag({ url: scriptUrl });
+  expect(
+    await page.evaluate(() => (window as unknown as { mappedMarker?: string }).mappedMarker),
+  ).toBe("browser-app");
+  // What a debugger does: resolve the comment against the script URL and fetch it.
+  const fetched = await page.evaluate(async (url) => {
+    const script = await (await fetch(url)).text();
+    const reference = /\/\/# sourceMappingURL=(\S+)/.exec(script)?.[1] ?? "";
+    const resolved = new URL(reference, url).href;
+    const response = await fetch(resolved);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    return {
+      resolved,
+      status: response.status,
+      contentType: response.headers.get("content-type"),
+      sha256: Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(""),
+      text: new TextDecoder().decode(bytes),
+    };
+  }, scriptUrl);
+  const expected = previewFixtureSourceMap("browser-app");
+  expect(fetched).toEqual({
+    resolved: mapUrl,
+    status: 200,
+    contentType: "application/json",
+    sha256: createHash("sha256").update(expected).digest("hex"),
+    text: expected,
+  });
+  const paths = (await fixtureRequestsSince("app", before)).map((request) => request.path);
+  expect(paths).toContain("/assets/mapped.js.map");
+  if (parsed) {
+    const event = await parsed;
+    expect(new URL(event.sourceMapURL ?? "", event.url).href).toBe(mapUrl);
+    await cdp!.detach();
+  }
+  await context.close();
+});
+
+test("an SPA deep link opens after sign-in and history survives reloads without a sign-in code", async () => {
+  const context = await newContext();
+  const page = await context.newPage();
+  const deep = "/app/deep/route?x=1#h";
+  const requestsBefore = await fixtureRequestCount("app");
+  const grant = await signIn(page, "app", deep);
+  expect(page.url()).toBe(`${grant.origin}${deep}`);
+  await expect(page.locator("body")).toHaveAttribute("data-loaded", "browser-app");
+  expect(await page.evaluate(() => document.referrer)).toBe("");
+  // The bootstrap and session-code redirects add no history entries: only the
+  // page that submitted the form precedes the deep link. Firefox replaces
+  // that initial `about:blank` entry on the first navigation.
+  const before = engine === "firefox" ? 0 : 1;
+  expect(await page.evaluate(() => history.length)).toBe(before + 1);
+
+  // Client-side route change, then a full reload of the pushed address.
+  const pushed = "/app/next/view?tab=2";
+  await page.evaluate((path) => history.pushState({ step: 2 }, "", path), pushed);
+  expect(page.url()).toBe(`${grant.origin}${pushed}`);
+  const reloaded = await page.reload();
+  expect(reloaded?.status()).toBe(200);
+  expect(page.url()).toBe(`${grant.origin}${pushed}`);
+  await expect(page.locator("body")).toHaveAttribute("data-loaded", "browser-app");
+  expect(await page.evaluate(() => history.state)).toEqual({ step: 2 });
+
+  await page.goBack();
+  expect(page.url()).toBe(`${grant.origin}${deep}`);
+  await expect(page.locator("body")).toHaveAttribute("data-loaded", "browser-app");
+  await page.goForward();
+  expect(page.url()).toBe(`${grant.origin}${pushed}`);
+  await expect(page.locator("body")).toHaveAttribute("data-loaded", "browser-app");
+
+  const paths = (await fixtureRequestsSince("app", requestsBefore)).map((request) => request.path);
+  expect(paths).toContain("/app/deep/route");
+  expect(paths).toContain("/app/next/view");
+  expect(paths.some((path) => path.startsWith("/__orkestrator_preview/"))).toBe(false);
+
+  // Walking Back from the deep link reaches the form page (or nothing)
+  // without passing a sign-in URL.
+  const visited: string[] = [];
+  await page.goBack();
+  visited.push(page.url());
+  await page.goBack();
+  visited.push(page.url());
+  expect(visited).toEqual([
+    `${grant.origin}${deep}`,
+    before ? "about:blank" : `${grant.origin}${deep}`,
+  ]);
+  for (const url of visited) {
+    expect(url).not.toContain("__orkestrator_preview");
+    expect(url).not.toContain(grant.grant);
+    expect(url).not.toContain(grant.attachmentId);
+  }
+  await context.close();
+});
+
+test("sibling services do not share IndexedDB, BroadcastChannel, Cache Storage or service workers", async () => {
+  const context = await newContext();
+  const app = await context.newPage();
+  const appGrant = await signIn(app, "app");
+  const other = await context.newPage();
+  const otherGrant = await signIn(other, "other");
+  // A second page of the same service is the positive control for each channel.
+  const sameService = await context.newPage();
+  await sameService.goto(`${appGrant.origin}/app/second`);
+  await expect(sameService.locator("body")).toHaveAttribute("data-loaded", "browser-app");
+
+  // IndexedDB: a database written by `app` does not exist for `other`.
+  const openDatabase = (page: Page, write: string | null) =>
+    page.evaluate(
+      (value) =>
+        new Promise<{ oldVersion: number; stores: string[]; value: unknown }>((resolve, reject) => {
+          let oldVersion = -1;
+          const request = indexedDB.open("preview-shared", 1);
+          request.onupgradeneeded = (event) => {
+            oldVersion = event.oldVersion;
+            if (value !== null) request.result.createObjectStore("items");
+          };
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            const db = request.result;
+            const stores = Array.from(db.objectStoreNames);
+            if (!stores.includes("items")) {
+              db.close();
+              resolve({ oldVersion, stores, value: null });
+              return;
+            }
+            const transaction = db.transaction("items", "readwrite");
+            const store = transaction.objectStore("items");
+            if (value !== null) store.put(value, "owner");
+            const read = store.get("owner");
+            transaction.oncomplete = () => {
+              db.close();
+              resolve({ oldVersion, stores, value: read.result });
+            };
+          };
+        }),
+      write,
+    );
+  expect(await openDatabase(app, "app")).toEqual({
+    oldVersion: 0,
+    stores: ["items"],
+    value: "app",
+  });
+  expect(await openDatabase(sameService, null)).toEqual({
+    oldVersion: -1,
+    stores: ["items"],
+    value: "app",
+  });
+  expect(await openDatabase(other, null)).toEqual({ oldVersion: 0, stores: [], value: null });
+
+  // BroadcastChannel: same-origin pages hear each other; the sibling does not.
+  for (const page of [sameService, other]) {
+    await page.evaluate(() => {
+      const received: unknown[] = [];
+      const channel = new BroadcastChannel("preview-shared");
+      channel.onmessage = (event) => received.push(event.data);
+      Object.assign(window, { previewChannel: channel, previewReceived: received });
+    });
+  }
+  const receivedOn = (page: Page) =>
+    page.evaluate(() => (window as unknown as { previewReceived: unknown[] }).previewReceived);
+  await app.evaluate(() => new BroadcastChannel("preview-shared").postMessage("from-app"));
+  await expect.poll(() => receivedOn(sameService)).toEqual(["from-app"]);
+  await other.waitForTimeout(500);
+  expect(await receivedOn(other)).toEqual([]);
+
+  // Cache Storage.
+  await app.evaluate(async () => {
+    const cache = await caches.open("preview-shared");
+    await cache.put("/cached", new Response("app"));
+  });
+  expect(
+    await sameService.evaluate(async () => (await caches.match("/cached"))?.text() ?? null),
+  ).toBe("app");
+  expect(
+    await other.evaluate(async () => ({
+      keys: await caches.keys(),
+      match: (await caches.match("/cached")) ?? null,
+    })),
+  ).toEqual({ keys: [], match: null });
+
+  // Service worker: `/sw.js` registered and controlling `app` answers
+  // `/sw/marker` there; `other` has no registration and reaches its own app.
+  await app.evaluate(async () => {
+    await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    await navigator.serviceWorker.ready;
+  });
+  await expect
+    .poll(() => app.evaluate(() => navigator.serviceWorker.controller !== null))
+    .toBe(true);
+  expect(await app.evaluate(async () => (await fetch("/sw/marker")).json())).toEqual({
+    worker: "browser-app",
+  });
+  await other.reload();
+  await expect(other.locator("body")).toHaveAttribute("data-loaded", "browser-other");
+  expect(
+    await other.evaluate(async () => {
+      const response = await fetch("/sw/marker");
+      return {
+        controlled: navigator.serviceWorker.controller !== null,
+        registrations: (await navigator.serviceWorker.getRegistrations()).length,
+        status: response.status,
+        body: await response.text(),
+      };
+    }),
+  ).toEqual({ controlled: false, registrations: 0, status: 404, body: "not found: browser-other" });
+  expect(new URL(otherGrant.origin).host).not.toBe(new URL(appGrant.origin).host);
+  await context.close();
+});
+
+test("preview sign-in and refusal pages cannot be framed; popups open top-level", async () => {
+  const context = await newContext();
+  const signedIn = await context.newPage();
+  const grant = await signIn(signedIn, "app");
+  const bootstrapOrigin = new URL(grant.action).origin;
+  // A cross-site parent page, and a frameable page on a third origin as the
+  // control that a rendered cross-origin frame's text is readable here.
+  const framer = "https://framer.example";
+  const control = "https://frameable.example";
+  for (const origin of [framer, control]) {
+    await context.route(`${origin}/**`, (route) =>
+      route.fulfill({
+        contentType: "text/html; charset=utf-8",
+        body:
+          origin === control
+            ? "<!doctype html><body>control frame rendered</body>"
+            : "<!doctype html><title>framer</title><body></body>",
+      }),
+    );
+  }
+  const page = await context.newPage();
+  await page.goto(`${framer}/`);
+  const before = await fixtureRequestCount("app");
+
+  const frame = async (name: string, src: string) => {
+    const response = page.waitForResponse((answer) => answer.url() === src);
+    await page.evaluate(
+      ({ name, src }) =>
+        new Promise<void>((resolve) => {
+          const element = document.createElement("iframe");
+          element.name = name;
+          element.onload = () => resolve();
+          // Some engines fire no load event for a blocked frame.
+          setTimeout(resolve, 3_000);
+          element.src = src;
+          document.body.append(element);
+        }),
+      { name, src },
+    );
+    const answer = await response;
+    const child = page.frames().find((candidate) => candidate.name() === name);
+    const text = child
+      ? await child.evaluate(() => document.body?.innerText ?? "").catch(() => "")
+      : "";
+    return {
+      status: answer.status(),
+      frameOptions: answer.headers()["x-frame-options"],
+      csp: answer.headers()["content-security-policy"],
+      text,
+    };
+  };
+
+  expect((await frame("control", `${control}/`)).text).toContain("control frame rendered");
+  // Bootstrap authority (GET: the sign-in explanation page), a session-code
+  // URL with a bad code, and the signed-in service itself from a cross-site
+  // parent: each answer forbids framing and does not render.
+  const bootstrap = await frame("bootstrap", `${bootstrapOrigin}/__orkestrator_preview/bootstrap`);
+  const session = await frame(
+    "session",
+    `${grant.origin}/__orkestrator_preview/session?code=not-a-code`,
+  );
+  const service = await frame("service", `${grant.origin}/app/framed`);
+  expect(bootstrap.status).toBe(405);
+  expect(session.status).toBe(403);
+  // Cross-site frames carry no Lax session cookie, so authentication refuses
+  // them before the Fetch Metadata check (403 from a same-site sibling).
+  expect(service.status).toBe(401);
+  for (const outcome of [bootstrap, session, service]) {
+    expect(outcome.frameOptions).toBe("DENY");
+    expect(outcome.csp).toContain("frame-ancestors 'none'");
+    expect(outcome.text).not.toMatch(/preview|sign-in|browser-app/i);
+  }
+  expect(await fixtureRequestsSince("app", before)).toEqual([]);
+
+  // The web client's popup: a blank window, opener cut, then the form POST
+  // (`submitPreviewBootstrap` in apps/web/src/lib/preview-external.ts).
+  const popupGrant = await next<Grant>("grant", "grant app /app/popup");
+  const [popup] = await Promise.all([
+    context.waitForEvent("page"),
+    page.evaluate((descriptor) => {
+      const target = window.open("about:blank", "_blank")!;
+      target.opener = null;
+      target.document.open();
+      target.document.write('<!doctype html><meta name="referrer" content="no-referrer">');
+      target.document.close();
+      const form = target.document.createElement("form");
+      form.method = "POST";
+      form.action = descriptor.action;
+      form.referrerPolicy = "no-referrer";
+      for (const [name, value] of [
+        ["attachment", descriptor.attachmentId],
+        ["grant", descriptor.grant],
+      ]) {
+        const input = target.document.createElement("input");
+        input.type = "hidden";
+        input.name = name!;
+        input.value = value!;
+        form.append(input);
+      }
+      target.document.body.append(form);
+      form.submit();
+    }, popupGrant),
+  ]);
+  await popup.waitForURL((url) => url.href === `${popupGrant.origin}/app/popup`);
+  await expect(popup.locator("body")).toHaveAttribute("data-loaded", "browser-app");
+  expect(await popup.evaluate(() => window.opener === null)).toBe(true);
+  expect(popup.url()).not.toContain(popupGrant.grant);
+
+  // A plain cross-site `window.open` is a top-level navigation and opens the
+  // signed-in service. The transport adds no Cross-Origin-Opener-Policy (the
+  // application's own headers pass through), so that popup keeps its opener.
+  const openedUrl = `${grant.origin}/app/opened`;
+  const [opened, openedResponse] = await Promise.all([
+    context.waitForEvent("page"),
+    context.waitForEvent("response", (answer) => answer.url() === openedUrl),
+    page.evaluate((url) => void window.open(url, "_blank"), openedUrl),
+  ]);
+  expect(openedResponse.status()).toBe(200);
+  expect(openedResponse.headers()["cross-origin-opener-policy"]).toBeUndefined();
+  await expect(opened.locator("body")).toHaveAttribute("data-loaded", "browser-app");
+  expect(await opened.evaluate(() => window.opener !== null)).toBe(true);
+  await context.close();
+});
+
+test("an IPv6-only service loads through its private origin", async () => {
+  test.skip(ready.ipv6Unavailable !== null, ready.ipv6Unavailable ?? "");
+  const context = await newContext();
+  const page = await context.newPage();
+  const before = await fixtureRequestCount("ipv6");
+  const grant = await signIn(page, "ipv6");
+  await expect(page.locator("body")).toHaveAttribute("data-loaded", "browser-ipv6");
+  const received = await page.evaluate(
+    () =>
+      new Promise<string>((resolve, reject) => {
+        const socket = new WebSocket(`wss://${location.host}/ws`, "fixture.v1");
+        socket.onmessage = (event) => {
+          resolve(String(event.data));
+          socket.close();
+        };
+        socket.onerror = () => reject(new Error("websocket failed"));
+      }),
+  );
+  expect(received).toContain("browser-ipv6");
+  expect(page.url()).toBe(`${grant.origin}/`);
+  const paths = (await fixtureRequestsSince("ipv6", before)).map((request) => request.path);
+  expect(paths).toEqual(expect.arrayContaining(["/", "/assets/app.js", "/ws"]));
   await context.close();
 });
 

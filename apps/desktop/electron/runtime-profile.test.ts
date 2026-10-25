@@ -1,13 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   assertProfileIsolatedFromProduction,
   assertSafeProfileResetTarget,
+  AGENT_TEST_PREVIEW_RETENTION_ENV,
   chromiumSwitchesForRuntime,
   defaultRuntimeProfileRoots,
   isExternalWorktreeDir,
   normalizeRuntimeProfileId,
   parseRuntimeProfile,
+  PREVIEW_RETENTION_TIMING,
+  previewRetentionTimingForRuntime,
   resolveRuntimeProfile,
 } from "./runtime-profile";
 import { APP_SLUG } from "./app-constants";
@@ -205,4 +209,57 @@ test("only an agent-test profile on macOS swaps the login keychain for a mock", 
   expect(chromiumSwitchesForRuntime("agent-test", "linux")).toEqual([]);
   expect(chromiumSwitchesForRuntime("development", "darwin")).toEqual([]);
   expect(chromiumSwitchesForRuntime("production", "darwin")).toEqual([]);
+});
+
+describe("preview partition retention timing", () => {
+  const overridden = { [AGENT_TEST_PREVIEW_RETENTION_ENV]: "1500" };
+
+  test("only an agent-test runtime honours the override", () => {
+    expect(previewRetentionTimingForRuntime("agent-test", overridden)).toEqual({
+      delayMs: 1_500,
+      intervalMs: 1_500,
+    });
+    // An installed app (or a developer's own profile) never clears site data
+    // on a schedule some leftover environment variable chose.
+    expect(previewRetentionTimingForRuntime("production", overridden)).toEqual(
+      PREVIEW_RETENTION_TIMING,
+    );
+    expect(previewRetentionTimingForRuntime("development", overridden)).toEqual(
+      PREVIEW_RETENTION_TIMING,
+    );
+    expect(PREVIEW_RETENTION_TIMING).toEqual({ delayMs: 60_000, intervalMs: 30 * 60_000 });
+  });
+
+  test("an agent-test runtime keeps the default without a usable value", () => {
+    for (const value of [
+      undefined,
+      "",
+      " ",
+      "abc",
+      "1e3",
+      "-5",
+      "1.5",
+      "99",
+      "1800001",
+      "9".repeat(20),
+    ]) {
+      expect(
+        previewRetentionTimingForRuntime("agent-test", {
+          [AGENT_TEST_PREVIEW_RETENTION_ENV]: value,
+        }),
+      ).toEqual(PREVIEW_RETENTION_TIMING);
+    }
+    expect(
+      previewRetentionTimingForRuntime("agent-test", {
+        [AGENT_TEST_PREVIEW_RETENTION_ENV]: " 100 ",
+      }),
+    ).toEqual({ delayMs: 100, intervalMs: 100 });
+  });
+
+  test("main schedules retention with the flavor-gated timing and never reads the variable itself", () => {
+    const main = readFileSync(new URL("./main.ts", import.meta.url), "utf8");
+    expect(main).toContain("previewRetentionTimingForRuntime(runtimeFlavor)");
+    expect(main).not.toContain(AGENT_TEST_PREVIEW_RETENTION_ENV);
+    expect(main).not.toContain("AGENT_TEST_PREVIEW_RETENTION_ENV");
+  });
 });

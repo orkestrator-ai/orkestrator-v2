@@ -2389,8 +2389,14 @@ export class StorageService {
     associationId: string,
     state: "completed" | "failed" | "stopped",
     at = new Date().toISOString(),
+    backgroundWorkTimeoutMs?: number,
   ): Promise<CoordinatorWorkflowAssociation | null> {
-    return this.repos.coordinators.closeCoordinatorDelegation(associationId, state, at);
+    return this.repos.coordinators.closeCoordinatorDelegation(
+      associationId,
+      state,
+      at,
+      backgroundWorkTimeoutMs,
+    );
   }
 
   prepareCoordinatorDelegationWake(

@@ -457,12 +457,20 @@ export class CoordinatorsRepository {
     associationId: string,
     state: "completed" | "failed" | "stopped",
     at = new Date().toISOString(),
+    backgroundWorkTimeoutMs?: number,
   ): Promise<CoordinatorWorkflowAssociation | null> {
     return this.enqueueCoordinatorMutation(async () => {
       const store = await this.loadCoordinatorStore();
       const association = store.workflows.find((item) => item.id === associationId);
       if (!association?.delegation || association.delegation.state !== "running") return null;
-      association.delegation = { ...association.delegation, state, completedAt: at };
+      association.delegation = {
+        ...association.delegation,
+        state,
+        completedAt: at,
+        ...(state === "completed" && backgroundWorkTimeoutMs !== undefined
+          ? { backgroundWorkTimeoutMs }
+          : {}),
+      };
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
       this.context.changes.announce("coordinator", association.projectId, association.projectId);

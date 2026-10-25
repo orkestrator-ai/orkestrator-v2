@@ -35,6 +35,26 @@ import type { CoordinatorRemoteAccess } from "./coordinator-remote.js";
 
 const MAX_STARTUP_ERROR_CHARS = 2_000;
 const DELEGATION_IDLE_RECONCILE_GRACE_MS = 15_000;
+/**
+ * How long a delegation stays open after its worker ended a turn without a
+ * report while work it started in the background (a shell, sub-agents) is
+ * still running. The worker usually resumes when that work reports; past
+ * this, it may have left a long-lived process behind and the coordinator is
+ * told after all. Raw activity cannot distinguish awaited work from servers
+ * or watchers, so keep this fallback short and qualify the timeout notice.
+ */
+const DELEGATION_BACKGROUND_WORK_HOLD_MS = 2 * 60_000;
+
+/** Delegation settling knobs beyond the status-wake options. */
+export interface CoordinatorDelegationOptions {
+  /**
+   * Whether a worker tab's turn has ended while background work it started is
+   * still running (the raw session state is working, the turn view idle).
+   */
+  workerBackgroundWork?: (environmentId: string, tabId: string) => Promise<boolean>;
+  /** Overrides {@link DELEGATION_BACKGROUND_WORK_HOLD_MS}; for tests. */
+  backgroundWorkHoldMs?: number;
+}
 
 export function sanitizeCoordinatorError(value: unknown): string {
   const text = (value instanceof Error ? value.message : String(value))
@@ -138,6 +158,12 @@ export class CoordinatorService {
    */
   private readonly remoteSeenWorking = new Set<string>();
   private readonly remoteAskedAt = new Map<string, { at: number }>();
+  /**
+   * Delegations whose worker ended a turn without a report while its
+   * background work kept running, with when that was first seen. Lost on
+   * restart, which only restarts the hold.
+   */
+  private readonly backgroundWorkSince = new Map<string, { since: number; requestedAt: string }>();
 
   constructor(
     private readonly storage: StorageService,
@@ -151,7 +177,8 @@ export class CoordinatorService {
       environmentId: string,
       tabId: string,
     ) => Promise<AgentActivityState | "unknown">,
-    private readonly options: Omit<CoordinatorStatusWakeOptions, "workerActivity"> = {},
+    private readonly options: Omit<CoordinatorStatusWakeOptions, "workerActivity"> &
+      CoordinatorDelegationOptions = {},
   ) {
     this.statusWakes = new CoordinatorStatusWakes(storage, {
       ...options,
@@ -174,6 +201,7 @@ export class CoordinatorService {
    * that starts after now.
    */
   noteRemoteRequest(associationId: string): void {
+    this.backgroundWorkSince.delete(associationId);
     this.remoteSeenWorking.delete(associationId);
     this.remoteAskedAt.set(associationId, { at: Date.now() });
   }
@@ -736,13 +764,23 @@ export class CoordinatorService {
     this.statusWakes.stop();
   }
 
-  /** A worker tab's activity changed; only delegated tabs' waiting episodes matter. */
-  noteWorkerActivity(event: {
+  /** Working starts a fresh pause budget; waiting feeds the status-wake debounce. */
+  async noteWorkerActivity(event: {
     environmentId: string;
     tabId: string;
     state: AgentActivityState | "unknown";
   }): Promise<void> {
-    return this.statusWakes.noteWorkerActivity(event);
+    if (event.state === "working") {
+      for (const association of await this.storage.listOpenCoordinatorDelegations()) {
+        if (
+          !association.nodeId &&
+          association.resourceId === event.environmentId &&
+          association.delegation?.workerTabId === event.tabId
+        )
+          this.backgroundWorkSince.delete(association.id);
+      }
+    }
+    await this.statusWakes.noteWorkerActivity(event);
   }
 
   /**
@@ -791,13 +829,83 @@ export class CoordinatorService {
         ) {
           continue;
         }
+        const background =
+          worker.state === "completed"
+            ? await this.backgroundWorkDisposition(association)
+            : { held: false };
+        if (background.held) continue;
         // A close that returns null lost the race to another observer of the same
         // edge. Either way the delegation is now closed, and the wake below is
         // idempotent, so there is nothing to do differently.
-        await this.storage.closeCoordinatorDelegation(association.id, worker.state);
+        await this.closeWorkerDelegation(association.id, worker.state, background.timeoutMs);
       }
     });
     await this.deliverDelegationWakes();
+  }
+
+  /**
+   * Whether a worker whose turn just read as ended should keep its delegation
+   * open because work it started in the background is still running.
+   *
+   * A worker that waits on a background shell or on sub-agents ends its turn
+   * and resumes when they report. Without a report that turn end is a pause,
+   * and "finished without sending a report" would be false. A worker that did
+   * report has answered, so its report is never held for background work, and
+   * the hold is bounded so a forgotten long-lived process cannot keep the
+   * coordinator waiting forever.
+   */
+  private async backgroundWorkDisposition(
+    association: CoordinatorWorkflowAssociation,
+    backgroundWorkPending?: boolean,
+  ): Promise<{ held: boolean; timeoutMs?: number }> {
+    const delegation = association.delegation;
+    const probe = this.options.workerBackgroundWork;
+    if (
+      !delegation ||
+      !(
+        backgroundWorkPending ??
+        (await probe?.(association.resourceId, delegation.workerTabId).catch(() => false))
+      )
+    ) {
+      this.backgroundWorkSince.delete(association.id);
+      return { held: false };
+    }
+    const owner = await this.storage.getCoordinatorWorkspaceById(association.coordinatorId);
+    const main = owner ? coordinatorMainConversation(owner) : undefined;
+    if (
+      owner &&
+      main &&
+      (await this.storage.hasDelegationHeldAgentMail(
+        association.id,
+        coordinatorRuntimeId(owner.id, main.id),
+        main.tabId,
+        association.resourceId,
+        delegation.workerTabId,
+      ))
+    ) {
+      this.backgroundWorkSince.delete(association.id);
+      return { held: false };
+    }
+    const now = Date.now();
+    const previous = this.backgroundWorkSince.get(association.id);
+    const since = previous?.requestedAt === delegation.requestedAt ? previous.since : now;
+    this.backgroundWorkSince.set(association.id, { since, requestedAt: delegation.requestedAt });
+    const timeoutMs = this.options.backgroundWorkHoldMs ?? DELEGATION_BACKGROUND_WORK_HOLD_MS;
+    return now - since < timeoutMs ? { held: true } : { held: false, timeoutMs };
+  }
+
+  private async closeWorkerDelegation(
+    id: string,
+    state: "completed" | "failed" | "stopped",
+    backgroundWorkTimeoutMs?: number,
+  ): Promise<void> {
+    await this.storage.closeCoordinatorDelegation(
+      id,
+      state,
+      new Date().toISOString(),
+      backgroundWorkTimeoutMs,
+    );
+    this.backgroundWorkSince.delete(id);
   }
 
   /**
@@ -842,6 +950,12 @@ export class CoordinatorService {
               : environment.status === "stopped"
                 ? ("stopped" as const)
                 : null;
+        const activity =
+          !state && this.workerActivity
+            ? await this.workerActivity(association.resourceId, association.delegation!.workerTabId)
+            : "unknown";
+        if (activity === "working") this.backgroundWorkSince.delete(association.id);
+        let timeoutMs: number | undefined;
         if (
           !state &&
           this.workerActivity &&
@@ -852,18 +966,16 @@ export class CoordinatorService {
             association.resourceId,
             association.delegation!.workerTabId,
           );
-          if (
-            !undelivered &&
-            (await this.workerActivity(
-              association.resourceId,
-              association.delegation!.workerTabId,
-            )) === "idle"
-          ) {
-            state = "completed";
+          if (!undelivered && activity === "idle") {
+            const background = await this.backgroundWorkDisposition(current);
+            if (!background.held) {
+              state = "completed";
+              timeoutMs = background.timeoutMs;
+            }
           }
         }
         if (!state) return;
-        await this.storage.closeCoordinatorDelegation(association.id, state);
+        await this.closeWorkerDelegation(association.id, state, timeoutMs);
       });
     }
     await this.deliverDelegationWakes();
@@ -909,6 +1021,7 @@ export class CoordinatorService {
     if (state.tab === "working" || state.tab === "waiting") {
       this.remoteSeenWorking.add(association.id);
     }
+    if (state.tab === "working") this.backgroundWorkSince.delete(association.id);
     const seenWorking = this.remoteSeenWorking.has(association.id);
     // As here: a turn that ends before the worker has read the request is not
     // its answer, and a stopped worker with the request waiting may still start.
@@ -944,9 +1057,14 @@ export class CoordinatorService {
           (item) => item.id === association.id,
         );
         if (!current) return;
+        const background =
+          outcome === "completed"
+            ? await this.backgroundWorkDisposition(current, state.backgroundWorkPending === true)
+            : { held: false };
+        if (background.held) return;
         this.remoteSeenWorking.delete(association.id);
         this.remoteAskedAt.delete(association.id);
-        await this.storage.closeCoordinatorDelegation(association.id, outcome);
+        await this.closeWorkerDelegation(association.id, outcome, background.timeoutMs);
       },
     );
   }
@@ -1053,6 +1171,8 @@ export class CoordinatorService {
               : await this.options
                   .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
                   .catch(() => undefined);
+        const backgroundWorkTimeoutMs = delegation.backgroundWorkTimeoutMs;
+        const backgroundWorkMinutes = Math.round((backgroundWorkTimeoutMs ?? 0) / 60_000);
         const tabArgs = `{ ${association.nodeId ? `"nodeId": "${association.nodeId}", ` : ""}"environmentId": "${association.resourceId}", "tabId": "${delegation.workerTabId}" }`;
         await this.storage
           .sendAgentMail(
@@ -1070,6 +1190,9 @@ export class CoordinatorService {
               body:
                 `Worker environment ${association.resourceId}${nodeName ? ` on ${nodeName} (nodeId ${association.nodeId})` : ""} (tab ${delegation.workerTabId}) ${outcome} ` +
                 `without sending a report.` +
+                (backgroundWorkTimeoutMs !== undefined
+                  ? ` Its turn ended while work it started in the background was still running, and none of it reported for ${backgroundWorkMinutes} ${backgroundWorkMinutes === 1 ? "minute" : "minutes"}; it may resume if that work reports.`
+                  : "") +
                 (association.baseBranch
                   ? ` It was started from ${association.baseBranch}${
                       association.baseCommit ? ` at ${association.baseCommit.slice(0, 12)}` : ""

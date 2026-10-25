@@ -348,8 +348,11 @@ The preview suite uses a browser-local loopback proxy, throwaway certificates
 and fresh contexts; it changes neither system DNS nor the trust store. Chromium
 pins the test leaf. Firefox and WebKit bypass certificate validation only in
 those contexts. WebKit engine coverage does **not** qualify shipping Safari or
-iOS. The suite covers sibling reads/frames, visible links, hostile workers and
-same-service iframe returns through a synthetic external identity provider.
+iOS. The suite covers sibling reads/frames, visible links, hostile workers,
+same-service iframe returns through a synthetic external identity provider,
+`srcset`, source maps, SPA deep links and history, IndexedDB,
+BroadcastChannel, Cache and worker isolation, frame and popup handling, and
+an IPv6-only (`::1`) service.
 
 Live Tailscale Serve header preservation is a separate opt-in transport check:
 
@@ -437,7 +440,8 @@ the full matrix is a separate task:
 
 ```bash
 # Credential-free: read-only, local-lifecycle, retry-and-retention,
-# setup-failure, client-exit, exec, wrong-profile
+# setup-failure, client-exit, exec, wrong-profile, project-cascade,
+# project-init (container runs add foreign-owner and drop the local-only ones)
 mise run test:logged -- --name cli-scenarios -- mise run test:cli:scenarios
 
 # One scenario, keeping its root for inspection on failure
@@ -455,17 +459,23 @@ mise run test:cli:scenarios -- --environment-type container \
 ```
 
 `mise run test:agent:browser:isolated` includes `e2e/agent-testing/cli-ui.spec.ts`
-(CLI changes seen by an open and a reloaded renderer). Its live question test
-needs a profile started with Claude credentials:
+(CLI changes seen by an open and a reloaded renderer). Its live question and
+approval tests start their run on `ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT`
+(default `claude`; `ORKESTRATOR_AGENT_TEST_LIVE_CLI_MODEL` pins a model) and
+need a profile started with that provider's credentials. The approval test
+sets the environment's execution policy to ask (a host session otherwise
+auto-approves):
 
 ```bash
-mise run dev:test --profile qa-cli-live --fixture --credential-source claude --agent-platforms claude
+mise run dev:test --profile qa-cli-live --fixture --credential-source opencode --agent-platforms opencode
 ORKESTRATOR_AGENT_TEST_PROFILE=qa-cli-live ORKESTRATOR_AGENT_TEST_LIVE_CLI=1 \
+  ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT=opencode \
   mise run test:agent:browser -- e2e/agent-testing/cli-ui.spec.ts
 mise run dev:stop --profile qa-cli-live && mise run dev:reset --profile qa-cli-live
 ```
 
-The run manifest (IDs, exit codes, stages — no prompts or tokens) is written to
+The run manifest (IDs, exit codes, stages and, for a live turn, the pinned and
+reported model — no prompts or tokens) is written to
 `output/cli-scenarios/<run>/manifest.json`. Record live results in the
 [evidence log](../todo/cli-and-slash-commands/0014-cli-qualification.md#evidence-log), against the coverage
 table in [cli-testing.md](cli-testing.md#coverage-by-layer).
@@ -1124,6 +1134,7 @@ Use the default suite plus the additional evidence relevant to the change:
 | User-visible or background renderer flow | Isolated-stack browser cycle, including inactive-environment rehydration |
 | Electron main/preload/IPC | Focused Electron tests plus `mise run test:agent:electron` |
 | Docker lifecycle or ownership | Local fixture coverage plus `mise run test:agent:docker` |
+| Service previews: private origins, publication, bootstrap, request forwarding, or the preview fixtures | `mise run test:preview:browser` (all three engines); add `mise run test:preview:docker` for target resolution, port publication or the relay, and `mise run test:agent:electron` for the desktop tunnel. See "Opt-in preview checks". |
 | iOS | `mise run test:all` on macOS with Xcode, or report that iOS was not run |
 
 For real-stack flows, artifact handling, authentication, and safe profile

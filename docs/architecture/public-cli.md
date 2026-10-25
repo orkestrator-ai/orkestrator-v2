@@ -98,7 +98,10 @@ The client configuration lives in `ORKESTRATOR_CLI_CONFIG_DIR`, else
 `~/Library/Application Support/orkestrator-cli` (macOS): `connections.json`
 (0600), `credentials/` (0600 files in a 0700 directory), `receipts/`. A config
 file writable by others or a credential file readable by others is refused.
-There is no project-local configuration, so cloning a repository cannot select
+`mise run smoke:cli` checks the platform default from the packed install: with
+a disposable `HOME` and no override, `connection add` creates the directory
+0700 and `connections.json` 0600 there, and a group-writable file is refused
+(exit 4, `connection-not-configured`). There is no project-local configuration, so cloning a repository cannot select
 a backend or hand a worker an operator credential. `add` contacts the backend
 and pins its installation ID unless `--no-check`. URLs with embedded
 credentials are refused; plain `http` is accepted only for loopback and
@@ -571,7 +574,18 @@ worktree roots, argv-only driver, owned cleanup, private manifest under
 `client-exit`, `exec`, `wrong-profile`, `project-cascade` (a started and a
 stopped environment deleted by `project remove --cascade`; checkout and origin
 kept) and `project-init` (local only: no remote, a local environment starts
-from the repository's own `main`). `live-session` also lists the session's
+from the repository's own `main`). The container matrix adds
+`foreign-owner`: a container and two volumes (one mounted, one unmounted)
+carrying every label of the scenario's environment except its owner
+(`orkestrator-owner`) sit beside it while `environment start`, `exec`, `list`,
+`stop` and `delete` run, and must
+stay exactly as created (state, start time, labels), with the command run in
+the environment's own container. Cleanup verifies that all decoy resources
+are absent and reports Docker failures in `cleanupErrors`. `live-session`
+records the model each session reports in force (`session config get`) on
+its `session start`
+manifest entry, beside the pinned model or `null` for the provider default.
+`live-session` also lists the session's
 commands, checks that an unknown and a changed command are refused, runs a
 selected command (Claude's built-in `/context`), and sends `--literal`,
 `--attach` and an `--enqueue` prompt behind a running turn. Options: `--scenario NAME` (repeat),
@@ -646,15 +660,17 @@ Which test proves each scenario class is listed in
   see [0017-cli-command-surface.md](../todo/cli-and-slash-commands/0017-cli-command-surface.md).
 - Container lifecycle and exec are qualified on Linux Docker and macOS Docker
   Desktop with worktree-owned images. The 2026-10-18 macOS evidence also records
-  live Claude, Codex and OpenCode container passes. Remaining gaps include Pi,
-  Cursor and Grok live runs, macOS packed install/config permissions/profile
-  discovery, and a foreign-owner Docker decoy through the CLI; see the
+  live Claude, Codex and OpenCode container passes. The 2026-10-25 evidence
+  completes macOS packed install/config permissions/profile discovery and the
+  foreign-owner Docker decoy through the CLI. Pi, Cursor and Grok live runs
+  and live token-cost measurement remain open; see the
   [qualification evidence and remaining work](../todo/cli-and-slash-commands/0014-cli-qualification.md).
 - Browser-checked in `e2e/agent-testing/cli-ui.spec.ts`: CLI-made project,
   environment and settings changes reach an open and a reloaded renderer;
-  with a live Claude profile, a CLI-started question rehydrates in an
-  inactive, reloaded renderer and the UI's answer completes the CLI's run.
-  Other providers' question cards were not browser-checked.
+  with live Claude and OpenCode profiles, CLI-started questions and approvals
+  rehydrate in an inactive, reloaded renderer and the UI's answer or approval
+  completes the CLI's run. Codex raised neither card in host build mode;
+  Pi, Cursor and Grok card checks await credentials (see the qualification record).
 - To withdraw one action, remove its handler from
   [`registry.ts`](../../apps/backend/src/core/public-api/registry.ts):
   capabilities stop advertising it and clients refuse it before submitting,

@@ -1,3 +1,4 @@
+import { workerSessionActivity } from "./worker-session-activity.js";
 import { ScheduledJobExecutor } from "./scheduled-jobs/executor.js";
 import { defaultOwnerLabel, ScheduledJobService } from "./scheduled-jobs/service.js";
 import { publicActionHandlers } from "./public-api/registry.js";
@@ -503,27 +504,14 @@ export class OrkestratorBackend {
       storage,
       () => this.controlMcp.getSettings(),
       undefined,
-      async (environmentId, tabId) => {
-        const logicalSessionKey = `env-${environmentId}:${tabId}`;
-        const session = (await storage.listNativeAgentSessions()).find(
-          (candidate) =>
-            candidate.environmentId === environmentId &&
-            candidate.logicalSessionKey === logicalSessionKey,
-        );
-        if (!session) return "unknown";
-        // The turn view: a worker whose turn ended but whose background tasks
-        // still run has answered, and its report must not wait for them. The
-        // raw state stays `working` until every task finishes, which held a
-        // report indefinitely when the turn-end edge itself was missed.
-        return this.nativeAgents.sessionTurnActivitySnapshot(
-          environmentId,
-          session.agent,
-          logicalSessionKey,
-        );
-      },
+      async (environmentId, tabId) =>
+        (await workerSessionActivity(storage, this.nativeAgents, environmentId, tabId)).turn,
       {
         lastAssistantExcerpt: (environmentId, tabId) =>
           this.lastAssistantExcerpt(environmentId, tabId),
+        workerBackgroundWork: async (environmentId, tabId) =>
+          (await workerSessionActivity(storage, this.nativeAgents, environmentId, tabId))
+            .backgroundWorkPending,
         waitingBlocker: (environmentId, tabId) => this.waitingBlocker(environmentId, tabId),
       },
     );

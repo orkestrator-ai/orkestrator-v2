@@ -39,3 +39,12 @@ immediately afterwards; the next isolated rerun with the same command passed
 - **Disposition:** open.
 - **Evidence:** recurred on 2026-10-25 in [0801](../aggregate-validation-runs/0801-per-machine-accounts-validation.md) at 40,002.06 ms, and the owner passed alone. Two failures at exactly the 40 s deadline, against 1.5 s alone, suggest a hang during startup rather than slow work.
 - **Next step:** on timeout, print the `opencode serve` output and the last registration step reached. Check whether the start waits on the shared OpenCode database lock (see [0723](../backend-services-and-tooling/0723-opencode-host-shutdown-retry-race.md)).
+
+## Main-merge recurrence — 2026-10-25
+
+- Merge parents: feature `7650912e87ff060ba5beeb6a5f7e29e26d9e49ea` and main `1d40fcf38a9845ede8a2645dce437a41eaa1587e`, on branch `false-worker-finished-notice-31ed23d5bb4d`, Linux x64. The sole source conflict was coordinator callback wiring in `apps/backend/src/core/index.ts`; this test was unchanged.
+- Command: `mise run test:logged -- --name merge-suite -- mise run test`, using default reservations of 4 workspace, 1 root, 2 bridge and 1 protocol worker slots, with two backend Bun workers.
+- Failure: the same case timed out at 40,000.69 ms, with one dangling process killed. Backend: 11,478 passed, 134 skipped, 1 failed across 11,613 tests in 688 files (399.97 s). All other workspace packages and the root, bridge and protocol groups passed; aggregate duration was 516.0 s.
+- Complete unchanged owner: `mise run test:logged -- --name merge-opencode-research-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/opencode-coordinator-research-live.test.ts --parallel=1 --only-failures` passed (exit 0, 2.6 s).
+- Evidence: `/tmp/orkestrator-test-run.BiI1L3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer logged-run summary: `/tmp/orkestrator-test-run.zPP21z/summary.json`.
+- Assessment: another aggregate-only timeout. The cause remains unconfirmed; no implementation, assertion, timeout or skip changed.

@@ -178,6 +178,41 @@ function installBackend(backend: Backend, native = true) {
   };
 }
 
+/**
+ * The narrow-pane toolbar contract, asserted by class because happy-dom cannot
+ * measure (keep in step with `BrowserTab.test.tsx`). One row only from `@2xl`
+ * (672 px). Below it, so at the 519 px pane of an 800×600 window, the buttons
+ * share the first row and the address form takes a full-width second row. On
+ * one row the address keeps at least min(10rem, 60%).
+ */
+function expectBrowserToolbarLayout(toolbar: HTMLElement) {
+  const classes = (element: Element | null | undefined) => element?.className.split(/\s+/) ?? [];
+  const input = toolbar.querySelector('input[aria-label="Browser address"]');
+  const form = input?.closest("form");
+  const actions = form?.nextElementSibling;
+  expect(classes(toolbar)).toEqual(
+    expect.arrayContaining(["flex-wrap", "@2xl/browser:flex-nowrap"]),
+  );
+  expect(toolbar.className).not.toMatch(/@(md|lg|xl)\/browser:flex-nowrap/);
+  expect(form?.parentElement).toBe(toolbar);
+  expect(classes(form)).toEqual(
+    expect.arrayContaining([
+      "order-last",
+      "w-full",
+      "basis-full",
+      "@2xl/browser:order-none",
+      "@2xl/browser:basis-0",
+      "@2xl/browser:flex-1",
+    ]),
+  );
+  expect(classes(input)).toEqual(expect.arrayContaining(["min-w-[min(10rem,60%)]", "flex-1"]));
+  expect(classes(input)).not.toContain("min-w-0");
+  // Everything after the form is one right-aligned group on the button row.
+  expect((actions?.nextElementSibling ?? null) === null).toBe(true);
+  expect(classes(actions)).toEqual(expect.arrayContaining(["ml-auto", "shrink-0"]));
+  expect(actions?.querySelector('button[aria-label^="Annotations"]') != null).toBe(true);
+}
+
 const serviceUri = (path = "/", serviceId = FIXTURE_SERVICE_ID) =>
   formatPreviewServiceUri({
     backendInstanceId: FIXTURE_BACKEND_INSTANCE_ID,
@@ -622,6 +657,30 @@ describe("service browser tabs", () => {
     );
   });
 
+  test("wraps the address onto its own row in narrow panes; the picker shrinks before the address", async () => {
+    installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService()],
+    });
+    seedTab(serviceUri());
+    const { container } = renderTab();
+    const input = (await screen.findByLabelText("Browser address")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("http://localhost:3000/"));
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.className).toContain("@container/browser");
+    expectBrowserToolbarLayout(root.firstElementChild as HTMLElement);
+    const options = screen.getByRole("button", { name: "Preview options" });
+    expect(options.parentElement).toBe(input.closest("form")!.nextElementSibling as HTMLElement);
+
+    const picker = screen.getByRole("button", { name: /^Preview service / });
+    expect(picker.nextElementSibling).toBe(input);
+    const pickerClasses = picker.className.split(/\s+/);
+    expect(pickerClasses).toEqual(
+      expect.arrayContaining(["shrink", "min-w-[4.5rem]", "max-w-[14rem]"]),
+    );
+    expect(pickerClasses).not.toContain("shrink-0");
+  });
+
   test("the address bar navigates by path within the service", async () => {
     installBackend({
       capabilities: fixturePreviewCapabilities(),
@@ -881,5 +940,68 @@ describe("service browser tabs", () => {
     renderTab();
     expect(await screen.findByText("Different backend")).toBeTruthy();
     expect(browserPreview.attach).not.toHaveBeenCalled();
+  });
+
+  describe("legacy URL tabs", () => {
+    // The fixture service is container port 3000 published on host port 49152.
+    const legacyUrl = "http://localhost:49152/app/next?tab=2";
+
+    test("a port one current service owns offers Open as service, keeping the path", async () => {
+      installBackend({
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      });
+      seedTab(legacyUrl);
+      renderTab();
+      expect(await screen.findByText(/Port 49152 is the web preview service/)).toBeTruthy();
+      expect(tabUrl()).toBe(legacyUrl);
+
+      fireEvent.click(screen.getByRole("button", { name: "Open as service" }));
+      await waitFor(() => expect(tabUrl()).toBe(serviceUri("/app/next?tab=2")));
+      expect(invokeMock).toHaveBeenCalledWith("get_preview_services", expect.anything());
+    });
+
+    test("an ambiguous port keeps the tab as it is", async () => {
+      const api = fixturePreviewService({
+        definition: { serviceId: API_SERVICE_ID, label: "api", entry: false },
+      });
+      installBackend({
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService(), api],
+      });
+      seedTab(legacyUrl);
+      renderTab();
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("get_preview_services", expect.anything()),
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      expect(screen.queryByRole("button", { name: "Open as service" }) === null).toBe(true);
+      expect(tabUrl()).toBe(legacyUrl);
+    });
+
+    test("a binding that changed after the offer was shown is not followed", async () => {
+      const backend: Backend = {
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      };
+      installBackend(backend);
+      seedTab(legacyUrl);
+      renderTab();
+      const open = await screen.findByRole("button", { name: "Open as service" });
+
+      // The container was recreated: same service and host port, new generation.
+      const rebound = fixturePreviewService();
+      rebound.endpoint = { ...rebound.endpoint, endpointGeneration: 2 };
+      backend.services = [rebound];
+      fireEvent.click(open);
+      expect(await screen.findByText(/changed while this was checked/)).toBeTruthy();
+      expect(tabUrl()).toBe(legacyUrl);
+
+      // The new binding is offered afresh and only converts on a second request.
+      fireEvent.click(screen.getByRole("button", { name: "Open as service" }));
+      await waitFor(() => expect(tabUrl()).toBe(serviceUri("/app/next?tab=2")));
+    });
   });
 });

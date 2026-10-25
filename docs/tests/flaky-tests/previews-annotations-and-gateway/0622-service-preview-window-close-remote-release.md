@@ -68,3 +68,6 @@ Original command: `mise run test:logged -- --name merge-electron -- mise run tes
 - **Evidence:** `orkestrator-test-run.zGyXkd/merge-electron.log.gz` below the host temporary directory; rerun results under `output/agent-testing/merge-preview-electron-owner/electron/results.json`.
 - **Assessment:** confirmed intermittent failure in the same scenario at an earlier attachment-count check; no cause was established. No implementation, assertion, timeout or skip changed.
 - **Recurrence 2026-10-25:** failed once (5 s predicate timeout) in the full `test:agent:electron` run on branch `todo-0044-annotation-qualification-55474f22f1aa` at host load about 45; passed alone on rerun.
+- **Service preview rollout (0042), 2026-10-25:** no recurrence in 6 runs on
+  branch `todo-0042-service-preview-rollout-f64ae24ade8a`; the window was gone
+  208 to 230 ms after `close()` and the remote release followed in time.

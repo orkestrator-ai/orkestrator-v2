@@ -201,7 +201,8 @@ the changed paths can affect instead of always running every suite:
   (`mise run test:browser`, or `mise run test:agent:browser:isolated` for
   real-stack flows), the design canvas (`mise run test:agent:design:isolated`),
   Electron main/preload/IPC (`mise run test:agent:electron`), Docker lifecycle
-  (`mise run test:agent:docker`), the published CLI
+  (`mise run test:agent:docker`), service preview origins, forwarding and
+  fixtures (`mise run test:preview:browser`), the published CLI
   (`mise run test:cli:scenarios`), and iOS (`mise run test:all`, macOS only).
   Omit them otherwise and say so in one limitation.
 

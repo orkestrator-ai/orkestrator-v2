@@ -24,6 +24,7 @@ import { createInterface } from "node:readline";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 
 import { startPreviewFixture } from "../../../test-fixtures/preview-app/server.ts";
+import { defaultProbeFamily } from "./core/preview-target-resolver.js";
 import { createPreviewHarness } from "./core/preview-test-support.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { PreviewPublicationManager } from "./preview-publication.js";
@@ -54,17 +55,40 @@ const pki = await mkdtemp(join(tmpdir(), "ork-preview-browser-"));
 certificates(pki, [`*.${TEST_PREVIEW_DOMAIN}`, "idp.identity.test"]);
 const fixture = await startPreviewFixture({ marker: "browser-app" });
 const other = await startPreviewFixture({ marker: "browser-other" });
-const harness = await createPreviewHarness({ env: { ORKESTRATOR_PREVIEW_TRANSPORT: "1" } });
+// An IPv6-only target: bound to `::1` alone, registered with `auto` so the
+// real resolver has to fall back from 127.0.0.1 to ::1.
+let ipv6: Awaited<ReturnType<typeof startPreviewFixture>> | null = null;
+let ipv6Unavailable: string | null = null;
+try {
+  ipv6 = await startPreviewFixture({ marker: "browser-ipv6", host: "::1" });
+} catch (error) {
+  ipv6Unavailable = `no IPv6 loopback: ${error instanceof Error ? error.message : String(error)}`;
+}
+const fixtures: Record<string, Awaited<ReturnType<typeof startPreviewFixture>>> = {
+  app: fixture,
+  other,
+  ...(ipv6 ? { ipv6 } : {}),
+};
+// The real loopback family probe (the test support stubs it to "no answer"),
+// so `auto` resolves the IPv6-only fixture the way a user's service would.
+const harness = await createPreviewHarness({
+  env: { ORKESTRATOR_PREVIEW_TRANSPORT: "1" },
+  probeFamily: defaultProbeFamily,
+});
 await harness.addLocalEnvironment("local");
 await harness.runtime.init();
 
-async function register(label: string, port: number): Promise<string> {
+async function register(
+  label: string,
+  port: number,
+  addressFamily: "ipv4" | "auto" = "ipv4",
+): Promise<string> {
   const created = await harness.runtime.registry.register({
     environmentId: "local",
     label,
     targetKind: "backend-host",
     applicationPort: port,
-    addressFamily: "ipv4",
+    addressFamily,
   });
   if (created.kind !== "definition") throw new Error("expected definition");
   return created.definition.serviceId;
@@ -73,6 +97,7 @@ async function register(label: string, port: number): Promise<string> {
 const services: Record<string, string> = {
   app: await register("app", fixture.port),
   other: await register("other", other.port),
+  ...(ipv6 ? { ipv6: await register("ipv6", ipv6.port, "auto") } : {}),
 };
 
 let vite: ChildProcess | null = null;
@@ -199,13 +224,13 @@ const recorder = createHttpServer((request, response) => {
 await new Promise<void>((resolve) => recorder.listen(0, "127.0.0.1", resolve));
 const gatewayUrl = `http://127.0.0.1:${(recorder.address() as AddressInfo).port}`;
 
-async function grant(name: string) {
+async function grant(name: string, path = "/") {
   const serviceId = services[name];
   if (!serviceId) return { error: "unknown service" };
   const attachment = await harness.runtime.access.createAttachment({
     serviceId,
     surface: "browser-top-level",
-    path: "/",
+    path,
   });
   return {
     action: attachment.bootstrap!.action,
@@ -244,8 +269,7 @@ async function shutdown(): Promise<void> {
   await new Promise<void>((resolve) => recorder.close(() => resolve()));
   await gateway.stop();
   await manager.dispose();
-  await fixture.close();
-  await other.close();
+  for (const source of Object.values(fixtures)) await source.close();
   await harness.cleanup();
   await rm(pki, { recursive: true, force: true });
   process.exit(0);
@@ -258,6 +282,7 @@ process.stdout.write(
     domain: TEST_PREVIEW_DOMAIN,
     spki: spkiPin(join(pki, "leaf.pem")),
     services: Object.keys(services),
+    ipv6Unavailable,
     gateway: gatewayUrl,
     redirectPort: (redirector.address() as AddressInfo).port,
   })}\n`,
@@ -265,9 +290,10 @@ process.stdout.write(
 
 const lines = createInterface({ input: process.stdin });
 lines.on("line", (line) => {
-  const [command, name] = line.trim().split(/\s+/);
+  // `grant <service> [path]`: the path is app-relative and has no whitespace.
+  const [command, name, path] = line.trim().split(/\s+/);
   if (command === "grant" && name) {
-    void grant(name).then((result) =>
+    void grant(name, path).then((result) =>
       process.stdout.write(`${JSON.stringify({ type: "grant", name, ...result })}\n`),
     );
   } else if (command === "revoke") {
@@ -292,7 +318,7 @@ lines.on("line", (line) => {
       `${JSON.stringify({ type: "access-stats", stats: harness.runtime.access.stats() })}\n`,
     );
   } else if (command === "fixture-requests") {
-    const source = name === "other" ? other : fixture;
+    const source = fixtures[name ?? "app"] ?? fixture;
     process.stdout.write(
       `${JSON.stringify({
         type: "fixture-requests",

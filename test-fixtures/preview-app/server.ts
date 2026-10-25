@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
-import { brotliCompressSync, gzipSync } from "node:zlib";
+import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 
 export interface PreviewFixtureRequest {
   method: string;
@@ -151,6 +151,60 @@ self.addEventListener("fetch", (event) => {
 });`;
 }
 
+function crc32(bytes: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/**
+ * A valid, solid-colour RGB PNG of `size`×`size` pixels. `/assets/small.png`
+ * (2 px) and `/assets/large.png` (4 px) back the page's `srcset`, so a test can
+ * tell which candidate the browser chose and that it decoded.
+ */
+export function previewFixturePng(size: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
+  header[8] = 8; // bit depth
+  header[9] = 2; // RGB
+  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(size * 3, 0x5a)]);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(Buffer.concat(Array.from({ length: size }, () => row)))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/** `/assets/mapped.js`: a script whose `sourceMappingURL` names `mapped.js.map`. */
+export function previewFixtureMappedScript(marker: string): string {
+  return `window.mappedMarker=${JSON.stringify(marker)};\n//# sourceMappingURL=mapped.js.map\n`;
+}
+
+/** `/assets/mapped.js.map`: exact bytes, so a test can prove they arrive unchanged. */
+export function previewFixtureSourceMap(marker: string): string {
+  return JSON.stringify({
+    version: 3,
+    file: "mapped.js",
+    sources: ["../src/mapped.ts"],
+    sourcesContent: [`(window as any).mappedMarker = ${JSON.stringify(marker)};\n`],
+    names: [],
+    mappings: "AAAA",
+  });
+}
+
 function send(
   response: ServerResponse,
   status: number,
@@ -171,6 +225,8 @@ export function startPreviewFixture(options: PreviewFixtureOptions = {}): Promis
   const binary = Buffer.alloc(1024 * 1024);
   for (let index = 0; index < binary.length; index++) binary[index] = (index * 31 + 7) & 0xff;
   const binaryHash = createHash("sha256").update(binary).digest("hex");
+  const smallPng = previewFixturePng(2);
+  const largePng = previewFixturePng(4);
 
   const record = (request: IncomingMessage, path: string) => {
     requests.push({
@@ -222,6 +278,22 @@ export function startPreviewFixture(options: PreviewFixtureOptions = {}): Promis
         `document.body.dataset.loaded=${JSON.stringify(marker)};`,
         { "x-service-marker": marker },
       );
+    if (path === "/assets/small.png" || path === "/assets/large.png") {
+      return send(response, 200, "image/png", path.endsWith("small.png") ? smallPng : largePng, {
+        "x-service-marker": marker,
+      });
+    }
+    if (path === "/assets/mapped.js")
+      return send(response, 200, "text/javascript", previewFixtureMappedScript(marker), {
+        "x-service-marker": marker,
+      });
+    if (path === "/assets/mapped.js.map") {
+      const map = Buffer.from(previewFixtureSourceMap(marker));
+      return send(response, 200, "application/json", map, {
+        "x-service-marker": marker,
+        "x-sha256": createHash("sha256").update(map).digest("hex"),
+      });
+    }
     if (path === "/echo") {
       const chunks: Buffer[] = [];
       let size = 0;

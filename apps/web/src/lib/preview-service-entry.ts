@@ -2,6 +2,11 @@ import type { BrowserPreviewServiceTarget } from "@orkestrator/protocol/browser-
 import {
   formatPreviewIntentUri,
   formatPreviewServiceUri,
+  normalizePreviewPath,
+  type PreviewCapabilities,
+  type PreviewRegistrySnapshot,
+  type PreviewServiceRef,
+  type PreviewServiceSnapshot,
   type PreviewUrlSource,
 } from "@orkestrator/protocol/preview-services";
 
@@ -63,4 +68,133 @@ export function linkBrowserTarget(
 /** A same-service link opened from inside a service preview. */
 export function serviceLinkTarget(target: BrowserPreviewServiceTarget): string {
   return formatPreviewServiceUri(target);
+}
+
+/** Hosts a legacy URL tab can address: the backend machine's loopback. */
+const LEGACY_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * The backend host port a legacy URL tab (`http://localhost:<port>/…`) loads,
+ * or null for anything that is not a plain loopback HTTP address.
+ */
+export function legacyUrlHostPort(url: string): number | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" || !LEGACY_LOOPBACK_HOSTS.has(parsed.hostname)) return null;
+  if (parsed.username || parsed.password) return null;
+  const port = parsed.port ? Number(parsed.port) : 80;
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
+/** A legacy URL tab's address that one current service owns. */
+export interface LegacyUrlServiceMatch {
+  service: PreviewServiceSnapshot;
+  /** The durable service reference the tab would become, keeping the URL's path. */
+  ref: PreviewServiceRef;
+  /** The binding the match was made against; a conversion must still see it. */
+  backendEpoch: string;
+  endpointGeneration: number;
+}
+
+/**
+ * The service a legacy URL tab can be opened as, or null.
+ *
+ * A host port says nothing durable about which application answers it, so a
+ * match needs all of: the tab's own environment (never the active one), a
+ * snapshot from the current backend identity and epoch, exactly one service in
+ * that environment whose last resolved host port is the URL's port (a second
+ * claimant, even a stale one, makes it ambiguous), and that service enabled
+ * with an available endpoint of the current epoch. Anything else keeps the
+ * tab as it is.
+ */
+export function legacyUrlServiceMatch(
+  url: string,
+  environmentId: string,
+  capabilities: Pick<PreviewCapabilities, "backendInstanceId" | "backendEpoch"> | null | undefined,
+  snapshot: PreviewRegistrySnapshot | null | undefined,
+): LegacyUrlServiceMatch | null {
+  const port = legacyUrlHostPort(url);
+  if (port === null || !capabilities || !snapshot) return null;
+  if (
+    snapshot.backendInstanceId !== capabilities.backendInstanceId ||
+    snapshot.backendEpoch !== capabilities.backendEpoch ||
+    (snapshot.environmentId !== null && snapshot.environmentId !== environmentId)
+  ) {
+    return null;
+  }
+  const claimants = snapshot.services.filter(
+    (service) =>
+      service.definition.environmentId === environmentId && service.endpoint.hostPort === port,
+  );
+  if (claimants.length !== 1) return null;
+  const service = claimants[0]!;
+  const { endpoint } = service;
+  if (
+    !service.definition.enabled ||
+    endpoint.state !== "available" ||
+    endpoint.backendEpoch !== snapshot.backendEpoch
+  ) {
+    return null;
+  }
+  let path: string;
+  try {
+    const parsed = new URL(url);
+    path = normalizePreviewPath(`${parsed.pathname}${parsed.search}${parsed.hash}`);
+  } catch {
+    return null;
+  }
+  return {
+    service,
+    ref: {
+      backendInstanceId: capabilities.backendInstanceId,
+      environmentId,
+      serviceId: service.definition.serviceId,
+      path,
+    },
+    backendEpoch: endpoint.backendEpoch,
+    endpointGeneration: endpoint.endpointGeneration,
+  };
+}
+
+/** True when two matches name the same service binding (service, epoch and generation). */
+export function sameLegacyUrlServiceBinding(
+  left: LegacyUrlServiceMatch,
+  right: LegacyUrlServiceMatch,
+): boolean {
+  return (
+    left.ref.backendInstanceId === right.ref.backendInstanceId &&
+    left.ref.environmentId === right.ref.environmentId &&
+    left.ref.serviceId === right.ref.serviceId &&
+    left.backendEpoch === right.backendEpoch &&
+    left.endpointGeneration === right.endpointGeneration
+  );
+}
+
+/**
+ * Convert a legacy URL tab to the service that owns its port, re-checking the
+ * offer against a fresh snapshot first: the tab converts only if the same
+ * service still holds the same binding (epoch and endpoint generation), so a
+ * port reassigned since the offer was shown is never followed. Returns the
+ * service tab target, or null when the offer no longer holds.
+ */
+export async function confirmLegacyUrlServiceMatch(
+  url: string,
+  environmentId: string,
+  offered: LegacyUrlServiceMatch,
+): Promise<string | null> {
+  ensurePreviewServiceSync();
+  const store = usePreviewServiceStore.getState();
+  const snapshot = await store.refreshEnvironment(environmentId, { force: true });
+  const current = legacyUrlServiceMatch(
+    url,
+    environmentId,
+    usePreviewServiceStore.getState().capabilities,
+    snapshot,
+  );
+  if (!current || !sameLegacyUrlServiceBinding(current, offered)) return null;
+  return formatPreviewServiceUri(current.ref);
 }

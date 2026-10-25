@@ -74,7 +74,7 @@ export function PreviewServicePicker({
         aria-label={
           selected ? `Preview service ${selected.definition.label}` : "Choose preview service"
         }
-        className="flex h-full max-w-[14rem] shrink-0 items-center gap-1.5 border-r border-border/70 px-2.5 text-[11px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-60"
+        className="flex h-full min-w-[4.5rem] max-w-[14rem] shrink items-center gap-1.5 border-r border-border/70 px-2.5 text-[11px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-60"
       >
         {readiness ? (
           <ReadinessDot tone={readiness.tone} />

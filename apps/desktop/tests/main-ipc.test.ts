@@ -579,6 +579,41 @@ describe("main IPC registration", () => {
     }
   });
 
+  test("passes a URL attach's navigation basis through and drops a malformed one", async () => {
+    const harness = createHarness();
+    const bounds = { x: 0, y: 0, width: 640, height: 480 };
+    const url = "http://localhost:3000/next";
+    await harness.invoke("orkestrator:browser-preview:attach", {
+      tabId: "browser-1",
+      url,
+      navigationBasis: 0,
+      bounds,
+      visible: true,
+    });
+    expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
+      tabId: "browser-1",
+      url,
+      navigationBasis: 0,
+      bounds,
+      visible: true,
+    });
+    for (const navigationBasis of [-1, 1.5, "4", null, undefined]) {
+      await harness.invoke("orkestrator:browser-preview:attach", {
+        tabId: "browser-1",
+        url,
+        navigationBasis,
+        bounds,
+        visible: true,
+      });
+      expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
+        tabId: "browser-1",
+        url,
+        bounds,
+        visible: true,
+      });
+    }
+  });
+
   test("routes trusted capture channels and removes the legacy annotation channels", async () => {
     const harness = createHarness();
     for (const legacy of ["annotation-start", "annotation-status", "annotation-cancel"]) {

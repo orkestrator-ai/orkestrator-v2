@@ -71,3 +71,14 @@ in this file (whole suite: 14 passed, 1 skipped in 80.4 seconds). The startup
 title assertion and timeout were unchanged. The separate Window-menu
 non-key-window fallback was fixed between runs; it cannot explain an earlier
 startup-title timeout. Concurrent startup/build contention remains a hypothesis.
+
+## Service preview rollout (0042) — 2026-10-25
+
+In the first owner rerun of `electron-main.spec.ts` after a loaded full suite
+(`ORKESTRATOR_AGENT_TEST_RUN_ID=svc0042-owner-electron-main`, load 43 to 60),
+`real Electron main process shares one backend across independent windows`
+(line 571) timed out in `electronApplication.firstWindow` after 30 s. The
+mock keychain was in use, so the 2026-10-17 Keychain cause does not apply.
+The next owner rerun (`svc0042-owner2-electron-main`) passed the unchanged
+file (3 passed, 1 skipped, 40.4 s), as did the second full suite
+(`svc0042-suite-2`, 38 passed). No assertion, timeout or skip changed.

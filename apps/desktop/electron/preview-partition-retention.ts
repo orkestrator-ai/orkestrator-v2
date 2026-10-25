@@ -1,8 +1,10 @@
 import { readFile, readdir, rename, rm, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
+import { isBackendId } from "@orkestrator/protocol/federation";
 import { isOpaquePreviewId } from "@orkestrator/protocol/preview-services";
 
+import { connectionPartitionKey } from "./desktop-window-lifecycle.js";
 import { previewServicePartitionSuffix } from "./preview-transport-manager.js";
 
 const SERVICE_PARTITION = /^orkestrator-preview-svc-\d{1,3}-([0-9a-f]{16})-([0-9a-f]{16})$/;
@@ -11,6 +13,8 @@ const SHARED_PARTITION = /^orkestrator-browser-previews-\d{1,3}-([0-9a-f]{16})$/
 const MAX_CLEARED_PER_PASS = 64;
 /** Directory removals remembered for the next start. */
 const MAX_PENDING = 1024;
+/** Command connections remembered per node. */
+const MAX_COMMANDS_PER_NODE = 8;
 
 /** The part of an Electron session retention needs (injectable in tests). */
 export interface RetainedPartitionSession {
@@ -41,7 +45,22 @@ export interface PreviewPartitionRetentionOptions {
 /** A source of the authoritative service list for one window's connection. */
 export interface PreviewServiceListSource {
   listServices(): Promise<unknown>;
+  /** The connection's node registry (`list_nodes`), when it may be a command node. */
+  listNodes?(): Promise<unknown>;
   readonly closed: boolean;
+}
+
+/** A node reached through command nodes, and the command connections that list it. */
+interface NodeEntry {
+  key: string;
+  commands: string[];
+}
+
+const PARTITION_KEY = /^[0-9a-f]{16}$/;
+
+/** Partition key of a node's previews (`node:<id>`, as `createWindowBrowserPreviews` names them). */
+export function nodePartitionKey(nodeId: string): string {
+  return connectionPartitionKey(`node:${nodeId}`);
 }
 
 const nodeFs: PreviewPartitionFs = {
@@ -55,6 +74,11 @@ const nodeFs: PreviewPartitionFs = {
     await rename(temporary, file);
   },
 };
+
+/** The connection or node key a preview partition directory belongs to. */
+function partitionKeyOf(name: string): string | undefined {
+  return SERVICE_PARTITION.exec(name)?.[1] ?? SHARED_PARTITION.exec(name)?.[1];
+}
 
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
@@ -82,6 +106,25 @@ export function liveServicePartitionSuffixes(snapshot: unknown): Set<string> | n
     );
   }
   return suffixes;
+}
+
+/**
+ * The node partition keys a command node's full `list_nodes` reply keeps
+ * alive, or null when the reply cannot be trusted as its complete registry
+ * (a bad shape, or a leaf whose registry is suspended).
+ */
+export function liveNodePartitionKeys(list: unknown): Set<string> | null {
+  if (!list || typeof list !== "object") return null;
+  const value = list as Record<string, unknown>;
+  if (typeof value.revision !== "number" || value.suspended !== false) return null;
+  if (!Array.isArray(value.nodes)) return null;
+  const keys = new Set<string>();
+  for (const node of value.nodes) {
+    const nodeId = (node as { nodeId?: unknown } | null)?.nodeId;
+    if (!isBackendId(nodeId)) return null;
+    keys.add(nodePartitionKey(nodeId));
+  }
+  return keys;
 }
 
 /** Authoritative holdings across every window, including its shared legacy session. */
@@ -160,24 +203,112 @@ export class PreviewPartitionRetention {
   /** Every preview partition of a connection this device forgot (all window slots). */
   forgetConnection(connectionKey: string, options: { includeShared: boolean }): Promise<string[]> {
     return this.serialize(async () => {
-      if (!/^[0-9a-f]{16}$/.test(connectionKey)) throw new Error("Invalid connection key");
+      if (!PARTITION_KEY.test(connectionKey)) throw new Error("Invalid connection key");
+      const forget = [{ key: connectionKey, includeShared: options.includeShared }];
+      // Nodes this device reached only through the forgotten command node go too.
+      const nodes = await this.readNodes();
+      const orphaned: string[] = [];
+      for (const entry of nodes) {
+        if (!entry.commands.includes(connectionKey)) continue;
+        entry.commands = entry.commands.filter((command) => command !== connectionKey);
+        if (!entry.commands.length) orphaned.push(entry.key);
+      }
+      for (const key of orphaned) forget.push({ key, includeShared: true });
+      const cleared = await this.forgetKeys(forget);
+      await this.writeNodes(nodes.filter((entry) => entry.commands.length));
+      return cleared;
+    });
+  }
+
+  /**
+   * Record that a window reached a node through a command connection. A node
+   * seen again after it was forgotten keeps its new site data: its key leaves
+   * the forgotten and pending journals, so no later start removes it.
+   */
+  rememberNode(nodeKey: string, commandKey: string): Promise<void> {
+    return this.serialize(async () => {
+      if (!PARTITION_KEY.test(nodeKey) || !PARTITION_KEY.test(commandKey))
+        throw new Error("Invalid partition key");
+      const nodes = await this.readNodes();
+      const entry = nodes.find((candidate) => candidate.key === nodeKey);
+      if (entry) {
+        if (entry.commands.includes(commandKey)) return;
+        if (entry.commands.length >= MAX_COMMANDS_PER_NODE) entry.commands.shift();
+        entry.commands.push(commandKey);
+      } else {
+        if (nodes.length >= MAX_PENDING) nodes.shift();
+        nodes.push({ key: nodeKey, commands: [commandKey] });
+      }
+      await this.writeNodes(nodes);
       const forgotten = await this.readForgotten();
-      const existing = forgotten.find((entry) => entry.key === connectionKey);
-      if (existing) existing.includeShared ||= options.includeShared;
-      else {
-        if (forgotten.length >= MAX_PENDING) throw new Error("Preview cleanup capacity exceeded");
-        forgotten.push({ key: connectionKey, includeShared: options.includeShared });
+      if (forgotten.some((candidate) => candidate.key === nodeKey))
+        await this.writeForgotten(forgotten.filter((candidate) => candidate.key !== nodeKey));
+      const pending = await this.readPending();
+      const kept = pending.filter((name) => partitionKeyOf(name) !== nodeKey);
+      if (kept.length !== pending.length) await this.writePending(kept);
+    });
+  }
+
+  /**
+   * A command handover moved nodes from one command node to another: the
+   * target now vouches for every node the source did, so the source dropping
+   * them from its registry is not a removal.
+   */
+  transferNodes(fromCommandKey: string, toCommandKey: string): Promise<void> {
+    return this.serialize(async () => {
+      if (!PARTITION_KEY.test(fromCommandKey) || !PARTITION_KEY.test(toCommandKey))
+        throw new Error("Invalid partition key");
+      const nodes = await this.readNodes();
+      let changed = false;
+      for (const entry of nodes) {
+        if (!entry.commands.includes(fromCommandKey) || entry.commands.includes(toCommandKey))
+          continue;
+        if (entry.commands.length >= MAX_COMMANDS_PER_NODE) entry.commands.shift();
+        entry.commands.push(toCommandKey);
+        changed = true;
       }
-      // Admission is durable before clearing anything. A restart can finish
-      // even if no transport for this connection will ever exist again.
-      await this.writeForgotten(forgotten);
+      if (changed) await this.writeNodes(nodes);
+    });
+  }
+
+  /**
+   * Node partitions whose node every command connection that listed it has
+   * since removed from its registry. A command node that is unreachable,
+   * suspended or answers with anything but its full registry vouches as
+   * before. Nodes seen through no other command node are then forgotten like
+   * a connection: service and shared partitions in every window slot.
+   */
+  reconcileNodes(
+    commandKey: string,
+    source: { listNodes(): Promise<unknown>; readonly closed: boolean },
+  ): Promise<string[]> {
+    return this.serialize(async () => {
+      const vouched = (await this.readNodes()).filter((entry) =>
+        entry.commands.includes(commandKey),
+      );
+      if (!vouched.length || source.closed) return [];
+      let live: Set<string> | null;
       try {
-        return await this.clear(
-          (await this.listPartitions()).filter((name) => this.isForgotten(name, forgotten)),
-        );
-      } finally {
-        this.scheduleForgotten();
+        live = liveNodePartitionKeys(await source.listNodes());
+      } catch {
+        // Not a command node, older, or unreachable: no evidence of removal.
+        return [];
       }
+      if (!live || source.closed || this.disposed) return [];
+      // Re-read: a node remembered while the list was fetched keeps its voucher.
+      const nodes = await this.readNodes();
+      const removed: string[] = [];
+      for (const entry of nodes) {
+        if (!entry.commands.includes(commandKey) || live.has(entry.key)) continue;
+        if (!vouched.some((candidate) => candidate.key === entry.key)) continue;
+        entry.commands = entry.commands.filter((command) => command !== commandKey);
+        if (!entry.commands.length) removed.push(entry.key);
+      }
+      const cleared = removed.length
+        ? await this.forgetKeys(removed.map((key) => ({ key, includeShared: true })))
+        : [];
+      await this.writeNodes(nodes.filter((entry) => entry.commands.length));
+      return cleared;
     });
   }
 
@@ -207,7 +338,8 @@ export class PreviewPartitionRetention {
 
   /**
    * Reconcile a window transport's connection shortly after it starts and
-   * then periodically, until the transport closes (a switch or window close).
+   * then periodically, until the transport closes (a switch or window close):
+   * its services, and the nodes reached through it when it is a command node.
    */
   schedule(
     connectionKey: string,
@@ -227,6 +359,14 @@ export class PreviewPartitionRetention {
         return;
       }
       void this.reconcileServices(connectionKey, source).catch(() => undefined);
+      const listNodes = source.listNodes?.bind(source);
+      if (listNodes)
+        void this.reconcileNodes(connectionKey, {
+          listNodes,
+          get closed() {
+            return source.closed;
+          },
+        }).catch(() => undefined);
     };
     const first = setTimeout(() => {
       run();
@@ -244,6 +384,66 @@ export class PreviewPartitionRetention {
     if (this.retry) clearTimeout(this.retry);
     this.retry = null;
     for (const stop of Array.from(this.schedules)) stop();
+  }
+
+  /** Durable forget intent for each key, then a clear pass. Call only inside `serialize`. */
+  private async forgetKeys(entries: Array<{ key: string; includeShared: boolean }>) {
+    const forgotten = await this.readForgotten();
+    for (const { key, includeShared } of entries) {
+      const existing = forgotten.find((entry) => entry.key === key);
+      if (existing) existing.includeShared ||= includeShared;
+      else {
+        if (forgotten.length >= MAX_PENDING) throw new Error("Preview cleanup capacity exceeded");
+        forgotten.push({ key, includeShared });
+      }
+    }
+    // Admission is durable before clearing anything. A restart can finish
+    // even if no transport for this connection will ever exist again.
+    await this.writeForgotten(forgotten);
+    try {
+      return await this.clear(
+        (await this.listPartitions()).filter((name) => this.isForgotten(name, forgotten)),
+      );
+    } finally {
+      this.scheduleForgotten();
+    }
+  }
+
+  private async readNodes(): Promise<NodeEntry[]> {
+    try {
+      const value: unknown = JSON.parse(
+        await this.fs.readFile(`${this.options.pendingFile}.nodes`),
+      );
+      if (!Array.isArray(value)) return [];
+      return value
+        .filter(
+          (entry): entry is NodeEntry =>
+            !!entry &&
+            typeof entry.key === "string" &&
+            PARTITION_KEY.test(entry.key) &&
+            Array.isArray(entry.commands),
+        )
+        .map((entry) => ({
+          key: entry.key,
+          commands: entry.commands
+            .filter((command): command is string => typeof command === "string")
+            .filter((command) => PARTITION_KEY.test(command))
+            .slice(-MAX_COMMANDS_PER_NODE),
+        }))
+        .filter((entry) => entry.commands.length)
+        .slice(-MAX_PENDING);
+    } catch {
+      // A missing or unreadable journal only means no node is remembered yet.
+      return [];
+    }
+  }
+
+  private async writeNodes(nodes: NodeEntry[]): Promise<void> {
+    try {
+      await this.fs.writeFile(`${this.options.pendingFile}.nodes`, `${JSON.stringify(nodes)}\n`);
+    } catch {
+      this.warn("[Previews] Failed to record preview nodes.");
+    }
   }
 
   private isForgotten(

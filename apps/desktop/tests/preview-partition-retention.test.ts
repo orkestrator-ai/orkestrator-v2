@@ -10,7 +10,9 @@ import {
   connectionPartitionKey,
 } from "../electron/desktop-window-lifecycle";
 import {
+  liveNodePartitionKeys,
   liveServicePartitionSuffixes,
+  nodePartitionKey,
   PreviewPartitionRetention,
   previewPartitionsInUse,
   type PreviewPartitionFs,
@@ -466,6 +468,217 @@ describe("PreviewPartitionRetention", () => {
     scheduled.closed = true;
     await Bun.sleep(30);
     expect(list.mock.calls.length).toBe(runs);
+  });
+});
+
+describe("node partitions", () => {
+  const COMMAND_A = connectionPartitionKey("command-a");
+  const COMMAND_B = connectionPartitionKey("command-b");
+
+  function nodeList(nodeIds: string[], overrides: Record<string, unknown> = {}) {
+    return {
+      revision: 3,
+      mode: "command",
+      suspended: false,
+      nodes: nodeIds.map((nodeId) => ({ nodeId })),
+      pendingDetaches: [],
+      ...overrides,
+    };
+  }
+
+  function nodeSource(list: () => Promise<unknown>) {
+    return { closed: false, listNodes: list };
+  }
+
+  /** Every partition kind a node's previews create, in two window slots. */
+  function nodePartitions(fs: MemoryFs, nodeId: string): string[] {
+    const names = [
+      dirName(servicePartition(1, `node:${nodeId}`, "svc-alpha")),
+      dirName(servicePartition(2, `node:${nodeId}`, "svc-bravo")),
+      dirName(browserPreviewPartitionForWindow(1, `node:${nodeId}`)),
+      dirName(browserPreviewPartitionForWindow(2, `node:${nodeId}`)),
+    ];
+    for (const name of names) fs.directories.add(name);
+    return names;
+  }
+
+  test("liveNodePartitionKeys trusts only a full, unsuspended registry", () => {
+    expect(liveNodePartitionKeys(nodeList(["node-a", "node-b"]))).toEqual(
+      new Set([nodePartitionKey("node-a"), nodePartitionKey("node-b")]),
+    );
+    expect(nodePartitionKey("node-a")).toBe(connectionPartitionKey("node:node-a"));
+    expect(liveNodePartitionKeys(nodeList([], { suspended: true }))).toBeNull();
+    expect(liveNodePartitionKeys(nodeList([], { revision: undefined }))).toBeNull();
+    expect(liveNodePartitionKeys(nodeList([], { nodes: "x" }))).toBeNull();
+    expect(liveNodePartitionKeys({ ...nodeList([]), nodes: [{ nodeId: "../x y" }] })).toBeNull();
+    expect(liveNodePartitionKeys(null)).toBeNull();
+  });
+
+  test("a node its command node removed loses every preview partition; others stay", async () => {
+    const { fs, cleared, retention } = setup();
+    const removed = nodePartitions(fs, "node-gone");
+    const kept = nodePartitions(fs, "node-live");
+    const direct = dirName(servicePartition(1, "command-a", "svc-alpha"));
+    fs.directories.add(direct);
+    await retention.rememberNode(nodePartitionKey("node-gone"), COMMAND_A);
+    await retention.rememberNode(nodePartitionKey("node-live"), COMMAND_A);
+
+    const result = await retention.reconcileNodes(
+      COMMAND_A,
+      nodeSource(async () => nodeList(["node-live"])),
+    );
+    expect(result.sort()).toEqual(removed.sort());
+    expect(cleared.sort()).toEqual(removed.map((name) => `persist:${name}`).sort());
+    for (const name of [...kept, direct]) expect(cleared).not.toContain(`persist:${name}`);
+
+    // The node is no longer remembered, and the next start removes the directories.
+    const remembered = JSON.parse(fs.files.get(`${PENDING}.nodes`)!) as Array<{ key: string }>;
+    expect(remembered.map((entry) => entry.key)).toEqual([nodePartitionKey("node-live")]);
+    expect((await retention.sweepPending()).sort()).toEqual(removed.sort());
+  });
+
+  test("a node another command node still lists keeps its partitions", async () => {
+    const { fs, cleared, retention } = setup();
+    nodePartitions(fs, "node-shared");
+    await retention.rememberNode(nodePartitionKey("node-shared"), COMMAND_A);
+    await retention.rememberNode(nodePartitionKey("node-shared"), COMMAND_B);
+
+    expect(
+      await retention.reconcileNodes(
+        COMMAND_A,
+        nodeSource(async () => nodeList([])),
+      ),
+    ).toEqual([]);
+    expect(cleared).toEqual([]);
+    // Once the last command node that listed it drops it, it goes.
+    expect(
+      (
+        await retention.reconcileNodes(
+          COMMAND_B,
+          nodeSource(async () => nodeList([])),
+        )
+      ).length,
+    ).toBe(4);
+  });
+
+  test("no evidence of removal keeps every node partition", async () => {
+    const { fs, cleared, retention } = setup();
+    nodePartitions(fs, "node-a");
+    await retention.rememberNode(nodePartitionKey("node-a"), COMMAND_A);
+    const replies: Array<() => Promise<unknown>> = [
+      async () => {
+        throw new Error("unreachable");
+      },
+      async () => nodeList([], { suspended: true }),
+      async () => ({ nodes: [] }),
+      async () => "not a registry",
+    ];
+    for (const reply of replies) {
+      expect(await retention.reconcileNodes(COMMAND_A, nodeSource(reply))).toEqual([]);
+    }
+    const closed = { closed: true, listNodes: mock(async () => nodeList([])) };
+    expect(await retention.reconcileNodes(COMMAND_A, closed)).toEqual([]);
+    expect(closed.listNodes).not.toHaveBeenCalled();
+    // A command node that never listed the node is not asked about it.
+    const other = mock(async () => nodeList([]));
+    expect(await retention.reconcileNodes(COMMAND_B, nodeSource(other))).toEqual([]);
+    expect(other).not.toHaveBeenCalled();
+    expect(cleared).toEqual([]);
+  });
+
+  test("a held node partition waits for a later pass", async () => {
+    const shared = browserPreviewPartitionForWindow(1, "node:node-a");
+    const { fs, cleared, retention } = setup({ held: [shared] });
+    nodePartitions(fs, "node-a");
+    await retention.rememberNode(nodePartitionKey("node-a"), COMMAND_A);
+    const result = await retention.reconcileNodes(
+      COMMAND_A,
+      nodeSource(async () => nodeList([])),
+    );
+    expect(result).toHaveLength(3);
+    expect(cleared).not.toContain(shared);
+  });
+
+  test("a handover moves the node's voucher to the new command node", async () => {
+    const { fs, cleared, retention } = setup();
+    nodePartitions(fs, "node-moved");
+    await retention.rememberNode(nodePartitionKey("node-moved"), COMMAND_A);
+    await retention.transferNodes(COMMAND_A, COMMAND_B);
+
+    // The source no longer lists it: that is the handover, not a removal.
+    expect(
+      await retention.reconcileNodes(
+        COMMAND_A,
+        nodeSource(async () => nodeList([])),
+      ),
+    ).toEqual([]);
+    expect(
+      await retention.reconcileNodes(
+        COMMAND_B,
+        nodeSource(async () => nodeList(["node-moved"])),
+      ),
+    ).toEqual([]);
+    expect(cleared).toEqual([]);
+  });
+
+  test("forgetting a command node forgets nodes reached only through it", async () => {
+    const { fs, cleared, retention } = setup();
+    const only = nodePartitions(fs, "node-only-a");
+    const both = nodePartitions(fs, "node-both");
+    await retention.rememberNode(nodePartitionKey("node-only-a"), COMMAND_A);
+    await retention.rememberNode(nodePartitionKey("node-both"), COMMAND_A);
+    await retention.rememberNode(nodePartitionKey("node-both"), COMMAND_B);
+
+    const result = await retention.forgetConnection(COMMAND_A, { includeShared: true });
+    for (const name of only) expect(result).toContain(name);
+    for (const name of both) expect(cleared).not.toContain(`persist:${name}`);
+    // node-both now depends on command B alone.
+    expect(
+      (
+        await retention.reconcileNodes(
+          COMMAND_B,
+          nodeSource(async () => nodeList([])),
+        )
+      ).sort(),
+    ).toEqual(both.sort());
+  });
+
+  test("a node seen again after removal keeps its new site data across a restart", async () => {
+    const { fs, retention } = setup();
+    const names = nodePartitions(fs, "node-back");
+    await retention.rememberNode(nodePartitionKey("node-back"), COMMAND_A);
+    await retention.reconcileNodes(
+      COMMAND_A,
+      nodeSource(async () => nodeList([])),
+    );
+    expect(fs.pending().sort()).toEqual(names.sort());
+
+    // Re-added and opened again before the next start.
+    await retention.rememberNode(nodePartitionKey("node-back"), COMMAND_A);
+    expect(fs.pending()).toEqual([]);
+    expect(await retention.sweepPending()).toEqual([]);
+    for (const name of names) expect(fs.directories.has(name)).toBe(true);
+  });
+
+  test("a window schedule on a command node reconciles its nodes", async () => {
+    const { fs, cleared, retention } = setup();
+    nodePartitions(fs, "node-gone");
+    await retention.rememberNode(nodePartitionKey("node-gone"), COMMAND_A);
+    const listNodes = mock(async () => nodeList([]));
+    retention.schedule(
+      COMMAND_A,
+      { closed: false, listServices: async () => snapshot([]), listNodes },
+      { delayMs: 5, intervalMs: 1_000 },
+    );
+    await Bun.sleep(40);
+    expect(listNodes).toHaveBeenCalled();
+    expect(cleared).toHaveLength(4);
+  });
+
+  test("rejects malformed keys", async () => {
+    const { retention } = setup();
+    await expect(retention.rememberNode("not-a-key", COMMAND_A)).rejects.toThrow();
+    await expect(retention.transferNodes(COMMAND_A, "../x")).rejects.toThrow();
   });
 });
 

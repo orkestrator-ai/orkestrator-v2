@@ -145,7 +145,14 @@ response:
   unauthenticated or embedded view.
 
 The legacy route (`/__orkestrator/browser/loopback/<port>/`) stays available
-for old clients.
+for old clients and legacy URL tabs. A legacy URL tab whose loopback port
+belongs to exactly one enabled, available service of its own environment in
+the current backend epoch offers **Open as service**. The click re-reads the
+service list and converts the tab only if the same service still has the
+same endpoint generation, keeping the path, query and fragment
+(`legacyUrlServiceMatch` in `apps/web/src/lib/preview-service-entry.ts`).
+Ownership is never inferred from the port alone or from the active
+environment, so ambiguous tabs get no offer.
 
 ### Desktop tunnel
 
@@ -192,6 +199,18 @@ The client never names a host, port, or container.
   journal admits at most 1,024 entries until startup removes them, and the
   forgotten-key journal refuses admission at 1,024 keys without evicting
   earlier cleanup intent.
+- A workspace realm's previews are keyed to its node (`node:<nodeId>`), not
+  to a connection. Each time a realm opens, Electron records in
+  `preview-partitions-pending.json.nodes` which command connection it reached
+  the node through. The same window schedule that reconciles services also
+  fetches that command node's `list_nodes`; once every command connection
+  that listed a node has dropped it from a full, unsuspended registry, the
+  node's service and shared partitions are forgotten like a connection's. An
+  unreachable, suspended or malformed registry is no evidence of removal. A
+  command handover moves the source's nodes to the target before the source
+  drops them, and forgetting a command connection forgets nodes reached only
+  through it. A node opened again after removal leaves the forgotten and
+  pending journals, so its new site data survives the next start.
 - The listener first binds the port it used last for that service (bind, never
   probe-then-close), so origin-keyed storage such as localStorage usually
   survives a restart. If the port is taken, a fresh one is used and that
@@ -216,7 +235,9 @@ The client never names a host, port, or container.
   visibility re-attach still carrying the previous path, or a late echo of the
   tab's own earlier save, therefore never undoes a navigation. Renderers that
   send no basis fall back to navigating only for a path they have not already
-  asked for.
+  asked for. Legacy URL tabs follow the same rule since 2026-10-25: their
+  states carry `navigation` and their attaches `navigationBasis`
+  (`attachUrl` in `browser-preview-manager.ts`).
 
 HTTPS upstream services are not carried by the desktop tunnel. They need the
 private origin.
@@ -479,8 +500,18 @@ with `x-orkestrator-preview-error`, or tunnel close code 4429.
 A full tunnel queue is backpressure, not a failure. When the queue toward the
 client reaches 256 KiB, the backend pauses the upstream and returns the rest of
 the current read to the upstream's buffer. It resumes once the queue drains,
-so the queue never exceeds the limit by more than one frame. A reader that
-stops entirely is closed by the 30-second liveness ping, not by the queue.
+so the queue never exceeds the limit by more than one frame. Liveness is
+any frame from the client within a 30-second interval. A client whose reader
+stopped (the browser is not consuming, such as paused media) cannot answer
+the backend's ping queued behind the unread data, so the desktop pings the
+backend every 15 seconds (`PREVIEW_TUNNEL_CLIENT_PING_MS`) and its tunnel
+stays open, holding at most the queue, one read and its admission slot until
+the tab closes it. A client that sends nothing for an interval (network
+loss, a crashed process) is closed. Older desktops only answer pings, so a
+stopped reader on them is still closed after 30 to 60 seconds; older
+backends answer the desktop's pings and ignore them. When the backend
+itself stops reading (the upstream application is not consuming an upload),
+the client's pings wait too, and that tunnel is still closed by liveness.
 When a tunnel closes, a slow reader still receives the queued bytes. The
 2-second close-handshake grace starts once the close frame has been flushed,
 and a peer that stops reading is cut off 30 seconds after the close.
@@ -556,9 +587,16 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   deployment certificate trust.
 - The following have not been validated:
   - shipping Safari and iOS devices;
-  - Docker Desktop;
-  - a real Electron window;
-  - a two-machine tailnet run.
+  - Docker Desktop on Windows (Docker Desktop for macOS passed, including
+    Auto mappings);
+  - a two-machine tailnet run (the real Electron window passed on one
+    machine);
+  - real private DNS and certificates.
+- Private origins add no `Cross-Origin-Opener-Policy`; the application's own
+  headers pass through. The web client opens a preview with no opener, but a
+  service opened by another site with a plain `window.open` keeps
+  `window.opener`. Bootstrap, session and refusal pages send
+  `X-Frame-Options: DENY` and `frame-ancestors 'none'`.
 
   See the evidence log in
   [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md).

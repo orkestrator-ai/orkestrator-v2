@@ -113,6 +113,7 @@ import {
   resolveNativeAgentApprovalMode,
 } from "@orkestrator/protocol/native-agent";
 import { sessionIncompleteTurnNotice } from "./models.js";
+import { NativeAgentResumeIdentityObserver } from "./native-agent-resume-identity.js";
 import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import { randomUUID } from "node:crypto";
 import { legacyCompatibilityCounts } from "./change-tracking/legacy-payload.js";
@@ -881,12 +882,14 @@ export class NativeAgentTranscriptProjection {
    */
   private detailRegistrations: ProjectionDetailRegistration[] | undefined;
 
+  private readonly resumeIdentity: NativeAgentResumeIdentityObserver;
   private readonly storage: StorageService;
   private readonly options: NativeAgentServiceOptions;
   private readonly catalogs: NativeAgentCatalogCache;
 
   constructor(private readonly host: NativeAgentTranscriptProjectionHost) {
     this.storage = host.storage;
+    this.resumeIdentity = new NativeAgentResumeIdentityObserver(this.storage);
     this.options = host.options;
     this.catalogs = host.catalogs;
     this.displayTailScheduler = new NativeAgentDisplayTailScheduler({
@@ -3169,15 +3172,17 @@ export class NativeAgentTranscriptProjection {
     const advertisedCapabilities = nativeCapabilities(input.agent);
     timer?.sourceStarted();
     const sourceReads = Promise.all([
-      resolved.provider.sessionStateSnapshot
-        ? resolved.provider.sessionStateSnapshot(resolved.session.providerSessionId)
-        : resolved.provider.interactiveSnapshot
-          ? this.sharedInteractiveSnapshot(
-              input,
-              resolved.provider,
-              resolved.session.providerSessionId,
-            )
-          : readProviderStatus(resolved.provider, resolved.session.providerSessionId),
+      this.resumeIdentity.read(resolved.session, () =>
+        resolved.provider.sessionStateSnapshot
+          ? resolved.provider.sessionStateSnapshot(resolved.session.providerSessionId)
+          : resolved.provider.interactiveSnapshot
+            ? this.sharedInteractiveSnapshot(
+                input,
+                resolved.provider,
+                resolved.session.providerSessionId,
+              )
+            : readProviderStatus(resolved.provider, resolved.session.providerSessionId),
+      ),
       resolved.provider.interactions
         ? resolved.provider.interactions.listPendingInteractions(resolved.session.providerSessionId)
         : Promise.resolve({ requests: [], revision: 0 }),
@@ -4805,16 +4810,20 @@ export class NativeAgentTranscriptProjection {
       // These reads describe independent parts of one projection. Keeping
       // them serial made a transcript wait for every approval, queue and slash
       // command round trip in turn, even though none produces message text.
-      const snapshotPromise: Promise<ProviderInteractiveSnapshot> = resolved.provider
-        .interactiveSnapshot
-        ? resolved.provider.interactiveSnapshot(resolved.session.providerSessionId)
-        : (async () => ({
-            // A terminal turn error belongs in the projection as `error` plus
-            // its detail, not as a thrown read that would report the whole
-            // runtime as unreachable.
-            ...(await readProviderStatus(resolved.provider, resolved.session.providerSessionId)),
-            messages: await resolved.provider.messages(resolved.session.providerSessionId),
-          }))();
+      const readSnapshot = (): Promise<ProviderInteractiveSnapshot> =>
+        resolved.provider.interactiveSnapshot
+          ? resolved.provider.interactiveSnapshot(resolved.session.providerSessionId)
+          : (async () => ({
+              // A terminal turn error belongs in the projection as `error` plus
+              // its detail, not as a thrown read that would report the whole
+              // runtime as unreachable.
+              ...(await readProviderStatus(resolved.provider, resolved.session.providerSessionId)),
+              messages: await resolved.provider.messages(resolved.session.providerSessionId),
+            }))();
+      // Capture as soon as the snapshot resolves, before unrelated metadata.
+      const snapshotPromise = resolved.transient
+        ? readSnapshot()
+        : this.resumeIdentity.read(resolved.session, readSnapshot);
       const interactionSnapshotPromise = resolved.provider.interactions
         ? resolved.provider.interactions.listPendingInteractions(resolved.session.providerSessionId)
         : Promise.resolve({ requests: [], revision: 0 });

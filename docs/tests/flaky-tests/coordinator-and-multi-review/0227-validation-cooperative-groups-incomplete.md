@@ -82,3 +82,12 @@ Full failure names, counts, evidence paths and unresolved limitations are in [07
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-review-worker-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review-validation-worker.test.ts --parallel=1 --only-failures` failed: 47 passed and two failed across 49 tests in 100.73 s.
 - **Evidence:** `orkestrator-test-run.bFHIz7/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.pQ8a8n/merge-review-worker-owner.log.gz` below the host temporary directory.
 - **Assessment:** no new isolated pass or root cause was established. No implementation, assertion, timeout or skip changed.
+
+## Live provider review validation — 2026-10-25
+
+The two-worker backend aggregate repeated this failure at `2238f5ec4`. The
+complete unchanged owner passed alone with one isolated worker. Exact failure
+text, durations, commands, suite counts and retained evidence are recorded in
+[0887](../aggregate-validation-runs/0887-live-provider-review-validation.md).
+No implementation, assertion, deadline or skip changed; the original aggregate
+remains failed.

@@ -46,3 +46,29 @@
 - **Owning-file rerun:** `mise run test:logged -- --name backend-submodule-recheck -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged (34.4 s logged).
 - **Evidence:** `orkestrator-test-run.45VcQo/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Changes:** recorded recurrence only; no backend tests, timeouts or skips changed.
+
+## Design links resume identity validation — 2026-10-25
+
+- **Failure:** `move_environment > moves a worktree with nested submodules (same disk)` timed out (5231.33 ms).
+- **Original command:** `mise run test` on `todo-0038-design-conversation-links-852aa84d76e8` (commit `f771a8b8c`; native-session resume identity and teardown fallback, no environment-move or Git code changed), Bun 1.4.4, default reservations, host load average 37–52 from other workers.
+- **Aggregate counts:** backend 11,437 passed, 89 skipped, 3 failed across 681 files (796.55 s); the third failure is the new owner case [0930](../backend-services-and-tooling/0930-coordinator-codex-login-renewal-loginless.md).
+- **Owning-file rerun:** `mise exec -- bun test --preload ../../tests/setup-node.ts src/core/environment-move.test.ts` from `apps/backend` passed unchanged twice (37 pass, 0 fail each).
+- **Evidence:** `orkestrator-test-run.ZkIWTS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Changes:** recorded recurrence only; no test, timeout, assertion or skip changed.
+
+## Recurring-work qualification validation — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name full-0048 -- mise run test` on `todo-0048-recurring-work-qualification-dbe14f8256cc` (storage read path, recurring-work harness and scripts only), macOS 27.0 arm64, Bun 1.4.4, standard worker leases.
+- **Failure:** the same-disk nested-submodule move exceeded five seconds (5224.36 ms).
+- **Owning-file reruns:** passed in the three-file rerun `mise run test:logged -- --name owners-0048 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-worktree-signal-install.test.ts ./src/core/coordinator-service.test.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures`. A later rerun of the file alone at load average 55 (`--name env-move-owner-0048`) failed it at 10005.30 ms together with the `(copy)` variant (5042.92 ms) and case 0248. Evidence: `orkestrator-test-run.fSNcim/` and `orkestrator-test-run.f5VfI7/`.
+- **Aggregate evidence:** `orkestrator-test-run.VrI5KW/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` (enclosing log `orkestrator-test-run.JFzi7O/full-0048.log.gz`) under the host temporary directory. Backend 11433 passed, 89 skipped and 4 failed across 11526 tests in 680 files (872.95 s); web 9760 passed; root/support, bridges and the Codex protocol lockfile passed. Test groups finished in 942.4 s; the run exited 1.
+- **Assessment:** recurrence under heavy host load; no owning code, assertion, deadline or skip changed.
+
+## Voice qualification review fixes — 2026-10-25
+
+- **Change:** `9b1b42be8`; only CLI voice examples and their tests changed.
+- **Original command:** `mise run test:logged -- --name voice-suite -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1, with other worktrees validating on the same host.
+- **Failure:** The nested-submodule same-disk move exceeded its five-second deadline (5156.02 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name environment-move-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 42.5 seconds logged.
+- **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** recurrence of this tracked intermittent failure. No implementation, assertion, timeout or skip changed in the owner; the aggregate result is not made green by the isolated pass.

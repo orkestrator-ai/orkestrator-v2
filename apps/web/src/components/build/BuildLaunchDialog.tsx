@@ -935,7 +935,7 @@ export function BuildLaunchDialog({
                         <span className="mt-1 text-[11px] leading-snug text-zinc-500">
                           {disabled
                             ? option.value === "containerized"
-                              ? "Unavailable while Docker is stopped"
+                              ? "Containers unavailable while Docker stopped"
                               : "Unavailable without a local project checkout"
                             : option.description}
                         </span>

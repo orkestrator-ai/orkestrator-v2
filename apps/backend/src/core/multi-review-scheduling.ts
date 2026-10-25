@@ -6,9 +6,9 @@ import type {
 import type { WorkflowDiscoveryResult } from "./workflow-supervisor.js";
 
 /**
- * Supervision rules for Multi Review (step 08). Moved unchanged from the
- * service so the keyed driver, the adaptive due scheduler and the legacy
- * tick classify a record from exactly the same code.
+ * Supervision rules for Multi Review, shared by the keyed driver and the
+ * `WorkflowDueScheduler` rollback so both classify a record, and jitter its
+ * passes, from exactly the same code.
  */
 
 export function reviewSession(workflow: MultiReviewWorkflow): MultiReviewFixSession | undefined {
@@ -147,4 +147,19 @@ export function multiReviewDiscovery(
     entries.push({ key: record.id, obligation, target: record.snapshot.environmentId });
   }
   return { entries, scanned: records.length, complete: true };
+}
+
+/**
+ * Stable per-workflow jitter in `[0, spreadMs)`, so workflows restored together
+ * after a restart do not all poll their providers in the same instant. The
+ * identifier is only hashed locally; it never leaves this function.
+ */
+export function stableJitterMs(workflowId: string, spreadMs: number): number {
+  if (spreadMs <= 0) return 0;
+  let hash = 2166136261;
+  for (let index = 0; index < workflowId.length; index++) {
+    hash ^= workflowId.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) % Math.floor(spreadMs);
 }

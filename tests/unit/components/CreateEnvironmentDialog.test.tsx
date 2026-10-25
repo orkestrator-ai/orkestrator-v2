@@ -203,7 +203,7 @@ describe("resolveAgentDefaults", () => {
 
     const container = screen.getByRole("button", { name: /Containerized/ });
     expect((container as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("Unavailable while Docker is stopped")).toBeTruthy();
+    expect(screen.getByText("Containers unavailable while Docker stopped")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
@@ -253,7 +253,7 @@ describe("resolveAgentDefaults", () => {
     expect((screen.getByRole("button", { name: /Local/ }) as HTMLButtonElement).disabled).toBe(
       true,
     );
-    expect(screen.getByText("Unavailable while Docker is stopped")).toBeTruthy();
+    expect(screen.getByText("Containers unavailable while Docker stopped")).toBeTruthy();
     expect(screen.getByText("Unavailable without a local project checkout")).toBeTruthy();
     const submit = screen.getByRole("button", { name: "Create Environment" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);

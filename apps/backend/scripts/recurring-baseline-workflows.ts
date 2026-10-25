@@ -30,8 +30,8 @@ import { StorageService } from "../src/core/storage.js";
 
 /**
  * Drives the *real* feature-planning, build-pipeline, looped-review and
- * multi-review supervisors (recurring-processes step 08) over a fixture of
- * many completed records and a few active ones, in two modes:
+ * multi-review supervisors over a fixture of many completed records and a few
+ * active ones, in two modes:
  *
  * - `rollback`: what `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects. For
  *   feature planning, build pipelines and looped review that is the previous
@@ -72,6 +72,12 @@ export interface WorkflowDomainCounts {
   storageReads: number;
   /** Revision checks that reused records already decoded (build pipelines' control cache). */
   storageStats: number;
+  /**
+   * Serialized length of the content those reads fetched from SQLite. A row
+   * read charges its row, a whole-store read every row; cache-served reads
+   * charge nothing.
+   */
+  storageBytes: number;
   /** Provider status/activity reads for the active records. */
   providerReads: number;
 }
@@ -482,6 +488,7 @@ async function runDomain(
       recordsSelected: counters?.workUnits["record-selected"] ?? 0,
       storageReads: counters?.workUnits["storage-read"] ?? 0,
       storageStats: counters?.workUnits["storage-stat"] ?? 0,
+      storageBytes: counters?.bytes ?? 0,
       providerReads: provider.reads,
     };
   } finally {

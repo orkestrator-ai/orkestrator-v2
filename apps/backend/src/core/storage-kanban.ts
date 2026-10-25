@@ -661,9 +661,15 @@ export class StorageKanban extends StorageAgentMail {
     return await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
   }
 
+  /**
+   * One plan by ID, read as its own row. The planning supervisor calls this
+   * on every pass, so it must cost one plan however many the store retains.
+   */
   async getFeaturePlan(featureId: string): Promise<FeaturePlan | null> {
-    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
-    return plans.find((candidate) => candidate.id === featureId) ?? null;
+    const stored = this.loadStoreRow(this.featurePlansFile(), featureId);
+    return typeof stored === "object" && stored !== null && (stored as FeaturePlan).id === featureId
+      ? (stored as FeaturePlan)
+      : null;
   }
 
   /**

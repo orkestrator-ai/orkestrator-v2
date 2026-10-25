@@ -5,11 +5,13 @@ import type { PreviewServiceSnapshot } from "@orkestrator/protocol/preview-servi
 
 import { Button } from "@/components/ui/button";
 import {
+  serviceOwnershipLabel,
   serviceTargetLabel,
   type DiagnosisAction,
   type ServiceDiagnosis,
 } from "@/lib/preview-service-display";
 import { cn } from "@/lib/utils";
+import { PreviewFrameworkHints } from "./PreviewFrameworkHints";
 
 const ACTION_LABEL: Record<DiagnosisAction, string> = {
   retry: "Retry",
@@ -19,6 +21,7 @@ const ACTION_LABEL: Record<DiagnosisAction, string> = {
   reconnect: "Reconnect",
   "open-top-level": "Open top-level preview",
   "use-relay": "Use container relay",
+  "confirm-association": "Show any process",
 };
 
 export interface PreviewDiagnosticsProps {
@@ -48,6 +51,7 @@ export function PreviewDiagnostics({
   busy,
 }: PreviewDiagnosticsProps) {
   const [expanded, setExpanded] = useState(false);
+  const [hints, setHints] = useState(false);
   // Expanding or collapsing can swap the toggle for another element; a
   // keyboard user keeps focus on whichever toggle is shown.
   const toggleRef = useRef<HTMLButtonElement | null>(null);
@@ -134,8 +138,15 @@ export function PreviewDiagnostics({
           <dd className="truncate">
             {service.definition.label} · {service.definition.scheme} ·{" "}
             {serviceTargetLabel(service.definition)}
-            {service.endpoint.ownership === "user-registered" ? " · user-registered" : ""}
           </dd>
+          {serviceOwnershipLabel(service.endpoint) && (
+            <>
+              <dt>owner</dt>
+              <dd className="break-words [overflow-wrap:anywhere]">
+                {serviceOwnershipLabel(service.endpoint)}
+              </dd>
+            </>
+          )}
           <dt>binding</dt>
           <dd>
             {service.endpoint.hostPort
@@ -167,7 +178,27 @@ export function PreviewDiagnostics({
             {mode}
             {transport ? ` · ${transport.state}` : ""}
           </dd>
+          <dt>setup</dt>
+          <dd>
+            <button
+              type="button"
+              className="flex items-center gap-0.5 font-sans hover:text-foreground"
+              aria-expanded={hints}
+              onClick={() => setHints((open) => !open)}
+            >
+              {hints ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              Framework setup hints
+            </button>
+          </dd>
         </dl>
+      )}
+      {expanded && service && hints && (
+        <div className="mt-1.5 text-muted-foreground">
+          <PreviewFrameworkHints
+            serviceId={service.definition.serviceId}
+            applicationPort={service.definition.applicationPort}
+          />
+        </div>
       )}
     </div>
   );

@@ -3,6 +3,7 @@ import {
   isValidElement,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useState,
@@ -19,6 +20,13 @@ import { toast } from "sonner";
 import { useOptionalTerminalContext } from "@/contexts";
 import { openInBrowser } from "@/lib/backend";
 import { parseLocalFileLinkTarget } from "@/lib/chat/file-url";
+import { PREVIEW_LINK_GESTURE } from "@/lib/preview-service-display";
+import {
+  getTerminalLinkTarget,
+  isLoopbackUrl,
+  requestTerminalBrowserTab,
+} from "@/lib/terminal-links";
+import { PreviewLinkSourceContext } from "./link-source-context";
 import { usePullRequestOpener } from "@/lib/pull-request-opener";
 import { parseGitHubPullRequestLink } from "@orkestrator/protocol/github-pull-requests";
 import {
@@ -162,6 +170,9 @@ export function MarkdownLink({
 }: AnchorHTMLAttributes<HTMLAnchorElement> & ExtraProps) {
   const createFileTab = useOptionalTerminalContext()?.createFileTab;
   const openPullRequest = usePullRequestOpener();
+  const linkSource = useContext(PreviewLinkSourceContext);
+  // Only the explicit gesture opens a preview tab; a plain click is unchanged.
+  const previewable = Boolean(linkSource && href && isLoopbackUrl(href));
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLAnchorElement>) => {
       onClick?.(event);
@@ -192,6 +203,18 @@ export function MarkdownLink({
         return;
       }
 
+      // An agent's loopback link resolves in the agent's environment, like a
+      // terminal link: a container's localhost:3000 is its own port 3000.
+      if (previewable && linkSource && getTerminalLinkTarget(event.nativeEvent) === "browser-tab") {
+        requestTerminalBrowserTab({
+          environmentId: linkSource.environmentId,
+          sourceTabId: linkSource.tabId,
+          url: href,
+          origin: "agent",
+        });
+        return;
+      }
+
       // Pull request links open in the app; Cmd/Ctrl-click opens GitHub.
       const pullRequest = event.metaKey || event.ctrlKey ? null : parseGitHubPullRequestLink(href);
       if (pullRequest && openPullRequest(pullRequest, pullRequest.view)) return;
@@ -200,11 +223,12 @@ export function MarkdownLink({
         console.error("[MessageMarkdown] Failed to open link:", error);
       });
     },
-    [createFileTab, href, onClick, openPullRequest],
+    [createFileTab, href, linkSource, onClick, openPullRequest, previewable],
   );
 
   return (
     <a
+      {...(previewable ? { title: `${PREVIEW_LINK_GESTURE} opens a preview tab` } : {})}
       {...props}
       href={href}
       className={cn("cursor-pointer text-blue-300 hover:underline", className)}

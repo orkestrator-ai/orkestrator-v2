@@ -231,7 +231,6 @@
     {
       "files": [
         "apps/backend/src/core/bridge-session-close.ts",
-        "apps/backend/src/core/commands-pr-monitor.ts",
         "apps/backend/src/core/control-mcp-server.ts",
         "apps/backend/src/core/coordinator-service.ts",
         "apps/backend/src/core/extension-discovery.ts",

@@ -5,7 +5,6 @@ import path from "node:path";
 
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { startEnvironmentOnce } from "./commands-environment.js";
-import { prMonitorService } from "./commands-pr-monitor.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import {
   AGENT_ACTIVE_MOVE_ERROR,
@@ -59,7 +58,6 @@ afterEach(async () => {
   if (optionalLocks === undefined) delete process.env.GIT_OPTIONAL_LOCKS;
   else process.env.GIT_OPTIONAL_LOCKS = optionalLocks;
   for (const runtime of runtimes.splice(0)) runtime.shutdown();
-  prMonitorService.sync([]);
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 

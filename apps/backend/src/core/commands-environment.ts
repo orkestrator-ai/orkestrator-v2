@@ -105,11 +105,6 @@ import {
   SETUP_FAILED_PRINTF_CMD,
 } from "./container-scripts.js";
 import {
-  prMonitorService,
-  invalidatePendingPrMonitorSync,
-  syncPrMonitorTracking,
-} from "./commands-pr-monitor.js";
-import {
   quoteShell,
   validateGitRefName,
   envWithManagedBinaries,
@@ -1526,7 +1521,7 @@ export async function startEnvironmentOnce(
         const result = await startEnvironmentSetup(running, context);
         schedulePendingRename(environment.id, context);
         await context.runtime.diffStats.sync(context);
-        await syncPrMonitorTracking(context);
+        await context.runtime.prMonitor.sync(context);
         return result;
       }
       // The project home works in the user's checkout. A missing checkout is
@@ -1579,7 +1574,7 @@ export async function startEnvironmentOnce(
       const result = await startEnvironmentSetup(updated, context);
       schedulePendingRename(environment.id, context);
       await context.runtime.diffStats.sync(context);
-      await syncPrMonitorTracking(context);
+      await context.runtime.prMonitor.sync(context);
       return result;
     }
 
@@ -1619,7 +1614,7 @@ export async function startEnvironmentOnce(
     const result = await startEnvironmentSetup(updated, context);
     schedulePendingRename(environment.id, context);
     await context.runtime.diffStats.sync(context);
-    await syncPrMonitorTracking(context);
+    await context.runtime.prMonitor.sync(context);
     return result;
   } catch (error) {
     await fs
@@ -1769,8 +1764,8 @@ export async function stopEnvironmentOnce(
     shutdownClaudeStatePolling(containerId);
     context.runtime.diffStats.invalidatePendingSync();
     context.runtime.diffStats.service.pause(environment.id);
-    invalidatePendingPrMonitorSync();
-    prMonitorService.pause(environment.id);
+    context.runtime.prMonitor.invalidatePendingSync();
+    context.runtime.prMonitor.service.pause(environment.id);
     return;
   }
 

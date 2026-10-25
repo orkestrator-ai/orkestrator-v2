@@ -9,7 +9,6 @@ import {
 
 import type { CommandContext } from "./commands-context.js";
 import { stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-lifecycle.js";
-import { syncPrMonitorTracking, invalidatePendingPrMonitorSync } from "./commands-pr-monitor.js";
 import { assertEnvironmentDeletionNotRequested } from "./commands-terminal.js";
 import { enqueueEnvironmentLifecycleOperation } from "./commands-environment.js";
 import {
@@ -371,7 +370,7 @@ async function quiesceLocalEnvironment(
   // Release the worktree watcher and fetch schedule of the old folder.
   context.runtime.diffStats.invalidatePendingSync();
   context.runtime.diffStats.service.pause(environment.id);
-  invalidatePendingPrMonitorSync();
+  context.runtime.prMonitor.invalidatePendingSync();
   if (environment.worktreePath)
     context.runtime.diffStats.gitFetchScheduler.forget(environment.worktreePath);
 }
@@ -548,7 +547,7 @@ async function completeCommittedMove(
 async function afterMove(context: CommandContext): Promise<void> {
   // Terminal panes still name sessions that were closed in the old folder.
   await context.runtime.diffStats.sync(context);
-  await syncPrMonitorTracking(context);
+  await context.runtime.prMonitor.sync(context);
 }
 
 /** Removes a copied-from worktree, but only from inside the folder it was created in. */

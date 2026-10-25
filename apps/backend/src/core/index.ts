@@ -73,7 +73,7 @@ import {
 import { McpManagementService } from "./mcp-management/service.js";
 import {
   createCommandRegistry,
-  shutdownPrMonitorTracking,
+  scheduleMergeCleanupRecovery,
   type BackendEmit,
   type CommandContext,
 } from "./commands.js";
@@ -412,6 +412,7 @@ export class OrkestratorBackend {
         // Docker-backed, so unit tests keep the unwatched bounds unless they inject one.
         worktreeSignal:
           process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
+        prMonitor: { scheduleMergeCleanup: scheduleMergeCleanupRecovery },
       });
     this.environmentLifecycleDrainTimeoutMs =
       options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
@@ -1126,7 +1127,7 @@ export class OrkestratorBackend {
    * — never per idle observation, and never for a fenced pre-dispatch idle,
    * which the observer refuses to apply (step 07). It reaches the PR monitor's
    * completion wakeup via `pr_monitor_probe_environment` →
-   * `wakePrMonitorForCompletion` (step 05).
+   * `PrMonitorRuntime.wakeForCompletion` (step 05).
    */
   private probeForAgentCreatedPullRequest(environmentId: string, context: CommandContext): void {
     void Promise.resolve(context.probeAgentCreatedPullRequest?.(environmentId)).catch(
@@ -1955,7 +1956,6 @@ export class OrkestratorBackend {
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     this.runtime.shutdown();
-    shutdownPrMonitorTracking();
     cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir());
     const attempt = (async () => {
       try {

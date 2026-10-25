@@ -31,8 +31,10 @@ const SCANNED_ROOTS = [
  *
  * If this list is ever non-empty again, each entry needs a reason. Prefer
  * moving the shared symbol into a leaf both sides can depend on; where the
- * back-edge is a notification rather than a dependency (see
- * `setMergeCleanupScheduler`), invert it so the owner registers itself.
+ * back-edge is a notification rather than a dependency, inject it instead: the
+ * backend passes `scheduleMergeCleanupRecovery` from `commands-servers` to
+ * `BackendRuntime` as `prMonitor.scheduleMergeCleanup`, so the PR monitor never
+ * imports it.
  */
 const KNOWN_CYCLES: ReadonlyArray<{ cycle: readonly string[]; reason: string }> = [];
 

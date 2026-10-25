@@ -1042,6 +1042,11 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     ]) {
       delete sanitizedEnvironment[name];
     }
+    // Bun only defaults NODE_ENV to "test" when it is unset. An inherited
+    // "production" (for example from an agent session launched by the packaged
+    // app) loads React's production build, which has no `act`, and fails every
+    // component test in groups that Turbo does not already filter.
+    delete sanitizedEnvironment.NODE_ENV;
     const runEnvironment: NodeJS.ProcessEnv = { ...sanitizedEnvironment };
     delete runEnvironment.ORKESTRATOR_VALIDATION_SCHEDULER_STATE;
     delete runEnvironment.ORKESTRATOR_VALIDATION_HEAD_REF;

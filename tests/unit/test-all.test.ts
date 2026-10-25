@@ -332,6 +332,17 @@ describe("scripts/test-all.ts", () => {
     expect(dependencies.env.ORKESTRATOR_BRIDGE_DEBUG).toBe("1");
   });
 
+  test("removes an ambient NODE_ENV so every Bun test group defaults to test", async () => {
+    const { dependencies, invocations } = createDependencies({
+      environment: { NODE_ENV: "production" },
+    });
+
+    await runAllTests(dependencies);
+    expect(invocations.length).toBeGreaterThan(0);
+    for (const invocation of invocations) expect(invocation.env.NODE_ENV).toBeUndefined();
+    expect(dependencies.env.NODE_ENV).toBe("production");
+  });
+
   test("worker plan bounds aggregate Bun workers across every active package task", () => {
     // Every field is a worker count handed straight to `--parallel` / Turbo's
     // `--concurrency`, so a zero or negative anywhere is a broken command line,

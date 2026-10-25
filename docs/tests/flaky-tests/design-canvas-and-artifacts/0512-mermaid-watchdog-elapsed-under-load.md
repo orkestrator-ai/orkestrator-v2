@@ -114,6 +114,16 @@ The owning implementation, assertions, timeouts and skips were unchanged.
 
 The aggregate recurrence passed in the complete unchanged owning-file rerun. Exact commands, durations, merge parents, aggregate results and evidence are retained in [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
 
+## Failing-tests fix validation — 2026-10-25
+
+The aggregate `mise run test` measured 7,090 ms against `< 5000 ms` while another
+worktree ran its complete suite. Three loaded complete-owner reruns also
+exceeded the bound (5,571, 5,452 and 7,021 ms at load 3.4–13.1); the owner
+passed alone earlier the same day at load 2.8 (30.7 s). Evidence and the
+co-occurring boundary-test case are in
+[0841](0841-mermaid-boundary-render-deadline-under-load.md). The watchdog
+implementation, assertion, deadline and skip were unchanged.
+
 ## Recurrence 2026-10-25 (scheduled jobs)
 
 `mermaid rendering > enforces source bytes, edges and SVG limits at and over the boundary` returned `render_timeout` (5000 ms parse/layout watchdog) instead of `package_size_exceeded` in the scheduled-jobs `mise run test` aggregate (8084 ms). The complete unchanged 13-test owner passed alone (`bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts`).

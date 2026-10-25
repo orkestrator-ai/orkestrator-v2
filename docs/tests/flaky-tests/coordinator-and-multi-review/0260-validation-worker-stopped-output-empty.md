@@ -20,3 +20,13 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-review-worker-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review-validation-worker.test.ts --parallel=1 --only-failures` failed: 47 passed and two failed across 49 tests in 100.73 s.
 - **Evidence:** `orkestrator-test-run.bFHIz7/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.pQ8a8n/merge-review-worker-owner.log.gz` below the host temporary directory.
 - **Assessment:** no new isolated pass or root cause was established. No implementation, assertion, timeout or skip changed.
+
+## Failing-tests branch main merge — 2026-10-25
+
+- **Merge parents:** feature `d0769b278573edbdafc6de496e7108fd6ee146c1` and main `b52267c2611fc7fd418e346640309b16a28bc8d4`.
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, default workspace/root/bridge/protocol reservations 4/1/2/1 and two isolated backend workers. Formatting, lint and typechecking also ran; no browser scenario suite ran.
+- **Failure:** expected stdout to contain `partial cooperative output`, received an empty string at `review-validation-worker.test.ts:567` (1068.79 ms).
+- **Suite counts:** backend 11,524 passed, 151 skipped and one failed across 11,676 tests (467.94 s). All other packages and the root, bridge and protocol groups passed. The aggregate exited 1 in 696.4 s.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-review-worker-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review-validation-worker.test.ts --parallel=1 --only-failures` passed, exit 0 in 35.3 s, after the aggregate finished.
+- **Evidence:** `/tmp/orkestrator-test-run.67KJPk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer logged command `/tmp/orkestrator-test-run.urQT6W/merge-tests.log.gz`.
+- **Assessment:** recurrence of the recorded intermittent missing-output failure, confirmed by the complete unchanged owner's isolated pass. The stop racing the fixture's first stdout write remains an unconfirmed hypothesis. No implementation, assertion, timeout or skip changed.

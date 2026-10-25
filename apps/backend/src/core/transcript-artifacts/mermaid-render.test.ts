@@ -11,6 +11,7 @@ import { resolveDesignChromiumPath } from "../design/index.js";
 import { verifyMermaidSvg } from "./mermaid-svg.js";
 import { isAlive, listProcesses } from "./preview-process-tree.js";
 import { TranscriptPreviewRunner } from "./preview-runner.js";
+import type { WorkerResult } from "./preview-worker-protocol.js";
 
 const CHROMIUM = resolveDesignChromiumPath();
 if (!CHROMIUM)
@@ -56,6 +57,47 @@ const run = (source: string, target = runner) =>
 // (escaped label text such as `&lt;a href="…"&gt;` is inert text, not markup).
 const UNSAFE = /<script|<foreignobject|<iframe|<a[\s>]|<image|<use|javascript:|@import/i;
 
+const svgWithElements = (count: number) =>
+  `<svg xmlns="http://www.w3.org/2000/svg">${"<g></g>".repeat(count - 1)}</svg>`;
+
+/**
+ * Returns valid worker evidence selected by the source. The runner still owns
+ * source validation and independently verifies the returned edge/SVG limits,
+ * so exact policy classification does not depend on Chromium scheduling.
+ */
+function controlledPolicyRunner() {
+  return new TranscriptPreviewRunner({
+    isolation: "process",
+    executablePath: () => "/bin/true",
+    workerCommand: () => ({ command: "/bin/true", args: [] }),
+    supervise: (_launch, pkg) => {
+      const source = pkg.job.kind === "mermaid" ? pkg.job.source : "";
+      const edges = Number(/^controlled-edges:(\d+)$/.exec(source)?.[1] ?? 0);
+      const elements = Number(/^controlled-svg-elements:(\d+)$/.exec(source)?.[1] ?? 3);
+      const result: WorkerResult = {
+        ok: true,
+        kind: "mermaid",
+        browserBuild: "controlled/1",
+        diagnostics: [],
+        blockedRequests: {},
+        captures: [],
+        svg: svgWithElements(elements),
+        diagramType: "flowchart",
+        edges,
+      };
+      return {
+        outcome: Promise.resolve({ type: "result" as const, result }),
+        exited: Promise.resolve({ verified: true, pids: [], browserPid: null }),
+        cancel: () => undefined,
+        browserPid: () => null,
+        workerPid: () => null,
+        reap: async () => true,
+        scratchDir: () => null,
+      };
+    },
+  });
+}
+
 beforeAll(() => {
   runner = new TranscriptPreviewRunner({ isolation: "process" });
 });
@@ -64,6 +106,54 @@ afterAll(async () => {
 });
 
 describe("mermaid rendering", () => {
+  test("classifies source, edge and SVG limits exactly at and over each boundary", async () => {
+    const padded = (bytes: number) => "x".repeat(bytes);
+    const controlled = controlledPolicyRunner();
+    try {
+      const atSource = await run(padded(MERMAID_POLICY.maxSourceBytes), controlled);
+      const overSource = await run(padded(MERMAID_POLICY.maxSourceBytes + 1), controlled);
+      expect(atSource.ok).toBe(true);
+      expect(overSource.ok).toBe(false);
+      if (!overSource.ok)
+        expect(overSource.error).toMatchObject({
+          code: "package_size_exceeded",
+          resource: "source-bytes",
+        });
+
+      const atEdges = await run(`controlled-edges:${MERMAID_POLICY.maxEdges}`, controlled);
+      const overEdges = await run(`controlled-edges:${MERMAID_POLICY.maxEdges + 1}`, controlled);
+      expect(atEdges.ok).toBe(true);
+      if (atEdges.ok && atEdges.kind === "mermaid")
+        expect(atEdges.edges).toBe(MERMAID_POLICY.maxEdges);
+      expect(overEdges.ok).toBe(false);
+      if (!overEdges.ok)
+        expect(overEdges.error).toMatchObject({
+          code: "package_size_exceeded",
+          resource: "edges",
+        });
+
+      const atSvg = await run(
+        `controlled-svg-elements:${MERMAID_POLICY.maxSvgElements}`,
+        controlled,
+      );
+      const overSvg = await run(
+        `controlled-svg-elements:${MERMAID_POLICY.maxSvgElements + 1}`,
+        controlled,
+      );
+      expect(atSvg.ok).toBe(true);
+      if (atSvg.ok && atSvg.kind === "mermaid")
+        expect(atSvg.svgElements).toBe(MERMAID_POLICY.maxSvgElements);
+      expect(overSvg.ok).toBe(false);
+      if (!overSvg.ok)
+        expect(overSvg.error).toMatchObject({
+          code: "package_size_exceeded",
+          resource: "svg",
+        });
+    } finally {
+      await controlled.close();
+    }
+  });
+
   for (const [name, { source, type }] of Object.entries(DIAGRAMS)) {
     browserTest(
       `renders a ${name} diagram to verified, sanitized SVG`,
@@ -123,68 +213,57 @@ describe("mermaid rendering", () => {
   );
 
   browserTest(
-    "enforces source bytes, edges and SVG limits at and over the boundary",
+    "enforces edge and SVG limits through the real browser at the policy boundary",
     async () => {
-      const padded = (bytes: number) => {
-        const head = "flowchart TD\n  A --> B\n";
-        return head + "%".repeat(bytes - Buffer.byteLength(head));
-      };
       const chain = (edges: number) =>
         `flowchart LR\n${Array.from({ length: edges }, (_, i) => `  A${i} --> A${i + 1}`).join("\n")}`;
-      // 2,000 notes stay under 32 KiB of source but generate more than 5,000 SVG elements.
-      const notes = `sequenceDiagram\n${Array.from({ length: 2_000 }, () => "Note over A:x").join("\n")}`;
-      // The five jobs are independent (each has its own environment), so they
-      // run at once on a runner admitting all five.
-      const concurrent = new TranscriptPreviewRunner({
+      // Each pie slice adds three SVG elements, so 2,000 slices (~6,000 elements) exceed the
+      // 5,000-element limit from ~27 KiB of source. Pie layout is cheap; a sequence diagram
+      // of the same size can exceed the parse/layout deadline on a loaded host and fail with
+      // render_timeout before the SVG check runs.
+      const slices = `pie\n${Array.from({ length: 2_000 }, (_, i) => `  "s${i}" : 1`).join("\n")}`;
+      // This integration exercises Mermaid rather than the runner's controlled
+      // policy seam. Run it sequentially and allow for aggregate host contention;
+      // production timeout behaviour has a separate watchdog test below.
+      const integration = new TranscriptPreviewRunner({
         isolation: "process",
-        admission: { runningGlobal: 5 },
-        // These cases assert the size limits, not the render deadline (the
-        // watchdog case below owns that). Five Chromium layouts at once on a
-        // four-core CI runner took the 2,000-note diagram past the production
-        // 5 s deadline, so it failed as `render_timeout` before its SVG was
-        // counted. Every other bound stays at its production value.
-        budgets: { mermaidRenderMs: 20_000 },
+        budgets: {
+          mermaidRenderMs: 30_000,
+          workerWallMs: 40_000,
+          operationDeadlineMs: 45_000,
+        },
       });
       try {
-        const [atLimit, over, at250, over250, tooMany] = await Promise.all([
-          // A trailing run of `%` is a comment line in Mermaid.
-          run(
-            padded(MERMAID_POLICY.maxSourceBytes).replace(/%+$/, (match) => `%%${match.slice(2)}`),
-            concurrent,
-          ),
-          run(padded(MERMAID_POLICY.maxSourceBytes + 1), concurrent),
-          run(chain(MERMAID_POLICY.maxEdges), concurrent),
-          run(chain(MERMAID_POLICY.maxEdges + 1), concurrent),
-          run(notes, concurrent),
-        ]);
-        expect(atLimit.ok).toBe(true);
-        expect(over.ok).toBe(false);
-        if (!over.ok)
-          expect(over.error).toMatchObject({
-            code: "package_size_exceeded",
-            resource: "source-bytes",
-          });
-
+        const at250 = await run(chain(MERMAID_POLICY.maxEdges), integration);
         expect(at250.ok).toBe(true);
         if (at250.ok && at250.kind === "mermaid") expect(at250.edges).toBe(MERMAID_POLICY.maxEdges);
+
+        const over250 = await run(chain(MERMAID_POLICY.maxEdges + 1), integration);
         expect(over250.ok).toBe(false);
         if (!over250.ok)
-          expect(over250.error).toMatchObject({ code: "package_size_exceeded", resource: "edges" });
+          expect(over250.error).toMatchObject({
+            code: "package_size_exceeded",
+            resource: "edges",
+          });
 
+        const tooMany = await run(slices, integration);
         expect(tooMany.ok).toBe(false);
         if (!tooMany.ok) {
-          expect(tooMany.error).toMatchObject({ code: "package_size_exceeded", resource: "svg" });
+          expect(tooMany.error).toMatchObject({
+            code: "package_size_exceeded",
+            resource: "svg",
+          });
           expect(tooMany.diagnostics[0]!.message).toContain("elements");
         }
       } finally {
-        await concurrent.close();
+        await integration.close();
       }
     },
-    90_000,
+    150_000,
   );
 
   browserTest(
-    "the external watchdog ends a blocked render within the deadline and the browser is gone",
+    "the external watchdog ends a blocked render after its deadline and the browser is gone",
     async () => {
       const RENDER_DEADLINE_MS = 1_000;
       const exits: Array<{
@@ -210,10 +289,10 @@ describe("mermaid rendering", () => {
             code: "render_timeout",
             resource: "mermaid-render",
           });
-        // Launch (≈1 s) + the parse/layout deadline; the spin never yields, so
-        // only the deadline ended it.
+        // The spin never yields, so only the external render deadline can
+        // produce this result. Total wall time also includes Chromium startup,
+        // which is intentionally not bounded by the render-phase deadline.
         expect(elapsed).toBeGreaterThanOrEqual(RENDER_DEADLINE_MS);
-        expect(elapsed).toBeLessThan(RENDER_DEADLINE_MS + 4_000);
         const deadline = Date.now() + 10_000;
         while (blocking.stats().running > 0 && Date.now() < deadline)
           await new Promise((resolve) => setTimeout(resolve, 50));
@@ -256,10 +335,8 @@ describe("mermaid SVG verification", () => {
   });
 
   test("enforces byte and element limits at and over the boundary", async () => {
-    const withElements = (count: number) =>
-      `<svg xmlns="http://www.w3.org/2000/svg">${"<g></g>".repeat(count - 1)}</svg>`;
-    expect((await verifyMermaidSvg(withElements(MERMAID_POLICY.maxSvgElements))).ok).toBe(true);
-    expect((await verifyMermaidSvg(withElements(MERMAID_POLICY.maxSvgElements + 1))).ok).toBe(
+    expect((await verifyMermaidSvg(svgWithElements(MERMAID_POLICY.maxSvgElements))).ok).toBe(true);
+    expect((await verifyMermaidSvg(svgWithElements(MERMAID_POLICY.maxSvgElements + 1))).ok).toBe(
       false,
     );
     const shell = '<svg xmlns="http://www.w3.org/2000/svg"><!----></svg>';

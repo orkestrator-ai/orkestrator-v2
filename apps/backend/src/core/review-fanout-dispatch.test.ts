@@ -81,6 +81,7 @@ function harness(
   };
   return {
     host,
+    provider,
     reviewer,
     sends,
     attached,
@@ -177,4 +178,77 @@ describe("review fan-out dispatch preparation", () => {
     expect(testHarness.sends[0]?.options.reviewShellPolicy).toBeUndefined();
     expect(testHarness.sends[0]?.options.readOnly).toBeUndefined();
   });
+});
+
+describe("recovered reviewer dispatch", () => {
+  test.each(["unknown", "lost", "throws", "unsupported"] as const)(
+    "parks %s acceptance without spending another turn",
+    async (acceptance) => {
+      const h = harness("build");
+      h.reviewer.dispatchState = "dispatching";
+      h.reviewer.continuationPrompt = "Continue the interrupted review";
+      h.reviewer.restartContinuationSent = true;
+      h.provider.dispatchStatus =
+        acceptance === "unsupported"
+          ? undefined
+          : async () => {
+              if (acceptance === "throws") throw new Error("journal unavailable");
+              return acceptance;
+            };
+      h.provider.status = async () => {
+        throw new Error("must not observe the superseded turn");
+      };
+      const runner = new ReviewFanoutRunner(h.host);
+      await runner.advanceReviewers([h.reviewer]);
+      expect(h.reviewer).toMatchObject({
+        status: "running",
+        dispatchState: "dispatching",
+        continuationPrompt: "Continue the interrupted review",
+      });
+      for (let pass = 0; pass < 30 && h.reviewer.status === "running"; pass++)
+        await runner.advanceReviewers([h.reviewer]);
+      expect(h.reviewer.status).toBe("failed");
+      expect(h.reviewer.error).toContain("acceptance could not be confirmed");
+      expect(h.reviewer.resultReminderSent).toBeUndefined();
+      expect(h.sends).toHaveLength(0);
+    },
+  );
+
+  test("acceptance promotes the same request and clears the uncertainty poll budget", async () => {
+    const h = harness("build");
+    h.reviewer.dispatchState = "dispatching";
+    h.reviewer.continuationPrompt = "Continue";
+    h.reviewer.idleResultPolls = 10;
+    h.provider.dispatchStatus = async () => "dispatched";
+    await new ReviewFanoutRunner(h.host).advanceReviewers([h.reviewer]);
+    expect(h.reviewer).toMatchObject({
+      requestId: "review-request",
+      dispatchState: "sent",
+      status: "running",
+    });
+    expect(h.reviewer.continuationPrompt).toBeUndefined();
+    expect(h.reviewer.idleResultPolls).toBeUndefined();
+    expect(h.sends).toHaveLength(0);
+  });
+});
+
+test("a sent continuation ignores a superseded restart until its own turn settles", async () => {
+  const h = harness("build");
+  h.reviewer.dispatchState = "sent";
+  h.reviewer.restartContinuationSent = true;
+  h.provider.observeSession = async () => ({
+    status: "error",
+    interruption: "restart",
+    turnSettled: false,
+  });
+  h.provider.structured = async () => {
+    throw new Error("must not read the old turn result");
+  };
+  await new ReviewFanoutRunner(h.host).advanceReviewers([h.reviewer]);
+  expect(h.reviewer).toMatchObject({
+    status: "running",
+    requestId: "review-request",
+    restartContinuationSent: true,
+  });
+  expect(h.sends).toHaveLength(0);
 });

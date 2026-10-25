@@ -848,8 +848,19 @@ export class BuildPipelineReviewFanout {
       await this.save(pipeline);
     }
     if (consolidation.state === "dispatching") {
-      // Dispatch acceptance is ambiguous after a crash. The stable request id
-      // makes provider reconciliation authoritative; never send it twice.
+      // Session status can still belong to a superseded request. Require
+      // acceptance of this exact ID before observing it or spending a follow-up.
+      const acceptance = await provider
+        .dispatchStatus?.(consolidation.providerSessionId, consolidation.requestId)
+        .catch(() => "unknown" as const);
+      if (acceptance !== "dispatched") {
+        return this.countIdlePoll(
+          pipeline,
+          state,
+          "The consolidation dispatch acceptance could not be confirmed",
+        );
+      }
+      delete consolidation.idleResultPolls;
       consolidation.state = "sent";
       delete consolidation.continuationPrompt;
       await this.save(pipeline);
@@ -871,7 +882,8 @@ export class BuildPipelineReviewFanout {
       consolidation.providerSessionId,
       consolidation.requestId,
     );
-    if (status === "idle" && turnSettled === false) return { kind: "working" };
+    if ((status === "idle" || status === "error") && turnSettled === false)
+      return { kind: "working" };
     // A running session's transcript is looked at only at the persist
     // boundary, and its whole body is read only when the bounded probe shows
     // it moved since the committed copy; an unchanged one costs no body and no

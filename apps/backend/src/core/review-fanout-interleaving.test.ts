@@ -114,9 +114,7 @@ describe("review fan-out interleavings", () => {
     });
   });
 
-  // Bugs these interleavings found in the runner. The fixed ones run; the
-  // open ones are `test.todo` (`bun test --todo` runs them), each failing on
-  // the seeds named until 0112-review-fanout-dispatch-recovery.md is done.
+  // Regression seeds for recovery bugs found by these interleavings.
   describe("runner bugs found by interleaving", () => {
     // Fixed 2026-10-25. Accepting a tool-transport report, `consumeResult` and
     // the `commit()` after it share one try whose catch logged "Deferred
@@ -160,7 +158,7 @@ describe("review fan-out interleavings", () => {
     // already done ... only submit the result") as its first turn, under a
     // new request id. A structured-output reviewer fails as "idle without
     // returning its structured report".
-    test.todo("a dispatch that never reached the provider is not treated as sent", async () => {
+    test("a dispatch that never reached the provider is not treated as sent", async () => {
       for (const [flavour, seed] of [
         ["fence-loss", 24],
         ["fence-loss", 34],
@@ -198,7 +196,7 @@ describe("review fan-out interleavings", () => {
     // The runner attributes it to the continuation, finds the continuation
     // spent, and fails the reviewer as restarted twice while its continuation
     // is about to run. Seeds: fence-loss 861, 1251 (outside the CI seed list).
-    test.todo("a takeover mid-continuation does not count the old restart twice", async () => {
+    test("a takeover mid-continuation does not count the old restart twice", async () => {
       for (const seed of [861, 1251]) {
         const result = await runInterleaving(planScenario(seed, "fence-loss"));
         for (const plan of result.scenario.reviewers) {

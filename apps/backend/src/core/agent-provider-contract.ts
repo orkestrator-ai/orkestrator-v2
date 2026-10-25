@@ -237,8 +237,10 @@ export async function readProviderStatus(
     return observation;
   } catch (error) {
     if (error instanceof ProviderSessionFailedError) {
+      const settled = requestId ? await provider.settleTurn?.(sessionId, requestId) : undefined;
       return {
         status: "error",
+        ...(settled !== undefined ? { turnSettled: settled } : {}),
         error: error.detail,
         ...(error.interruption ? { interruption: error.interruption } : {}),
       };

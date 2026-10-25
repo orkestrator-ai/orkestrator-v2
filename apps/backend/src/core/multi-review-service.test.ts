@@ -149,6 +149,9 @@ const consolidatedReport: StructuredReviewReport = {
 };
 
 class Provider implements BuildPipelineProvider {
+  async dispatchStatus(_sessionId: string, requestId: string) {
+    return this.sends.has(requestId) ? ("dispatched" as const) : ("unknown" as const);
+  }
   readonly agent: BuildPipelineProvider["agent"] = "claude";
   readonly creates: Array<{ label: string; options?: ProviderCreateSessionOptions }> = [];
   readonly sends = new Map<string, { prompt: string; options: ProviderSendOptions }>();
@@ -12036,3 +12039,133 @@ test.each(["queued", "dispatch"] as const)(
     );
   },
 );
+
+for (const kind of ["prepare", "consolidate", "fix"] as const) {
+  test.each([false, true])(
+    `${kind} reconciles a recovered dispatch before observing the old restart (continuation %s)`,
+    async (continuation) => {
+      const provider = new Provider(false);
+      provider.statusValue = "running";
+      const environmentId = `env-dispatch-proof-${kind}-${continuation}`;
+      await withService(
+        environmentId,
+        provider,
+        async (context) => {
+          const { service, storage, snapshot, workflowResults } = context;
+          let first: MultiReviewWorkflow;
+          if (kind === "consolidate") {
+            const selection = { agent: "codex" as const, model: "default" };
+            const started = await context.start([selection], selection);
+            const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+              Boolean(workflow.reviewers[0]?.requestId),
+            );
+            provider.statusValue = "idle";
+            await workflowResults!.submit(
+              { environmentId, projectId: "project-1" },
+              reviewing.reviewers[0]!.requestId!,
+              cleanReport,
+            );
+            first = await advanceUntil(
+              service,
+              snapshot,
+              started.id,
+              (workflow) =>
+                workflow.activeRequest?.kind === "consolidate" &&
+                workflow.activeRequest.state === "sent",
+            );
+          } else {
+            first = await startFollowUpStep(kind, context, environmentId, true);
+          }
+          provider.statusValue = "running";
+          const sessionId = (first.reviewSession ?? first.fixSession)!.providerSessionId;
+          const initial = provider.sends.get(first.activeRequest!.requestId)!;
+          let current = first;
+          if (continuation) {
+            provider.sessionFailures.set(sessionId, "provider restarted the original request");
+            provider.restartInterrupted.add(sessionId);
+            await service.advanceNow(first.id);
+            current = (await snapshot(first.id))!;
+            expect(current.activeRequest).toMatchObject({
+              state: "prepared",
+              restartContinuationSent: true,
+            });
+          } else {
+            // Restore the checkpoint before send accepted the original request.
+            provider.sends.delete(first.activeRequest!.requestId);
+          }
+          const requestId = current.activeRequest!.requestId;
+          const prompt = current.activeRequest!.continuationPrompt;
+          current.activeRequest!.state = "dispatching";
+          const stored = (await storage.getMultiReviewWorkflow(first.id))!;
+          await storage.saveMultiReviewWorkflow(
+            first.id,
+            environmentId,
+            1,
+            current,
+            stored.revision,
+          );
+          await service.shutdown();
+          const restored = new MultiReviewService(storage, stableReviewInvoker, {
+            autoAdvance: false,
+            provider: async () => provider,
+            workflowResults,
+            resolveAgentToolConnection: () => ({
+              url: "http://127.0.0.1:1234/mcp",
+              token: "test-token",
+            }),
+          });
+          try {
+            await restored.init();
+            const statusCalls = provider.statusCalls;
+            await restored.advanceNow(first.id);
+            const parked = (await snapshot(first.id))!;
+            expect(parked.phase).toBe(first.phase);
+            expect(parked.activeRequest).toMatchObject({ requestId, state: "dispatching" });
+            expect(parked.activeRequest!.continuationPrompt).toBe(prompt);
+            expect(parked.activeRequest!.resultReminderSent).toBeUndefined();
+            expect(provider.statusCalls).toBe(statusCalls);
+            expect(provider.sends.has(requestId)).toBe(false);
+            if (!continuation) {
+              const failed = await advanceUntil(
+                restored,
+                snapshot,
+                first.id,
+                (workflow) => workflow.phase === "failed",
+              );
+              expect(failed.error).toContain("dispatch acceptance could not be confirmed");
+              expect(failed.activeRequest!.state).toBe("dispatching");
+              expect(failed.activeRequest!.resultReminderSent).toBeUndefined();
+              return;
+            }
+            // The old owner's pending send lands. It is only now safe to inspect
+            // the session, whose old restart notice clears when the turn starts.
+            await provider.send(sessionId, prompt!, { ...initial.options, requestId });
+            // Request acceptance can precede the session's visible transition.
+            const settlingProvider: BuildPipelineProvider = provider;
+            settlingProvider.settleTurn = async () => false;
+            await restored.advanceNow(first.id);
+            expect((await snapshot(first.id))!.phase).toBe(first.phase);
+            delete settlingProvider.settleTurn;
+            provider.sessionFailures.delete(sessionId);
+            provider.restartInterrupted.delete(sessionId);
+            await restored.advanceNow(first.id);
+            expect((await snapshot(first.id))!.activeRequest).toMatchObject({
+              requestId,
+              state: "sent",
+              restartContinuationSent: true,
+            });
+            expect((await snapshot(first.id))!.phase).toBe(first.phase);
+            provider.sessionFailures.set(sessionId, "a second request was interrupted");
+            provider.restartInterrupted.add(sessionId);
+            await restored.advanceNow(first.id);
+            expect((await snapshot(first.id))!.phase).toBe("failed");
+            expect((await snapshot(first.id))!.error).toContain("a second request was interrupted");
+          } finally {
+            await restored.shutdown();
+          }
+        },
+        { toolMode: true },
+      );
+    },
+  );
+}

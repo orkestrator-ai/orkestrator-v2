@@ -1350,7 +1350,9 @@ export function expectedStatuses(
     case "noSubmit":
       return [tool ? "completed" : "failed"];
     case "ambiguous":
-      return [plan.ambiguousRan || tool ? "completed" : "failed"];
+      // An unaccepted ambiguous prompt stays parked and exhausts its bound;
+      // a delivery-only reminder cannot stand in for its missing first turn.
+      return [plan.ambiguousRan ? "completed" : "failed"];
     case "createFail":
       // A lost `failed` commit lets the next owner create the session again.
       return ledger.switchedWhileLive ? ["failed", "completed"] : ["failed"];

@@ -1641,7 +1641,7 @@ export class BuildPipelineSupervisor {
         previousRequestId,
       )
       .catch(() => null);
-    const resultKind = binding?.kind ?? this.ctx.workflowResultKind(phase);
+    const resultKind = binding?.kind;
     if (
       !resultKind ||
       this.ctx.workflowResultKind(phase, resultKind === "validation-plan") !== resultKind

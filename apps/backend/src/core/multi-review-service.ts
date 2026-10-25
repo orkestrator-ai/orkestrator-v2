@@ -3987,6 +3987,30 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.save(workflow, token);
     }
     if (request.state === "dispatching") {
+      // Only this request's acceptance can settle a recovered dispatch intent.
+      // An idle/error session may still describe its superseded request.
+      const acceptance = await provider
+        .dispatchStatus?.(session.providerSessionId, request.requestId)
+        .catch(() => "unknown" as const);
+      await this.assertFence(workflow.id, token);
+      if (acceptance !== "dispatched") {
+        const scope = `${request.requestId}\0idle`;
+        if (!this.countPoll(workflow.id, scope)) return;
+        request.idleResultPolls = Math.min(
+          (request.idleResultPolls ?? 0) + 1,
+          MAX_IDLE_RESULT_POLLS,
+        );
+        await this.save(workflow, token);
+        if (
+          request.idleResultPolls >= MAX_IDLE_RESULT_POLLS ||
+          this.pollsExhausted(workflow.id, scope, request.idleResultPolls, MAX_IDLE_RESULT_POLLS)
+        ) {
+          throw new Error(`The ${modelLabel} dispatch acceptance could not be confirmed`);
+        }
+        return;
+      }
+      delete request.idleResultPolls;
+      this.pollGate.clear(`${workflow.id}\0${request.requestId}\0idle`);
       request.state = "sent";
       delete request.continuationPrompt;
       await this.save(workflow, token);
@@ -4027,7 +4051,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     }
     const { status, error: statusDetail } = observation;
     await this.assertFence(workflow.id, token);
-    if (status === "idle" && observation.turnSettled === false) return;
+    if ((status === "idle" || status === "error") && observation.turnSettled === false) return;
     if (status === "running") {
       if (request.idleResultPolls !== undefined || request.usageFinalizationPolls !== undefined) {
         delete request.idleResultPolls;

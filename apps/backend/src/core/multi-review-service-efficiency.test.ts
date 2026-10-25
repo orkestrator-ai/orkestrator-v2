@@ -355,3 +355,91 @@ test("recorded measurements carry no prompt, transcript or identifier content", 
     await env.cleanup();
   }
 });
+
+test("lease renewal re-arms after slow work and ignores callbacks from stopped or replaced timers", async () => {
+  const env = await setup(1);
+  const timers = new Map<object, { callback: () => void; delay: number }>();
+  const renewalTimers: Array<{ handle: object; callback: () => void }> = [];
+  const clock = {
+    now: () => 0,
+    timers: {
+      set(callback: () => void, delay: number) {
+        const handle = {};
+        timers.set(handle, { callback, delay });
+        if (delay === 17) renewalTimers.push({ handle, callback });
+        return handle;
+      },
+      clear(handle: unknown) {
+        timers.delete(handle as object);
+      },
+    },
+  };
+  const service = env.createService({
+    autoAdvance: true,
+    keyedScheduling: false,
+    schedulerClock: clock,
+    controllerRenewMs: 17,
+  });
+  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+  let release: (() => void) | undefined;
+  const claim = env.storage.claimMultiReviewController.bind(env.storage);
+  try {
+    await service.advanceNow(env.workflowId);
+    await service.init();
+    const renew = jest
+      .spyOn(env.storage, "claimMultiReviewController")
+      .mockImplementation(async (...args) => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return claim(...args);
+      });
+    try {
+      const first = renewalTimers.at(-1)!;
+      timers.delete(first.handle);
+      first.callback();
+      await flush();
+      expect(renew).toHaveBeenCalledTimes(1);
+      expect(renewalTimers).toHaveLength(1);
+      // No timer is armed until the slow renewal completes.
+      expect(Array.from(timers.values()).filter((timer) => timer.delay === 17)).toHaveLength(0);
+      release!();
+      await flush();
+      const second = renewalTimers.at(-1)!;
+      expect(second.handle).not.toBe(first.handle);
+      expect(renewalTimers).toHaveLength(2);
+      first.callback();
+      await flush();
+      expect(renew).toHaveBeenCalledTimes(1);
+      timers.delete(second.handle);
+      second.callback();
+      await flush();
+      expect(renew).toHaveBeenCalledTimes(2);
+      // Reinitialisation replaces the identity while a renewal is in flight.
+      await service.init();
+      expect(renewalTimers).toHaveLength(3);
+      second.callback();
+      expect(renew).toHaveBeenCalledTimes(2);
+      release!();
+      await flush();
+      expect(renewalTimers).toHaveLength(3);
+      const third = renewalTimers.at(-1)!;
+      await service.shutdown();
+      third.callback();
+      await flush();
+      expect(renew).toHaveBeenCalledTimes(2);
+      expect(renewalTimers).toHaveLength(3);
+      expect(timers.size).toBe(0);
+      await service.init();
+      expect(renewalTimers).toHaveLength(4);
+      third.callback();
+      expect(renew).toHaveBeenCalledTimes(2);
+    } finally {
+      renew.mockRestore();
+    }
+  } finally {
+    release?.();
+    await service.shutdown();
+    await env.cleanup();
+  }
+});

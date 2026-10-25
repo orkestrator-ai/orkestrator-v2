@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
-import { parseResourceLimits } from "@orkestrator/protocol/container-resources";
+import {
+  builtInResourceDefault,
+  parseResourceLimits,
+} from "@orkestrator/protocol/container-resources";
 import {
   environmentResourcePolicy,
   parseAppliedLimits,
@@ -53,19 +56,82 @@ describe("resource limits", () => {
     expect(parseResourceLimits({ pids: "1024" })).toMatchObject({ ok: false, field: "pids" });
   });
 
-  test("an environment override wins; nothing configured is unrestricted", () => {
+  const enforcing = {
+    memoryBytes: 32 * 1024 ** 3,
+    rootless: false,
+    support: { cpuQuota: true, memoryLimit: true, pidsLimit: true },
+  };
+
+  test("an environment override wins, then Settings, then the built-in default", () => {
     const global = { containerResourceLimits: { cpus: 2, memoryMiB: 4096, pids: null } };
-    expect(resolveResourceLimits({}, {})).toEqual({
-      limits: { cpus: null, memoryMiB: null, pids: null },
-      source: "none",
+    expect(resolveResourceLimits({}, {}, enforcing)).toEqual({
+      limits: { cpus: null, memoryMiB: 8192, pids: 4096 },
+      source: "default",
+      unenforced: [],
     });
-    expect(resolveResourceLimits({}, global).source).toBe("global");
+    expect(resolveResourceLimits({}, global, enforcing).source).toBe("global");
     expect(
       resolveResourceLimits(
         { containerResourceLimits: { cpus: 1, memoryMiB: null, pids: 512 } },
         global,
+        enforcing,
       ),
-    ).toEqual({ limits: { cpus: 1, memoryMiB: null, pids: 512 }, source: "environment" });
+    ).toEqual({
+      limits: { cpus: 1, memoryMiB: null, pids: 512 },
+      source: "environment",
+      unenforced: [],
+    });
+    // All-null limits are an explicit opt-out, at either level.
+    const unrestricted = { cpus: null, memoryMiB: null, pids: null };
+    expect(resolveResourceLimits({}, { containerResourceLimits: unrestricted }, enforcing)).toEqual(
+      { limits: unrestricted, source: "global", unenforced: [] },
+    );
+    expect(
+      resolveResourceLimits({ containerResourceLimits: unrestricted }, {}, enforcing).limits,
+    ).toEqual(unrestricted);
+  });
+
+  test("the built-in default caps memory at three quarters of the daemon", () => {
+    // Docker Desktop's default 8 GB VM (7.75 GiB reported).
+    expect(builtInResourceDefault({ ...enforcing, memoryBytes: 8317267968 }).limits).toEqual({
+      cpus: null,
+      memoryMiB: 5888,
+      pids: 4096,
+    });
+    expect(builtInResourceDefault({ ...enforcing, memoryBytes: null }).limits.memoryMiB).toBe(8192);
+    // Never below the smallest accepted limit.
+    expect(
+      builtInResourceDefault({ ...enforcing, memoryBytes: 256 * 1024 ** 2 }).limits.memoryMiB,
+    ).toBe(512);
+  });
+
+  test("the built-in default leaves off what the daemon cannot enforce, and says so", () => {
+    expect(
+      builtInResourceDefault({
+        ...enforcing,
+        support: { cpuQuota: true, memoryLimit: false, pidsLimit: true },
+      }),
+    ).toEqual({ limits: { cpus: null, memoryMiB: null, pids: 4096 }, unenforced: ["memoryMiB"] });
+    // Rootless with unknown support (no delegation reported): nothing is claimed.
+    const rootless = {
+      ...enforcing,
+      rootless: true,
+      support: { cpuQuota: null, memoryLimit: null, pidsLimit: null },
+    };
+    expect(builtInResourceDefault(rootless)).toEqual({
+      limits: { cpus: null, memoryMiB: null, pids: null },
+      unenforced: ["memoryMiB", "pids"],
+    });
+    // Unknown support on a rootful daemon is trusted, as for explicit budgets.
+    expect(builtInResourceDefault({ ...rootless, rootless: false }).limits).toEqual({
+      cpus: null,
+      memoryMiB: 8192,
+      pids: 4096,
+    });
+    // The default is never refused, unlike an explicit unenforceable budget.
+    expect(() =>
+      refuseUnenforceableLimits(resolveResourceLimits({}, {}, rootless).limits, rootless, "x"),
+    ).not.toThrow();
   });
 
   test("docker arguments disable swap by pinning it to the memory limit", () => {
@@ -89,6 +155,12 @@ describe("resource limits", () => {
       pids: 512,
     });
     expect(parseAppliedLimits("0\t0\t<nil>")).toEqual({ cpus: null, memoryMiB: null, pids: null });
+    // Docker Engine 29 renders the nil pointer as `<no value>`.
+    expect(parseAppliedLimits("0\t0\t<no value>")).toEqual({
+      cpus: null,
+      memoryMiB: null,
+      pids: null,
+    });
     expect(parseAppliedLimits("garbage")).toBeNull();
   });
 });

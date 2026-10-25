@@ -7,7 +7,7 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+import { SegmentedSelector } from "@/components/ui/segmented-selector";
 import * as backend from "@/lib/backend";
 import { useAccountMachine } from "./account-machine";
 
@@ -90,17 +90,46 @@ export function ResourceLimitFields({
   );
 }
 
+type BudgetMode = "default" | "custom" | "unrestricted";
+
+function initialMode(limits: ContainerResourceLimits | null | undefined): BudgetMode {
+  if (!limits) return "default";
+  return limits.cpus === null && limits.memoryMiB === null && limits.pids === null
+    ? "unrestricted"
+    : "custom";
+}
+
+const AXIS_LABELS: Record<keyof ContainerResourceLimits, string> = {
+  cpus: "CPU",
+  memoryMiB: "memory",
+  pids: "processes",
+};
+
+/** "8 GB memory · 4096 processes · no CPU limit" */
+export function describeBuiltInDefault(limits: ContainerResourceLimits): string {
+  return [
+    limits.memoryMiB !== null
+      ? `${Math.round((limits.memoryMiB / 1024) * 10) / 10} GB memory`
+      : "no memory limit",
+    limits.pids !== null ? `${limits.pids} processes` : "no process limit",
+    limits.cpus !== null ? `${limits.cpus} CPU` : "no CPU limit",
+  ].join(" · ");
+}
+
 /**
- * Default budget for new containers. Off by default: no limits are applied
- * until chosen here, and existing containers keep what they were created with.
+ * The budget for new containers: the built-in default for this Docker (unless
+ * the backend predates it), custom limits, or none. Existing containers keep
+ * what they were created with until they are rebuilt.
  */
 export function ContainerResourceLimitsSettings({
   initial,
 }: {
   initial: ContainerResourceLimits | null | undefined;
 }) {
-  const [enabled, setEnabled] = useState(Boolean(initial));
-  const [draft, setDraft] = useState(limitsToDraft(initial));
+  const [mode, setMode] = useState<BudgetMode>(initialMode(initial));
+  const [draft, setDraft] = useState(
+    limitsToDraft(initialMode(initial) === "custom" ? initial : null),
+  );
   const [capacity, setCapacity] = useState<DockerCapacity | null>(null);
   const [saving, setSaving] = useState(false);
   const { machine } = useAccountMachine();
@@ -121,10 +150,21 @@ export function ContainerResourceLimitsSettings({
     };
   }, [machine]);
 
+  // An older backend reports no built-in default and applies none.
+  const builtIn = capacity?.builtInDefault;
+  const legacyBackend = capacity !== null && !builtIn;
+
   const save = async () => {
     setSaving(true);
     try {
-      await backend.setContainerResourceLimits(enabled ? draftToLimits(draft) : null, machine);
+      await backend.setContainerResourceLimits(
+        mode === "custom"
+          ? draftToLimits(draft)
+          : mode === "unrestricted"
+            ? { cpus: null, memoryMiB: null, pids: null }
+            : null,
+        machine,
+      );
       toast.success("Resource limits saved", {
         description: "They apply to containers created or rebuilt from now on.",
       });
@@ -139,21 +179,45 @@ export function ContainerResourceLimitsSettings({
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <Label htmlFor="limit-enabled" className="text-sm">
-            Limit resources of new containers
-          </Label>
-          <p className="text-xs text-muted-foreground">
-            Off means no limits. Environments can override this in their own settings.
+      <div className="space-y-2">
+        <Label className="text-sm">Limit resources of new containers</Label>
+        <SegmentedSelector
+          ariaLabel="Limit resources of new containers"
+          value={mode}
+          onValueChange={setMode}
+          options={[
+            { value: "default", label: "Built-in default", disabled: legacyBackend },
+            { value: "custom", label: "Custom" },
+            { value: "unrestricted", label: "No limits" },
+          ]}
+        />
+        <p className="text-xs text-muted-foreground">
+          {mode === "default"
+            ? builtIn
+              ? `On this Docker: ${describeBuiltInDefault(builtIn.limits)}. Contains a runaway environment without slowing normal work.`
+              : "Measured limits that contain a runaway environment without slowing normal work."
+            : mode === "unrestricted"
+              ? "No limits: one environment can use all of Docker's memory and processes."
+              : "Blank fields are unrestricted."}{" "}
+          Environments can override this in their own settings.
+        </p>
+        {mode === "default" && builtIn && builtIn.unenforced.length > 0 ? (
+          <p className="text-xs text-yellow-700 dark:text-yellow-400">
+            This Docker engine cannot enforce the default{" "}
+            {builtIn.unenforced.map((axis) => AXIS_LABELS[axis]).join(" and ")} limit, so it is left
+            off.
           </p>
-        </div>
-        <Switch id="limit-enabled" checked={enabled} onCheckedChange={setEnabled} />
+        ) : null}
+        {legacyBackend ? (
+          <p className="text-xs text-muted-foreground">
+            This backend has no built-in default; without custom limits it applies none.
+          </p>
+        ) : null}
       </div>
       <ResourceLimitFields
         draft={draft}
         onChange={setDraft}
-        disabled={!enabled}
+        disabled={mode !== "custom"}
         capacity={capacity}
       />
       <Button type="button" size="sm" onClick={() => void save()} disabled={saving}>

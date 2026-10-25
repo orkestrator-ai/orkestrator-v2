@@ -233,11 +233,12 @@ export async function createDockerContainer(
       "This image cannot write the environment's persistent storage format. Nothing was created; use the image the environment was built with or a newer one.",
     );
   }
-  // A budget the daemon cannot enforce is refused, never passed through: a
-  // rootless daemon without cgroups records it and enforces nothing. The
+  // An explicit budget the daemon cannot enforce is refused, never passed
+  // through: a rootless daemon without cgroups records it and enforces
+  // nothing. The built-in default leaves such an axis off instead. The
   // topology probe's rootless flag survives a failed capacity probe.
-  const resourceLimits = resolveResourceLimits(environment, config.global).limits;
   const capacity = await dockerAdmissionCapacity(topology);
+  const resourceLimits = resolveResourceLimits(environment, config.global, capacity).limits;
   refuseUnenforceableLimits(resourceLimits, capacity, "Nothing was created.");
   const runtimeGeneration = identity.runtimeGeneration ?? 1;
   const args = [
@@ -284,8 +285,8 @@ export async function createDockerContainer(
     // at most half of it.
     "--shm-size",
     `${sharedMemoryMiB(resourceLimits)}m`,
-    // Opt-in budget (environment override, else global default); none means
-    // unrestricted, as before. Read back from inspect, never assumed.
+    // Environment override, else the Settings budget, else the built-in
+    // default for this daemon. Read back from inspect, never assumed.
     ...resourceArguments(resourceLimits),
     // Bounded container stdout/stderr (10 MiB × 3) where the daemon offers
     // the local driver.

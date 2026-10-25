@@ -613,11 +613,9 @@ export function registerEnvironmentCommands(
       limits = parsed.limits;
     }
     // Applies to runtimes created from now on; existing ones keep theirs.
-    const current = await storage.loadConfig();
-    await storage.updateGlobalConfig(
-      { ...current.global, containerResourceLimits: limits },
-      { preserveCredentials: true },
-    );
+    // `null` removes the budget (the built-in default applies); all-null
+    // limits are explicitly unrestricted.
+    await storage.setContainerResourceLimits(limits);
     return { limits: limits ?? null };
   });
   register("get_environment_network_policy", async (args, context) => {

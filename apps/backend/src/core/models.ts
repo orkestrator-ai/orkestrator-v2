@@ -915,9 +915,11 @@ export interface AppConfig {
   desktopConnections?: import("@orkestrator/protocol/connections").StoredDesktopConnections;
   global: {
     /**
-     * Default resource budget enforced on new container runtimes. Absent means
-     * unrestricted: defaults are chosen from measurements, not guessed. (The
-     * older `containerResources` value was never applied and is not read.)
+     * Resource budget enforced on new container runtimes (Settings →
+     * Container). Absent means the built-in default for the daemon
+     * (`builtInResourceDefault`); all-`null` limits mean unrestricted.
+     * Written only by `setContainerResourceLimits`. (The older
+     * `containerResources` value was never applied and is not read.)
      */
     containerResourceLimits?: import("@orkestrator/protocol/container-resources").ContainerResourceLimits;
     /** Agent systems installed and exposed in launch/review surfaces. */

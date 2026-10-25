@@ -74,7 +74,7 @@ describe("environment resources section", () => {
     install();
     render(<EnvironmentResourcesSection environmentId="env-r" containerId="c1" dockerAvailable />);
     await screen.findByText(/2 CPU · 4 GB/);
-    expect(screen.getByText("(default)")).toBeTruthy();
+    expect(screen.getByText("(Settings default)")).toBeTruthy();
     expect(screen.getByText("unrestricted")).toBeTruthy();
     expect(screen.getByText(/1.25 cores · 1 GB · 12 processes/)).toBeTruthy();
     expect(screen.getByText(/runs with different limits than requested/)).toBeTruthy();
@@ -139,5 +139,22 @@ describe("environment resources section", () => {
     );
     render(<EnvironmentResourcesSection environmentId="env-r" containerId="c1" dockerAvailable />);
     await screen.findByText(/Docker runs rootless/);
+  });
+
+  test("names the built-in default and the axes this daemon cannot enforce", async () => {
+    install();
+    const defaultPolicy: EnvironmentResourcePolicy = {
+      ...policy,
+      requested: { cpus: null, memoryMiB: null, pids: 4096 },
+      source: "default",
+      unsupported: ["memoryMiB"],
+    };
+    const base = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
+      command === "get_environment_resources" ? defaultPolicy : base(command, args),
+    );
+    render(<EnvironmentResourcesSection environmentId="env-r" containerId="c1" dockerAvailable />);
+    await screen.findByText("(built-in default)");
+    expect(screen.getByText(/cannot enforce: memory/)).toBeTruthy();
   });
 });

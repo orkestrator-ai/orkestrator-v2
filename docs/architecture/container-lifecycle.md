@@ -833,12 +833,43 @@ probe URL carries no credential. Commands: `get_container_host_reachability`,
 
 ## Resource budgets and usage (`container-resources.ts`)
 
-Budgets are opt-in. `global.containerResourceLimits` (Settings → Container)
-sets a default for new runtimes and `environment.containerResourceLimits`
-overrides it; with neither, a runtime is unrestricted, because a default
-must come from measured workloads, not guesses. The older
-`global.containerResources` slider value was never applied and is no longer
-shown or read.
+A new runtime gets `environment.containerResourceLimits`, else
+`global.containerResourceLimits` (Settings → Container), else the built-in
+default for its daemon (`builtInResourceDefault`,
+`packages/protocol/src/container-resources.ts`). A budget whose limits are
+all `null` is an explicit opt-out ("No limits" in Settings, or blank fields
+on an environment). The budget is resolved only when a runtime is created or
+rebuilt, so an existing container keeps what it was created with until it is
+rebuilt or updated on purpose; its resources panel shows the difference.
+Settings writes the global budget only through `set_container_resource_limits`
+(`setContainerResourceLimits`); `null` removes it and restores the built-in
+default. The older `global.containerResources` slider value was never
+applied and is no longer shown or read.
+
+### Built-in default
+
+| Axis | Default | Why |
+| --- | --- | --- |
+| `cpus` | none | CPU is compressible and Docker shares it fairly; a 2-CPU cap made the browser workload 1.4–1.75× slower on Desktop and builds 1.5× slower on Linux, and protects nothing memory and PID limits do not |
+| `memoryMiB` | 8,192 MiB, capped at 75% of the daemon's memory (rounded down to 256 MiB; never below 512) | Above every measured workload's peak, and a small Docker Desktop VM keeps a quarter for the daemon and other containers. 5,888 MiB on Desktop's default 7.75 GiB VM, 8,192 MiB on a 32 GB Linux host; the preset when the daemon's memory is unknown |
+| `pids` | 4,096 | About 10× the highest measured peak (392; threads count), far below a fork bomb |
+
+`/dev/shm` stays 1 GiB under the default (half of any memory limit of at
+least 2 GiB). The default contains a runaway environment — a leak or a fork
+bomb is killed inside its own cgroup instead of exhausting the VM or host,
+the backend and sibling environments; it is not a packing target, and the
+sum over environments may exceed the daemon. The measurements behind it are
+in [container-qualification.md](../development/container-qualification.md#workload-budgets).
+
+An axis the daemon cannot enforce (support `false`, or unknown on a rootless
+daemon) is left off the default and reported in the policy's `unsupported`
+list and in Settings; the default is never refused, so a rootless daemon
+without delegated controllers still creates runtimes, unrestricted. An
+explicit budget on such a daemon is still refused, below. Docker Desktop
+enforces all three axes inside its VM, whose size is the ceiling.
+`get_docker_capacity` carries the default for that daemon as
+`builtInDefault`; policies report its source as `default`. Older backends
+omit both (and apply no default), which the Settings page shows.
 
 | Axis | Docker | Bounds |
 | --- | --- | --- |
@@ -853,10 +884,11 @@ enforcement (rootless with cgroup driver `none`, or a controller that is not
 delegated) accepts `--cpus`, `--memory` and `--pids-limit`, stores them and
 enforces nothing, so the read-back alone would show them as applied. Every
 create, `update_environment_resources` (stored or applied) and the rebuild
-preflight therefore refuse a budget axis whose support `docker info` reports
-`false`, with `unsupported-topology`, before anything is created or stopped.
-On a rootless daemon whose support is unknown the budget is refused as
-`daemon-unavailable`. `update_environment_resources`
+preflight therefore refuse an explicit (environment or Settings) budget axis
+whose support `docker info` reports `false`, with `unsupported-topology`,
+before anything is created or stopped. On a rootless daemon whose support is
+unknown such a budget is refused as `daemon-unavailable`. The built-in
+default drops those axes instead. `update_environment_resources`
 stores an override and, when asked, applies it to the running container with
 `docker update` as an `update-resources` lifecycle operation; it refuses a
 limit above the daemon's capacity and a memory limit within 10% of current use

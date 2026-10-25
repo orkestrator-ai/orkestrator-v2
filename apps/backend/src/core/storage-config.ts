@@ -737,6 +737,25 @@ export abstract class StorageConfig extends StorageProjects {
   }
 
   /** Turn the startup GitHub CLI reminder off, or back on. */
+  /**
+   * The Settings → Container budget for new runtimes. `undefined` removes it,
+   * so new runtimes get the built-in default; a budget whose limits are all
+   * `null` is explicitly unrestricted. A settings save that omits the field
+   * keeps it, so this is the only way to remove it.
+   */
+  async setContainerResourceLimits(
+    limits: import("@orkestrator/protocol/container-resources").ContainerResourceLimits | undefined,
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadOwnConfig();
+      if (limits) config.global.containerResourceLimits = limits;
+      else delete config.global.containerResourceLimits;
+      await this.saveSensitiveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return this.withInheritedSettings(config);
+    });
+  }
+
   async setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadOwnConfig();

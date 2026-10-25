@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { DesignElement } from "@orkestrator/protocol/design-canvas";
 import { invoke } from "@/lib/native/backend";
@@ -379,8 +379,7 @@ describe("DesignCanvasTab", () => {
     }
   });
 
-  test("a Layers element on an unrendered frame is announced, then selected once it renders", async () => {
-    const bridges = new Set<DesignFrameBridge>();
+  describe("deferred layer selection", () => {
     const target: DesignElement = {
       selector: "body > :nth-child(1)",
       tag: "p",
@@ -389,58 +388,290 @@ describe("DesignCanvasTab", () => {
       styles: {},
       rect: { x: 0, y: 0, width: 20, height: 20 },
     };
-    const ask = spyOn(DesignFrameBridge.prototype, "ask").mockImplementation(function (
-      this: DesignFrameBridge,
-      operation,
-    ) {
-      if (operation.op === "render") bridges.add(this);
-      if (operation.op === "inspectElement") return Promise.resolve(target) as Promise<never>;
-      if (operation.op === "hierarchyPage")
-        return Promise.resolve({
-          layers: [
-            { selector: target.selector, tag: "p", label: "target", depth: 1, childCount: 0 },
-          ],
-          total: 1,
-          truncated: false,
-          bytes: 0,
-        }) as Promise<never>;
-      return Promise.resolve(undefined) as Promise<never>;
-    });
-    try {
+    let ask: ReturnType<typeof spyOn<DesignFrameBridge, "ask">>;
+    let renderGate: ReturnType<typeof deferred<void>>;
+    let inspectGate: ReturnType<typeof deferred<DesignElement>> | undefined;
+    let hitGate: ReturnType<typeof deferred<DesignElement>>;
+    let waitingBridge: DesignFrameBridge | undefined;
+    let layer: HTMLElement;
+    const inspector = () => screen.queryByRole("complementary", { name: "Element inspector" });
+    const announcement = () => document.querySelector('p.sr-only[role="status"]')!.textContent;
+    const inspections = () => ask.mock.calls.filter(([op]) => op.op === "inspectElement");
+    const refresh = () => act(() => designController("env-1", canvasId).refresh());
+    const finishRender = () =>
+      act(async () => {
+        renderGate.resolve();
+      });
+
+    async function setup(narrow = false, legacy = false) {
+      globalThis.ResizeObserver = class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(element: Element) {
+          if (element.getAttribute("aria-label") === "Design canvas") {
+            Object.defineProperty(element, "clientWidth", {
+              value: narrow ? 600 : 1200,
+              configurable: true,
+            });
+            this.callback([], this as unknown as ResizeObserver);
+          }
+        }
+        unobserve() {}
+        disconnect() {}
+      } as unknown as typeof ResizeObserver;
+      if (legacy) {
+        invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+          if (command === "design_capabilities")
+            return Promise.reject(new Error("Unknown backend command: design_capabilities"));
+          if (command === "design_changes")
+            return Promise.resolve({
+              generation: "legacy",
+              revision: backend.revision,
+              reset: true,
+              events: [],
+            });
+          if (command === "design_action")
+            return Promise.resolve({
+              canvas: backend.canvas(),
+              history: { canUndo: false, canRedo: false, undoCount: 0, redoCount: 0 },
+            });
+          return backend.handle(command, args ?? {});
+        });
+      }
+      renderGate = deferred();
+      hitGate = deferred<DesignElement>();
+      inspectGate = undefined;
+      waitingBridge = undefined;
+      const bridgesByFrame = new Map<string, DesignFrameBridge>();
+      backend.frames.get(frameB)!.frame.html = "<p>B</p>";
+      ask = spyOn(DesignFrameBridge.prototype, "ask").mockImplementation(function (
+        this: DesignFrameBridge,
+        operation,
+      ) {
+        if (operation.op === "render") {
+          if (operation.html.startsWith("<p>B</p>")) bridgesByFrame.set(frameB, this);
+          if (this === waitingBridge) return renderGate.promise as Promise<never>;
+        }
+        if (operation.op === "hitTest") return hitGate.promise as Promise<never>;
+        if (operation.op === "inspectElement")
+          return (inspectGate?.promise ?? Promise.resolve(target)) as Promise<never>;
+        if (operation.op === "hierarchyPage")
+          return Promise.resolve({
+            layers: [
+              { selector: target.selector, tag: "p", label: "target", depth: 1, childCount: 0 },
+              {
+                selector: "body > :nth-child(2)",
+                tag: "p",
+                label: "other",
+                depth: 1,
+                childCount: 0,
+              },
+            ],
+            total: 2,
+            truncated: false,
+            bytes: 0,
+          }) as Promise<never>;
+        return Promise.resolve(undefined) as Promise<never>;
+      });
       render(
         <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
       );
       await screen.findByRole("button", { name: "Move frame A" });
+      fireEvent.load(screen.getByTitle("A"));
       fireEvent.load(screen.getByTitle("B"));
-      const layer = (await screen.findAllByRole("button", { name: "target" })).find((button) =>
+      layer = (await screen.findAllByRole("button", { name: "target" })).find((button) =>
         button.closest('[role="treeitem"]')?.getAttribute("data-row-key")?.startsWith(frameB),
       )!;
-      const bridge = Array.from(bridges).find(
-        (candidate) => candidate.renderedContentId === backend.frames.get(frameB)!.contentId,
-      )!;
-      // The frame has not rendered its current content: one activation waits for it.
-      bridge.renderedContentId = null;
-      fireEvent.click(layer);
-      const announcer = document.querySelector('p.sr-only[role="status"]')!;
       await waitFor(() =>
-        expect(announcer.textContent).toBe("Loading B; the layer is selected when it appears"),
+        expect(bridgesByFrame.get(frameB)?.renderedContentId).toBe(
+          legacy ? "revision:1" : backend.frames.get(frameB)!.contentId,
+        ),
       );
-      expect(ask.mock.calls.some(([operation]) => operation.op === "inspectElement")).toBe(false);
-      expect(screen.queryByRole("complementary", { name: "Element inspector" }) === null).toBe(
-        true,
-      );
-
-      // The frame renders new content: the waiting layer is selected without a second Enter.
-      backend.externalReplace(frameB);
-      await act(() => designController("env-1", canvasId).refresh());
-      const inspector = await screen.findByRole("complementary", { name: "Element inspector" });
-      expect(within(inspector).getByRole("heading", { name: "p" })).toBeTruthy();
-      expect(
-        ask.mock.calls.filter(([operation]) => operation.op === "inspectElement"),
-      ).toHaveLength(1);
-    } finally {
-      ask.mockRestore();
+      waitingBridge = bridgesByFrame.get(frameB);
+      if (legacy) waitingBridge!.renderedContentId = null;
+      else await styleUpdate();
     }
+    async function styleUpdate() {
+      const entry = backend.frames.get(frameB)!;
+      entry.frame = {
+        ...entry.frame,
+        html: entry.frame.html + "<!--style-->",
+        revision: entry.frame.revision + 1,
+      };
+      entry.contentId = `style-${entry.frame.revision}`;
+      backend.revision++;
+      await refresh();
+      await waitFor(() => expect(waitingBridge!.renderedContentId).toBeNull());
+    }
+    afterEach(() => {
+      ask?.mockRestore();
+      jest.useRealTimers();
+    });
+
+    test("delayed rendering of the same structure selects after one activation, including a style update", async () => {
+      await setup();
+      fireEvent.click(layer);
+      expect(announcement()).toBe("Loading B; the layer is selected when it appears");
+      expect(inspections()).toHaveLength(0);
+      await styleUpdate();
+      await finishRender();
+      expect(inspections()).toHaveLength(1);
+      expect(inspector()).not.toBeNull();
+    });
+
+    test.each([false, true])(
+      "a changed structure or legacy revision cancels positional selection (legacy=%s)",
+      async (legacy) => {
+        await setup(false, legacy);
+        fireEvent.click(layer);
+        backend.externalReplace(frameB);
+        await refresh();
+        expect(announcement()).toBe("The frame structure changed; select the layer again");
+        await finishRender();
+        expect(inspections()).toHaveLength(0);
+        expect(inspector() === null).toBe(true);
+      },
+    );
+
+    test.each([false, true])(
+      "a newer hit test wins before or during layer inspection (inspecting=%s)",
+      async (inspecting) => {
+        await setup();
+        inspectGate = deferred<DesignElement>();
+        fireEvent.click(layer);
+        if (inspecting) await finishRender();
+        fireEvent.click(screen.getByRole("button", { name: "Select element in A" }));
+        expect(ask.mock.calls.some(([op]) => op.op === "hitTest")).toBe(true);
+        await finishRender();
+        expect(inspections()).toHaveLength(inspecting ? 1 : 0);
+        await act(async () => inspectGate!.resolve(target));
+        expect(inspector() === null).toBe(true);
+        await act(async () => hitGate.resolve({ ...target, tag: "h1" }));
+        expect(within(inspector()!).getByRole("heading", { name: "h1" })).toBeTruthy();
+      },
+    );
+
+    test("a structural replacement during inspection discards the old reply", async () => {
+      await setup();
+      inspectGate = deferred<DesignElement>();
+      fireEvent.click(layer);
+      await finishRender();
+      expect(inspections()).toHaveLength(1);
+      backend.externalReplace(frameB);
+      await refresh();
+      await act(async () => inspectGate!.resolve(target));
+      expect(announcement()).toBe("The frame structure changed; select the layer again");
+      expect(inspector() === null).toBe(true);
+    });
+
+    test.each([false, true])(
+      "Escape dismisses a narrow pending layer before or during inspection (inspecting=%s)",
+      async (inspecting) => {
+        await setup(true);
+        inspectGate = deferred<DesignElement>();
+        act(() => layer.focus());
+        fireEvent.click(layer);
+        if (inspecting) await finishRender();
+        fireEvent.keyDown(layer, { key: "Escape" });
+        expect(screen.queryByRole("navigation", { name: "Design hierarchy" }) === null).toBe(true);
+        expect(
+          screen.getByRole("button", { name: "Toggle layers" }).getAttribute("aria-pressed"),
+        ).toBe("false");
+        await finishRender();
+        await act(async () => inspectGate!.resolve(target));
+        expect(inspector() === null).toBe(true);
+        expect(screen.queryByRole("navigation", { name: "Design hierarchy" }) === null).toBe(true);
+        expect(inspections()).toHaveLength(inspecting ? 1 : 0);
+      },
+    );
+
+    test("same-frame row focus preserves the first activation while inspection is in flight", async () => {
+      await setup();
+      inspectGate = deferred<DesignElement>();
+      fireEvent.click(layer);
+      await finishRender();
+      expect(inspections()).toHaveLength(1);
+      const other = screen
+        .getAllByRole("button", { name: "other" })
+        .find((button) =>
+          button.closest('[role="treeitem"]')?.getAttribute("data-row-key")?.startsWith(frameB),
+        )!;
+      act(() => (other.closest('[role="treeitem"]') as HTMLElement).focus());
+      await act(async () => inspectGate!.resolve(target));
+      expect(inspector()).not.toBeNull();
+      expect(layer.closest('[role="treeitem"]')!.getAttribute("aria-selected")).toBe("true");
+    });
+
+    test("the ten-second expiry announces failure and ignores a late render", async () => {
+      await setup();
+      jest.useFakeTimers();
+      fireEvent.click(layer);
+      act(() => jest.advanceTimersByTime(9_999));
+      expect(announcement()).toBe("Loading B; the layer is selected when it appears");
+      act(() => jest.advanceTimersByTime(1));
+      expect(announcement()).toBe("B did not finish loading; nothing was selected");
+      await finishRender();
+      expect(inspections()).toHaveLength(0);
+      expect(inspector() === null).toBe(true);
+    });
+
+    test("replacing a request clears its timer and the replacement can still select", async () => {
+      await setup();
+      jest.useFakeTimers();
+      const clear = spyOn(globalThis, "clearTimeout");
+      try {
+        fireEvent.click(layer);
+        act(() => jest.advanceTimersByTime(5_000));
+        const other = screen
+          .getAllByRole("button", { name: "other" })
+          .find((button) =>
+            button.closest('[role="treeitem"]')?.getAttribute("data-row-key")?.startsWith(frameB),
+          )!;
+        clear.mockClear();
+        fireEvent.click(other);
+        expect(clear).toHaveBeenCalled();
+        act(() => jest.advanceTimersByTime(5_000));
+        expect(announcement()).toBe("Loading B; the layer is selected when it appears");
+        await finishRender();
+        expect(inspections()).toHaveLength(1);
+        expect(inspections()[0]![0]).toMatchObject({ selector: "body > :nth-child(2)" });
+        act(() => jest.advanceTimersByTime(5_000));
+        expect(announcement()).not.toContain("did not finish loading");
+        expect(inspector()).not.toBeNull();
+      } finally {
+        clear.mockRestore();
+      }
+    });
+
+    test("unmount clears the waiting timer", async () => {
+      await setup();
+      jest.useFakeTimers();
+      const clear = spyOn(globalThis, "clearTimeout");
+      try {
+        fireEvent.click(layer);
+        clear.mockClear();
+        cleanup();
+        expect(clear).toHaveBeenCalled();
+        act(() => jest.advanceTimersByTime(10_000));
+        await finishRender();
+        expect(inspections()).toHaveLength(0);
+      } finally {
+        clear.mockRestore();
+      }
+    });
+
+    test("removing the waiting frame cancels immediately and clears its timer", async () => {
+      await setup();
+      jest.useFakeTimers();
+      fireEvent.click(layer);
+      backend.removeFrame(frameB);
+      await refresh();
+      expect(announcement()).toBe("The frame was removed; nothing was selected");
+      act(() => jest.advanceTimersByTime(10_000));
+      expect(announcement()).toBe("The frame was removed; nothing was selected");
+      await finishRender();
+      expect(inspections()).toHaveLength(0);
+      expect(inspector() === null).toBe(true);
+    });
   });
 
   test("a Layers element waiting for its frame is dropped when another frame takes focus", async () => {

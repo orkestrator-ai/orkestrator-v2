@@ -615,12 +615,52 @@ test("Enter on a layer of an unrendered frame announces the wait and selects onc
     // Focusing the row keeps Pricing's chrome mounted offscreen, not rendered.
     await expect(pricing).toHaveCount(0);
 
-    // One Enter: Pricing comes into view, the wait is announced, then it selects.
+    // Hold the real runtime's inspection reply, leaving the post-render window
+    // open while the user moves focus to a different row in this same frame.
+    await page.evaluate(() => {
+      const state = window as unknown as {
+        heldInspection?: MessageEvent;
+        releaseInspection?: () => void;
+      };
+      const hold = (event: MessageEvent) => {
+        if (event.data?.channel !== "orkestrator-design" || event.data?.result?.tag !== "h2")
+          return;
+        event.stopImmediatePropagation();
+        state.heldInspection = event;
+      };
+      window.addEventListener("message", hold, true);
+      state.releaseInspection = () => {
+        window.removeEventListener("message", hold, true);
+        const event = state.heldInspection!;
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            data: event.data,
+            source: event.source,
+            origin: event.origin,
+          }),
+        );
+      };
+    });
+    // One Enter: Pricing comes into view and the wait is announced.
     await page.keyboard.press("Enter");
     await expect(announcer(page)).toHaveText(
       "Loading Pricing; the layer is selected when it appears",
     );
     await expect(pricing).toHaveCount(1);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          Boolean((window as unknown as { heldInspection?: MessageEvent }).heldInspection),
+        ),
+      )
+      .toBe(true);
+    const pricingRow = tree.getByRole("treeitem", { name: /^Pricing, \d+ elements$/ });
+    await page.keyboard.press("ArrowUp");
+    await expect(pricingRow).toBeFocused();
+    await expect(inspector).toBeHidden();
+    await page.evaluate(() =>
+      (window as unknown as { releaseInspection: () => void }).releaseInspection(),
+    );
     await expect(inspector).toBeVisible();
     await expect(inspector.getByRole("heading", { name: "h2" })).toBeVisible();
     if (narrow) {
@@ -629,7 +669,7 @@ test("Enter on a layer of an unrendered frame announces the wait and selects onc
       await expect(inspector.locator(":focus")).toHaveCount(1);
     } else {
       await expect(plansRow).toHaveAttribute("aria-selected", "true");
-      await expectSettledFocus(page, plansRow);
+      await expectSettledFocus(page, pricingRow);
     }
     await expectFocusNeverLost(page);
   });
@@ -900,6 +940,52 @@ for (const zoom of [
           await page.keyboard.press("Escape");
           await expect(menu).toBeHidden();
           await expectSettledFocus(page, more);
+
+          // Checkbox tools run after closing the menu, update their checked
+          // state, and leave focus on the trigger for the next action.
+          for (const [name, activeName] of [
+            ["Preview mode", "Exit preview mode"],
+            ["Design history", "Design history"],
+          ]) {
+            await page.keyboard.press("Enter");
+            const item = menu.getByRole("menuitemcheckbox", { name, exact: true });
+            await arrowTo(page, item);
+            await expect(item).toHaveAttribute("aria-checked", "false");
+            await page.keyboard.press("Enter");
+            await expect(menu).toBeHidden();
+            await expectSettledFocus(page, more);
+            if (name === "Preview mode")
+              await expect(
+                page.getByRole("button", { name: "Exit preview", exact: true }),
+              ).toBeVisible();
+            else
+              await expect(
+                page.getByRole("complementary", { name: "Design history" }),
+              ).toBeVisible();
+            await page.keyboard.press("Enter");
+            const active = menu.getByRole("menuitemcheckbox", { name: activeName, exact: true });
+            await arrowTo(page, active);
+            await expect(active).toHaveAttribute("aria-checked", "true");
+            await page.keyboard.press("Enter");
+            await expect(menu).toBeHidden();
+            await expectSettledFocus(page, more);
+            if (name === "Preview mode")
+              await expect(
+                page.getByRole("button", { name: "Exit preview", exact: true }),
+              ).toBeHidden();
+            else
+              await expect(
+                page.getByRole("complementary", { name: "Design history" }),
+              ).toBeHidden();
+            await page.keyboard.press("Enter");
+            await arrowTo(page, menu.getByRole("menuitemcheckbox", { name, exact: true }));
+            await expect(menu.getByRole("menuitemcheckbox", { name, exact: true })).toHaveAttribute(
+              "aria-checked",
+              "false",
+            );
+            await page.keyboard.press("Escape");
+            await expectSettledFocus(page, more);
+          }
 
           await page.keyboard.press("Enter");
           const exportItem = menu.getByRole("menuitem", { name: "Export design to repository" });

@@ -70,3 +70,12 @@ The owning implementation, assertions, timeouts and skips were unchanged.
 - **Suite counts:** backend reported 11013 passed, 79 skipped and one failed across 11093 tests in 660 files (687.40 seconds). Twelve of thirteen workspace build/test tasks passed. The full aggregate completed with this failure and the Codex timeout in case 0210; root/support and protocol-lockfile groups passed.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.2BemPO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after aggregate finalization; outer run `orkestrator-test-run.LLUEZq`.
 - **Assessment:** confirmed intermittent recurrence of the cleanup/publication ordering symptom. No account implementation, assertion, timeout or skip changed.
+
+
+## Design deferred-selection review — 2026-10-25
+
+- **Command:** `mise run test:logged -- --name repository-tests -- mise run test`, macOS, Bun 1.4.4; workspace/root/bridges/protocol reservations 4/1/2/1, with other worktrees active.
+- **Failure:** the duplicate-login assertion at `apps/backend/src/core/agent-accounts.test.ts:811` observed an extra account directory after rejecting the duplicate (158.78 ms). The backend reported 10458 passed and one failed.
+- **Unchanged owner:** `mise run test:logged -- --name agent-accounts-isolated -- bun test --cwd apps/backend ./src/core/agent-accounts.test.ts --parallel=1 --only-failures` passed the complete file (exit 0, 3.9 seconds). The backend package's configured Node preload was used.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.jzcWwc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer run `orkestrator-test-run.cXrTp9`.
+- **Assessment:** the same intermittent extra-directory symptom; no agent-account code, assertions, deadlines or skips changed. The aggregate also loaded an intermediate canvas test fixture and caught new DOM absence assertions; those branch defects were corrected and their owning checks passed separately before the final aggregate rerun.

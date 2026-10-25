@@ -1586,6 +1586,7 @@ const REPOSITORIES = [
   "PublicOperationsRepository",
   "CoordinatorsRepository",
   "AgentAccountsRepository",
+  "ScheduledJobsRepository",
 ];
 
 describe("StorageService store writers", () => {
@@ -1641,6 +1642,33 @@ describe("StorageService store writers", () => {
     ]) {
       expect(stores.get(store)?.kind).toBe("transactional");
     }
+  });
+
+  test("resume-identity writes stay transactional under the per-session lease", () => {
+    const member = "NativeAgentSessionsRepository.saveNativeAgentSession";
+    expect(analyzeStorageService().sites.find((site) => site.member === member)).toMatchObject({
+      store: "nativeAgentSessionsFile",
+      kind: "transactional",
+    });
+    // Turn the row writer into a whole-value writer: the production call graph
+    // must reach the new facade entry and reject its per-key lease.
+    const sources = readStorageSources().map((source) => ({
+      ...source,
+      source: source.source.replace(
+        "this.context.updateStoreRow(this.files.nativeAgentSessionsFile(), key, () => {",
+        "await this.context.saveSensitiveJson(this.files.nativeAgentSessionsFile(), key, () => {",
+      ),
+    }));
+    const result = analyzeStorageWriters(sources, { rootClass: "StorageService" });
+    const write = result.sites.find((site) => site.member === member)!;
+    const resume = write.paths.filter(
+      (route) => route.entry?.name === "recordNativeAgentSessionResumeIdentity",
+    );
+    expect(resume).toHaveLength(1);
+    expect(resume[0]!.leases).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyed: true })]),
+    );
+    expect(result.violations.join("\n")).toContain("recordNativeAgentSessionResumeIdentity");
   });
 
   test("no backend class outside the scan calls the store write primitives", () => {
@@ -1751,6 +1779,7 @@ describe("raw StorageDatabase writers outside StorageService", () => {
       "environment-cleanup-ledger",
       "native-agent-display-tail-records",
       "usage-history",
+      "scheduled-jobs",
       "design-canvases/dirty/*",
     ]) {
       expect(stores).toContain(store);
@@ -1759,6 +1788,87 @@ describe("raw StorageDatabase writers outside StorageService", () => {
     expect([...written.keys()].filter((store) => !storeNames.has(store))).toEqual([]);
     expect(storeNames.get("kanbanFile")).toBe("kanban");
     expect(storeNames.get("publicOperationNamespaceFile")).toBe("public-operations/*");
+  });
+
+  test("scheduled jobs write only single rows and overlap no repository store", () => {
+    const scheduled = writes().filter((write) => write.store === "scheduled-jobs");
+    // The conservative raw scan counts row readers too; the only store
+    // mutation primitive is the engine's single-row transaction.
+    expect(scheduled.filter((write) => write.call !== "rows")).toEqual([
+      expect.objectContaining({
+        location: expect.stringContaining("scheduled-jobs/store.ts:"),
+        call: "updateStoreRow",
+      }),
+    ]);
+    for (const name of analyzeStorageService().storeNames.values()) {
+      expect(storesOverlap("scheduled-jobs", name)).toBe(false);
+    }
+  });
+
+  test("detects repository overlap through imported parameterized row helpers", () => {
+    const sources = [
+      {
+        file: "core/rows.ts",
+        source: `export function writeRow(database: Db, store: string) {
+          database.updateStoreRow(store, "k", () => ({ result: 1 }));
+        }`,
+      },
+      {
+        file: "core/delegate.ts",
+        source: `import { writeRow as persist } from "./rows.js";
+          export function writeStore(database: Db, store: string) { persist(database, store); }`,
+      },
+      {
+        file: "core/engine.ts",
+        source: `import { writeStore as commit } from "./delegate.js";
+          export class Engine { run(database: Db) { commit(database, "kanban"); } }`,
+      },
+    ];
+    const writes = rawDatabaseWrites(sources, new Set());
+    expect(writes).toEqual([
+      {
+        location: expect.stringMatching(/rows.ts:.* via core\/delegate.ts:.* via core\/engine.ts:/),
+        call: "updateStoreRow",
+        store: "kanban",
+      },
+    ]);
+    const overlaps = writes.flatMap((write) =>
+      [...analyzeStorageService().storeNames].filter(
+        ([, name]) => write.store !== null && storesOverlap(write.store, name),
+      ),
+    );
+    expect(overlaps).toEqual([["kanbanFile", "kanban"]]);
+  });
+
+  test("leaves a store-name field unresolved when assigned outside its constructor", () => {
+    const sources = [
+      {
+        file: "core/engine.ts",
+        source: `
+      export class Stable {
+        private storeName: string;
+        constructor() { this.storeName = "fixed"; }
+        run(database: Db) { database.writeStore(this.storeName, 1); }
+      }
+      export class Reassigned {
+        private storeName: string;
+        constructor() { this.storeName = "kanban"; }
+        change() { this.storeName = "other"; }
+        run(database: Db) { database.writeStore(this.storeName, 1); }
+      }
+      export class AssignedLater {
+        private storeName!: string;
+        change() { this.storeName = "kanban"; }
+        run(database: Db) { database.writeStore(this.storeName, 1); }
+      }
+    `,
+      },
+    ];
+    expect(rawDatabaseWrites(sources, new Set()).map((write) => write.store)).toEqual([
+      "fixed",
+      null,
+      null,
+    ]);
   });
 
   test("follows store names through constants, templates, functions and imports", () => {

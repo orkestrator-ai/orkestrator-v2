@@ -125,6 +125,23 @@ describe("creation", () => {
     expect(other.job.id).not.toBe(created.job.id);
   });
 
+  test("the facade adapter reuses its store across database reopen and announces committed edits", async () => {
+    const { storage, service } = await backend(await dataDir(), { now: T0 });
+    const store = storage.scheduledJobStore();
+    const changes: string[] = [];
+    storage.addResourceChangeListener((event) => {
+      if (event.resource === "scheduled-job") changes.push(event.id!);
+    });
+    const { job } = await service.create(OPERATOR, { at: "+5m", action: MAIL });
+    expect(changes).toEqual([job.id]);
+    storage.close();
+    expect(storage.scheduledJobStore()).toBe(store);
+    expect(store.get(job.id)).toEqual(job);
+    expect(store.mutate(job.id, () => ({ result: "removed", delete: true }))).toBe("removed");
+    expect(store.get(job.id)).toBeNull();
+    expect(changes).toEqual([job.id, job.id]);
+  });
+
   test("refuses what the owner could not run, and stores nothing", async () => {
     const clock = { now: T0 };
     const { service, executor } = await backend(await dataDir(), clock);

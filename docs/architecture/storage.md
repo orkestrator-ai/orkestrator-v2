@@ -46,6 +46,7 @@ start-up steps (`init`) and exposes the change journal.
 | `PublicOperationsRepository` | `storage-public-operations.ts` | The public-operation ledger, and the project and config writes it admits |
 | `CoordinatorsRepository` | `storage-coordinators.ts` | Coordinator workspaces and workflow associations |
 | `AgentAccountsRepository` | `storage-agent-accounts.ts` | The provider account registry |
+| `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
 
 A store written by more than one repository is written under the same lease
 by each, or only through transactions; the guard checks that per store.

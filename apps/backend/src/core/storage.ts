@@ -144,7 +144,6 @@ export class StorageService {
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
     this.repos = new StorageRepositories(this.context);
-
   }
 
   scheduledJobStore(): ScheduledJobStore {
@@ -846,6 +845,10 @@ export class StorageService {
     return this.repos.nativeAgentSessions.getNativeAgentSession(key);
   }
 
+  getNativeAgentSessionAfterMutations(key: string): Promise<PersistedNativeAgentSession | null> {
+    return this.repos.nativeAgentSessions.getNativeAgentSessionAfterMutations(key);
+  }
+
   listNativeAgentSessions(): Promise<PersistedNativeAgentSession[]> {
     return this.repos.nativeAgentSessions.listNativeAgentSessions();
   }
@@ -942,7 +945,9 @@ export class StorageService {
     resumableSessionId: string,
   ): Promise<boolean> {
     return this.repos.nativeAgentSessions.recordNativeAgentSessionResumeIdentity(
-      key, providerSessionId, resumableSessionId,
+      key,
+      providerSessionId,
+      resumableSessionId,
     );
   }
 

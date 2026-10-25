@@ -47,7 +47,7 @@ import {
   isAgentMailConversationMessage,
   listAgentMailConversations,
   type ConversationMailbox,
-} from "./agent-mail-conversations.ts";
+} from "./agent-mail-conversations.js";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import {
   COORDINATOR_DELEGATION_HOLD_REASON,

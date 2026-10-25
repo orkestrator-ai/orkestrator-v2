@@ -155,7 +155,7 @@ export function parsePinsOutput(
       continue;
     if (results.has(entry.annotationId)) continue;
     const { state, rule, candidateCount } = entry;
-    const rect = entry.rect === null ? null : pickRect(entry.rect);
+    const rect = entry.rect == null ? null : pickRect(entry.rect);
     if (
       typeof state !== "string" ||
       !PAGE_STATES.has(state) ||
@@ -165,7 +165,7 @@ export function parsePinsOutput(
       !Number.isSafeInteger(candidateCount) ||
       candidateCount < 0 ||
       candidateCount > 1_000_000 ||
-      (state === "matched") !== (rect !== null) ||
+      (state !== "matched" && rect !== null) ||
       (rect !== null && !isWebAnnotationRect(rect))
     ) {
       continue;
@@ -614,7 +614,13 @@ export class BrowserPreviewPinSessions {
       );
       last =
         results.find((entry) => entry.annotationId === input.pin.annotationId)?.resolution ?? null;
-      if (last?.state === "matched") return outcome("shown", navigated, last);
+      if (last?.state === "matched") {
+        // A target that renders no box (inside a closed dialog, a collapsed
+        // menu) matched, but there is nothing on screen to show.
+        const rect = last.rect;
+        const rendered = rect !== null && rect !== undefined && (rect.width > 0 || rect.height > 0);
+        return outcome(rendered ? "shown" : "hidden", navigated, last);
+      }
       // Late-rendering pages: only a missing target is worth waiting for.
       if (last && last.state !== "missing") return outcome("not-found", navigated, last);
       if (last?.rule === "route-mismatch") return outcome("navigation-required", navigated, last);

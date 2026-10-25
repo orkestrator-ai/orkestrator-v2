@@ -1,3 +1,4 @@
+import { materializedEvidencePath } from "./web-annotation-materialization.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -726,6 +727,21 @@ describe("WebAnnotationDispatchAdapter.observe", () => {
         { id: "approval:2", kind: "command-approval", state: "pending", blocking: true },
       ],
     });
+    expect(await adapter.observe(request({ state: "cancelling" }))).toMatchObject({
+      state: "cancelling",
+      interactionIds: ["question:1", "approval:2"],
+    });
+    await storage.enqueuePromptQueueMessage(QUEUE_KEY, ENV, { id: "steer", text: "continue" });
+    await dispatchThroughQueue("steer");
+    expect(await adapter.observe(request({ state: "needs-input" }))).toMatchObject({
+      state: "needs-input",
+      interactionIds: ["question:1", "approval:2"],
+      interactions: [
+        expect.objectContaining({ id: "question:1" }),
+        expect.objectContaining({ id: "approval:2" }),
+      ],
+    });
+    expect((await adapter.observe(request({ state: "cancelling" }))).state).toBe("cancelling");
     activity = "working";
     expect(await adapter.observe(request({ state: "needs-input" }))).toMatchObject({
       state: "running",
@@ -879,6 +895,18 @@ describe("WebAnnotationDispatchAdapter.materialize", () => {
     relativePath: ".orkestrator/annotations/abc0123456789def.png",
   };
 
+  test("complete request IDs get distinct bounded evidence names", () => {
+    for (const [left, right] of [
+      ["req:1", "req_1"],
+      ["a".repeat(120) + "1", "a".repeat(120) + "2"],
+    ]) {
+      const first = materializedEvidencePath(left!, attachment.relativePath)!;
+      const second = materializedEvidencePath(right!, attachment.relativePath)!;
+      expect(first).not.toBe(second);
+      expect(first.split("/").at(-1)!.length).toBeLessThanOrEqual(205);
+    }
+  });
+
   test("writes exact bytes under the evidence directory for local environments", async () => {
     const [result] = await adapter.materialize({
       environment: { id: ENV, environmentType: "local", worktreePath: "/tmp/worktree-e1" },
@@ -891,15 +919,15 @@ describe("WebAnnotationDispatchAdapter.materialize", () => {
         command: "write_local_file",
         args: {
           worktreePath: "/tmp/worktree-e1",
-          filePath: ".orkestrator/annotations/req_1-abc0123456789def.png",
+          filePath: materializedEvidencePath("req:1", attachment.relativePath)!,
           base64Data: Buffer.from([1, 2, 3]).toString("base64"),
         },
       },
     ]);
     expect(result).toEqual({
       ...attachment,
-      relativePath: ".orkestrator/annotations/req_1-abc0123456789def.png",
-      materializedPath: "/tmp/worktree-e1/.orkestrator/annotations/req_1-abc0123456789def.png",
+      relativePath: materializedEvidencePath("req:1", attachment.relativePath)!,
+      materializedPath: `/tmp/worktree-e1/${materializedEvidencePath("req:1", attachment.relativePath)}`,
     });
   });
 
@@ -912,7 +940,7 @@ describe("WebAnnotationDispatchAdapter.materialize", () => {
     });
     expect(calls[0]?.command).toBe("write_container_file");
     expect(result?.materializedPath).toBe(
-      "/workspace/.orkestrator/annotations/req-1-abc0123456789def.png",
+      `/workspace/${materializedEvidencePath("req-1", attachment.relativePath)}`,
     );
   });
 

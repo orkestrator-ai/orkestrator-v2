@@ -52,7 +52,19 @@ export const ROUTE_VARIANTS = {
   hashSettingsBilling: "/#/settings?tab=billing",
   /** Carries a token-like parameter the page identity must strip. */
   tokenBearingSettings: `/settings?tab=profile&token=${SYNTHETIC_SECRETS.queryToken}`,
+  /** A CSS animation that never settles beside copy that does not move. */
+  motion: "/motion",
+  /** A web font whose load the server delays (`?delay=<ms>`), then a layout shift. */
+  lateFont: "/fonts",
+  /** A target inside a modal dialog that is closed on load. */
+  dialogs: "/dialogs",
+  /** Signed-in page that redirects to `signIn` once the fixture session expires. */
+  account: "/account",
+  signIn: "/sign-in",
 } as const;
+
+/** Late font: default and upper bound of the server's delay (`/__fixture/font`). */
+export const LATE_FONT_DELAY_MS = { default: 1_200, max: 10_000 } as const;
 
 /**
  * The repository change a workflow must implement. It is a source edit, not
@@ -82,4 +94,14 @@ export const TEST_IDS = {
   featureList: "feature-toggles",
   hotReload: "fixture-hot-reload",
   wideTable: "comparison-table",
+  animatedBanner: "animated-banner",
+  staticCopy: "static-copy",
+  lateFontHeading: "late-font-heading",
+  fontShiftTarget: "font-shift-target",
+  openDialog: "open-dialog",
+  dialog: "settings-dialog",
+  dialogConfirm: "dialog-confirm",
+  accountPlan: "account-plan",
+  signInSubmit: "sign-in-submit",
+  offscreenFooter: "offscreen-footer",
 } as const;

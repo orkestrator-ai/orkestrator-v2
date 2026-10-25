@@ -356,3 +356,12 @@ The integrated default suite timed out the stored-domain/repeated-range case at 
 - **Assessment:** this complete owner remains non-green; no new flake classification or cause is established. Neither `tests/unit/firewall-policy.test.ts` nor `docker/firewall-domains.sh` differs from the merge base. No implementation, assertion, deadline or skip changed for this observation.
 
 - **Completed aggregate:** workspace (web, backend, desktop, web-public, CLI, protocol, toolchain), bridge and protocol-lockfile groups passed; only the two root firewall timeouts remained. The outer command exited 1 after 638.3 s. Full evidence: `orkestrator-test-run.lyZaoe/merge95-tests.log.gz`; group evidence is under `orkestrator-test-run.N9YUtx/`. Static checks and the flake-index contract test passed on the merged result.
+
+
+## Resume cleanup coverage validation — 2026-10-25
+
+Original command: `mise run test:logged -- --name cleanup-repository -- mise run test`, with workspace/root/bridge/protocol worker reservations 4/1/2/1 and component browser validation running concurrently. Aggregate evidence is under the host temporary directory, `orkestrator-test-run.TabHxj/`.
+
+`container firewall policy > policy 2 narrows host access to named ports and records what it applied` timed out after 5,006.54 ms, with subprocess exit code null instead of zero. Root/support reported 3,415 passed, two failed and one between-test error across 162 files (515.96 s); the other failure and error belong to disk report case 0259.
+
+The complete unchanged owner passed: `mise run test:logged -- --name cleanup-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` (exit 0, 37.3 s). This confirms another shell-fixture deadline recurrence without establishing its cause. No firewall implementation, assertion, timeout or skip changed.

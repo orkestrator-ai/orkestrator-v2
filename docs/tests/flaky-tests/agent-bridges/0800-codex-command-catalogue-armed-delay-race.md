@@ -26,3 +26,12 @@ Unlike 0791's first observation, this one fails without parallel workers, so
 host load is not needed to reproduce it. The same hypothesis applies: a
 background catalogue refresh settles between the test's polling condition and
 the final `commands.list()`. Not established.
+
+
+## Resume cleanup coverage validation — 2026-10-25
+
+Original command: `mise run test:logged -- --name cleanup-repository -- mise run test`, with workspace/root/bridge/protocol worker reservations 4/1/2/1 and component browser validation running concurrently. Aggregate evidence is under the host temporary directory, `orkestrator-test-run.TabHxj/`.
+
+Codex bridge reported 2,356 passed, 40 skipped and one failed across 88 files (56.79 s). `a cold app-server child > an explicit refresh cannot replace the baseline for an already armed delay` expected `stale` but received `ready` at line 293 (72.02 ms).
+
+The complete unchanged owner passed: `mise run test:logged -- --name cleanup-codex-catalogue-rerun -- bun test ./bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures` (exit 0, 2.1 s). This confirms a recurrence; the cause remains unestablished. No bridge implementation, assertion, timeout or skip changed.

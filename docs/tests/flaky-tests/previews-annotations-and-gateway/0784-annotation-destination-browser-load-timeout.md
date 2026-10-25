@@ -1,7 +1,7 @@
 # Annotation destination layout navigation times out in the broad browser suite
 
 - **ID:** 0784
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-24
 - **Test:** `destination titles and composer actions stay inside a 240px sidebar`, `destination titles and composer actions stay inside a 280px sidebar`, and `destination titles and composer actions stay inside a 360px sidebar` in `e2e/AnnotationDestinationLayout.spec.ts:21` (mobile-chromium).
 - **Original command:** `ORKESTRATOR_E2E_PORT=18423 ORKESTRATOR_PUBLIC_E2E_PORT=18424 mise run test:logged -- --name annotation-browser -- mise run test:browser`.
@@ -11,3 +11,8 @@
 - **Isolated rerun:** `ORKESTRATOR_E2E_PORT=18423 mise run test:logged -- --name annotation-layout -- bunx playwright test --config e2e/playwright.config.ts e2e/AnnotationDestinationLayout.spec.ts --workers=1` → all six cases passed, complete owning file, 75.7 seconds including fixture-server setup.
 - **Hypothesis:** Shared host contention is a candidate: observed load averages were 88.36, 100.88 and 72.19, and the aggregate runner reported 18 of 18 host worker slots reserved. The navigation timeouts also affected unrelated files. This does not establish the precise cause; the isolated pass used one worker. Test logic, assertions and timeout budgets were unchanged between the failing and passing runs.
 - **Artifacts:** Failing browser log and summary were retained under `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.2cl2Vt/` (`annotation-browser.log.gz`, `summary.json`).
+
+## Triage 2026-10-25
+
+- **Disposition:** environmental (host load).
+- **Evidence:** load averages of 88 to 101 with all 18 host worker slots reserved. 50 failures across unrelated files were navigation timeouts before any assertion, and the run was interrupted. The owner passed with one worker (six of six). Reopen if it fails at normal load.

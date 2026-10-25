@@ -1,10 +1,12 @@
 # Web annotation qualification
 
-Checked against `main` at `a5d338c1` (2026-10-18).
+Checked against `main` at `ba7cc8d4` (2026-10-25).
 
 Web-page annotations shipped in #845 (`964d71f4`, 2026-09-25). They have
-unit, contract and component tests, plus two real-stack specs on Linux. No
-milestone has a sign-off. The missing evidence is the part mocks cannot give:
+unit, contract and component tests, plus real-stack specs. Milestones A–C
+have sign-off records written on 2026-10-25 by a worker agent, awaiting human
+review; three runs remain open (a remote backend on another host, the iOS
+wrapper, native focus and keyboard resolve). The evidence is the part mocks cannot give:
 the native Electron window beside the Notes column, live agents for each
 provider, Docker and remote workspaces, and review from web and iOS clients.
 This file lists those runs, the small amount of test code they need, the
@@ -54,14 +56,17 @@ that names what was actually tested.
   rejected dispatch ends the test at once: a sign-in rejection is a skip that
   names the reason (`isSignInError`), any other rejection is a failure. The
   test also prints a progress line each minute while it waits.
-- There is no Docker annotation spec. `test:agent:docker` greps for
-  `'Docker fixture'`, and no annotation test title matches. Container
-  materialization is covered only with a fake container call
-  (`web-annotation-dispatch.test.ts`, which expects `write_container_file`).
+- Since 2026-10-25 the gateway spec has two `Docker fixture` annotation cases
+  (selected by `test:agent:docker`), a local-worktree evidence case, a web
+  review case (runs in WebKit too with `ORKESTRATOR_AGENT_TEST_BROWSER=webkit`),
+  live needs-input cases and a closing metrics baseline. The opt-in
+  `web-annotations-approval-live.spec.ts` restarts the profile around a
+  pending approval.
 - The fixture app (`test-fixtures/agent-project/annotation-app/`, checked by
   `tests/unit/annotation-fixture-app.test.ts`) has an iframe, an open shadow
-  root, a canvas, synthetic secrets and a hot-reload hook. It has no CSS
-  animation, no late-loading font and no expired sign-in route.
+  root, a canvas, synthetic secrets and a hot-reload hook, and since
+  2026-10-25 a CSS animation (`/motion`), a late web font (`/fonts`), a modal
+  and an offscreen target (`/dialogs`) and an expiring sign-in (`/account`).
 - The fault-injection matrix is covered at unit level: SSE loss and restart,
   crash before the queue write, claim versus cancel, environment A/B, and an
   untouched compose draft (`web-annotation-dispatch-flow.test.ts`). So are the
@@ -70,8 +75,9 @@ that names what was actually tested.
 - `WebAnnotationMetrics` (`apps/backend/src/core/web-annotation-metrics.ts`),
   read through `web_annotations_metrics`, has `command_ms`,
   `request_enqueue_ms`, `request_dispatch_ms` and `request_duration_ms`
-  histograms. Nothing measures capture-to-saved end to end, from desktop spool
-  to backend commit.
+  histograms. Capture-to-saved is measured at the client by the Electron
+  spec's baseline case (selection → spool, spool → backend commit); see
+  "Baselines" under "Runs on 2026-10-25".
 
 ## Outstanding work
 
@@ -83,27 +89,41 @@ Test code the runs below depend on.
    open the real Notes column and assert the native view's bounds against it,
    plus a capture-alignment case at preview zoom 0.8, 1 and 1.5, and at DPR 1
    and 2.
-2. A Docker annotation case whose title contains `Docker fixture`, so
-   `mise run test:agent:docker` selects it. Assert that
-   `.orkestrator/annotations/<request>-<digest>.png` is written inside the
-   container, that settled-request cleanup removes it, and that result file
-   checks report `exists` / `missing` from inside the container (the container
-   check from
-   [0043-web-annotation-known-limitations.md](0043-web-annotation-known-limitations.md)
-   landed on 2026-10-24; its script was checked in a real container, but not yet
-   through a Docker fixture environment).
-3. A real-stack assertion that a sent request writes
-   `.orkestrator/annotations/<request>-<digest>.png` into the local worktree.
-   Today only the skipped live test exercises this, and only implicitly.
-4. Discuss part done 2026-10-24 (see "Runs on 2026-10-24"): `live agent
-   discusses a note and the turn outcome is known` runs next to the implement
-   case and expects plan mode on Claude and advisory elsewhere, and `live
-   session-scoped agent already in Plan discusses read-only…` covers Codex,
-   Cursor and Grok sessions in Plan. Still open: a needs-input or
-   clarification case.
-5. Fixture-app routes for a CSS animation, a late-loading web font and an
-   expired sign-in redirect. Use them to exercise `stable`/`unstable` from
-   `web_annotation_result_capture` and the redirect handling of Show on page.
+2. Done 2026-10-25 (see "Runs on 2026-10-25"): `Docker fixture writes
+   annotation evidence inside the container, checks paths there, and removes
+   it after settlement` (credential-free) and `Docker fixture live agent
+   implements a note inside the container and its reported files are checked
+   there` (live opt-in), both selected by `mise run test:agent:docker`. The
+   evidence PNG is written as `node` under `/workspace/.orkestrator/annotations/`
+   with the recorded digest; `check_container_workspace_paths` answers
+   `exists`, `exists`, `missing` and `outside-workspace` (a symlink to
+   `/etc/hostname`) from inside the container; the agent-reported files of a
+   live Claude turn read `exists` / `missing`; and settled-evidence cleanup
+   removed the file 226 s after settlement. The run found and fixed a cleanup
+   bug (below).
+3. Done 2026-10-25: `a sent request writes its evidence image into the local
+   worktree under .orkestrator/annotations` (gateway spec, credential-free, in
+   `test:agent:browser:isolated`). A staged real-Chromium PNG is written to
+   `<worktree>/.orkestrator/annotations/<request>-<digest>.png` with the
+   staged bytes' SHA-256 while the request is still held in `queued`, and is
+   kept (not removed) after the request settles while its note exists.
+4. Done (discuss 2026-10-24; needs-input 2026-10-25): `live agent request
+   waits in needs-input on an approval, and one answer completes it` and `…
+   on a clarifying question, …`. Both answer through
+   `resolve_native_agent_interaction` with the request card's own answer,
+   expect a second answer to be refused, and then require `awaiting-review`
+   and `verify-change.ts`. The question case runs on providers with a
+   question tool (Claude, Grok, OpenCode); the approval case skips Codex with
+   the reason (its Ask policy does not gate workspace edits).
+5. Done 2026-10-25: fixture routes `/motion` (an infinite CSS animation beside
+   copy that never moves), `/fonts?delay=<ms>[&lazy=1]` (a web font the server
+   answers late, then a 44 px layout shift; `lazy` starts it after the load
+   event as a script font loader does), `/dialogs` (a target inside a
+   `<dialog>` opened with `showModal()`, and a footer 2,400 px below the fold)
+   and `/account` → 302 `/sign-in?next=%2Faccount` once
+   `POST /__fixture/state {"sessionExpired": true}`. Covered by
+   `tests/unit/annotation-fixture-app.test.ts`; exercised by the two new
+   Electron cases below.
 6. Done 2026-10-17: both flakes that touched these suites are resolved.
    [0204](../../tests/flaky-tests/previews-annotations-and-gateway/0204-web-annotation-quota-hook-timeout.md)
    (`web-annotation-quotas.test.ts` hook timeout) was resolved on `main` by
@@ -118,75 +138,101 @@ Test code the runs below depend on.
 
 - Done 2026-10-17 on macOS (see "Runs on 2026-10-17"): re-run
   `mise run test:agent:electron` and `mise run test:agent:browser:isolated` on
-  current main and record them with the sign-off template below.
+  current main and record them with the sign-off template below. Re-run again
+  on 2026-10-25 with the new cases.
 - Done 2026-10-18 (see "Runs on 2026-10-18"): the live implement test ran once
   for each provider in `AGENT_PLATFORMS`. Claude, Codex, Cursor and OpenCode
   passed; Grok and Pi were skipped for missing credentials, recorded with
   their reasons.
 - Done 2026-10-24 on node mbp3 (see "Runs on 2026-10-24"): the live implement
   test passed for Grok and Pi (and again for the other four).
-- Remote backend: connect the desktop to a backend on another host, capture,
-  and confirm that `web_annotation_asset_stage` and materialization in the
-  remote workspace both work.
-- Approval across disruption: start a request whose turn raises an approval.
-  Switch environments, reload the renderer, drop SSE and restart the backend,
-  then answer from the request card and from chat. No approval may be applied
-  twice, and an approval from a dead generation must be withdrawn, never
-  applied implicitly.
-- Native window. Everything but the last bullet is done and permanent in the
-  Electron spec (2026-10-17, macOS), with the exceptions listed under "Not
-  qualified" there:
+- **Open — remote backend on another host.** Connect the desktop to a backend
+  on another host, capture, and confirm that `web_annotation_asset_stage` and
+  materialization in the remote workspace both work. Not run: this worker had
+  one machine (arktech-mini) and no second backend host. What the 2026-10-25
+  runs do cover: every gateway case stages its PNG with
+  `web_annotation_asset_stage` over the gateway's HTTP `/__orkestrator/invoke`,
+  the same transport a desktop uses for a remote backend, and the backend then
+  materializes it into a local worktree and a Docker workspace. What remains
+  is a desktop process on one host capturing and staging into a backend on
+  another (batched in 0031).
+- Done 2026-10-25 on Claude (see "Runs on 2026-10-25"): approval across
+  disruption, `web-annotations-approval-live.spec.ts` (opt-in
+  `ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATION_DISRUPTION=1`; it restarts the
+  profile, so it runs alone). Other providers are not run.
+- Native window. Everything is done and permanent in the Electron spec, with
+  the exceptions listed under "Not qualified" (2026-10-17) and below:
   - with the Notes column open, the preview bounds shrink;
   - menus, dialogs and focus rings are never covered;
   - create, send and resolve work by keyboard alone (create and send only;
-    resolve needs a request in `awaiting-review`, which needs a live agent);
+    resolve needs a request in `awaiting-review`, which needs a live agent in
+    the Electron spec — still open, see "Native focus and keyboard resolve");
   - the narrow (under 720 px) Preview/Notes switch works;
   - screenshot and highlight alignment holds at the zoom and DPR values
     above;
-  - pins and Show on page stay on the right target, or become explicit, for
-    an offscreen target, a target inside a modal, and a layout shift from a
-    late-loading font (code item 5's font route). Only reorder, hot reload and
-    duplication have real-stack evidence so far.
-- Web and iOS review: on a gateway browser client and in the iOS wrapper
-  (`apps/ios`, `WKWebView`), review a capture made on the desktop while no
-  desktop is connected. Capture must show as unavailable.
-- Comparison cases (after code item 5): matching and mismatched routes and
-  viewports, unstable animation or fonts, expired authentication, and
-  unavailable functional verification.
-- Baselines: record request-to-review latency (`request_duration_ms`) and
-  per-command latency (`command_ms`) from `web_annotations_metrics` during
-  fixture runs, and the time from selection to saved feedback measured at the
-  client. Record the numbers before setting any target.
-- Sign-off: one record per milestone (A core loop; B targets and batches; C
-  results, modes and clients). Then update the client capability matrix in
-  [web-page-annotations.md](../../architecture/web-page-annotations.md) with the
-  providers and clients actually tested.
+  - done 2026-10-25: pins and Show on page stay on the right target, or
+    become explicit, for an offscreen target (matched, scrolled into view), a
+    target inside a modal (matched while open; `hidden` and no pin once
+    closed — fixed, below) and a layout shift from a late-loading font (on the
+    shifted target, both while the font holds the load event and when a
+    script loads it after load — fixed, below).
+- Web and iOS review. Web done 2026-10-25: `a desktop capture is reviewable
+  from the web client with capture shown as unavailable` (gateway browser
+  client, Chromium and WebKit): the Notes column shows the "needs the
+  Orkestrator desktop app" notice, the note and its saved image load from the
+  backend, and Show on page is not offered. **Open — the iOS wrapper.** Not
+  run: the wrapper accepts only an HTTPS tailnet origin plus the gateway token
+  typed into its native form, and an agent must never handle the gateway
+  token; plain-HTTP loopback profiles are refused by design. The WebKit run is
+  the engine-level substitute; the wrapper run needs a person (or a
+  tailnet-served profile and a token entered by hand) on a simulator or
+  device.
+- Done 2026-10-25: comparison cases. Matching route and viewport (no
+  difference), a different route, a different viewport, an animated target
+  and a loading font (`unstable`), an expired sign-in (`route` + `target`), and
+  unavailable functional verification (a container path check that cannot
+  answer is `unavailable`; a path outside the workspace is
+  `outside-workspace`; `unavailable` is covered at unit level for a failed or
+  malformed container check, `outside-workspace` on the real stack with a
+  symlink).
+- Done 2026-10-25: baselines recorded (below). No target is set yet.
+- Sign-off: records for milestones A, B and C are below ("Sign-off records,
+  2026-10-25"), written by a worker agent and awaiting human review; the
+  client capability matrix in
+  [web-page-annotations.md](../../architecture/web-page-annotations.md) now
+  names what was actually tested.
 
-Batch the provider, Docker, remote, macOS and iOS runs with other todo files
+Batch the remaining remote, iOS and native-focus runs with other todo files
 through
 [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 
 ### Found on 2026-10-17
 
-- **Keychain prompt holds startup (medium).** The Electron specs no longer
-  touch the host keychain, but two other paths still can. A `dev:test` profile
-  whose name another worktree used first (a shared `--profile codex-qa`, for
-  example) waits on the same unanswered prompt. And the desktop app itself
-  awaits `isAsyncEncryptionAvailable()` before its first window
-  (`connection-manager.ts:731`), with no log line while it waits. Options:
-  pass `--use-mock-keychain` for `agent-test` launches from
-  `apps/desktop/scripts/dev/`; or start the check without awaiting it, create
-  the window, and resolve credential storage when a remote connection first
-  needs it; or log after a few seconds that a keychain prompt is pending.
-- **Native focus and keyboard resolve (medium, qualification).** Qualify the
-  preview's OS-level focus during selection, the `electron-main` Window-menu
-  focus check, and "Accept and resolve" by keyboard on a host where the app
-  can be frontmost and a live agent can bring a request to `awaiting-review`.
-- **Create cost grows with the collection (low).** A create costs about
-  4 ms at 1,900 notes against 0.3 ms empty, linear in the collection. Find what
-  each create reads or writes in proportion to the collection (not located
-  yet) before collections near the 2,000-note cap are common, and rename the
-  bench case, which claims the cost "stays flat".
+- **Keychain prompt holds startup (medium). Done.** Agent-test profiles
+  (including a shared `dev:test --profile codex-qa`) already start Electron
+  with the mock keychain: `chromiumSwitchesForRuntime` returns
+  `use-mock-keychain` for the `agent-test` flavour on macOS and `main.ts`
+  applies it before `whenReady` (#1052, covered by
+  `main-startup-switches.test.ts`; development and production keep the real
+  keychain). Since 2026-10-25 the app also logs once if the safe-storage check
+  has not settled after 5 s: "[Connections] Waiting for the macOS keychain
+  (safe storage) before opening the first window; answer the keychain prompt
+  to continue" (`connection-manager.ts`, three unit tests). It still awaits
+  the check, so a late answer keeps persistent storage.
+- **Native focus and keyboard resolve (medium, qualification). Open.** Qualify
+  the preview's OS-level focus during selection, the `electron-main`
+  Window-menu focus check, and "Accept and resolve" by keyboard on a host
+  where the app can be frontmost and a live agent can bring a request to
+  `awaiting-review`. Not run on 2026-10-25: arktech-mini is a shared desktop
+  (as on 2026-10-17) and the Electron spec deliberately has no live provider
+  (its Codex probe refuses launches).
+- **Create cost grows with the collection (low). Located; moved to
+  [0124](0124-web-annotation-commit-cost.md).** Every commit deep-copies the
+  manifest (`structuredClone` in `commitManifest`) and re-serializes every
+  index row to diff it (`planRows`); each is about half the cost at 1,900
+  notes. The fix is a storage redesign, so it is new work in 0124. The bench
+  case is renamed `SQLite writes per create stay bounded as the collection
+  grows (no whole-history rewrite)`.
 
 ### Sign-off template
 
@@ -201,6 +247,183 @@ Capability matrix and known limitations:
 Migration and rollback verification:
 Reviewer / date:
 ```
+
+### Sign-off records, 2026-10-25
+
+Written by a worker agent from the runs recorded in this file; each awaits a
+human reviewer. "Implemented scope" is the shipped feature (#845 and later);
+the remaining deferrals are the open items above.
+
+```text
+Milestone / PR / commit: A, core loop (capture, store, request, dispatch,
+  review); main ba7cc8d4, branch todo-0044-annotation-qualification-55474f22f1aa
+Implemented scope and remaining deferrals: capture without an agent tab,
+  durable spool and recovery, request send and dispatch through the prompt
+  queue, evidence materialization and cleanup, needs-input, review. Deferred:
+  remote backend on another host; native OS focus and keyboard resolve
+Platforms, providers, and client versions exercised: macOS 27.0 (arm64),
+  Electron 44.7.0, Docker Desktop 29.9.2, Playwright Chromium and WebKit 27.2;
+  live implement on all six providers (2026-10-18/24, Claude and Codex again
+  2026-10-25); needs-input and disruption on Claude
+Logged commands and results: "Runs on 2026-10-25" and earlier sections
+Real workflow and inactive-environment evidence: an approval pending in one
+  environment while the client switched to another, reloaded and lost its
+  event stream; capture without an agent tab across reload and restart
+Fault-injection boundaries exercised: graceful restart and backend SIGKILL
+  with an approval pending (withdrawn, never applied); a second answer to an
+  applied approval (stale); unit-level matrix unchanged
+Capability matrix and known limitations: web-page-annotations.md, "Client
+  capability matrix" and "Known limitations"
+Migration and rollback verification: unit level only (web-annotation-
+  migration*.test.ts, web-annotation-rollout.test.ts); not run on a real stack
+Reviewer / date: Claude (worker agent), 2026-10-25; awaiting human review
+```
+
+```text
+Milestone / PR / commit: B, targets and batches; same commit
+Implemented scope and remaining deferrals: anchors, live pins, Show on page,
+  hash/query identity, batch reservation. Deferred: shadow/iframe targets
+  (0047)
+Platforms, providers, and client versions exercised: macOS Electron (pins,
+  Show on page); gateway Chromium (batches)
+Logged commands and results: pins after reorder, hot reload, duplication,
+  offscreen, modal open/closed, blocking and script-loaded late fonts, expired
+  sign-in redirect; overlapping batches from two clients
+Real workflow and inactive-environment evidence: batches held across reload
+Fault-injection boundaries exercised: two clients racing a send (all-or-none)
+Capability matrix and known limitations: pins resolve after a loading page's
+  load event; hidden targets are reported, not shown
+Migration and rollback verification: not applicable
+Reviewer / date: Claude (worker agent), 2026-10-25; awaiting human review
+```
+
+```text
+Milestone / PR / commit: C, results, modes and clients; same commit
+Implemented scope and remaining deferrals: result captures and comparison
+  labels, Discuss modes, web review, container file checks. Deferred: the
+  iOS wrapper run; pixel differences (0047)
+Platforms, providers, and client versions exercised: macOS Electron (result
+  captures); gateway Chromium and WebKit 27.2 (web review); Docker container
+  (file checks, live Claude report)
+Logged commands and results: "Runs on 2026-10-25"
+Real workflow and inactive-environment evidence: web review of a desktop
+  capture with no capture available in that client
+Fault-injection boundaries exercised: an unaddressable container path check
+  is unavailable (unit); a symlink out of /workspace is outside-workspace
+Capability matrix and known limitations: as milestone A
+Migration and rollback verification: not run
+Reviewer / date: Claude (worker agent), 2026-10-25; awaiting human review
+```
+
+### Runs on 2026-10-25 (macOS, arktech-mini)
+
+macOS 27.0 (arm64), Xcode 27.1, Docker Desktop 29.9.2, Electron 44.7.0,
+Playwright 1.64.0 (Chromium; WebKit 27.2), host load average about 45 on 18
+cores throughout. One disposable profile, `qa-0044`
+(`mise run docker:build:dev --profile qa-0044`, then `mise run dev:test
+--profile qa-0044 --fixture --fixture-environments local,container`), stopped
+and reset afterwards (`dev:reset`: 2 exact-owner containers, 4 volumes and 2
+networks removed). The host Grok login had expired, so Grok was not seeded and
+no Grok case ran. Every command ran through `mise run test:logged`.
+
+| Command (abbreviated) | Result |
+| --- | --- |
+| `test:agent:docker -- web-annotations-gateway.spec.ts` | Pass (229 s). Evidence at `/workspace/.orkestrator/annotations/<request>-<digest>.png`, owner `node`, digest matches; container checks `exists,exists,missing,outside-workspace`; removed 226 s after settlement. The live case skipped without the opt-in |
+| Same, live, `ORKESTRATOR_AGENT_TEST_ANNOTATION_AGENT=claude` | Pass (37 s): `awaiting-review`, `verify-change.ts` 8/8 inside the container, reported files `content.ts: exists`, `not-created.ts: missing` |
+| `test:agent:browser -- … --grep 'evidence image into the local'` | Pass: file at `<worktree>/.orkestrator/annotations/<request>-<digest>.png` with the staged SHA-256 while `queued`; kept after settlement |
+| `… --grep 'reviewable from the web'`, Chromium and `ORKESTRATOR_AGENT_TEST_BROWSER=webkit` | Pass both (WebKit 27.2): capture-unavailable notice, note body and saved image; no Show on page |
+| `… --grep needs-input`, Claude | Approval: pass (335 s; `file-approval` after 15 s, card answer `applied`, second answer `stale`, `awaiting-review`, 8/8). Question: pass (`AskUserQuestion`, answered with the expected label, 8/8) |
+| `… --grep needs-input`, Codex | Approval: the turn settled `awaiting-review` in 29 s without asking (now a skip with that reason). Question: skipped (no question tool in Default mode) |
+| `web-annotations-approval-live.spec.ts`, Claude | Pass (118 s); table below |
+| `… --grep "fixture's expected source change"`, Claude and Codex | Pass: `awaiting-review` after 25 s and 20 s, 8/8 each |
+| `web-annotations-electron.spec.ts --grep 'late-font shift|comparison differences|baselines'` | Pass after the fixes below; the late-font case failed with the redraw fix reverted (negative control) |
+| `mise run test:agent:browser:isolated` (final, own disposable profile) | Pass: 32 passed, 61 skipped (opt-in live, Docker and container cases), 0 failed (638 s); the four credential-free annotation gateway cases and the metrics baseline pass, the live and Docker cases skip as designed |
+| `mise run test` (final) | Pass, all groups (1,459 s) |
+| `mise run format:check`, `mise run lint`, `mise run typecheck` | Pass (lint warnings only, none in touched files) |
+| Focused unit runs | `browser-preview-pins-live` + `browser-preview-show-on-page` pass; `web-annotation-quotas` passes, and fails with the cleanup fix reverted (negative control); `connection-manager` 85 passed; fixture app, `AnnotationThread`, `AnnotationPanel.flows` pass |
+| `mise run test:agent:electron` (final) | 31 passed, 1 skipped (Linux-only Wayland), 3 failed (554 s). All 13 annotation cases pass. Failures: `remote nicknames …` (known flake 0515; also fails alone with this branch's desktop changes reverted), `windows on different backends …` (known flake 0622; passed alone), `a leaf's workspace opens in the window's central region …` (DOM focus under load; failed once and passed once alone, passed on the base; new flake [0840](../../tests/flaky-tests/electron-and-desktop/0840-workspace-realm-panel-dom-focus.md)) |
+
+Approval across disruption (Claude, one approval each):
+
+| Step | Request | Interaction | Source |
+| --- | --- | --- | --- |
+| Raised before the edit | `needs-input` | `file-approval` pending | unchanged |
+| Client opened A, switched to B, reloaded, lost and regained its event stream | `needs-input` | same id pending | unchanged |
+| Graceful restart | `running`, then `failed` (`turnOutcome: failed`) | absent (withdrawn with the bridge generation); answering it: `stale` | unchanged |
+| New environment, approval pending, backend `SIGKILL`, restart | `running`, then `failed` | absent; answering it: `stale` | unchanged |
+
+On Claude neither restart kept the approval alive, so the "answered once from
+the card, refused from chat" branch ran only without a restart (the
+needs-input case above). After a restart cut its turn, the first session
+refused the next request ("The claude session failed before this prompt was
+sent … Send a message to continue"), which is why the crash step uses a fresh
+environment.
+
+Native window (Electron, display scale 1):
+
+| Check | Result |
+| --- | --- |
+| Offscreen footer | Pin `matched/stable-id` on the target; Show on page `shown`, scrolled into view |
+| Target in an open `<dialog>` | `matched-correct` |
+| Same dialog closed | Before the fix: `matched` with a 0×0 rect, Show on page `shown`, pin badge drawn at the page corner. After: no badge, Show on page `hidden` |
+| Font holding the load event (`/fonts?delay=2500`) | Pins resolve after load, on the target after its 44 px shift |
+| Font loaded by script after load (`&lazy=1`) | Pin drawn before the shift; before the fix it stayed at the old position, after it follows the 44 px shift |
+| Expired sign-in (`/account` → `/sign-in`) | Show on page `navigation-required`, `navigated: true` |
+
+Result-capture comparisons (one held implement request per note):
+
+| After-capture | Stability | Differences | Target |
+| --- | --- | --- | --- |
+| Same route, static copy beside the animation | stable | none | same-target |
+| The animated banner | unstable | target, unstable | different-target |
+| Another route (`/settings`) | stable | route, target | different-target |
+| Same target, preview 1000×700 | stable | viewport | same-target |
+| Same target while the font loads | unstable | unstable | same-target |
+| Same target once it settled | stable | none | same-target |
+| Expired sign-in page | stable | route, target | different-target |
+
+Baselines (no targets set; loaded host). Client, from the full Electron run's
+`baselines` case (one local backend): selection → spooled capture median
+146 ms, p90 219 ms, max 247 ms (17 captures); spool → backend commit (asset
+stage + create) median 46 ms, p90 67 ms, max 98 ms (16). Backend
+`command_ms` in that run (mean / max): create 2 / 3 ms, asset stage 5 / 22 ms,
+result capture 3 / 4 ms, prepare 2 / 4 ms, send 47 / 55 ms. Backend
+`web_annotations_metrics` after the Claude and Codex live implements:
+`request_duration_ms` to `awaiting-review` mean 19.9 s, max 21.9 s (2);
+`request_dispatch_ms` 4.7 s / 6.2 s; `request_enqueue_ms` 12 / 20 ms;
+`command_ms` send 24 / 41 ms, prepare 12 / 13 ms, create 8 / 13 ms, asset
+stage 11 / 17 ms, destinations 21 / 72 ms.
+
+Findings (all fixed on this branch unless stated):
+
+- **Settled evidence was never removed from a workspace (fixed).**
+  Materialization writes `<request>-<digest>.png`, but cleanup removed the
+  attachment's `relativePath` (`<digest>.png`, the brief's name), found it
+  missing, marked the attachment `removedAt`, and left the real file forever;
+  a user file at the brief's name with the same bytes would have been deleted
+  instead. The unit test wrote its file at `relativePath`, so it never saw
+  the difference. Both paths now use `materializedEvidencePath`; the test
+  fake writes the real name, and a bystander file at the brief's name must
+  survive. The Docker case confirms removal on the real stack.
+- **A target in a closed dialog was "shown" (fixed).** Pins matched by
+  identity drew a badge at the page corner for an element with no box, and
+  Show on page reported `shown`. The pin layer now skips targets whose
+  `checkVisibility()` is false, and Show on page returns `hidden`
+  (`BrowserPreviewShowOnPageResult`), which the panel words as "on the page
+  but hidden … open it, then try again".
+- **A web font swap left pins behind (fixed).** The pin layer redrew only on
+  scroll, resize and DOM mutations; a font swap reflows without any. It now
+  also redraws on `document.fonts` `loadingdone`/`loadingerror` and on a
+  `ResizeObserver` of the document, and the snapshot reports the drawn rect.
+- **Main's page scripts wait for a loading page's load event** (behaviour,
+  documented). `webContents.executeJavaScript` (and the capture world's
+  equivalent) defer until load, so pins, captures and probes see the page
+  after a load-blocking font has settled. The spec probes loading pages
+  through `mainFrame.executeJavaScript`.
+- **Codex's Ask policy does not gate workspace edits** (provider behaviour,
+  documented as a known limitation).
+- **A session cut short by a restart refuses the next request** until the
+  user sends a message (documented; the card shows the reason).
 
 ### Runs on 2026-10-24 (macOS, node mbp3)
 
@@ -674,6 +897,84 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   recover. Latency and memory targets come from measurements, not from an
   assumed SLA.
 
+## Assumptions and decisions
+
+Made on 2026-10-25 without the user, to be validated.
+
+1. **Fix the evidence-cleanup path in the backend, not only in the test.**
+   Options: (a) store the written name in the attachment's `relativePath` at
+   materialization; (b) derive the written name in one helper
+   (`materializedEvidencePath`) used by the writer and by cleanup; (c) record
+   the bug and change only the test. Chose (b): the naming has been
+   `<request>-<digest>.png` since #845, so the helper is right for every
+   existing record, and the frozen request (whose `relativePath` the brief and
+   publication use) stays untouched. Pros: no record migration, one source of
+   truth. Cons: cleanup depends on the writer's naming rule staying in that
+   helper; files written before this fix are removed only by the next GC pass
+   after their notes are deleted or 7 days pass, and attachments already
+   marked `removedAt` by the old code are not revisited (their files remain;
+   they are inert PNGs in `.orkestrator/annotations/`).
+2. **Report a hidden target as a new `hidden` outcome.** Options: keep `shown`;
+   map it to `not-found` (whose message says "reselect", wrong here); add
+   `hidden` to `BrowserPreviewShowOnPageResult`. Chose `hidden`. Pros: an
+   explicit, accurate message; no false claim of success. Cons: a protocol
+   union grows (renderer and desktop ship together; a web client never calls
+   Show on page). "Hidden" means a matched rect with no width and height,
+   so a genuinely zero-size visible element also reads as hidden, which is
+   still accurate (nothing to show). The pin layer uses `checkVisibility()`
+   where available.
+3. **Redraw pins on font loads and document resizes, not on attribute
+   mutations.** Options: add `attributes: true` to the MutationObserver; a
+   `ResizeObserver` per target; font events plus a `ResizeObserver` on the
+   document. Chose the last: it catches a font swap (no DOM change at all)
+   and most reflows at one redraw per frame, without re-resolving anchors or
+   spending the pass allowance. Cons: a target that moves without changing
+   the document's size and without a font load (a sibling's transform, say)
+   still waits for the next scroll, resize or mutation.
+4. **The late font is simulated.** Options: commit a font binary to the
+   fixture; generate one; serve a delayed response (a 404) and apply the
+   font's larger metrics when the load settles. Chose the delayed response.
+   Pros: no binary in the repository, deterministic shift, and
+   `document.fonts.ready` pends exactly as for a real font. Cons: no glyphs
+   are swapped; only the layout effect is real. A unique URL per load avoids
+   Chromium reusing the failed font.
+5. **Docker evidence on the existing fixture container.** Options: create a
+   container environment per test; reuse `fixture-container`. Chose reuse, as
+   the other Docker fixture cases do, restoring its pane layout afterwards.
+   Cleanup is waited for (up to 7 minutes) rather than adding a test-only GC
+   switch to the product. Cons: the case takes about 4 minutes.
+6. **Result file checks through the real command and a live agent.** The
+   credential-free case calls `check_container_workspace_paths` over the
+   gateway; the live case asks the agent to report two named paths so
+   `report_annotation_result` produces `exists` and `missing`. The note body
+   is contrived for that purpose.
+7. **Needs-input answered at the API the request card uses.** Options: drive
+   the card in a browser; call `resolve_native_agent_interaction` with the
+   card's own resolution. Chose the API (the card's code path, see
+   `RequestInteractions.tsx`), which is deterministic and lets the test send
+   the same answer twice. Cons: the card's rendering is not exercised here
+   (component tests cover it).
+8. **Codex approval case skips with its reason.** Codex under Ask applied the
+   edit without asking. Options: force an approval with Codex's `untrusted`
+   approval mode; skip. Chose skip: forcing a mode the user did not choose is
+   not what an annotation request does. Recorded as a known limitation.
+9. **Disruption on a fresh environment for the crash step.** After a restart
+   cut its turn, the first session refuses new requests until the user
+   writes in chat; reusing it would test that refusal, not the crash.
+10. **iOS: WebKit as the engine-level substitute; the wrapper stays open.** The
+    wrapper needs the gateway token typed in, which agents must not handle.
+11. **Remote backend stays open.** One machine was available; running a
+    second backend on the same host would not test another host.
+12. **Create cost moved to new file 0124.** The fix is a storage redesign, so
+    per the todo rules it is new work; this file records where the cost is.
+13. **Keychain: no launcher change.** The `dev:test` launcher already gets the
+    mock keychain from the runtime profile (#1052). Added only the pending-
+    keychain log line, keeping the await so a late answer still gets
+    persistent storage.
+14. **Rating unchanged (Medium).** What remains is a second-host run, the iOS
+    wrapper and native focus: qualification of secondary platforms of a
+    feature on by default, with its main gates now signed off.
+
 ## Open questions
 
 - Is macOS (the primary development host) required as well as Linux for the
@@ -682,19 +983,25 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   matrix?
 - Do the unit-level fault and race tests count for gate A, or does gate A need
   real-stack runs of the acceptance race and migration restart too?
+- Does the WebKit run of the web review case count for the iOS gate, or must
+  the `WKWebView` wrapper itself be run by a person with the gateway token?
 
 ## Needs verification
 
 - Whether the 2026-09-25 runs still pass after #969 and #983. The Electron
-  and isolated browser suites do (2026-10-17, macOS); the bench and full
-  suite were re-run too. Linux was not re-run.
+  and isolated browser suites do (2026-10-17 and 2026-10-25, macOS); the bench
+  and full suite were re-run too. Linux was not re-run.
 - Whether the gateway spec's synthetic capture still matches what the Electron
-  capture path produces.
+  capture path produces. Since 2026-10-25 it carries a real staged PNG and
+  geometry image; target and evidence fields remain synthetic.
+- The baselines were taken on a host at load ~45; repeat them on a quiet host
+  before setting targets.
 
 ## Related
 
 - [0043-web-annotation-known-limitations.md](0043-web-annotation-known-limitations.md),
-  [0047-web-annotation-extensions.md](0047-web-annotation-extensions.md).
+  [0047-web-annotation-extensions.md](0047-web-annotation-extensions.md),
+  [0124-web-annotation-commit-cost.md](0124-web-annotation-commit-cost.md).
 - [0042-service-preview-rollout.md](0042-service-preview-rollout.md): the native-window
   run uses the same Electron harness, and annotations run inside service tabs.
 - [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)

@@ -3,7 +3,10 @@
  * compared against are in docs/development/container-qualification.md.
  *
  * Opt-in and slow: RUN_CONTAINER_BENCHMARKS=1 and
- * ORKESTRATOR_QUALIFICATION_IMAGE=<image>. Uses synthetic fixtures only, runs
+ * ORKESTRATOR_QUALIFICATION_IMAGE=<image>. Runtimes get the built-in default
+ * budget, as a new install's would; ORKESTRATOR_BENCHMARK_UNRESTRICTED=1 runs
+ * them without limits instead. The report records the budget Docker applied.
+ * Uses synthetic fixtures only, runs
  * with concurrency 1 (and a bounded 3-environment case), and removes every
  * resource it labelled. Results go to output/benchmarks/<run>.json and a table
  * on stdout; nothing here records commands, paths or file contents.
@@ -24,6 +27,7 @@ const ENABLED = process.env.RUN_CONTAINER_BENCHMARKS === "1" && IMAGE.length > 0
 const bench = ENABLED ? test : test.skip;
 const RUN = `b${Date.now().toString(36)}`;
 const TIMEOUT = 1_800_000;
+const UNRESTRICTED = process.env.ORKESTRATOR_BENCHMARK_UNRESTRICTED === "1";
 
 let dataDir = "";
 let owner = "";
@@ -115,7 +119,13 @@ function benchContext(environments: Environment[]) {
     }),
     loadConfig: async () => ({
       version: "1.0.0",
-      global: { allowedDomains: ["registry.npmjs.org"], enabledAgentPlatforms: ["claude"] },
+      global: {
+        allowedDomains: ["registry.npmjs.org"],
+        enabledAgentPlatforms: ["claude"],
+        ...(UNRESTRICTED
+          ? { containerResourceLimits: { cpus: null, memoryMiB: null, pids: null } }
+          : {}),
+      },
       repositories: {},
     }),
     listMultiReviewWorkflows: async () => [],
@@ -146,6 +156,7 @@ async function writeReport(): Promise<void> {
     cpus: os.cpus().length,
     engine,
     image: imageId,
+    budget: UNRESTRICTED ? "unrestricted" : "built-in default",
     results,
   };
   await fs.writeFile(path.join(out, `${RUN}.json`), JSON.stringify(report, null, 2));
@@ -212,7 +223,7 @@ describe("container baselines", () => {
   bench(
     "fresh environment, warm stop/start, rebuild, sampler and observer churn",
     async () => {
-      const { resetResourceCaches, sampleContainerUsage } =
+      const { inspectAppliedLimits, resetResourceCaches, sampleContainerUsage } =
         await import("../src/core/container-resources");
       const { drainContainerProcesses } = await import("../src/core/container-readiness");
       const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
@@ -245,6 +256,7 @@ describe("container baselines", () => {
         }
       }
       if (!last) last = await freshRuntime(`env-${RUN}-fresh-full`, "full");
+      results.appliedLimits = await inspectAppliedLimits(last.containerId);
       results.freshRestricted = {
         ...Object.fromEntries(Object.entries(fresh).map(([key, value]) => [key, summarize(value)])),
         dockerCalls: summarize(freshCalls),

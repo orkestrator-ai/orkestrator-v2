@@ -1,4 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { closeElectronWithin } from "./design-electron-cleanup";
+import { expect, test } from "./electron-fixtures";
+import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import type { OrkestratorElectronApi } from "../../apps/desktop/electron/preload-api";
@@ -163,6 +165,7 @@ async function testIndependentWindows(nicknamesOnly = false): Promise<void> {
         VITE_ORKESTRATOR_PROFILE: profile.id,
       },
     });
+    ownProcessGroup(vite);
     await waitForUrl(rendererUrl);
     const app = await electron.launch({
       executablePath: electronExecutable,
@@ -559,12 +562,8 @@ print("public.tiff")
     launchedApp = null;
     await expect.poll(() => processExists(backendPid!), { timeout: 10_000 }).toBe(false);
   } finally {
-    await launchedApp?.close().catch(() => undefined);
-    if (vite?.pid) {
-      try {
-        process.kill(-vite.pid, "SIGTERM");
-      } catch {}
-    }
+    await closeElectronWithin(launchedApp).catch(() => undefined);
+    if (vite) await stopProcessGroup(vite).catch(() => undefined);
     await rm(temporaryRoot, { recursive: true, force: true });
   }
 }
@@ -597,6 +596,7 @@ test("a real window with a missing preload reaches recovery without mounting the
         VITE_DEV_PORT: String(rendererPort),
       },
     });
+    ownProcessGroup(vite);
     await waitForUrl(rendererUrl);
     await writeFile(
       entrypoint,
@@ -632,12 +632,8 @@ test("a real window with a missing preload reaches recovery without mounting the
     await expect(window.getByRole("button", { name: "Global settings" })).toHaveCount(0);
     expect(await window.evaluate(() => typeof (globalThis as any).orkestrator)).toBe("undefined");
   } finally {
-    await launchedApp?.close().catch(() => undefined);
-    if (vite?.pid) {
-      try {
-        process.kill(-vite.pid, "SIGTERM");
-      } catch {}
-    }
+    await closeElectronWithin(launchedApp).catch(() => undefined);
+    if (vite) await stopProcessGroup(vite).catch(() => undefined);
     await rm(temporaryRoot, { recursive: true, force: true });
   }
 });
@@ -703,7 +699,7 @@ test("bootstrap window repaints a resized native Wayland surface at fractional s
     expect(rendering.ozonePlatform).toBe("wayland");
     expect(rendering.scaleFactor).toBeCloseTo(1.25, 2);
   } finally {
-    await launchedApp?.close().catch(() => undefined);
+    await closeElectronWithin(launchedApp).catch(() => undefined);
     await rm(temporaryRoot, { recursive: true, force: true });
   }
 });

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import path from "node:path";
 import {
   agentMcpConfigJson,
@@ -60,8 +60,26 @@ function pollTickStepper() {
   let released = 0;
   let resume: (() => void) | undefined;
   let parked = deferred<void>();
+  // A loop that ended (a tick threw, or it saw a stop) never parks again. Say
+  // so promptly instead of letting the test hang until its own timeout.
+  const untilParked = async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        parked.promise,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("the poll loop did not park for its next tick")),
+            5_000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   const release = async () => {
-    await parked.promise;
+    await untilParked();
     parked = deferred<void>();
     released += 1;
     const resumeTick = resume!;
@@ -81,7 +99,7 @@ function pollTickStepper() {
     /** Runs one whole tick: the loop is parked again when this resolves. */
     step: async () => {
       await release();
-      await parked.promise;
+      await untilParked();
     },
   };
 }
@@ -1022,7 +1040,8 @@ describe("live session read paths", () => {
   }, 20_000);
 
   test("a failed poll snapshot skips the tick without ending the loop", async () => {
-    const handlers = createHandlers();
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
@@ -1047,9 +1066,16 @@ describe("live session read paths", () => {
       // for the whole session, and the tab silently stops receiving hooks and
       // transcript lines with nothing reporting an error.
       await fs.chmod(pendingDir, 0o000);
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
       try {
-        await delay(750);
+        // The three whole ticks the former 750ms wait covered at POLL_INTERVAL_MS
+        // (250ms). Each must fail its snapshot and still park for the next tick.
+        for (let tick = 0; tick < 3; tick += 1) await ticks.step();
+        expect(
+          warn.mock.calls.filter(([message]) => message === "[tmux] poll snapshot failed"),
+        ).toHaveLength(3);
       } finally {
+        warn.mockRestore();
         await fs.chmod(pendingDir, 0o755);
       }
 
@@ -1057,23 +1083,24 @@ describe("live session read paths", () => {
         path.join(pendingDir, "Stop-after-failure.json"),
         JSON.stringify({ ok: true }),
       );
-      await waitFor(
-        () =>
-          emitted.some(
-            (item) =>
-              item.event === "claude-tmux:event" &&
-              (item.payload as { kind?: string }).kind === "hook" &&
-              (item.payload as { event_id?: string }).event_id === "after-failure",
-          ),
-        5_000,
-      );
+      await ticks.step();
+      expect(
+        emitted.some(
+          (item) =>
+            item.event === "claude-tmux:event" &&
+            (item.payload as { kind?: string }).kind === "hook" &&
+            (item.payload as { event_id?: string }).event_id === "after-failure",
+        ),
+      ).toBe(true);
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+      await ticks.release();
     });
   }, 20_000);
 
   test("bounds informational hook snapshots and rehydrates Unicode-safe messages", async () => {
-    const handlers = createHandlers();
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
@@ -1103,15 +1130,14 @@ describe("live session read paths", () => {
           );
         }),
       );
-      await waitFor(
-        () =>
-          emitted.some(
-            (entry) =>
-              entry.event === "claude-tmux:event" &&
-              (entry.payload as { event_id?: string }).event_id === "info-21",
-          ),
-        5_000,
-      );
+      await ticks.step();
+      expect(
+        emitted.some(
+          (entry) =>
+            entry.event === "claude-tmux:event" &&
+            (entry.payload as { event_id?: string }).event_id === "info-21",
+        ),
+      ).toBe(true);
 
       const bounded = (await invoke(
         handlers,
@@ -1142,18 +1168,7 @@ describe("live session read paths", () => {
         path.join(pendingDir, "Notification-info-21.json"),
         JSON.stringify({ message: "updated duplicate" }),
       );
-      await waitFor(async () => {
-        const snapshot = (await invoke(
-          handlers,
-          "claude_tmux_status",
-          {
-            tabId,
-            environmentId: environment.id,
-          },
-          context,
-        )) as { info_events: Array<{ id: string; message: string }> };
-        return snapshot.info_events.at(-1)?.message === "updated duplicate";
-      }, 5_000);
+      await ticks.step();
       const deduplicated = (await invoke(
         handlers,
         "claude_tmux_status",
@@ -1163,6 +1178,7 @@ describe("live session read paths", () => {
         },
         context,
       )) as { info_events: Array<{ id: string; message: string }> };
+      expect(deduplicated.info_events.at(-1)?.message).toBe("updated duplicate");
       expect(deduplicated.info_events.filter(({ id }) => id === "info-21")).toEqual([
         expect.objectContaining({
           id: "info-21",
@@ -1172,15 +1188,14 @@ describe("live session read paths", () => {
       expect(deduplicated.info_events).toHaveLength(20);
 
       await fs.writeFile(path.join(pendingDir, "Notification-default-message.json"), "{}");
-      await waitFor(
-        () =>
-          emitted.some(
-            (entry) =>
-              entry.event === "claude-tmux:event" &&
-              (entry.payload as { event_id?: string }).event_id === "default-message",
-          ),
-        5_000,
-      );
+      await ticks.step();
+      expect(
+        emitted.some(
+          (entry) =>
+            entry.event === "claude-tmux:event" &&
+            (entry.payload as { event_id?: string }).event_id === "default-message",
+        ),
+      ).toBe(true);
       const rehydrated = (await invoke(
         handlers,
         "claude_tmux_status",
@@ -1199,11 +1214,13 @@ describe("live session read paths", () => {
       );
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+      await ticks.release();
     });
   }, 20_000);
 
   test("keeps same-id hooks of different kinds and re-admits an evicted id", async () => {
-    const handlers = createHandlers();
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
@@ -1234,18 +1251,17 @@ describe("live session read paths", () => {
       const deliver = async (kind: string, id: string, body: string) => {
         const seen = emitted.length;
         await fs.writeFile(path.join(pendingDir, `${kind}-${id}.json`), body);
-        await waitFor(
-          () =>
-            emitted
-              .slice(seen)
-              .some(
-                (entry) =>
-                  entry.event === "claude-tmux:event" &&
-                  (entry.payload as { event_id?: string }).event_id === id &&
-                  (entry.payload as { event_kind?: string }).event_kind === kind,
-              ),
-          5_000,
-        );
+        await ticks.step();
+        expect(
+          emitted
+            .slice(seen)
+            .some(
+              (entry) =>
+                entry.event === "claude-tmux:event" &&
+                (entry.payload as { event_id?: string }).event_id === id &&
+                (entry.payload as { event_kind?: string }).event_kind === kind,
+            ),
+        ).toBe(true);
       };
 
       // Deduplication keys on id *and* kind. A Notification and a Stop that
@@ -1278,19 +1294,18 @@ describe("live session read paths", () => {
           await fs.rename(staged, path.join(pendingDir, `Notification-${id}.json`));
         }),
       );
-      await waitFor(() => {
-        const delivered = new Set(
-          emitted
-            .slice(seenBeforeFillers)
-            .filter(
-              (entry) =>
-                entry.event === "claude-tmux:event" &&
-                (entry.payload as { event_kind?: string }).event_kind === "Notification",
-            )
-            .map((entry) => (entry.payload as { event_id?: string }).event_id),
-        );
-        return fillerIds.every((id) => delivered.has(id));
-      }, 5_000);
+      await ticks.step();
+      const delivered = new Set(
+        emitted
+          .slice(seenBeforeFillers)
+          .filter(
+            (entry) =>
+              entry.event === "claude-tmux:event" &&
+              (entry.payload as { event_kind?: string }).event_kind === "Notification",
+          )
+          .map((entry) => (entry.payload as { event_id?: string }).event_id),
+      );
+      expect(fillerIds.filter((id) => !delivered.has(id))).toEqual([]);
       const filled = await snapshot();
       expect(filled.info_events).toHaveLength(20);
       expect(filled.info_events.some(({ id }) => id === "shared")).toBe(false);
@@ -1303,6 +1318,7 @@ describe("live session read paths", () => {
       ]);
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+      await ticks.release();
     });
   }, 30_000);
 
@@ -1404,7 +1420,8 @@ describe("live session read paths", () => {
   }, 30_000);
 
   test("notifies once for each armed UserPromptSubmit-to-Stop turn", async () => {
-    const handlers = createHandlers();
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
@@ -1424,13 +1441,14 @@ describe("live session read paths", () => {
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
       const writeHook = async (kind: "UserPromptSubmit" | "Stop", id: string) => {
         await fs.writeFile(path.join(pendingDir, `${kind}-${id}.json`), "{}");
-        await waitFor(() =>
+        await ticks.step();
+        expect(
           emitted.some(
             (entry) =>
               entry.event === "claude-tmux:event" &&
               (entry.payload as { event_id?: string }).event_id === id,
           ),
-        );
+        ).toBe(true);
       };
 
       await writeHook("UserPromptSubmit", "turn-1-start");
@@ -1446,11 +1464,13 @@ describe("live session read paths", () => {
       expect(notifyAgentTurnCompleted.mock.calls).toEqual([[environment.id], [environment.id]]);
 
       await invoke(handlers, "claude_tmux_stop", args, context);
+      await ticks.release();
     });
   }, 20_000);
 
   test("uses the durable arm to recover a Stop after backend reattach", async () => {
-    const handlers = createHandlers();
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
@@ -1472,15 +1492,18 @@ describe("live session read paths", () => {
       // No UserPromptSubmit reaches this TmuxSession instance. This is the
       // observable state after the backend restarts while Claude is working.
       await fs.writeFile(path.join(pendingDir, "Stop-after-reattach.json"), "{}");
+      await ticks.step();
       await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 1);
       expect(notifyAgentTurnCompleted).toHaveBeenCalledWith(environment.id);
 
       await invoke(handlers, "claude_tmux_stop", args, context);
+      await ticks.release();
     });
   }, 20_000);
 
   test("does not drop a back-to-back turn while the prior notification is pending", async () => {
-    const handlers = createHandlers();
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
@@ -1501,9 +1524,10 @@ describe("live session read paths", () => {
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
       const writeAndObserve = async (kind: "UserPromptSubmit" | "Stop", id: string) => {
         await fs.writeFile(path.join(pendingDir, `${kind}-${id}.json`), "{}");
-        await waitFor(() =>
+        await ticks.step();
+        expect(
           emitted.some((entry) => (entry.payload as { event_id?: string }).event_id === id),
-        );
+        ).toBe(true);
       };
 
       await writeAndObserve("UserPromptSubmit", "overlap-start-1");
@@ -1515,11 +1539,13 @@ describe("live session read paths", () => {
 
       gate.resolve();
       await invoke(handlers, "claude_tmux_stop", args, context);
+      await ticks.release();
     });
   }, 20_000);
 
   test("does not reopen a newer turn when an older completion notification rejects", async () => {
-    const handlers = createHandlers();
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
@@ -1549,9 +1575,10 @@ describe("live session read paths", () => {
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
       const writeAndObserve = async (kind: "UserPromptSubmit" | "Stop", id: string) => {
         await fs.writeFile(path.join(pendingDir, `${kind}-${id}.json`), "{}");
-        await waitFor(() =>
+        await ticks.step();
+        expect(
           emitted.some((entry) => (entry.payload as { event_id?: string }).event_id === id),
-        );
+        ).toBe(true);
       };
 
       await writeAndObserve("UserPromptSubmit", "generation-1-start");
@@ -1568,11 +1595,13 @@ describe("live session read paths", () => {
       expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(2);
       resolveSecond();
       await invoke(handlers, "claude_tmux_stop", args, context);
+      await ticks.release();
     });
   }, 20_000);
 
   test("retries a failed durable-arm read and treats a missing environment as terminal", async () => {
-    const handlers = createHandlers();
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
@@ -1602,20 +1631,23 @@ describe("live session read paths", () => {
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
       for (const id of ["failed-read", "missing-read", "successful-read"]) {
         await fs.writeFile(path.join(pendingDir, `Stop-${id}.json`), "{}");
-        await waitFor(() =>
+        await ticks.step();
+        expect(
           emitted.some((entry) => (entry.payload as { event_id?: string }).event_id === id),
-        );
+        ).toBe(true);
         await delay(25);
       }
 
       expect(completionReads).toBe(2);
       expect(notifyAgentTurnCompleted).not.toHaveBeenCalled();
       await invoke(handlers, "claude_tmux_stop", args, context);
+      await ticks.release();
     });
   }, 20_000);
 
   test("ignores an unarmed Stop and retries a rejected armed notification", async () => {
-    const handlers = createHandlers();
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       const notifyAgentTurnCompleted = mock(async (_environmentId: string) => undefined);
@@ -1633,12 +1665,15 @@ describe("live session read paths", () => {
       };
       const unarmedPending = path.join(runtimeRoot, "sessions", unarmed.session_id, "pending");
       await fs.writeFile(path.join(unarmedPending, "Stop-unarmed.json"), "{}");
-      await waitFor(() =>
+      await ticks.step();
+      expect(
         emitted.some((entry) => (entry.payload as { event_id?: string }).event_id === "unarmed"),
-      );
+      ).toBe(true);
       await delay(25);
       expect(notifyAgentTurnCompleted).not.toHaveBeenCalled();
       await invoke(handlers, "claude_tmux_stop", unarmedArgs, context);
+      // Let the first session's parked loop exit before the second one parks.
+      await ticks.release();
 
       environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
       let attempts = 0;
@@ -1652,13 +1687,16 @@ describe("live session read paths", () => {
       };
       const retryPending = path.join(runtimeRoot, "sessions", retry.session_id, "pending");
       await fs.writeFile(path.join(retryPending, "Stop-rejected.json"), "{}");
+      await ticks.step();
       await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 1);
       await delay(25);
       await fs.writeFile(path.join(retryPending, "Stop-retry.json"), "{}");
+      await ticks.step();
       await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 2);
       expect(attempts).toBe(2);
 
       await invoke(handlers, "claude_tmux_stop", retryArgs, context);
+      await ticks.release();
     });
   }, 20_000);
 

@@ -1,7 +1,7 @@
 # Cross-service read policy (0054) validation under aggregate load
 
 - **ID:** 0696
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-23.
 - **Baseline:** `062971245` with the 0054 read-policy change (`packages/protocol/src/preview-header-policy.ts`, `apps/backend/src/preview-publication.ts` and their tests) in the working tree.
 - **Original command:** `mise run test:logged -- --name full-tests-0054 -- mise run test`.
@@ -62,3 +62,7 @@ Complete unit-owner reruns used `mise run test:logged`, explicit paths and `--pa
 | `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts` | External watchdog case missed its elapsed deadline; recurrence of 0512. | Passed unchanged (24.9 s logged). |
 
 The passing whole-owner reruns establish intermittent aggregate recurrences for those owners. Host contention is a hypothesis; other worktrees were running suites concurrently. No implementation, assertion, timeout or skip was changed. Live-provider, Docker-image and iOS qualification were not run.
+
+## Triage 2026-10-25
+
+Resolved: run record only. Owner cases cover every confirmed failure: environment move 0248/0291/0621, coordinator digest [0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md), Codex runtime prompt [0492](../agent-bridges/0492-codex-deleted-session-initial-retry-race.md), registry create [0229](../environments-and-containers/0229-reconciliation-backoff-aggregate-timeout.md), Pi cancel [0500](0500-agent-mail-main-merge-validation.md), ACP 0219, preview baseline 0771, OpenCode host 0723, artifact engines 0507/0697, coordinator service 0165, public API exec 0341/0624, App 0082 and Mermaid 0512. One `useVirtuosoScrollState` sticky-reactivation failure passed alone; that owner's earlier cases (0135, 0381) are resolved, so the lead may want to reopen one if it recurs. The 40 component failures were not rerun and do not establish flakes.

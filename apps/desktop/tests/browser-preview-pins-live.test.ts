@@ -1,10 +1,13 @@
-import { describe, expect, test } from "bun:test";
-import type { HTMLElement } from "happy-dom";
+import { describe, expect, test, mock } from "bun:test";
+import type { WebAnnotationTarget } from "@orkestrator/protocol/web-annotations";
+import type { HTMLElement, Element } from "happy-dom";
 import {
   BROWSER_PREVIEW_PINS_SNAPSHOT_SCRIPT,
+  BROWSER_PREVIEW_PINS_CLEAR_SCRIPT,
   browserPreviewPinsShowScript,
   type BrowserPreviewPinsScriptLimits,
 } from "../electron/browser-preview-pins-script";
+import { BrowserPreviewPinSessions } from "../electron/browser-preview-capture-pins";
 import { captureElement, page, type Json } from "./browser-preview-page-harness";
 
 type Harness = ReturnType<typeof page>;
@@ -54,6 +57,129 @@ describe("live pin layer", () => {
     expect(badge!.style.display).toBe("block");
     const outline = badge!.previousElementSibling!;
     expect(outline.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  test("a matched target that renders no box (a closed dialog) gets no pin", () => {
+    const harness = page(`<dialog><button data-testid="confirm">Save</button></dialog>`);
+    const button = harness.document.querySelector("button")!;
+    const target = captureElement(harness, button);
+    // Chromium's answer for an element inside a closed <dialog>.
+    Object.assign(button, { checkVisibility: () => false });
+    const result = show(harness, [
+      { annotationId: "annotation-1", number: 1, label: target.label, target },
+    ]);
+    expect(result.results[0]).toMatchObject({ state: "matched", rule: "stable-id" });
+    expect(badges(harness)[0]!.style.display).toBe("none");
+    Object.assign(button, { checkVisibility: () => true });
+    show(harness, [{ annotationId: "annotation-1", number: 1, label: target.label, target }]);
+    expect(badges(harness).at(-1)!.style.display).toBe("block");
+  });
+
+  test("a font swap that reflows the page without a DOM mutation moves the drawn pin", async () => {
+    const harness = page(`<h1>Release notes</h1><button data-testid="read">Read</button>`);
+    const button = harness.document.querySelector("button")!;
+    let top = 40;
+    Object.assign(button, {
+      getBoundingClientRect: () => ({ left: 10, top, width: 80, height: 24, x: 10, y: top }),
+    });
+    const fonts = new harness.window.EventTarget();
+    Object.defineProperty(harness.document, "fonts", { value: fonts, configurable: true });
+    const target = captureElement(harness, button);
+    const events: unknown[] = [];
+    const sessions = new BrowserPreviewPinSessions({
+      livePollIntervalMs: 0,
+      emit: (event) => events.push(event),
+      preview: () => ({
+        generation: 1,
+        visible: true,
+        contents: {
+          executeJavaScript: async (script) => harness.window.eval(script),
+          capturePage: async () => {
+            throw new Error("unused");
+          },
+          getURL: () => "http://localhost:3000/dashboard",
+          isDestroyed: () => false,
+        },
+      }),
+    });
+    const [initial] = await sessions.showPins({
+      tabId: "browser-1",
+      pins: [
+        {
+          annotationId: "annotation-1",
+          number: 1,
+          route: "/dashboard",
+          target: target as WebAnnotationTarget,
+        },
+      ],
+    });
+    expect(initial!.resolution.rect).toMatchObject({ y: 40 });
+    const before = snapshot(harness);
+    const outline = badges(harness)[0]!.previousElementSibling as HTMLElement;
+    expect(outline.style.top).toBe("40px");
+    // The web font arrives: the heading grows and the button moves down.
+    top = 84;
+    fonts.dispatchEvent(new harness.window.Event("loadingdone"));
+    await wait(50);
+    expect(outline.style.top).toBe("84px");
+    expect(snapshot(harness).results[0].rect).toMatchObject({ y: 84 });
+    expect(snapshot(harness).revision).toBe(before.revision + 1);
+    expect(snapshot(harness).diagnostics.passes).toBe(before.diagnostics.passes);
+    await sessions.pollOnce();
+    expect((await sessions.getPinResults("browser-1"))!.results[0]!.resolution.rect).toMatchObject({
+      y: 84,
+    });
+    expect(events).toEqual([expect.objectContaining({ status: "pins-changed" })]);
+    await sessions.pollOnce();
+    expect(events).toHaveLength(1);
+    await sessions.clearPins("browser-1");
+    sessions.dispose();
+  });
+
+  test("document resize alone redraws pins and destroy disconnects the observer", async () => {
+    const harness = page(`<button data-testid="read">Read</button>`);
+    const button = harness.document.querySelector("button")!;
+    let top = 40;
+    Object.assign(button, {
+      getBoundingClientRect: () => ({ left: 10, top, width: 80, height: 24 }),
+    });
+    let resized = () => {};
+    const observe = mock((_element: Element) => {});
+    const disconnect = mock(() => {});
+    Object.defineProperty(harness.window, "ResizeObserver", {
+      configurable: true,
+      value: class {
+        constructor(callback: () => void) {
+          resized = callback;
+        }
+        observe = observe;
+        disconnect = disconnect;
+      },
+    });
+    const target = captureElement(harness, button);
+    const before = show(harness, [
+      { annotationId: "annotation-1", number: 1, label: target.label, target },
+    ]);
+    expect(observe.mock.calls.map((call) => call[0])).toEqual([
+      harness.document.documentElement,
+      harness.document.body,
+    ]);
+    top = 100;
+    resized();
+    resized();
+    await wait(50);
+    const after = snapshot(harness);
+    expect(after.results[0].rect.y).toBe(100);
+    expect(after.revision).toBe(before.revision + 1);
+    expect(after.diagnostics.passes).toBe(before.diagnostics.passes);
+    const outline = badges(harness)[0]!.previousElementSibling as HTMLElement;
+    harness.window.eval(BROWSER_PREVIEW_PINS_CLEAR_SCRIPT);
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    top = 200;
+    resized();
+    await wait(50);
+    expect(outline.style.top).toBe("100px");
+    expect(badges(harness)).toHaveLength(0);
   });
 
   test("a replaced element (hot reload) is re-resolved and the pin follows the new node", async () => {

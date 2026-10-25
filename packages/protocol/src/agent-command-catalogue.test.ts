@@ -164,6 +164,17 @@ describe("normalizeCommandCataloguePayload", () => {
     expect(result).toMatchObject({ status: "unsupported", revision: 4, freshness: "push" });
   });
 
+  test("reads attachPending only on an enhanced stale list", () => {
+    expect(enhanced([], { status: "stale", attachPending: true }).attachPending).toBe(true);
+    // A ready list is the whole inventory; nothing can be pending.
+    expect(enhanced([], { status: "ready", attachPending: true }).attachPending).toBeUndefined();
+    expect(enhanced([], { status: "stale", attachPending: "yes" }).attachPending).toBeUndefined();
+    expect(
+      normalizeCommandCataloguePayload({ status: "stale", attachPending: true, commands: [] })
+        .attachPending,
+    ).toBeUndefined();
+  });
+
   test("public descriptors never carry private binding fields", () => {
     const result = enhanced([
       {

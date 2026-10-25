@@ -1,7 +1,7 @@
 # ACP harness child exit publication
 
 - **ID:** 0179
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-02
 - **Original command:** `mise run test:logged -- --name steer-suite -- mise run test`
 - **Worker configuration:** normal aggregate host allocation; bridge packages use their configured isolated workers. Browser validation also ran on the host.
@@ -35,3 +35,18 @@ machine environments ran suites concurrently. The owning file passed alone with
 - **Scope:** this change updates account-panel documentation, comments, and
   renderer tests; it does not change the ACP harness. The existing exit-code
   publication race hypothesis remains unconfirmed.
+
+## Root cause and fix, 2026-10-25
+
+- **Root cause:** the test's child process wrote its `ready` file and only then
+  installed its SIGTERM handler. `cleanupTrackedResources` sends SIGTERM as soon
+  as the file appears, so when the signal arrived in that gap the default action
+  killed the child: `exitCode` null, `signalCode` `SIGTERM`. It was not an
+  exit-code publication race.
+- **Reproduction:** with the old order and a 50 ms `Bun.sleep` between the write
+  and the handler, the test failed every time with `Expected: 0, Received: null`.
+  With the handler installed first and the same delay after the write, it passed.
+- **Fix:** on branch `todo-0030-test-suite-ci-health-e11a519267e2`, the handler
+  is installed before `ready` is written (`bridges/acp-bridge/src/acp-test-harness.test.ts`).
+- **Verification:** 20 of 20 runs of the owning file passed; the whole ACP
+  package passed at `--parallel=4`.

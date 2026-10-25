@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  WorktreeRemoteFreshness,
   WorktreeSnapshotEvent,
   WorktreeSnapshotState,
 } from "@orkestrator/protocol/worktree-snapshots";
@@ -26,6 +27,15 @@ interface WorktreeSnapshotStoreState {
   applyChange: (event: WorktreeSnapshotEvent) => void;
 }
 
+function sameRemote(
+  a: WorktreeRemoteFreshness | undefined,
+  b: WorktreeRemoteFreshness | undefined,
+): boolean {
+  return (
+    a?.state === b?.state && a?.lastSuccessAt === b?.lastSuccessAt && a?.failure === b?.failure
+  );
+}
+
 function sameState(a: WorktreeSnapshotState, b: WorktreeSnapshotState): boolean {
   return (
     a.targetGeneration === b.targetGeneration &&
@@ -33,7 +43,8 @@ function sameState(a: WorktreeSnapshotState, b: WorktreeSnapshotState): boolean 
     a.fileListRevision === b.fileListRevision &&
     a.treeRevision === b.treeRevision &&
     a.freshness === b.freshness &&
-    a.watched === b.watched
+    a.watched === b.watched &&
+    sameRemote(a.remote, b.remote)
   );
 }
 
@@ -46,6 +57,16 @@ function toState(event: WorktreeSnapshotState): WorktreeSnapshotState {
     treeRevision: event.treeRevision,
     freshness: event.freshness,
     watched: event.watched,
+    // Container fetch freshness; absent for local worktrees and older backends.
+    ...(event.remote
+      ? {
+          remote: {
+            state: event.remote.state,
+            ...(event.remote.lastSuccessAt ? { lastSuccessAt: event.remote.lastSuccessAt } : {}),
+            ...(event.remote.failure ? { failure: event.remote.failure } : {}),
+          },
+        }
+      : {}),
   };
 }
 

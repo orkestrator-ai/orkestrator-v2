@@ -122,7 +122,7 @@ export class AppServerCircuitOpenError extends Error {
 
   constructor(failures: number, lastError?: string) {
     super(
-      `app-server failed to start ${failures} times; not retrying${lastError ? ` (last error: ${lastError})` : ""}`,
+      `app-server failed to start ${failures} times; not retrying until the cooldown ends${lastError ? ` (last error: ${lastError})` : ""}`,
     );
     this.name = "AppServerCircuitOpenError";
     this.failures = failures;

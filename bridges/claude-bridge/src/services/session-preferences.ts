@@ -631,6 +631,15 @@ export async function updateSessionPreferences(
   return write;
 }
 
+/**
+ * Waits for every preference write and deletion in flight, whatever its
+ * outcome. Tests call it between cases so a write one case started cannot land
+ * in the next case's fixture.
+ */
+export async function settleSessionPreferenceWritesForTesting(): Promise<void> {
+  while (pendingWrites.size > 0) await Promise.allSettled(pendingWrites.values());
+}
+
 /** Remove a session's preference file. Absent files are a no-op. */
 export async function deleteSessionPreferences(sdkSessionId: string): Promise<void> {
   const writeKey = normalizedSessionId(sdkSessionId);

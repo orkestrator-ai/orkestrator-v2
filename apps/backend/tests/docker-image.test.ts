@@ -389,6 +389,90 @@ esac
       resetResourceCaches();
     }
   });
+
+  test("with no budget set a new runtime gets the built-in default, minus axes the daemon cannot enforce", async () => {
+    const dir = await tempDir("ork-default-budget-");
+    cleanup.push(dir);
+    const { context } = memoryLifecycleContext([lifecycleEnvironment()], dir);
+    Object.assign(context.storage, {
+      getProject: async () => ({
+        id: "project-1",
+        gitUrl: "https://github.com/example/project.git",
+        localPath: null,
+      }),
+      loadConfig: async () => ({
+        version: "1.0.0",
+        global: { allowedDomains: [] },
+        repositories: {},
+      }),
+    });
+    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const { resetResourceCaches } = await import("../src/core/container-resources");
+    const daemon = (extra: Record<string, unknown>) =>
+      JSON.stringify({
+        OSType: "linux",
+        OperatingSystem: "Ubuntu 24.04",
+        Architecture: "x86_64",
+        ServerVersion: "29.9.2",
+        CgroupVersion: "2",
+        CpuCfsQuota: true,
+        MemoryLimit: true,
+        PidsLimit: true,
+        NCPU: 12,
+        MemTotal: 32 * 1024 ** 3,
+        ...extra,
+      });
+    const script = (info: string, endpoint: string) => `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  context) printf '${endpoint}\\n' ;;
+  info) printf '%s\\n' '${info}' ;;
+esac
+`;
+    const createLine = async (log: { read: () => Promise<string> }) =>
+      (await log.read()).split("\n").find((line) => line.startsWith("create ")) ?? "";
+    try {
+      resetResourceCaches();
+      await withDockerScript(
+        script(
+          daemon({ SecurityOptions: ["name=seccomp,profile=builtin"] }),
+          "unix:///var/run/docker.sock",
+        ),
+        async (log) => {
+          await createDockerContainer(lifecycleEnvironment(), context).catch(() => undefined);
+          const line = await createLine(log);
+          expect(line).toContain("--memory 8192m --memory-swap 8192m --pids-limit 4096");
+          expect(line).toContain("--shm-size 1024m");
+          expect(line).not.toContain("--cpus");
+        },
+      );
+      // Rootless without delegation: the explicit budget above is refused,
+      // but the default is not; it creates with nothing claimed.
+      resetResourceCaches();
+      resetDockerTopologyCache();
+      await withDockerScript(
+        script(
+          daemon({
+            SecurityOptions: ["name=seccomp,profile=builtin", "name=rootless", "name=cgroupns"],
+            CgroupDriver: "none",
+            CpuCfsQuota: false,
+            MemoryLimit: false,
+            PidsLimit: false,
+          }),
+          "unix:///run/user/1000/docker.sock",
+        ),
+        async (log) => {
+          await createDockerContainer(lifecycleEnvironment(), context).catch(() => undefined);
+          const line = await createLine(log);
+          expect(line).toContain("--shm-size 1024m");
+          expect(line).not.toMatch(/--memory|--pids-limit|--cpus/);
+        },
+      );
+    } finally {
+      resetResourceCaches();
+      resetDockerTopologyCache();
+    }
+  });
 });
 
 describe("pinned image identity", () => {

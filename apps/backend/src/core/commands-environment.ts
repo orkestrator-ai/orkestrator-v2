@@ -2,7 +2,6 @@ import {
   assertWorktreePathUnlinked,
   captureWorktreePathIdentity,
 } from "@orkestrator/protocol/node/worktree-paths";
-import { withEnvironmentReplacement } from "./environment-replacement-fence.js";
 import {
   getWorktreeBaseDir,
   resolveEnvironmentWorktreeRoot,
@@ -80,15 +79,12 @@ import { addLocalWorkspaceArtifactsToGitExclude } from "./commands-files.js";
 import { setupTerminalSessionId, isSetupTerminalSessionId } from "./commands-terminal.js";
 import {
   CONTAINER_AGENT_TOOLS_HOST,
-  DOCKER_CONTAINER_STATE_CACHE_MS,
   DOCKER_DESKTOP_GATEWAY_HOST,
-  dockerContainerStateCache,
   dockerExec,
   getDockerStatus,
   getHostPort,
   isContainerRunning,
   parseDockerStatus,
-  setDockerContainerStateCache,
 } from "./commands-container-exec.js";
 import { copyConfiguredProjectFilesToDirectory } from "./commands-project-files.js";
 import { seedFilesDir } from "./nodes/node-files.js";
@@ -100,7 +96,6 @@ import {
 import type { Environment, EnvironmentStatus } from "./models.js";
 import type { PtyProcess } from "./pty.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import { completeTerminalHistory, configureTerminalHistory } from "./terminal-history.js";
 import {
   CONTAINER_WORKSPACE_SETUP_COMMAND,
   SETUP_DONE_OSC_SEQUENCE,
@@ -108,11 +103,6 @@ import {
   SETUP_DONE_PRINTF_CMD,
   SETUP_FAILED_PRINTF_CMD,
 } from "./container-scripts.js";
-import {
-  prMonitorService,
-  invalidatePendingPrMonitorSync,
-  syncPrMonitorTracking,
-} from "./commands-pr-monitor.js";
 import {
   quoteShell,
   validateGitRefName,
@@ -225,7 +215,7 @@ export function spawnTerminalProcess(
       });
     }
     hooks.onExit?.();
-    void completeTerminalHistory(id).catch(() => undefined);
+    void terminals.history.complete(id).catch(() => undefined);
     terminals.cleanupSession(id);
   });
   return terminalProcess;
@@ -336,23 +326,16 @@ export async function listOrkestratorContainerStates(
   }
 }
 
+/** One backend's shared `docker ps` snapshot (`runtime.containerStates`). */
 export function getOrkestratorContainerStates(
-  context?: Pick<CommandContext, "storage" | "strictDockerOwner">,
+  context: Pick<CommandContext, "storage" | "strictDockerOwner" | "runtime">,
 ): Promise<Map<string, EnvironmentStatus> | null> {
-  const now = Date.now();
-  const ownershipKey = context?.strictDockerOwner
+  const ownershipKey = context.strictDockerOwner
     ? dockerOwnerNamespace(context.storage.getDataDir())
     : "legacy";
-  if (
-    dockerContainerStateCache &&
-    dockerContainerStateCache.ownershipKey === ownershipKey &&
-    now - dockerContainerStateCache.fetchedAt < DOCKER_CONTAINER_STATE_CACHE_MS
-  ) {
-    return dockerContainerStateCache.states;
-  }
-  const states = listOrkestratorContainerStates(context);
-  setDockerContainerStateCache({ fetchedAt: now, ownershipKey, states });
-  return states;
+  return context.runtime.containerStates.read(ownershipKey, () =>
+    listOrkestratorContainerStates(context),
+  );
 }
 
 export async function syncStoredEnvironmentStatus(
@@ -554,7 +537,7 @@ export function beginSetupPreparationSession(
   const sessionId = setupTerminalSessionId(environment.id);
   const terminals = context.runtime.terminals;
   terminals.resetOutput(sessionId);
-  configureTerminalHistory({
+  terminals.history.configure({
     sessionId,
     dataDir: context.storage.getDataDir(),
     stableIdentity: `setup\0${environment.id}`,
@@ -662,7 +645,7 @@ export async function spawnSetupTerminal(
     running: true,
     startedAt: existingSession?.startedAt ?? new Date().toISOString(),
   });
-  configureTerminalHistory({
+  terminals.history.configure({
     sessionId,
     dataDir: context.storage.getDataDir(),
     stableIdentity: `setup\0${environment.id}`,
@@ -1543,7 +1526,7 @@ export async function startEnvironmentOnce(
         const result = await startEnvironmentSetup(running, context);
         schedulePendingRename(environment.id, context);
         await context.runtime.diffStats.sync(context);
-        await syncPrMonitorTracking(context);
+        await context.runtime.prMonitor.sync(context);
         return result;
       }
       // The project home works in the user's checkout. A missing checkout is
@@ -1596,7 +1579,7 @@ export async function startEnvironmentOnce(
       const result = await startEnvironmentSetup(updated, context);
       schedulePendingRename(environment.id, context);
       await context.runtime.diffStats.sync(context);
-      await syncPrMonitorTracking(context);
+      await context.runtime.prMonitor.sync(context);
       return result;
     }
 
@@ -1636,7 +1619,7 @@ export async function startEnvironmentOnce(
     const result = await startEnvironmentSetup(updated, context);
     schedulePendingRename(environment.id, context);
     await context.runtime.diffStats.sync(context);
-    await syncPrMonitorTracking(context);
+    await context.runtime.prMonitor.sync(context);
     return result;
   } catch (error) {
     await fs
@@ -1786,8 +1769,8 @@ export async function stopEnvironmentOnce(
     shutdownClaudeStatePolling(containerId);
     context.runtime.diffStats.invalidatePendingSync();
     context.runtime.diffStats.service.pause(environment.id);
-    invalidatePendingPrMonitorSync();
-    prMonitorService.pause(environment.id);
+    context.runtime.prMonitor.invalidatePendingSync();
+    context.runtime.prMonitor.service.pause(environment.id);
     return;
   }
 
@@ -1875,7 +1858,7 @@ export async function recreateEnvironmentOnce(
   invalidateDiscovery: (environmentId: string) => void,
 ): Promise<EnvironmentSetupStartResult | undefined> {
   // No agent prompt reaches this environment while its runtime is replaced.
-  return withEnvironmentReplacement(request.environmentId, () =>
+  return context.runtime.environments.fence.withReplacement(request.environmentId, () =>
     recreateEnvironmentOnceUnfenced(request, context, schedulePendingRename, invalidateDiscovery),
   );
 }

@@ -7,11 +7,7 @@ import type { CommandContext } from "./commands-context.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
 import { withShortLivedBridge } from "./host-model-catalog-refresh.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
-import {
-  acquireOpenCodeHostStart,
-  isOpenCodeDatabaseLockedError,
-  setOpenCodeLockedStartRetryDelaysForTests,
-} from "./opencode-host-start.js";
+import { isOpenCodeDatabaseLockedError, OpenCodeHostStartGate } from "./opencode-host-start.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 
 /**
@@ -27,7 +23,6 @@ describe("local OpenCode server starts on one host", () => {
   const started: string[] = [];
 
   beforeEach(async () => {
-    setOpenCodeLockedStartRetryDelaysForTests([20, 20]);
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ork-opencode-host-start-")));
     await fs.mkdir(path.join(root, "managed-bin"));
     // `locked-runs` is how many launches still lose the database; `events`
@@ -72,7 +67,10 @@ process.on("SIGTERM", () => process.exit(0));
       toolchainBinDir: path.join(root, "managed-bin"),
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
+      runtime: new BackendRuntime({
+        emit: () => undefined,
+        localServers: { openCodeLockedStartRetryDelaysMs: [20, 20] },
+      }),
     } as unknown as CommandContext;
   });
 
@@ -179,7 +177,7 @@ process.on("SIGTERM", () => process.exit(0));
 
   test("a queued environment start rechecks shutdown after acquiring the host turn", async () => {
     const environmentId = await localEnvironment("queued-shutdown");
-    const release = await acquireOpenCodeHostStart();
+    const release = await context.runtime.localServers.openCodeHostStart.acquire();
     const starting = startLocalServerUnlocked(environmentId, context, "opencode");
     const outcome = starting.catch((error: unknown) => error);
     try {
@@ -199,7 +197,7 @@ process.on("SIGTERM", () => process.exit(0));
     expect(((await outcome) as Error).message).toContain("shutting down");
     expect(await events()).toEqual([]);
     expect(context.runtime.localServers.bridgeToken("opencode", environmentId)).toBeUndefined();
-    const releaseNext = await acquireOpenCodeHostStart();
+    const releaseNext = await context.runtime.localServers.openCodeHostStart.acquire();
     releaseNext();
   });
 
@@ -241,11 +239,12 @@ process.on("SIGTERM", () => process.exit(0));
   });
 });
 
-describe("acquireOpenCodeHostStart", () => {
+describe("OpenCodeHostStartGate", () => {
   test("grants turns in order and tolerates a double release", async () => {
+    const gate = new OpenCodeHostStartGate();
     const order: string[] = [];
-    const releaseFirst = await acquireOpenCodeHostStart();
-    const second = acquireOpenCodeHostStart().then((release) => {
+    const releaseFirst = await gate.acquire();
+    const second = gate.acquire().then((release) => {
       order.push("second");
       return release;
     });
@@ -256,7 +255,7 @@ describe("acquireOpenCodeHostStart", () => {
     const releaseSecond = await second;
     expect(order).toEqual(["second"]);
     releaseSecond();
-    const releaseThird = await acquireOpenCodeHostStart();
+    const releaseThird = await gate.acquire();
     releaseThird();
   });
 });

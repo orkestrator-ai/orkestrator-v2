@@ -2074,3 +2074,51 @@ test("production excerpt wiring looks up the exact session and falls back within
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }, 10_000);
+
+test("production waiting-blocker wiring reads the worker's pending interactions", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worker-blocker-"));
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    agentTools: fakeAgentTools(),
+  });
+  const internal = backend as unknown as {
+    context: { storage: StorageService };
+    nativeAgents: {
+      getProjection: (input: unknown) => Promise<{ messages: unknown[]; interactions: unknown[] }>;
+    };
+    coordinators: {
+      options: {
+        waitingBlocker: (environmentId: string, tabId: string) => Promise<string | undefined>;
+      };
+    };
+  };
+  const sessions = spyOn(internal.context.storage, "listNativeAgentSessions").mockResolvedValue([
+    { environmentId: "e", logicalSessionKey: "env-e:tab", agent: "claude" },
+  ] as Awaited<ReturnType<StorageService["listNativeAgentSessions"]>>);
+  const projection = spyOn(internal.nativeAgents, "getProjection").mockResolvedValue({
+    messages: [],
+    interactions: [{ kind: "command-approval", state: "pending" }],
+  });
+  try {
+    const blocker = internal.coordinators.options.waitingBlocker;
+    expect(await blocker("e", "missing")).toBeUndefined();
+    expect(await blocker("e", "tab")).toBe("approval");
+    expect(projection).toHaveBeenLastCalledWith({
+      environmentId: "e",
+      logicalSessionKey: "env-e:tab",
+      agent: "claude",
+      messageLimit: 1,
+    });
+    projection.mockRejectedValueOnce(new Error("bridge offline"));
+    expect(await blocker("e", "tab")).toBeUndefined();
+  } finally {
+    sessions.mockRestore();
+    projection.mockRestore();
+    await backend.shutdown();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

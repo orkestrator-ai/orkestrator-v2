@@ -219,7 +219,12 @@ export function McpSourceList({
   onRemove: McpRowAction;
   onSetEnabled: McpRowAction;
 }) {
-  const sources = [...snapshot.sources].sort((left, right) => right.precedence - left.precedence);
+  // Plugin sources never share a server name with a file, so they follow the files.
+  const sources = [...snapshot.sources].sort(
+    (left, right) =>
+      Number(left.scope === "plugin") - Number(right.scope === "plugin") ||
+      right.precedence - left.precedence,
+  );
   if (!sources.length) {
     return (
       <p className="rounded-lg border border-white/10 px-3 py-4 text-sm text-muted-foreground">

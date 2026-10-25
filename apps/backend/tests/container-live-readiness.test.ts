@@ -374,8 +374,6 @@ function expectRefusedLaunch(
 afterAll(async () => {
   if (!ENABLED) return;
   for (const cleanup of cleanups) await Promise.resolve(cleanup()).catch(() => undefined);
-  const { shutdownPrMonitorTracking } = await import("../src/core/commands-pr-monitor");
-  shutdownPrMonitorTracking();
   const filters = [
     `label=${RUN_LABEL}`,
     ...scenarios.map((s) => `label=orkestrator-owner=${s.owner}`),

@@ -1,15 +1,15 @@
 # Client reconnect and freshness
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `20f6de91` (2026-10-25). All five code items are
+done; what is left is live qualification.
 
 This covers how clients behave across disconnects and staleness: how a
 read-only stream comes back after an outage, and what a view tells the user
-while its data may be behind. A shared jittered reconnect policy exists, but
-two transport owners (the terminal WebSocket client and the Codex supervisor)
-still retry on unjittered or never-closing ladders. Event-led views
-already track whether they are current, stale, degraded or unsupported, and
-the container fetch policy tracks remote freshness, but none of this reaches
-the UI, and the read coordinator never hears that a transport is down.
+while its data may be behind. Every reconnect owner now uses the shared
+jittered policy, the Codex breaker closes again after a quiet cooldown, the
+read coordinator pauses while a transport is known to be down, and stale,
+degraded, unsupported and remote freshness reach the UI. None of it has been
+exercised against a real outage yet.
 
 ## Current state
 
@@ -36,83 +36,212 @@ the UI, and the read coordinator never hears that a transport is down.
   fallbacks at once (`retryWaitingStreams`); the gateway's disposer removes
   both listeners. `web-gateway-reconnect.test.ts` covers both stream kinds on
   a manual timer queue.
-- Terminal WebSocket client (`apps/web/src/lib/native/terminal-websocket-client.ts`):
-  `fallbackAndReconnect` and `scheduleSubscribe` use
-  `min(10 s, 500 ms * 2^min(n, 5))` with no jitter. Its repeated
-  `onFallbackRequired` calls no longer hurry the gateway's HTTP fallback,
-  which waits for its own pending retry.
-- Codex `ProcessSupervisor.startWithRetry`
+- Terminal WebSocket client
+  (`apps/web/src/lib/native/terminal-websocket-client.ts`): the socket has one
+  `ReconnectBackoff` (`socketBackoff`: first retry 500 ms, cap 10 s, equal
+  jitter, healthy after 30 s of `ready`). A deliberate foreground rebuild
+  ends its health interval without counting a failure; going idle resets it.
+  Denied subscriptions use `reconnectDelayMs` per channel (500 ms to 10 s),
+  reset when the server accepts the subscription. The gateway hands it the
+  same jitter source and clock as its event streams (`eventReconnectRandom`,
+  `eventReconnectNow`). Its repeated `onFallbackRequired` calls do not hurry
+  the gateway's HTTP fallback.
+- Codex `AppServerSupervisor.startWithRetry`
   (`bridges/codex-bridge/src/app-server/process-supervisor.ts`) retries with
   jitter over `DEFAULT_BACKOFF_MS` (250 ms to 10 s). After
-  `DEFAULT_CIRCUIT_THRESHOLD` (5) failures within 60 s it sets `circuitOpen`,
-  which is never cleared, and its backoff `sleep` cannot be cancelled: shutdown
-  waits out the current delay.
+  `DEFAULT_CIRCUIT_THRESHOLD` (5) failures within 60 s the breaker opens for
+  `DEFAULT_CIRCUIT_COOLDOWN_MS` (5 min). The next demand after that gets one
+  half-open probe start with no retries: success closes the breaker, failure
+  re-opens it at once with the cooldown doubled, up to
+  `DEFAULT_CIRCUIT_MAX_COOLDOWN_MS` (30 min). The backoff sleep wakes on
+  `stop()` (`sleepUnlessAborted` on `stopController`), so shutdown no longer
+  waits it out.
 - Claude, Pi and Cursor have no transport reconnect loops. ACP's
   `requestPromptWithRetriableProviderRetries` re-sends a continuation prompt,
   so it is not a read retry and is out of scope.
 
 ### Freshness
 
-- `createBoundedHydration` (`apps/web/src/lib/bounded-hydration.ts`) reports a
-  `HydrationStatus` (`idle`, `hydrating`, `current`, `stale`, `degraded`,
-  `unsupported`). It is mirrored as `syncStatus` into `prMonitorStore`,
-  `environmentDiffStore` and `worktreeSnapshotStore`, and no component reads it.
-- `WorktreeSnapshotState.remote` (`WorktreeRemoteFreshness` in
-  `packages/protocol/src/worktree-snapshots.ts`: `not-required`, `current`,
-  `stale`, `unknown`, plus `lastSuccessAt` and `failure`) is published for
-  containers and not rendered.
-- PR `lastSuccessfulCheckAt` is used only for store equality in
-  `prMonitorStore.ts`.
-- `ReadCoordinator.setDisconnected()` (`apps/web/src/lib/read-coordinator.ts`)
-  has no caller, so "pause while the transport is known disconnected" never
-  triggers. The coordinator does hear confirmed reconnects
-  (`notifyReadCoordinatorReconnected` from `resource-sync.ts`) and server
-  switches (`setReadCoordinatorConnection` from `App.tsx`). The web gateway
-  exposes no connection-state signal today; it only logs disconnects.
-- The coordinator panel remembers the legacy capability per mount (`legacyRef`
-  in `apps/web/src/components/projects/useCoordinatorPanelData.ts`) and does
-  not re-probe after a server switch within that mount.
+- The gateway exposes `eventStreamConnection` (`idle`, `connecting`,
+  `connected`, `disconnected`; it stays `disconnected` through retries until a
+  stream opens). `apps/web/src/lib/transport-connectivity.ts` combines it with
+  Electron's connection list (the active remote `reconnecting` or
+  `unreachable`, or Local no longer available) and calls
+  `ReadCoordinator.setDisconnected(true/false)`. `App.tsx` starts it and feeds
+  the connection list. Browser `offline` is still not an owner.
+- `ConnectionStatusBanner` shows one app-wide notice once the transport has
+  been down for 4 s and clears on reconnect.
+- `syncStatus` (`stale`, `degraded`, `unsupported`) marks the View PR action
+  (tooltip adds the last successful check time from `lastSuccessfulCheckAt`)
+  and the legacy diff badge. The Files panel shows `stale`/`degraded` of its
+  revision feed as delayed announcements (it still polls every 5 s) and
+  nothing for `unsupported`. Texts are in `apps/web/src/lib/view-freshness.ts`.
+- `worktreeSnapshotStore` now keeps `remote`; the Files panel's Changes tab
+  shows `stale` as "Base may be behind remote" (exact against the clone's
+  refs) and `unknown` as "Base not fetched yet".
+- The coordinator panel keys its legacy capability to the read coordinator's
+  connection generation (`legacyRef` in
+  `apps/web/src/components/projects/useCoordinatorPanelData.ts`), so a server
+  switch within one mount probes the view command again.
+- The behaviour is described in `../../architecture/event-snapshot-recovery.md`
+  ("Freshness in the UI") and `../../architecture/remote-gateway.md`.
 
 ## Outstanding work
 
 ### Code
 
-1. Adopt `reconnectDelayMs` with an injected random source in the terminal
-   WebSocket client for both the socket reconnect and denied-subscription
-   retries. Update the exact-delay test "backs off repeatedly denied
-   subscriptions instead of polling at a fixed interval" in
-   `terminal-websocket-client.test.ts`.
-2. Decide whether the Codex breaker should close after a healthy period or a
-   quiet interval, and make the backoff sleep cancellable so shutdown does not
-   wait for it.
-3. Give the read coordinator a disconnect signal. Expose connected and
-   disconnected state from the web gateway main stream and the desktop
-   transport, and call `setDisconnected(true)` and `setDisconnected(false)`
-   from it.
-4. Show freshness in the UI:
-   - stale, degraded and unsupported state for the PR, diff-badge and Files
-     views, from `syncStatus`;
-   - container remote freshness from `remote`, where `stale` means "exact
-     against the clone's refs, which may be behind the remote", never
-     "unusable";
-   - optionally the last successful PR check time.
-5. Reset the coordinator panel's `legacyRef` when the active connection
-   changes.
+All done on 2026-10-25:
+
+1. ~~Terminal WebSocket jitter.~~ Done. Socket reconnect uses
+   `ReconnectBackoff`, denied subscriptions use `reconnectDelayMs`, both with
+   an injected random source. Evidence in `terminal-websocket-client.test.ts`:
+   "backs off repeatedly denied subscriptions instead of polling at a fixed
+   interval" (updated: the top of the jitter range is the old exact ladder
+   100, 200, 400, 800, 800), "jitters denied-subscription retries so clients
+   denied together spread out" (50 … 400, and the ladder resets once
+   accepted), and "backs off socket reconnects with jitter and resets only
+   after a healthy connection".
+2. ~~Codex breaker and cancellable sleep.~~ Done: quiet-interval cooldown with
+   a single half-open probe (see Assumptions and decisions), and a backoff
+   sleep that `stop()` wakes. Evidence in `process-supervisor.test.ts`: "after
+   a quiet cooldown one probe start closes the breaker", "a failed probe
+   re-opens at once, without retries, for a doubled cooldown", "concurrent
+   demand during a probe joins it instead of spawning twice", and "stop wakes
+   a start that is waiting out its backoff" (a 60 s backoff, stop returns in
+   well under 5 s).
+3. ~~Read coordinator disconnect signal.~~ Done for both transports. Evidence:
+   `transport-connectivity.test.ts` (owners combine, the coordinator's
+   `getDiagnostics().disconnected` follows, a stream already down at start is
+   adopted, `connectionListDisconnected` for Local and remote states) and the
+   two "gateway main stream connection state" cases in
+   `web-gateway-reconnect.test.ts` (same-origin `EventSource` with a browser
+   retry and a fatal close; direct fetch stream across a failed retry).
+4. ~~Show freshness in the UI.~~ Done, including the optional last successful
+   PR check time. Evidence: `view-freshness.test.ts`,
+   `ConnectionStatusBanner.test.tsx` (a blip inside the delay never shows; the
+   banner clears at once on reconnect), `worktreeSnapshotStore.test.ts`, and
+   the freshness cases in `ActionBar.test.tsx`, `EnvironmentItem.test.tsx` and
+   `FilesPanel.test.tsx`.
+5. ~~Reset the coordinator panel's `legacyRef` on a connection change.~~ Done.
+   Evidence: "probes the view command again after a server switch within the
+   same mount" in `useCoordinatorPanelData.test.tsx`, which fails against the
+   old per-mount flag.
 
 ### Qualification
+
+Not run: each needs a live stack this run did not have (see "Not verified"
+below for why).
 
 - An outage workload (backend restart and a dropped tailnet link) with
   several tabs and terminals open, showing that reconnects spread out instead
   of retrying in lock-step, and that terminals come back with the main stream.
   Run it for both terminal paths: a same-origin browser (shared `EventSource`)
-  and a direct client (per-terminal fetch). Today only deterministic ladder
-  tests exist (`reconnect-backoff.test.ts`, `web-gateway-reconnect.test.ts`,
-  `opencode-provider-reconnect.test.ts`).
-- Real-browser checks that freshness indicators appear on disconnect, clear
-  after reconnect, and do not flicker on a quiet `unchanged` safety read.
-- Exact terminal recovery under backpressure, re-run after item 1. The
-  gateway terminal fallback backoff has landed, so the HTTP/SSE path can be
-  re-run now.
+  and a direct client (per-terminal fetch), and once with the terminal
+  WebSocket enabled (`orkestrator-terminal-transport` = `websocket`), whose
+  socket ladder is new. Today only deterministic ladder tests exist
+  (`reconnect-backoff.test.ts`, `web-gateway-reconnect.test.ts`,
+  `terminal-websocket-client.test.ts`, `opencode-provider-reconnect.test.ts`).
+- Real-browser checks that the connection banner appears after 4 s of a real
+  outage and clears after reconnect, that automatic reads pause meanwhile
+  (`getReadCoordinator().getDiagnostics().disconnected`), and that the PR,
+  diff-badge and Files indicators do not flicker on a quiet `unchanged`
+  safety read. Include an Electron remote connection, whose signal is the
+  connection list rather than the gateway stream.
+- Exact terminal recovery under backpressure, re-run after item 1, on both the
+  HTTP/SSE fallback and the WebSocket path.
+
+## Not verified
+
+- The qualification runs above. An agent-test (`dev:test`) browser session
+  lapses whenever the backend restarts and is sent to the login page by
+  design, so a backend restart cannot show the banner in that harness; the
+  outage check needs a durable-token browser or a direct (bearer) client
+  against a backend that is stopped and restarted, and the dropped tailnet
+  link needs a second machine.
+- The Codex breaker's cooldown and probe are proved only with a fake
+  app-server child (`process-supervisor.test.ts`), not with a real `codex`
+  binary that keeps failing to start.
+- The 4 s banner delay and the 5 min / 30 min breaker cooldowns are reasoned
+  defaults, not measured ones. Revisit them with the outage workload.
+
+## Assumptions and decisions
+
+1. **Codex breaker: does it close, and how?**
+   - Options: (a) stay open until the bridge restarts and only make the sleep
+     cancellable; (b) close after the next generation stays healthy for a
+     while; (c) close after a quiet interval via one half-open probe.
+   - Choice: (c), a 5-minute cooldown, then one probe start on the next
+     demand, with the cooldown doubling per failed probe up to 30 minutes.
+     The existing "a successful start clears the failure window" is kept.
+   - Why: (a) turns a transient fault (a full disk, a `codex` upgrade the user
+     then fixes) into a workspace that needs a bridge restart nobody knows to
+     do. (b) does not answer the question: an open breaker never starts a
+     generation, so there is nothing to stay healthy. A probe that runs only on
+     real demand cannot become a background restart loop.
+   - Pros: self-healing; bounded cost (at most one spawn per cooldown, two an
+     hour at the cap); no timers while nobody asks. Cons: a permanently broken
+     install now costs a probe spawn every 30 minutes of demand instead of
+     none; a user may wait up to the cooldown after fixing the cause (a bridge
+     restart still clears it at once).
+2. **Terminal WebSocket ladder: when does it reset?**
+   - Options: (a) keep resetting on `ready`, as before; (b) reset only after
+     the socket stayed ready for 30 s, like every gateway stream.
+   - Choice: (b), via `ReconnectBackoff`. The defaults stay 500 ms to 10 s,
+     faster than the event streams because a terminal is interactive.
+   - Why: the constraint "only a connection that stayed healthy resets the
+     ladder"; a server that accepts and then drops the socket must back off.
+   - Pros: one policy everywhere; no lock-step after a restart. Cons: a
+     socket that flaps every few seconds now waits up to 10 s between
+     attempts, where it used to retry at 500 ms (the HTTP fallback carries
+     the terminal meanwhile).
+3. **Jitter source for the terminal socket.**
+   - Options: a new `terminalWebSocketReconnectRandom` option, or reuse the
+     gateway's `eventReconnectRandom`/`eventReconnectNow`.
+   - Choice: reuse. Pros: one seam for tests and embedders; matches the
+     gateway's fallback streams using the main stream's options. Cons: a test
+     cannot give the socket a different source than the event streams.
+4. **Where the disconnect signal comes from.**
+   - Options: (a) only the browser gateway's main stream; (b) also a new
+     Electron IPC event from `BackendHttpClient.onStreamState`; (c) also the
+     existing Electron connection list (`transport`, `localAvailable`).
+   - Choice: (a) plus (c), combined in `transport-connectivity.ts` (down while
+     any owner says so).
+   - Why: the connection list already publishes the active connection's
+     transport state to the renderer, so no desktop change is needed; Local
+     is a child process whose loss is already `localAvailable: false`.
+   - Pros: no new IPC; one place decides. Cons: Electron Local is not paused
+     for a stream hiccup that does not end the process (none is expected on
+     loopback); `connecting` and `authentication-required` deliberately do not
+     pause, so an auth failure stays visible as read errors.
+5. **Where freshness indicators live** (the open question).
+   - Options: per view only; one connection banner only; one banner plus
+     per-view detail.
+   - Choice: one banner for transport outages, per-view indicators only for
+     failures specific to that view.
+   - Why: during an outage every view is behind for the same reason, and
+     marking each would be noise; a view-specific failure (a failed PR read,
+     an exhausted retry) is invisible to the banner.
+   - Pros: one clear message per cause. Cons: per-view indicators do not light
+     up during an outage by themselves until their own reads fail.
+6. **Banner delay.** 4 s, so a blip that recovers on the first 2 s retry
+   never shows. Pros: no flicker on restarts. Cons: a real outage is reported
+   4 s late.
+7. **Files panel and `unsupported`.** The Files panel polls every 5 s, so its
+   revision feed only speeds updates up. It shows `stale`/`degraded` as
+   delayed announcements and nothing for `unsupported`, which is the
+   designed polling path. Pros: no false alarm on older backends. Cons:
+   departs slightly from the item's wording ("unsupported for the Files
+   view").
+8. **Times shown.** Last successful check and last fetch are absolute local
+   times, not "3m ago": a relative age needs a clock read in render (the
+   React Compiler purity rule) and goes stale itself. Pros: never implies a
+   new measurement. Cons: less glanceable.
+9. **Coordinator legacy capability.** Keyed to the read coordinator's
+   connection generation rather than reset by a separate connection listener.
+   Pros: the same identity the read results are fenced by; no extra
+   subscription. Cons: a reconnect to the same server keeps the remembered
+   capability (correct unless that server was upgraded in place, which the
+   next server switch or remount corrects).
 
 ## Constraints and rationale
 
@@ -158,27 +287,8 @@ the UI, and the read coordinator never hears that a transport is down.
   advances the stream cursor, Claude's SSE sends every 30 s, and Codex checks
   every 5 s and sends at 5 s active and 30 s idle.
 - Any polling reduction that relies on bounded hydration must cite its fault
-  coverage and add rows for its own view. Current coverage:
-  - `apps/web/src/lib/bounded-hydration.test.ts`: event before subscription,
-    event during a snapshot, repeated reconnects during a snapshot, a late
-    older snapshot, duplicates, out-of-order gaps, generation reset, a lost
-    final event, replay expiry, filtered stream cursors, deletion and
-    recreation, buffer overflow, invalid payloads, snapshot timeouts,
-    unsupported capability and transport switch;
-  - `apps/web/src/hooks/usePrMonitorService.test.tsx` and
-    `useEnvironmentDiffStats.test.tsx`: the same at hook level, a revision gap
-    turning into one conditional read, and PR transitions toasting once;
-  - `apps/web/src/lib/resource-sync.test.ts`: the safety-check cadence;
-  - `apps/backend/tests/view-revisions.test.ts` and
-    `apps/backend/src/core/commands-state-sync.test.ts`: backend stamping and
-    compact conditional reads.
-
-## Open questions
-
-- Should the Codex breaker reset at all, or stay a permanent failure until the
-  bridge restarts, with only the sleep made cancellable?
-- Where should the freshness indicators live: per view, or one connection
-  banner plus per-view detail?
+  coverage and add rows for its own view. The coverage list now lives in
+  `../../architecture/event-snapshot-recovery.md` ("Adopting the contract").
 
 ## Related
 
@@ -188,16 +298,12 @@ the UI, and the read coordinator never hears that a transport is down.
   observation invalidations and the read coordinator's native views.
 - [0048-recurring-work-qualification.md](0048-recurring-work-qualification.md): the
   wider real-stack and two-client QA.
-- `../architecture/event-snapshot-recovery.md` (sequence semantics, supported
-  peers, `remote` freshness) and `../architecture/remote-gateway.md`.
-- Living-doc drift to fix:
-  - `event-snapshot-recovery.md` links recurring-processes plan step 11 in its
-    header and uses "step NN" labels throughout (the "Supported peers" table
-    says "Before step 11"). Its "Adopting the contract" step 5 points at "the
-    plan's recovery coverage list" and the coordinator section at "step 09's
-    completion notes"; inline the coverage list above and drop both pointers.
-  - `remote-gateway.md` ("Event stream reconnects") does not say that the
-    25 s keepalive also advances the cursor.
+- `../../architecture/event-snapshot-recovery.md` (sequence semantics,
+  supported peers, `remote` freshness, freshness in the UI) and
+  `../../architecture/remote-gateway.md`. The living-doc drift this file
+  listed is fixed: the step labels and plan pointers are gone from
+  `event-snapshot-recovery.md`, its coverage list is inlined, and
+  `remote-gateway.md` says that the 25 s keepalive also advances the cursor.
 
 ## Replaces
 

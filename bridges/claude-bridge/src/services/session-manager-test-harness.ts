@@ -73,7 +73,11 @@ export { eventEmitter };
 import { claudeSessionPreferencesDir, setClaudeHomeForTesting } from "./claude-home.js";
 export { claudeSessionPreferencesDir, setClaudeHomeForTesting };
 
-import { readSessionPreferences, updateSessionPreferences } from "./session-preferences.js";
+import {
+  readSessionPreferences,
+  settleSessionPreferenceWritesForTesting,
+  updateSessionPreferences,
+} from "./session-preferences.js";
 export { readSessionPreferences, updateSessionPreferences };
 
 /**
@@ -286,7 +290,7 @@ export function track(id: string): string {
 
 const defaultMcpRuntimeConfig = mockGetMcpRuntimeConfig.getMockImplementation()!;
 
-afterEach(() => {
+afterEach(async () => {
   setClaudeHomeForTesting(sessionManagerTestHome);
   // Clean up any sessions/abortable work the test created.
   for (const id of createdSessionIds.splice(0)) {
@@ -322,6 +326,10 @@ afterEach(() => {
   installSdkModuleMock();
   for (const key of Object.keys(queryControlOverrides)) delete queryControlOverrides[key];
   setClaudeRuntimeIdleTimingForTesting();
+  // A preference write the test (or the deletions above) started can finish
+  // after the test; the next test's fixture would then find a file it had just
+  // removed (flake 0877).
+  await settleSessionPreferenceWritesForTesting();
 });
 
 afterAll(async () => {

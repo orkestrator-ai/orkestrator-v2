@@ -709,6 +709,14 @@ for (const engine of ENGINES) {
       browser = await engine.type.launch({
         headless: true,
         ...(engine.name === "chromium" ? { executablePath: engine.executablePath } : {}),
+        // Firefox's own UI fetches a page's /favicon.ico, sometimes after the
+        // page's context has closed, so the request lands in a later
+        // observation (flake 0697). It is the browser's request, not the
+        // document's, so the policy cannot govern it; switch it off instead of
+        // ignoring sink hits.
+        ...(engine.name === "firefox"
+          ? { firefoxUserPrefs: { "browser.chrome.site_icons": false } }
+          : {}),
       });
       results.version = browser.version();
       report[engine.name] = results;

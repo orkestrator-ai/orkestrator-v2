@@ -99,8 +99,18 @@ describe("pausing an interaction's deadline through the HTTP bridges", () => {
   });
 
   test("Claude: a pause that is already in place, or a resume of a running one, sends nothing", async () => {
+    // One clock read: a pause stamped a millisecond before the request it
+    // pauses is malformed, so separate `Date.now()` calls failed whenever a
+    // millisecond boundary fell between them (flake 0878).
+    const requestedAt = Date.now();
     const bridge = holdingBridge({
-      questions: [claudeQuestion({ hold: { available: true, heldAt: Date.now() } })],
+      questions: [
+        claudeQuestion({
+          requestedAt,
+          expiresAt: requestedAt + 300_000,
+          hold: { available: true, heldAt: requestedAt },
+        }),
+      ],
       interactions: [],
     });
     const { provider } = httpProvider(bridge.handler);

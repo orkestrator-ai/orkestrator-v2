@@ -98,7 +98,6 @@ export interface ClaudeLaunchProfile {
   context1m: boolean;
   promptSuggestions: boolean;
   chrome: boolean;
-  maxBudgetUsd: number | null;
   thinking: string;
   bypassCapable: boolean;
   plugins?: string;
@@ -131,10 +130,6 @@ export function claudeLaunchProfile(
     context1m: effectiveClaudeContext1m(options),
     promptSuggestions: options?.promptSuggestions === true,
     chrome: effectiveClaudeChrome(policy, options),
-    maxBudgetUsd:
-      typeof options?.maxBudgetUsd === "number" && options.maxBudgetUsd > 0
-        ? options.maxBudgetUsd
-        : null,
     thinking:
       typeof options?.parameterValues?.thinking === "string"
         ? options.parameterValues.thinking
@@ -372,7 +367,6 @@ export function claudeLaunchConflict(
   request: ClaudeLaunchProfile,
 ): string | undefined {
   if (runtime.chrome !== request.chrome) return "Chrome setting";
-  if (runtime.maxBudgetUsd !== request.maxBudgetUsd) return "cost budget";
   if (runtime.context1m !== request.context1m) return "1M context setting";
   if (runtime.promptSuggestions !== request.promptSuggestions) return "prompt suggestions";
   if (request.thinking === "adaptive" && runtime.thinking !== "adaptive")

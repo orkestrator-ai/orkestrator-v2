@@ -261,7 +261,7 @@ function normalizeMcp(status: McpServerStatus): NativeAgentMcpServer {
     id: status.name,
     name: status.serverInfo?.name || status.name,
     status: mappedStatus,
-    scope: mcpScope(status.scope, status.name),
+    scope: mcpScope(status.scope, status.name, status.source),
     ...(transport ? { transport } : {}),
     toolCount: tools.length,
     ...(tools.length ? { tools } : {}),

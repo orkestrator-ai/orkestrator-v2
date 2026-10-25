@@ -27,3 +27,21 @@ headroom on a loaded host. The bound exists to prove that a hanging delete
 does not block other intents, so a fix should assert ordering (the other
 intent completed before the hanging one settled) rather than raise the
 number. Not changed here.
+
+## Composer model parameters validation — 2026-10-25
+
+- **Change:** branch `todo-0004-composer-model-params-803868a90fcb` (Codex dispatch model, Codex config merge, removed Codex summary/personality and Claude `maxBudgetUsd`); nothing in tab teardown changed.
+- **Original command:** `mise run test`; workspace/root/bridges/protocol reserved 4/1/2/1 worker slots, with other worktrees active on the host.
+- **Failure:** `expect(performance.now() - startedAt).toBeLessThan(250)` received 874.81 ms (test 1321.24 ms); `reconcile_tab_teardowns` itself resolved `{ completed: 1 }`.
+- **Owning-file rerun:** `mise exec -- bun test --cwd apps/backend ./src/core/commands-state-sync.test.ts --parallel=1` passed the complete unchanged file (169 pass, 0 fail).
+- **Evidence:** `orkestrator-test-run.1IoirM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** recurrence of the same wall-clock bound under load. No assertion, deadline or skip changed.
+
+## Reconnect freshness qualification — 2026-10-25
+
+The default two-worker backend aggregate repeated this failure while validating
+renderer-only test changes at `33b96fb48`. The complete owners were rerun with one
+isolated Bun worker; exact commands, failures, durations, counts and evidence are
+recorded in [0826](../aggregate-validation-runs/0826-reconnect-freshness-validation.md).
+The unchanged teardown owner passed; the aggregate measured 336.97 ms against
+its 250 ms bound. No assertion or deadline was changed.

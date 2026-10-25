@@ -31,7 +31,6 @@ import { discoverAgentExtensions } from "./extension-discovery.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import type { Environment } from "./models.js";
 import {
-  syncPrMonitorTracking,
   asString,
   assertOnlyKeys,
   asOptionalString,
@@ -153,7 +152,7 @@ export function registerEnvironmentCommands(
     // Cleanup-after-merge intent also makes exact-URL PR monitoring authoritative
     // after a restart. The monitor never resubmits the merge; it only confirms a
     // terminal state so the persisted deletion follow-up can resume safely.
-    void syncPrMonitorTracking(context).catch(() => undefined);
+    void context.runtime.prMonitor.sync(context).catch(() => undefined);
     return synced.map(toClientEnvironment);
   });
   register("get_environment_snapshots", (args, { storage }) =>
@@ -349,7 +348,7 @@ export function registerEnvironmentCommands(
     // The home is a tracked worktree like any other: its watcher is what
     // announces a dropped or edited file as a change.
     await context.runtime.diffStats.sync(context);
-    await syncPrMonitorTracking(context);
+    await context.runtime.prMonitor.sync(context);
     return toClientEnvironment(environment);
   });
   register("fork_environment", async ({ environmentId, environmentType }, context) => {
@@ -377,13 +376,13 @@ export function registerEnvironmentCommands(
     const environment = await storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
     const updated = await renameEnvironmentToName(environment, newName, context);
-    await syncPrMonitorTracking(context);
+    await context.runtime.prMonitor.sync(context);
     return toClientEnvironment(updated);
   });
   register("rename_environment_from_prompt", async ({ environmentId, prompt }, context) => {
     const envId = asString(environmentId, "environmentId");
     await renameEnvironmentFromPrompt(envId, asString(prompt, "prompt"), context);
-    await syncPrMonitorTracking(context);
+    await context.runtime.prMonitor.sync(context);
   });
   register("prepare_environment_first_prompt", async ({ environmentId, prompt }, context) => {
     await prepareEnvironmentFirstPrompt(
@@ -613,11 +612,9 @@ export function registerEnvironmentCommands(
       limits = parsed.limits;
     }
     // Applies to runtimes created from now on; existing ones keep theirs.
-    const current = await storage.loadConfig();
-    await storage.updateGlobalConfig(
-      { ...current.global, containerResourceLimits: limits },
-      { preserveCredentials: true },
-    );
+    // `null` removes the budget (the built-in default applies); all-null
+    // limits are explicitly unrestricted.
+    await storage.setContainerResourceLimits(limits);
     return { limits: limits ?? null };
   });
   register("get_environment_network_policy", async (args, context) => {
@@ -703,7 +700,7 @@ export function registerEnvironmentCommands(
     });
     // A PR recorded outside the monitor (e.g. right after a merge command) must
     // enter the monitored set without waiting for a client to rehydrate.
-    void syncPrMonitorTracking(context).catch(() => undefined);
+    void context.runtime.prMonitor.sync(context).catch(() => undefined);
     return toClientEnvironment(updated);
   });
   register("clear_environment_pr", async ({ environmentId }, context) => {
@@ -713,7 +710,7 @@ export function registerEnvironmentCommands(
       hasMergeConflicts: null,
       prRecheckAfterAgentCompletionArmedAt: undefined,
     });
-    void syncPrMonitorTracking(context).catch(() => undefined);
+    void context.runtime.prMonitor.sync(context).catch(() => undefined);
   });
   register(
     "get_environment_pr_url",

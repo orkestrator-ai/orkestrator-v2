@@ -45,3 +45,9 @@
   under `output/playwright/arrival-final/`. Repository and isolated application
   suites were also running. Timing or follow-state interaction under load
   remains a hypothesis. No owner assertion, timeout or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** three recurrences (two-worker, nine-worker, and two-worker on 2026-10-25), always `scrollTop` 704 instead of zero, and the owner always passes with one worker. The test is now at `ToolGroupFold.spec.ts:442` after #1227. [0825](../aggregate-validation-runs/0825-dependency-upgrades-0032-validation.md) also reported a painted-gap failure at `ToolGroupFold.spec.ts:79` in the same file.
+- **Next step:** record the group's follow state and inner `scrollTop` on each frame during the append, so the next failure shows whether follow was lost or never set.

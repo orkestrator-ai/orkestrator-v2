@@ -5,6 +5,8 @@ import {
   OpenCodeAgentToolsReconciler,
   type OpenCodeAgentToolsTuning,
 } from "./opencode-agent-tools.js";
+import { OpenCodeHostStartGate } from "./opencode-host-start.js";
+import { PiCatalogProbes, type PiCatalogProbesOptions } from "./pi-catalog-probes.js";
 
 export type LocalServerKind = "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi";
 /** The ACP-speaking subset of `LocalServerKind`, launched through the ACP bridge. */
@@ -73,6 +75,9 @@ export type LocalServerRuntimeOptions = {
   /** Stops a bridge's whole process tree; tests substitute a recorder. */
   terminateProcessTree?: typeof terminateProcessTree;
   openCodeAgentTools?: OpenCodeAgentToolsTuning;
+  /** Waits before each retry of a host OpenCode start that lost the database. */
+  openCodeLockedStartRetryDelaysMs?: readonly number[];
+  piCatalog?: PiCatalogProbesOptions;
 };
 
 /**
@@ -87,6 +92,10 @@ export class LocalServerRuntime {
   /** Launches bridge and probe processes. */
   readonly spawn: typeof spawnCommand;
   readonly openCodeAgentTools: OpenCodeAgentToolsReconciler;
+  /** Host OpenCode starts, one at a time (`opencode-host-start.ts`). */
+  readonly openCodeHostStart: OpenCodeHostStartGate;
+  /** Pi's host catalogue probes (`pi-model-catalog-seeding.ts`). */
+  readonly piCatalog: PiCatalogProbes;
 
   private readonly terminateTree: typeof terminateProcessTree;
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
@@ -122,6 +131,8 @@ export class LocalServerRuntime {
     this.spawn = options.spawn ?? spawnCommand;
     this.terminateTree = options.terminateProcessTree ?? terminateProcessTree;
     this.openCodeAgentTools = new OpenCodeAgentToolsReconciler(options.openCodeAgentTools);
+    this.openCodeHostStart = new OpenCodeHostStartGate(options.openCodeLockedStartRetryDelaysMs);
+    this.piCatalog = new PiCatalogProbes(options.piCatalog);
   }
 
   // Owned processes

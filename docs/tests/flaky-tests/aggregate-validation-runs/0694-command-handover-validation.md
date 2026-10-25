@@ -1,7 +1,7 @@
 # Command-handover validation
 
 - **ID:** 0694
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-23
 - **Scope:** command-handover backend, desktop, shared web switching, and regression coverage.
 
@@ -167,3 +167,7 @@ mise run test:logged -- --name handover-artifact-engine-owner -- bun test --cwd 
 mise run test:logged -- --name handover-electron-preview-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts e2e/agent-testing/service-preview-electron.spec.ts --workers=1
 mise run test:logged -- --name handover-electron-annotations-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts e2e/agent-testing/web-annotations-electron.spec.ts --workers=1
 ```
+
+## Triage 2026-10-25
+
+Resolved: run record only. Every confirmed flake here has an owner case: [0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md), [0259](../environments-and-containers/0259-disk-report-aggregate-timeout.md), [0621](../environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md), 0162 (resolved), [0182](../agent-bridges/0182-cursor-auth-readiness-aggregate-timeout.md), [0192](../environments-and-containers/0192-firewall-bootstrap-shell-timeout.md), [0620](../previews-annotations-and-gateway/0620-service-preview-keyboard-picker-register-item.md) and [0471](../web-ui/0471-close-retention-fixture-startup.md) (CloseRetention). Native branch selection reproduces alone and on main, so it is a deterministic failure, not a flake; it is tracked in [0493](0493-component-browser-aggregate-timeout-cluster.md). The seven backend Chromium-hook timeouts in the second run were never rerun, so they do not establish flakes.

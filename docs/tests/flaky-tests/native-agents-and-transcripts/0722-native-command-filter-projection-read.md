@@ -64,3 +64,9 @@ The combined merge repeated a failure in this owner during `mise run test:logged
 ## Local preview discovery review — 2026-10-25
 
 `mise run test:logged -- --name preview-repository -- mise run test` repeated the extra projection read (expected one, received two) at `AgentNativeTab.commands.test.tsx:607`, in 2981.50 ms. The web package used two isolated Bun workers; repository and browser validation were active on the shared host. The complete unchanged owner ran separately with `mise run test:logged -- --name preview-native-commands-owner -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures`: 18 passed, one failed (14.1 s). The same assertion received two reads in 2019.10 ms. This observation remains non-green in the owner and is not newly classified as a flake. No native-command implementation, assertion, timeout or skip changed. Evidence: `orkestrator-test-run.0vNQwf/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.s52vMF/preview-native-commands-owner.log.gz` under the host temporary directory.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** at least seven recurrences from 2026-10-24 to 2026-10-25, including [0815](../aggregate-validation-runs/0815-container-rebuild-state-validation.md), and one failure alone (three reads, 21.11 s), so it is not only load. The test takes its baseline count right after the listbox appears (`AgentNativeTab.commands.test.tsx:596`); one more projection read lands while it types 20 keystrokes.
+- **Next step:** find what issues the extra `getNativeAgentProjection` call (a mount-time or periodic re-read), and wait for it to settle before taking the baseline, or stub it.

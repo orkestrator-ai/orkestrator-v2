@@ -50,3 +50,25 @@ After this run's Electron annotation check had closed, the complete unchanged ow
 - The complete unchanged owner ran separately with `mise run test:logged -- --name preview-design-owner -- mise run test:agent:design:isolated` on fresh profile `qa-browser-8176c36a-ee6`, one browser worker: one passed, one failed (194.8 s including lifecycle). The same poll instead missed `d1/d2/d3/d4/d5/d6/d7/d8/deep.orkdes`, with the previous overlong-text tab still persisted. Other repository/browser validation continued on the host during both runs.
 - Both isolated runners stopped and reset their profiles. No design implementation, assertion, timeout, or skip changed. This recurrence remains non-green in the owning suite and is not newly classified as a flake. The preview ownership, discovery, terminal-root, chooser, confirmation, and display regressions passed independently.
 - Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.BZJbLy/preview-agent-browser.log.gz`, `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.DWuY2z/preview-design-owner.log.gz`, and `output/agent-testing/<profile>/browser/artifacts/` for each profile above.
+
+## Design opening-prompt review — 2026-10-25
+
+- `mise run test:logged -- --name design-isolated -- mise run test:agent:design:isolated`
+  used disposable credential-free Codex profile `qa-browser-8626a8bc-414`.
+  The unchanged file-opening case again lacked
+  `"filePath":".private/hidden.orkdes"` in the persisted pane layout at
+  `design-canvas.spec.ts:250` after five seconds. The run also exposed an
+  insufficient readiness wait in the newly added opening-prompt race test.
+- After giving the new test's provider startup a bounded 30-second wait,
+  `mise run test:logged -- --name design-isolated-rerun -- mise run test:agent:design:isolated`
+  used fresh profile `qa-browser-07f55979-0cc`. The same unchanged hidden-file
+  case failed again; the other two cases passed, including delayed image-brief
+  enqueue acknowledgement across tab unmount and a subsequent failed renderer
+  fallback (195.1 seconds including startup and cleanup).
+- This observation remains non-green in the owning suite and is not newly
+  classified as intermittent. The failing case's assertions, timeouts and
+  implementation were not changed.
+- Evidence: `output/agent-testing/qa-browser-8626a8bc-414/browser/` and
+  `output/agent-testing/qa-browser-07f55979-0cc/browser/`, with compressed logs
+  in host temporary directories `orkestrator-test-run.c9Ge59` and
+  `orkestrator-test-run.hBv8qd`. Both disposable profiles were stopped and reset.

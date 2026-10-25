@@ -1654,7 +1654,6 @@ export class AppServerEngine implements CodexEngine {
       // than the global default, and `bindThread` adopts the model app-server
       // reports, so the transcript labels what the next turn runs.
       ...(config.model ? { model: config.model } : {}),
-      ...(config.personality ? { personality: config.personality } : {}),
       // `null` clears a previously set tier; `undefined` would leave it in place.
       serviceTier: config.serviceTier ?? null,
       ...(Object.keys(threadConfig).length > 0 ? { config: threadConfig } : {}),
@@ -2578,8 +2577,6 @@ export class AppServerEngine implements CodexEngine {
         ? { serviceTier: options.config.serviceTier }
         : {}),
       ...(options.config.reasoningEffort ? { effort: options.config.reasoningEffort } : {}),
-      ...(options.config.reasoningSummary ? { summary: options.config.reasoningSummary } : {}),
-      ...(options.config.personality ? { personality: options.config.personality } : {}),
       // turn/start takes a resolved policy object, not the mode string.
       ...(options.config.permissionProfile
         ? {}

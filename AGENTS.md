@@ -1182,12 +1182,17 @@ Files:
 Storage rules:
 - Never hold a SQLite transaction across an `await`; `bun:sqlite` blocks the
   event loop while it waits for a lock. Use `updateStore` (or `updateStoreRow`
-  for one row) for a synchronous read-modify-write, `serializeMutation` (a
-  lease) for one that awaits, and `atomically` to commit several stores
-  together. Under a per-key lease, write only that key's row.
+  for one row) for a synchronous read-modify-write, `serialize` (a lease,
+  usually through the owning repository's `enqueue*Mutation`) for one that
+  awaits, and `atomically` to commit several stores together. Under a per-key
+  lease, write only that key's row.
 - Give each store one kind of writer: `saveJson`/`saveSensitiveJson`/
   `deleteStore` awaited inside the store's lease, or `updateStore`/
   `updateStoreRow`, never both. `storage-writer-guards.test.ts` enforces it.
+- `StorageService` is a facade over per-store repositories sharing one
+  `StorageContext`; add store code to the owning repository and a forwarder
+  to the facade, never a base class (`docs/architecture/storage.md`, "Code
+  layout").
 - An older record shape is upgraded once by a migration
   (`storage-record-upgrades.ts`), not by a reader on every load.
 - Tests seed and inspect stores through `storage-test-support.ts`, never by

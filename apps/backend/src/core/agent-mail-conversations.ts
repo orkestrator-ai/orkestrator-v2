@@ -19,7 +19,7 @@ import {
  *
  * The store files each message in its recipient's mailbox only, so the history
  * between A and B is A's mail from B plus B's mail from A. Everything here is a
- * pure read over that store; `StorageAgentMail` supplies the mailboxes.
+ * pure read over that store; `AgentMailRepository` supplies the mailboxes.
  */
 
 export interface ConversationMailbox {

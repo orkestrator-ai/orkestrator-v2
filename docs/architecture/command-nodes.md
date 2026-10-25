@@ -160,7 +160,7 @@ to everything it runs, on every machine it controls.
   preferences) to each leaf when the link connects and whenever its config
   changes (`sync_controller_settings`, never routable through a workspace
   grant or `invoke_on_node`). The leaf lays them over its own config
-  (`StorageConfig.loadConfig`), so a launch on the leaf that falls back to
+  (`ConfigRepository.loadConfig`), so a launch on the leaf that falls back to
   defaults — a coordinator's `launch_environment` with a `nodeId` and no
   model, a build or review step — uses the command node's.
 - **The leaf's own settings are kept underneath** (`loadOwnConfig`) and come

@@ -18,18 +18,15 @@ import { BUILD_PIPELINE_TRANSCRIPT_MANIFEST_STORE } from "./build-pipeline-trans
 import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
 import { writeLegacyTranscriptSession } from "./build-pipeline-transcript-test-fixtures.js";
 import { transcriptFingerprint } from "./build-pipeline-service-helpers.js";
-import type { StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
 import {
   readStoredValue,
   seedStore,
   seedUnreadableStore,
   storageFilesContain,
+  storageDatabase,
+  storageInternals,
 } from "./storage-test-support.js";
-
-function databaseOf(storage: StorageService): StorageDatabase {
-  return (storage as unknown as { database: StorageDatabase }).database;
-}
 
 /** Manifest rows a pipeline owns, read through a separate connection. */
 function manifestRows(dataDir: string, pipelineId: string): unknown[] {
@@ -397,7 +394,7 @@ describe("build pipeline transcript commit", () => {
       expect(await chunkCount(dataDir)).toBeGreaterThan(chunksAfterFirst);
 
       // The control write's transaction fails after the manifest row was written.
-      const database = databaseOf(storage);
+      const database = storageDatabase(storage);
       const failing = spyOn(database, "updateStoreRow").mockImplementation(() => {
         throw new Error("disk I/O error");
       });
@@ -500,7 +497,7 @@ describe("build pipeline transcript commit", () => {
       await checkpoints.prepare(pipeline);
       (pipeline as { phase: string }).phase = "reviewing";
       const store = (
-        storage as unknown as {
+        storageInternals(storage).repos.buildPipelines as unknown as {
           buildPipelineTranscriptStore(): {
             commitStagedInTransaction(staged: unknown): unknown;
           };

@@ -125,3 +125,38 @@ navigation. Validation started from `4ffb776ba` with these changes uncommitted.
   `orkestrator-test-run.hsPReK/`, native-picker owner evidence in
   `orkestrator-test-run.ZFdFk7/`. The public-site browser command did not run
   because the preceding component command failed.
+
+## Storage repository main merge — 2026-10-25
+
+- **Merge parents:** `369d22489` and `f47398fdc`. The conflict resolution
+  forwards coordinator background-work timeout metadata through the storage
+  facade and repository, and adapts the startup-prompt environment lookup to
+  the project repository. It does not edit preview discovery or its test owner.
+- **Command:** `mise run test:logged -- --name merge-main-tests -- mise run test`,
+  with workspace/root/bridges/protocol reservations of 4/1/2/1 and two backend
+  workers. Root, bridges, protocol regeneration and every workspace package
+  except backend passed. Backend reported 11,611 passed, 91 skipped and one
+  failed across 11,703 tests in 695 files (422.41 s); the workspace group
+  finished in 495.1 s.
+- **Failure:** `local preview service discovery on this host > two environments,
+  a restart on the reused port, and an auto-incremented port` in
+  `apps/backend/src/core/preview-local-discovery.test.ts:617` (696.68 ms).
+  After registering the second server's incremented port, the endpoint was
+  available but its ownership was `user-registered` and listener `unattributed`,
+  where the test expected `managed-process`.
+- **Complete unchanged owner reruns:**
+  `mise run test:logged -- --name merge-main-preview-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/preview-local-discovery.test.ts --parallel=1 --only-failures`
+  failed during the aggregate (18 passed, one failed, 3.91 s): the synthetic
+  server hit `EADDRINUSE` on `127.0.0.1:62651` and its terminal exited before
+  reporting a bound port. The same command with name
+  `merge-main-preview-post-suite`, after the aggregate finished, failed again
+  (18 passed, one failed, 3.46 s), with `EADDRINUSE` on `127.0.0.1:49540`.
+- **Evidence:** aggregate group logs in `orkestrator-test-run.BJhYag/`, outer
+  log in `orkestrator-test-run.jUkCFn/`, and owner reruns in
+  `orkestrator-test-run.wNjCO4/` and `orkestrator-test-run.nTapJF/`, under the
+  host temporary directory.
+- **Assessment:** this observation remains non-green in isolation and does
+  not establish a passing flake rerun. The earlier port-collision history is
+  relevant, but neither it nor these reruns proves the cause of the aggregate
+  ownership mismatch. No assertion, timeout, skip or preview implementation
+  was changed. Static checks and the focused coordinator/storage guards passed.

@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Project } from "./models.js";
 import { StorageService } from "./storage.js";
-import type { StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
+import { storageDatabase, storageInternals } from "./storage-test-support.js";
 
 function project(id: string): Project {
   return {
@@ -369,7 +369,7 @@ describe("StorageService project storage lock", () => {
 
   test("propagates a database failure while claiming the project lock", async () => {
     await withSharedStorage(async (first) => {
-      const database = (first as unknown as { database: StorageDatabase }).database;
+      const database = storageDatabase(first);
       const transaction = spyOn(database, "transaction").mockImplementationOnce(() => {
         throw new Error("disk I/O error");
       });
@@ -421,10 +421,7 @@ describe("StorageService.addProject validation", () => {
   test("does not announce a project whose mutation rejected", async () => {
     await withSharedStorage(async (first) => {
       const announced: string[] = [];
-      (first as unknown as { announce: (kind: string, id: string) => void }).announce = (
-        _kind,
-        id,
-      ) => {
+      storageInternals(first).context.changes.announce = (_kind, id) => {
         announced.push(id);
       };
 

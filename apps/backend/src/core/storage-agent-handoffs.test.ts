@@ -3,12 +3,13 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
-import { STORAGE_DATABASE_FILE, type StorageDatabase } from "./storage-database.js";
+import { STORAGE_DATABASE_FILE } from "./storage-database.js";
 import {
   hasStore,
   readStoredValue,
   seedStore,
   storageFilesContain,
+  storageDatabase,
 } from "./storage-test-support.js";
 
 async function withStorage<T>(run: (storage: StorageService) => Promise<T>): Promise<T> {
@@ -40,10 +41,6 @@ async function withStorage<T>(run: (storage: StorageService) => Promise<T>): Pro
 }
 
 const HANDOFFS = "agent-handoffs.json";
-
-function storageDatabase(storage: StorageService): StorageDatabase {
-  return (storage as unknown as { database: StorageDatabase }).database;
-}
 
 function readStoredHandoffs(dataDir: string): Record<string, unknown> {
   return readStoredValue<Record<string, unknown>>(dataDir, HANDOFFS) ?? {};

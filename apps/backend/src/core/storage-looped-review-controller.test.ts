@@ -3,16 +3,16 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
-import type { StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
-import { readStoredValue, seedStore, storageFilesContain } from "./storage-test-support.js";
-
-function storageDatabase(storage: StorageService): StorageDatabase {
-  return (storage as unknown as { database: StorageDatabase }).database;
-}
+import {
+  readStoredValue,
+  seedStore,
+  storageFilesContain,
+  storageDatabase,
+} from "./storage-test-support.js";
 
 function storeDir(storage: StorageService): string {
-  return (storage as unknown as { dataDir: string }).dataDir;
+  return storage.getDataDir();
 }
 
 async function withWorkflowStorage(run: (storage: StorageService) => Promise<void>): Promise<void> {

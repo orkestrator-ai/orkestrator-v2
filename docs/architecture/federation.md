@@ -132,7 +132,7 @@ handshake before a route is used:
 ## Machine profile
 
 - Stored in the backend's `backend-profile` document store
-  (`StoragePreviewServices.getBackendProfile`) as `{ version: 1, revision,
+  (`PreviewServicesRepository.getBackendProfile`) as `{ version: 1, revision,
   displayName, colorToken, updatedAt }`.
 - It is created once, on first read, under a storage lease. The name is the
   host name without `.local`, or `Orkestrator` if that is empty. The colour is

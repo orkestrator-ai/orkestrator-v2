@@ -30,11 +30,10 @@ import {
  * {@link atomically} scope, the per-target mutation queues, the store
  * primitives and the resource change journal ({@link changes}).
  *
- * `StorageService` owns exactly one. Until its layers become repositories
- * (`docs/todo/backend-structure/0009-storage-service-repositories.md`), only
- * `StorageBase` holds it and the layers reach it through `StorageBase`'s
- * forwarders, which `storage-writer-guards.test.ts` follows. A class that
- * takes a `StorageContext` has to be added to that scan.
+ * `StorageService` owns exactly one and hands it to every repository it
+ * builds (`StorageRepositories`), so they share one {@link atomically} scope
+ * and one set of mutation queues. `storage-writer-guards.test.ts` follows
+ * every class that holds it from the facade, and fails one it cannot reach.
  */
 export class StorageContext {
   readonly dataDir: string;

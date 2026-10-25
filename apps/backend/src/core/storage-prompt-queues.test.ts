@@ -4,18 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { StorageService } from "./storage.js";
-import type { StorageDatabase } from "./storage-database.js";
 import {
   exportStoresAsLegacyJson,
   readStoredValue,
   seedLegacyPromptQueueClaim,
   seedStore,
   storageFilesContain,
+  storageDatabase,
 } from "./storage-test-support.js";
-
-function storageDatabase(storage: StorageService): StorageDatabase {
-  return (storage as unknown as { database: StorageDatabase }).database;
-}
 
 async function withStorage<T>(run: (storage: StorageService) => Promise<T>): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-prompt-queues-"));

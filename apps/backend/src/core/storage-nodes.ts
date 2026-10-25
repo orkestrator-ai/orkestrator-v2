@@ -10,7 +10,7 @@ import {
 } from "@orkestrator/protocol/portal-layout";
 
 import { readStoredNodeAttachments, readStoredNodeRegistry } from "./nodes/node-store-format.js";
-import { StoragePreviewServices } from "./storage-preview-services.js";
+import type { StorageContext } from "./storage-context.js";
 
 /** Result of a registry or attachment mutation: `next: null` writes nothing. */
 export interface NodeStoreMutation<TStore, TResult> {
@@ -50,54 +50,57 @@ export interface NodeMailRouter {
   ): Promise<{ seq: number }>;
 }
 
-export class StorageNodes extends StoragePreviewServices {
+export class NodesRepository {
+  constructor(private readonly context: StorageContext) {}
+
   private reportedDroppedNodes = false;
   /** Leaf → command node mail routing; consulted by the agent mail tools. */
   nodeMailRouter: NodeMailRouter | null = null;
 
-  protected nodeRegistryFile(): string {
-    return this.file("node-registry.json");
+  private nodeRegistryFile(): string {
+    return this.context.file("node-registry.json");
   }
 
-  protected nodeAttachmentsFile(): string {
-    return this.file("node-attachments.json");
+  private nodeAttachmentsFile(): string {
+    return this.context.file("node-attachments.json");
   }
 
-  protected nodeSummariesFile(): string {
-    return this.file("node-summaries.json");
+  private nodeSummariesFile(): string {
+    return this.context.file("node-summaries.json");
   }
 
-  protected nodeOutcomesFile(): string {
-    return this.file("node-outcomes.json");
+  private nodeOutcomesFile(): string {
+    return this.context.file("node-outcomes.json");
   }
 
-  protected portalLayoutFile(): string {
-    return this.file("portal-layout.json");
+  private portalLayoutFile(): string {
+    return this.context.file("portal-layout.json");
   }
 
-  protected controllerSettingsFile(): string {
-    return this.file("controller-settings.json");
+  private controllerSettingsFile(): string {
+    return this.context.file("controller-settings.json");
   }
 
   /** Leaf: the settings each attached command node handed down (no credentials). */
   async getControllerSettings(): Promise<ControllerSettingsStore> {
     return parseControllerSettingsStore(
-      await this.loadJson<unknown>(this.controllerSettingsFile(), () => null),
+      await this.context.loadJson<unknown>(this.controllerSettingsFile(), () => null),
     );
   }
 
   async mutateControllerSettings<T>(
     mutate: (current: ControllerSettingsStore) => NodeStoreMutation<ControllerSettingsStore, T>,
   ): Promise<T> {
-    return this.serializeMutation(
+    return this.context.serialize(
       this.controllerSettingsFile(),
       "controller settings",
       async () => {
         const current = parseControllerSettingsStore(
-          await this.loadJson<unknown>(this.controllerSettingsFile(), () => null),
+          await this.context.loadJson<unknown>(this.controllerSettingsFile(), () => null),
         );
         const { next, result } = mutate(structuredClone(current));
-        if (next) await this.saveJson(this.controllerSettingsFile(), { ...next, version: 1 });
+        if (next)
+          await this.context.saveJson(this.controllerSettingsFile(), { ...next, version: 1 });
         return result;
       },
     );
@@ -105,75 +108,77 @@ export class StorageNodes extends StoragePreviewServices {
 
   /** The portal sidebar's cross-machine order (see `@orkestrator/protocol/portal-layout`). */
   async getPortalLayout(): Promise<PortalLayout> {
-    return parsePortalLayout(await this.loadJson<unknown>(this.portalLayoutFile(), () => null));
+    return parsePortalLayout(
+      await this.context.loadJson<unknown>(this.portalLayoutFile(), () => null),
+    );
   }
 
   /** Replaces the given fields; the revision advances on every write. */
   async updatePortalLayout(update: PortalLayoutUpdate): Promise<PortalLayout> {
-    return this.serializeMutation(this.portalLayoutFile(), "portal layout", async () => {
+    return this.context.serialize(this.portalLayoutFile(), "portal layout", async () => {
       const current = parsePortalLayout(
-        await this.loadJson<unknown>(this.portalLayoutFile(), () => null),
+        await this.context.loadJson<unknown>(this.portalLayoutFile(), () => null),
       );
       const next: PortalLayout = { ...current, ...update, revision: current.revision + 1 };
-      await this.saveJson(this.portalLayoutFile(), { version: 1, ...next });
+      await this.context.saveJson(this.portalLayoutFile(), { version: 1, ...next });
       return next;
     });
   }
 
   /** Last-known portal summaries of other nodes (names and states only). */
   async loadNodeSummariesCache(): Promise<unknown> {
-    return this.loadJson<unknown>(this.nodeSummariesFile(), () => null);
+    return this.context.loadJson<unknown>(this.nodeSummariesFile(), () => null);
   }
 
   async saveNodeSummariesCache(value: unknown): Promise<void> {
-    await this.serializeMutation(this.nodeSummariesFile(), "node summaries", () =>
-      this.saveJson(this.nodeSummariesFile(), value, { backup: false }),
+    await this.context.serialize(this.nodeSummariesFile(), "node summaries", () =>
+      this.context.saveJson(this.nodeSummariesFile(), value, { backup: false }),
     );
   }
 
-  protected nodeMailFile(): string {
-    return this.file("node-mail.json");
+  private nodeMailFile(): string {
+    return this.context.file("node-mail.json");
   }
 
-  protected nodeActionRequestsFile(): string {
-    return this.file("node-action-requests.json");
+  private nodeActionRequestsFile(): string {
+    return this.context.file("node-action-requests.json");
   }
 
   /** Leaf mail state: environment origins, coordinator threads and the outbox. Sensitive (mail bodies). */
   async loadNodeMail(): Promise<unknown> {
-    return this.loadJson<unknown>(this.nodeMailFile(), () => null);
+    return this.context.loadJson<unknown>(this.nodeMailFile(), () => null);
   }
 
   async mutateNodeMail<T>(mutate: (current: unknown) => { next: unknown; result: T }): Promise<T> {
-    return this.serializeMutation(this.nodeMailFile(), "node mail", async () => {
-      const current = await this.loadJson<unknown>(this.nodeMailFile(), () => null);
+    return this.context.serialize(this.nodeMailFile(), "node mail", async () => {
+      const current = await this.context.loadJson<unknown>(this.nodeMailFile(), () => null);
       const { next, result } = mutate(current);
       if (next !== null && next !== undefined)
-        await this.saveSensitiveJson(this.nodeMailFile(), next);
+        await this.context.saveSensitiveJson(this.nodeMailFile(), next);
       return result;
     });
   }
 
   async loadNodeActionRequests(): Promise<unknown> {
-    const value = await this.loadJson<unknown>(this.nodeActionRequestsFile(), () => null);
+    const value = await this.context.loadJson<unknown>(this.nodeActionRequestsFile(), () => null);
     return (value as { requests?: unknown } | null)?.requests ?? null;
   }
 
   async saveNodeActionRequests(requests: unknown): Promise<void> {
-    await this.serializeMutation(this.nodeActionRequestsFile(), "node action requests", () =>
-      this.saveJson(this.nodeActionRequestsFile(), { version: 1, requests }),
+    await this.context.serialize(this.nodeActionRequestsFile(), "node action requests", () =>
+      this.context.saveJson(this.nodeActionRequestsFile(), { version: 1, requests }),
     );
   }
 
   /** Outcome-unknown records of routed writes, kept until the user dismisses them. */
   async loadNodeOutcomes(): Promise<unknown> {
-    const value = await this.loadJson<unknown>(this.nodeOutcomesFile(), () => null);
+    const value = await this.context.loadJson<unknown>(this.nodeOutcomesFile(), () => null);
     return (value as { records?: unknown } | null)?.records ?? null;
   }
 
   async saveNodeOutcomes(records: unknown): Promise<void> {
-    await this.serializeMutation(this.nodeOutcomesFile(), "node outcomes", () =>
-      this.saveJson(this.nodeOutcomesFile(), { version: 1, records }),
+    await this.context.serialize(this.nodeOutcomesFile(), "node outcomes", () =>
+      this.context.saveJson(this.nodeOutcomesFile(), { version: 1, records }),
     );
   }
 
@@ -188,11 +193,11 @@ export class StorageNodes extends StoragePreviewServices {
   async mutateNodeRegistry<T>(
     mutate: (current: NodeRegistry) => NodeStoreMutation<NodeRegistry, T>,
   ): Promise<T> {
-    return this.serializeMutation(this.nodeRegistryFile(), "node registry", async () => {
+    return this.context.serialize(this.nodeRegistryFile(), "node registry", async () => {
       const current = await this.readNodeRegistry();
       const { next, result } = mutate(structuredClone(current));
       if (next) {
-        await this.saveSensitiveJson(this.nodeRegistryFile(), {
+        await this.context.saveSensitiveJson(this.nodeRegistryFile(), {
           ...next,
           version: 1,
           revision: current.revision + 1,
@@ -204,26 +209,26 @@ export class StorageNodes extends StoragePreviewServices {
 
   async getNodeAttachments(): Promise<NodeAttachments> {
     return readStoredNodeAttachments(
-      await this.loadJson<unknown>(this.nodeAttachmentsFile(), () => null),
+      await this.context.loadJson<unknown>(this.nodeAttachmentsFile(), () => null),
     );
   }
 
   async mutateNodeAttachments<T>(
     mutate: (current: NodeAttachments) => NodeStoreMutation<NodeAttachments, T>,
   ): Promise<T> {
-    return this.serializeMutation(this.nodeAttachmentsFile(), "node attachments", async () => {
+    return this.context.serialize(this.nodeAttachmentsFile(), "node attachments", async () => {
       const current = readStoredNodeAttachments(
-        await this.loadJson<unknown>(this.nodeAttachmentsFile(), () => null),
+        await this.context.loadJson<unknown>(this.nodeAttachmentsFile(), () => null),
       );
       const { next, result } = mutate(structuredClone(current));
-      if (next) await this.saveJson(this.nodeAttachmentsFile(), { ...next, version: 1 });
+      if (next) await this.context.saveJson(this.nodeAttachmentsFile(), { ...next, version: 1 });
       return result;
     });
   }
 
   private async readNodeRegistry(): Promise<NodeRegistry> {
     const { registry, dropped } = readStoredNodeRegistry(
-      await this.loadJson<unknown>(this.nodeRegistryFile(), () => null),
+      await this.context.loadJson<unknown>(this.nodeRegistryFile(), () => null),
     );
     if (dropped > 0 && !this.reportedDroppedNodes) {
       this.reportedDroppedNodes = true;

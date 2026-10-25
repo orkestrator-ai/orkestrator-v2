@@ -16,7 +16,12 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { STORAGE_DATABASE_FILE } from "./storage-database.js";
-import { readStoredValue, seedStore, storageFilesContain } from "./storage-test-support.js";
+import {
+  readStoredValue,
+  seedStore,
+  storageFilesContain,
+  storageInternals,
+} from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
 
 /** The persisted agent-mail store, as far as these tests edit it. */
@@ -220,7 +225,7 @@ describe("StorageService agent mail", () => {
           body: "hello",
         },
       );
-      storage.loadPaneLayoutsForReconciliation = async () => {
+      storageInternals(storage).repos.sessions.loadPaneLayoutsForReconciliation = async () => {
         throw new Error("read path touched pane layouts");
       };
       await expect(storage.getAgentMailSummary()).resolves.toBeDefined();
@@ -241,8 +246,9 @@ describe("StorageService agent mail", () => {
     const { storage, dataDir } = await fixture();
     try {
       let synchronizations = 0;
-      const synchronize = storage.synchronizeAgentMailboxes.bind(storage);
-      storage.synchronizeAgentMailboxes = async () => {
+      const mail = storageInternals(storage).repos.agentMail;
+      const synchronize = mail.synchronizeAgentMailboxes.bind(mail);
+      mail.synchronizeAgentMailboxes = async () => {
         synchronizations += 1;
         await synchronize();
       };
@@ -331,11 +337,12 @@ describe("StorageService agent mail", () => {
       }));
       await storage.synchronizeAgentMailboxes();
       let synchronizations = 0;
-      storage.synchronizeAgentMailboxes = async () => {
+      const mail = storageInternals(storage).repos.agentMail;
+      mail.synchronizeAgentMailboxes = async () => {
         synchronizations += 1;
       };
       await (
-        storage as unknown as {
+        mail as unknown as {
           ensureAgentMailDirectoryFresh: (environmentIds: string[]) => Promise<void>;
         }
       ).ensureAgentMailDirectoryFresh([coordinatorRuntimeId("coordinator-1", "conversation-1")]);

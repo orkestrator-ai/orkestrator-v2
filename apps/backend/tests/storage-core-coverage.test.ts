@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { createEnvironment, defaultConfig, StorageService } from "../src/core/storage";
 import type { ClaudeModelCatalogSnapshot } from "../src/core/models";
-import type { StorageDatabase } from "../src/core/storage-database";
 import { openBackendDatabase } from "../src/core/storage-stores";
+import { storageDatabase, storageInternals } from "../src/core/storage-test-support.js";
 
 const tempDirs: string[] = [];
 
@@ -15,12 +15,10 @@ async function createTempDir(prefix: string): Promise<string> {
   return dir;
 }
 
+/** Takes the configuration lease the way every config writer does. */
 function configLockFor(storage: StorageService): Promise<() => Promise<void>> {
-  return (
-    storage as unknown as {
-      acquireConfigMutationLock(): Promise<() => Promise<void>>;
-    }
-  ).acquireConfigMutationLock();
+  const { context, repos } = storageInternals(storage);
+  return context.acquireLease(repos.files.configFile(), "configuration storage");
 }
 
 /** The configuration file's cross-process lease (it was `config.json.lock`). */
@@ -406,7 +404,7 @@ describe("StorageService core coverage", () => {
     expect(await storage.getEnvironment(second.id)).toMatchObject({ status: "error" });
     expect(await storage.getEnvironment(unrelated.id)).toMatchObject({ status: "stopped" });
 
-    const database = (storage as unknown as { database: StorageDatabase }).database;
+    const database = storageDatabase(storage);
     const writeStore = spyOn(database, "writeStore");
     try {
       await storage.setAllEnvironmentStatusesForContainer("missing-container", "running");

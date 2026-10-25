@@ -11,11 +11,11 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { createEnvironment, StorageService } from "./storage.js";
 import { LEGACY_JSON_DIRECTORY } from "./storage-stores.js";
-import { seedUnreadableStore } from "./storage-test-support.js";
+import { seedUnreadableStore, storageDatabase } from "./storage-test-support.js";
 
 class ArchiveProbe extends StorageService {
   committed(store: string): unknown {
-    return this.database.readStore(store)?.value;
+    return storageDatabase(this).readStore(store)?.value;
   }
 }
 

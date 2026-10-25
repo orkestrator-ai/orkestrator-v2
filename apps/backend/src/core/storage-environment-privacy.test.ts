@@ -3,9 +3,9 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createEnvironment, StorageService } from "./storage.js";
-import { STORAGE_DATABASE_FILE, type StorageDatabase } from "./storage-database.js";
+import { STORAGE_DATABASE_FILE } from "./storage-database.js";
 import { LEGACY_JSON_DIRECTORY } from "./storage-stores.js";
-import { storageFilesContain } from "./storage-test-support.js";
+import { storageFilesContain, storageDatabase } from "./storage-test-support.js";
 
 async function withStorage<T>(
   run: (storage: StorageService, dataDir: string) => Promise<T>,
@@ -18,10 +18,6 @@ async function withStorage<T>(
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
-}
-
-function storageDatabase(storage: StorageService): StorageDatabase {
-  return (storage as unknown as { database: StorageDatabase }).database;
 }
 
 describe("StorageService environment attachment privacy", () => {

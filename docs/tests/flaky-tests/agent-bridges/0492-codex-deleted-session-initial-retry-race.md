@@ -26,3 +26,10 @@
 - **Owning-file rerun:** `mise run test:logged -- --name codex-prompt-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/app-server-runtime-prompt.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 7.1 seconds.
 - **Evidence:** `orkestrator-test-run.jMkwTI/bridges.log.gz` under the host temporary directory after aggregate completion.
 - **Assessment:** recurrence of the existing intermittent failure; this change touches no bridge source or assertions.
+
+## Storage repositories validation recurrence — 2026-10-25
+
+- **Original command:** `mise run test` on `todo-0009-storage-repositories-4696a61ea39f` (head `14213a95`, Bun 1.4.4), with another worktree's full suite and a live Docker suite on the host.
+- **Failure:** the same assertion at `app-server-runtime-prompt.test.ts:231` (103.01 ms). Every other group passed.
+- **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts src/app-server-runtime-prompt.test.ts` from `bridges/codex-bridge` passed unchanged: 123 pass, 0 fail, 7.46 s.
+- **Assessment:** recurrence of the existing intermittent failure; todo 0009 changes backend storage only and touches no bridge source or assertions.

@@ -25,7 +25,7 @@ import {
   storageFilesContain,
 } from "../src/core/storage-test-support";
 import { openBackendDatabase } from "../src/core/storage-stores";
-import type { StorageDatabase } from "../src/core/storage-database";
+import { storageDatabase } from "../src/core/storage-test-support.js";
 
 const resizeKanbanImageToBuffer = mock(async () => Buffer.from("webp-bytes"));
 const transparentPngBase64 =
@@ -2765,7 +2765,7 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-linear-failed-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const database = (storage as unknown as { database: StorageDatabase }).database;
+    const database = storageDatabase(storage);
     const writeStore = spyOn(database, "writeStoreInTransaction").mockImplementationOnce(() => {
       throw new Error("disk full");
     });

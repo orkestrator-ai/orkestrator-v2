@@ -35,9 +35,11 @@ import {
   type InlineImportBatchEntry,
   type InlineImportBatchOutcome,
 } from "./build-pipeline-transcript-migration.js";
-import { StoragePrompts } from "./storage-prompts.ts";
 import { StoreCorruptError } from "./storage-database.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import type { StorageContext } from "./storage-context.js";
+import type { StorageFiles } from "./storage-files.js";
+import type { StorageRepositories } from "./storage-repositories.js";
 type PersistedBuildPipeline = shared.PersistedBuildPipeline;
 
 /** Committed control records and the store revision they were read at. */
@@ -105,7 +107,28 @@ function sameReference(left: unknown, right: unknown): boolean {
  *
  * Reads are served from a revision-validated decoded cache.
  */
-export abstract class StorageBuildPipelines extends StoragePrompts {
+export class BuildPipelinesRepository {
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+    private readonly repos: StorageRepositories,
+  ) {}
+
+  /**
+   * Serializes build pipeline writes across backend processes sharing this data
+   * directory. The cross-process lease matters more here than the in-process
+   * queue: two renderers driving the same pipeline is precisely the race the
+   * compare-and-swap revision exists to reject, and it can only reject it if the
+   * read-modify-write is atomic.
+   */
+  private enqueueBuildPipelineMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(
+      this.files.buildPipelinesFile(),
+      "build pipeline storage",
+      operation,
+    );
+  }
+
   private buildPipelineReadCache: {
     fingerprint: string;
     records: Readonly<Record<string, PersistedBuildPipeline>>;
@@ -117,10 +140,10 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
   private liveBuildPipelineTagCache: { revision: number | null; tags: Set<string> } | null = null;
 
   /** Constructed lazily: storage that never runs a build never creates the chunk directory. */
-  protected buildPipelineTranscriptStore(): BuildPipelineTranscriptStore {
+  private buildPipelineTranscriptStore(): BuildPipelineTranscriptStore {
     this.buildPipelineTranscriptStoreInstance ??= new BuildPipelineTranscriptStore({
-      directory: this.file(BUILD_PIPELINE_TRANSCRIPT_DIRECTORY),
-      database: () => this.database,
+      directory: this.context.file(BUILD_PIPELINE_TRANSCRIPT_DIRECTORY),
+      database: () => this.context.database,
       isLivePipeline: (pipelineTag) => this.liveBuildPipelineTags()?.has(pipelineTag) ?? true,
       faults: () => this.buildPipelineTranscriptFaultHooks,
       ...(this.buildPipelineTranscriptLimitOverrides
@@ -155,7 +178,7 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
   }
 
   private buildPipelineStore(): string {
-    return this.storeForFile(this.buildPipelinesFile())!;
+    return this.context.storeForFile(this.files.buildPipelinesFile())!;
   }
 
   /**
@@ -166,7 +189,7 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
   private committedBuildPipeline(id: string): PersistedBuildPipeline | null {
     let current: unknown;
     try {
-      current = this.database.readStoreRow(this.buildPipelineStore(), id);
+      current = this.context.database.readStoreRow(this.buildPipelineStore(), id);
     } catch (error) {
       if (error instanceof StoreCorruptError) return null;
       throw error;
@@ -181,14 +204,14 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
    */
   private liveBuildPipelineTags(): Set<string> | null {
     const store = this.buildPipelineStore();
-    const revision = this.database.storeRevision(store);
+    const revision = this.context.database.storeRevision(store);
     if (this.liveBuildPipelineTagCache?.revision === revision) {
       recurringWorkMetrics.work("storage-stat");
       return this.liveBuildPipelineTagCache.tags;
     }
     let value: unknown;
     try {
-      value = this.database.readStore(store)?.value ?? {};
+      value = this.context.database.readStore(store)?.value ?? {};
     } catch {
       return null;
     }
@@ -207,15 +230,15 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
    * later, never a stale answer.
    */
   private async loadBuildPipelineState(): Promise<LoadedBuildPipelines> {
-    const revision = this.database.storeRevision(this.buildPipelineStore());
+    const revision = this.context.database.storeRevision(this.buildPipelineStore());
     const fingerprint = revision === null ? "missing" : `revision:${revision}`;
     const cached = this.buildPipelineReadCache;
     if (cached && cached.fingerprint === fingerprint) {
       recurringWorkMetrics.work("storage-stat");
       return { records: cached.records, revision };
     }
-    const stored = await this.loadJson<Record<string, PersistedBuildPipeline>>(
-      this.buildPipelinesFile(),
+    const stored = await this.context.loadJson<Record<string, PersistedBuildPipeline>>(
+      this.files.buildPipelinesFile(),
       () => ({}),
     );
     const records = Object.fromEntries(
@@ -227,7 +250,7 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
     return { records, revision };
   }
 
-  protected async loadBuildPipelines(): Promise<Readonly<Record<string, PersistedBuildPipeline>>> {
+  private async loadBuildPipelines(): Promise<Readonly<Record<string, PersistedBuildPipeline>>> {
     return (await this.loadBuildPipelineState()).records;
   }
 
@@ -263,8 +286,8 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
     let primed: Record<string, PersistedBuildPipeline> | null = touchesControl
       ? { ...loaded.records }
       : null;
-    const fingerprint = this.database.transaction(() => {
-      if (this.database.storeRevision(store) !== loaded.revision) primed = null;
+    const fingerprint = this.context.database.transaction(() => {
+      if (this.context.database.storeRevision(store) !== loaded.revision) primed = null;
       for (const id of [
         ...(changes.put ?? []).map((record) => record.id),
         ...(changes.remove ?? []),
@@ -278,19 +301,22 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
         result.deletedChunks.push(...transcripts.deletePipelineInTransaction(id).chunks);
       }
       for (const id of changes.remove ?? []) {
-        this.database.updateStoreRow(store, id, () => ({ result: undefined, delete: true }));
+        this.context.database.updateStoreRow(store, id, () => ({
+          result: undefined,
+          delete: true,
+        }));
         if (primed) delete primed[id];
       }
       for (const record of changes.put ?? []) {
         const reverted = this.commitSessionTranscripts(record, loaded.records[record.id], result);
         if (reverted.length > 0) result.reverted.set(record.id, reverted);
-        this.database.updateStoreRow(store, record.id, () => ({
+        this.context.database.updateStoreRow(store, record.id, () => ({
           result: undefined,
           value: record,
         }));
         if (primed) primed[record.id] = record;
       }
-      const revision = this.database.storeRevision(store);
+      const revision = this.context.database.storeRevision(store);
       return revision === null ? "missing" : `revision:${revision}`;
     });
     if (touchesControl) {
@@ -450,7 +476,10 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
 
     const saved = await this.enqueueBuildPipelineMutation(async () => {
       if (environmentId) {
-        await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Build pipeline");
+        await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
+          environmentId,
+          "Build pipeline",
+        );
       }
       const loaded = await this.loadBuildPipelineState();
       const pipelines = loaded.records;
@@ -499,7 +528,7 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
         }>,
       );
       const commit = this.commitBuildPipelineChanges(loaded, { put: [record] });
-      this.announce("build-pipeline", pipelineId, projectId);
+      this.context.changes.announce("build-pipeline", pipelineId, projectId);
       return { record: structuredClone(record), commit };
     });
     if (saved.commit) {
@@ -535,10 +564,16 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
         removeTranscripts: record ? [] : [pipelineId],
       });
       if (record) {
-        this.announce("build-pipeline", pipelineId, record.projectId, undefined, true);
+        this.context.changes.announce(
+          "build-pipeline",
+          pipelineId,
+          record.projectId,
+          undefined,
+          true,
+        );
       }
-      await this.scrubSensitiveJsonBackups(
-        this.buildPipelinesFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.buildPipelinesFile(),
         (storedId, pipeline) =>
           storedId !== pipelineId && isPersistedBuildPipeline(pipeline, storedId),
       );
@@ -577,15 +612,21 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
           removeTranscripts: transcriptOnly,
         });
         for (const removed of removedPipelines) {
-          this.announce("build-pipeline", removed.id, removed.projectId, undefined, true);
+          this.context.changes.announce(
+            "build-pipeline",
+            removed.id,
+            removed.projectId,
+            undefined,
+            true,
+          );
         }
         if (linkedId) removedIdSet.add(linkedId);
         // Task snapshots embed base64 attachments and full review findings, so
         // the deleting commit is scrubbed from free pages and the WAL. Check
         // both ownership forms because a newly-created pipeline deliberately
         // has a blank environmentId until create_environment links it.
-        await this.scrubSensitiveJsonBackups(
-          this.buildPipelinesFile(),
+        await this.context.scrubSensitiveJsonBackups(
+          this.files.buildPipelinesFile(),
           (storedId, pipeline) =>
             isPersistedBuildPipeline(pipeline, storedId) &&
             pipeline.environmentId !== environmentId &&
@@ -640,7 +681,7 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
       const loaded = await this.loadBuildPipelineState();
       if (loaded.records[pipelineId]) return null;
       const commit = this.commitBuildPipelineChanges(loaded, { removeTranscripts: [pipelineId] });
-      if (commit.deletedChunks.length > 0) this.scrubDeletedDatabaseContent();
+      if (commit.deletedChunks.length > 0) this.context.scrubDeletedDatabaseContent();
       return commit;
     });
     if (commit) await this.finishTranscriptDeletion([pipelineId], commit);
@@ -729,7 +770,7 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
       const committed: StagedTranscript[] = [];
       const refused: StagedTranscript[] = [];
       this.buildPipelineReadCache = null;
-      this.database.transaction(() => {
+      this.context.database.transaction(() => {
         for (const entry of entries) {
           const current = this.committedBuildPipeline(entry.pipelineId);
           if (!current) {
@@ -743,12 +784,12 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
           try {
             // A savepoint per pipeline: all of its manifests and its control
             // row, or none of them.
-            this.database.transaction(() => {
+            this.context.database.transaction(() => {
               for (const staged of entry.staged) {
                 const result = transcripts.commitStagedInTransaction(staged);
                 if (!result.ok) throw new RefusedImport(result.reason);
               }
-              this.database.updateStoreRow(store, entry.pipelineId, () => ({
+              this.context.database.updateStoreRow(store, entry.pipelineId, () => ({
                 result: undefined,
                 value: { ...current, snapshot: entry.apply(current.snapshot) },
               }));

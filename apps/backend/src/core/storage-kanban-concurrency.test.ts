@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
+import { storageInternals } from "./storage-test-support.js";
 
 async function withStoragePair<T>(
   run: (first: StorageService, second: StorageService, dataDir: string) => Promise<T>,
@@ -219,10 +220,8 @@ describe("StorageService Kanban mutation serialization", () => {
       );
       const imageId = withImage.images[0]!.id;
       const taskImageId = withTaskImage.images[0]!.id;
-      const internals = storage as unknown as {
-        saveJson(filePath: string, value: unknown): Promise<void>;
-      };
-      const originalSaveJson = internals.saveJson.bind(storage);
+      const internals = storageInternals(storage).context;
+      const originalSaveJson = internals.saveJson.bind(internals);
 
       internals.saveJson = async () => {
         throw new Error("injected Kanban save failure");

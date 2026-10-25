@@ -11,7 +11,7 @@ import path from "node:path";
 import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import { StorageService } from "./storage.js";
 import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
-import { readStoredValue } from "./storage-test-support.js";
+import { readStoredValue, storageInternals } from "./storage-test-support.js";
 
 /**
  * Serialized size of every committed control record. An upper bound on what a
@@ -247,7 +247,7 @@ describe("build pipeline transcript checkpoints", () => {
       const second = messages(9, "second");
       expect(checkpoints.observe(snapshot.sessions[0]!, second)).toBe(true);
       const store = (
-        storage as unknown as {
+        storageInternals(storage).repos.buildPipelines as unknown as {
           buildPipelineTranscriptStore(): { commitStagedInTransaction(staged: unknown): unknown };
         }
       ).buildPipelineTranscriptStore();

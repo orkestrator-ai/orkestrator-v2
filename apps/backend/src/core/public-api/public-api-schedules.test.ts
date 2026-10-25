@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, jest, test } from "bun:test";
+import { afterEach, describe, expect, jest, test, spyOn } from "bun:test";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import type { ScheduledJob, ScheduledJobSummary } from "@orkestrator/protocol/scheduled-jobs";
 import { AgentToolsServer } from "../agent-tools.js";
@@ -9,7 +9,10 @@ import { withPublicAuthority } from "./dispatch.js";
 import { controlMcpAuthority } from "./operation-ledger.js";
 import { publicActionHandlers } from "./registry.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
-import type { PublicApiHarness } from "./test-support.js";
+import { commitFile, headCommit, type PublicApiHarness } from "./test-support.js";
+import { runCommand } from "../shell.js";
+import { rpc } from "../control-mcp-test-support.js";
+import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
 
 /**
  * Scheduled jobs end to end over the real registry, storage, public actions
@@ -491,4 +494,215 @@ describe("agent schedules", () => {
     });
     expect(cancelled.structuredContent).toMatchObject({ deleted: true });
   });
+});
+
+function interruptSettlement(harness: PublicApiHarness) {
+  const store = harness.storage.scheduledJobStore();
+  const mutate = store.mutate.bind(store);
+  return spyOn(store, "mutate").mockImplementation((id, update) =>
+    mutate(id, (current) => {
+      const next = update(current);
+      if ("value" in next && next.value.fires.some((fire) => fire.state === "succeeded"))
+        throw new Error("Simulated backend interruption before settlement");
+      return next;
+    }),
+  );
+}
+
+test("public launch replay after admission uses its original commit after the branch advances", async () => {
+  const { harness, stub } = await setup();
+  const clock = { now: Date.now() };
+  const scheduler = attachScheduler(harness, clock);
+  const repository = await harness.createRepository("scheduled-replay");
+  const originalCommit = await headCommit(repository.projectPath);
+  const added = await harness.call<{ project: { id: string } }>(
+    "project.add",
+    { path: repository.projectPath },
+    { requestId: "replay-add" },
+  );
+  if (!added.ok) throw new Error(added.error.message);
+  // The default branch must be pinned too, even when no branch was supplied.
+  const { job } = await scheduler.service.create(
+    { kind: "operator" },
+    {
+      at: "+1m",
+      action: {
+        kind: "launch",
+        projectId: added.result.project.id,
+        type: "local",
+        agent: "claude",
+        prompt: "replay audit",
+      },
+    },
+  );
+  const interruption = interruptSettlement(harness);
+  try {
+    clock.now += 60_000;
+    await scheduler.fire();
+    expect(scheduler.service.get({ kind: "operator" }, job.id).fires[0]).toMatchObject({
+      state: "running",
+      outcome: { baseCommit: originalCommit },
+    });
+  } finally {
+    interruption.mockRestore();
+  }
+  await waitFor(
+    () => stub.sends.filter((send) => send.prompt.includes("replay audit")).length,
+    (count) => count === 1,
+  );
+  const advanced = await commitFile(repository.projectPath, "README.md", "advanced branch");
+  expect(advanced).not.toBe(originalCommit);
+  await runCommand("git", ["push", "origin", "main"], { cwd: repository.projectPath });
+  clock.now += SCHEDULED_JOB_LIMITS.fireStaleMs;
+  await scheduler.fire();
+  const fire = scheduler.service.get({ kind: "operator" }, job.id).fires[0]!;
+  expect(fire).toMatchObject({
+    state: "succeeded",
+    attempts: 2,
+    outcome: { baseCommit: originalCommit },
+  });
+  expect(stub.sends.filter((send) => send.prompt.includes("replay audit"))).toHaveLength(1);
+  await harness.commands.get("delete_environment")!(
+    { environmentId: fire.outcome!.environmentId },
+    harness.context,
+  );
+});
+
+test("environment-wide schedule credentials select a caller mailbox and tab credentials cannot impersonate siblings", async () => {
+  const { harness, service: agents, stub, projectId } = await setup();
+  await enableMessaging(harness);
+  const tools = new AgentToolsServer(harness.storage);
+  const scheduler = attachScheduler(harness, { now: Date.now() }, tools);
+  const a = await startIdleSession(harness, agents, stub, "claim-a");
+  const b = await startIdleSession(harness, agents, stub, "claim-b");
+  await harness.storage.synchronizeAgentMailboxes();
+  await tools.start();
+  try {
+    const environment = tools.connection("env-1", projectId, "host");
+    const bound = tools.connection("env-1", projectId, "host", a.tabId);
+    const call = async (
+      credential: typeof environment,
+      name: string,
+      args: Record<string, unknown>,
+    ) =>
+      (await rpc(credential.url, credential.token, "tools/call", { name, arguments: args })).body
+        .result!;
+    const input = {
+      requestId: "claimed",
+      at: "+1h",
+      action: { type: "send_message", toEnvironmentId: "coordinator", body: "wake" },
+    };
+    expect((await call(environment, "create_schedule", input)).isError).toBe(true);
+    const created = await call(environment, "create_schedule", { ...input, tabId: b.tabId });
+    expect(created.isError).not.toBe(true);
+    const id = String(created.structuredContent!.scheduleId);
+    expect(scheduler.service.get({ kind: "operator" }, id).owner).toMatchObject({
+      kind: "agent",
+      tabId: b.tabId,
+    });
+    expect(
+      (await call(environment, "list_schedules", { tabId: b.tabId })).structuredContent!.total,
+    ).toBe(1);
+    for (const [name, args] of [
+      ["create_schedule", input],
+      ["list_schedules", {}],
+      ["cancel_schedule", { scheduleId: id }],
+    ] as const) {
+      expect((await call(bound, name, { ...args, tabId: b.tabId })).isError).toBe(true);
+    }
+    expect(
+      (await call(environment, "cancel_schedule", { scheduleId: id, tabId: b.tabId }))
+        .structuredContent,
+    ).toMatchObject({ deleted: true });
+  } finally {
+    await tools.stop();
+  }
+});
+
+test("scheduled agent tickets and comments replay once after committed effects and interrupted settlement", async () => {
+  const { harness, service: agents, stub, projectId } = await setup();
+  await enableMessaging(harness);
+  const tools = new AgentToolsServer(harness.storage);
+  const clock = { now: Date.now() };
+  const scheduler = attachScheduler(harness, clock, tools);
+  const sender = await startIdleSession(harness, agents, stub, "ticket-owner");
+  await harness.storage.synchronizeAgentMailboxes();
+  const owner = { kind: "agent", environmentId: "env-1", projectId, tabId: sender.tabId } as const;
+  const create = await scheduler.service.create(owner, {
+    at: "+1m",
+    action: { kind: "action", action: "create_ticket", input: { title: "Scheduled ticket" } },
+  });
+  let interruption = interruptSettlement(harness);
+  try {
+    clock.now += 60_000;
+    await scheduler.fire();
+  } finally {
+    interruption.mockRestore();
+  }
+  expect(scheduler.service.get(owner, create.job.id).fires[0]!.state).toBe("running");
+  let tickets = await harness.storage.getKanbanTasks(projectId);
+  expect(tickets).toHaveLength(1);
+  clock.now += SCHEDULED_JOB_LIMITS.fireStaleMs;
+  await scheduler.fire();
+  expect(scheduler.service.get(owner, create.job.id).fires[0]!.state).toBe("succeeded");
+  tickets = await harness.storage.getKanbanTasks(projectId);
+  expect(tickets).toHaveLength(1);
+  const comment = await scheduler.service.create(owner, {
+    at: "+1m",
+    action: {
+      kind: "action",
+      action: "add_ticket_comment",
+      input: { ticketId: tickets[0]!.id, text: "Once" },
+    },
+  });
+  interruption = interruptSettlement(harness);
+  try {
+    clock.now += 60_000;
+    await scheduler.fire();
+  } finally {
+    interruption.mockRestore();
+  }
+  expect(scheduler.service.get(owner, comment.job.id).fires[0]!.state).toBe("running");
+  clock.now += SCHEDULED_JOB_LIMITS.fireStaleMs;
+  await scheduler.fire();
+  tickets = await harness.storage.getKanbanTasks(projectId);
+  expect(tickets[0]!.comments).toHaveLength(1);
+  expect(scheduler.service.get(owner, comment.job.id).fires[0]!.state).toBe("succeeded");
+});
+
+test("agent schedules survive credential teardown but lose authority when their mailbox tab is removed", async () => {
+  const { harness, service: agents, stub, projectId } = await setup();
+  await enableMessaging(harness);
+  const tools = new AgentToolsServer(harness.storage);
+  const clock = { now: Date.now() };
+  const scheduler = attachScheduler(harness, clock, tools);
+  const sender = await startIdleSession(harness, agents, stub, "teardown-owner");
+  await harness.storage.synchronizeAgentMailboxes();
+  const owner = { kind: "agent", environmentId: "env-1", projectId, tabId: sender.tabId } as const;
+  const { job } = await scheduler.service.create(owner, {
+    everySeconds: 60,
+    action: {
+      kind: "action",
+      action: "send_message",
+      input: { toEnvironmentId: "env-1", body: "reminder" },
+    },
+  });
+  await tools.start();
+  try {
+    tools.connection("env-1", projectId, "host", sender.tabId);
+    tools.revokeTab("env-1", sender.tabId);
+    clock.now += 60_000;
+    await scheduler.fire();
+    expect(scheduler.service.get(owner, job.id).fires[0]!.state).toBe("succeeded");
+    await harness.storage.deletePaneLayout("env-1");
+    await harness.storage.synchronizeAgentMailboxes();
+    clock.now += 60_000;
+    await scheduler.fire();
+    expect(scheduler.service.get(owner, job.id)).toMatchObject({
+      state: "paused",
+      pausedReason: "authority-lost",
+    });
+  } finally {
+    await tools.stop();
+  }
 });

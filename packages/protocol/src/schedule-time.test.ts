@@ -4,6 +4,7 @@ import {
   instantsForWallTime,
   isValidTimeZone,
   nextCronFire,
+  previousCronFire,
   parseCronExpression,
   resolveOneShotTime,
   resolveWallTime,
@@ -184,4 +185,21 @@ describe("one-shot times", () => {
       expect(() => resolveOneShotTime(bad, LONDON, now)).toThrow(ScheduleTimeError);
     }
   });
+});
+
+test("reverse cron search includes exact slots and follows forward DST disambiguation", () => {
+  for (const [expression, instant, expected] of [
+    ["30 1 * * *", "2026-10-25T01:45:00Z", "2026-10-25T00:30:00Z"],
+    ["*/30 * * * *", "2026-10-25T01:45:00Z", "2026-10-25T01:30:00Z"],
+    ["30 1 * * *", "2026-03-29T01:30:00Z", "2026-03-29T01:30:00Z"],
+    ["0 0 29 2 *", "2026-03-29T01:30:00Z", "2024-02-29T00:00:00Z"],
+  ]) {
+    const cron = parseCronExpression(expression!);
+    const latest = previousCronFire(cron, LONDON, Date.parse(instant!));
+    expect(latest).toBe(Date.parse(expected!));
+    expect(nextCronFire(cron, LONDON, latest!)).toBeGreaterThan(Date.parse(instant!));
+  }
+  expect(
+    previousCronFire(parseCronExpression("0 0 31 2 *"), "UTC", Date.parse("2026-10-25T00:00:00Z")),
+  ).toBeNull();
 });

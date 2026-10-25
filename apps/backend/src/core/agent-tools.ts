@@ -485,6 +485,7 @@ async function createAgentToolServer(
       title: "Create a Kanban ticket",
       description: "Create a Kanban ticket in the current project. New tickets default to backlog.",
       inputSchema: z.object({
+        requestId: z.string().trim().min(1).max(256).optional(),
         title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
         description: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
         acceptanceCriteria: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
@@ -497,10 +498,11 @@ async function createAgentToolServer(
         openWorldHint: false,
       },
     },
-    async ({ title, description, acceptanceCriteria, status }) => {
+    async ({ title, description, acceptanceCriteria, status, requestId }) => {
       const ticket = await storage.addKanbanTask(scope.projectId, title, description, {
         acceptanceCriteria,
         status,
+        requestId,
       });
       return ticketResult(ticket);
     },
@@ -548,6 +550,7 @@ async function createAgentToolServer(
       title: "Comment on a Kanban ticket",
       description: "Add a durable comment to a Kanban ticket in the current project.",
       inputSchema: z.object({
+        requestId: z.string().trim().min(1).max(256).optional(),
         ticketId: z.string().trim().min(1).max(200),
         text: z.string().trim().min(1).max(MAX_COMMENT_LENGTH),
       }),
@@ -558,9 +561,9 @@ async function createAgentToolServer(
         openWorldHint: false,
       },
     },
-    async ({ ticketId, text }) => {
+    async ({ ticketId, text, requestId }) => {
       await scopedTicket(storage, scope.projectId, ticketId);
-      const ticket = await storage.addKanbanComment(ticketId, text, scope.projectId);
+      const ticket = await storage.addKanbanComment(ticketId, text, scope.projectId, requestId);
       const commentOffset = Math.max(0, ticket.comments.length - DEFAULT_COMMENT_LIMIT);
       return ticketResult(ticket, commentOffset);
     },
@@ -872,11 +875,12 @@ export class AgentToolsServer {
     return callToolInProcess(this.toolServerFor({ ...scope }), tool, args);
   }
 
-  listToolsAs(scope: {
+  async listToolsAs(scope: {
     environmentId: string;
     projectId: string;
     tabId: string;
   }): Promise<InProcessToolInfo[]> {
+    await assertCallerMailbox(this.storage, scope);
     return listToolsInProcess(this.toolServerFor({ ...scope }));
   }
 
@@ -1141,8 +1145,8 @@ function agentScheduleBackend(
   scope: AgentToolScope,
   service: ScheduledJobService,
 ): ScheduleToolBackend {
-  const owner = async (): Promise<Extract<ScheduleOwner, { kind: "agent" }>> => {
-    const { identity } = await assertCallerMailbox(storage, scope);
+  const owner = async (tabId?: string): Promise<Extract<ScheduleOwner, { kind: "agent" }>> => {
+    const { identity } = await assertCallerMailbox(storage, scope, tabId);
     return {
       kind: "agent",
       projectId: scope.projectId,
@@ -1151,15 +1155,15 @@ function agentScheduleBackend(
     };
   };
   return {
-    async create(input, requestId) {
-      const { job, replayed } = await service.create(await owner(), input, requestId);
+    async create(input, requestId, tabId) {
+      const { job, replayed } = await service.create(await owner(tabId), input, requestId);
       return { schedule: job, replayed };
     },
-    async list() {
-      return service.list(await owner());
+    async list(tabId) {
+      return service.list(await owner(tabId));
     },
-    async cancel(scheduleId) {
-      return service.delete(await owner(), scheduleId);
+    async cancel(scheduleId, tabId) {
+      return service.delete(await owner(tabId), scheduleId);
     },
   };
 }

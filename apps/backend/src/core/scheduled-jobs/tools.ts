@@ -20,9 +20,10 @@ export interface ScheduleToolBackend {
   create(
     input: ScheduleCreateInput,
     requestId: string,
+    tabId?: string,
   ): Promise<{ schedule: ScheduledJob; replayed: boolean }>;
-  list(): Promise<ScheduledJobSummary[]>;
-  cancel(scheduleId: string): Promise<{ scheduleId: string; deleted: boolean }>;
+  list(tabId?: string): Promise<ScheduledJobSummary[]>;
+  cancel(scheduleId: string, tabId?: string): Promise<{ scheduleId: string; deleted: boolean }>;
 }
 
 export type ScheduleToolSurface = "agent" | "coordinator";
@@ -237,6 +238,20 @@ export function registerScheduleTools(
   backend: () => ScheduleToolBackend | null,
 ): void {
   const zone = hostTimeZone();
+  const caller: { tabId?: z.ZodOptional<z.ZodString> } =
+    surface === "agent"
+      ? {
+          tabId: z
+            .string()
+            .trim()
+            .min(1)
+            .max(256)
+            .optional()
+            .describe(
+              "Your caller mailbox tab; required for an environment credential with multiple mailboxes.",
+            ),
+        }
+      : {};
   const available = () => {
     const resolved = backend();
     if (!resolved) throw new Error("Scheduled jobs are unavailable");
@@ -254,6 +269,7 @@ export function registerScheduleTools(
           : 'To wake yourself later, send_message to your own environment id: it arrives as a reminder that starts a turn. To wake your coordinator, send to "coordinator". ') +
         "The action runs as you, with your permissions at fire time; anything you could not do directly is refused. A fire missed while the backend was down runs once on return if no more than catchUpMinutes late (default 15), otherwise it is skipped. Reuse requestId when retrying. Returns scheduleId and nextFireAt; then finish your turn.",
       inputSchema: z.object({
+        ...caller,
         requestId: z.string().trim().min(1).max(200),
         name: z.string().trim().min(1).max(120).optional(),
         at: z.string().trim().min(1).max(64).optional(),
@@ -293,7 +309,7 @@ export function registerScheduleTools(
         openWorldHint: true,
       },
     },
-    async ({ requestId, everyMinutes, action, ...timing }) => {
+    async ({ requestId, everyMinutes, action, tabId, ...timing }) => {
       const created = await available().create(
         {
           ...timing,
@@ -301,6 +317,7 @@ export function registerScheduleTools(
           action: scheduleActionFromTool(action as ActionInput),
         },
         requestId,
+        typeof tabId === "string" ? tabId : undefined,
       );
       return textResult({ ...scheduleView(created.schedule), replayed: created.replayed });
     },
@@ -311,7 +328,7 @@ export function registerScheduleTools(
       title: "List your schedules",
       description:
         "List the schedules you created: when each fires next, its state and its last outcome.",
-      inputSchema: z.object({}),
+      inputSchema: z.object({ ...caller }),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -319,8 +336,8 @@ export function registerScheduleTools(
         openWorldHint: false,
       },
     },
-    async () => {
-      const schedules = await available().list();
+    async ({ tabId }) => {
+      const schedules = await available().list(typeof tabId === "string" ? tabId : undefined);
       return textResult({ schedules: schedules.map(scheduleView), total: schedules.length });
     },
   );
@@ -330,7 +347,7 @@ export function registerScheduleTools(
       title: "Cancel a schedule",
       description:
         "Delete one of your schedules so it never fires again. A fire already running finishes.",
-      inputSchema: z.object({ scheduleId: z.string().trim().min(1).max(100) }),
+      inputSchema: z.object({ ...caller, scheduleId: z.string().trim().min(1).max(100) }),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -338,6 +355,9 @@ export function registerScheduleTools(
         openWorldHint: false,
       },
     },
-    async ({ scheduleId }) => textResult(await available().cancel(scheduleId)),
+    async ({ scheduleId, tabId }) =>
+      textResult(
+        await available().cancel(scheduleId, typeof tabId === "string" ? tabId : undefined),
+      ),
   );
 }

@@ -208,3 +208,48 @@ describe("SchedulesSettings", () => {
     expect(history.textContent).toContain("2099-10-25 03:00 GMT");
   });
 });
+
+for (const action of [
+  {
+    kind: "launch",
+    type: "container",
+    projectId: "p1",
+    agent: "codex",
+    prompt: "audit",
+    name: "Pinned worker",
+    baseBranch: "main",
+    baseCommit: "a".repeat(40),
+    model: "model-1",
+    reasoning: "high",
+    mode: "plan",
+  },
+  { kind: "prompt", environmentId: "env-1", tabId: "startup-agent", prompt: "audit", mode: "plan" },
+] as const) {
+  for (const edit of ["name", "time", "prompt"] as const) {
+    test(`operator ${action.kind} ${edit} edit preserves unrepresented action fields`, async () => {
+      const original = job({ owner: { kind: "operator" }, ownerKey: "operator", action });
+      schedules = [original];
+      render(<SchedulesSettings />);
+      await screen.findAllByTestId("schedule-row");
+      fireEvent.click(screen.getByRole("button", { name: "Edit Wake the coordinator" }));
+      const dialog = await screen.findByRole("dialog");
+      const label =
+        edit === "name"
+          ? "Name"
+          : edit === "time"
+            ? "Time"
+            : action.kind === "launch"
+              ? "Initial prompt"
+              : "Prompt";
+      fireEvent.change(within(dialog).getByLabelText(label), {
+        target: { value: edit === "time" ? "+40m" : "Edited" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(updateScheduledJob).toHaveBeenCalledTimes(1));
+      const input = updateScheduledJob.mock.calls[0]![1] as { action?: unknown };
+      if (edit === "prompt") expect(input.action).toEqual({ ...action, prompt: "Edited" });
+      else expect(input).not.toHaveProperty("action");
+      expect(original.action).toEqual(action);
+    });
+  }
+}

@@ -547,7 +547,16 @@ function coordinatorScheduleBackend(
     const conversation = asArray(workspace?.conversations).find(
       (item) => isRecord(item) && item.id === scope.conversationId,
     );
-    const role = isRecord(conversation) && conversation.role === "side" ? "side" : "main";
+    if (
+      !workspace ||
+      workspace.id !== scope.coordinatorId ||
+      !isRecord(conversation) ||
+      conversation.closedAt ||
+      (conversation.role !== "side" && conversation.role !== "main")
+    ) {
+      throw new Error("The authenticated coordinator conversation is unavailable");
+    }
+    const role = conversation.role;
     return {
       kind: "coordinator",
       projectId: scope.projectId,

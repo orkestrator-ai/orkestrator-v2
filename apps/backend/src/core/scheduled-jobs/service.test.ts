@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,9 +10,10 @@ import type {
 } from "@orkestrator/protocol/scheduled-jobs";
 import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
 import { StorageService } from "../storage.js";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 import { ScheduleAuthorityError, type ScheduledJobExecutor } from "./executor.js";
-import type { FireResult } from "./model.js";
-import { ScheduledJobService, ScheduleNotFoundError } from "./service.js";
+import { claimDueFire, settleFire, type FireResult } from "./model.js";
+import { ScheduledJobService, SAFETY_TICK_MS, ScheduleNotFoundError } from "./service.js";
 
 /**
  * The scheduler over real storage with a recording executor: persistence
@@ -466,5 +467,182 @@ describe("visibility and ownership", () => {
     expect(service.coordinatorConversationClosed("c1", "s")).toEqual([sideJob.id]);
     expect(service.coordinatorConversationClosed("c1", "m")).toEqual([]);
     expect(service.list(OPERATOR).map((job) => job.id)).toEqual([mainJob.id]);
+  });
+});
+
+describe("scheduler regressions", () => {
+  test("replays an absolute creation after its time expires, but conflicts on changed intent", async () => {
+    const clock = { now: T0 };
+    const { service } = await backend(await dataDir(), clock);
+    const input = { at: new Date(T0 + 60_000).toISOString(), action: MAIL };
+    const first = await service.create(OPERATOR, input, "absolute");
+    clock.now += 120_000;
+    expect(await service.create(OPERATOR, input, "absolute")).toEqual({
+      job: first.job,
+      replayed: true,
+    });
+    await expect(
+      service.create(OPERATOR, { ...input, name: "changed" }, "absolute"),
+    ).rejects.toThrow(/different schedule/);
+    await expect(service.create(OPERATOR, input, "new")).rejects.toThrow();
+  });
+
+  for (const timing of [{ everySeconds: 60 }, { cron: "* * * * *" }]) {
+    test(`coalesces over 500 missed slots: ${JSON.stringify(timing)}`, async () => {
+      const clock = { now: T0 };
+      const { service, executor } = await backend(await dataDir(), clock);
+      const { job } = await service.create(OPERATOR, { ...timing, action: MAIL });
+      clock.now += 24 * 60 * 60_000 + 12_000;
+      await tick(service);
+      const stored = service.get(OPERATOR, job.id);
+      expect(stored.fires).toHaveLength(1);
+      expect(stored.fires[0]).toMatchObject({
+        state: "succeeded",
+        scheduledFor: new Date(clock.now - 12_000).toISOString(),
+      });
+      expect(stored.fires[0]!.missed).toBeGreaterThanOrEqual(500);
+      expect(Date.parse(stored.nextFireAt!)).toBeGreaterThan(clock.now);
+      await tick(service);
+      expect(executor.fired).toHaveLength(1);
+    });
+  }
+
+  test("busy retries block later slots and do not consume the interruption budget", async () => {
+    const clock = { now: T0 };
+    const { service } = await backend(await dataDir(), clock);
+    let job = (await service.create(OPERATOR, { everySeconds: 60, action: MAIL })).job;
+    clock.now += 60_000;
+    const id = `${job.id}@${clock.now}`;
+    for (let index = 0; index < 6; index++) {
+      const claim = claimDueFire(job, clock.now, "first");
+      expect(claim.fire?.fireId).toBe(id);
+      job = settleFire(
+        claim.job!,
+        id,
+        "first",
+        { ok: false, error: { code: "busy", message: "busy" }, retry: true },
+        clock.now,
+      )!;
+      expect(claimDueFire(job, clock.now + 1, "other")).toEqual({ job: null, fire: null });
+      expect(job.fires).toHaveLength(1);
+      clock.now += SCHEDULED_JOB_LIMITS.busyRetryDelayMs;
+    }
+    const running = claimDueFire(job, clock.now, "first");
+    clock.now += SCHEDULED_JOB_LIMITS.fireStaleMs;
+    const reclaimed = claimDueFire(running.job!, clock.now, "second");
+    expect(reclaimed.fire).toMatchObject({ fireId: id, interruptions: 1, attempts: 8 });
+    job = reclaimed.job!;
+    for (let index = 2; index <= SCHEDULED_JOB_LIMITS.maxFireAttempts; index++) {
+      clock.now += SCHEDULED_JOB_LIMITS.fireStaleMs;
+      const claim = claimDueFire(job, clock.now, `restart-${index}`);
+      job = claim.job!;
+      expect(job.fires[0]!.interruptions).toBe(index);
+    }
+    expect(job.fires[0]).toMatchObject({
+      state: "failed",
+      error: {
+        code: "interrupted",
+        message: "The backend running this fire stopped 3 times before it finished",
+      },
+    });
+  });
+
+  test("non-writers and saturated workers arm at the safety interval; completion and edits wake them", async () => {
+    const clock = { now: T0 };
+    const { storage } = await backend(await dataDir(), clock);
+    const executor = new RecordingExecutor();
+    let writer = false;
+    const service = new ScheduledJobService({
+      store: storage.scheduledJobStore(),
+      executor: executor as unknown as ScheduledJobExecutor,
+      now: () => clock.now,
+      isWriter: () => writer,
+    });
+    const jobs = [];
+    for (let i = 0; i < 5; i++)
+      jobs.push((await service.create(OPERATOR, { at: "+1m", action: MAIL })).job);
+    clock.now += 60_000;
+    const releases: Array<() => void> = [];
+    executor.next = () =>
+      new Promise((resolve) => releases.push(() => resolve({ ok: true, outcome: {} })));
+    const safetyTimer = installControlledTimeout(SAFETY_TICK_MS, {
+      label: "scheduler safety tick",
+    });
+    const timers = spyOn(globalThis, "setTimeout");
+    const flush = async () => {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    };
+    try {
+      service.start();
+      await flush();
+      expect(timers.mock.calls.at(-1)?.[1]).toBe(SAFETY_TICK_MS);
+      expect(executor.fired).toHaveLength(0);
+      clock.now += SAFETY_TICK_MS;
+      expect(safetyTimer.advance()).toBe(1);
+      await flush();
+      expect(executor.fired).toHaveLength(0);
+      expect(timers.mock.calls.every((call) => call[1] === SAFETY_TICK_MS)).toBe(true);
+      writer = true;
+      service.wake();
+      await flush();
+      expect(executor.fired).toHaveLength(4);
+      expect(timers.mock.calls.at(-1)?.[1]).toBe(SAFETY_TICK_MS);
+      clock.now += SAFETY_TICK_MS;
+      expect(safetyTimer.advance()).toBe(1);
+      await flush();
+      expect(executor.fired).toHaveLength(4);
+      expect(timers.mock.calls.every((call) => call[1] === SAFETY_TICK_MS)).toBe(true);
+      await service.update(OPERATOR, jobs[4]!.id, { name: "edited while saturated" });
+      await flush();
+      expect(timers.mock.calls.at(-1)?.[1]).toBe(SAFETY_TICK_MS);
+      releases.shift()!();
+      await flush();
+      expect(executor.fired).toHaveLength(5);
+    } finally {
+      writer = false;
+      for (const release of releases) release();
+      await service.stop();
+      timers.mockRestore();
+      expect(safetyTimer.restore()).toBe(0);
+    }
+  });
+
+  test("a heartbeat persists without resource events; settlement announces", async () => {
+    const clock = { now: T0 };
+    const { storage, service, executor } = await backend(await dataDir(), clock);
+    const changes: string[] = [];
+    storage.setResourceChangeListener((event) => {
+      if (event.resource === "scheduled-job") changes.push(event.resource);
+    });
+    const { job } = await service.create(OPERATOR, { at: "+1m", action: MAIL });
+    clock.now += 60_000;
+    let release!: () => void;
+    executor.next = () =>
+      new Promise((resolve) => {
+        release = () => resolve({ ok: true, outcome: {} });
+      });
+    const intervals = spyOn(globalThis, "setInterval");
+    try {
+      await service.tick();
+      const before = changes.length;
+      const revision = service.get(OPERATOR, job.id).revision;
+      clock.now += SCHEDULED_JOB_LIMITS.fireHeartbeatMs;
+      const callback = intervals.mock.calls.find(
+        (call) => call[1] === SCHEDULED_JOB_LIMITS.fireHeartbeatMs,
+      )![0];
+      (callback as () => void)();
+      expect(service.get(OPERATOR, job.id).fires[0]!.heartbeatAt).toBe(
+        new Date(clock.now).toISOString(),
+      );
+      expect(service.get(OPERATOR, job.id).revision).toBe(revision);
+      expect(changes).toHaveLength(before);
+      release();
+      await service.idle();
+      expect(changes).toHaveLength(before + 1);
+    } finally {
+      release?.();
+      await service.idle();
+      intervals.mockRestore();
+    }
   });
 });

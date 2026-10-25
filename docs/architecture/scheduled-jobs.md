@@ -50,7 +50,7 @@ A schedule (`ScheduledJob`) records:
 Each **fire** has a stable `fireId`: `<scheduleId>@<slot epoch ms>` for a
 scheduled slot and `<scheduleId>@run-<n>` for a manual run. Its state is
 `pending`, `running`, `succeeded`, `failed` or `skipped`, with the attempt
-count, the claiming backend's token and heartbeat, start and finish times,
+count, a separate count of stale-claim interruptions, the claiming backend's token and heartbeat, start and finish times,
 the number of coalesced missed slots, an `{code, message}` error and a small,
 content-free outcome (operation, message, environment, session and run ids;
 the base a launch resolved).
@@ -128,7 +128,7 @@ after now.
   the registry writer lease (`registry-writer-lease.ts`), the same
   single-writer guard container reconciliation uses. Any backend may create
   and edit schedules; the writer picks the change up within one safety tick.
-- **One fire per schedule at a time.** A running fire blocks the next slot
+- **One fire per schedule at a time.** A running fire or pending busy retry blocks the next slot
   until it settles.
 - **Request keys make re-runs replays.** Every dispatch carries the request
   key `sched:<fireId>`: the public operation ledger, agent-mail idempotency
@@ -137,8 +137,8 @@ after now.
 - **Abandoned fires are re-claimed.** A running fire heartbeats every 20 s. A
   fire whose heartbeat is 90 s old was left by a backend that stopped; the
   writer re-claims it and dispatches again under the same key (a replay if
-  the first attempt got through). After three attempts it fails as
-  `interrupted`. A fire that fails while its own backend is shutting down is
+  the first attempt got through). After three stale claims it fails as
+  `interrupted`; busy refusals do not consume this recovery budget. A fire that fails while its own backend is shutting down is
   left running for the next backend rather than recorded as a failure.
 - **Busy targets retry.** A refusal the target can outgrow (`busy`,
   `not-ready`, `dispatch-parked`, no main coordinator open) returns the fire
@@ -171,11 +171,12 @@ exactly as a worker's mail would.
 A **launch** without `baseCommit` resolves its base when it fires: the newest
 commit of `baseBranch` (the repository's base branch by default), fetched
 through `get_project_base_branch_tip`, which now takes an optional `branch`.
-The resolved pair is recorded on the fire. A coordinator launch on another
+The resolved pair is persisted on the claimed fire before dispatch and reused
+on every busy retry or stale-claim recovery. A coordinator launch on another
 node resolves that node's default base through `get_launch_options`; a
 different branch on another node needs a pinned `baseCommit`. An operator
-launch with neither field keeps `environment.launch`'s own default, which
-already resolves the default branch at start.
+launch with neither field resolves and persists the default branch and its tip
+through the same path.
 
 A schedule can never create, change or cancel schedules, never runs a read,
 and never runs an action that always needs a confirmation (`project.create`,
@@ -224,6 +225,7 @@ since it always runs as the owner.
 | Event | Effect |
 | --- | --- |
 | Environment deleted | Its agents' schedules are **deleted**; other owners' schedules whose action targets it are **paused** (`target-deleted`) |
+| Agent mailbox tab removed | The next fire pauses its schedules (`authority-lost`); revoking a session credential alone leaves durable schedules intact |
 | Side coordinator conversation closed | Its schedules are **deleted** |
 | Main coordinator conversation closed | Nothing: main schedules follow the next main |
 | Project removed | Its coordinator's schedules are deleted; schedules launching into it pause |
@@ -251,6 +253,9 @@ since it always runs as the owner.
   every `scheduled-job` resource change and on view safety checks.
 
 The tool form takes `everyMinutes`; the public action takes `everySeconds`.
+Agent schedule tools also accept a caller `tabId`, required when an
+environment credential has several pull-capable mailboxes. A tab credential
+cannot claim another tab.
 
 ```text
 create_schedule {

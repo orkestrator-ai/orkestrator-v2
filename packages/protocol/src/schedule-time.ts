@@ -396,6 +396,30 @@ export function nextCronFire(
   return best;
 }
 
+/** Latest cron slot at or before `atMs`, with the same DST rules as nextCronFire. */
+export function previousCronFire(
+  cron: CronExpression,
+  timeZone: string,
+  atMs: number,
+): number | null {
+  const start = wallTimeAt(atMs + DAY_MS, timeZone);
+  let cursor = Date.UTC(start.year, start.month - 1, start.day);
+  let best: number | null = null;
+  for (let index = 0; index < CRON_SEARCH_DAYS; index += 1, cursor -= DAY_MS) {
+    const date = new Date(cursor);
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth() + 1;
+    const day = date.getUTCDate();
+    if (dayMatches(cron, year, month, day)) {
+      for (const instant of cronInstantsOnDay(cron, timeZone, year, month, day)) {
+        if (instant <= atMs && (best === null || instant > best)) best = instant;
+      }
+    }
+    if (best !== null && cursor + DAY_MS * 2 < best) return best;
+  }
+  return best;
+}
+
 // ---------------------------------------------------------------------------
 // One-shot times
 

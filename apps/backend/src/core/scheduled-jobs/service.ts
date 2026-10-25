@@ -195,7 +195,10 @@ export class ScheduledJobService {
     if (!this.started) return;
     let delay = SAFETY_TICK_MS;
     const now = this.now();
-    for (const job of this.options.store.list()) {
+    const canClaim =
+      (this.options.isWriter?.() ?? true) && this.inFlight.size < MAX_CONCURRENT_FIRES;
+    for (const job of canClaim ? this.options.store.list() : []) {
+      if (this.inFlight.has(job.id)) continue;
       const attention = nextAttentionAt(job);
       if (attention !== null) delay = Math.min(delay, Math.max(0, attention - now));
     }
@@ -227,7 +230,18 @@ export class ScheduledJobService {
     (heartbeat as { unref?: () => void }).unref?.();
     let result: FireResult;
     try {
-      result = await this.options.executor.execute(job, fire);
+      result = await this.options.executor.execute(job, fire, (base) => {
+        this.options.store.mutate(scheduleId, (current) => {
+          const next = current && cloneJob(current);
+          const held = next?.fires.find((item) => item.fireId === fire.fireId);
+          if (!next || !held || held.state !== "running" || held.claimedBy !== this.token) {
+            throw new Error("The launch fire claim was lost before dispatch");
+          }
+          held.outcome = { ...held.outcome, ...base };
+          touchJob(next, this.now());
+          return { result: undefined, value: next };
+        });
+      });
     } catch (error) {
       result = {
         ok: false,
@@ -292,7 +306,6 @@ export class ScheduledJobService {
   ): Promise<{ job: ScheduledJob; replayed: boolean }> {
     const now = this.now();
     const timeZone = normalizeTimeZone(input.timeZone, this.defaultTimeZone());
-    const trigger = normalizeScheduleTrigger(input, timeZone, now);
     const catchUpMinutes = normalizeCatchUp(input.catchUpMinutes);
     const action = normalizeAction(input.action);
     const ownerKey = scheduleOwnerKey(owner);
@@ -316,6 +329,7 @@ export class ScheduledJobService {
       const prior = this.options.store.get(id);
       if (prior) return this.replay(prior, fingerprint);
     }
+    const trigger = normalizeScheduleTrigger(input, timeZone, now);
     await this.options.executor.validate(owner, action);
     const ownerLabel = (await this.options.ownerLabel?.(owner)) ?? defaultOwnerLabel(owner);
     const nextFireAt = nextScheduleSlot(trigger, timeZone, now);

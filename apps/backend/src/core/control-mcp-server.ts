@@ -512,7 +512,11 @@ export class ControlMcpServer {
       return { isError: true, text: "capability-denied: Coordinator capability denied" };
     }
     const checked = await this.coordinatorInvoker(coordinatorScope);
-    if (!checked.ok) return { isError: true, text: `capability-denied: ${checked.error}` };
+    if (!checked.ok)
+      return {
+        isError: true,
+        text: `${checked.status === 409 ? "owner-unavailable" : "capability-denied"}: ${checked.error}`,
+      };
     return callToolInProcess(this.coordinatorServer(coordinatorScope, checked.invoke), tool, args);
   }
 

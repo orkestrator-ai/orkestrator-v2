@@ -48,7 +48,7 @@ export const SCHEDULED_JOB_LIMITS = Object.freeze({
   /** A running fire whose heartbeat is older than this was abandoned by its backend. */
   fireStaleMs: 90_000,
   fireHeartbeatMs: 20_000,
-  /** Attempts of one fire across backend restarts before it is failed as interrupted. */
+  /** Stale-claim interruptions of one fire before it is failed as interrupted. */
   maxFireAttempts: 3,
 });
 
@@ -154,6 +154,8 @@ export interface ScheduleFire {
   scheduledFor: string;
   state: ScheduleFireState;
   attempts: number;
+  /** Stale claims observed; busy refusals do not consume the recovery budget. */
+  interruptions?: number;
   /** Earlier slots coalesced into this fire, or skipped with it. */
   missed?: number;
   /** Opaque token of the backend process executing this fire. */

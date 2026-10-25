@@ -76,7 +76,7 @@ export class ScheduledJobStore {
         }
         if (!("value" in update)) return { result: update.result };
         if (!existing) this.assertCapacity(update.value);
-        changed = true;
+        changed = !existing || existing.revision !== update.value.revision;
         return { result: update.result, value: update.value };
       });
     if (changed) this.options.announce?.(id);

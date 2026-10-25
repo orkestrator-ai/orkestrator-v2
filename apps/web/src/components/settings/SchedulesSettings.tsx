@@ -487,7 +487,7 @@ function initialForm(job: ScheduledJob | undefined): FormState {
   return base;
 }
 
-function buildAction(form: FormState): ScheduleAction {
+function buildAction(form: FormState, original?: ScheduleAction): ScheduleAction {
   const [environmentId = "", tabId = ""] = form.mailbox.split("\n");
   switch (form.actionMode) {
     case "mail":
@@ -504,16 +504,23 @@ function buildAction(form: FormState): ScheduleAction {
       };
     case "prompt":
       if (!environmentId || !tabId) throw new Error("Choose an agent tab");
-      return { kind: "prompt", environmentId, tabId, prompt: form.prompt };
+      return {
+        ...(original?.kind === "prompt" ? original : {}),
+        kind: "prompt",
+        environmentId,
+        tabId,
+        prompt: form.prompt,
+      };
     case "launch":
       if (!form.projectId) throw new Error("Choose a project");
       return {
+        ...(original?.kind === "launch" ? original : {}),
         kind: "launch",
         projectId: form.projectId,
         agent: form.agent,
         prompt: form.prompt,
-        type: "local",
-        ...(form.baseBranch.trim() ? { baseBranch: form.baseBranch.trim() } : {}),
+        type: original?.kind === "launch" ? original.type : "local",
+        baseBranch: form.baseBranch.trim() || undefined,
       };
     case "action": {
       let input: unknown;
@@ -586,16 +593,29 @@ function ScheduleDialog({
 
   const save = async () => {
     setProblem(null);
+    const original = job ? initialForm(job) : null;
+    const actionFields: (keyof FormState)[] = [
+      "actionMode",
+      "mailbox",
+      "subject",
+      "body",
+      "prompt",
+      "projectId",
+      "agent",
+      "baseBranch",
+      "actionName",
+      "actionInput",
+    ];
+    const actionChanged = !original || actionFields.some((key) => form[key] !== original[key]);
     let action: ScheduleAction | undefined;
     try {
-      action = actionLocked ? undefined : buildAction(form);
+      action = actionLocked || !actionChanged ? undefined : buildAction(form, job?.action);
     } catch (error) {
       setProblem(errorText(error));
       return;
     }
     // An edit sends the time only when it changed, so saving a rename never
     // moves the next fire.
-    const original = job ? initialForm(job) : null;
     const retimed =
       !original ||
       JSON.stringify(timingInput(form)) !== JSON.stringify(timingInput(original)) ||

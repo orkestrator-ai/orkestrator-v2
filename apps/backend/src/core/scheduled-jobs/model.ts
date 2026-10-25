@@ -1,3 +1,4 @@
+import { parseCronExpression, previousCronFire } from "@orkestrator/protocol/schedule-time";
 import {
   SCHEDULED_JOB_LIMITS,
   SCHEDULED_JOB_RECORD_VERSION,
@@ -100,12 +101,13 @@ export function claimDueFire(job: ScheduledJob, nowMs: number, token: string): C
   if (running) {
     const heartbeat = Date.parse(running.heartbeatAt ?? running.startedAt ?? running.scheduledFor);
     if (nowMs - heartbeat < SCHEDULED_JOB_LIMITS.fireStaleMs) return { job: null, fire: null };
-    if (running.attempts >= SCHEDULED_JOB_LIMITS.maxFireAttempts) {
+    running.interruptions = (running.interruptions ?? 0) + 1;
+    if (running.interruptions >= SCHEDULED_JOB_LIMITS.maxFireAttempts) {
       running.state = "failed";
       running.finishedAt = iso(nowMs);
       running.error = {
         code: "interrupted",
-        message: `The backend running this fire stopped ${running.attempts} times before it finished`,
+        message: `The backend running this fire stopped ${running.interruptions} times before it finished`,
       };
       delete running.claimedBy;
       finishIfDone(next);
@@ -133,6 +135,8 @@ export function claimDueFire(job: ScheduledJob, nowMs: number, token: string): C
     return { job: next, fire: pending };
   }
 
+  if (activeFire(next)) return { job: null, fire: null };
+
   if (next.state !== "active" || next.nextFireAt === null) return { job: null, fire: null };
   const slot = Date.parse(next.nextFireAt);
   if (!Number.isFinite(slot) || slot > nowMs) return { job: null, fire: null };
@@ -148,7 +152,16 @@ export function claimDueFire(job: ScheduledJob, nowMs: number, token: string): C
     following = nextScheduleSlot(next.trigger, next.timeZone, following);
   }
   if (following !== null && following <= nowMs) {
-    // Too many to walk: jump ahead; `missed` stays a lower bound.
+    // Keep the selected slot current even when the missed count is bounded.
+    if (next.trigger.kind === "interval") {
+      const period = next.trigger.everySeconds * 1000;
+      missed = Math.floor((nowMs - slot) / period);
+      latest = slot + missed * period;
+    } else if (next.trigger.kind === "cron") {
+      latest =
+        previousCronFire(parseCronExpression(next.trigger.expression), next.timeZone, nowMs) ??
+        latest;
+    }
     following = nextScheduleSlot(next.trigger, next.timeZone, nowMs);
   }
   next.nextFireAt = following === null ? null : iso(following);
@@ -243,13 +256,13 @@ export function settleFire(
     fire.state = "succeeded";
     fire.finishedAt = iso(nowMs);
     delete fire.error;
-    fire.outcome = result.outcome;
+    fire.outcome = { ...fire.outcome, ...result.outcome };
   } else {
     const retryAt = nowMs + SCHEDULED_JOB_LIMITS.busyRetryDelayMs;
     const deadline =
       Date.parse(fire.startedAt ?? fire.scheduledFor) + SCHEDULED_JOB_LIMITS.busyRetryWindowMs;
     fire.error = result.error;
-    if (result.outcome) fire.outcome = result.outcome;
+    if (result.outcome) fire.outcome = { ...fire.outcome, ...result.outcome };
     if (result.retry && retryAt <= deadline && next.state !== "paused") {
       fire.state = "pending";
       fire.retryAt = iso(retryAt);
@@ -344,7 +357,8 @@ export function nextAttentionAt(job: ScheduledJob): number | null {
       );
     }
   }
-  if (job.state === "active" && job.nextFireAt) consider(Date.parse(job.nextFireAt));
+  if (!activeFire(job) && job.state === "active" && job.nextFireAt)
+    consider(Date.parse(job.nextFireAt));
   return earliest;
 }
 

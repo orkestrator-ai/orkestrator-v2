@@ -95,6 +95,9 @@ export interface ScheduledJobRuntime {
   };
 }
 
+type LaunchBase = { baseBranch: string; baseCommit: string };
+type PersistLaunchBase = (base: LaunchBase) => void | Promise<void>;
+
 export class ScheduleAuthorityError extends Error {}
 
 /** Tools a schedule may never call: scheduling from a schedule, and reads. */
@@ -305,12 +308,26 @@ export class ScheduledJobExecutor {
   // -------------------------------------------------------------------------
   // Fire time
 
-  async execute(job: ScheduledJob, fire: ScheduleFire): Promise<FireResult> {
+  async execute(
+    job: ScheduledJob,
+    fire: ScheduleFire,
+    persistBase: PersistLaunchBase,
+  ): Promise<FireResult> {
     try {
+      if (job.owner.kind === "agent" && this.runtime.agentTools) {
+        try {
+          await this.runtime.agentTools.listTools(job.owner);
+        } catch (error) {
+          if (isRecord(error) && error.code === "capability-denied") {
+            throw new ScheduleAuthorityError(errorMessage(error));
+          }
+          throw error;
+        }
+      }
       if (isReminderToSelf(job.owner, job.action)) return await this.remind(job, fire);
       switch (job.owner.kind) {
         case "operator":
-          return await this.runPublic(job, fire, "operator");
+          return await this.runPublic(job, fire, "operator", undefined, persistBase);
         case "control-mcp": {
           const policy = this.runtime.controlMcp?.credentialPolicy(job.owner.credentialId);
           if (!policy) {
@@ -328,12 +345,13 @@ export class ScheduledJobExecutor {
             fire,
             controlMcpAuthority(job.owner.credentialId),
             policy,
+            persistBase,
           );
         }
         case "agent":
           return await this.runAgentTool(job, fire, job.owner);
         case "coordinator":
-          return await this.runCoordinatorTool(job, fire, job.owner);
+          return await this.runCoordinatorTool(job, fire, job.owner, persistBase);
       }
     } catch (error) {
       if (error instanceof ScheduleAuthorityError) {
@@ -358,27 +376,33 @@ export class ScheduledJobExecutor {
     job: ScheduledJob,
     fire: ScheduleFire,
     authority: PublicAuthority,
-    policy?: ControlMcpCredentialPolicy,
+    policy: ControlMcpCredentialPolicy | undefined,
+    persistBase: PersistLaunchBase,
   ): Promise<FireResult> {
     let action = job.action;
     const resolved: ScheduleFireOutcome = {};
-    if (action.kind === "launch" && action.baseBranch && !action.baseCommit) {
-      const tip = await this.runtime.invoke<unknown>("get_project_base_branch_tip", {
-        projectId: action.projectId,
-        branch: action.baseBranch,
-      });
-      const commit = isRecord(tip) ? stringField(tip.commit) : undefined;
-      const branch = isRecord(tip) ? stringField(tip.branch) : undefined;
-      if (!commit || branch !== action.baseBranch) {
-        return {
-          ok: false,
-          error: {
-            code: "base-unavailable",
-            message: `Could not resolve the newest commit of ${action.baseBranch}`,
-          },
-        };
+    if (action.kind === "launch" && !action.baseCommit) {
+      let branch = fire.outcome?.baseBranch;
+      let commit = fire.outcome?.baseCommit;
+      if (!branch || !commit) {
+        const tip = await this.runtime.invoke<unknown>("get_project_base_branch_tip", {
+          projectId: action.projectId,
+          ...(action.baseBranch ? { branch: action.baseBranch } : {}),
+        });
+        commit = isRecord(tip) ? stringField(tip.commit) : undefined;
+        branch = isRecord(tip) ? stringField(tip.branch) : undefined;
+        if (!commit || !branch || (action.baseBranch && branch !== action.baseBranch)) {
+          return {
+            ok: false,
+            error: {
+              code: "base-unavailable",
+              message: `Could not resolve the newest commit of ${action.baseBranch ?? "the base branch"}`,
+            },
+          };
+        }
+        await persistBase({ baseBranch: branch, baseCommit: commit });
       }
-      action = { ...action, baseCommit: commit };
+      action = { ...action, baseBranch: branch, baseCommit: commit };
       resolved.baseBranch = branch;
       resolved.baseCommit = commit;
     }
@@ -457,6 +481,7 @@ export class ScheduledJobExecutor {
     job: ScheduledJob,
     fire: ScheduleFire,
     owner: Extract<ScheduleOwner, { kind: "coordinator" }>,
+    persistBase: PersistLaunchBase,
   ): Promise<FireResult> {
     if (!this.runtime.controlMcp) {
       return {
@@ -485,9 +510,14 @@ export class ScheduledJobExecutor {
         ...(action.nodeId ? { nodeId: action.nodeId } : {}),
       };
     } else {
-      const base = await this.coordinatorLaunchBase(scope, action);
+      const stored = fire.outcome;
+      const base =
+        stored?.baseBranch && stored.baseCommit
+          ? { ok: true as const, baseBranch: stored.baseBranch, baseCommit: stored.baseCommit }
+          : await this.coordinatorLaunchBase(scope, action);
       if (!base.ok)
         return { ok: false, error: { code: "base-unavailable", message: base.message } };
+      await persistBase({ baseBranch: base.baseBranch, baseCommit: base.baseCommit });
       resolved.baseBranch = base.baseBranch;
       resolved.baseCommit = base.baseCommit;
       tool = "launch_environment";
@@ -511,7 +541,7 @@ export class ScheduledJobExecutor {
     }
     const result = await this.runtime.controlMcp.callCoordinatorTool(scope, tool, args);
     const outcome = toolOutcome(tool, result);
-    if (outcome.ok) outcome.outcome = { ...resolved, ...outcome.outcome };
+    outcome.outcome = { ...resolved, ...outcome.outcome };
     return outcome;
   }
 
@@ -691,7 +721,10 @@ function toolOutcome(tool: string, result: InProcessToolResult): FireResult {
   if (result.isError) {
     const message = bounded(result.text || `${tool} failed`);
     const lower = message.toLowerCase();
-    const retry = /\bbusy\b|not ready|still running|already has an open|waiting on/.test(lower);
+    const retry =
+      /\bbusy\b|not ready|still running|already has an open|waiting on|owner-unavailable/.test(
+        lower,
+      );
     const authority =
       /capability-denied|capability denied|cannot access|no longer valid|credential/.test(lower);
     return {
@@ -708,6 +741,33 @@ function toolOutcome(tool: string, result: InProcessToolResult): FireResult {
     } catch {
       parsed = undefined;
     }
+  }
+  if (isRecord(parsed)) {
+    const dispatch = stringField(parsed.outcome);
+    const error = isRecord(parsed.error) ? parsed.error : null;
+    const message =
+      stringField(parsed.error) ?? stringField(error?.message) ?? stringField(parsed.message);
+    if (
+      parsed.ok === false ||
+      parsed.error ||
+      (tool === "send_prompt_to_tab" && dispatch !== "accepted")
+    ) {
+      const code =
+        stringField(error?.code) ??
+        (tool === "send_prompt_to_tab" ? `dispatch-${dispatch ?? "unknown"}` : "startup-failed");
+      return {
+        ok: false,
+        error: { code, message: bounded(message ?? `${tool} ${dispatch ?? "failed"}`) },
+        // Unknown admission is ambiguous: retain it without resubmitting.
+        retry: dispatch !== "unknown" && /busy|not-ready|parked/.test(code),
+        outcome: { ...idsFrom(parsed), summary: `${tool} ${dispatch ?? "failed"}` },
+      };
+    }
+  } else if (tool === "send_prompt_to_tab") {
+    return {
+      ok: false,
+      error: { code: "dispatch-unknown", message: "Prompt acceptance could not be confirmed" },
+    };
   }
   return { ok: true, outcome: { ...idsFrom(parsed), summary: `${tool} succeeded` } };
 }

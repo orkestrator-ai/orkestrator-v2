@@ -58,6 +58,7 @@ import { TerminalWarningBanner } from "@/components/terminal/TerminalWarningBann
 import { TerminalDisconnectedBanner } from "@/components/terminal/TerminalDisconnectedBanner";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { buildAgentLaunchCommand } from "@/lib/agent-launch-command";
+import { isKeyboardShortcutsShortcut } from "@/lib/keyboard-shortcuts";
 import { MobileTerminalKeyBar, resolveTerminalKeyData } from "./MobileTerminalKeyBar";
 import { TerminalHistoryPanel } from "./TerminalHistoryPanel";
 import { TerminalCornerToolbar, useTerminalCornerHover } from "./TerminalCornerToolbar";
@@ -1518,6 +1519,11 @@ export function PersistentTerminal({
       // Cmd+W belongs to the application tab manager. If xterm processes it,
       // the window-level close shortcut never sees the focused-terminal event.
       if (isMeta && key === "w" && !isCtrl && !isAlt && !isShift) {
+        return false;
+      }
+
+      // The keyboard shortcuts dialog toggle belongs to the window, not the shell.
+      if (isKeyboardShortcutsShortcut(event)) {
         return false;
       }
 

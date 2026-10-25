@@ -20,6 +20,7 @@ import { CodexSubagentCardsFixture } from "./CodexSubagentCardsFixture";
 import { MachinesSettingsFixture } from "./MachinesSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
+import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
@@ -1774,6 +1775,9 @@ function fixtureForPath() {
   if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
   if (window.location.pathname === "/native-compose") return <NativeComposeFixture />;
   if (window.location.pathname === "/menu-placement") return <MenuPlacementFixture />;
+  if (window.location.pathname === "/keyboard-shortcuts") {
+    return <KeyboardShortcutsDialog platform="mac" />;
+  }
   if (window.location.pathname === "/composer-icon-pickers") return <ComposerIconPickersFixture />;
   if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;
   if (window.location.pathname === "/mobile-shell") return <MobileAppShellFixture />;

@@ -148,6 +148,7 @@ function PlainToolGroupBody({
   writePlace,
 }: BodyProps & PlaceProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const pinnedScrollTop = useRef(0);
   const arrivals = useLiveArrivals(
     entries,
     (list, index) => toolGroupEntryKey(list[index]!, index),
@@ -157,7 +158,11 @@ function PlainToolGroupBody({
     const element = ref.current;
     if (!element) return;
     const atEnd =
-      element.scrollHeight - element.clientHeight - element.scrollTop <= INNER_END_TOLERANCE_PX;
+      element.scrollHeight - element.clientHeight - element.scrollTop <= INNER_END_TOLERANCE_PX ||
+      // A pin's scroll event may arrive after another frame of growth. That
+      // larger gap must not release following; a reader moving up does.
+      (readPlace().atEnd && element.scrollTop >= pinnedScrollTop.current);
+    if (atEnd) pinnedScrollTop.current = element.scrollTop;
     let index = 0;
     let offset = 0;
     const top = element.getBoundingClientRect().top;
@@ -170,13 +175,24 @@ function PlainToolGroupBody({
       }
     }
     writePlace({ atEnd, index, offset });
-  }, [writePlace]);
+  }, [readPlace, writePlace]);
   // An append while the reader was at the end keeps the end in view; growth
   // of an entry they scrolled away from does not move them.
   useLayoutEffect(() => {
     const element = ref.current;
-    if (!element || !readPlace().atEnd) return;
-    element.scrollTop = element.scrollHeight;
+    if (!element) return;
+    const pin = () => {
+      if (!readPlace().atEnd) return;
+      element.scrollTop = element.scrollHeight;
+      pinnedScrollTop.current = element.scrollTop;
+    };
+    pin();
+    // The body stops resizing at its ceiling, but an arriving entry keeps
+    // growing inside it. Observe the entries so crossing that ceiling (or
+    // receiving more content) keeps the newest call in view as well.
+    const observer = new ResizeObserver(pin);
+    for (const child of Array.from(element.children)) observer.observe(child);
+    return () => observer.disconnect();
   }, [entries, readPlace]);
   return (
     <div

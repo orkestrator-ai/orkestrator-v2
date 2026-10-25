@@ -148,6 +148,11 @@ describe("NativeChatShell", () => {
     expect(spacer.style.height).toBe("336px");
   });
 
+  test("enables live arrivals on the production transcript", () => {
+    render(<NativeChatShell {...shellProps()} />);
+    expect(lastVirtualizedMessageListProps?.animateArrivals).toBe(true);
+  });
+
   test("shows a desync warning while already at the bottom without another accessory", () => {
     render(<NativeChatShell {...shellProps()} desynced />);
 

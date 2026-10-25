@@ -37,7 +37,7 @@ async function distanceFromBottom(page: Page) {
  * scroller's distance from its end, and records every element the entrance
  * attribute is added to.
  */
-async function startArrivalProbe(page: Page) {
+async function startArrivalProbe(page: Page, selector = arrivingRow) {
   await page.evaluate(
     ({ scrollerSelector, selector }) => {
       const samples: Array<{ height: number; distance: number; animating: boolean }> = [];
@@ -89,7 +89,7 @@ async function startArrivalProbe(page: Page) {
         },
       };
     },
-    { scrollerSelector, selector: arrivingRow },
+    { scrollerSelector, selector },
   );
 }
 
@@ -213,3 +213,235 @@ test("a detached reader's row holds every painted frame while rows grow in below
   expect(probe.maxError).toBeLessThanOrEqual(2);
   await expect.poll(() => distanceFromBottom(page)).toBeGreaterThan(100);
 });
+
+test("a live authentication failure grows its notice and recovery card in one track", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await openFollowing(page, "/streaming-transcript?arrivals");
+  const selector = '[data-chat-message-key^="native-terminal:error:"]';
+  await startArrivalProbe(page, selector);
+  await page.getByRole("button", { name: "Append authentication error" }).click();
+  const row = page.locator(selector);
+  await expect(row.getByRole("region", { name: "Sign in to Claude", exact: true })).toBeVisible();
+  await expect(row).not.toHaveAttribute("data-transcript-arrival");
+  await waitForFrames(page);
+  const { samples, added } = await stopArrivalProbe(page);
+  const height = samples.at(-1)!.height;
+  expect(height).toBeGreaterThan(120);
+  expect(added).toEqual([{ row: true, inGroup: false }]);
+  // Includes the recovery card: an implicit second grid track would make the
+  // first frame almost full height and leave only the small notice growing.
+  expect(samples[0]!.height).toBeLessThan(height * 0.5);
+  expect(samples.filter((sample) => sample.animating).length).toBeGreaterThan(4);
+  for (let i = 1; i < samples.length; i++) {
+    expect(samples[i]!.height).toBeGreaterThanOrEqual(samples[i - 1]!.height - 0.5);
+  }
+  for (const sample of samples) expect(sample.distance).toBeLessThanOrEqual(1);
+});
+
+test("content updates and another append preserve an active entrance and following", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await openFollowing(page, "/streaming-transcript?arrivals");
+  await startArrivalProbe(page);
+  const preserved = await page.evaluate(async (selector) => {
+    const click = (name: string) =>
+      Array.from(document.querySelectorAll("button"))
+        .find((button) => button.textContent === name)!
+        .click();
+    const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    click("Append turn");
+    await frame();
+    const row = document.querySelector<HTMLElement>(selector)!;
+    const animation = row.getAnimations()[0]!;
+    await animation.ready;
+    const startTime = animation.startTime;
+    // Keep both mutations inside the real 300ms entrance, across commits.
+    click("Update turn");
+    await frame();
+    const afterUpdate =
+      row.getAnimations()[0] === animation && row.hasAttribute("data-transcript-arrival");
+    click("Append turn");
+    await frame();
+    const afterAppend =
+      row.getAnimations()[0] === animation && row.hasAttribute("data-transcript-arrival");
+    return {
+      afterUpdate,
+      afterAppend,
+      sameStart: animation.startTime === startTime,
+      text: row.textContent,
+    };
+  }, arrivingRow);
+  expect(preserved.afterUpdate).toBe(true);
+  expect(preserved.afterAppend).toBe(true);
+  expect(preserved.sameStart).toBe(true);
+  expect(preserved.text).toContain("More streamed content");
+  await expect(page.locator(arrivingRow)).toHaveCount(2);
+  await expect(page.locator("[data-transcript-arrival]")).toHaveCount(0);
+  await waitForFrames(page);
+  const { samples, added } = await stopArrivalProbe(page);
+  expect(added).toEqual([
+    { row: true, inGroup: false },
+    { row: true, inGroup: false },
+  ]);
+  expect(samples.filter((sample) => sample.animating).length).toBeGreaterThan(4);
+  for (const sample of samples) expect(sample.distance).toBeLessThanOrEqual(1);
+});
+
+test("an entry entrance settles together with the automatic three-call fold", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await openFollowing(page, "/streaming-transcript?long=1&fold&arrivals");
+  await startArrivalProbe(page, '[data-chat-message-key="live-fold"]');
+  await page.getByRole("button", { name: "Grow tool group" }).click();
+  const show = page.getByRole("button", { name: /^Show 3 tool calls:/ });
+  await expect(show).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator("[data-transcript-arrival]")).toHaveCount(0);
+  await expect(page.locator(".tool-group-fold-content").last()).toBeHidden();
+  const { samples, added } = await stopArrivalProbe(page);
+  expect(added).toEqual([{ row: false, inGroup: true }]);
+  expect(samples.length).toBeGreaterThan(4);
+  for (const sample of samples) expect(sample.distance).toBeLessThanOrEqual(1);
+  await show.click();
+  await expect(
+    page.locator('[data-chat-message-key="live-fold"] [data-transcript-part-id]'),
+  ).toHaveCount(3);
+  await expect(page.locator("[data-transcript-arrival]")).toHaveCount(0);
+});
+
+for (const scenario of ["crossing", "overflowing", "oversized", "detached"] as const) {
+  test(`a short tool body handles an arriving call when ${scenario}`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    // Deterministic content heights exercise both sides of the production cap
+    // on mobile and desktop, without depending on text wrapping or fonts.
+    const initialCount = scenario === "crossing" ? 4 : 5;
+    await openFollowing(
+      page,
+      `/streaming-transcript?long=1&bigGroup=${initialCount}&liveGroup&arrivals`,
+    );
+    await page.addStyleTag({
+      content: `.tool-group-fold-content button { height: ${scenario === "overflowing" || scenario === "detached" ? 110 : 78}px; }`,
+    });
+    await page
+      .getByRole("button", { name: new RegExp(`^Show ${initialCount} tool calls:`) })
+      .click();
+    const body = page.locator(
+      '[data-chat-message-key="big-tool-group"] .tool-group-fold-content > div',
+    );
+    await expect(body).toBeVisible();
+    await page.evaluate(() =>
+      Promise.all(
+        Array.from(document.querySelectorAll(".tool-group-fold-content")).flatMap((element) =>
+          element.getAnimations().map((animation) => animation.finished),
+        ),
+      ),
+    );
+    await waitForFrames(page);
+    const before = await body.evaluate((element) => ({
+      height: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+    }));
+    if (scenario === "overflowing" || scenario === "detached") {
+      expect(before.scrollHeight).toBeGreaterThan(before.height);
+    } else {
+      expect(before.scrollHeight).toBeLessThanOrEqual(before.height + 1);
+    }
+    if (scenario === "detached") {
+      await body.hover();
+      await page.mouse.wheel(0, -1000);
+      await waitForFrames(page);
+      await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(0);
+    }
+    if (scenario === "oversized") {
+      await page.addStyleTag({
+        content:
+          '.tool-group-fold-content [data-transcript-part-id="tool-5005"] button { height: 600px; }',
+      });
+    }
+    await startArrivalProbe(page);
+    await page
+      .getByRole("button", { name: "Append group call", exact: true })
+      .evaluate((button) => (button as HTMLButtonElement).click());
+    await expect(body.locator(":scope > div")).toHaveCount(initialCount + 1);
+    if (scenario === "crossing") {
+      const entry = body.locator(":scope > div").last();
+      await expect(entry).toHaveAttribute("data-transcript-arrival");
+      // The call's initial layout fits; streamed content makes it taller
+      // during its entrance, taking the short body across its height ceiling.
+      await entry.locator("button").evaluate((button) => {
+        button.style.height = "160px";
+      });
+    }
+    await expect(page.locator("[data-transcript-arrival]")).toHaveCount(0);
+    await waitForFrames(page);
+    const { added } = await stopArrivalProbe(page);
+    const after = await body.evaluate((element) => {
+      const viewport = element.getBoundingClientRect();
+      const last = element.lastElementChild!.getBoundingClientRect();
+      return {
+        gap: element.scrollHeight - element.clientHeight - element.scrollTop,
+        top: element.scrollTop,
+        height: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+        lastHeight: last.height,
+        lastTop: last.top - viewport.top,
+        lastBottom: last.bottom - viewport.bottom,
+      };
+    });
+    expect(after.scrollHeight).toBeGreaterThan(after.height);
+    if (scenario === "detached") {
+      expect(after.top).toBe(0);
+      expect(after.gap).toBeGreaterThan(100);
+    } else {
+      expect(after.gap).toBeLessThanOrEqual(2);
+      expect(after.lastBottom).toBeLessThanOrEqual(1);
+      if (scenario === "oversized") expect(after.lastHeight).toBeGreaterThan(after.height);
+      else expect(after.lastTop).toBeGreaterThanOrEqual(-1);
+    }
+    expect(added).toEqual(scenario === "crossing" ? [{ row: false, inGroup: true }] : []);
+    if (scenario === "crossing") {
+      // A subsequent append still follows: growth must not leave stale
+      // detached state behind after the entrance clears.
+      await page
+        .getByRole("button", { name: "Append group call", exact: true })
+        .evaluate((button) => (button as HTMLButtonElement).click());
+      await expect(body.locator(":scope > div")).toHaveCount(initialCount + 2);
+      await expect
+        .poll(() =>
+          body.evaluate(
+            (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+          ),
+        )
+        .toBeLessThanOrEqual(2);
+    }
+    if (scenario === "detached") {
+      // Resume following at the new end, then move up within the range that
+      // was added. That must release following again before the next append.
+      await body.hover();
+      await page.mouse.wheel(0, 1000);
+      await expect
+        .poll(() =>
+          body.evaluate(
+            (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+          ),
+        )
+        .toBeLessThanOrEqual(2);
+      await page.mouse.wheel(0, -50);
+      await expect
+        .poll(() =>
+          body.evaluate(
+            (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+          ),
+        )
+        .toBeGreaterThan(20);
+      const held = await body.evaluate((element) => element.scrollTop);
+      await page
+        .getByRole("button", { name: "Append group call", exact: true })
+        .evaluate((button) => (button as HTMLButtonElement).click());
+      await expect(body.locator(":scope > div")).toHaveCount(initialCount + 2);
+      await waitForFrames(page);
+      expect(await body.evaluate((element) => element.scrollTop)).toBe(held);
+    }
+  });
+}

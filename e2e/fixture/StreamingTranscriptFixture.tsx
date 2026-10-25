@@ -102,7 +102,13 @@ function TrackedNativeMessage({
     };
   }, []);
 
-  return <NativeMessage message={message} previousMessage={previousMessage} platform="codex" />;
+  return (
+    <NativeMessage
+      message={message}
+      previousMessage={previousMessage}
+      platform={message.id.startsWith("native-terminal:error:") ? "claude" : "codex"}
+    />
+  );
 }
 
 /** One finished tool run of `count` calls: the bounded-rendering stress case. */
@@ -192,6 +198,27 @@ export function StreamingTranscriptFixture() {
     });
   };
 
+  const updateTurn = () => {
+    setMessages((current) => {
+      const last = current.at(-1)!;
+      const content = `${last.content}\n\nMore streamed content in the arriving response.`;
+      return [...current.slice(0, -1), { ...last, content, parts: [{ type: "text", content }] }];
+    });
+  };
+
+  const appendAuthError = () => {
+    setMessages((current) => [
+      ...current,
+      {
+        id: `native-terminal:error:${current.length}`,
+        role: "system",
+        content: "API error: 401 — failed to authenticate",
+        createdAt: new Date().toISOString(),
+        parts: [],
+      },
+    ]);
+  };
+
   const saveAndRemount = () => {
     virtuosoRef.current?.getState((snapshot) => {
       window.transcriptRenderProbe ??= {
@@ -250,6 +277,20 @@ export function StreamingTranscriptFixture() {
             onClick={() =>
               setMessages((current) => {
                 const last = current.at(-1)!;
+                return [
+                  ...current.slice(0, -1),
+                  { ...last, parts: [...last.parts, command(5_000 + last.parts.length)] },
+                ];
+              })
+            }
+          >
+            Append group call
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setMessages((current) => {
+                const last = current.at(-1)!;
                 const settled = last.parts.map((part) => ({
                   ...part,
                   toolState: "success" as const,
@@ -294,6 +335,12 @@ export function StreamingTranscriptFixture() {
       </button>
       <button type="button" onClick={appendTurn}>
         Append turn
+      </button>
+      <button type="button" onClick={updateTurn}>
+        Update turn
+      </button>
+      <button type="button" onClick={appendAuthError}>
+        Append authentication error
       </button>
       <button type="button" onClick={scrollToToolHistory}>
         Scroll to tool history

@@ -328,7 +328,10 @@ function TranscriptRow({
       )}
     >
       <RichRowVisibilityContext value={visibility}>
-        <ChatFindActiveContext value={isCurrentFindMessage}>{children}</ChatFindActiveContext>
+        <ChatFindActiveContext value={isCurrentFindMessage}>
+          {/* One grid track must contain every root returned by the message. */}
+          <div>{children}</div>
+        </ChatFindActiveContext>
       </RichRowVisibilityContext>
     </div>
   );

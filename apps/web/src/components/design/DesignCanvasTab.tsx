@@ -63,6 +63,14 @@ import type { DesignFrameBridge } from "./frame-bridge";
 const NEW_FRAME_HTML =
   "<!doctype html><html><head><style>body{margin:0;font-family:system-ui;padding:48px;background:#fff;color:#18181b}</style></head><body><h1>Your next idea</h1><p>Ask your agent to design here.</p></body></html>";
 const NARROW_WIDTH = 640;
+/**
+ * Below this height (about 400% zoom) the wrapped toolbar would take half the
+ * pane and squeeze Layers and the inspector to a sliver (WCAG 1.4.10), so the
+ * tools collapse into one menu.
+ */
+const SHORT_HEIGHT = 400;
+/** How long a layer chosen in a frame that has not rendered waits for it. */
+const PENDING_ELEMENT_MS = 10_000;
 
 function isTextEditingTarget(target: EventTarget | null): boolean {
   return (
@@ -100,7 +108,10 @@ export function DesignCanvasTab({
   const restored = useRef(false);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [workspaceWidth, setWorkspaceWidth] = useState(1024);
+  const [workspaceHeight, setWorkspaceHeight] = useState(900);
   const narrow = workspaceWidth < NARROW_WIDTH;
+  // Zero means not laid out yet (or hidden), not short.
+  const compact = workspaceHeight > 0 && workspaceHeight < SHORT_HEIGHT;
   const narrowRef = useRef(narrow);
   narrowRef.current = narrow;
   const [selection, setSelection] = useState<DesignSelection | null>(null);
@@ -127,6 +138,7 @@ export function DesignCanvasTab({
   const [pinned, setPinned] = useState<ReadonlySet<string>>(new Set());
   const [renderedVersion, setRenderedVersion] = useState(0);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState("");
   const bridges = useRef(new Map<string, DesignFrameBridge>());
   const viewportElement = useRef<HTMLElement>(null);
   const workspace = useRef<HTMLDivElement>(null);
@@ -180,6 +192,7 @@ export function DesignCanvasTab({
     const measure = () => {
       setSize({ width: target.clientWidth, height: target.clientHeight });
       setWorkspaceWidth(root.clientWidth);
+      setWorkspaceHeight(root.clientHeight);
       const maximum = Math.max(120, Math.min(400, Math.floor(root.clientWidth * 0.45)));
       setLayersMaxWidth(maximum);
       setLayersWidth((width) => Math.min(width, maximum));
@@ -493,6 +506,20 @@ export function DesignCanvasTab({
 
   const frameActionRef = useRef(frameAction);
   frameActionRef.current = frameAction;
+  // A layer chosen in the Layers tree before its frame rendered: the frame is
+  // brought into view and the layer is selected when it renders, unless the
+  // user selects or moves to another frame first.
+  const pendingElement = useRef<{
+    frameId: string;
+    selector: string;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const cancelPendingElement = useCallback(() => {
+    if (pendingElement.current) clearTimeout(pendingElement.current.timer);
+    pendingElement.current = null;
+  }, []);
+  useEffect(() => cancelPendingElement, [cancelPendingElement]);
+  const selectElementRef = useRef<(frameId: string, selector: string) => void>(() => undefined);
   const actions = useMemo<DesignCanvasActions>(
     () => ({
       controller,
@@ -502,6 +529,7 @@ export function DesignCanvasTab({
       select: (next, generation) => {
         if (generation !== undefined && generation !== selectionGeneration.current) return false;
         selectionGeneration.current++;
+        cancelPendingElement();
         setSelection(next);
         selectedFrameRef.current = null;
         setSelectedFrameId(null);
@@ -533,6 +561,8 @@ export function DesignCanvasTab({
       frameRendered: (frameId) => {
         setRenderedVersion((value) => value + 1);
         refreshSelection(frameId);
+        const pending = pendingElement.current;
+        if (pending?.frameId === frameId) selectElementRef.current(frameId, pending.selector);
       },
       pin: (frameId, value) =>
         setPinned((current) => {
@@ -547,6 +577,7 @@ export function DesignCanvasTab({
       frameAction: (frameId, action) => frameActionRef.current(frameId, action),
       focusFrame: (frameId) => {
         selectionGeneration.current++;
+        if (pendingElement.current?.frameId !== frameId) cancelPendingElement();
         setFocusedFrame(frameId);
         if (selectedFrameRef.current && selectedFrameRef.current !== frameId) {
           selectedFrameRef.current = null;
@@ -555,6 +586,7 @@ export function DesignCanvasTab({
       },
       selectFrame: (frameId) => {
         selectionGeneration.current++;
+        cancelPendingElement();
         selectedFrameRef.current = frameId;
         setSelectedFrameId(frameId);
         setFocusedFrame(frameId);
@@ -564,6 +596,7 @@ export function DesignCanvasTab({
     [
       applyStyles,
       canvasId,
+      cancelPendingElement,
       controller,
       environmentId,
       refreshSelection,
@@ -571,6 +604,59 @@ export function DesignCanvasTab({
       submitGeometry,
     ],
   );
+
+  const selectElement = useCallback(
+    (frameId: string, selector: string) => {
+      const latest = projectionRef.current;
+      const frame = latest?.canvas?.frames.find((candidate) => candidate.id === frameId);
+      if (!frame) return;
+      const meta = latest?.workspace?.frames[frameId];
+      const bridge = bridges.current.get(frameId);
+      const key = meta?.contentId ?? `revision:${frame.revision}`;
+      actions.focusFrame(frameId);
+      if (!bridge || bridge.renderedContentId !== key) {
+        // Hit testing needs a live, current render: bring the frame into view
+        // and select when it renders (frameRendered). A render of older
+        // content keeps the same wait.
+        const waiting = pendingElement.current;
+        if (waiting?.frameId === frameId && waiting.selector === selector) return;
+        cancelPendingElement();
+        const entry = {
+          frameId,
+          selector,
+          timer: setTimeout(() => {
+            if (pendingElement.current !== entry) return;
+            pendingElement.current = null;
+            setAnnouncement(`${frame.name} did not finish loading; nothing was selected`);
+          }, PENDING_ELEMENT_MS),
+        };
+        pendingElement.current = entry;
+        fitFrame(frameId);
+        setAnnouncement(`Loading ${frame.name}; the layer is selected when it appears`);
+        return;
+      }
+      cancelPendingElement();
+      const generation = actions.beginSelection();
+      void bridge
+        .ask<DesignElement>({ op: "inspectElement", selector })
+        .then((element) => {
+          if (bridge.renderedContentId !== key) return;
+          const selected = actions.select(
+            {
+              frameId,
+              revision: frame.revision,
+              element,
+              ...(meta ? { structureId: meta.structureId, contentId: meta.contentId } : {}),
+            },
+            generation,
+          );
+          if (selected && narrowRef.current) setInspectorOpen(true);
+        })
+        .catch(reportError);
+    },
+    [actions, cancelPendingElement, fitFrame, reportError],
+  );
+  selectElementRef.current = selectElement;
 
   const restoreHistory = useCallback(
     (kind: "undo" | "redo") => {
@@ -683,7 +769,6 @@ export function DesignCanvasTab({
     }
   }, [environmentId, reportError]);
 
-  const [announcement, setAnnouncement] = useState("");
   useEffect(() => {
     if (projection?.notice) setAnnouncement(projection.notice.text);
   }, [projection?.notice]);
@@ -875,6 +960,7 @@ export function DesignCanvasTab({
         className="design-workspace absolute inset-0 flex min-h-0 flex-col bg-background"
         aria-label="Design canvas"
         data-narrow={narrow || undefined}
+        data-short={compact || undefined}
         onFocus={(event) => {
           // Portalled dialogs bubble here too; they restore their own focus.
           if (event.currentTarget.contains(event.target)) lastFocus.current = event.target;
@@ -890,6 +976,7 @@ export function DesignCanvasTab({
           zoom={viewport.zoom}
           mode={mode}
           narrow={narrow}
+          compact={compact}
           layersOpen={showLayers}
           inspectorOpen={showInspector}
           historyOpen={historyOpen}
@@ -998,38 +1085,7 @@ export function DesignCanvasTab({
                     fitFrame(frameId);
                   }}
                   onFocusRow={(frameId) => actions.focusFrame(frameId)}
-                  onSelectElement={(frameId, selector) => {
-                    const bridge = bridges.current.get(frameId);
-                    const frame = committedById.get(frameId);
-                    const meta = metas[frameId];
-                    const key = meta?.contentId ?? `revision:${frame?.revision}`;
-                    if (!frame) return;
-                    actions.focusFrame(frameId);
-                    if (!bridge || bridge.renderedContentId !== key) {
-                      // Bring the frame into view first; hit testing needs a live, current render.
-                      fitFrame(frameId);
-                      return;
-                    }
-                    const generation = actions.beginSelection();
-                    void bridge
-                      .ask<DesignElement>({ op: "inspectElement", selector })
-                      .then((element) => {
-                        if (bridge.renderedContentId !== key) return;
-                        const selected = actions.select(
-                          {
-                            frameId,
-                            revision: frame.revision,
-                            element,
-                            ...(meta
-                              ? { structureId: meta.structureId, contentId: meta.contentId }
-                              : {}),
-                          },
-                          generation,
-                        );
-                        if (selected && narrow) setInspectorOpen(true);
-                      })
-                      .catch(reportError);
-                  }}
+                  onSelectElement={selectElement}
                   onFrameAction={frameAction}
                 />
                 <div

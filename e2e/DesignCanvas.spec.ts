@@ -120,8 +120,8 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     });
     expect((await service.getFrame(canvas.id, "design-fixture", frame.id)).revision).toBe(1);
     await page.screenshot({ path: testInfo.outputPath("design-inspector.png") });
-    const widthField = page.getByRole("textbox", { name: "width", exact: true });
-    const heightField = page.getByRole("textbox", { name: "height", exact: true });
+    const widthField = page.getByRole("textbox", { name: "Width", exact: true });
+    const heightField = page.getByRole("textbox", { name: "Height", exact: true });
     const widthBox = (await widthField.boundingBox())!;
     const heightBox = (await heightField.boundingBox())!;
     expect(widthBox.y).toBe(heightBox.y);
@@ -131,27 +131,27 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       true,
     );
     await expect(page.getByRole("button", { name: "Apply styles" })).toBeDisabled();
-    await page.getByRole("combobox", { name: "position", exact: true }).click();
+    await page.getByRole("combobox", { name: "Position", exact: true }).click();
     await page.getByRole("option", { name: "relative", exact: true }).click();
     await page.getByRole("button", { name: "Reset", exact: true }).click();
-    await expect(page.getByRole("combobox", { name: "position", exact: true })).toContainText(
+    await expect(page.getByRole("combobox", { name: "Position", exact: true })).toContainText(
       "static",
     );
     await expect(page.getByRole("button", { name: "Apply styles" })).toBeDisabled();
-    await page.getByRole("combobox", { name: "position", exact: true }).click();
+    await page.getByRole("combobox", { name: "Position", exact: true }).click();
     await page.getByRole("option", { name: "relative", exact: true }).click();
-    await page.getByRole("combobox", { name: "text-align", exact: true }).click();
+    await page.getByRole("combobox", { name: "Align", exact: true }).click();
     await page.getByRole("option", { name: "center", exact: true }).click();
-    await page.getByRole("combobox", { name: "font-weight", exact: true }).click();
+    await page.getByRole("combobox", { name: "Weight", exact: true }).click();
     await page.getByRole("option", { name: "Custom…", exact: true }).click();
-    await page.getByRole("textbox", { name: "font-weight", exact: true }).fill("450");
-    await page.getByLabel("Pick background-color", { exact: true }).fill("#336699");
-    await expect(page.getByRole("textbox", { name: "background-color", exact: true })).toHaveValue(
+    await page.getByRole("textbox", { name: "Weight", exact: true }).fill("450");
+    await page.getByLabel("Pick Fill", { exact: true }).fill("#336699");
+    await expect(page.getByRole("textbox", { name: "Fill", exact: true })).toHaveValue(
       "rgba(51, 102, 153, 0.4)",
     );
     // Draft controls must not overwrite the frame until explicitly applied.
     expect((await service.getFrame(canvas.id, "design-fixture", frame.id)).revision).toBe(1);
-    await page.getByLabel("color", { exact: true }).fill("rgb(240, 10, 20)");
+    await page.getByLabel("Color", { exact: true }).fill("rgb(240, 10, 20)");
     await page.getByRole("button", { name: "Apply styles" }).click();
     await expect(embedded.getByRole("heading")).toHaveCSS("color", "rgb(240, 10, 20)");
     await expect(embedded.getByRole("heading")).toHaveCSS(
@@ -190,7 +190,7 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     await page.reload();
     await expect(embedded.getByRole("heading")).toHaveText("Changed while away");
     await page.getByRole("button", { name: "title", exact: true }).click();
-    await page.getByLabel("color", { exact: true }).fill("blue");
+    await page.getByLabel("Color", { exact: true }).fill("blue");
     await service.mutate(canvas.id, "design-fixture", frame.id, 3, {
       html: "<h1 id='title'>Agent's newer edit</h1>",
     });

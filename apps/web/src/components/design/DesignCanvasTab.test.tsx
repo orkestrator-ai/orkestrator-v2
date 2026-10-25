@@ -379,6 +379,126 @@ describe("DesignCanvasTab", () => {
     }
   });
 
+  test("a Layers element on an unrendered frame is announced, then selected once it renders", async () => {
+    const bridges = new Set<DesignFrameBridge>();
+    const target: DesignElement = {
+      selector: "body > :nth-child(1)",
+      tag: "p",
+      text: "target",
+      attributes: {},
+      styles: {},
+      rect: { x: 0, y: 0, width: 20, height: 20 },
+    };
+    const ask = spyOn(DesignFrameBridge.prototype, "ask").mockImplementation(function (
+      this: DesignFrameBridge,
+      operation,
+    ) {
+      if (operation.op === "render") bridges.add(this);
+      if (operation.op === "inspectElement") return Promise.resolve(target) as Promise<never>;
+      if (operation.op === "hierarchyPage")
+        return Promise.resolve({
+          layers: [
+            { selector: target.selector, tag: "p", label: "target", depth: 1, childCount: 0 },
+          ],
+          total: 1,
+          truncated: false,
+          bytes: 0,
+        }) as Promise<never>;
+      return Promise.resolve(undefined) as Promise<never>;
+    });
+    try {
+      render(
+        <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+      );
+      await screen.findByRole("button", { name: "Move frame A" });
+      fireEvent.load(screen.getByTitle("B"));
+      const layer = (await screen.findAllByRole("button", { name: "target" })).find((button) =>
+        button.closest('[role="treeitem"]')?.getAttribute("data-row-key")?.startsWith(frameB),
+      )!;
+      const bridge = Array.from(bridges).find(
+        (candidate) => candidate.renderedContentId === backend.frames.get(frameB)!.contentId,
+      )!;
+      // The frame has not rendered its current content: one activation waits for it.
+      bridge.renderedContentId = null;
+      fireEvent.click(layer);
+      const announcer = document.querySelector('p.sr-only[role="status"]')!;
+      await waitFor(() =>
+        expect(announcer.textContent).toBe("Loading B; the layer is selected when it appears"),
+      );
+      expect(ask.mock.calls.some(([operation]) => operation.op === "inspectElement")).toBe(false);
+      expect(screen.queryByRole("complementary", { name: "Element inspector" }) === null).toBe(
+        true,
+      );
+
+      // The frame renders new content: the waiting layer is selected without a second Enter.
+      backend.externalReplace(frameB);
+      await act(() => designController("env-1", canvasId).refresh());
+      const inspector = await screen.findByRole("complementary", { name: "Element inspector" });
+      expect(within(inspector).getByRole("heading", { name: "p" })).toBeTruthy();
+      expect(
+        ask.mock.calls.filter(([operation]) => operation.op === "inspectElement"),
+      ).toHaveLength(1);
+    } finally {
+      ask.mockRestore();
+    }
+  });
+
+  test("a Layers element waiting for its frame is dropped when another frame takes focus", async () => {
+    const bridges = new Set<DesignFrameBridge>();
+    const ask = spyOn(DesignFrameBridge.prototype, "ask").mockImplementation(function (
+      this: DesignFrameBridge,
+      operation,
+    ) {
+      if (operation.op === "render") bridges.add(this);
+      if (operation.op === "hierarchyPage")
+        return Promise.resolve({
+          layers: [
+            {
+              selector: "body > :nth-child(1)",
+              tag: "p",
+              label: "target",
+              depth: 1,
+              childCount: 0,
+            },
+          ],
+          total: 1,
+          truncated: false,
+          bytes: 0,
+        }) as Promise<never>;
+      return Promise.resolve(undefined) as Promise<never>;
+    });
+    try {
+      render(
+        <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+      );
+      const titleA = await screen.findByRole("button", { name: "Move frame A" });
+      fireEvent.load(screen.getByTitle("B"));
+      const layer = (await screen.findAllByRole("button", { name: "target" })).find((button) =>
+        button.closest('[role="treeitem"]')?.getAttribute("data-row-key")?.startsWith(frameB),
+      )!;
+      Array.from(bridges).find(
+        (candidate) => candidate.renderedContentId === backend.frames.get(frameB)!.contentId,
+      )!.renderedContentId = null;
+      fireEvent.click(layer);
+      // The user moves on to frame A before B renders.
+      fireEvent.click(titleA);
+      await waitFor(() => expect(titleA.getAttribute("aria-pressed")).toBe("true"));
+      backend.externalReplace(frameB);
+      await act(() => designController("env-1", canvasId).refresh());
+      await waitFor(() =>
+        expect(
+          ask.mock.calls.filter(([operation]) => operation.op === "render").length,
+        ).toBeGreaterThan(2),
+      );
+      expect(ask.mock.calls.some(([operation]) => operation.op === "inspectElement")).toBe(false);
+      expect(screen.queryByRole("complementary", { name: "Element inspector" }) === null).toBe(
+        true,
+      );
+    } finally {
+      ask.mockRestore();
+    }
+  });
+
   test("legacy Delete asks for confirmation, and non-editable canvases ignore it", async () => {
     render(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
@@ -490,6 +610,39 @@ describe("DesignCanvasTab", () => {
     // The save state is a polite live region, so acknowledgements are announced.
     const footer = screen.getByRole("contentinfo");
     expect(within(footer).getByRole("status").textContent).toBe("Saved in workspace");
+  });
+
+  test("a short pane (about 400% zoom) collapses the tools into one menu", async () => {
+    globalThis.ResizeObserver = class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        if (target.getAttribute("aria-label") === "Design canvas") {
+          Object.defineProperty(target, "clientWidth", { value: 320, configurable: true });
+          Object.defineProperty(target, "clientHeight", { value: 225, configurable: true });
+          this.callback([], this as unknown as ResizeObserver);
+        }
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    render(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    const toolbar = await screen.findByRole("toolbar", { name: "Design tools" });
+    await waitFor(() =>
+      expect(within(toolbar).getByRole("button", { name: "More design tools" })).toBeTruthy(),
+    );
+    expect(document.querySelector('[aria-label="Design canvas"]')?.hasAttribute("data-short")).toBe(
+      true,
+    );
+    // Panel toggles stay inline; every other tool moves into the menu.
+    expect(within(toolbar).getByRole("button", { name: "Toggle layers" })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: "Toggle inspector" })).toBeTruthy();
+    expect(within(toolbar).queryByRole("button", { name: "Zoom in" }) === null).toBe(true);
+    const exportButton = within(toolbar).queryByRole("button", {
+      name: "Export design to repository",
+    });
+    expect(exportButton === null).toBe(true);
   });
 
   test.each([false, true])(

@@ -12,6 +12,7 @@ import type {
   HostAgentSignIns,
   HostSignInPlatform,
   MachineAgentAccountsResult,
+  PreferredAgentIdentities,
 } from "@orkestrator/protocol/agent-accounts";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { NativeAgentAuthStatus } from "@orkestrator/protocol/native-agent";
@@ -160,6 +161,21 @@ export async function getNativeAgentSessionAccount(
 /** Every machine's accounts, collected by the command node. */
 export async function listMachineAgentAccounts(): Promise<MachineAgentAccountsResult> {
   return invokeCommandNodeSetting<MachineAgentAccountsResult>("list_machine_agent_accounts");
+}
+
+/**
+ * Record (or clear, with `null`) the login the overview flags every machine
+ * against. Kept by the same machine that answers the overview; it switches
+ * nothing. Older machines reject the command.
+ */
+export async function setPreferredAgentIdentity(
+  platform: AgentAccountPlatform,
+  email: string | null,
+): Promise<PreferredAgentIdentities> {
+  return invokeCommandNodeSetting<PreferredAgentIdentities>("set_preferred_agent_identity", {
+    platform,
+    email,
+  });
 }
 
 /** Grok's and Pi's login on `machine`, read without a session. Older machines reject it. */

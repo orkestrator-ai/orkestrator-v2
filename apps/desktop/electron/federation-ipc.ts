@@ -151,6 +151,13 @@ function realmSearch(request: Record<string, unknown>): Record<string, string> {
     search.boardTab = request.boardTab;
   if (request.addProject === true) search.addProject = "1";
   if (createEnvironment) search.createEnvironment = createEnvironment;
+  if (
+    projectId &&
+    (request.dialog === "repository-settings" ||
+      request.dialog === "delete-project" ||
+      (request.dialog === "environment-settings" && environmentId))
+  )
+    search.dialog = request.dialog;
   return search;
 }
 

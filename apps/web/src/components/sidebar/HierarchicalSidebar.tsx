@@ -87,6 +87,7 @@ import { useMachineViews } from "@/components/federation/useMachineViews";
 import { ALL_MACHINES, filterMachines } from "@/lib/federation/aggregate";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
+import type { ActivitySortOrder } from "@/stores/uiStore";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -152,16 +153,39 @@ function parseActivityTime(value: string | undefined): number {
   return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
 }
 
-/** Most recent activity first, with the existing project/environment order as a stable fallback. */
+const ATTENTION_PRIORITY: Record<NonNullable<Environment["agentActivityState"]>, number> = {
+  waiting: 0,
+  working: 1,
+  idle: 2,
+};
+
+/**
+ * "priority": unread work first, then waiting, working and idle, most recent
+ * activity first within each. "newest"/"oldest": by activity time alone. The
+ * existing project/environment order is a stable fallback in every order.
+ */
 export function sortEnvironmentsByActivity(
   environments: Environment[],
   projects: Project[],
+  order: ActivitySortOrder = "priority",
 ): Environment[] {
   const projectOrder = new Map(projects.map((project) => [project.id, project.order]));
   return [...environments].sort((left, right) => {
+    if (order === "priority") {
+      const unreadDifference =
+        Number(right.hasUnreadWork === true) - Number(left.hasUnreadWork === true);
+      if (unreadDifference !== 0) return unreadDifference;
+      const stateDifference =
+        ATTENTION_PRIORITY[left.agentActivityState ?? "idle"] -
+        ATTENTION_PRIORITY[right.agentActivityState ?? "idle"];
+      if (stateDifference !== 0) return stateDifference;
+    }
+
     const leftActivity = parseActivityTime(left.lastActivityAt);
     const rightActivity = parseActivityTime(right.lastActivityAt);
-    if (leftActivity !== rightActivity) return rightActivity - leftActivity;
+    if (leftActivity !== rightActivity) {
+      return order === "oldest" ? leftActivity - rightActivity : rightActivity - leftActivity;
+    }
 
     const projectDifference =
       (projectOrder.get(left.projectId) ?? Number.MAX_SAFE_INTEGER) -
@@ -488,6 +512,7 @@ export function HierarchicalSidebar() {
   const collapsedProjectFolders = useUIStore((state) => state.collapsedProjectFolders);
   const selectedEnvironmentIds = useUIStore((state) => state.selectedEnvironmentIds);
   const environmentSortMode = useUIStore((state) => state.environmentSortMode);
+  const activitySortOrder = useUIStore((state) => state.activitySortOrder);
   const selectProject = useUIStore((state) => state.selectProject);
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
@@ -499,6 +524,7 @@ export function HierarchicalSidebar() {
   const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const setEnvironmentSortMode = useUIStore((state) => state.setEnvironmentSortMode);
+  const setActivitySortOrder = useUIStore((state) => state.setActivitySortOrder);
   // Multi-machine presentation. This sidebar's own machine keeps its full
   // tree; other machines appear as their own sections, or merged into one
   // projection when grouped by project/repository or sorted by activity.
@@ -565,8 +591,8 @@ export function HierarchicalSidebar() {
     [allEnvironments, selectedEnvironmentId],
   );
   const activityEnvironments = useMemo(
-    () => sortEnvironmentsByActivity(sidebarEnvironments, projects),
-    [sidebarEnvironments, projects],
+    () => sortEnvironmentsByActivity(sidebarEnvironments, projects, activitySortOrder),
+    [sidebarEnvironments, projects, activitySortOrder],
   );
   const defaultCloneDirectory = useMemo(
     () => suggestedCloneDirectory(projects.map((project) => project.localPath)),
@@ -1204,7 +1230,7 @@ export function HierarchicalSidebar() {
             </Tooltip>
           </div>
         </div>
-        {sortEnvironmentsByActivity(allEnvironments, projects)
+        {sortEnvironmentsByActivity(allEnvironments, projects, activitySortOrder)
           .filter(
             (environment) =>
               environment.projectHome &&
@@ -1429,6 +1455,27 @@ export function HierarchicalSidebar() {
                     <DropdownMenuRadioItem value="project">By project</DropdownMenuRadioItem>
                     <DropdownMenuRadioItem value="activity">By activity</DropdownMenuRadioItem>
                   </DropdownMenuRadioGroup>
+                  {environmentSortMode === "activity" ? (
+                    <>
+                      <DropdownMenuLabel className="text-xs text-muted-foreground">
+                        Order
+                      </DropdownMenuLabel>
+                      <DropdownMenuRadioGroup
+                        value={activitySortOrder}
+                        onValueChange={(value) => {
+                          if (value === "priority" || value === "newest" || value === "oldest") {
+                            setActivitySortOrder(value);
+                          }
+                        }}
+                      >
+                        <DropdownMenuRadioItem value="priority">
+                          Priority order
+                        </DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="newest">Newest first</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="oldest">Oldest first</DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                    </>
+                  ) : null}
                   {federation.enabled && environmentSortMode === "project" ? (
                     <>
                       <DropdownMenuLabel className="text-xs text-muted-foreground">
@@ -1537,6 +1584,7 @@ export function HierarchicalSidebar() {
           {federatedMode === "activity" ? (
             <FederatedActivityList
               machines={visibleMachines}
+              order={activitySortOrder}
               renderBoundRow={renderFederatedActivityRow}
             />
           ) : federatedMode === "project" || federatedMode === "repository" ? (

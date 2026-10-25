@@ -94,10 +94,13 @@ export function jwtExpiryMs(token: string): number | undefined {
  * Reduce a copy of a Codex `auth.json` to what may not rotate the original.
  *
  * A ChatGPT login keeps its access and id tokens with the refresh token
- * blanked, and `last_refresh` is set to now: Codex refreshes proactively once
- * that stamp is about eight days old, and a copy that cannot refresh should
- * use its access token until it actually expires instead. An expired access
- * token drops the ChatGPT login. An API key cannot rotate and is kept as is.
+ * blanked, and `last_refresh` is set to now. Codex 0.164 refreshes proactively
+ * once the access token is within five minutes of its `exp`, and only for a
+ * token without a readable `exp` once that stamp is eight days old; a copy
+ * that cannot refresh should use its access token until then instead. Its
+ * attempt with the blank token fails without touching the file
+ * (`scripts/codex-access-only-auth-probe.ts`). An expired access token drops
+ * the ChatGPT login. An API key cannot rotate and is kept as is.
  */
 export function restrictCodexAuthSnapshot(text: string, nowMs = Date.now()): LoginSnapshot {
   const parsed = parseObject(text);

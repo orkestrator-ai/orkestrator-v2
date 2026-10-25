@@ -284,7 +284,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     const local = screen.getByRole("button", { name: "Local" });
     expect(containerized.getAttribute("aria-describedby")).toBe("containerized-unavailable");
     expect(local.getAttribute("aria-describedby")).toBe("local-unavailable");
-    expect(screen.getByText("Unavailable while Docker is stopped")).toBeTruthy();
+    expect(screen.getByText("Containers unavailable while Docker stopped")).toBeTruthy();
     expect(screen.getByText("Unavailable without a local project checkout")).toBeTruthy();
   });
 

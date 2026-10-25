@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import {
   Archive,
   ArrowLeft,
@@ -180,15 +188,15 @@ export function GitHubRepositoryPicker({
   const [accountsAttempt, setAccountsAttempt] = useState(0);
   const [repositoriesAttempt, setRepositoriesAttempt] = useState(0);
   const cloningRef = useRef(false);
-  const loadAccountsRef = useRef(loadAccounts);
-  loadAccountsRef.current = loadAccounts;
-  const loadRepositoriesRef = useRef(loadRepositories);
-  loadRepositoriesRef.current = loadRepositories;
+  const loadLatestAccounts = useEffectEvent(() => loadAccounts());
+  const loadLatestRepositories = useEffectEvent((owner: string, cursor?: string) =>
+    loadRepositories(owner, cursor),
+  );
 
+  // Starts "loading": the initial state, and what a retry sets.
   useEffect(() => {
     let cancelled = false;
-    setAccounts({ status: "loading" });
-    loadAccountsRef.current().then(
+    loadLatestAccounts().then(
       (value) => {
         if (!cancelled) setAccounts({ status: "ready", value });
       },
@@ -208,13 +216,12 @@ export function GitHubRepositoryPicker({
 
   const activeOwner = step.kind === "repository" ? step.account.login : null;
   const activeRepositories = activeOwner ? repositories.get(activeOwner) : undefined;
-  const repositoriesRef = useRef(repositories);
-  repositoriesRef.current = repositories;
+  const cachedRepositories = useEffectEvent((owner: string) => repositories.get(owner));
 
   useEffect(() => {
     if (!activeOwner) return;
     // Settled listings are cached per owner for the life of the picker.
-    const cached = repositoriesRef.current.get(activeOwner);
+    const cached = cachedRepositories(activeOwner);
     if (cached && cached.status !== "loading" && !(cached.status === "ready" && cached.loadingMore))
       return;
     const previous = cached?.status === "ready" ? cached.value : undefined;
@@ -223,7 +230,7 @@ export function GitHubRepositoryPicker({
       setRepositories((current) => new Map(current).set(activeOwner, state));
     };
     if (!previous) update({ status: "loading" });
-    loadRepositoriesRef.current(activeOwner, previous?.nextCursor).then(
+    loadLatestRepositories(activeOwner, previous?.nextCursor).then(
       (value) => {
         if (!cancelled) {
           const merged = new Map(
@@ -351,7 +358,10 @@ export function GitHubRepositoryPicker({
         {accounts.status === "error" && (
           <ErrorRow
             message={accounts.message}
-            onRetry={() => setAccountsAttempt((attempt) => attempt + 1)}
+            onRetry={() => {
+              setAccounts({ status: "loading" });
+              setAccountsAttempt((attempt) => attempt + 1);
+            }}
           />
         )}
         {accounts.status === "ready" && (

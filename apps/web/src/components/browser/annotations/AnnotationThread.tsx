@@ -92,6 +92,8 @@ export function showOnPageMessage(result: ShowOnPageResult): string | null {
       return `This note is on ${result.route}.`;
     case "not-found":
       return `Could not find this target on the page (${result.reason}). Reselect it to attach current evidence.`;
+    case "hidden":
+      return "This target is on the page but hidden, for example inside a closed dialog or menu. Open it, then try again.";
     case "navigation-required":
       return `${result.reason} Navigate to the page yourself, then reselect the target.`;
     case "timeout":
@@ -179,10 +181,8 @@ export function AnnotationThread({
   useEffect(() => {
     if (loaded) headingRef.current?.focus();
   }, [annotationId, loaded]);
-  useEffect(() => {
-    // Everything present when the thread opens counts as read.
-    if (annotation && seenSequence === null) setSeenSequence(annotation.lastSequence);
-  }, [annotation, seenSequence]);
+  // Everything present when the thread opens counts as read.
+  if (annotation && seenSequence === null) setSeenSequence(annotation.lastSequence);
 
   const mutate = async (label: string, action: () => Promise<unknown>): Promise<boolean> => {
     setMessage(null);

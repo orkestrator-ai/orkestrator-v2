@@ -16,28 +16,44 @@ const DATABASE_LOCKED = /database is locked/i;
 export const OPENCODE_STARTUP_STDERR_TAIL_BYTES = 4_096;
 const DEFAULT_LOCKED_START_RETRY_DELAYS_MS: readonly number[] = [500, 2_000];
 
-let lockedStartRetryDelaysMs = DEFAULT_LOCKED_START_RETRY_DELAYS_MS;
-let hostStartTail: Promise<void> = Promise.resolve();
-
 /**
- * Wait for this host's turn to start an OpenCode server. Call the returned
- * release once the server is healthy or the start has failed; it is safe to
- * call more than once. A start holds the turn for at most the health budget.
+ * One backend's turn-taking for host OpenCode starts, owned by
+ * `LocalServerRuntime` as `openCodeHostStart`.
  */
-export async function acquireOpenCodeHostStart(): Promise<() => void> {
-  const previous = hostStartTail;
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  hostStartTail = previous.then(() => current);
-  await previous;
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    release();
-  };
+export class OpenCodeHostStartGate {
+  private tail: Promise<void> = Promise.resolve();
+  private readonly lockedStartRetryDelaysMs: readonly number[];
+
+  /** `lockedStartRetryDelaysMs`: the waits before each retry of a locked start. */
+  constructor(lockedStartRetryDelaysMs: readonly number[] = DEFAULT_LOCKED_START_RETRY_DELAYS_MS) {
+    this.lockedStartRetryDelaysMs = lockedStartRetryDelaysMs;
+  }
+
+  /**
+   * Wait for this host's turn to start an OpenCode server. Call the returned
+   * release once the server is healthy or the start has failed; it is safe to
+   * call more than once. A start holds the turn for at most the health budget.
+   */
+  async acquire(): Promise<() => void> {
+    const previous = this.tail;
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.tail = previous.then(() => current);
+    await previous;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      release();
+    };
+  }
+
+  /** The wait before retry `attempt` (0-based), or undefined once retries are spent. */
+  lockedStartRetryDelayMs(attempt: number): number | undefined {
+    return this.lockedStartRetryDelaysMs[attempt];
+  }
 }
 
 /** Whether a starting server's stderr says it lost the shared database. */
@@ -58,18 +74,4 @@ export function isOpenCodeDatabaseLockedError(
     error instanceof Error &&
     (error as Partial<OpenCodeDatabaseLockedError>).openCodeDatabaseLocked === true
   );
-}
-
-/** The wait before retry `attempt` (0-based), or undefined once retries are spent. */
-export function openCodeLockedStartRetryDelayMs(attempt: number): number | undefined {
-  return lockedStartRetryDelaysMs[attempt];
-}
-
-export function setOpenCodeLockedStartRetryDelaysForTests(delays: readonly number[]): void {
-  lockedStartRetryDelaysMs = delays;
-}
-
-export function resetOpenCodeHostStartForTests(): void {
-  lockedStartRetryDelaysMs = DEFAULT_LOCKED_START_RETRY_DELAYS_MS;
-  hostStartTail = Promise.resolve();
 }

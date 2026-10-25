@@ -22,6 +22,8 @@ import {
 } from "../src/core/registry-writer-lease";
 import { environmentSnapshot } from "../src/core/public-api/actions-settings";
 import { defaultConfig } from "../src/core/storage-shared";
+import { containerNetworkView } from "../src/core/commands-registry-mcp";
+import { urlReachabilityWarning } from "../src/core/mcp-management/network-hints";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,
@@ -237,6 +239,56 @@ async function allowlistContext(allowedDomains: string[] | undefined) {
   return { ...memory, dir };
 }
 
+describe("MCP runtime network hints", () => {
+  test("a kept policy-1 runtime uses its label even on a policy-3 image", async () => {
+    const { context } = await allowlistContext(["one.example", "db.example:8080"]);
+    const tarPath = await manifestTar({ "network-policy": 3 });
+    const environment = await context.storage.getEnvironment("env-lifecycle");
+    await context.storage.updateEnvironment("env-lifecycle", {
+      containerLifecycle: {
+        schemaVersion: 1,
+        revision: 1,
+        lastRuntimeGeneration: 1,
+        runtime: {
+          containerId: "container-1",
+          runtimeGeneration: 1,
+          owner: "test",
+          imageId: IMAGE_ID,
+        },
+        storage: { format: "legacy-layer", workspaceGeneration: 1 },
+        outcomes: [],
+      },
+    });
+    expect(environment?.containerId).toBe("container-1");
+    for (const label of ["1", "2", "3", "<no value>"]) {
+      await withDockerScript(
+        `#!/bin/sh
+case "$1" in
+  inspect) printf '${label}\\n' ;;
+  create) printf 'probe-container\\n' ;;
+  cp) cat '${tarPath}' ;;
+esac
+`,
+        async () => {
+          const view = await containerNetworkView(context)("env-lifecycle");
+          const policyVersion = label === "<no value>" ? 3 : Number(label);
+          expect(view).toEqual({
+            mode: "restricted",
+            policyVersion,
+            allowedDomains:
+              policyVersion < 3
+                ? ["one.example", "db.example"]
+                : ["one.example", "db.example:8080"],
+          });
+          expect(urlReachabilityWarning("https://one.example:8080/mcp", view) === undefined).toBe(
+            policyVersion < 3,
+          );
+        },
+      );
+    }
+  });
+});
+
 /**
  * A running policy-2 container whose firewall reports `before` until the
  * backend applies a list, and `after` once it has.
@@ -332,8 +384,12 @@ describe("allowlist edits in place", () => {
     expect(containerNetworkPolicy(2, undefined)).toBe(2);
     expect(containerNetworkPolicy(3, undefined)).toBe(3);
     expect(containerNetworkPolicy(3, "2")).toBe(2);
-    expect(containerNetworkPolicy(3, "1")).toBe(1);
     expect(containerNetworkPolicy(2, "3")).toBe(2);
+    // The shared-bridge opt-out is gone: a capable image never joins the
+    // default bridge, where siblings can reach each other.
+    expect(containerNetworkPolicy(3, "1")).toBe(3);
+    expect(containerNetworkPolicy(2, "1")).toBe(2);
+    expect(containerNetworkPolicy(0, "3")).toBe(1);
   });
 
   test("ports reach only a policy 3 container; earlier policies get each domain once", async () => {

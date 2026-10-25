@@ -30,10 +30,20 @@ export const getProjectCoordinatorView = (
     ...(known ? { knownGeneration: known.generation, knownRevision: known.revision } : {}),
   });
 
+/**
+ * `closeUnused` names unassigned side agents whose composer is empty here; the
+ * backend closes those it agrees were never used.
+ */
 export const createCoordinatorConversation = (
   projectId: string,
   title?: string,
-): Promise<CoordinatorSnapshot> => invoke("create_coordinator_conversation", { projectId, title });
+  closeUnused?: readonly string[],
+): Promise<CoordinatorSnapshot> =>
+  invoke("create_coordinator_conversation", {
+    projectId,
+    title,
+    ...(closeUnused?.length ? { closeUnused } : {}),
+  });
 
 export const assignCoordinatorConversationAgent = (
   projectId: string,

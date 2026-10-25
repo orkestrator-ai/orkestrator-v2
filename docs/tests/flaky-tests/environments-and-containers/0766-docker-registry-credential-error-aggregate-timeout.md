@@ -10,3 +10,9 @@
 - **Suite counts:** 10670 passed, 115 skipped, 16 failed and one error across 10801 tests in 636 files (1199.8 s). Fourteen failures were exact-main OpenCode version assertions; the other failure was the observation baseline.
 - **Evidence:** `orkestrator-test-run.BDDGcj/merge-backend-complete.log.gz` under the host temporary directory after run finalization. Aggregate counts are recorded in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#mixed-version-compatibility-main-merge--2026-10-24).
 - **Hypothesis:** the fake Docker child or its reconciliation exceeded the fixed deadline under shared-host load; the current evidence does not identify which wait was delayed. The owner passed unchanged with one worker. No implementation, assertion, timeout or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** single observation. The file uses `ASYNC_TEST_BUDGET_MS` for five other cases; this case uses Bun's default five seconds while it drives the fake Docker child and its reconciliation.
+- **Next step:** give the case the same explicit budget.

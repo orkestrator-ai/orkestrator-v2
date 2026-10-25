@@ -57,7 +57,6 @@ import {
   claudeBashMaxTimeoutEnvValue,
 } from "@orkestrator/protocol/claude-background-commands";
 import {
-  invalidateDockerContainerStateCache,
   isContainerRunning,
   getHostPort,
   shouldAddDockerHostGatewayAlias,
@@ -233,11 +232,12 @@ export async function createDockerContainer(
       "This image cannot write the environment's persistent storage format. Nothing was created; use the image the environment was built with or a newer one.",
     );
   }
-  // A budget the daemon cannot enforce is refused, never passed through: a
-  // rootless daemon without cgroups records it and enforces nothing. The
+  // An explicit budget the daemon cannot enforce is refused, never passed
+  // through: a rootless daemon without cgroups records it and enforces
+  // nothing. The built-in default leaves such an axis off instead. The
   // topology probe's rootless flag survives a failed capacity probe.
-  const resourceLimits = resolveResourceLimits(environment, config.global).limits;
   const capacity = await dockerAdmissionCapacity(topology);
+  const resourceLimits = resolveResourceLimits(environment, config.global, capacity).limits;
   refuseUnenforceableLimits(resourceLimits, capacity, "Nothing was created.");
   const runtimeGeneration = identity.runtimeGeneration ?? 1;
   const args = [
@@ -284,8 +284,8 @@ export async function createDockerContainer(
     // at most half of it.
     "--shm-size",
     `${sharedMemoryMiB(resourceLimits)}m`,
-    // Opt-in budget (environment override, else global default); none means
-    // unrestricted, as before. Read back from inspect, never assumed.
+    // Environment override, else the Settings budget, else the built-in
+    // default for this daemon. Read back from inspect, never assumed.
     ...resourceArguments(resourceLimits),
     // Bounded container stdout/stderr (10 MiB × 3) where the daemon offers
     // the local driver.
@@ -392,10 +392,11 @@ export async function createDockerContainer(
   // files of enabled providers, copied into a private per-environment
   // revision; older images keep the read-only home mounts their entrypoint
   // expects. A running legacy container keeps its mounts until it is rebuilt.
-  const stagingCapabilities =
-    identity.imageId && process.env.ORKESTRATOR_PORTABLE_INPUTS !== "host-mounts"
-      ? await imageCapabilities(identity.imageId, context)
-      : null;
+  // There is no switch back to home mounts for a capable image: they exposed
+  // whole host agent homes and put the Anthropic key in `docker inspect`.
+  const stagingCapabilities = identity.imageId
+    ? await imageCapabilities(identity.imageId, context)
+    : null;
   // An entrypoint older than Cursor's copy would ignore `/cursor-config`, and
   // staging it anyway would report Cursor's MCP servers as delivered.
   const stagedProviders = imageCopiesCursorMcpConfig(stagingCapabilities)
@@ -562,7 +563,7 @@ export async function createDockerContainer(
     });
     containerId = stdout.trim();
   } catch (error) {
-    invalidateDockerContainerStateCache();
+    context.runtime.containerStates.invalidate();
     if (!identity.operationId) throw error;
     // A timeout or dropped connection does not say whether Docker created the
     // container. Resolve it by exact label identity before reporting failure,
@@ -583,7 +584,7 @@ export async function createDockerContainer(
       );
     }
   }
-  invalidateDockerContainerStateCache();
+  context.runtime.containerStates.invalidate();
   if (stagedInputs) {
     // Earlier revisions no container binds any more (recovery copies keep
     // theirs) are removed. Best effort: a failure only leaves a revision for

@@ -178,3 +178,30 @@ export function resolveComposeDraftDiscardConflict(
   }
   return discardComposeDraft(draftKey, state);
 }
+
+/** Modify the latest saved value after pending hydration/unmount writes, using CAS. */
+export function updateSavedComposeDraft<T>(
+  draftKey: string,
+  update: (value: T) => T,
+): Promise<void> {
+  return enqueue(draftKey, async () => {
+    const saved = await backend.getComposeDraft<T>(draftKey);
+    if (!saved) return;
+    const value = update(saved.value);
+    if (value === saved.value) return;
+    const state = revisionStateFor(draftKey);
+    try {
+      const result = await backend.saveComposeDraft(
+        draftKey,
+        saved.ownerType,
+        saved.ownerId,
+        value,
+        saved.revision,
+      );
+      state.revision = result?.revision ?? saved.revision;
+      state.conflictRevision = null;
+    } catch (error) {
+      await recordComposeConflict(draftKey, state, error);
+    }
+  });
+}

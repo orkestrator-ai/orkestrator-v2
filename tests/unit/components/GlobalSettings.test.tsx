@@ -1757,15 +1757,38 @@ describe("GlobalSettings", () => {
     }
   });
 
-  test("saves an enforced default budget only when limits are switched on", async () => {
+  test("container limits default to the built-in budget; custom and none are explicit", async () => {
     const { invoke } = await import("../../../apps/web/src/lib/native/backend");
     const invokeMock = invoke as unknown as ReturnType<typeof mock>;
     invokeMock.mockClear();
+    let saved = useConfigStore.getState().config;
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "get_config") return saved;
+      if (command === "set_container_resource_limits") {
+        saved = { ...saved, global: { ...saved.global } };
+        const limits = args?.limits as GlobalConfig["containerResourceLimits"];
+        if (limits) saved.global.containerResourceLimits = limits;
+        else delete saved.global.containerResourceLimits;
+        return { limits: limits ?? null };
+      }
+      if (command === "get_docker_capacity")
+        return {
+          scope: "docker-daemon",
+          cpus: 8,
+          memoryBytes: 8 * 1024 ** 3,
+          builtInDefault: {
+            limits: { cpus: null, memoryMiB: 6144, pids: 4096 },
+            unenforced: [],
+          },
+        };
+      return undefined;
+    });
     render(<GlobalSettings activeSection="container" />);
     const cpu = screen.getByLabelText("CPU cores") as HTMLInputElement;
-    // Off by default: no limits, fields disabled.
+    // Nothing stored: the built-in default, fields disabled.
     expect(cpu.disabled).toBe(true);
-    fireEvent.click(screen.getByRole("switch", { name: "Limit resources of new containers" }));
+    await screen.findByText(/On this Docker: 6 GB memory · 4096 processes · no CPU limit/);
+    fireEvent.click(screen.getByRole("button", { name: "Custom" }));
     fireEvent.change(screen.getByLabelText("CPU cores"), { target: { value: "2" } });
     fireEvent.change(screen.getByLabelText("Memory (GB)"), { target: { value: "4" } });
     fireEvent.click(screen.getByRole("button", { name: "Save limits" }));
@@ -1773,6 +1796,35 @@ describe("GlobalSettings", () => {
       expect(invokeMock).toHaveBeenCalledWith("set_container_resource_limits", {
         limits: { cpus: 2, memoryMiB: 4096, pids: null },
       }),
+    );
+    await waitFor(() =>
+      expect(useConfigStore.getState().config.global.containerResourceLimits).toEqual({
+        cpus: 2,
+        memoryMiB: 4096,
+        pids: null,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "No limits" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save limits" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_container_resource_limits", {
+        limits: { cpus: null, memoryMiB: null, pids: null },
+      }),
+    );
+    await waitFor(() =>
+      expect(useConfigStore.getState().config.global.containerResourceLimits).toEqual({
+        cpus: null,
+        memoryMiB: null,
+        pids: null,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Built-in default" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save limits" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_container_resource_limits", { limits: null }),
+    );
+    await waitFor(() =>
+      expect(useConfigStore.getState().config.global.containerResourceLimits).toBeUndefined(),
     );
     invokeMock.mockImplementation(() => Promise.resolve());
   });

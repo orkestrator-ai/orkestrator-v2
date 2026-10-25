@@ -1,7 +1,7 @@
 # Design canvas times out in the parallel browser suite
 
 - **ID:** 0174
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-28
 - **Test:** `canvas edits, script isolation, missed events, conflict and reload`
 - **File:** `e2e/DesignCanvas.spec.ts:16`
@@ -235,9 +235,41 @@ Evidence: host temporary directory
 `output/playwright/test-results/DesignCanvas-canvas-edits--cfd2e--events-conflict-and-reload-mobile-chromium/`.
 No canvas implementation, assertion, timeout or skip changed.
 
-
 ## Resume cleanup coverage validation — 2026-10-25
 
 The mobile replacement-iframe assertion exceeded the 30 s test deadline in the five-worker component run. Both unchanged owner viewport cases passed in the sequential one-worker owner rerun.
 
 The original component run reported 734 passed, 102 skipped and six failed. The six complete owning files ran sequentially with one worker: 80 passed, one skipped and three failed (307.4 s). Exact commands, per-owner results and artifact paths are in [0822](../aggregate-validation-runs/0822-resume-cleanup-coverage-validation.md). No owning implementation, assertion, deadline or skip changed.
+
+## Root cause and fix — 2026-10-25
+
+Reproduced without host load through `ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE`
+(CDP `Emulation.setCPUThrottlingRate` on the page, added to the spec), with
+`bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts
+--workers=1`:
+
+- Rate 4, `--repeat-each=5`: 2 of 10 failed at the 30 s deadline, both late
+  (the export dialog's **Done**, line 278).
+- Rate 8, `--repeat-each=5`: 10 of 10 failed at the deadline, each at a
+  different step (lines 147–202).
+- Rate 4, `--repeat-each=3 --timeout=120000`: four runs took 29.6–38.8 s; two
+  stalled for the full 120 s clicking **Apply styles** (line 209) with
+  "element is not enabled".
+
+The test filled a style, then landed another client's edit through the Bun
+service, then clicked **Apply styles** expecting a revision conflict. When the
+edit's live hint reached the page before the click, the inspector did the
+right thing and disabled Apply styles for the stale selection, so the click
+waited until the deadline. On a loaded host that wait, or plain slowness,
+spent the 30 s budget at whichever step came next, which is why the reported
+failing step varied.
+
+Fix (test only, every assertion kept): the other client's edit now lands
+inside the page's `design_prepare` for Apply styles, before the command is
+forwarded, so the server always moves on while this edit is in flight. After
+the fix: rate 4 passed 10 of 10 (24.3–38.3 s, 120 s deadline) and the
+unthrottled file passed 6 of 6 at the default deadline (7.2–11.7 s). The
+8x failures are the 30 s budget under emulated slowdown well beyond the
+suite's and were not chased. A quiet nine-worker `mise run test:browser` run
+to confirm no recurrence is listed in
+[0036](../../../todo/design-canvas/0036-design-canvas-qualification.md).

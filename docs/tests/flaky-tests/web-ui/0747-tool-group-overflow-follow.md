@@ -46,9 +46,14 @@
   suites were also running. Timing or follow-state interaction under load
   remains a hypothesis. No owner assertion, timeout or skip changed.
 
-
 ## Resume cleanup coverage validation — 2026-10-25
 
 The desktop waiting-group case received inner scrollTop 704 instead of zero in the five-worker component run and again in the complete unchanged one-worker owner rerun. No new owner pass was established; both results remain failed.
 
 The original component run reported 734 passed, 102 skipped and six failed. The six complete owning files ran sequentially with one worker: 80 passed, one skipped and three failed (307.4 s). Exact commands, per-owner results and artifact paths are in [0822](../aggregate-validation-runs/0822-resume-cleanup-coverage-validation.md). No owning implementation, assertion, deadline or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** three recurrences (two-worker, nine-worker, and two-worker on 2026-10-25), each with `scrollTop` 704 instead of zero and a passing one-worker owner rerun. The resume-cleanup recurrence above also failed in the unchanged one-worker owner, so this case does not always pass in isolation. The test is now at `ToolGroupFold.spec.ts:442` after #1227. [0825](../aggregate-validation-runs/0825-dependency-upgrades-0032-validation.md) also reported a painted-gap failure at `ToolGroupFold.spec.ts:79` in the same file.
+- **Next step:** record the group's follow state and inner `scrollTop` on each frame during the append, so the next failure shows whether follow was lost or never set.

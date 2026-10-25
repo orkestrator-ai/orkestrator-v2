@@ -371,10 +371,17 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     | { state: "unreported" }
     | { state: "failed" }
   >({ state: "loading" });
+  // Entering the debug section, or switching machine while on it, probes again.
+  const [probedSection, setProbedSection] = useState(activeSection);
+  const [probedMachine, setProbedMachine] = useState(machine);
+  if (probedSection !== activeSection || (activeSection === "debug" && probedMachine !== machine)) {
+    setProbedSection(activeSection);
+    setProbedMachine(machine);
+    if (activeSection === "debug") setBackendVersion({ state: "loading" });
+  }
   useEffect(() => {
     if (activeSection !== "debug") return;
     let cancelled = false;
-    setBackendVersion({ state: "loading" });
     backend
       .getAppVersion(machine)
       .then((reported) => {
@@ -1783,15 +1790,16 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     }
   }, [copyGatewayToken, gatewayToken]);
 
+  const webClientUrl = webClientStatus?.url;
   const handleCopyWebClientUrl = useCallback(async () => {
-    if (!webClientStatus?.url) return;
+    if (!webClientUrl) return;
     try {
-      await copyWebClientUrl(webClientStatus.url);
+      await copyWebClientUrl(webClientUrl);
     } catch (error) {
       console.error("[settings] Failed to copy web client URL:", error);
       toast.error("Failed to copy web client URL");
     }
-  }, [copyWebClientUrl, webClientStatus?.url]);
+  }, [copyWebClientUrl, webClientUrl]);
 
   const handleResetTailscaleServe = useCallback(async () => {
     setIsResettingTailscaleServe(true);

@@ -16,6 +16,12 @@ import {
   limitsToDraft,
 } from "@/components/settings/ContainerResourceLimitsSettings";
 
+const AXIS_NAMES: Record<keyof ContainerResourceLimits, string> = {
+  cpus: "CPU",
+  memoryMiB: "memory",
+  pids: "processes",
+};
+
 function describeLimits(limits: ContainerResourceLimits | null): string {
   if (!limits) return "unknown";
   const parts = [
@@ -65,25 +71,28 @@ export function EnvironmentResourcesSection({
   /** The backend asked for confirmation: the limit is below current use. */
   const [confirmBelowUsage, setConfirmBelowUsage] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const [nextPolicy, snapshot, nextCapacity] = await Promise.all([
+  const load = useCallback(
+    () =>
+      Promise.all([
         backend.getEnvironmentResources(environmentId),
         backend.getContainerUsage(),
         backend.getDockerCapacity(),
-      ]);
-      setPolicy(nextPolicy);
-      setCustom(nextPolicy.source === "environment");
-      setDraft(limitsToDraft(nextPolicy.source === "environment" ? nextPolicy.requested : null));
-      setUsage({
-        sample: snapshot.containers.find((entry) => entry.containerId === containerId),
-        stale: snapshot.stale,
-      });
-      setCapacity(nextCapacity);
-    } catch {
-      setPolicy(null);
-    }
-  }, [environmentId, containerId]);
+      ])
+        .then(([nextPolicy, snapshot, nextCapacity]) => {
+          setPolicy(nextPolicy);
+          setCustom(nextPolicy.source === "environment");
+          setDraft(
+            limitsToDraft(nextPolicy.source === "environment" ? nextPolicy.requested : null),
+          );
+          setUsage({
+            sample: snapshot.containers.find((entry) => entry.containerId === containerId),
+            stale: snapshot.stale,
+          });
+          setCapacity(nextCapacity);
+        })
+        .catch(() => setPolicy(null)),
+    [environmentId, containerId],
+  );
 
   useEffect(() => {
     void load();
@@ -142,8 +151,10 @@ export function EnvironmentResourcesSection({
             {policy.source === "environment"
               ? "this environment"
               : policy.source === "global"
-                ? "default"
-                : "no limits set"}
+                ? "Settings default"
+                : policy.source === "default"
+                  ? "built-in default"
+                  : "no limits set"}
             )
           </span>
         </dd>
@@ -164,7 +175,8 @@ export function EnvironmentResourcesSection({
       ) : null}
       {policy.unsupported.length > 0 ? (
         <p className="text-xs text-yellow-700 dark:text-yellow-400">
-          This Docker engine cannot enforce: {policy.unsupported.join(", ")}.
+          This Docker engine cannot enforce:{" "}
+          {policy.unsupported.map((axis) => AXIS_NAMES[axis]).join(", ")}.
         </p>
       ) : null}
       {policy.daemonRootless ? (

@@ -25,6 +25,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { type AgentNativeTabProps, findNativeAgentAdapter } from "./adapter";
 import { UnassignedNativeAgentComposer } from "./AgentNativeTab.helpers";
 import { SharedNativeAgentController } from "./AgentNativeTab.controller";
+import { PreviewLinkSourceContext } from "@/components/chat/link-source-context";
 
 function firstPromptDraftKeys(
   environmentId: string,
@@ -71,8 +72,15 @@ async function persistFirstPromptDraftToLockedProvider(
 
 export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTabProps) {
   const pendingFirstPrompt = useRef<Parameters<typeof dispatchNativeAgentIntent>[0] | null>(null);
+  // Whether `pendingFirstPrompt` holds a prompt, for the saving label. Written
+  // alongside every assignment to the ref.
+  const [startingFirstPrompt, setStartingFirstPrompt] = useState(false);
   const [awaitingDurability, setAwaitingDurability] = useState(false);
   const [durabilityError, setDurabilityError] = useState<string | null>(null);
+  const linkSource = useMemo(
+    () => ({ environmentId: props.data.environmentId, tabId: props.tabId }),
+    [props.data.environmentId, props.tabId],
+  );
   const [pendingDurabilityOperation, setPendingDurabilityOperation] = useState<
     "send" | "resume" | null
   >(null);
@@ -166,6 +174,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
             });
           }
           pendingFirstPrompt.current = null;
+          setStartingFirstPrompt(false);
         }
         setPendingDurabilityOperation(null);
         setAwaitingDurability(false);
@@ -242,6 +251,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
           filename: attachment.name,
         })),
       };
+      setStartingFirstPrompt(true);
       composeStore.updateDraft(sessionKey, {
         requestId,
         submissionPending: true,
@@ -263,6 +273,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
       if (!lockedPlatform) {
         composeStore.updateDraft(sessionKey, { submissionPending: false });
         pendingFirstPrompt.current = null;
+        setStartingFirstPrompt(false);
         setDurabilityError("This tab could not be locked to an agent.");
         setPendingDurabilityOperation(null);
         setAwaitingDurability(false);
@@ -413,7 +424,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
   if (awaitingDurability) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        {pendingFirstPrompt.current ? "Starting agent…" : "Saving agent choice…"}
+        {startingFirstPrompt ? "Starting agent…" : "Saving agent choice…"}
       </div>
     );
   }
@@ -443,10 +454,18 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
     );
   }
 
-  return (
+  const controller = (
     <SharedNativeAgentController
       {...props}
       initialResumeOpen={resumeRequestedPlatform === props.data.platform}
     />
+  );
+  // A coordinator has no environment to resolve its loopback links in.
+  if (props.coordinatorProjectId || props.executionPolicy === "coordinator-read-only")
+    return controller;
+  return (
+    <PreviewLinkSourceContext.Provider value={linkSource}>
+      {controller}
+    </PreviewLinkSourceContext.Provider>
   );
 });

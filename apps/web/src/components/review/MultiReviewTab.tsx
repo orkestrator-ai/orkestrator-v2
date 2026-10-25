@@ -484,6 +484,10 @@ function MultiReviewOverviewTab({
 
   useEffect(() => {
     if (!isActive || !hasLiveClock) return;
+    // The clock is the external system this effect subscribes to. Resuming it
+    // reads the time at once, so the header never shows the time it paused at
+    // for a second; reading it while rendering would be impure.
+    // oxlint-disable-next-line react/set-state-in-effect
     setReviewPanelNow(Date.now());
     const interval = window.setInterval(() => setReviewPanelNow(Date.now()), 1_000);
     return () => window.clearInterval(interval);
@@ -498,24 +502,46 @@ function MultiReviewOverviewTab({
 
   useEffect(() => {
     isActiveRef.current = isActive;
-    // The user navigated away after requesting the handoff. Delivery continues
-    // in the backend, but a hidden review tab must never change pane focus.
-    if (!isActive) setOpenAfterDelivery(false);
   }, [isActive]);
 
-  const hydrate = useCallback(async () => {
+  // The user navigated away after requesting the handoff. Delivery continues
+  // in the backend, but a hidden review tab must never change pane focus.
+  const [wasActive, setWasActive] = useState(isActive);
+  if (wasActive !== isActive) {
+    setWasActive(isActive);
+    if (!isActive) setOpenAfterDelivery(false);
+  }
+
+  /** Reads the workflow without clearing the last error; `hydrate` does both. */
+  const fetchWorkflow = useCallback(
+    () =>
+      // The executor turns a synchronous throw into a rejection, as `await` did.
+      new Promise<Awaited<ReturnType<typeof hydrateWorkflow>>>((resolve) =>
+        resolve(hydrateWorkflow(data.workflowId)),
+      ).then(
+        (result) => {
+          if (!result) setError("The authoritative Multi Review workflow could not be found.");
+        },
+        (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)),
+      ),
+    [data.workflowId, hydrateWorkflow],
+  );
+
+  const hydrate = () => {
     setError(null);
-    try {
-      const result = await hydrateWorkflow(data.workflowId);
-      if (!result) setError("The authoritative Multi Review workflow could not be found.");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  }, [data.workflowId, hydrateWorkflow]);
+    void fetchWorkflow();
+  };
+
+  // Every (re)activation reads the workflow again, starting without an error.
+  const [hydratedFor, setHydratedFor] = useState({ fetchWorkflow, isActive });
+  if (hydratedFor.fetchWorkflow !== fetchWorkflow || hydratedFor.isActive !== isActive) {
+    setHydratedFor({ fetchWorkflow, isActive });
+    setError(null);
+  }
 
   useEffect(() => {
-    void hydrate();
-  }, [hydrate, isActive]);
+    void fetchWorkflow();
+  }, [fetchWorkflow, isActive]);
 
   const openFixSession = useCallback(
     (target: MultiReviewWorkflow | undefined): FixSessionOpenOutcome => {
@@ -578,6 +604,10 @@ function MultiReviewOverviewTab({
 
   useEffect(() => {
     if (!openAfterDelivery || !workflow || workflow.addressPromptPending === true) return;
+    // Consumes the one-shot request in the step that acts on it: opening the
+    // Fix tab (`createTab`) is a side effect that cannot run while rendering,
+    // and the request must not survive to open a second tab.
+    // oxlint-disable-next-line react/set-state-in-effect
     setOpenAfterDelivery(false);
     if (isActive && workflow.phase === "interactive") presentFixSession(workflow, "automatic");
   }, [isActive, openAfterDelivery, presentFixSession, workflow]);
@@ -824,7 +854,7 @@ function MultiReviewOverviewTab({
           )}
           <p className="text-sm text-muted-foreground">{error ?? "Restoring Multi Review…"}</p>
           {error && (
-            <Button className="mt-4" variant="outline" size="sm" onClick={() => void hydrate()}>
+            <Button className="mt-4" variant="outline" size="sm" onClick={hydrate}>
               <RefreshCw className="mr-2 size-3.5" />
               Retry
             </Button>

@@ -499,6 +499,7 @@ export class NativeAgentCommandCatalogueCache {
       freshness: result.freshness ?? "ttl",
       fetchedAt: new Date(this.options.now()).toISOString(),
       ...(result.truncated ? { truncated: true } : {}),
+      ...(result.status === "stale" && result.attachPending ? { attachPending: true } : {}),
       ...(result.status === "missing"
         ? {
             error: {
@@ -549,6 +550,8 @@ export class NativeAgentCommandCatalogueCache {
       freshness: previous?.state.freshness ?? "ttl",
       ...(previous?.state.fetchedAt ? { fetchedAt: previous.state.fetchedAt } : {}),
       ...(previous?.state.truncated ? { truncated: true } : {}),
+      // Still true of the rows kept: they were read before the session attached.
+      ...(retained && previous.state.attachPending ? { attachPending: true } : {}),
       error: { code, message: ERROR_MESSAGES[code] },
       ...(previous?.state.lastRefresh ? { lastRefresh: previous.state.lastRefresh } : {}),
     };

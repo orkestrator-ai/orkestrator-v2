@@ -57,7 +57,11 @@ import {
 } from "./agent-accounts-last-usage.js";
 import { readAgentAccountPlanUsage, readPlanUsage, type PlanUsageReader } from "./plan-usage.js";
 import { promoteClaudeLogin, removeTemporaryClaudeLogin } from "./agent-accounts-promotion.js";
-import { terminalAccountHomes } from "./terminal-account-usage.js";
+import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
+import {
+  resetHostModelCatalogSeedCooldown,
+  seedHostModelCatalogIfMissing,
+} from "./host-model-catalog-seed.js";
 
 /**
  * Added Claude and Codex logins: registry, switching, sign-in and per-account
@@ -279,11 +283,7 @@ export async function removeAgentAccount(
     throw new Error("An agent is still running on this account. Try again once it is idle.");
   }
   return withAccountMutation(async () => {
-    if (
-      Array.from(terminalAccountHomes.values()).some(
-        (home) => home === homeFor(context, platform, accountId),
-      )
-    ) {
+    if (context.runtime.terminals.isAccountHomeInUse(homeFor(context, platform, accountId))) {
       throw new Error(
         "A terminal is still running on this account. Close it before removing the account.",
       );
@@ -487,6 +487,14 @@ async function finishLogin(context: CommandContext, entry: ActiveLogin): Promise
       await finishReauthentication(context, entry);
       entry.state = "succeeded";
       entry.completedAt = new Date().toISOString();
+      // A first-run user who was never signed in has no model list yet; fetch it
+      // now rather than waiting for the picker to be reopened.
+      if (platform === "claude") {
+        resetHostModelCatalogSeedCooldown(platform);
+        void seedHostModelCatalogIfMissing(context, platform, refreshHostModelCatalog).catch(
+          () => undefined,
+        );
+      }
       announceAccountsChanged(context, platform);
       return;
     }

@@ -1,7 +1,3 @@
-import {
-  beginEnvironmentMove,
-  endEnvironmentMove,
-} from "../src/core/environment-replacement-fence";
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 import { tmuxSessionName } from "../src/core/tmux";
@@ -11,6 +7,7 @@ import {
   createHandlers,
   createTempDir,
   deferred,
+  harnessRuntime,
   invoke,
   waitFor,
   withFakeTmuxRuntime,
@@ -1214,7 +1211,9 @@ test("tmux launch admission and every input path are fenced during transfer", as
     );
     try {
       await entered.promise;
-      expect(() => beginEnvironmentMove(environment.id)).toThrow("submission is still in progress");
+      expect(() => harnessRuntime().environments.fence.beginMove(environment.id)).toThrow(
+        "submission is still in progress",
+      );
       naming.resolve();
       await starting;
       const terminalSessionId = await invoke(
@@ -1223,7 +1222,7 @@ test("tmux launch admission and every input path are fenced during transfer", as
         { tabId: "tab-move", environmentId: environment.id, cols: 80, rows: 24 },
         context,
       );
-      expect(beginEnvironmentMove(environment.id)).toBe(true);
+      expect(harnessRuntime().environments.fence.beginMove(environment.id)).toBe(true);
       for (const command of [
         "claude_tmux_start",
         "claude_tmux_submit",
@@ -1253,7 +1252,7 @@ test("tmux launch admission and every input path are fenced during transfer", as
       ).rejects.toThrow("being moved");
     } finally {
       naming.resolve();
-      endEnvironmentMove(environment.id);
+      harnessRuntime().environments.fence.endMove(environment.id);
       await starting;
       await invoke(
         handlers,

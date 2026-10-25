@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { useEffect } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { LiveElapsed } from "./LiveElapsed";
 
@@ -14,7 +15,10 @@ test("the clock ticks itself; the component that owns it renders once", () => {
   try {
     let ownerRenders = 0;
     function Owner() {
-      ownerRenders += 1;
+      // Counted per commit: an Owner re-render would commit again.
+      useEffect(() => {
+        ownerRenders += 1;
+      });
       return <LiveElapsed startedAt={1_000_000 - 64_000} />;
     }
     render(<Owner />);

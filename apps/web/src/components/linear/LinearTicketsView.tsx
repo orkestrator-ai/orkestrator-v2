@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -331,9 +331,10 @@ export function LinearTicketsViewContent({
   buildPipeline,
 }: LinearTicketsViewContentProps) {
   const [connection, setConnection] = useState<LinearConnectionStatus | null>(null);
-  const [connectionState, setConnectionState] = useState<LoadState>("idle");
+  // Both start loading: the first load begins on mount.
+  const [connectionState, setConnectionState] = useState<LoadState>("loading");
   const [issues, setIssues] = useState<LinearIssueListItem[]>([]);
-  const [issuesState, setIssuesState] = useState<LoadState>("idle");
+  const [issuesState, setIssuesState] = useState<LoadState>("loading");
   const [issuesError, setIssuesError] = useState<string | null>(null);
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set());
   const [issueOrder, setIssueOrder] = useState<IssueOrder>("manual");
@@ -364,8 +365,11 @@ export function LinearTicketsViewContent({
   const selectedIssueIdRef = useRef(selectedIssueId);
   const commentBodyRef = useRef(commentBody);
   const commentEditRevisionsRef = useRef(new Map<string, number>());
-  selectedIssueIdRef.current = selectedIssueId;
-  commentBodyRef.current = commentBody;
+  // Read after a comment submission settles, so they track the latest commit.
+  useLayoutEffect(() => {
+    selectedIssueIdRef.current = selectedIssueId;
+    commentBodyRef.current = commentBody;
+  }, [selectedIssueId, commentBody]);
 
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
@@ -376,55 +380,65 @@ export function LinearTicketsViewContent({
     selectedIssueId !== null,
   );
 
-  const loadConnection = useCallback(async () => {
+  /** Callers mark the connection as loading; see `loadIssues`. */
+  const loadConnection = useCallback(() => {
     const requestId = connectionRequestRef.current + 1;
     connectionRequestRef.current = requestId;
-    setConnectionState("loading");
-    try {
-      const status = await getLinearConnection();
-      if (connectionRequestRef.current !== requestId) return null;
-      setConnection(status);
-      setConnectionState("loaded");
-      return status;
-    } catch (error) {
-      if (connectionRequestRef.current !== requestId) return null;
-      setConnection({
-        connected: false,
-        hasToken: false,
-        error: error instanceof Error ? error.message : "Failed to verify Linear connection",
-      });
-      setConnectionState("error");
-      return null;
-    }
+    return getLinearConnection().then(
+      (status) => {
+        if (connectionRequestRef.current !== requestId) return null;
+        setConnection(status);
+        setConnectionState("loaded");
+        return status;
+      },
+      (error: unknown) => {
+        if (connectionRequestRef.current !== requestId) return null;
+        setConnection({
+          connected: false,
+          hasToken: false,
+          error: error instanceof Error ? error.message : "Failed to verify Linear connection",
+        });
+        setConnectionState("error");
+        return null;
+      },
+    );
   }, []);
 
-  const loadIssues = useCallback(async () => {
+  /** Loads without marking the load as started; `loadIssues` does both. */
+  const fetchIssues = useCallback(() => {
     const requestId = issuesRequestRef.current + 1;
     issuesRequestRef.current = requestId;
-    setIssuesState("loading");
-    setIssuesError(null);
-    try {
-      const status = await loadConnection();
-      if (issuesRequestRef.current !== requestId) return;
-      if (!status?.connected) {
-        setIssues([]);
+    return loadConnection()
+      .then(async (status) => {
+        if (issuesRequestRef.current !== requestId) return;
+        if (!status?.connected) {
+          setIssues([]);
+          setIssuesState("loaded");
+          return;
+        }
+        const nextIssues = await getLinearIssues();
+        if (issuesRequestRef.current !== requestId) return;
+        setIssues(nextIssues);
         setIssuesState("loaded");
-        return;
-      }
-      const nextIssues = await getLinearIssues();
-      if (issuesRequestRef.current !== requestId) return;
-      setIssues(nextIssues);
-      setIssuesState("loaded");
-    } catch (error) {
-      if (issuesRequestRef.current !== requestId) return;
-      setIssuesError(error instanceof Error ? error.message : "Failed to load Linear tickets");
-      setIssuesState("error");
-    }
+      })
+      .catch((error: unknown) => {
+        if (issuesRequestRef.current !== requestId) return;
+        setIssuesError(error instanceof Error ? error.message : "Failed to load Linear tickets");
+        setIssuesState("error");
+      });
   }, [loadConnection]);
 
+  const loadIssues = useCallback(() => {
+    setIssuesState("loading");
+    setIssuesError(null);
+    setConnectionState("loading");
+    return fetchIssues();
+  }, [fetchIssues]);
+
+  // The initial state already shows this first load as loading.
   useEffect(() => {
-    void loadIssues();
-  }, [loadIssues]);
+    void fetchIssues();
+  }, [fetchIssues]);
 
   const statusOrder = useMemo(() => buildStatusOrder(issues), [issues]);
 

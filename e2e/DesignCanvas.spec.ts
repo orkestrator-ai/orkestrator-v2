@@ -6,6 +6,18 @@ import { planDefaultDesignExportPath } from "../apps/backend/src/core/design/exp
 import { DESIGN_EVENT } from "@orkestrator/protocol/design-canvas";
 import { startDesignServiceHost } from "./design-service-client";
 
+/**
+ * Flake 0174 qualification: `ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE=4` slows the
+ * page's main thread through CDP (Chromium only) instead of loading the host,
+ * so a timing-sensitive step fails reproducibly rather than by chance.
+ */
+const cpuThrottle = Number(process.env.ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE ?? "1");
+test.beforeEach(async ({ page, browserName }) => {
+  if (!(cpuThrottle > 1) || browserName !== "chromium") return;
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
+});
+
 test("canvas edits, script isolation, missed events, conflict and reload", async ({
   page,
 }, testInfo) => {
@@ -26,10 +38,17 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       html: `<style>body{margin:0;padding:24px;font-family:system-ui}h1{color:rgb(20,30,40);background-color:rgba(10,20,30,.4)}</style><h1 id="title">A better workspace</h1><script>document.body.textContent="EXECUTED"</script><img onerror="document.body.textContent='EXECUTED'" src="https://example.invalid/x"><template id="nested"><script>bad()</script><iframe src="data:text/html,bad"></iframe><frame src="bad"></frame></template><div id="target"></div>`,
     });
     let snapshots = 0;
+    // Runs once, just before the next operation reaches the service.
+    let beforeNextPrepare: (() => Promise<unknown>) | null = null;
     await page.exposeFunction(
       "designInvoke",
       async (command: string, args: Record<string, unknown>) => {
         if (command === "design_snapshot") snapshots++;
+        if (command === "design_prepare" && beforeNextPrepare) {
+          const landOtherEdit = beforeNextPrepare;
+          beforeNextPrepare = null;
+          await landOtherEdit();
+        }
         return service.invoke(command, args);
       },
     );
@@ -120,8 +139,8 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     });
     expect((await service.getFrame(canvas.id, "design-fixture", frame.id)).revision).toBe(1);
     await page.screenshot({ path: testInfo.outputPath("design-inspector.png") });
-    const widthField = page.getByRole("textbox", { name: "width", exact: true });
-    const heightField = page.getByRole("textbox", { name: "height", exact: true });
+    const widthField = page.getByRole("textbox", { name: "Width", exact: true });
+    const heightField = page.getByRole("textbox", { name: "Height", exact: true });
     const widthBox = (await widthField.boundingBox())!;
     const heightBox = (await heightField.boundingBox())!;
     expect(widthBox.y).toBe(heightBox.y);
@@ -131,27 +150,27 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       true,
     );
     await expect(page.getByRole("button", { name: "Apply styles" })).toBeDisabled();
-    await page.getByRole("combobox", { name: "position", exact: true }).click();
+    await page.getByRole("combobox", { name: "Position", exact: true }).click();
     await page.getByRole("option", { name: "relative", exact: true }).click();
     await page.getByRole("button", { name: "Reset", exact: true }).click();
-    await expect(page.getByRole("combobox", { name: "position", exact: true })).toContainText(
+    await expect(page.getByRole("combobox", { name: "Position", exact: true })).toContainText(
       "static",
     );
     await expect(page.getByRole("button", { name: "Apply styles" })).toBeDisabled();
-    await page.getByRole("combobox", { name: "position", exact: true }).click();
+    await page.getByRole("combobox", { name: "Position", exact: true }).click();
     await page.getByRole("option", { name: "relative", exact: true }).click();
-    await page.getByRole("combobox", { name: "text-align", exact: true }).click();
+    await page.getByRole("combobox", { name: "Align", exact: true }).click();
     await page.getByRole("option", { name: "center", exact: true }).click();
-    await page.getByRole("combobox", { name: "font-weight", exact: true }).click();
+    await page.getByRole("combobox", { name: "Weight", exact: true }).click();
     await page.getByRole("option", { name: "Custom…", exact: true }).click();
-    await page.getByRole("textbox", { name: "font-weight", exact: true }).fill("450");
-    await page.getByLabel("Pick background-color", { exact: true }).fill("#336699");
-    await expect(page.getByRole("textbox", { name: "background-color", exact: true })).toHaveValue(
+    await page.getByRole("textbox", { name: "Weight", exact: true }).fill("450");
+    await page.getByLabel("Pick Fill", { exact: true }).fill("#336699");
+    await expect(page.getByRole("textbox", { name: "Fill", exact: true })).toHaveValue(
       "rgba(51, 102, 153, 0.4)",
     );
     // Draft controls must not overwrite the frame until explicitly applied.
     expect((await service.getFrame(canvas.id, "design-fixture", frame.id)).revision).toBe(1);
-    await page.getByLabel("color", { exact: true }).fill("rgb(240, 10, 20)");
+    await page.getByLabel("Color", { exact: true }).fill("rgb(240, 10, 20)");
     await page.getByRole("button", { name: "Apply styles" }).click();
     await expect(embedded.getByRole("heading")).toHaveCSS("color", "rgb(240, 10, 20)");
     await expect(embedded.getByRole("heading")).toHaveCSS(
@@ -190,10 +209,14 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     await page.reload();
     await expect(embedded.getByRole("heading")).toHaveText("Changed while away");
     await page.getByRole("button", { name: "title", exact: true }).click();
-    await page.getByLabel("color", { exact: true }).fill("blue");
-    await service.mutate(canvas.id, "design-fixture", frame.id, 3, {
-      html: "<h1 id='title'>Agent's newer edit</h1>",
-    });
+    await page.getByLabel("Color", { exact: true }).fill("blue");
+    // Another client's edit lands while this one is on its way (flake 0174).
+    // Landing it before the click raced its live hint: once the page heard of
+    // the newer revision it rightly disabled Apply styles, and the click waited.
+    beforeNextPrepare = () =>
+      service.mutate(canvas.id, "design-fixture", frame.id, 3, {
+        html: "<h1 id='title'>Agent's newer edit</h1>",
+      });
     await page.getByRole("button", { name: "Apply styles" }).click();
     // The stale selector edit is rejected, never retargeted; the draft stays for review.
     await expect(

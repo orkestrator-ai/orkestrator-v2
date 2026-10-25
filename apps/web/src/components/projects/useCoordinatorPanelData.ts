@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { CoordinatorSnapshot, ProjectGitStatus } from "@orkestrator/protocol/coordinator";
 import {
   classifyViewSnapshotResponse,
@@ -98,14 +98,34 @@ export interface CoordinatorPanelData {
 export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData {
   const instance = useId();
   const projectRef = useRef(projectId);
-  projectRef.current = projectId;
+  // Updated before any effect or late answer of this commit reads it.
+  useLayoutEffect(() => {
+    projectRef.current = projectId;
+  }, [projectId]);
   const [snapshot, setSnapshot] = useState<CoordinatorSnapshot | null>(null);
   const [git, setGit] = useState<ProjectGitStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [readyProject, setReadyProject] = useState<string | null>(null);
+  // A new project starts from nothing; nothing from the previous one applies.
+  const [shownProject, setShownProject] = useState(projectId);
+  if (shownProject !== projectId) {
+    setShownProject(projectId);
+    setSnapshot(null);
+    setGit(null);
+    setReadyProject(null);
+    setLoading(true);
+    setError(null);
+  }
   const ready = readyProject === projectId;
-  const legacyRef = useRef(false);
+  /**
+   * The read-coordinator connection generation on which the backend proved it
+   * has no view command, or null. Capability belongs to a server, not to this
+   * mount: after a server switch the next read probes the view command again.
+   */
+  const legacyRef = useRef<number | null>(null);
+  /** Connection generation of the latest read, for the safety-check gate. */
+  const connectionGenerationRef = useRef(0);
   const stampRef = useRef<ViewRevisionStamp | null>(null);
   const directSeqRef = useRef(0);
   const gitRef = useRef<ProjectGitStatus | null>(null);
@@ -159,11 +179,12 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
       intervalMs: LEGACY_COORDINATOR_POLL_INTERVAL_MS,
       priority: "standard",
     },
-    read: async () => {
+    read: async (context) => {
       const pid = projectId;
       const sent = stampRef.current;
       const directSeq = directSeqRef.current;
-      if (!legacyRef.current) {
+      connectionGenerationRef.current = context.connectionGeneration;
+      if (legacyRef.current !== context.connectionGeneration) {
         try {
           const answer = await backend.getProjectCoordinatorView(pid, sent);
           const classified = classifyViewSnapshotResponse(answer, isCoordinatorSnapshot);
@@ -194,7 +215,7 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
           return { projectId: pid, snapshot: outcome.snapshot, stamp, directSeq, legacy: false };
         } catch (cause) {
           if (!isUnknownViewCommandError(cause, backend.COORDINATOR_VIEW_COMMAND)) throw cause;
-          legacyRef.current = true;
+          legacyRef.current = context.connectionGeneration;
         }
       }
       const full = await backend.getProjectCoordinator(pid);
@@ -255,7 +276,7 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
     // Provider availability is derived from configuration.
     const offConfig = onResourceChanged("config", () => requestViewRead());
     const offSafety = onViewSafetyCheck(() => {
-      if (!legacyRef.current) requestViewRead();
+      if (legacyRef.current !== connectionGenerationRef.current) requestViewRead();
     });
     return () => {
       offCoordinator();
@@ -264,42 +285,46 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
     };
   }, [requestViewRead]);
 
-  const load = useCallback(async () => {
+  const hydrate = useCallback(() => {
     const pid = projectId;
-    setLoading(true);
-    setError(null);
-    try {
-      const coordinator = await backend.ensureProjectCoordinator(pid);
-      if (projectRef.current !== pid) return;
-      applySnapshot(coordinator);
-      setReadyProject(pid);
-      lastProbeRef.current = Date.now();
-      applyGit(await backend.getProjectGitStatus(pid));
-      // Fetch-on-open: the backend's fetch cooldown decides whether this
-      // reaches the remote; an in-flight fetch from another client is joined.
-      void backend
-        .fetchProjectGit(pid)
-        .then(applyGit)
-        .catch(() => undefined);
-    } catch (cause) {
-      if (projectRef.current !== pid) return;
-      setError(cause instanceof Error ? cause.message : "Coordinator could not be opened");
-    } finally {
-      if (projectRef.current === pid) setLoading(false);
-    }
+    return backend
+      .ensureProjectCoordinator(pid)
+      .then(async (coordinator) => {
+        if (projectRef.current !== pid) return;
+        applySnapshot(coordinator);
+        setReadyProject(pid);
+        lastProbeRef.current = Date.now();
+        applyGit(await backend.getProjectGitStatus(pid));
+        // Fetch-on-open: the backend's fetch cooldown decides whether this
+        // reaches the remote; an in-flight fetch from another client is joined.
+        void backend
+          .fetchProjectGit(pid)
+          .then(applyGit)
+          .catch(() => undefined);
+      })
+      .catch((cause: unknown) => {
+        if (projectRef.current !== pid) return;
+        setError(cause instanceof Error ? cause.message : "Coordinator could not be opened");
+      })
+      .finally(() => {
+        if (projectRef.current === pid) setLoading(false);
+      });
   }, [applyGit, applySnapshot, projectId]);
 
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    return hydrate();
+  }, [hydrate]);
+
   useEffect(() => {
-    // A new project starts from nothing; nothing from the previous one applies.
+    // The state was reset while rendering the new project; these are its refs.
     liveRef.current = false;
     pendingViewReadRef.current = false;
     stampRef.current = null;
     gitRef.current = null;
-    setSnapshot(null);
-    setGit(null);
-    setReadyProject(null);
-    void load();
-  }, [load]);
+    void hydrate();
+  }, [hydrate]);
 
   // Runs after `useCoordinatedRead` subscribed for the ready project, so an
   // invalidation queued during hydration reaches a live subscription.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Copy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -56,22 +56,20 @@ export function useContainerHostReachability(): {
 } {
   const [value, setValue] = useState<ContainerHostReachability | null>(null);
   const [checking, setChecking] = useState(false);
-  const refreshRef = useRef<() => void>(() => undefined);
-
-  refreshRef.current = () => {
-    // Inside an async function so an older backend, or a stub without the
-    // command, is a quiet no-op rather than a synchronous render error.
-    void (async () => {
-      try {
-        const next = await backend.getContainerHostReachability();
-        if (isContainerHostReachability(next)) setValue(next);
-      } catch {
-        // The next change event, reconnect or remount refreshes it.
-      }
-    })();
-  };
 
   useEffect(() => {
+    const refresh = () => {
+      // Inside an async function so an older backend, or a stub without the
+      // command, is a quiet no-op rather than a synchronous render error.
+      void (async () => {
+        try {
+          const next = await backend.getContainerHostReachability();
+          if (isContainerHostReachability(next)) setValue(next);
+        } catch {
+          // The next change event, reconnect or remount refreshes it.
+        }
+      })();
+    };
     let disposed = false;
     const unlisteners: Array<() => void> = [];
     const subscribe = (event: string, handler: (event: NativeEvent<unknown>) => void) => {
@@ -84,10 +82,10 @@ export function useContainerHostReachability(): {
     };
     subscribe(CONTAINER_HOST_REACHABILITY_CHANGED_EVENT, ({ payload }) => {
       if (isContainerHostReachability(payload)) setValue(payload);
-      else refreshRef.current();
+      else refresh();
     });
-    subscribe(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => refreshRef.current());
-    refreshRef.current();
+    subscribe(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => refresh());
+    refresh();
     return () => {
       disposed = true;
       for (const unlisten of unlisteners) unlisten();
@@ -303,16 +301,25 @@ export function ContainerHostReachabilityNotice() {
   const attention = value !== null && containerHostReachabilityNeedsAttention(value);
   const key = value ? problemKey(value) : null;
 
+  // A newly blocked problem opens the dialog, unless this app session already
+  // opened it for that problem; the effect below records that it did.
+  const blockedKey = value?.status === "blocked" ? key : null;
+  const [autoOpenCheckedKey, setAutoOpenCheckedKey] = useState<string | null>(null);
+  if (blockedKey && autoOpenCheckedKey !== blockedKey) {
+    setAutoOpenCheckedKey(blockedKey);
+    if (readSession(AUTO_OPENED_KEY) !== blockedKey) setDialogOpen(true);
+  }
   useEffect(() => {
-    if (!value || value.status !== "blocked" || !key) return;
-    if (readSession(AUTO_OPENED_KEY) === key) return;
-    writeSession(AUTO_OPENED_KEY, key);
-    setDialogOpen(true);
-  }, [value, key]);
+    if (blockedKey) writeSession(AUTO_OPENED_KEY, blockedKey);
+  }, [blockedKey]);
 
-  useEffect(() => {
-    if (value?.status === "reachable") setDialogOpen(false);
-  }, [value?.status]);
+  // Fixed problems close the dialog.
+  const status = value?.status;
+  const [previousStatus, setPreviousStatus] = useState(status);
+  if (previousStatus !== status) {
+    setPreviousStatus(status);
+    if (status === "reachable") setDialogOpen(false);
+  }
 
   if (!value || (!attention && !dialogOpen)) return null;
 

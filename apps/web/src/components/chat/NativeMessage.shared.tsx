@@ -173,10 +173,13 @@ export function useDeferredToolResult(
   );
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
+  // A different detail reference starts over from the cache, while rendering.
+  const [detailsFor, setDetailsFor] = useState(detailRef);
+  if (detailsFor !== detailRef) {
+    setDetailsFor(detailRef);
     setDetails(detailRef ? cachedToolDetails(detailRef) : undefined);
     setLoadError(null);
-  }, [detailRef]);
+  }
 
   useEffect(() => {
     if (!open || !detailRef || details || loadError || !loadToolDetails) return;

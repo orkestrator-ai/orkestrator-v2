@@ -68,24 +68,34 @@ export function EnvironmentRecoveryCopies({
   onClose,
 }: EnvironmentRecoveryCopiesProps) {
   const [list, setList] = useState<RecoveryCopyList | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<PendingAction>(null);
   const [working, setWorking] = useState(false);
 
-  const load = useCallback(async () => {
+  // Each environment's list is loading from the moment it is shown.
+  const [listedId, setListedId] = useState(environment.id);
+  if (listedId !== environment.id) {
+    setListedId(environment.id);
     setLoading(true);
-    try {
-      setList(await backend.listRecoveryCopies(environment.id, { measureSize: true }));
-    } catch {
-      setList(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [environment.id]);
+  }
+
+  const fetchList = useCallback(
+    () =>
+      backend
+        .listRecoveryCopies(environment.id, { measureSize: true })
+        .then(setList, () => setList(null))
+        .finally(() => setLoading(false)),
+    [environment.id],
+  );
+
+  const load = useCallback(() => {
+    setLoading(true);
+    return fetchList();
+  }, [fetchList]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchList();
+  }, [fetchList]);
 
   // A rebuild, restore or reset finishing while this is open (started here,
   // from another window or from the CLI) changes the lifecycle record's

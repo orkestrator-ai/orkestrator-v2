@@ -38,26 +38,27 @@ export function DockerImageStatusPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (refresh = false) => {
+  const fetchStatus = useCallback(
+    (refresh: boolean) =>
+      Promise.all([backend.getDockerImageStatus(), backend.getDockerTopology(refresh)])
+        .then(([imageStatus, daemon]) => {
+          setImage(imageStatus);
+          setTopology(daemon);
+        })
+        .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+        .finally(() => setLoading(false)),
+    [],
+  );
+
+  const load = (refresh: boolean) => {
     setLoading(true);
     setError(null);
-    try {
-      const [imageStatus, daemon] = await Promise.all([
-        backend.getDockerImageStatus(),
-        backend.getDockerTopology(refresh),
-      ]);
-      setImage(imageStatus);
-      setTopology(daemon);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    void fetchStatus(refresh);
+  };
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchStatus(false);
+  }, [fetchStatus]);
 
   const healthy = image?.state === "compatible";
   const capabilities = image?.manifest
@@ -75,7 +76,7 @@ export function DockerImageStatusPanel() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => void load(true)}
+          onClick={() => load(true)}
           disabled={loading}
           aria-label="Refresh image status"
         >

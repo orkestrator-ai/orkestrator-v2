@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import type { WebAnnotationSummary } from "@orkestrator/protocol/web-annotations";
 import {
   NO_WEB_ANNOTATION_FEATURES,
@@ -35,11 +35,11 @@ export function useWebAnnotationCache(environmentId: string | null): WebAnnotati
  */
 export function useWebAnnotationSync(environmentId: string | null, visible: boolean) {
   const handleRef = useRef<ReturnType<typeof acquireWebAnnotationSync> | null>(null);
-  const visibleRef = useRef(visible);
-  visibleRef.current = visible;
+  // Visibility changes update the handle below rather than re-acquiring it.
+  const currentVisible = useEffectEvent(() => visible);
   useEffect(() => {
     if (!environmentId) return;
-    const handle = acquireWebAnnotationSync(environmentId, { visible: visibleRef.current });
+    const handle = acquireWebAnnotationSync(environmentId, { visible: currentVisible() });
     handleRef.current = handle;
     return () => {
       handleRef.current = null;
@@ -63,11 +63,13 @@ export function useWebAnnotationList(
   query: ListQuery | null,
 ): ListView {
   const key = query ? listQueryKey(query) : "";
-  const queryRef = useRef(query);
-  queryRef.current = query;
+  // Registered by its key, so a new query object with the same key is not a
+  // new registration.
+  const currentQuery = useEffectEvent(() => query);
   useEffect(() => {
-    if (!environmentId || !queryRef.current) return;
-    const registration = registerWebAnnotationList(environmentId, queryRef.current);
+    const latestQuery = currentQuery();
+    if (!environmentId || !latestQuery) return;
+    const registration = registerWebAnnotationList(environmentId, latestQuery);
     return registration.release;
   }, [environmentId, key]);
   const cache = useWebAnnotationCache(environmentId);

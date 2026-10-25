@@ -81,3 +81,11 @@
 The aggregate completed with workspace, bridges and protocol passing; only root/support failed (exit 1, 426.4 seconds). The root failure prevented its serial iOS stage, so iOS was invoked separately with `mise run test:logged -- --name merge-ios -- mise run test:ios`.
 
 The separate iOS command did not reach compilation or tests: `simctl list devices available --json` waited on Xcode's `xcodebuild -runFirstLaunch`. The logged runner's 300-second no-output watchdog stopped its owned process group (exit 1, 300.0 seconds; evidence `orkestrator-test-run.SZkLnj/merge-ios.log.gz`). iOS remains unvalidated because host initialization did not finish. Separate Electron, Docker and CLI scenario suites were outside the changed implementation areas.
+
+## Design-canvas qualification recurrence — 2026-10-25
+
+- **Command:** `mise run test:logged -- --name full-test-0036 -- mise run test` on branch `todo-0036-design-canvas-qualification-e17e8f7e743c` (from `20f6de91`), Bun 1.4.4 on macOS arm64, load average 35–46 with other worktrees running suites.
+- **Failure:** `kills the server when the overall deadline expires` (line 399) found one `ork-opencode-compat-*` root that was not there at its first snapshot, and `a deadline during setup stops the abandoned probe from spawning a server` failed the same temporary-root comparison. Root/support: 3,416 passed, 2 failed. Every other group passed.
+- **Owning file alone:** `bun test scripts/opencode-live-compatibility-probe.test.ts` passed three times (31 pass, 0 fail each).
+- **Evidence:** `orkestrator-test-run.xWCOyP/root-and-agent-support-tests.log.gz` below the host temporary directory.
+- **Assessment:** recurrence of this case; the change under test touched only the web renderer, e2e specs and a new script, nothing the probe imports. No implementation, assertion, deadline or skip changed.

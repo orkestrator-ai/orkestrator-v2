@@ -4,9 +4,10 @@
  *
  * The request record is the ownership ledger: each attachment names the
  * app-generated relative path, the agent-readable path it was written to,
- * and the digest of the exact bytes. A file is removed only when:
+ * and the digest of the exact bytes. Cleanup recognizes both the current
+ * filename and the legacy filename at that recorded path. A file is removed only when:
  *
- * - its request is settled (never while queued/running/unconfirmed), and
+ * - its request is settled and no active request owns the same path, and
  * - its notes were all deleted, or the settlement is older than the
  *   retention period (the transcript may still refer to the file until then),
  * - and the file on disk is still a regular file with the recorded digest
@@ -15,9 +16,13 @@
  * Environment deletion removes the whole workspace through the existing
  * lifecycle, so nothing is tracked past it.
  */
+import { createHash } from "node:crypto";
+import path from "node:path";
 import {
   WEB_ANNOTATION_LIMITS,
+  WEB_ANNOTATION_WORKSPACE_DIRECTORY,
   isWebAnnotationRequestActive,
+  type WebAnnotationRequestAttachment,
 } from "@orkestrator/protocol/web-annotations";
 import {
   removeLocalEvidence,
@@ -25,6 +30,44 @@ import {
 } from "./web-annotation-evidence-files.js";
 import type { WebAnnotationHostEnvironment } from "./web-annotation-context.js";
 import type { WebAnnotationManifest } from "./web-annotation-storage.js";
+
+/**
+ * Existing materializations used a normalized, truncated request ID. This
+ * name is retained only for recognizing their recorded ownership at cleanup.
+ */
+function legacyEvidencePath(requestId: string, relativePath: string): string | null {
+  const safeRequest = requestId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
+  if (!safeRequest || safeRequest.startsWith(".")) return null;
+  const basename = path.posix.basename(relativePath);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.png$/.test(basename)) return null;
+  return `${WEB_ANNOTATION_WORKSPACE_DIRECTORY}/${safeRequest}-${basename}`;
+}
+
+/** Hash the complete ID: punctuation and long shared prefixes cannot alias. */
+export function materializedEvidencePath(requestId: string, relativePath: string): string | null {
+  const legacy = legacyEvidencePath(requestId, relativePath);
+  if (!legacy) return null;
+  const prefix = requestId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 12);
+  const identity = createHash("sha256").update(requestId).digest("hex");
+  return `${WEB_ANNOTATION_WORKSPACE_DIRECTORY}/${prefix}-${identity}-${path.posix.basename(relativePath)}`;
+}
+
+/** Only recognize generated names, using the persisted path to retain old ownership. */
+function writtenEvidencePath(
+  requestId: string,
+  attachment: WebAnnotationRequestAttachment,
+): string | null {
+  const recorded = attachment.materializedPath?.replace(/\\/g, "/");
+  if (!recorded) return null;
+  for (const candidate of [
+    materializedEvidencePath(requestId, attachment.relativePath),
+    legacyEvidencePath(requestId, attachment.relativePath),
+  ]) {
+    if (candidate && (recorded === candidate || recorded.endsWith(`/${candidate}`)))
+      return candidate;
+  }
+  return null;
+}
 
 /** Settled evidence stays in the workspace this long for transcript references. */
 export const MATERIALIZED_EVIDENCE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -46,6 +89,15 @@ export function planMaterializedCleanup(
   const retentionMs = options.retentionMs ?? MATERIALIZED_EVIDENCE_RETENTION_MS;
   const batch = options.batch ?? CLEANUP_BATCH;
   const out: MaterializedEvidence[] = [];
+  const activePaths = new Set<string>();
+  for (const request of Object.values(manifest.requests)) {
+    if (!isWebAnnotationRequestActive(request.state)) continue;
+    for (const attachment of request.attachments) {
+      if (attachment.removedAt) continue;
+      const written = writtenEvidencePath(request.id, attachment);
+      if (written) activePaths.add(written);
+    }
+  }
   for (const request of Object.values(manifest.requests)) {
     if (out.length >= batch) break;
     if (isWebAnnotationRequestActive(request.state) || !request.settledAt) continue;
@@ -62,10 +114,13 @@ export function planMaterializedCleanup(
     if (!notesDeleted && !expired) continue;
     for (const attachment of pending) {
       if (out.length >= batch) break;
+      // The file written, not the brief's name for it (`relativePath`).
+      const written = writtenEvidencePath(request.id, attachment);
+      if (!written || activePaths.has(written)) continue;
       out.push({
         requestId: request.id,
         assetId: attachment.assetId,
-        relativePath: attachment.relativePath,
+        relativePath: written,
         digest: attachment.digest,
       });
     }

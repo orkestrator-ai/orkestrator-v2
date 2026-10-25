@@ -60,17 +60,29 @@ Clean them up opportunistically in files you are already touching. Do not
 silence the rule, and do not raise it to `error` until the backlog is actually
 gone.
 
-The React Compiler rules oxlint 1.79 moved into `correctness` are warnings for
-the same reason: `react/refs`, `react/set-state-in-effect`,
+The React Compiler rules oxlint 1.79 moved into `correctness` are errors like
+the rest of the category: `react/refs`, `react/set-state-in-effect`,
 `react/immutability`, `react/preserve-manual-memoization`, `react/globals`,
-`react/purity` and `react/use-memo`. When oxlint 1.88 was adopted (2026-10-13)
-they reported 337 findings in 129 files, almost all in `apps/web` — 149 refs
-read or written during render and 125 synchronous `setState` calls in effects.
-Several are genuine React 19 correctness issues, but the fixes touch hot
-rendering paths such as the chat transcript, so they are burned down in their
-own reviewed changes rather than in a linter bump. Do not add new findings for
-these rules, fix them in files you are already changing, and raise each rule
-back to `error` once its count reaches zero.
+`react/purity` and `react/use-memo`. They were warnings from the oxlint 1.88
+adoption (2026-10-13, 337 findings in 129 files, almost all `apps/web`) until
+the backlog reached zero on 2026-10-25 (317 findings in 114 files at the
+time), when all seven went back to `error`. The usual fixes:
+
+- Reset state on a prop or key change during render (keep the previous key in
+  state and compare), not in an effect.
+- Write "latest value" refs in `useLayoutEffect`, or use `useEffectEvent`;
+  never read or write `ref.current` during render.
+- Read clocks through `useSyncExternalStore` or a `useState` initialiser, not
+  `Date.now()` in render.
+- In a loader an effect calls, set state only after the request settles; a
+  click handler that wants an immediate loading state sets it itself.
+
+Thirteen sites (2026-10-25) keep a disable directive for these rules, each
+with its reason above it. Twelve are `react/set-state-in-effect` where the
+state change has to happen in the same effect as a side effect (a native
+cancel, a flush before unmount, a tab opened in the parent) or must follow a
+commit (the design canvas restores its saved view only after the first
+default-view commit has marked the visible frames live).
 
 The `jsx-a11y` plugin is not enabled. Its interaction rules reported 58
 findings that are real accessibility gaps, but fixing them means adding keyboard

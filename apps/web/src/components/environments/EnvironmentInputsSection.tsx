@@ -29,13 +29,10 @@ export function EnvironmentInputsSection({
   const [status, setStatus] = useState<EnvironmentInputStatus | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      setStatus(await backend.getEnvironmentInputs(environmentId));
-    } catch {
-      setStatus(null);
-    }
-  }, [environmentId]);
+  const load = useCallback(
+    () => backend.getEnvironmentInputs(environmentId).then(setStatus, () => setStatus(null)),
+    [environmentId],
+  );
 
   useEffect(() => {
     void load();

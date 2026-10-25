@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   ChevronDown,
@@ -96,12 +96,15 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
   /** Annotation item whose removal (= cancellation) awaits confirmation. */
   const [confirmingRemoveId, setConfirmingRemoveId] = useState<string | null>(null);
 
-  useEffect(() => {
+  // Closing the dialog drops a stale error and any pending removal confirmation.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
     if (!open) {
       setActionError(null);
       setConfirmingRemoveId(null);
     }
-  }, [open]);
+  }
 
   const runAction = async (key: string, action: () => void | Promise<void>) => {
     if (pendingActionRef.current) return;

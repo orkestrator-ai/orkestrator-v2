@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -51,26 +51,45 @@ export function NetworkWhitelistDialog({
   const [isTesting, setIsTesting] = useState(false);
   const [testResults, setTestResults] = useState<DomainTestResult[] | null>(null);
 
-  // Reset state when dialog opens
-  useEffect(() => {
+  // Reset state when dialog opens. Both resets also run on the first render.
+  const allowedDomains = environment.allowedDomains;
+  const [resetFor, setResetFor] = useState<{
+    open: boolean;
+    allowedDomains: typeof allowedDomains;
+    globalDomains: string[];
+  } | null>(null);
+  if (
+    resetFor?.open !== open ||
+    resetFor.allowedDomains !== allowedDomains ||
+    resetFor.globalDomains !== globalDomains
+  ) {
+    setResetFor({ open, allowedDomains, globalDomains });
     if (open) {
-      const customDomainList = environment.allowedDomains ?? [];
+      const customDomainList = allowedDomains ?? [];
       const hasCustom = customDomainList.length > 0;
       setUseGlobalDefaults(!hasCustom);
       setCustomDomains((hasCustom ? customDomainList : globalDomains).join("\n"));
       setDomainErrors([]);
       setTestResults(null);
     }
-  }, [open, environment.allowedDomains, globalDomains]);
+  }
 
   // Update custom domains when toggling to global
-  useEffect(() => {
+  const [globalSyncFor, setGlobalSyncFor] = useState<{
+    useGlobalDefaults: boolean;
+    globalDomains: string[];
+  } | null>(null);
+  if (
+    globalSyncFor?.useGlobalDefaults !== useGlobalDefaults ||
+    globalSyncFor.globalDomains !== globalDomains
+  ) {
+    setGlobalSyncFor({ useGlobalDefaults, globalDomains });
     if (useGlobalDefaults) {
       setCustomDomains(globalDomains.join("\n"));
       setDomainErrors([]);
       setTestResults(null);
     }
-  }, [useGlobalDefaults, globalDomains]);
+  }
 
   // Validate domains locally
   const validateDomainsLocally = useCallback((domainsText: string) => {

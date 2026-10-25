@@ -20,6 +20,7 @@ import {
   mcpFailure,
   parseMcpMutation,
   utf8ByteLength,
+  truncateUtf8,
   type McpDefaultsRefreshPreview,
   type McpDefinitionSummary,
   type McpEditableDefinition,
@@ -134,6 +135,7 @@ import { tomlDeepEqual } from "./toml-edit.js";
 import type {
   ContainerBootReader,
   ContainerFileReader,
+  ContainerDirectoryLister,
   ContainerFileWriter,
   ContainerPathProbe,
   SourceSpec,
@@ -155,6 +157,7 @@ export interface McpManagementServiceOptions {
   tickMs?: number;
   /** Reads container files for container targets' catalogs. */
   readContainerFile?: ContainerFileReader;
+  listContainerDirectories?: ContainerDirectoryLister;
   /**
    * Narrow writer for container files (environment overlays and persistent
    * project files). Without it every container source is read-only.
@@ -312,6 +315,7 @@ export class McpManagementService {
             : [],
         },
         this.options.readContainerFile,
+        this.options.listContainerDirectories,
       );
     }
     return providerSources(target.provider, this.sourceContext(target.info));
@@ -451,6 +455,7 @@ export class McpManagementService {
     const rows = sorted.slice(0, MCP_MANAGEMENT_LIMITS.catalogRowsMax);
     const sourceErrors = catalog.sources.some(
       (source) =>
+        source.spec.discoveryIncomplete ||
         source.state === "invalid" ||
         source.state === "permission-denied" ||
         source.state === "oversized",
@@ -2062,8 +2067,16 @@ function sortDefinitions(
   const precedence = new Map(
     catalog.sources.map((source) => [source.spec.sourceId, source.spec.precedence]),
   );
+  // Plugin rows are read-only extras; when rows are trimmed, they go first.
+  const plugin = new Set(
+    catalog.sources
+      .filter((source) => source.spec.owner === "plugin")
+      .map((source) => source.spec.sourceId),
+  );
+  const rank = (row: McpDefinitionSummary) => (plugin.has(row.sourceId) ? 1 : 0);
   return [...definitions].sort(
     (left, right) =>
+      rank(left) - rank(right) ||
       left.name.localeCompare(right.name) ||
       (precedence.get(right.sourceId) ?? 0) - (precedence.get(left.sourceId) ?? 0) ||
       STATUS_ORDER[left.status] - STATUS_ORDER[right.status],
@@ -2082,6 +2095,25 @@ export function fitSnapshotBudget(
   const budget = MCP_MANAGEMENT_LIMITS.catalogMaxBytes;
   // Room for the counters that are filled in after this measurement.
   const reserve = 64;
+  // Source text must leave room for editable rows. Plugin names, paths and
+  // settings keys are untrusted, including container display paths.
+  for (let textBytes = 1024; textBytes >= 64; textBytes /= 2) {
+    if (utf8ByteLength(JSON.stringify(snapshot.sources)) <= budget / 3) break;
+    snapshot.sources = snapshot.sources.map((source) =>
+      source.scope !== "plugin"
+        ? source
+        : {
+            ...source,
+            label: truncateUtf8(source.label, textBytes),
+            displayPath: truncateUtf8(source.displayPath, textBytes),
+            note: source.note ? truncateUtf8(source.note, textBytes) : undefined,
+            error: source.error ? truncateUtf8(source.error, textBytes) : undefined,
+            readOnlyReason: source.readOnlyReason
+              ? truncateUtf8(source.readOnlyReason, textBytes)
+              : undefined,
+          },
+    );
+  }
   let base = utf8ByteLength(JSON.stringify({ ...snapshot, definitions: [] })) + reserve;
   while (base > budget && snapshot.operations.length) {
     snapshot.operations = snapshot.operations.slice(0, -1);

@@ -2236,24 +2236,6 @@ export class CodexRuntimeLifecycle {
         : undefined;
     const reasoningEffort =
       typeof body.modelReasoningEffort === "string" ? body.modelReasoningEffort : undefined;
-    const rawParameters =
-      body.parameterValues &&
-      typeof body.parameterValues === "object" &&
-      !Array.isArray(body.parameterValues)
-        ? (body.parameterValues as Record<string, unknown>)
-        : {};
-    const reasoningSummary = ["auto", "concise", "detailed", "none"].includes(
-      String(rawParameters.summary ?? ""),
-    )
-      ? (rawParameters.summary as EngineTurnConfig["reasoningSummary"])
-      : undefined;
-    // Personality is intentionally accepted by the bridge, but the backend only
-    // sends it when an environment-level policy supplies one.
-    const personality = ["none", "friendly", "pragmatic"].includes(
-      String(rawParameters.personality ?? ""),
-    )
-      ? (rawParameters.personality as EngineTurnConfig["personality"])
-      : undefined;
     const rawAgentMcp = body.agentMcp;
     let agentMcp: EngineTurnConfig["agentMcp"];
     if (rawAgentMcp && typeof rawAgentMcp === "object" && !Array.isArray(rawAgentMcp)) {
@@ -2290,8 +2272,6 @@ export class CodexRuntimeLifecycle {
       mode,
       model,
       reasoningEffort,
-      reasoningSummary,
-      personality,
       // Explicit null clears a previously set tier rather than inheriting it.
       serviceTier: body.fastMode === true ? "fast" : null,
       cwd: this.ctx.options.cwd,

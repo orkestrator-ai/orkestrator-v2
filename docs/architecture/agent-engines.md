@@ -280,9 +280,13 @@ bridge exists to make that survivable:
   did not run; anything else reconciles against persisted turns via
   `sessions/dispatch-journal.ts`, which is what makes prompt dispatch
   at-most-once.
-- **A circuit breaker,** rather than restarting forever, plus an environment
-  fingerprint that forces a controlled restart when the developer's `PATH`
-  changes.
+- **A circuit breaker,** rather than restarting forever: five start failures
+  within 60 s open it. After a quiet 5-minute cooldown the next demand gets
+  one probe start (half-open, no retries behind it); success closes the
+  breaker, failure re-opens it with the cooldown doubled up to 30 minutes.
+  The backoff sleep between start attempts wakes on `stop()`, so shutdown
+  never waits it out. Plus an environment fingerprint that forces a
+  controlled restart when the developer's `PATH` changes.
 - **A pidfile and process-group termination,** so orphaned children cannot
   outlive the bridge and race over the same `CODEX_HOME`.
 
@@ -337,6 +341,26 @@ picker and the run on the same model:
   The renderer keeps that row when a later discovery update replaces the
   composer's models with the bare catalogue
   (`withRetainedSelectedModelRow` in `useNativeAgentSession.ts`).
+- **A dispatch that names another model.** A `dispatch_native_agent_prompt`
+  or Control MCP `model` that differs from the session's stored model is
+  applied the way a model pick is, a control update persisted under the session
+  lease and sent to the bridge, before anything is journaled
+  (`native-agent-dispatch-model.ts`, keyed on the platform policy's
+  `runsSessionHeldModel`). A model the live `model/list` positively does not
+  offer is refused with the draft kept, naming a model to pick instead. An
+  inherited default (`modelSource: "default"`) never changes the session.
+
+The bridge's `POST /session/:id/config` replaces the whole session config: a
+field left out resets (mode to Build, fast tier off). The backend therefore
+reads the current config and restates every field a control update leaves
+alone (`updateCodexSessionConfig` in `http-bridge-codex-config.ts`). A model
+change without an effort drops the old model's effort, so Codex applies the
+new model's default.
+
+Codex's reasoning summary (`summary`) and `personality` are not offered.
+`model/list` reports no summary support, and upstream deprecated
+`personality` (`supportsPersonality` is always false). Codex's own
+`config.toml` still applies to both.
 
 `session-titles.ts` is the one deliberate exception to all of the above — it
 still spawns a hermetic `codex exec` with a custom model catalog, a read-only

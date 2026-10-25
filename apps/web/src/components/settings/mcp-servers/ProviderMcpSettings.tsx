@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Plus, RefreshCw } from "lucide-react";
 
 import {
@@ -122,7 +122,9 @@ export function ProviderMcpSettings() {
     else run();
   };
   const guardSwitchRef = useRef(guardSwitch);
-  guardSwitchRef.current = guardSwitch;
+  useLayoutEffect(() => {
+    guardSwitchRef.current = guardSwitch;
+  });
   const restoreFocus = () => {
     const element = returnFocusRef.current;
     returnFocusRef.current = null;
@@ -365,7 +367,9 @@ export function ProviderMcpSettings() {
           <McpSourceList
             snapshot={current}
             highlightEntryId={
-              liveJoin?.kind === "saved" || liveJoin?.kind === "injected"
+              liveJoin?.kind === "saved" ||
+              liveJoin?.kind === "injected" ||
+              liveJoin?.kind === "plugin"
                 ? liveJoin.entryId
                 : undefined
             }

@@ -143,6 +143,60 @@ describe("joinLiveMcpServer", () => {
     expect(joinLiveMcpServer(shadowed, ref({ scope: "plugin" }))).toEqual({ kind: "plugin" });
   });
 
+  test("a plugin server joins its read-only plugin row by the CLI's exact name", () => {
+    const pluginSource: McpConfigSource = {
+      ...userSource,
+      sourceId: "claude:plugin-0123456789abcdef",
+      scope: "plugin",
+      owner: "plugin",
+      label: "Plugin docs",
+      displayPath: "~/.claude/plugins/cache/m/docs/1.0.0/.mcp.json",
+      precedence: 101,
+      writable: false,
+    };
+    const name = "plugin:docs:search";
+    const withPlugin = snapshot({
+      sources: [userSource, pluginSource],
+      definitions: [
+        // A file entry that happens to share the name is never the plugin's server.
+        definition({ entryId: "claude:user/x", name }),
+        definition({
+          entryId: "claude:plugin-0123456789abcdef/x",
+          sourceId: pluginSource.sourceId,
+          name,
+        }),
+      ],
+    });
+    // The pinned CLI reports a plugin server as scope `dynamic`, source `plugin`.
+    const scope = mcpScope("dynamic", name, "plugin");
+    expect(joinLiveMcpServer(withPlugin, ref({ serverName: name, scope }))).toEqual({
+      kind: "plugin",
+      entryId: "claude:plugin-0123456789abcdef/x",
+      sourceLabel: "Plugin docs",
+    });
+    const disabled = snapshot({
+      sources: [pluginSource],
+      definitions: [
+        definition({
+          entryId: "claude:plugin-0123456789abcdef/x",
+          sourceId: pluginSource.sourceId,
+          name,
+          status: "disabled",
+          statusReason:
+            'Disabled: enabledPlugins["docs@inline"] is false in ~/.claude/settings.json.',
+        }),
+      ],
+    });
+    expect(joinLiveMcpServer(disabled, ref({ serverName: name, scope }))).toMatchObject({
+      kind: "plugin",
+      disabledReason:
+        'Disabled: enabledPlugins["docs@inline"] is false in ~/.claude/settings.json.',
+    });
+    expect(joinLiveMcpServer(withPlugin, ref({ serverName: "plugin:docs:other", scope }))).toEqual({
+      kind: "plugin",
+    });
+  });
+
   test("Pi loads a saved name under the bridge's sanitized spelling", () => {
     const pi = snapshot({
       target: environmentTarget("e1"),

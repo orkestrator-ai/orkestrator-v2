@@ -125,6 +125,13 @@ const MAX_BACKGROUND_ATTEMPTS = 4;
 const STREAM_FAILURES_BEFORE_FALLBACK = 3;
 const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
 const LOCAL_HELLO_TIMEOUT_MS = 3_000;
+/**
+ * `isAsyncEncryptionAvailable()` can wait on a keychain access prompt (macOS
+ * asks when the "<app name> Safe Storage" item's access list does not name
+ * this binary). Startup keeps waiting so a late answer still gets persistent
+ * storage, but says why after this long.
+ */
+const SECURE_STORAGE_WAIT_NOTICE_MS = 5_000;
 
 type RemoteConnection = {
   connectionId: string;
@@ -227,7 +234,7 @@ export class ConnectionManager {
   }
 
   async initialize(): Promise<void> {
-    this.secureStorageAvailable = await this.detectSecureStorage();
+    this.secureStorageAvailable = await this.detectSecureStorageAtStartup();
     this.catalogue = await loadOrMigrateCatalogue(this.store, this.legacyCatalogue);
     this.bindings.set(DEFAULT_CONNECTION_SCOPE, LOCAL_CONNECTION_ID);
     await this.refreshLocalHello();
@@ -2073,6 +2080,25 @@ export class ConnectionManager {
       return false;
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  /** Main awaits `initialize()` before the first window, so a silent wait looks like a hang. */
+  private async detectSecureStorageAtStartup(): Promise<boolean> {
+    const [store, prompt] =
+      this.platform === "darwin"
+        ? ["the macOS keychain", "keychain"]
+        : ["the system keyring", "keyring"];
+    const notice = setTimeout(() => {
+      console.warn(
+        `[Connections] Waiting for ${store} (safe storage) before opening the first window; answer the ${prompt} prompt to continue`,
+      );
+    }, SECURE_STORAGE_WAIT_NOTICE_MS);
+    notice.unref?.();
+    try {
+      return await this.detectSecureStorage();
+    } finally {
+      clearTimeout(notice);
     }
   }
 

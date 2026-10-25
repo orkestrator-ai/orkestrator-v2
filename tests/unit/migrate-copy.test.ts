@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -127,6 +128,39 @@ describe.skipIf(NO_GNU_TAR !== undefined)(titleWithSkip("verified copy helper", 
     const truncated = archive.subarray(0, Math.floor(archive.length / 3));
     const result = copyStream(truncated, join(root, "truncated"), 1);
     expect(result.ok).toBe(false);
+  });
+
+  test("a volume copy archives the extended attributes extraction keeps", () => {
+    // Extraction keeps `user.*` attributes and file capabilities; a producer
+    // without `--xattrs` never put them in the archive, so a volume rebuild
+    // dropped file capabilities (seen live on Engine 29). Hosts whose tar has
+    // no xattr support only warn, so the copy itself is checked everywhere.
+    const script = readFileSync(SCRIPT, "utf8");
+    const includes = [
+      "--xattrs",
+      "--xattrs-include=user.*",
+      "--xattrs-include=security.capability",
+    ];
+    const extractor = script.slice(script.indexOf("tar_filter_args() {"));
+    const producer = script.slice(script.indexOf("    copy-volume)"));
+    for (const flag of includes) {
+      expect(extractor.slice(0, extractor.indexOf("\n}"))).toContain(`"${flag}"`);
+      expect(producer.slice(0, producer.indexOf(";;"))).toContain(
+        flag.replace("user.*", "'user.*'"),
+      );
+    }
+
+    const { root, src } = workspace();
+    mkdirSync(join(src, ".orkestrator"), { recursive: true });
+    writeFileSync(join(src, ".orkestrator", "storage-marker.json"), "{}\n");
+    const destination = join(root, "volume-copy");
+    const run = spawnSync("bash", [SCRIPT, "copy-volume", src, destination], { env: SHELL_ENV });
+    expect(parseCopyOutput(run.stdout.toString())).toMatchObject({ ok: true, files: 3 });
+    // The source volume's marker is never copied over the candidate's own.
+    expect(() => statSync(join(destination, ".orkestrator", "storage-marker.json"))).toThrow();
+    expect(statSync(join(destination, "sub", "hard.txt")).ino).toBe(
+      statSync(join(destination, "a.txt")).ino,
+    );
   });
 
   test("a hard link whose target is outside the archive is not a verified copy", () => {

@@ -5,7 +5,6 @@ import path from "node:path";
 
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { startEnvironmentOnce } from "./commands-environment.js";
-import { prMonitorService } from "./commands-pr-monitor.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
@@ -18,7 +17,6 @@ const runtimes: BackendRuntime[] = [];
 
 afterEach(async () => {
   for (const runtime of runtimes.splice(0)) runtime.shutdown();
-  prMonitorService.sync([]);
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 

@@ -118,12 +118,11 @@ export function HoverTooltipContent({
   onMouseLeave?: () => void;
 }) {
   const [position, setPosition] = useState<TooltipPosition | null>(null);
+  // A closed tooltip forgets where it was, so reopening measures afresh.
+  if (!open && position !== null) setPosition(null);
 
   useLayoutEffect(() => {
-    if (!open) {
-      setPosition(null);
-      return;
-    }
+    if (!open) return;
 
     const updatePosition = () => {
       const anchor = anchorRef.current;

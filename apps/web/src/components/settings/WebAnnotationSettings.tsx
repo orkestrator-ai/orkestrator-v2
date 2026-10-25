@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import {
   WEB_ANNOTATION_COMMANDS,
@@ -43,19 +43,23 @@ export function WebAnnotationSettings() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { machine } = useAccountMachine();
-
-  const load = useCallback(async () => {
+  // Switching machine clears the previous machine's error before it reloads.
+  const [loadedMachine, setLoadedMachine] = useState(machine);
+  if (loadedMachine !== machine) {
+    setLoadedMachine(machine);
     setError(null);
-    try {
-      setSnapshot(await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.rollout, {}, machine));
-    } catch (loadError) {
-      if (classifyWebAnnotationError(loadError) === "unsupported") setUnsupported(true);
-      else setError(describeWebAnnotationError(loadError));
-    }
-  }, [machine]);
+  }
+
   useEffect(() => {
-    void load();
-  }, [load]);
+    void (async () => {
+      try {
+        setSnapshot(await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.rollout, {}, machine));
+      } catch (loadError) {
+        if (classifyWebAnnotationError(loadError) === "unsupported") setUnsupported(true);
+        else setError(describeWebAnnotationError(loadError));
+      }
+    })();
+  }, [machine]);
 
   const choose = async (mode: WebAnnotationRolloutMode) => {
     setSaving(true);

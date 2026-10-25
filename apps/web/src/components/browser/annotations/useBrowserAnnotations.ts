@@ -4,7 +4,7 @@
  * capture coordination, panel view state (pane layout: visibility, selected
  * id, filter, width only), pins, and the narrow-width surface switch.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { BrowserPreviewCaptureMode } from "@orkestrator/protocol/browser-preview";
 import {
   WEB_ANNOTATION_LIMITS,
@@ -124,7 +124,9 @@ export function useBrowserAnnotations({
   const narrow = containerWidth !== null && containerWidth < NARROW_ANNOTATION_LAYOUT_PX;
   const [chosenSurface, setChosenSurface] = useState<"preview" | "notes">("notes");
   const narrowRef = useRef(narrow);
-  narrowRef.current = narrow;
+  useLayoutEffect(() => {
+    narrowRef.current = narrow;
+  }, [narrow]);
   // Selecting needs the page visible: while a selection runs the narrow
   // layout shows the preview, whatever tab was chosen. Choosing Notes during
   // a selection is remembered for when it ends instead of cancelling it.
@@ -139,7 +141,9 @@ export function useBrowserAnnotations({
   // the native view is visible when main starts listening for the target.
   // Ending the selection (captured or cancelled) returns to the notes.
   const chosenRef = useRef(chosenSurface);
-  chosenRef.current = chosenSurface;
+  useLayoutEffect(() => {
+    chosenRef.current = chosenSurface;
+  }, [chosenSurface]);
   const returnToNotesRef = useRef(false);
   const showPreviewForSelection = useCallback(() => {
     if (!narrowRef.current) return;
@@ -177,27 +181,33 @@ export function useBrowserAnnotations({
   }, [rawCapture, showPreviewForSelection]);
 
   const selectionRef = useRef({ selecting: capture.selecting, cancel: capture.cancel });
-  selectionRef.current = { selecting: capture.selecting, cancel: capture.cancel };
+  useLayoutEffect(() => {
+    selectionRef.current = { selecting: capture.selecting, cancel: capture.cancel };
+  }, [capture.cancel, capture.selecting]);
   /** Page changes end transient selection (never pending captures or drafts). */
   const stopSelection = useCallback(() => {
     if (selectionRef.current.selecting) void selectionRef.current.cancel();
   }, []);
   // A fresh capture always has a visible editor: open the panel and, when
   // narrow, return to the notes surface. Once per newly active capture only,
-  // so an explicit close is not undone while it stays pending.
+  // so an explicit close is not undone while it stays pending. The surface is
+  // local state, switched while rendering; the panel is the caller's.
+  const activeCaptureId = rawCapture.activeCaptureId;
+  const [surfaceCaptureId, setSurfaceCaptureId] = useState<string | null>(null);
+  if (activeCaptureId !== surfaceCaptureId) {
+    setSurfaceCaptureId(activeCaptureId);
+    if (activeCaptureId) setChosenSurface("notes");
+  }
   const openedForCaptureRef = useRef<string | null>(null);
   useEffect(() => {
-    const captureId = capture.activeCaptureId;
-    if (captureId === openedForCaptureRef.current) return;
-    openedForCaptureRef.current = captureId;
-    if (!captureId) return;
-    setChosenSurface("notes");
-    if (!view.open) onViewChange({ open: true });
-  }, [capture.activeCaptureId, onViewChange, view.open]);
+    if (activeCaptureId === openedForCaptureRef.current) return;
+    openedForCaptureRef.current = activeCaptureId;
+    if (activeCaptureId && !view.open) onViewChange({ open: true });
+  }, [activeCaptureId, onViewChange, view.open]);
 
   const supportedModes = useMemo(
-    () => offeredCaptureModes(cache.capabilities?.targets, capture.desktopCapabilities?.modes),
-    [cache.capabilities?.targets, capture.desktopCapabilities?.modes],
+    () => offeredCaptureModes(cache.capabilities?.targets, rawCapture.desktopCapabilities?.modes),
+    [cache.capabilities?.targets, rawCapture.desktopCapabilities?.modes],
   );
 
   // ---- pins -------------------------------------------------------------

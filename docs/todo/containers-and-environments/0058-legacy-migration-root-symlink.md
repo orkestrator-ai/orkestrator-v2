@@ -53,7 +53,6 @@ Seen on branch `todo-0040-mcp-env-delivery-024e7c80895b` (base `06297124`,
 
 ## Related
 
-- [0021-container-rebuild-state-preservation.md](0021-container-rebuild-state-preservation.md)
 - [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
 - [`container-lifecycle.md`](../../architecture/container-lifecycle.md)
 

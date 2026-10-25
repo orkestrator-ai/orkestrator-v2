@@ -71,14 +71,15 @@ export function NativeAgentInteractionCard({
   const questions = interaction.presentation.questions;
   const externalUrl = safeExternalUrl(interaction.presentation.url);
   const mcpQuestion = interaction.kind === "mcp-form" ? questions[0] : undefined;
+  const mcpSchemaText = mcpQuestion?.description;
   const schema = useMemo(() => {
-    if (!mcpQuestion?.description) return {};
+    if (!mcpSchemaText) return {};
     try {
-      return record(JSON.parse(mcpQuestion.description));
+      return record(JSON.parse(mcpSchemaText));
     } catch {
       return {};
     }
-  }, [mcpQuestion?.description]);
+  }, [mcpSchemaText]);
   const properties = record(schema.properties);
   const requiredFields = new Set(
     Array.isArray(schema.required)

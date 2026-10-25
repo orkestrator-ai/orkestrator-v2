@@ -10,7 +10,13 @@
  */
 
 import { readdir, access } from "node:fs/promises";
-import { join, resolve, relative, isAbsolute } from "node:path";
+import { join } from "node:path";
+import {
+  claudePluginConfigList,
+  mergeClaudePluginLayers,
+  remapInstalledPlugins as remapInstalledPluginPaths,
+  resolveClaudePluginPath,
+} from "@orkestrator/protocol/node/claude-plugin-set";
 import type {
   PluginInfo,
   PluginConfig,
@@ -38,14 +44,6 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-/**
- * Check whether a candidate path is contained within a parent directory.
- */
-function isPathWithin(parentDir: string, candidatePath: string): boolean {
-  const relativePath = relative(parentDir, candidatePath);
-  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
 /**
@@ -93,7 +91,7 @@ export async function loadGlobalPlugins(): Promise<PluginConfig[]> {
   const plugins = await readJsonSliceCached<ClaudeJsonPluginsConfig, PluginConfig[]>(
     claudeJsonPath(),
     "plugins",
-    (config) => config?.plugins,
+    (config) => claudePluginConfigList(config?.plugins),
   );
 
   return plugins ?? [];
@@ -106,7 +104,7 @@ export async function loadProjectPlugins(cwd: string): Promise<PluginConfig[]> {
   const plugins = await readJsonSliceCached<{ plugins?: PluginConfig[] }, PluginConfig[]>(
     join(cwd, ".claude", "plugins.json"),
     "plugins",
-    (config) => config?.plugins,
+    (config) => claudePluginConfigList(config?.plugins),
   );
 
   return plugins ?? [];
@@ -151,39 +149,9 @@ export function remapInstalledPlugins(
   // retains — the file's own `version` field is not needed here.
   installedPlugins: Pick<InstalledPluginsFile, "plugins">,
 ): PluginConfig[] {
-  const plugins: PluginConfig[] = [];
-  const CLAUDE_PLUGINS_MARKER = "/.claude/plugins/";
-  const pluginsRoot = resolve(pluginsDir);
-
-  for (const entries of Object.values(installedPlugins.plugins)) {
-    for (const entry of entries) {
-      // Remap host-absolute paths to container-local paths
-      // e.g. /Users/arkaydeus/.claude/plugins/marketplaces/... → /home/node/.claude/plugins/marketplaces/...
-      const markerIdx = entry.installPath.indexOf(CLAUDE_PLUGINS_MARKER);
-      let resolvedPath: string;
-
-      if (markerIdx !== -1) {
-        const relativePath = entry.installPath.substring(markerIdx + CLAUDE_PLUGINS_MARKER.length);
-        const remappedPath = resolve(pluginsDir, relativePath);
-        if (!isPathWithin(pluginsRoot, remappedPath)) {
-          console.warn(
-            `[plugin-config] Skipping plugin with unsafe install path: "${entry.installPath}"`,
-          );
-          continue;
-        }
-        resolvedPath = remappedPath;
-      } else {
-        resolvedPath = entry.installPath;
-      }
-
-      plugins.push({
-        type: "local",
-        path: resolvedPath,
-      });
-    }
-  }
-
-  return plugins;
+  return remapInstalledPluginPaths(pluginsDir, installedPlugins, (installPath) =>
+    console.warn(`[plugin-config] Skipping plugin with unsafe install path: "${installPath}"`),
+  );
 }
 
 /**
@@ -195,7 +163,7 @@ export async function loadProjectOverridesFromGlobal(cwd: string): Promise<Plugi
   const plugins = await readJsonSliceCached<ClaudeJsonPluginsConfig, PluginConfig[]>(
     claudeJsonPath(),
     `projects:${cwd}:plugins`,
-    (config) => config?.projects?.[cwd]?.plugins,
+    (config) => claudePluginConfigList(config?.projects?.[cwd]?.plugins),
   );
 
   return plugins ?? [];
@@ -228,17 +196,9 @@ export async function readPluginManifest(
   };
 }
 
-/**
- * Resolve a plugin path (handles relative paths and ~)
- */
+/** Resolve a plugin path (handles relative paths and ~). */
 function resolvePath(pluginPath: string, cwd: string): string {
-  if (pluginPath.startsWith("~")) {
-    return join(claudeHome(), pluginPath.slice(1));
-  }
-  if (pluginPath.startsWith("/")) {
-    return pluginPath;
-  }
-  return join(cwd, pluginPath);
+  return resolveClaudePluginPath(pluginPath, cwd, claudeHome());
 }
 
 /**
@@ -249,42 +209,24 @@ function resolvePath(pluginPath: string, cwd: string): string {
  * 3. CLI-installed plugins (~/.claude/plugins/)
  * 4. Global plugins in ~/.claude.json
  *
- * Deduplicates by resolved path
+ * Deduplicates by resolved path. The merge itself is shared with the
+ * backend's MCP editor (`@orkestrator/protocol/node/claude-plugin-set`), so
+ * the editor lists exactly the plugins a session loads.
  */
-export async function getMergedPlugins(cwd: string): Promise<PluginConfig[]> {
+export async function getMergedPlugins(
+  cwd: string,
+  includeProjectSources = true,
+): Promise<PluginConfig[]> {
   const [global, cliInstalled, projectGlobal, projectLocal] = await Promise.all([
     loadGlobalPlugins(),
     loadCliInstalledPlugins(),
-    loadProjectOverridesFromGlobal(cwd),
-    loadProjectPlugins(cwd),
+    includeProjectSources ? loadProjectOverridesFromGlobal(cwd) : [],
+    includeProjectSources ? loadProjectPlugins(cwd) : [],
   ]);
-
-  // Merge with priority: projectLocal > projectGlobal > cliInstalled > global
-  // Use a Map to deduplicate by resolved path
-  const pluginMap = new Map<string, PluginConfig>();
-
-  // Add in reverse priority order so higher priority overwrites
-  for (const plugin of global) {
-    const resolved = resolvePath(plugin.path, cwd);
-    pluginMap.set(resolved, { ...plugin, path: resolved });
-  }
-
-  for (const plugin of cliInstalled) {
-    const resolved = resolvePath(plugin.path, cwd);
-    pluginMap.set(resolved, { ...plugin, path: resolved });
-  }
-
-  for (const plugin of projectGlobal) {
-    const resolved = resolvePath(plugin.path, cwd);
-    pluginMap.set(resolved, { ...plugin, path: resolved });
-  }
-
-  for (const plugin of projectLocal) {
-    const resolved = resolvePath(plugin.path, cwd);
-    pluginMap.set(resolved, { ...plugin, path: resolved });
-  }
-
-  return Array.from(pluginMap.values());
+  return mergeClaudePluginLayers(
+    { global, cliInstalled, projectGlobal, projectLocal },
+    { cwd, home: claudeHome(), includeProjectSources },
+  ).map((path) => ({ type: "local", path }));
 }
 
 /**
@@ -294,9 +236,7 @@ export async function getPluginsForSdk(
   cwd: string,
   includeProjectSources = true,
 ): Promise<SdkPluginConfig[]> {
-  const configs = includeProjectSources
-    ? await getMergedPlugins(cwd)
-    : [...(await loadGlobalPlugins()), ...(await loadCliInstalledPlugins())];
+  const configs = await getMergedPlugins(cwd, includeProjectSources);
 
   // Filter to only include plugins that exist
   const validPlugins: SdkPluginConfig[] = [];

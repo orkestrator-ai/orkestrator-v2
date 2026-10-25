@@ -1,10 +1,16 @@
-import { useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 interface UseElapsedTimerReturn {
   /** Seconds elapsed since loading started, or null when not loading */
   elapsedSeconds: number | null;
   /** Seconds the last loading period took, or null before the first completion */
   finalElapsedSeconds: number | null;
+}
+
+const NO_SUBSCRIPTION = () => {};
+
+function elapsedSecondsSince(startedAt: number): number {
+  return Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
 }
 
 /**
@@ -21,18 +27,22 @@ export function useElapsedTimer(
   loadingStartedAt?: number,
   storedFinalElapsedSeconds?: number | null,
 ): UseElapsedTimerReturn {
-  const [, setTick] = useState(0);
+  const running = Boolean(isLoading) && loadingStartedAt !== undefined;
 
-  useEffect(() => {
-    if (!isLoading || loadingStartedAt === undefined) return;
-    const interval = setInterval(() => setTick((tick) => tick + 1), 1000);
-    return () => clearInterval(interval);
-  }, [isLoading, loadingStartedAt]);
-
-  const elapsedSeconds =
-    isLoading && loadingStartedAt !== undefined
-      ? Math.max(0, Math.floor((Date.now() - loadingStartedAt) / 1000))
-      : null;
+  // The wall clock is the external store: a one-second tick asks React to
+  // re-read it, and the snapshot is the whole-second count, so it is stable
+  // between ticks.
+  const subscribe = useCallback(
+    (onTick: () => void) => {
+      if (!running) return NO_SUBSCRIPTION;
+      const interval = setInterval(onTick, 1000);
+      return () => clearInterval(interval);
+    },
+    [running],
+  );
+  const readElapsedSeconds = () =>
+    running && loadingStartedAt !== undefined ? elapsedSecondsSince(loadingStartedAt) : null;
+  const elapsedSeconds = useSyncExternalStore(subscribe, readElapsedSeconds, readElapsedSeconds);
 
   return {
     elapsedSeconds,

@@ -1,7 +1,7 @@
 # In-app pull request viewer validation: coordinator fixture digest timing
 
 - **ID:** 0721
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-23.
 - **Baseline:** `eac5a2d9d`, with the in-app pull request viewer in the working tree.
 - **Original command:** `mise run test` (default aggregate allocation).
@@ -33,3 +33,7 @@ After the test fixes above and a crash fix in the files panel's
 pull-request widening, a fresh `mise run test` passed every group (workspace
 409.2 s, root and agent-support 122.2 s, bridges 81.3 s, Codex protocol
 lockfile).
+
+## Triage 2026-10-25
+
+Resolved: the two `usePullRequest` and `test-diagnostic-bounds` failures were branch defects fixed in the change, the digest timeout is tracked in [0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md), the host-picker failure in [0224](../previews-annotations-and-gateway/0224-host-picker-narrow-tools-popover.md), and the final `mise run test` passed every group.

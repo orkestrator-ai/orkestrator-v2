@@ -35,14 +35,15 @@ export type NetworkPolicyVersion = 1 | 2 | 3;
 
 /**
  * The network policy a new container gets: the newest its image implements.
- * `ORKESTRATOR_NETWORK_POLICY=1` keeps the legacy shared bridge and `=2`
- * keeps every port of an allowed address open.
+ * `ORKESTRATOR_NETWORK_POLICY=2` keeps every port of an allowed address open.
+ * Only an image older than policy 2 joins the shared bridge; there is no
+ * switch back to it, because siblings on that bridge can reach each other.
  */
 export function containerNetworkPolicy(
   imagePolicy: number,
   override: string | undefined,
 ): NetworkPolicyVersion {
-  if (override === "1" || imagePolicy < 2) return 1;
+  if (imagePolicy < 2) return 1;
   if (override === "2" || imagePolicy < 3) return 2;
   return 3;
 }

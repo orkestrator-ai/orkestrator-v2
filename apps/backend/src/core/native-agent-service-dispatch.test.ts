@@ -2279,6 +2279,60 @@ describe("NativeAgentService", () => {
       );
     });
 
+    for (const first of ["renderer", "queue"] as const) {
+      test(`opening prompt reaches the provider once when ${first} wins the queue race`, async () => {
+        let release!: () => void;
+        const pending = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const stub = createProviderStub("codex", { send: () => pending });
+        await withService(
+          { prefix: "orkestrator-opening-prompt-race-", provider: async () => stub.provider },
+          async ({ storage, service }) => {
+            const logicalSessionKey = "env-env-1:design-agent-race";
+            const requestId = "initial-prompt:env-1:design-agent-race";
+            const queueKey = `codex\0${logicalSessionKey}`;
+            const input = {
+              environmentId: "env-1",
+              agent: "codex" as const,
+              logicalSessionKey,
+              requestId,
+              prompt: "Design the header",
+              attachments: [],
+              mode: "build" as const,
+            };
+            await service.ensureSession(input);
+            await storage.enqueuePromptQueueMessage(queueKey, "env-1", {
+              id: requestId,
+              requestId,
+              text: input.prompt,
+              attachments: [],
+              mode: "build",
+            });
+            const renderer = () => service.dispatchIntent(input);
+            const drain = () => queueInternals(service).drainPromptQueues();
+            const winner = first === "renderer" ? renderer() : drain();
+            try {
+              await waitForCondition(() => stub.send.mock.calls.length === 1);
+              const loser = first === "renderer" ? drain() : renderer();
+              release();
+              await Promise.all([winner, loser]);
+              await drain();
+              expect(stub.send).toHaveBeenCalledTimes(1);
+              expect(stub.send.mock.calls[0]?.[2].requestId).toBe(requestId);
+              const queue = await storage.getPromptQueue(queueKey);
+              expect(queue?.messages).toEqual([]);
+              expect(queue?.inFlight).toBeUndefined();
+              expect(queue?.dispatchError).toBeUndefined();
+            } finally {
+              release();
+              await winner;
+            }
+          },
+        );
+      });
+    }
+
     test("drains two queued prompts in prompt and request order", async () => {
       const dispatched: Array<{ prompt: string; requestId: string }> = [];
       const { provider, send } = createProviderStub("codex", {

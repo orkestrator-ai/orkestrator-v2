@@ -1,4 +1,4 @@
-import { useState, type Ref } from "react";
+import { useRef, useState, type Ref } from "react";
 import {
   Download,
   Eye,
@@ -8,17 +8,28 @@ import {
   Maximize,
   MessageSquarePlus,
   Minus,
+  MoreHorizontal,
   MousePointer2,
   PanelRight,
+  Percent,
   Plus,
   Redo2,
   Save,
   Scan,
   SquarePlus,
   Undo2,
+  type LucideIcon,
 } from "lucide-react";
 import { DESIGN_KEYBOARD_SHORTCUTS } from "@/lib/keyboard-shortcuts";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import type { DesignProjection } from "@/stores/designStore";
 
@@ -29,6 +40,8 @@ export interface DesignToolbarProps {
   zoom: number;
   mode: "inspect" | "preview";
   narrow: boolean;
+  /** A short pane (about 400% zoom): the tools collapse into one menu. */
+  compact: boolean;
   layersOpen: boolean;
   inspectorOpen: boolean;
   historyOpen: boolean;
@@ -113,21 +126,226 @@ function RenameField({
   );
 }
 
-export function DesignToolbar({ layersButtonRef, ...props }: DesignToolbarProps) {
+interface DesignTool {
+  /** Stable React key: the zoom item's label changes with the zoom. */
+  id: string;
+  /** Accessible name inline; the visible text in the overflow menu. */
+  label: string;
+  icon: LucideIcon;
+  /** Shown inline instead of the icon. */
+  text?: string;
+  onSelect: () => void;
+  title?: string;
+  disabled?: boolean;
+  /** A toggle: aria-pressed inline, a checkbox item in the menu. */
+  pressed?: boolean;
+  /** Keeps the overflow menu open so the step can be repeated (zoom). */
+  repeat?: boolean;
+}
+
+function toolsOf(props: DesignToolbarProps): DesignTool[] {
   const { projection } = props;
   const history = projection?.workspace?.history;
   const canvas = projection?.canvas;
   const busyExport = projection?.busy.export ?? false;
+  const preview = props.mode === "preview";
+  return [
+    { id: "zoom-out", label: "Zoom out", icon: Minus, onSelect: props.onZoomOut, repeat: true },
+    {
+      id: "zoom-100",
+      label: `Zoom ${Math.round(props.zoom * 100)}%. Reset to 100%`,
+      icon: Percent,
+      text: `${Math.round(props.zoom * 100)}%`,
+      title: "Zoom to 100% (Ctrl/⌘+0)",
+      onSelect: props.onZoom100,
+      repeat: true,
+    },
+    { id: "zoom-in", label: "Zoom in", icon: Plus, onSelect: props.onZoomIn, repeat: true },
+    {
+      id: "fit-all",
+      label: "Fit all frames",
+      icon: Maximize,
+      title: "Fit all (Shift+1)",
+      onSelect: props.onFitAll,
+    },
+    {
+      id: "fit-selection",
+      label: "Zoom to selection",
+      icon: Scan,
+      title: "Zoom to selection (Shift+2)",
+      disabled: !props.hasSelection,
+      onSelect: props.onFitSelection,
+    },
+    {
+      id: "preview",
+      label: preview ? "Exit preview mode" : "Preview mode",
+      icon: preview ? MousePointer2 : Eye,
+      title: preview ? "Back to inspect (P or Esc)" : "Preview: scroll and hover the mockup (P)",
+      pressed: preview,
+      onSelect: props.onToggleMode,
+    },
+    {
+      id: "add-frame",
+      label: "Add frame",
+      icon: SquarePlus,
+      disabled: !canvas || !props.canEdit,
+      onSelect: props.onAddFrame,
+    },
+    {
+      id: "undo",
+      label: "Undo design change",
+      icon: Undo2,
+      title: history?.undoLabel
+        ? `Undo ${history.undoLabel} (Ctrl/⌘+Z)`
+        : (history?.undoBlockedReason ?? "Undo (Ctrl/⌘+Z)"),
+      disabled: !canvas || !props.canEdit || !history?.canUndo,
+      onSelect: props.onUndo,
+    },
+    {
+      id: "redo",
+      label: "Redo design change",
+      icon: Redo2,
+      title: history?.redoLabel
+        ? `Redo ${history.redoLabel} (Ctrl/⌘+Shift+Z)`
+        : (history?.redoBlockedReason ?? "Redo (Ctrl/⌘+Shift+Z)"),
+      disabled: !canvas || !props.canEdit || !history?.canRedo,
+      onSelect: props.onRedo,
+    },
+    {
+      id: "export",
+      label: "Export design to repository",
+      icon: Save,
+      title: "Export a revision to the repository (Save As)",
+      disabled: !canvas || busyExport,
+      onSelect: props.onExport,
+    },
+    {
+      id: "download",
+      label: "Download orkdes",
+      icon: Download,
+      disabled: !canvas,
+      onSelect: props.onDownload,
+    },
+    {
+      id: "history",
+      label: "Design history",
+      icon: History,
+      pressed: props.historyOpen,
+      disabled: !canvas || projection?.legacy === true,
+      onSelect: props.onToggleHistory,
+    },
+    {
+      id: "ask-agent",
+      label: "Ask agent about the selection",
+      icon: MessageSquarePlus,
+      disabled: !canvas,
+      onSelect: props.onAskAgent,
+    },
+  ];
+}
+
+/**
+ * The tools behind one button, for panes too short for the wrapped toolbar
+ * (about 400% zoom). An action runs once the menu has closed and focus is
+ * back on the trigger, so a dialog it opens returns focus there.
+ */
+function DesignToolsMenu({ tools, shortcuts }: { tools: DesignTool[]; shortcuts: DesignTool }) {
+  const deferred = useRef<(() => void) | null>(null);
+  const item = (tool: DesignTool) => {
+    const onSelect = (event: Event) => {
+      if (tool.repeat) {
+        event.preventDefault();
+        tool.onSelect();
+      } else deferred.current = tool.onSelect;
+    };
+    const Icon = tool.icon;
+    return tool.pressed === undefined ? (
+      <DropdownMenuItem
+        key={tool.id}
+        title={tool.title}
+        disabled={tool.disabled}
+        onSelect={onSelect}
+      >
+        <Icon />
+        {tool.label}
+      </DropdownMenuItem>
+    ) : (
+      <DropdownMenuCheckboxItem
+        key={tool.id}
+        title={tool.title}
+        checked={tool.pressed}
+        disabled={tool.disabled}
+        onSelect={onSelect}
+      >
+        {tool.label}
+      </DropdownMenuCheckboxItem>
+    );
+  };
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" className="size-8" aria-label="More design tools">
+          <MoreHorizontal className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        onCloseAutoFocus={() => {
+          const run = deferred.current;
+          deferred.current = null;
+          run?.();
+        }}
+      >
+        {tools.map(item)}
+        <DropdownMenuSeparator />
+        {item(shortcuts)}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+export function DesignToolbar(props: DesignToolbarProps) {
+  const { projection, layersButtonRef } = props;
+  const canvas = projection?.canvas;
+  const tools = toolsOf(props);
+  const shortcuts: DesignTool = {
+    id: "shortcuts",
+    label: "Keyboard shortcuts",
+    icon: Keyboard,
+    onSelect: props.onShortcuts,
+  };
+  const iconClass = props.compact ? "size-8" : undefined;
+  const iconButton = (tool: DesignTool) => {
+    const Icon = tool.icon;
+    return (
+      <Button
+        key={tool.id}
+        variant="ghost"
+        size="icon"
+        aria-label={tool.label}
+        aria-pressed={tool.pressed}
+        title={tool.title}
+        disabled={tool.disabled}
+        onClick={tool.onSelect}
+      >
+        <Icon className="size-4" />
+      </Button>
+    );
+  };
   return (
     <header
-      className="flex flex-wrap items-center gap-1 border-b border-divider px-2 py-2"
+      className={`flex items-center gap-1 border-b border-divider px-2 ${
+        props.compact ? "py-1" : "flex-wrap py-2"
+      }`}
       role="toolbar"
       aria-label="Design tools"
+      data-compact={props.compact || undefined}
     >
       <Button
         ref={layersButtonRef}
         variant="ghost"
         size="icon"
+        className={iconClass}
         aria-label="Toggle layers"
         aria-pressed={props.layersOpen}
         onClick={props.onToggleLayers}
@@ -144,137 +362,28 @@ export function DesignToolbar({ layersButtonRef, ...props }: DesignToolbarProps)
       ) : (
         <span className="mr-auto truncate text-sm font-medium">Loading design…</span>
       )}
-      <Button variant="ghost" size="icon" aria-label="Zoom out" onClick={props.onZoomOut}>
-        <Minus className="size-4" />
-      </Button>
-      <button
-        type="button"
-        className="min-w-11 rounded-sm px-1 text-xs tabular-nums hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
-        aria-label={`Zoom ${Math.round(props.zoom * 100)}%. Reset to 100%`}
-        title="Zoom to 100% (Ctrl/⌘+0)"
-        onClick={props.onZoom100}
-      >
-        {Math.round(props.zoom * 100)}%
-      </button>
-      <Button variant="ghost" size="icon" aria-label="Zoom in" onClick={props.onZoomIn}>
-        <Plus className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Fit all frames"
-        title="Fit all (Shift+1)"
-        onClick={props.onFitAll}
-      >
-        <Maximize className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Zoom to selection"
-        title="Zoom to selection (Shift+2)"
-        disabled={!props.hasSelection}
-        onClick={props.onFitSelection}
-      >
-        <Scan className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label={props.mode === "preview" ? "Exit preview mode" : "Preview mode"}
-        aria-pressed={props.mode === "preview"}
-        title={
-          props.mode === "preview"
-            ? "Back to inspect (P or Esc)"
-            : "Preview: scroll and hover the mockup (P)"
-        }
-        onClick={props.onToggleMode}
-      >
-        {props.mode === "preview" ? (
-          <MousePointer2 className="size-4" />
-        ) : (
-          <Eye className="size-4" />
+      {!props.compact &&
+        tools.map((tool) =>
+          tool.text ? (
+            <button
+              key={tool.id}
+              type="button"
+              className="min-w-11 rounded-sm px-1 text-xs tabular-nums hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+              aria-label={tool.label}
+              title={tool.title}
+              onClick={tool.onSelect}
+            >
+              {tool.text}
+            </button>
+          ) : (
+            iconButton(tool)
+          ),
         )}
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Add frame"
-        disabled={!canvas || !props.canEdit}
-        onClick={props.onAddFrame}
-      >
-        <SquarePlus className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Undo design change"
-        title={
-          history?.undoLabel
-            ? `Undo ${history.undoLabel} (Ctrl/⌘+Z)`
-            : (history?.undoBlockedReason ?? "Undo (Ctrl/⌘+Z)")
-        }
-        disabled={!canvas || !props.canEdit || !history?.canUndo}
-        onClick={props.onUndo}
-      >
-        <Undo2 className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Redo design change"
-        title={
-          history?.redoLabel
-            ? `Redo ${history.redoLabel} (Ctrl/⌘+Shift+Z)`
-            : (history?.redoBlockedReason ?? "Redo (Ctrl/⌘+Shift+Z)")
-        }
-        disabled={!canvas || !props.canEdit || !history?.canRedo}
-        onClick={props.onRedo}
-      >
-        <Redo2 className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Export design to repository"
-        title="Export a revision to the repository (Save As)"
-        disabled={!canvas || busyExport}
-        onClick={props.onExport}
-      >
-        <Save className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Download orkdes"
-        disabled={!canvas}
-        onClick={props.onDownload}
-      >
-        <Download className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Design history"
-        aria-pressed={props.historyOpen}
-        disabled={!canvas || projection?.legacy === true}
-        onClick={props.onToggleHistory}
-      >
-        <History className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Ask agent about the selection"
-        disabled={!canvas}
-        onClick={props.onAskAgent}
-      >
-        <MessageSquarePlus className="size-4" />
-      </Button>
       {props.narrow && (
         <Button
           variant="ghost"
           size="icon"
+          className={iconClass}
           aria-label="Toggle inspector"
           aria-pressed={props.inspectorOpen}
           onClick={props.onToggleInspector}
@@ -282,14 +391,11 @@ export function DesignToolbar({ layersButtonRef, ...props }: DesignToolbarProps)
           <PanelRight className="size-4" />
         </Button>
       )}
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Keyboard shortcuts"
-        onClick={props.onShortcuts}
-      >
-        <Keyboard className="size-4" />
-      </Button>
+      {props.compact ? (
+        <DesignToolsMenu tools={tools} shortcuts={shortcuts} />
+      ) : (
+        iconButton(shortcuts)
+      )}
     </header>
   );
 }

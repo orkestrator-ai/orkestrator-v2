@@ -36,7 +36,7 @@ As of this branch:
   comment now points at `resolveQueryPlan` (`session-manager-prompt-query.ts`),
   where `permissionMode: "plan"` is forwarded.
 - `session-manager-prompt-stream.test.ts` drives the stream directly on a bare
-  session (14 tests).
+  session (16 tests).
 - `turnCanUseTool` had grown to 327 lines since this file was written (it said
   251). AskUserQuestion, EnterPlanMode and ExitPlanMode moved verbatim into
   `askUserQuestion`, `enterPlanMode` and `requestPlanApproval`.
@@ -55,7 +55,8 @@ As of this branch:
 
 ### Code
 
-All four steps are done, one commit each on the branch (decision 1).
+All four steps are done: step 1 has its own test commit, and steps 2–4 share
+the refactor commit (decision 1).
 
 1. **Done — direct tests** (`26bcee502`).
    `session-manager-prompt-stream.test.ts` drives `createPromptStreamState` on
@@ -90,6 +91,11 @@ All four steps are done, one commit each on the branch (decision 1).
    Mutation check: removing the flush sort, the block-index bound, the subagent
    shed, the row anchor or the shared-row lookup each fails exactly the test
    aimed at it.
+
+   Review follow-up: two more tests assert that `content_block_stop` and a
+   future unrendered block event bind their message to its row before a newer
+   response starts, so late content still reaches the original row. Removing
+   the default branch's `locateStreamBlock` call fails both tests.
 2. **Done — `applyPartialAssistantMessage` split** (`3128367a4`), one method
    per `stream_event` type plus `locateStreamBlock` and `appendStreamedDelta`.
    Event order and side effects are kept: `content_block_stop` and other block
@@ -127,8 +133,9 @@ files.
 
 ## Assumptions and decisions
 
-1. **One branch, one commit per step** instead of one PR per step. Options:
-   four PRs, or one branch with a commit each. Chosen: one branch, because the
+1. **One branch, direct tests first, then a shared refactor commit** instead of
+   one PR per step. Options: four PRs, or one branch with separate test and
+   refactor commits. Chosen: one branch, because the
    coordinator delegated the whole file as one unit. Steps 2–4 share a commit:
    splitting the closure first and then converting it to a class would have
    rewritten the same lines twice, and step 3 removes members from the same

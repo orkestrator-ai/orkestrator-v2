@@ -379,6 +379,48 @@ describe("createPromptStreamState", () => {
     expect(session.messages).toEqual([]);
   });
 
+  test.each(["content_block_stop", "future_block_event"])(
+    "%s binds its message to a row without publishing content",
+    (eventType) => {
+      const session = bareSession();
+      const events = framesFor(session);
+      const stream = streamFor(session);
+      stream.applyAssistantRecord(rootRecord("msg_original", [text("original")]));
+      const original = row(session, "msg_original");
+      events.length = 0;
+
+      // With no message_start, the frame's uuid identifies its message and
+      // binds it to the current row even though this event has no content.
+      expect(
+        stream.applyPartialAssistantMessage({
+          type: "stream_event",
+          uuid: "msg_late",
+          event: { type: eventType, index: 0 },
+        }),
+      ).toBe(false);
+      stream.flushStreamedAssistantMessage();
+      expect(events).toEqual([]);
+      expect(session.messages).toEqual([original]);
+      expect(original.content).toBe("original");
+
+      stream.applyAssistantRecord(rootRecord("msg_newer", [text("newer")]));
+      const newer = row(session, "msg_newer");
+      events.length = 0;
+      stream.applyAssistantRecord({
+        apiMessageId: "msg_late",
+        isRoot: false,
+        contentBlockCount: 1,
+        orderedParts: [text("late content")],
+      });
+
+      expect(session.messages).toEqual([original, newer]);
+      expect(original.parts.map((part) => part.content)).toEqual(["original", "late content"]);
+      expect(newer.content).toBe("newer");
+      expect(frameIds(events)).toEqual(["msg_original"]);
+      expect(session.revisedRows?.ids()).toContain("msg_original");
+    },
+  );
+
   test("a non-delta flush publishes pending rows oldest first", () => {
     const session = bareSession();
     const events = framesFor(session);

@@ -25,6 +25,7 @@ import { afterEach, describe, expect, jest, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { createServer } from "node:net";
+import { createInterface } from "node:readline";
 
 import { promises as fs } from "node:fs";
 
@@ -214,6 +215,11 @@ export async function spawnBridge(
     stateDirectory?: string;
     env?: NodeJS.ProcessEnv;
   } = {},
+  startup: {
+    reservePort?: () => Promise<number>;
+    spawnChild?: (env: NodeJS.ProcessEnv) => ChildProcessWithoutNullStreams;
+    timeoutMs?: number;
+  } = {},
 ): Promise<{
   child: ChildProcessWithoutNullStreams;
   base: string;
@@ -273,33 +279,52 @@ export async function spawnBridge(
     });
   }
   const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
-  // `unusedPort` releases its port before the child binds it, so another
-  // worker's server can take it first. The child then exits on EADDRINUSE while
-  // the unauthenticated health route of whatever holds the port answers, and
-  // the test talks to a stranger (flake 0876: a 401 from a bridge with another
-  // token). Readiness therefore needs this child alive and this token
-  // accepted, and a child that exits while starting is replaced on a fresh
-  // port. Only the port choice is retried, never a test's own request.
+  // The released reservation can be claimed by another worker, even one with
+  // the same token. Require this child's post-bind announcement before probing
+  // authentication. A child that loses the bind is retried on a fresh port.
+  const launch =
+    startup.spawnChild ??
+    ((childEnv: NodeJS.ProcessEnv) =>
+      spawn(process.execPath, [resolve(here, "index.ts")], {
+        cwd: resolve(here, "../../.."),
+        env: childEnv,
+        stdio: ["pipe", "pipe", "pipe"],
+      }));
   for (let attempt = 1; ; attempt += 1) {
-    const port = options.port ?? (await unusedPort());
-    const child = spawn(process.execPath, [resolve(here, "index.ts")], {
-      cwd: resolve(here, "../../.."),
-      env: { ...env, PORT: String(port) },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const port = options.port ?? (await (startup.reservePort ?? unusedPort)());
+    const child = launch({ ...env, PORT: String(port) });
     children.add(child);
     const base = `http://127.0.0.1:${port}`;
-    const ready = await waitFor(
-      async () => {
-        if (child.exitCode !== null || child.signalCode !== null) return "exited" as const;
-        const response = await nativeFetch(`${base}/global/auth-check`, { headers }).catch(
-          () => undefined,
-        );
-        return response?.ok === true ? ("ready" as const) : ("starting" as const);
-      },
-      (state) => state !== "starting",
-      BRIDGE_STARTUP_TIMEOUT_MS,
-    );
+    let listening = false;
+    const lines = createInterface({ input: child.stdout });
+    lines.on("line", (line) => {
+      if (line.startsWith("ACP bridge (") && line.endsWith(`) listening on 127.0.0.1:${port}`)) {
+        listening = true;
+      }
+    });
+    let ready: "ready" | "exited" | "starting";
+    try {
+      ready = await waitFor(
+        async () => {
+          if (child.exitCode !== null || child.signalCode !== null) return "exited" as const;
+          if (!listening) return "starting" as const;
+          const response = await nativeFetch(`${base}/global/auth-check`, { headers }).catch(
+            () => undefined,
+          );
+          return response?.ok === true ? ("ready" as const) : ("starting" as const);
+        },
+        (state) => state !== "starting",
+        startup.timeoutMs ?? BRIDGE_STARTUP_TIMEOUT_MS,
+      );
+    } catch (error) {
+      await stopChild(child);
+      throw error;
+    } finally {
+      lines.close();
+      // readline pauses its input on close. Keep draining child logs, including
+      // diagnostics listeners that a test attaches after startup.
+      child.stdout.resume();
+    }
     if (ready === "ready" && child.exitCode === null && child.signalCode === null) {
       return { child, base, headers };
     }

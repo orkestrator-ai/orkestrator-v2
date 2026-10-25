@@ -107,6 +107,85 @@ describe("Electron spec process ownership", () => {
     }
   });
 
+  test.each([false, true])(
+    "retains orphaned descendants when close exits the root (pending=%s)",
+    async (pending) => {
+      const electronProcess = spawn("sh", ["-c", "sleep 600 & echo $!; read command; exit 0"], {
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+      const helper = Number(await firstLine(electronProcess));
+      const exited = new Promise((resolve) => electronProcess.once("exit", resolve));
+      let reaped = false;
+      let orphanSurvived = false;
+      try {
+        const app = {
+          close: async () => {
+            electronProcess.stdin!.end("quit\n");
+            await exited;
+            reaped = true;
+            orphanSurvived = !processAlive(electronProcess.pid!) && processAlive(helper);
+            if (pending) await new Promise<void>(() => {});
+          },
+          process: () => {
+            if (reaped) throw new Error("Playwright handle no longer exposes its process");
+            return electronProcess;
+          },
+        };
+        expect(await closeElectronWithin(app as never, 1_000)).toBe("killed");
+        expect(reaped).toBe(true);
+        expect(orphanSurvived).toBe(true);
+        expect(processAlive(helper)).toBe(false);
+      } finally {
+        killIfAlive(helper);
+        killIfAlive(electronProcess.pid);
+      }
+    },
+  );
+
+  test("retains descendants when an intermediate parent is reaped during a pending close", async () => {
+    const electronProcess = spawn(
+      process.execPath,
+      [
+        "--eval",
+        `
+      const { spawn } = require("node:child_process");
+      const parent = spawn("sh", ["-c", 'sleep 600 & echo "$$ $!"; read command; exit 0'], {
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+      parent.stdout.pipe(process.stdout);
+      process.stdin.once("data", () => parent.stdin.end("quit\\n"));
+      parent.once("exit", () => process.stdout.write("reaped\\n"));
+      setInterval(() => {}, 1000);
+    `,
+      ],
+      { stdio: ["pipe", "pipe", "ignore"] },
+    );
+    const [parent, helper] = (await firstLine(electronProcess)).split(" ").map(Number);
+    let orphanSurvived = false;
+    try {
+      const app = {
+        close: async () => {
+          const reaped = firstLine(electronProcess);
+          electronProcess.stdin!.write("quit\n");
+          orphanSurvived =
+            (await reaped) === "reaped" &&
+            !processAlive(parent!) &&
+            processAlive(electronProcess.pid!) &&
+            processAlive(helper!);
+          await new Promise<void>(() => {});
+        },
+        process: () => electronProcess,
+      };
+      expect(await closeElectronWithin(app as never, 1_000)).toBe("killed");
+      expect(orphanSurvived).toBe(true);
+      expect(processAlive(helper!)).toBe(false);
+    } finally {
+      killIfAlive(helper);
+      killIfAlive(parent);
+      killIfAlive(electronProcess.pid);
+    }
+  });
+
   test("a close that fails with Electron still running kills the tree", async () => {
     const electronProcess = spawnShellWithChild(false);
     const helper = Number(await firstLine(electronProcess));

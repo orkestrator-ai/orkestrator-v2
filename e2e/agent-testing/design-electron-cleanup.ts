@@ -74,6 +74,8 @@ export async function closeElectronWithin(
   timeoutMs = 20_000,
 ): Promise<"closed" | "killed"> {
   if (!app) return "closed";
+  // Preserve ownership while parent links and the Playwright handle still exist.
+  const owned = electronProcessTree(app);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const settled = await Promise.race([
     // A rejected close is settled too; whether Electron still runs is checked below.
@@ -83,15 +85,10 @@ export async function closeElectronWithin(
     ),
     new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), timeoutMs))),
   ]).finally(() => clearTimeout(timer));
-  let root: number | undefined;
-  try {
-    root = app.process().pid;
-  } catch {
-    // Playwright no longer exposes a process for a closed application.
+  if (!owned.length && !settled) {
+    throw new Error("Electron did not close and exposes no process to stop");
   }
-  if (settled && !(root && processAlive(root))) return "closed";
-  if (!root) throw new Error("Electron did not close and exposes no process to stop");
-  const owned = electronProcessTree(app);
+  if (!owned.some(processAlive)) return "closed";
   for (const pid of owned.filter(processAlive)) signalProcess(pid, "SIGKILL");
   await waitForStopped(owned, 5_000);
   return "killed";

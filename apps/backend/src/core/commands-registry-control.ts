@@ -15,6 +15,7 @@ import {
   createAgentModelCatalogReader,
   resolveFastMode,
 } from "./build-pipeline-service-helpers.js";
+import { assertValidPromptAttachments } from "./prompt-attachments.js";
 
 function jobIdFor(environmentId: string, requestId: string): string {
   return createHash("sha256")
@@ -64,6 +65,21 @@ async function launchNativeAgentJob(
   if (completionAction !== undefined && completionAction !== "refresh-pr-after-agent-completion") {
     throw new Error("completionAction is invalid");
   }
+  // Only explicit literal intent is accepted for a first prompt: a new tab has
+  // no catalogue a selection could have been made from.
+  if (args.literal !== undefined && args.literal !== true) {
+    throw new Error("literal must be true when given");
+  }
+  const literal = args.literal === true;
+  // Already staged in the workspace by the caller; validated, never written here.
+  const attachments =
+    args.attachments === undefined
+      ? undefined
+      : Array.isArray(args.attachments)
+        ? assertValidPromptAttachments(args.attachments)
+        : (() => {
+            throw new Error("attachments must be an array");
+          })();
 
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -216,6 +232,8 @@ async function launchNativeAgentJob(
       prompt,
       requestId,
       mode: conversationMode,
+      ...(literal ? { command: { kind: "literal" as const } } : {}),
+      ...(attachments?.length ? { attachments } : {}),
       ...(initialPromptPresentation ? { initialPromptPresentation } : {}),
     });
     if (outcome.outcome === "rejected") await rollBackCompletionAction();

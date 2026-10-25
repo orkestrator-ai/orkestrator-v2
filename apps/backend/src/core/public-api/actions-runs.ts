@@ -174,6 +174,7 @@ export function createRunReadHandlers(
 const PROMPT_RUN_ACTIONS: readonly PublicActionName[] = [
   "session.start",
   "session.prompt",
+  "session.command",
   "environment.launch",
   "session.steer",
 ];

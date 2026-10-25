@@ -6,7 +6,16 @@ import type {
 import { CliError } from "../errors.js";
 import { projectLines, projectRows, receiptLines, settingsLines } from "../format.js";
 import type { CommandSpec, OptionSpec } from "../spec.js";
-import { REQUEST_ID_OPTION, stringOption, submit } from "./common.js";
+import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
+import {
+  DEFAULT_WAIT_MS,
+  receiptFailure,
+  REQUEST_ID_OPTION,
+  stringOption,
+  submit,
+  TIMEOUT_OPTION,
+  waitForOperation,
+} from "./common.js";
 import { settingsCommands } from "./settings.js";
 
 const PAGE_OPTIONS: OptionSpec[] = [
@@ -122,7 +131,7 @@ export const projectCommands: CommandSpec[] = [
     action: "project.create",
     summary: "Create a new repository: git init, a PRIVATE GitHub repository, and a push.",
     description:
-      "This creates an external repository on GitHub using the backend's GitHub CLI credentials, pushes the initial commit, and registers the project. It requires --github-private to confirm that effect. Local-only initialization is not supported.",
+      "This creates an external repository on GitHub using the backend's GitHub CLI credentials, pushes the initial commit, and registers the project. It requires --github-private to confirm that effect. For a repository with no remote, use `project init`.",
     positionals: [],
     options: [
       {
@@ -153,6 +162,41 @@ export const projectCommands: CommandSpec[] = [
       }>(context, "project.create", { path: backendPath, githubPrivate: true }, parsed.options);
       return {
         action: "project.create",
+        result,
+        receipt,
+        warnings,
+        connection: session.identity,
+        ids: [result.project.id],
+        human: projectLines(result.project),
+      };
+    },
+  },
+  {
+    path: ["project", "init"],
+    action: "project.init",
+    summary:
+      "Create a local-only repository (git init, initial commit, no remote) and register it.",
+    description:
+      "Runs on the BACKEND host: the path must be new or an empty directory there. Nothing reaches GitHub or the network. Environments start from the repository's own branch; without a remote, container environments cannot clone it and pull requests are unavailable.",
+    positionals: [],
+    options: [
+      {
+        name: "path",
+        kind: "string",
+        valueName: "BACKEND_PATH",
+        description: "New, empty directory on the backend host.",
+      },
+      REQUEST_ID_OPTION,
+    ],
+    idOutput: "project ID",
+    async run(context, parsed) {
+      const backendPath = stringOption(parsed.options, "path");
+      if (!backendPath) throw new CliError("invalid-input", "--path is required");
+      const { session, result, receipt, warnings } = await submit<{
+        project: PublicProjectSummary;
+      }>(context, "project.init", { path: backendPath }, parsed.options);
+      return {
+        action: "project.init",
         result,
         receipt,
         warnings,
@@ -245,19 +289,57 @@ export const projectCommands: CommandSpec[] = [
   {
     path: ["project", "remove"],
     action: "project.remove",
-    summary: "Remove an empty project registration (refused while environments exist).",
+    summary: "Remove a project registration; --cascade deletes its environments first.",
     description:
-      "Only the registration is removed. The checkout on disk and any remote repository are never deleted.",
+      "Without --cascade a project that still has environments is refused (exit 8). With --cascade the backend deletes each environment through the normal lifecycle, one by one, reports a result for each, and removes the registration only if all were deleted (otherwise the operation is partial and the project is kept). The checkout on disk and any remote repository are never deleted. --wait observes a cascade until it ends.",
     positionals: [{ name: "project", required: true }],
-    options: [REQUEST_ID_OPTION],
+    options: [
+      {
+        name: "cascade",
+        kind: "boolean",
+        description: "Delete every environment of the project first.",
+      },
+      { name: "wait", kind: "boolean", description: "Observe the removal until it ends." },
+      TIMEOUT_OPTION,
+      REQUEST_ID_OPTION,
+    ],
     idOutput: "operation ID",
     async run(context, parsed) {
+      const options = parsed.options;
+      if (options.timeout !== undefined && options.wait !== true) {
+        throw new CliError("invalid-input", "--timeout needs --wait");
+      }
+      if (typeof options.timeout === "number" && options.timeout > PUBLIC_API_LIMITS.waitMaxMs) {
+        throw new CliError("invalid-input", "--timeout may be at most 24h");
+      }
       const { session, result, receipt, warnings } = await submit(
         context,
         "project.remove",
-        { projectId: parsed.positionals.project },
-        parsed.options,
+        {
+          projectId: parsed.positionals.project,
+          ...(options.cascade === true ? { cascade: true } : {}),
+        },
+        options,
       );
+      if (options.wait === true && receipt) {
+        const final = await waitForOperation(
+          context,
+          session,
+          receipt,
+          (options.timeout as number | undefined) ?? DEFAULT_WAIT_MS,
+        );
+        const failure = receiptFailure(final);
+        return {
+          action: "project.remove",
+          result,
+          receipt: final,
+          warnings,
+          connection: session.identity,
+          ids: [final.operationId],
+          human: receiptLines(final),
+          ...(failure ? { failure } : {}),
+        };
+      }
       return {
         action: "project.remove",
         result,

@@ -115,7 +115,17 @@ export const PUBLIC_ACTIONS = {
     effects: ["metadata"],
     observation: "receipt",
     milestone: "B",
-    summary: "Remove an empty project registration; never deletes checkouts or remotes.",
+    summary:
+      "Remove a project registration (with cascade, after deleting its environments); never deletes checkouts or remotes.",
+  },
+  "project.init": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata", "filesystem"],
+    observation: "receipt",
+    milestone: "B",
+    summary:
+      "Initialize a local-only Git repository (initial commit, no remote) at a backend path and register it.",
   },
   "project.config.get": {
     version: 1,
@@ -281,7 +291,25 @@ export const PUBLIC_ACTIONS = {
     effects: ["provider-session"],
     observation: "run",
     milestone: "C",
-    summary: "Send a follow-up prompt to one explicit idle conversation.",
+    summary:
+      "Send a follow-up prompt to one explicit idle conversation, or queue it behind a busy one.",
+  },
+  "session.commands": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "C",
+    summary: "List the session's slash-command catalogue (IDs, availability, argument policy).",
+  },
+  "session.command": {
+    version: 1,
+    mutation: true,
+    effects: ["provider-session"],
+    observation: "run",
+    milestone: "C",
+    summary:
+      "Run one selected slash command; a stale or unavailable selection fails, never sends text.",
   },
   "session.stop": {
     version: 1,
@@ -697,6 +725,11 @@ export const PUBLIC_API_LIMITS = Object.freeze({
   responseMaxBytes: 8 * 1024 * 1024,
   /** Largest request body the client sends. */
   requestMaxBytes: 1024 * 1024,
+  /** Prompt attachments travel inside the 1 MiB request, so their bound is small. */
+  promptAttachmentsMaxItems: 8,
+  promptAttachmentsMaxBytes: 512 * 1024,
+  promptAttachmentNameMaxChars: 128,
+  commandArgumentsMaxBytes: 64 * 1024,
   execArgvMaxItems: 256,
   execArgvMaxBytes: 256 * 1024,
   execEnvMaxEntries: 64,
@@ -1014,14 +1047,18 @@ export interface PublicCapabilities {
     retainedNamespaces: string[];
   };
   providers: Record<string, PublicProviderCapabilities>;
+  /**
+   * Optional features. Each was `false` in the first release, so a client
+   * must treat a missing or `false` entry as unavailable.
+   */
   features: {
     transcriptFollow: "poll" | "unavailable";
     exec: { local: boolean; container: boolean; reason?: string };
-    projectCascadeRemove: false;
-    localProjectInit: false;
-    promptAttachments: false;
-    selectedSlashCommands: false;
-    enqueue: false;
+    projectCascadeRemove: boolean;
+    localProjectInit: boolean;
+    promptAttachments: boolean;
+    selectedSlashCommands: boolean;
+    enqueue: boolean;
   };
 }
 

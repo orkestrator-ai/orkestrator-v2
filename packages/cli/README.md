@@ -136,10 +136,16 @@ orkestrator environment exec "$ENV" --wait -- bun test
   found/ambiguous/expired, 4 connection/auth, 5 observer deadline,
   6 interaction required, 7 unknown dispatch/outcome, 8 conflict/unsupported,
   130/143 observation interrupted.
-- Paths given to `project` commands are on the backend host; prompt, patch and
-  credential files are read locally.
+- Paths given to `project` commands are on the backend host; prompt, patch,
+  attachment (`--attach`) and credential files are read locally.
 - `project create` creates a **private GitHub repository** and pushes to it;
-  it requires `--github-private`.
+  it requires `--github-private`. `project init` makes a local-only repository
+  with no remote.
+- A prompt whose first word names a provider command (`/review …`) runs it;
+  pass `--literal` to send plain text. `session commands` and `session
+  command` list and run slash commands by ID. `--enqueue` queues a prompt
+  behind a busy session instead of refusing it.
+- `orkestrator completion bash|zsh|fish` prints a shell completion script.
 - A timeout or Ctrl+C only stops observing. Resume with `orkestrator run wait
   OP`; recover a lost response with `orkestrator run get --request-id KEY
   --action ACTION`. The client never resubmits under a new key.

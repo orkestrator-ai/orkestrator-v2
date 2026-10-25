@@ -109,6 +109,21 @@ describe("aggregate projections", () => {
     ]);
   });
 
+  test("newest and oldest first order by activity time alone", () => {
+    const names = (rows: ReturnType<typeof activityRows>) =>
+      rows.map((row) => `${row.environment.ref.backendId}/${row.environment.name}`);
+    expect(names(activityRows([mini, vps, laptop], "newest"))).toEqual([
+      "bk_mini/env-1",
+      "bk_vps/env-1",
+      "bk_laptop/env-9",
+    ]);
+    expect(names(activityRows([mini, vps, laptop], "oldest"))).toEqual([
+      "bk_laptop/env-9",
+      "bk_vps/env-1",
+      "bk_mini/env-1",
+    ]);
+  });
+
   test("connectivity never claims everything is current while a machine is missing", () => {
     const summary = connectivitySummary([mini, vps, laptop]);
     expect(summary.label).toBe("2 connected · 1 unavailable");

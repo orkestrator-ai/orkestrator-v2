@@ -11,6 +11,7 @@
 
 import type { ConnectionTransportState } from "@orkestrator/protocol/connections";
 import type { BackendId } from "@orkestrator/protocol/federation";
+import type { ActivitySortOrder } from "@/stores/uiStore";
 import type { FederatedEnvironment, FederatedProject, SummaryFreshness } from "./summaries";
 
 export interface MachineView {
@@ -59,8 +60,15 @@ const ACTIVITY_PRIORITY: Record<FederatedEnvironment["activity"], number> = {
   idle: 2,
 };
 
-/** Every environment across the selected machines, attention first. */
-export function activityRows(machines: readonly MachineView[]): ActivityRow[] {
+/**
+ * Every environment across the selected machines. "priority" puts attention
+ * first and newest first within it; "newest" and "oldest" go by activity time
+ * alone. Machine and environment IDs break ties the same way in every order.
+ */
+export function activityRows(
+  machines: readonly MachineView[],
+  order: ActivitySortOrder = "priority",
+): ActivityRow[] {
   const rows: ActivityRow[] = [];
   for (const machine of machines) {
     const projects = new Map(machine.projects.map((project) => [project.ref.projectId, project]));
@@ -71,14 +79,22 @@ export function activityRows(machines: readonly MachineView[]): ActivityRow[] {
       }
     }
   }
+  const attention = (a: ActivityRow, b: ActivityRow) =>
+    order === "priority"
+      ? Number(b.environment.hasUnreadWork) - Number(a.environment.hasUnreadWork) ||
+        ACTIVITY_PRIORITY[a.environment.activity] - ACTIVITY_PRIORITY[b.environment.activity]
+      : 0;
+  const recency = (a: ActivityRow, b: ActivityRow) => {
+    const newestFirst = compareTimestampsDesc(
+      a.environment.activityUpdatedAt ?? a.environment.lastActivityAt,
+      b.environment.activityUpdatedAt ?? b.environment.lastActivityAt,
+    );
+    return order === "oldest" ? -newestFirst : newestFirst;
+  };
   return rows.sort(
     (a, b) =>
-      Number(b.environment.hasUnreadWork) - Number(a.environment.hasUnreadWork) ||
-      ACTIVITY_PRIORITY[a.environment.activity] - ACTIVITY_PRIORITY[b.environment.activity] ||
-      compareTimestampsDesc(
-        a.environment.activityUpdatedAt ?? a.environment.lastActivityAt,
-        b.environment.activityUpdatedAt ?? b.environment.lastActivityAt,
-      ) ||
+      attention(a, b) ||
+      recency(a, b) ||
       compareText(a.machine.backendId, b.machine.backendId) ||
       compareText(a.environment.ref.environmentId, b.environment.ref.environmentId),
   );

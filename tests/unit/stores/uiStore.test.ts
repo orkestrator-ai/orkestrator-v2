@@ -18,6 +18,7 @@ describe("uiStore", () => {
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
       environmentSortMode: "project",
+      activitySortOrder: "priority",
       zoomLevel: 100,
     });
   });
@@ -34,6 +35,7 @@ describe("uiStore", () => {
     expect(state.selectedEnvironmentIds).toEqual([]);
     expect(state.expandedSessionsEnvironments).toEqual([]);
     expect(state.environmentSortMode).toBe("project");
+    expect(state.activitySortOrder).toBe("priority");
     expect(state.zoomLevel).toBe(100);
     expect(state.sidebarOpen).toBe(true);
   });
@@ -201,6 +203,16 @@ describe("uiStore", () => {
       state?: Record<string, unknown>;
     };
     expect(persisted.state?.environmentSortMode).toBe("activity");
+  });
+
+  test("sets and persists the activity sort order", () => {
+    useUIStore.getState().setActivitySortOrder("oldest");
+
+    expect(useUIStore.getState().activitySortOrder).toBe("oldest");
+    const persisted = JSON.parse(localStorage.getItem("ui-storage") ?? "{}") as {
+      state?: Record<string, unknown>;
+    };
+    expect(persisted.state?.activitySortOrder).toBe("oldest");
   });
 
   test("no longer persists unread activity, which the environment record owns", () => {

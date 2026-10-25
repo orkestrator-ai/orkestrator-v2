@@ -133,6 +133,14 @@ entry, so live and resumed transcripts have the same shape.
   await: new prompts get 409, one still preparing settles as cancelled, and
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).
+- Before a session attaches, `command-preview.ts` lists its templates and
+  skills from a resource-only `DefaultResourceLoader`: never an extension
+  (`noExtensions`, no inline factories, no `resolveProjectTrust` pass), never
+  a package install (the loader's private `packageManager.resolve` gets a
+  `skip` handler; `command-preview.test.ts` pins it against the real SDK),
+  and never an attach or a `lastAccessed` touch. The list is `stale` +
+  `attachPending` when the policy loads extensions, else `ready`, and it never
+  replaces rows an attach read.
 - Project-local `.pi/` resources load only when the session's execution
   policy turns `projectResources` on, on both host and container runs. Host
   project resources are off by default. Enabling them permits repository MCP processes and Pi extensions

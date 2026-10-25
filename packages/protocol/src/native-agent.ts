@@ -2170,6 +2170,12 @@ export interface NativeAgentCommandCatalogueState {
   freshness?: "push" | "ttl";
   fetchedAt?: string;
   truncated?: boolean;
+  /**
+   * The provider lists more commands once its session attaches (first turn
+   * or an explicit refresh); the rows are what it could read before that.
+   * Only ever set on a `stale` list.
+   */
+  attachPending?: boolean;
   error?: { code: NativeAgentCommandCatalogueErrorCode; message?: string };
   lastRefresh?: { outcome: NativeAgentCommandRefreshOutcome; at: string; message?: string };
 }

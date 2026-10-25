@@ -194,6 +194,19 @@ export interface PiCommandCatalogueState {
   /** Advances whenever the rows or the status change. */
   revision: number;
   truncated?: boolean;
+  /**
+   * The rows came from a resource-only read (`command-preview.ts`): templates
+   * and skills, without the extension commands an attach adds. Always `stale`.
+   */
+  attachPending?: boolean;
+}
+
+/** The resource-only command read for a session that has not attached. */
+export interface PiCommandPreview {
+  /** The resource policy the read used; a different policy reads again. */
+  key: string;
+  /** Settles when the read has been published or discarded. Never rejects. */
+  settled: Promise<void>;
 }
 
 /**
@@ -491,6 +504,8 @@ export interface SessionState {
   commandReloadPending?: boolean;
   /** The resource reload in flight. Prompts wait for it rather than racing it. */
   commandReload?: Promise<unknown>;
+  /** The latest resource-only command read; runtime-only. */
+  commandPreview?: PiCommandPreview;
   /** The extension command the current turn is running, if it is one. */
   commandRun?: PiCommandRun;
   /** True while Pi is compacting; the tab shows it as still working. */
@@ -534,6 +549,8 @@ export interface PersistedSession {
   /** Public descriptors only; restored as `stale` until the next attach. */
   commands?: NativeAgentSlashCommand[];
   commandsTruncated?: boolean;
+  /** The persisted rows came from a resource-only read, not an attach. */
+  commandsAttachPending?: boolean;
 }
 
 export interface PersistedState {

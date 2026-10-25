@@ -114,6 +114,10 @@ The owning implementation, assertions, timeouts and skips were unchanged.
 
 The aggregate recurrence passed in the complete unchanged owning-file rerun. Exact commands, durations, merge parents, aggregate results and evidence are retained in [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
 
+## Local preview discovery review — 2026-10-25
+
+`mise run test:logged -- --name preview-repository -- mise run test` measured 8314 ms against the current `< 5000 ms` bound at `mermaid-render.test.ts:210` (8959.74 ms test duration). The backend used two isolated Bun workers alongside repository/browser validation on the shared host. The complete unchanged owner ran separately with `mise run test:logged -- --name preview-mermaid-owner -- bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures`: 12 passed, one failed (59.3 s), measuring 6109 ms against the same bound (6351.60 ms test duration). This recurrence remains non-green in the owner and is not newly classified as a flake. No Mermaid implementation, assertion, deadline or skip changed. Evidence: `orkestrator-test-run.0vNQwf/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.Wv984c/preview-mermaid-owner.log.gz` under the host temporary directory.
+
 ## Coordinator consistency validation — 2026-10-25
 
 - **Command:** `mise run test:logged -- --name committed-consistency-suite -- mise run test`, with two isolated backend workers and concurrent worktree validations.

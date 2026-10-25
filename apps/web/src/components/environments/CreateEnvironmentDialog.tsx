@@ -1724,7 +1724,7 @@ export function CreateEnvironmentDialog({
                   </p>
                   {!dockerAvailable && (
                     <p id="containerized-unavailable" className="text-xs text-amber-400">
-                      Unavailable while Docker is stopped
+                      Containers unavailable while Docker stopped
                     </p>
                   )}
                   {!localEnvironmentAvailable && (

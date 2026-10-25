@@ -44,6 +44,13 @@ After this run's Electron annotation check had closed, the complete unchanged ow
 
 `mise run test:logged -- --name design-isolated -- mise run test:agent:design:isolated` repeated the guided-design brief failure at `design-canvas.spec.ts:287`: `Mock up the sidebar` was absent after five seconds. One scenario passed, one failed, and teardown removed the failed trace after it exceeded the 16 MiB sanitization limit (98.3 seconds logged). The runner stopped and reset disposable profile `qa-browser-a7273c35-ebd`. This matches the separately recorded brief-visibility failure above; this observation was not rerun and is not a newly established flake. No design-launch, transcript, assertion or deadline changes were made. Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.5NZ34d/design-isolated.log.gz` and `output/agent-testing/qa-browser-a7273c35-ebd/browser/artifacts/` (excluding the removed oversized trace).
 
+## Local preview discovery review — 2026-10-25
+
+- `mise run test:logged -- --name preview-agent-browser -- mise run test:agent:browser:isolated` ran with one browser worker on disposable credential-free Codex profile `qa-browser-9068b98a-a33`: 31 passed, 58 opt-in skips, one failed (858.8 s including lifecycle). The five-second pane-layout poll at `design-canvas.spec.ts:250` did not contain the overlong text-fallback path `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/overlong.orkdes`; the previous hidden-text tab remained persisted.
+- The complete unchanged owner ran separately with `mise run test:logged -- --name preview-design-owner -- mise run test:agent:design:isolated` on fresh profile `qa-browser-8176c36a-ee6`, one browser worker: one passed, one failed (194.8 s including lifecycle). The same poll instead missed `d1/d2/d3/d4/d5/d6/d7/d8/deep.orkdes`, with the previous overlong-text tab still persisted. Other repository/browser validation continued on the host during both runs.
+- Both isolated runners stopped and reset their profiles. No design implementation, assertion, timeout, or skip changed. This recurrence remains non-green in the owning suite and is not newly classified as a flake. The preview ownership, discovery, terminal-root, chooser, confirmation, and display regressions passed independently.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.BZJbLy/preview-agent-browser.log.gz`, `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.DWuY2z/preview-design-owner.log.gz`, and `output/agent-testing/<profile>/browser/artifacts/` for each profile above.
+
 ## Design opening-prompt review — 2026-10-25
 
 - `mise run test:logged -- --name design-isolated -- mise run test:agent:design:isolated`
